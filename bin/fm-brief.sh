@@ -35,6 +35,9 @@
 #                captain approves, firstmate merges to local main
 # Ship briefs begin with a worktree-isolation assertion before the branch step.
 # Scout tasks ignore mode - their deliverable is a report, not a merge.
+# Every scaffold - ship, scout, and secondmate charter - opens its Rules section
+# with the no-agent-co-author rule, so the brief the worker is following states it
+# and overrides any commit-message trailer habit of the harness.
 # Every scaffold's status protocol distinguishes the configured
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
@@ -73,6 +76,7 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+COAUTHOR_RULE='1. Never add an agent name as a commit co-author.'
 POS=()
 for a in "$@"; do
   case "$a" in
@@ -148,6 +152,9 @@ Do not invent a second delegation system.
 You do not generate your own work.
 Act only on tasks the main firstmate routes to you.
 Never start a survey, audit, or "find improvements" sweep on your own initiative; that is not your job and it is unwanted.
+
+# Rules
+$COAUTHOR_RULE
 
 # Requests from the main firstmate
 You are a firstmate in your own home, so an incoming message reaches you in your own chat.
@@ -242,10 +249,11 @@ The worktree is your laboratory - install, run, edit, and make scratch commits f
 The report is the only thing that survives, so anything worth keeping must be in it.
 
 # Rules
-1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
-4. Report status by appending one line:
+$COAUTHOR_RULE
+2. Never push to any remote and never open a PR.
+3. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+4. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+5. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
@@ -255,11 +263,11 @@ The report is the only thing that survives, so anything worth keeping must be in
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset):
    firstmate then leaves your idle pane alone and rechecks it on a long cadence instead of
    treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
-6. If a decision belongs to a human (product choices, destructive actions),
+6. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+7. If a decision belongs to a human (product choices, destructive actions),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will reply with the decision.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
-7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
+8. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
@@ -274,7 +282,7 @@ echo "scaffolded: $BRIEF (scout; replace {TASK})"
 exit 0
 fi
 
-# Ship task: shape Setup / Rule 1 / Definition of done by the project's delivery mode.
+# Ship task: shape Setup / Rule 2 / Definition of done by the project's delivery mode.
 # yolo does not affect the brief because the worker never owns approval decisions;
 # firstmate applies the authority contract in AGENTS.md section 7, so discard it.
 read -r MODE _ <<EOF
@@ -284,7 +292,7 @@ EOF
 case "$MODE" in
   direct-PR)
     SETUP2=""
-    RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
+    RULE1='2. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
     DOD=$(cat <<EOF
 # Definition of done
 This project ships **direct-PR**: you raise the PR yourself, without the no-mistakes pipeline.
@@ -296,7 +304,7 @@ EOF
     ;;
   local-only)
     SETUP2=""
-    RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
+    RULE1="2. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
     DOD=$(cat <<EOF
 # Definition of done
 This project ships **local-only**: no remote, no PR, no pipeline.
@@ -310,7 +318,7 @@ EOF
   *)  # no-mistakes (default)
     SETUP2="
 2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
-    RULE1='1. Never push to the default branch. Never merge a PR.'
+    RULE1='2. Never push to the default branch. Never merge a PR.'
     DOD=$(cat <<EOF
 # Definition of done
 The task is complete only when committed on your branch.
@@ -322,7 +330,7 @@ Follow the guidance no-mistakes itself provides for the mechanics: it loads when
 Do not hand-edit, commit, or fix findings yourself while a run is active - the pipeline applies every fix.
 
 Two firstmate-specific rules layer on top of that guidance:
-- ask-user findings are never yours to answer: escalate to firstmate (rule 6) and stop.
+- ask-user findings are never yours to answer: escalate to firstmate (rule 7) and stop.
   Firstmate applies the authority contract in its \`AGENTS.md\` and obtains any required captain decision.
   When the decision comes back, feed it to the gate with \`no-mistakes axi respond\` and let the pipeline apply it - do not route the question to "the user" or implement the fix yourself.
 - Avoid \`--yes\`: it would silently bypass firstmate's authority check and any required captain escalation.
@@ -351,10 +359,11 @@ If the top-level path is the primary checkout or not the worktree you were launc
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
 # Rules
+$COAUTHOR_RULE
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
-4. Report status by appending one line:
+3. Stay inside this worktree; modify nothing outside it.
+4. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+5. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
@@ -367,11 +376,11 @@ $RULE1
    known external wait you expect to clear on its own (an upstream release, a rate-limit reset,
    a scheduled window): firstmate then leaves your idle pane alone and rechecks it on a long
    cadence instead of treating it as a possible wedge. Use \`blocked:\` when you are stuck and need help.
-5. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
-6. If a decision belongs above the implementation worker (product choices, destructive actions, ask-user findings),
+6. If you hit the same obstacle twice, append \`blocked: {why}\` and stop; firstmate will help.
+7. If a decision belongs above the implementation worker (product choices, destructive actions, ask-user findings),
    append \`needs-decision: {summary of options}\` and stop. Firstmate will apply the configured authority and reply with the decision.
    When firstmate replies or a blocker clears and you resume, append \`resolved: {how it was decided or unblocked}\` (add the same \`[key=<slug>]\` if you opened it with one) so the decision or blocker is durably closed and does not keep resurfacing.
-7. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
+8. Never stop, restart, or update the shared \`no-mistakes\` daemon - it is one instance serving
    every lane/home, so restarting it kills other lanes' in-flight pipeline runs. On ANY no-mistakes
    daemon error, append \`blocked: {the daemon error}\` and stop; only firstmate manages the daemon.
 
