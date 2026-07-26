@@ -41,9 +41,15 @@ If `jq` is missing or hook stdin is empty, the guard exits 0 because it cannot s
 - Claude registers two `Stop` hooks in `.claude/settings.json`, both anchored through `CLAUDE_PROJECT_DIR`: `bin/fm-turnend-guard.sh --claude`, and `bin/fm-claude-stop-autoarm.sh` with `asyncRewake: true` and `timeout: 28800`.
 - Codex registers a `Stop` hook in `.codex/hooks.json`, anchors the executable to the hook process working directory, verifies a Firstmate-shaped hook-bearing root, and passes the original payload to the shared guard.
 - OpenCode listens for `session.idle` in `.opencode/plugins/fm-primary-turnend-guard.js`, lets the watcher coordinator act first, and calls `client.session.promptAsync` once when the guard returns 2.
-- Pi listens for `agent_settled` in `.pi/extensions/fm-primary-turnend-guard.ts`, runs once per logical agent run, and calls `pi.sendUserMessage(..., { deliverAs: "followUp" })` once when the guard returns 2.
+- Pi listens for `agent_end` in `.pi/extensions/fm-primary-turnend-guard.ts`, injects at most one follow-up per logical agent run through `pi.sendUserMessage(..., { deliverAs: "followUp" })` when the guard returns 2, and runs the shared predicate at every `agent_end` the run reaches.
 - Grok registers a `Stop` hook in `.grok/hooks/fm-primary-turnend-guard.json` and uses `bin/fm-turnend-guard-grok.sh` to resume the reported session once when the shared guard returns 2.
   The adapter intentionally omits `--permission-mode`, so a passive hook cannot grant stronger permissions than the resumed session default.
+
+Pi blocks genuinely rather than reacting after the fact.
+Pi drains both message queues before emitting `agent_end`, so a follow-up queued from an `agent_end` handler makes `_handlePostAgentRun()` return true and the session calls `agent.continue()`.
+The same run keeps going and `agent_settled`, the idle signal, never fires until the guard stops queuing.
+A guard hooked on `agent_settled` instead runs after that loop has already exited, so the idle signal is emitted first and the follow-up only re-opens a turn that already ended blind.
+Mechanism verified against pi 0.81.1 in [`verification/supervision.md`](verification/supervision.md#turn-end-guard).
 
 Claude and Codex can block a Stop directly with exit status 2 and stderr.
 Both payloads carry `stop_hook_active`.
@@ -55,22 +61,25 @@ The Claude mode waits up to `FM_CLAUDE_AUTOARM_SYNC_WAIT_MS` (default 800 millis
 When none of those proofs appears, it re-blocks up to `FM_CLAUDE_TURNEND_BLOCK_BUDGET` times (default 3, below Claude's 8-block override), then allows degraded with a visible `systemMessage`.
 Any allow resets the budget.
 
-OpenCode, Pi, and Grok expose passive callbacks for this purpose.
+OpenCode and Grok expose passive callbacks for this purpose, and Pi's blocking `agent_end` callback shares the same injection path.
 Their adapters fail open at the hook boundary to protect the user session but schedule one bounded follow-up when the predicate blocks.
 The generated prompts use the canonical `turn-end-guard` kind after the U+2063 `FIRSTMATE_OP: ` prefix, so Ahoy does not treat them as captain messages.
 Each adapter owns a loop latch.
-Pi keeps the latch across internal tool turns and clears it only when the generated follow-up settles or delivery fails.
+Pi keeps the latch across internal tool turns and clears it when the generated follow-up settles or delivery fails.
+A second `agent_settled` handler clears the latch and does nothing else, because `agent_end` fires again only if the run continues: a run that dies after the guard queued its follow-up would otherwise leave the latch set and let the next logical run end unguarded.
+Because `agent_end` also fires at auto-retry and compaction boundaries, a Pi run that needs one of those while supervision is already unhealthy spends its single latched follow-up at that earlier boundary rather than at the final one.
+The recovery instruction still lands in the same run, so this is an ordering nuance rather than a blind turn end.
 Grok's project hook requires the checkout to be trusted with `/hooks-trust` or launch-time `--trust`.
 OpenCode's forced follow-up is supported for persistent TUI sessions and remains fail-open in headless `opencode run`.
 
-If a passive adapter cannot invoke its SDK, find `grok`, or recover a Grok session id, the next pull-based `fm-guard.sh` call reports the problem.
+If a follow-up-injecting adapter cannot invoke its SDK, find `grok`, or recover a Grok session id, the next pull-based `fm-guard.sh` call reports the problem.
 That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it always points to the active harness protocol rather than embedding another repair command.
 
 ## Compatibility limits
 
 - Child crewmate and scout worktrees are outside scope.
 - A valid secondmate home is in scope; an idle secondmate endpoint with no X-mode relay poll remains healthy because it has no supervision need.
-- Claude and Codex block directly, while OpenCode, Pi, and Grok use bounded passive follow-ups.
+- Claude, Codex, and Pi block the turn end directly, while OpenCode and Grok use bounded passive follow-ups.
 - OpenCode headless mode and untrusted Grok project hooks remain fail-open at the host boundary.
 - Kimi Code CLI 0.29.1 exposes only global `[[hooks]]` configuration in `~/.kimi-code/config.toml`, including a `Stop` event with snake_case payload fields `hook_event_name`, `session_id`, `cwd`, and `stop_hook_active`.
 - Kimi has no project-level hook configuration and remains outside the primary guard integrations above.
@@ -83,7 +92,7 @@ That warning uses `bin/fm-supervision-instructions.sh --repair-line`, so it alwa
 
 ## Regression coverage
 
-`tests/fm-turnend-guard.test.sh` covers the predicate, main and secondmate primary scope, child-worktree exclusion, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, the cooperative `--claude` claim wait, epoch allow, re-block budget, Pi logical-run latching, missing-`jq` behavior, all five primary registrations, and Grok resume permission and recursion safety.
+`tests/fm-turnend-guard.test.sh` covers the predicate, main and secondmate primary scope, child-worktree exclusion, `FM_HOME` and `FM_STATE_OVERRIDE` precedence, the cooperative `--claude` claim wait, epoch allow, re-block budget, Pi logical-run latching, Pi blocking before the idle signal, Pi latch release after an interrupted run, missing-`jq` behavior, all five primary registrations, and Grok resume permission and recursion safety.
 `tests/fm-kimi-harness.test.sh` covers the separate Kimi crew hook's format preservation, idempotence, refusal cases, token guard, spawn registration, and teardown cleanup.
 `tests/fm-supervision-instructions.test.sh` covers recovery-line ownership.
 `FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh` is the opt-in isolated Pi path.

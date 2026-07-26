@@ -135,7 +135,14 @@ export default function (pi: ExtensionAPI) {
     return { block: true, reason: result.stderr.trim() || "denied by the watcher-arm PreToolUse seatbelt" };
   });
 
-  pi.on("agent_settled", async () => {
+  // agent_end, not agent_settled. Pi drains both queues before emitting agent_end,
+  // so a follow-up queued from an agent_end handler makes _handlePostAgentRun()
+  // return true and the session calls agent.continue() - the run keeps going and
+  // never settles (pi 0.81.1 dist/core/agent-session.js:745-757 and :780-782).
+  // agent_settled fires after that loop exits, so a guard hooked there emits the
+  // idle signal first and only then re-opens the turn: reactive, not preventive.
+  // Verified 2026-07-26 against pi 0.81.1; see docs/turnend-guard.md.
+  pi.on("agent_end", async () => {
     if (guardFollowupActive) {
       guardFollowupActive = false;
       return;
@@ -156,6 +163,20 @@ export default function (pi: ExtensionAPI) {
     } catch {
       guardFollowupActive = false;
     }
+  });
+
+  // Latch release of last resort. agent_end is emitted from inside the agent
+  // loop and only fires again if the run continues, so a run that dies after the
+  // guard queued its follow-up - ESC while the follow-up is still queued, a fatal
+  // session error, a discarded queue - leaves the latch set, and the NEXT logical
+  // run's agent_end consumes it and skips the guard, ending one turn blind.
+  // agent_settled is emitted from _runAgentPrompt's finally (pi 0.81.1
+  // dist/core/agent-session.js:752), so it always runs. This cannot reintroduce
+  // re-entrancy: agent_settled fires only after the whole agent loop has exited,
+  // so no further agent_end for that run can follow it, and the handler never
+  // invokes the predicate or sends a message - it only assigns false.
+  pi.on("agent_settled", () => {
+    guardFollowupActive = false;
   });
 
   markLoaded();
