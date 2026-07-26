@@ -34,7 +34,8 @@
 # Codex uses stop_hook_active and Grok uses stopHookActive; typed camel-case
 # takes precedence when both spellings are present. A true value means the
 # current stop attempt already follows a block, so this guard always allows it.
-# Passive harness adapters provide their own one-follow-up guard before calling
+# Harness adapters that inject a follow-up instead of returning exit status 2
+# (opencode and pi) provide their own one-follow-up guard before calling
 # this script.
 # That bounds those harnesses to at most one forced continuation per turn -
 # never a wedged, un-endable session - while still nagging again on a later turn
