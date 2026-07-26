@@ -26,6 +26,8 @@
 #   The flag must be explicit because {TASK} is filled after scaffolding and the
 #   caller-supplied repo string cannot reliably identify this repo. Briefs made
 #   without it carry a loud declaration so an omitted contract cannot be silent.
+#   Every generated brief also carries the no-agent-co-author rule so worker
+#   instructions override any commit-message trailer habit.
 # For ship tasks, the definition of done is shaped by the project's delivery mode
 # (data/projects.md via fm-project-mode.sh; see the project-management skill
 # and AGENTS.md task lifecycle):
@@ -118,6 +120,7 @@ fi
 KIND=ship
 HERDR_LAB=0
 NO_PROJECTS=0
+COAUTHOR_RULE='1. Never add an agent name as a commit co-author.'
 POS=()
 for a in "$@"; do
   case "$a" in
@@ -226,6 +229,13 @@ Never start a survey, audit, or "find improvements" sweep on your own initiative
 In Claude Code, the bottom \`CTX\` row is host-computed context pressure; when it shows \`COMPACT NOW: /compact\` at 70 percent used or higher, run \`/compact\` before continuing instead of relying on a self-estimate.
 
 $VERIFICATION_DISCIPLINE
+
+# Rules
+1. Never add an agent name as a commit co-author.
+2. Report status by appending one line:
+   `echo "{state}: {one short line}" >> $STATUS_FILE`
+   States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
+   Each append wakes firstmate, so report sparingly: only material phase changes, captain decisions, blockers, failures, or work ready for review.
 
 # Requests from the main firstmate
 You are a firstmate in your own home, so an incoming message reaches you in your own chat.
@@ -338,10 +348,11 @@ The worktree is your laboratory - install, run, edit, and make scratch commits f
 The report is the only thing that survives, so anything worth keeping must be in it.
 
 # Rules
-1. Never push to any remote and never open a PR.
-2. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
-3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
-4. Report status by appending one line:
+$COAUTHOR_RULE
+2. Never push to any remote and never open a PR.
+3. Stay inside this worktree; the only files you may write outside it are the report and the status file below.
+4. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
+5. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
    States: working, needs-decision, blocked, $PAUSED_VERB, done, failed.
    Each append wakes firstmate, so report sparingly: only phase changes a supervisor
@@ -456,8 +467,9 @@ If the top-level path is the primary checkout or not the worktree you were launc
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
 # Rules
+$COAUTHOR_RULE
 $RULE1
-2. Stay inside this worktree; modify nothing outside it.
+3. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.
 4. Report status by appending one line:
    \`echo "{state}: {one short line}" >> $STATUS_FILE\`
