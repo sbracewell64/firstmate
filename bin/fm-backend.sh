@@ -584,6 +584,79 @@ fm_backend_kill() {  # <backend> <target>
   esac
 }
 
+# fm_backend_self_endpoint_id: the id of the terminal endpoint the CALLER ITSELF
+# occupies - a tmux window id, a herdr tab id - resolved from the backend's own
+# process-stable ambient markers ($TMUX_PANE, HERDR_TAB_ID/HERDR_PANE_ID) and
+# never from a label lookup or a client-relative "current" lookup, which would
+# answer with whatever endpoint an attached client happens to be focused on.
+#
+# This exists so bin/fm-label-self.sh resolves its own endpoint EXACTLY ONCE and
+# hands that one id to both fm_backend_current_self_label and
+# fm_backend_label_self: two independent resolutions could disagree, letting the
+# fm-<task-id> refusal pass on one endpoint while the rename lands on another -
+# the very mislabel those refusals exist to prevent. It returns non-zero rather
+# than an empty id when the caller's own endpoint cannot be identified, so the
+# caller fails closed and renames nothing.
+fm_backend_self_endpoint_id() {  # <backend>
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_self_window_id "$@" ;;
+    herdr) fm_backend_herdr_self_tab_id "$@" ;;
+    *) echo "error: backend '$backend' has no verified way to identify firstmate's own endpoint" >&2; return 1 ;;
+  esac
+}
+
+# fm_backend_label_self: label the terminal endpoint FIRSTMATE ITSELF occupies,
+# so the supervisor is identifiable at a glance next to the fm-<task-id> worker
+# endpoints it spawns. This is the only backend operation whose target is the
+# caller's own pane rather than a recorded task target, so each arm resolves it
+# from the backend's own ambient markers and never from a label lookup.
+# bin/fm-label-self.sh is the sole caller and owns the safety refusals.
+# Only the two runtime-auto-detected backends implement it; the rest report the
+# limitation rather than pretending to have labeled anything.
+#
+# <endpoint-id> is an optional pre-resolved fm_backend_self_endpoint_id result,
+# passed straight through to the arm.
+fm_backend_label_self() {  # <backend> <label> [endpoint-id]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_label_self "$@" ;;
+    herdr) fm_backend_herdr_label_self "$@" ;;
+    *) echo "error: backend '$backend' has no verified way to label firstmate's own endpoint" >&2; return 1 ;;
+  esac
+}
+
+# fm_backend_current_self_label: the label the caller's OWN endpoint carries
+# right now, printed on stdout. The read half of fm_backend_label_self, and the
+# reason bin/fm-label-self.sh can tell firstmate's own unlabeled endpoint apart
+# from a worker endpoint it must never touch: a crewmate running
+# bin/fm-session-start.sh in a firstmate-repo worktree passes every other
+# refusal, so without reading the CURRENT label the self-label step would rename
+# a live fm-<task-id> tab out of the namespace herdr's recovery scan
+# (fm_backend_herdr_list_live) selects on. Each arm resolves the caller's own
+# endpoint from the backend's own ambient markers, never from a label lookup,
+# and returns non-zero rather than an empty label when it cannot read one, so
+# the caller can fail closed. Only the two runtime-auto-detected backends
+# implement it, matching fm_backend_label_self exactly.
+#
+# <endpoint-id> is the same optional pre-resolved fm_backend_self_endpoint_id
+# result fm_backend_label_self takes; passing the one id to both is what makes
+# the refusal and the rename address the same endpoint.
+fm_backend_current_self_label() {  # <backend> [endpoint-id]
+  local backend=$1
+  shift
+  fm_backend_source "$backend" || return 1
+  case "$backend" in
+    tmux) fm_backend_tmux_current_self_label "$@" ;;
+    herdr) fm_backend_herdr_current_self_label "$@" ;;
+    *) echo "error: backend '$backend' has no verified way to read firstmate's own endpoint label" >&2; return 1 ;;
+  esac
+}
+
 fm_backend_remove_worktree() {  # <backend> <worktree-id>
   local backend=$1
   shift

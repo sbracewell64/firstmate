@@ -156,6 +156,99 @@ if fm_backend_tmux_resolve_bare_selector "no-such-window-xyz" 2>/dev/null; then
 fi
 pass "real tmux: fm_backend_tmux_resolve_bare_selector fails for a window that does not exist"
 
+# --- firstmate's OWN window label -------------------------------------------
+# fm_backend_tmux_label_self targets the caller's own window through tmux's own
+# $TMUX/$TMUX_PANE markers, so this supplies a real pane id the same way a real
+# firstmate process inherits one. The property that matters is that the label
+# STICKS: an agent harness rewrites its terminal title continuously, so a label
+# an OSC 2 sequence could overwrite would silently do nothing.
+#
+# The probe window is created with a plain `new-window` (NOT
+# fm_backend_tmux_create_task, which already pins the name) under deliberately
+# hostile global options, so the pinning is actually exercised. Its command
+# rewrites the terminal title in a loop and needs no interactive shell.
+
+tmux set-option -g allow-rename on >/dev/null 2>&1 || true
+tmux set-window-option -g automatic-rename on >/dev/null 2>&1 || true
+SELF_PANE=$(tmux new-window -dP -F '#{pane_id}' -t "$SESSION:" -n captain-launched \
+  "sh -c 'while :; do printf \"\\033]2;harness-title-probe\\007\"; sleep 0.2; done'") \
+  || fail "could not create the self-label probe window"
+[ -n "$SELF_PANE" ] || fail "could not resolve the self-label probe pane id"
+
+if TMUX='' TMUX_PANE="$SELF_PANE" fm_backend_tmux_label_self firstmate 2>/dev/null; then
+  fail "fm_backend_tmux_label_self must refuse outside tmux (\$TMUX unset)"
+fi
+
+TMUX="fake,1,0" TMUX_PANE="$SELF_PANE" fm_backend_tmux_label_self firstmate \
+  || fail "fm_backend_tmux_label_self failed against real tmux"
+SELF_NAME=$(tmux display-message -p -t "$SELF_PANE" '#{window_name}')
+[ "$SELF_NAME" = firstmate ] || fail "fm_backend_tmux_label_self did not rename its own window, got '$SELF_NAME'"
+
+sleep 1
+SELF_NAME=$(tmux display-message -p -t "$SELF_PANE" '#{window_name}')
+[ "$SELF_NAME" = firstmate ] \
+  || fail "a continuous application terminal-title rewrite overwrote firstmate's own window label, got '$SELF_NAME'"
+tmux kill-window -t "$SELF_PANE" >/dev/null 2>&1 || true
+tmux set-option -g allow-rename off >/dev/null 2>&1 || true
+tmux set-window-option -g automatic-rename off >/dev/null 2>&1 || true
+pass "real tmux: fm_backend_tmux_label_self labels firstmate's own window, refuses outside tmux, and the label survives a harness terminal-title rewrite"
+
+# A crewmate runs bin/fm-session-start.sh too, and in a firstmate-repo worktree
+# every other refusal passes - so the ONE thing standing between the self-label
+# step and a renamed live worker window is reading the name it already carries.
+WORKER_PANE=$(tmux new-window -dP -F '#{pane_id}' -t "$SESSION:" -n fm-smoke-worker sh) \
+  || fail "could not create the worker-endpoint probe window"
+[ -n "$WORKER_PANE" ] || fail "could not resolve the worker-endpoint probe pane id"
+
+WORKER_LABEL=$(TMUX="fake,1,0" TMUX_PANE="$WORKER_PANE" fm_backend_tmux_current_self_label) \
+  || fail "fm_backend_tmux_current_self_label failed against real tmux"
+[ "$WORKER_LABEL" = fm-smoke-worker ] \
+  || fail "fm_backend_tmux_current_self_label must report the window's real current name, got '$WORKER_LABEL'"
+
+SELF_OUT=$(env TMUX="fake,1,0" TMUX_PANE="$WORKER_PANE" FM_SELF_LABEL=firstmate \
+  FM_HOME="$SHIM_DIR" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-label-self.sh" 2>&1)
+case "$SELF_OUT" in
+  *"already a worker endpoint"*) : ;;
+  *) fail "fm-label-self.sh must refuse a window that is already a worker endpoint"$'\n'"$SELF_OUT" ;;
+esac
+WORKER_NAME=$(tmux display-message -p -t "$WORKER_PANE" '#{window_name}')
+[ "$WORKER_NAME" = fm-smoke-worker ] \
+  || fail "a live fm-<id> worker window was renamed to '$WORKER_NAME'; that drops the task out of label-matched recovery"
+tmux kill-window -t "$WORKER_PANE" >/dev/null 2>&1 || true
+pass "real tmux: fm_backend_tmux_current_self_label reads the real window name, and fm-label-self.sh leaves an fm-<id> worker window alone"
+
+# Without $TMUX_PANE the caller's own window is not identifiable: tmux's
+# client-relative default target answers with whatever window is CURRENT, which
+# can be any window in the session - here a live fm-<id> worker. A resolution
+# that guessed it could pass the fm- refusal against one window and rename
+# another, so both self operations must refuse instead of naming a bystander.
+BYSTANDER_PANE=$(tmux new-window -dP -F '#{pane_id}' -t "$SESSION:" -n fm-smoke-bystander sh) \
+  || fail "could not create the bystander worker-endpoint probe window"
+tmux select-window -t "$BYSTANDER_PANE" >/dev/null 2>&1 \
+  || fail "could not focus the bystander window as the session's current window"
+
+if TMUX="fake,1,0" TMUX_PANE='' fm_backend_tmux_self_window_id 2>/dev/null; then
+  fail "fm_backend_tmux_self_window_id must refuse when \$TMUX_PANE is unset instead of answering with the client's current window"
+fi
+if TMUX="fake,1,0" TMUX_PANE='' fm_backend_tmux_current_self_label 2>/dev/null; then
+  fail "fm_backend_tmux_current_self_label must refuse when \$TMUX_PANE is unset"
+fi
+if TMUX="fake,1,0" TMUX_PANE='' fm_backend_tmux_label_self firstmate 2>/dev/null; then
+  fail "fm_backend_tmux_label_self must refuse when \$TMUX_PANE is unset"
+fi
+
+SELF_OUT=$(env -u TMUX_PANE TMUX="fake,1,0" FM_SELF_LABEL=firstmate \
+  FM_HOME="$SHIM_DIR" FM_ROOT_OVERRIDE="$ROOT" "$ROOT/bin/fm-label-self.sh" 2>&1)
+case "$SELF_OUT" in
+  *"could not work out which tmux terminal tab"*) : ;;
+  *) fail "fm-label-self.sh must report that it could not identify its own window"$'\n'"$SELF_OUT" ;;
+esac
+BYSTANDER_NAME=$(tmux display-message -p -t "$BYSTANDER_PANE" '#{window_name}')
+[ "$BYSTANDER_NAME" = fm-smoke-bystander ] \
+  || fail "the client's current window was renamed to '$BYSTANDER_NAME'; a window nobody identified as the caller's own must never be labeled"
+tmux kill-window -t "$BYSTANDER_PANE" >/dev/null 2>&1 || true
+pass "real tmux: with \$TMUX_PANE unset the self operations fail closed and the client's current window keeps its name"
+
 # --- kill and recovery-grade missing-window classification ------------------
 
 fm_backend_tmux_kill "$TARGET"
