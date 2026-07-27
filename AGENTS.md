@@ -108,8 +108,8 @@ state/               volatile runtime signals; gitignored
   .afk               durable away-mode flag; present = sub-supervisor may inject escalations (set by /afk, cleared on user return)
   .watch.lock .wake-queue.lock watcher singleton and queue serialization locks
   .claude-autoarm.lock .claude-autoarm-epoch .turnend-claude-blocks   Claude Stop auto-arm single-flight, epoch, and guard-budget records; never touch
-  .hash-* .count-* .stale-* .stale-since-* .paused-* .wedge-escalations-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
-  .watch-triage.log  watcher's absorbed-wake debug log (size-capped); never relied on, safe to delete
+  .hash-* .count-* .stale-* .stale-since-* .paused-* .wedge-escalations-* .progress-* .park-* .seen-* .hb-surfaced-* .last-* .heartbeat-streak   watcher internals; never touch
+  .watch-triage.log  absorbed-wake and supervision-telemetry debug log written by the watcher and the wake drain (size-capped); never relied on, safe to delete
   .last-watcher-beat watcher liveness beacon, touched every poll (including while absorbing benign wakes); guard scripts read it
   .subsuper-* .supervise-daemon.*   sub-supervisor internals; never touch
 .no-mistakes/        local validation state and evidence; gitignored
@@ -260,6 +260,7 @@ After spawning, confirm the worker is processing the brief, handle any trust dia
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
 Steer a worker with short single-line messages through fail-closed `fm-send`; put long instructions in a file.
+Every metadata-routed steer is marked as coming from firstmate, so a worker can always tell firstmate from a human at its keyboard; only a harness-dispatched command such as a slash command is sent bare, and `bin/fm-send.sh` owns that boundary.
 A secondmate's routed reply returns through status or a document pointer, not by firstmate peeking into its chat.
 For the parent-owned correlation, recovery, and escalation contract on marked secondmate requests, see `bin/fm-pending-reply-lib.sh`.
 Supervise all live work under section 8.

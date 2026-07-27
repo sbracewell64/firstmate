@@ -297,6 +297,44 @@ window_to_task() {
   t="${w##*:}"; t="${t#fm-}"; printf '%s' "$t"
 }
 
+# One stale wake reason, tagged with the classification branch that produced it.
+# Six paths emit a "stale:" wake - the watcher's surface_nonterminal_stale,
+# handle_paused_stale, wedge_timer_check, terminal-status override and away-mode
+# one-shot, plus the push fast-path in fm-push-transition-lib.sh - and before
+# this tag existed all six rendered the same bare "stale: <window>" opening.
+# Nothing downstream could tell which rule fired, so per-branch wake attribution
+# had to be reconstructed from truncation patterns in state/.watch-triage.log;
+# that method left 44% of stale wakes unattributed across two independent
+# readings of this system, and the wedge and pause regression tests need to
+# assert on the branch rather than on a window string three code paths produce.
+# The tag is PROSE inside the reason, never a parsed protocol field. Read it with
+# a substring match; recover the window with stale_reason_window below, never by
+# stripping the "stale: " prefix alone.
+stale_reason() {  # <branch> <window> [detail]
+  if [ -n "${3:-}" ]; then
+    printf 'stale: %s (%s) [branch=%s]' "$2" "$3" "$1"
+  else
+    printf 'stale: %s [branch=%s]' "$2" "$1"
+  fi
+}
+
+# The window named by a "stale:" wake reason, with trailing decoration removed.
+# A wake reason is PROSE written for firstmate, never a protocol: the watcher
+# already appends details such as "(idle 300s, possible wedge, escalation 2)" or
+# "(paused 3600s, awaiting external ...)", and every stale reason additionally
+# carries a "[branch=<name>]" classification tag. A consumer that needs the
+# window back out of a reason must strip that decoration through this one owner.
+# A bare "${reason#stale: }" yields "<window> (idle 300s, ...)", which matches no
+# recorded window= line, so window_to_task falls through to its suffix heuristic
+# and returns a garbage task id - the reason the decorated wedge and pause
+# reasons were already mis-parsed before the branch tag existed.
+stale_reason_window() {  # <stale-reason-or-window>
+  local s=${1#stale: }
+  s=${s%%" ("*}
+  s=${s%%" ["*}
+  printf '%s' "$s"
+}
+
 # 0 (actionable) if ANY status file listed in a "signal:" wake carries a
 # captain-relevant last line; 1 otherwise. Pass the space-separated file list that
 # follows the "signal:" prefix. Non-.status arguments (e.g. .turn-ended markers,
@@ -354,6 +392,55 @@ crew_absorb_class() {  # <id>
 # run. See crew_absorb_class for the exact working/paused/none decision.
 crew_is_provably_working() {  # <id>
   [ "$(crew_absorb_class "$1")" = working ]
+}
+
+# The crew's progress fingerprint - a token that is constant while nothing
+# advances and changes when something does. bin/fm-crew-state.sh's --progress
+# block is the single owner of what may and may not appear in it; read that
+# before touching this, because the obvious fields are the wrong ones.
+#
+# Empty on any failure, and empty compares equal to empty, so an unreadable
+# fingerprint leaves a caller's wedge escalation behaving exactly as it did
+# before this existed. That is the safe direction: treating "could not tell" as
+# progress would silence the escalation on a genuinely frozen worker, which is
+# the one failure this whole mechanism exists to keep detectable. "Failure" here
+# includes a run read that was owed and did not answer, not just a reader that
+# died - a partially-populated fingerprint would be a distinct non-empty token
+# and would compare UNEQUAL, which is the same false negative wearing a
+# different shape.
+#
+# NOT a pure read - it makes the same bounded no-mistakes call crew_absorb_class
+# does, minus the ci-log read - so callers use it only where the alternative is
+# spending a coordinator turn, never on every poll. FM_CREW_STATE_BIN lets tests
+# stub the answer; a stub or an older reader that does not know --progress
+# returns its ordinary state line instead, which is itself stable under no
+# change, so version skew degrades to a coarser signal rather than a wrong one.
+crew_progress_fingerprint() {  # <id>
+  local id=$1 out
+  [ -n "$id" ] || return 0
+  out=$("$FM_CREW_STATE_BIN" "$id" --progress 2>/dev/null) || true
+  printf '%s' "$out" | head -1 | tr -d '\r'
+}
+
+# The pipeline gate a crew's run is parked at, or empty when it is not parked.
+# Reuses bin/fm-crew-state.sh's own gate detection through the same authoritative
+# line crew_absorb_class reads, rather than re-deriving "is this parked" from run
+# output a second time. The returned text is both the comparison token and the
+# human-readable gate name, and it is stable while the run sits at that gate.
+#
+# NOT a pure read - same bounded no-mistakes call as crew_absorb_class - so
+# callers run it on a slow bounded sweep, never every poll.
+crew_parked_gate() {  # <id>
+  local id=$1 line state
+  [ -n "$id" ] || return 0
+  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  case "$line" in state:*) ;; *) return 0 ;; esac
+  state=${line#state: }; state=${state%% *}
+  [ "$state" = parked ] || return 0
+  case "$line" in
+    *"parked at "*) printf 'parked at %s' "${line#*"parked at "}" ;;
+    *) printf 'a pipeline gate' ;;
+  esac
 }
 
 # 0 if crew <id>'s authoritative current state is a declared external-wait pause.

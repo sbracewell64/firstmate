@@ -464,7 +464,9 @@ clear_pause_tracking() {  # <window> <state>
   watcher_key=$(_stale_key "$win")
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
-    "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
+    "$state/.paused-liveprobe-$watcher_key" \
+    "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key" \
+    "$state/.progress-$watcher_key"
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
@@ -1190,7 +1192,7 @@ handle_wake() {  # <reason> <state>
   case "$reason" in
     signal:*) kind=signal; arg="${reason#signal: }"
               decision=$(classify_signal "$arg" "$state") ;;
-    stale:*)  kind=stale; arg="${reason#stale: }"
+    stale:*)  kind=stale; arg=$(stale_reason_window "$reason")
               decision=$(classify_stale "$arg" "$state") ;;
     check:*)  decision=$(classify_check "$reason") ;;
     heartbeat|heartbeat:*) decision=$(classify_heartbeat) ;;

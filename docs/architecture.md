@@ -10,7 +10,21 @@ firstmate's always-loaded operating contract and routing index for conditional p
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
 Actionable wakes include captain-relevant status signals, no-verb signals whose crew is not provably working, authenticated check output such as PR merge polling or an X-mode mention, stale panes whose crew is not provably working whether their status log looks terminal or non-terminal, provably-working stale panes that persist past `FM_STALE_ESCALATE_SECS`, declared external waits that remain paused past `FM_PAUSE_RESURFACE_SECS`, and heartbeat backstop hits.
+A bounded park sweep adds the one wake class that does not depend on pane state at all: a validation run that reaches a decision gate produces no signal, no stale pane, and no log line of any kind, so a worker that never answers its gate was silent until something unrelated happened to look at it.
+The sweep reads at most `FM_PARK_SCAN_MAX` tasks every `FM_PARK_SCAN_SECS`, surfaces only a gate seen unchanged across two sweeps, and surfaces that gate only once; a run that keeps moving between gates, or leaves them, stays silent.
+A persisted cursor in `state/.park-scan-cursor` rotates which tasks the next sweep reads, so the cap bounds the work of one sweep while every ship task is still covered within `ceil(N / FM_PARK_SCAN_MAX)` sweeps.
+Both bounds are required: without the cursor a fleet larger than the cap left every task past it never scanned at all, and without the cap a large fleet would pay an unbounded number of run reads on every interval.
+Setting `FM_PARK_SCAN_MAX` to zero switches it off, because it is the only supervision change here that adds wakes rather than removing them.
+It sees only gates the run itself names: a worker blocked on something outside its run is not visible to it, and the status protocol is what already covers that.
 Repeated provably-working stale escalations on the same unchanged pane add an escalation count to the wake reason and, at `FM_WEDGE_DEMAND_INSPECT_COUNT`, a `demand-deep-inspection` marker.
+That escalation resets on a pane-hash change, a busy signature, or forward progress in the crew's pipeline.
+The progress term exists because a healthy worker driving a no-mistakes run can produce neither of the first two: the pipeline owns the branch and renders nothing to the worker's own pane, so a validating worker used to escalate on the same unchanged hash indefinitely.
+Progress is a difference, so the watcher stores the previous value in `state/.progress-<key>` and compares it only on the escalation branch, where the alternative is spending a coordinator turn.
+`bin/fm-crew-state.sh --progress` is the single owner of that fingerprint and of which fields may appear in it; a field carrying elapsed time may not, because a fingerprint that differs on every read would reset the escalation unconditionally and leave a genuinely frozen worker unable to escalate at all.
+With no stored previous value, and with an unreadable fingerprint, the escalation fires exactly as it did before: the reset is taken only on positive evidence that the run advanced.
+A run read that was owed and did not answer, such as a timed-out or absent `no-mistakes`, reports an empty fingerprint for the same reason, because a partially-populated one would compare unequal and read as progress.
+Every stale wake reason ends with a `[branch=<name>]` tag naming the classification rule that produced it, because six separate paths emit an otherwise identical `stale: <window>` opening.
+The tag is prose for a reader and a substring match, never a parsed protocol field; `stale_reason_window` in `bin/fm-classify-lib.sh` is the one owner that recovers a window from a decorated reason.
 Those actionable wakes are written to a durable local queue (`state/.wake-queue`) before detector state advances, so a missed process exit can be recovered by draining the queue.
 When a canonical validated PR poll returns exactly `merged`, the watcher appends that durable notification before publishing a private receipt bound to the poll's registration, bytes, file identities, metadata, provider, URL, and task ID.
 The receipt makes retirement safely retryable across restarts: fixed-path recovery revalidates the same evidence, removes the runnable check first, removes its registration and data sidecars, removes the receipt last, and preserves task metadata including `pr=` and `pr_head=`.
@@ -18,8 +32,10 @@ A concurrent replacement remains armed, every non-merged or invalid observation 
 `bin/fm-pr-lib.sh` owns the receipt format and strict identity mechanics, while `bin/fm-watch.sh` owns queue-before-retirement ordering.
 No-verb wakes, such as `working:` notes and bare turn-ended signals, are benign only when `bin/fm-crew-state.sh` reports positive evidence that the crew is still working: an actively running no-mistakes step attributed to that crew's current code or a backend busy signature.
 A crew that declares `paused:` for a known external wait is separately absorbed while idle and re-surfaced only on the longer pause cadence, rather than being treated as a possible wedge.
-For an ordinary crew that has stopped, the normal-mode watcher first surfaces one stale wake, then applies that same cadence to an unchanged `paused:` or durable `captain-held` endpoint only when the backend confidently reports its agent dead.
-Live or inconclusive liveness remains fail-open at that initial surface, and the secondmate idle-endpoint exemption is unchanged.
+For an ordinary crew that has stopped, the normal-mode watcher surfaces one stale wake per pause window, then applies that same cadence to an unchanged `paused:` or durable `captain-held` endpoint.
+A backend that confidently reports the agent dead takes the bounded cadence immediately.
+Live or inconclusive liveness still fails open for that one surface, because such a crew may be sitting on a decision gate its own status line silenced; `state/.paused-liveprobe-<key>` records that the look has been taken, so a pane that keeps redrawing cannot convert "once" into "once per redraw".
+The marker is released when the crew is observed to no longer declare a pause, so a later pause gets its own look, and the secondmate idle-endpoint exemption is unchanged.
 Its initial normal-mode status signal still surfaces through the no-verb path, while away mode self-handles that routine signal and owns the later recheck.
 Fresh stale panes use the same current-state read before trusting the status log, so an active run or busy pane outranks an old captain-relevant status-log line left behind before validation.
 No-change heartbeats are also benign.
@@ -52,12 +68,16 @@ A bounded direct-report terminal tail can help diagnose a mismatch by showing th
 The snapshot strips control sequences, retains only capture metadata and literal event-corroboration flags, and never lets terminal evidence override a valid structured classification.
 The default path remains local-only; live GitHub enrichment exists only behind the bearings `--include-prs` opt-in.
 Optional X mode integrates with the watcher only after explicit opt-in; [configuration.md](configuration.md#x-mode-env) owns its generated-artifact and dispatch mechanics.
+[`supervision-dormant-designs.md`](supervision-dormant-designs.md) owns the larger supervision architectures this design deliberately does not build - a batch abstraction, speculative-parallel execution, a second or hierarchical supervisor, a model in the supervision loop, and a typed event bus - each with the measurable trigger that would justify revisiting it.
 
 At session start, `bin/fm-session-start.sh` emits exactly one primary-harness supervision block rendered by `bin/fm-supervision-instructions.sh` from `docs/supervision-protocols/`.
 That block owns the live wait shape for the running primary harness: Claude's Stop `asyncRewake` hook owns tokenless re-arm cycles, Grok uses background-notify cycles, Codex uses bounded foreground checkpoints, Pi uses its two tracked primary extensions, and OpenCode uses its TUI plugin.
 `bin/fm-watch-arm.sh` remains the verified arm wrapper for protocols that call it; it forks the watcher as a tracked child, verifies it is genuinely alive with a fresh liveness beacon, and prints an honest `started`, `attached`, or nonzero `FAILED` status.
 On `attached` it stays live across identity-matched successors, and an unexplained clean child close either attaches to a verified healthy successor or becomes the typed nonzero `watcher: FAILED - cycle ended without an actionable reason` result.
-The arm layer records one bounded lifecycle row per observed cycle in `state/.watch-cycle-exits.log`; `state/.watch-triage.log` remains exclusively the absorbed-wake debug log.
+The arm layer records one bounded lifecycle row per observed cycle in `state/.watch-cycle-exits.log`; `state/.watch-triage.log` carries absorbed wakes plus the sampled supervision measurements below, and carries no lifecycle semantics.
+A stale cycle's ledger row records `reason=actionable-stale-<branch>`, so actionable wakes are countable per classification rule from telemetry that already existed rather than from a second collector.
+Two further measurements ride the same two logs and are deliberately sampled rather than continuous: the watcher stamps a `slow poll` line only once a poll's classification work reaches `FM_SLOW_POLL_SECS`, which is the saturation threshold that would justify a second supervisor, and it stamps this home's recorded endpoint count onto the rare no-change heartbeat line so sustained concurrency has a historical series.
+After the drain commits its authoritative output, `bin/fm-wake-drain.sh` appends one `drain:` line recording how many distinct wakes the turn was handed and how long the oldest of them waited.
 Pi and OpenCode verify session-lock ownership and launch one singleton successor from their child-close handlers before delivering an actionable wake prompt, with bounded exponential retry for failed restoration.
 Claude's `bin/fm-claude-stop-autoarm.sh` hook fires on every Stop and, when the home is eligible and still needs supervision, claims one home-scoped cycle, foregrounds the arm wrapper, and translates an actionable close or typed failure into one exit-2 rewake.
 [`watcher-continuity.md`](watcher-continuity.md) owns Claude's residual active-turn coverage and watcher-status command-gating boundary.
@@ -165,8 +185,13 @@ Seeding is transactional: if validation, cloning, initialization, or registry up
 The same project may appear in multiple secondmate homes when their scopes differ, such as issue triage versus feature development.
 Secondmates are idle by default: after startup recovery reconciles only work already in their own home, an empty queue waits silently for routed tasks, and they never self-initiate surveys or audits.
 When called with `FM_HOME=<this-firstmate-home>` or when `FM_HOME` is already set to the active firstmate home, metadata-routed `fm-send.sh` requests to a live `kind=secondmate` use the live-charter-compatible `from-firstmate` carrier owned by `bin/fm-operational-input.sh`, so the secondmate returns terse answers through status lines and detailed answers through docs plus status pointers instead of replying only in its own chat.
+A metadata-routed steer to an ordinary crewmate or scout carries the generic `firstmate-steer` kind from the same owner, and creates no reply expectation.
+Before that, a worker received exactly one marked message - its launch brief - and a bare stream afterwards, so it could not tell a firstmate steer from a human typing into its pane; the operating contract forbids a crewmate from addressing the captain while the transport withheld the means to tell who was speaking, and both directions of that confusion were observed in practice.
+An explicit backend target, the key-send path, and any message the harness itself must dispatch - a leading `/` slash command, or a leading `$` skill invocation on codex - stay bare, the last because a prefix in front of such a message turns it into plain text and the steer silently fails to run.
+Generated briefs teach the rule at the only moment a worker reads instructions.
+Deliberately not extended to crewmates: the correlated pending-reply record. Acknowledgement machinery answers "sent but not received"; the observed failure is a message never sent, which no acknowledgement protocol can detect.
 The parent guards every marked request against a missing correlated report without reading the secondmate conversation; `bin/fm-pending-reply-lib.sh` owns the correlation, recovery, escalation, and retention contract.
-Explicit backend-target sends and direct human typing stay unmarked, so captain intervention in a secondmate pane remains conversational.
+Direct human typing stays unmarked, so captain intervention in a worker pane remains conversational.
 After seeding a secondmate, `fm-backlog-handoff.sh` validates the fleet-specific handoff, then atomically delegates already-judged in-scope queued item moves to `tasks-axi mv` so the domain queue starts in the right place.
 Idle secondmate panes are healthy; teardown is explicit and refuses while the secondmate home has in-flight work unless the captain has approved discard with `--force`.
 
