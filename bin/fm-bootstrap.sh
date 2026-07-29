@@ -10,6 +10,8 @@
 #                 "BACKEND_INVALID: <name> (known: <names>)",
 #                 "STARTUP_MEMORY_BUDGET: invalid config/startup-memory-budget - <reason>",
 #                 "CREW_DISPATCH: invalid config/crew-dispatch.json - <reason>",
+#                 "ADMISSION_CONTROL: invalid config/crew-dispatch.json
+#                  _scheduling.admission_control - <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "TANGLE: <remediation>",
@@ -61,6 +63,13 @@
 #          guesses at malformed or unsafe existing files, and secondmate homes
 #          await the primary-authoritative inherited value instead of creating
 #          their own.
+#          The optional `_scheduling.admission_control` block inside the same
+#          config/crew-dispatch.json is validated against the fleet-admission
+#          schema owned by bin/fm-admission-lib.sh. A home with no such block, or
+#          one carrying only `_`-prefixed notes, is silent and unaffected; a
+#          malformed or unknown-field policy prints ADMISSION_CONTROL so the
+#          policy stops safely instead of being silently ignored. This is a
+#          read-only detect line and still prints in FM_BOOTSTRAP_DETECT_ONLY=1.
 #          X mode is OPTIONAL and inert unless FM_HOME/.env has a non-empty
 #          FMX_PAIRING_TOKEN. When opted in, bootstrap requires curl+jq, writes
 #          the relay poll shim and 30s cadence config, and prints an FMX line.
@@ -109,6 +118,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-admission-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-admission-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -825,6 +836,32 @@ startup_memory_budget_setup() {
   fi
 }
 
+admission_control_validate() {
+  local file reason state
+  file=$(fm_admission_config_file "$CONFIG")
+  [ -f "$file" ] || return 0
+  if ! command -v jq >/dev/null 2>&1; then
+    # The MISSING: jq line already carries the install-consent flow.
+    return 0
+  fi
+  # crew_dispatch_validate owns the file-level JSON parse for this exact file;
+  # reporting it twice would give one broken file two diagnostics.
+  jq -e . "$file" >/dev/null 2>&1 || return 0
+  reason=$(fm_admission_validate_reason "$file") || true
+  if [ -n "$reason" ]; then
+    echo "ADMISSION_CONTROL: invalid config/crew-dispatch.json _scheduling.admission_control - $reason"
+    return 0
+  fi
+  if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ]; then
+    # A dispatch file with no admission block at all is the ordinary case and is
+    # not a fact worth reporting; only a policy that exists gets a verbose line.
+    state=$(fm_admission_state "$file")
+    case "$state" in
+      inert|active) echo "BOOTSTRAP_INFO: fleet admission control $state" ;;
+    esac
+  fi
+}
+
 if [ "${1:-}" = "install" ]; then
   shift
   [ $# -gt 0 ] || { echo "usage: fm-bootstrap.sh install <tool>..." >&2; exit 1; }
@@ -892,6 +929,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != 
   echo "BOOTSTRAP_INFO: crew harness override active: $crew"
 fi
 crew_dispatch_validate
+admission_control_validate
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   && ! fm_backlog_backend_manual "$CONFIG" && fm_tasks_axi_compatible; then
   echo "BOOTSTRAP_INFO: tasks-axi available"
