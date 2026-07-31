@@ -44,6 +44,12 @@
 # unrelated backlog contradiction is reported and repaired without being
 # misread as physical fleet saturation.
 #
+# operator_attention is stronger than that: the captain ruled it ADVISORY, so it
+# is measured and reported but can never bind a band in any enforcement mode.
+# It names how many finished-awaiting-merge and awaiting-gate units the operator
+# is holding, and how long they have accumulated there, because that fan-in is
+# where measured fleet throughput is actually decided.
+#
 # Telemetry seam: the decision record printed by --json is the unit of admission
 # telemetry. When the wake-outcome ledger exposes its extension seam, append this
 # record in the ledger owner's format; admission never opens a competing store.
@@ -195,6 +201,20 @@ RECORD=$(printf '%s' "$SNAPSHOT" | jq \
   | ([$tasks[].id] | group_by(.) | map(select(length > 1) | .[0])) as $dupes
   | ([$snap.backlog.records[]? | select(.hold_kind == "load")] | length) as $load_holds
   | ([$tasks[] | select((.current_state.state // "") == "")] | length) as $unknown_state
+
+  # Operator attention: units that have finished or reached a gate and are now
+  # waiting on the operator, with how long each has waited. A `paused` unit is a
+  # bounded external wait expected to clear on its own, and a `blocked` unit sits
+  # in the supervision queue rather than the operator landing queue, so neither
+  # counts here. The wait comes from the dated last event in the census; a unit
+  # whose event time is unreadable is disclosed, never guessed at.
+  | ([$tasks[] | select((.current_state.state // "") as $s | ["done","parked"] | index($s))]) as $parked
+  | ([$parked[] | .paths.status_log.last_event.age_seconds]) as $parked_ages
+  | ([$parked_ages[] | select(. != null)]) as $measured_ages
+  | (($parked_ages | length) - ($measured_ages | length)) as $unmeasured_parked
+  | (if ($measured_ages | length) == 0 then null else ($measured_ages | add) end) as $parked_seconds
+  | (if ($measured_ages | length) == 0 then null else ($measured_ages | max) end) as $oldest_parked
+
   | ($snapshot_age != null and ($sig.census_integrity.max_snapshot_age_seconds != null)
      and ($snapshot_age > $sig.census_integrity.max_snapshot_age_seconds)) as $stale
   | ($snapshot_age == null and ($sig.census_integrity.max_snapshot_age_seconds != null)) as $age_unmeasurable
@@ -324,7 +344,46 @@ RECORD=$(printf '%s' "$SNAPSHOT" | jq \
         configured_value: ($sig.active_workers.enforce // false),
         result: "preferred",
         note: "observation only; an ambiguous worker is counted as present, never dropped"
+      },
+      {
+        rule_id: "operator_attention.parked_units",
+        signal: "operator_attention.parked_unit_count",
+        observed: ($parked | length),
+        detail: ([([$parked[] | .current_state.state // "unknown"]
+                   | group_by(.) | map("\(.[0])=\(length)"))[],
+                  "with-pr=\([$parked[] | select((.pr.url // null) != null)] | length)"]
+                 | join(" ")),
+        unit: "count",
+        source: ($sig.operator_attention.source // "fresh-authority-census"),
+        observed_at: ($snap.generated // $timestamp),
+        freshness_seconds: $snapshot_age,
+        valid: $census_readable,
+        config_path: cfg("/signals/operator_attention/enforce"),
+        operator: "observe",
+        configured_value: ($sig.operator_attention.enforce // false),
+        result: "preferred",
+        note: "advisory by ruling: finished-awaiting-merge and awaiting-gate units are reported and never bind a band"
+      },
+      ({
+        rule_id: "operator_attention.parked_seconds",
+        signal: "operator_attention.total_parked_seconds",
+        observed: $parked_seconds,
+        detail: (if $oldest_parked == null then "no parked unit has a readable event time"
+                 else "oldest \($oldest_parked)s over \($measured_ages | length) measured unit(s)" end),
+        unit: "seconds",
+        source: ($sig.operator_attention.source // "fresh-authority-census"),
+        observed_at: ($snap.generated // $timestamp),
+        freshness_seconds: $snapshot_age,
+        valid: ($census_readable and $unmeasured_parked == 0),
+        config_path: cfg("/signals/operator_attention/enforce"),
+        operator: "observe",
+        configured_value: ($sig.operator_attention.enforce // false),
+        result: "preferred",
+        note: "advisory by ruling: accumulated operator-facing wait is reported and never binds a band"
       }
+      + (if $unmeasured_parked > 0 then
+           {unmeasured_reason: "\($unmeasured_parked) parked unit(s) have no readable last-event time; the total covers only the measured ones"}
+         else {} end))
     ]
     + [ ("coordination_debt", "host_resources", "reservation_pressure")
         | . as $name
@@ -374,6 +433,10 @@ RECORD=$(printf '%s' "$SNAPSHOT" | jq \
       unknown_state_count: $unknown_state,
       load_queue_depth: $load_holds,
       oldest_load_wait_seconds: null,
+      parked_unit_count: ($parked | length),
+      total_parked_seconds: $parked_seconds,
+      oldest_parked_seconds: $oldest_parked,
+      unmeasured_parked_count: $unmeasured_parked,
       override_authority: null,
       release_triggers: ($p.queue.release_triggers // []),
       rules: ($rules | map(. + {signal_band: .result, fleet_band: $band})),
@@ -395,7 +458,9 @@ case "$MODE" in
   brief)
     printf '%s' "$RECORD" | jq -r '
       "admission: \(.decision_band) (\(.action); \(.active_worker_count) worker(s), "
-      + "\(.load_queue_depth) load-held; authority \(if .authority_held then "held" else "not held" end); config \(.config_digest))"
+      + "\(.load_queue_depth) load-held, \(.parked_unit_count) awaiting the operator"
+      + (if .total_parked_seconds == null then "" else " for \((.total_parked_seconds / 360 | round) / 10)h" end)
+      + "; authority \(if .authority_held then "held" else "not held" end); config \(.config_digest))"
       + (if .decision_band == "preferred" then "" else "\n  controlling: \(.controlling_rules | join(", "))" end)'
     ;;
   *)

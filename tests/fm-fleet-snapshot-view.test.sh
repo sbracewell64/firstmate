@@ -755,6 +755,50 @@ test_parked_scout_decision_stays_pending() {
   pass "a scout still parked at a decision stays pending (terminal clear does not over-fire)"
 }
 
+# The census is the only place a consumer may learn HOW LONG a task has been
+# sitting on its last event, so the dating has to be present, honest about the
+# time base, and explicitly null rather than zero when it cannot be measured.
+test_last_event_is_dated_against_the_observation_time() {
+  local home fakebin out
+  home=$(make_home dated-events)
+  mkdir -p "$home/projects/dated-wt"
+  fm_write_meta "$home/state/dated.meta" \
+    "window=firstmate:fm-dated" \
+    "worktree=$home/projects/dated-wt" \
+    "project=firstmate" \
+    "harness=codex" \
+    "kind=ship" \
+    "mode=ship"
+  printf 'done: PR https://example.test/pull/9 checks green\n' > "$home/state/dated.status"
+  touch -d '2026-07-29T00:00:00Z' "$home/state/dated.status" 2>/dev/null \
+    || touch -t 202607290000 "$home/state/dated.status" \
+    || { pass "skip: this platform cannot set a file time"; return 0; }
+  fakebin=$(make_fakebin "$home")
+
+  # 2026-07-29T00:00:00Z observed at 2026-07-30T12:00:00Z is exactly 36 hours.
+  out=$(PATH="$fakebin:$PATH" FM_SNAPSHOT_NOW=2026-07-30T12:00:00Z FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "dated") | .paths.status_log.last_event
+    | .at == "2026-07-29T00:00:00Z" and .age_seconds == 129600
+  ' >/dev/null || fail "the last event was not dated against the observation time: $out"
+
+  # A status file written after the observation time is a clock artifact, not a
+  # wait running backwards.
+  out=$(PATH="$fakebin:$PATH" FM_SNAPSHOT_NOW=2026-07-28T00:00:00Z FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "dated") | .paths.status_log.last_event.age_seconds == 0
+  ' >/dev/null || fail "a future-dated status file must floor at zero, not go negative: $out"
+
+  # No status file at all is unmeasured, and must not read as "waited zero".
+  rm -f "$home/state/dated.status"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  printf '%s' "$out" | jq -e '
+    .tasks[] | select(.id == "dated") | .paths.status_log.last_event
+    | .at == null and .age_seconds == null
+  ' >/dev/null || fail "an absent status file must date to null, never zero: $out"
+  pass "the last status event is dated against the observation time, and unmeasurable dating stays null"
+}
+
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
@@ -766,6 +810,7 @@ test_open_decision_transfers_to_captain_hold
 test_open_decision_clears_on_keyed_resolution
 test_completed_scout_report_is_pointer_not_pending
 test_parked_scout_decision_stays_pending
+test_last_event_is_dated_against_the_observation_time
 test_scout_reports_include_teardown_reports
 test_backlog_tasks_axi_forms_and_overrides
 test_view_renders_snapshot

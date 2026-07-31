@@ -255,6 +255,7 @@ Load `diagnostic-reasoning` before scoping a reported bug and before acting on a
 Fleet admission is a third layer above routing and scheduling: it decides whether the fleet should accept another task at all right now, from fleet-snapshot properties only.
 It never inspects the incoming task, so the same snapshot returns the same band for every task, and it adds no concurrency cap.
 It is inert unless this home configures `_scheduling.admission_control`; when it is configured, capture the request in its backlog, run `bin/fm-admission.sh` before routing, and load `fleet-admission` for any band other than preferred.
+Its operator-attention reading, the count and accumulated wait of work finished awaiting a merge or parked at a gate, is advisory by captain ruling: it is reported, never binding, so load `fleet-admission` before acting on it or relaying it rather than treating a large number as a reason to hold work.
 
 Treat file or subsystem overlap as a risk signal rather than an automatic reason to wait, and dispatch isolated work immediately with no concurrency cap when each change can be independently implemented and validated and the selected delivery path can reconcile ordinary rebases or conflicts.
 Serialize only for a true semantic dependency, shared mutable external state, incompatible concurrent migration, or another concrete condition that makes independent progress or reconciliation unsafe; same-file editing alone is insufficient, and genuine blockers remain durable.

@@ -44,6 +44,7 @@ def signal_source: {
   admission_queue_pressure: "tasks-axi-load-holds-plus-ledger",
   coordination_debt: "wake-outcome-ledger",
   active_workers: "fresh-authority-census",
+  operator_attention: "fresh-authority-census",
   host_resources: "node-summaries",
   reservation_pressure: "admission-registry"
 };
@@ -53,16 +54,23 @@ def signal_keys: {
   admission_queue_pressure: ["enabled","enforce","source","queued_soft_count","queued_hard_count","oldest_wait_soft_seconds","oldest_wait_hard_seconds"],
   coordination_debt: ["enabled","enforce","source","pending_wakes_soft_count","pending_wakes_hard_count","oldest_unhandled_wake_soft_seconds","oldest_unhandled_wake_hard_seconds","handled_wake_latency_window_seconds","handled_wake_latency_soft_seconds","handled_wake_latency_hard_seconds"],
   active_workers: ["enabled","enforce","source","soft_count","hard_count"],
+  operator_attention: ["enabled","enforce","source","parked_units_soft_count","parked_units_hard_count","total_parked_soft_seconds","total_parked_hard_seconds"],
   host_resources: ["enabled","enforce","source","metrics"],
   reservation_pressure: ["enabled","enforce","source","soft_count","hard_count"]
 };
 # Sources with no collector on this machine today. Enabling one would record an
 # invented value instead of an observation, so the schema refuses it outright.
 def uncollectable_signals: ["coordination_debt","host_resources","reservation_pressure"];
+# Signals the captain declared ADVISORY: measured and reported, never binding.
+# This refusal is deliberately independent of enforcement_mode, so a future
+# evidence-gated mode that relaxes numeric enforcement still cannot make one of
+# these signals close the fleet.
+def advisory_signals: ["operator_attention"];
 def threshold_pairs: {
   admission_queue_pressure: [["queued_soft_count","queued_hard_count"],["oldest_wait_soft_seconds","oldest_wait_hard_seconds"]],
   coordination_debt: [["pending_wakes_soft_count","pending_wakes_hard_count"],["oldest_unhandled_wake_soft_seconds","oldest_unhandled_wake_hard_seconds"],["handled_wake_latency_soft_seconds","handled_wake_latency_hard_seconds"]],
   active_workers: [["soft_count","hard_count"]],
+  operator_attention: [["parked_units_soft_count","parked_units_hard_count"],["total_parked_soft_seconds","total_parked_hard_seconds"]],
   reservation_pressure: [["soft_count","hard_count"]]
 };
 
@@ -97,6 +105,8 @@ def signal_error($name; $sig):
           | .[0]] | join(", "))
   elif ($sig.enabled == true) and (uncollectable_signals | index($name)) then
     "signals.\($name) cannot be enabled: its \(signal_source[$name]) source is not collectable yet"
+  elif ($sig.enforce == true) and (advisory_signals | index($name)) then
+    "signals.\($name).enforce is refused: this signal is advisory by ruling - it is reported in the observe bands and never binds a band"
   elif ($sig.enforce == true) and ($sig.enabled != true) then
     "signals.\($name).enforce requires enabled"
   else empty

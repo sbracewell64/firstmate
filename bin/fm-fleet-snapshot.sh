@@ -25,6 +25,10 @@
 #     state, source, detail, and raw line separately.
 #     paths.status_log.last_event is historical wake-event data only, never
 #     current state.
+#     paths.status_log.last_event.at and .age_seconds date that last event from
+#     the status file's modification time against this snapshot's observation
+#     time. Both are null when the file is absent or its time cannot be read, so
+#     a consumer can tell "not yet measured" from "measured as zero".
 #     hints.open_decisions is the keyed open-decision set returned by
 #     fm-classify-lib.sh's authoritative status_open_decisions fold and reconciled
 #     against current_state; hints.pending_decision and hints.blocked_event are
@@ -194,6 +198,12 @@ last_nonempty_line() {  # <file>
   grep -v '^[[:space:]]*$' "$1" 2>/dev/null | tail -1
 }
 
+epoch_to_iso() {  # <epoch> - print UTC ISO-8601, or nothing when unconvertible
+  date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null \
+    || true
+}
+
 crew_state_json() {  # <id>
   local id=$1 raw rest state source detail sep
   raw=$(
@@ -226,20 +236,36 @@ crew_state_json() {  # <id>
 }
 
 status_event_json() {  # <status-log>
-  local log=$1 present=0 raw='' verb='' note=''
+  local log=$1 present=0 raw='' verb='' note='' mtime='' at='' age=null
   if [ -f "$log" ]; then
     present=1
     raw=$(last_nonempty_line "$log" || true)
     verb=$(status_line_verb "$raw")
     note=$(status_line_note "$raw")
+    mtime=$(file_mtime_epoch "$log")
+    case "$mtime" in
+      ''|*[!0-9]*) ;;
+      *)
+        at=$(epoch_to_iso "$mtime")
+        age=$(( SNAPSHOT_EPOCH - mtime ))
+        # A status file written after the observation time is a clock artifact,
+        # not negative waiting; report it as zero rather than as a wait in reverse.
+        [ "$age" -lt 0 ] && age=0
+        ;;
+    esac
   fi
   jq -n \
     --arg path "$log" \
     --arg raw "$raw" \
     --arg verb "$verb" \
     --arg note "$note" \
+    --arg at "$at" \
+    --argjson age "$age" \
     --argjson present "$(bool_json "$present")" \
-    '{path:$path,present:$present,kind:"event_history",last_event:{state:$verb,note:$note,raw:$raw}}'
+    '{path:$path,present:$present,kind:"event_history",
+      last_event:{state:$verb,note:$note,raw:$raw,
+                  at:($at | if . == "" then null else . end),
+                  age_seconds:$age}}'
 }
 
 first_pr_url_in_file() {  # <file>

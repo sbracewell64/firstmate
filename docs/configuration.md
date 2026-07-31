@@ -322,6 +322,12 @@ The standing contract that isolated work dispatches immediately with no concurre
           "source": "fresh-authority-census",
           "soft_count": null, "hard_count": null
         },
+        "operator_attention": {
+          "enabled": true, "enforce": false,
+          "source": "fresh-authority-census",
+          "parked_units_soft_count": null, "parked_units_hard_count": null,
+          "total_parked_soft_seconds": null, "total_parked_hard_seconds": null
+        },
         "coordination_debt": {
           "enabled": false, "enforce": false,
           "source": "wake-outcome-ledger",
@@ -399,6 +405,14 @@ When a limit is configured and the snapshot's age cannot be measured, the freshn
 `backlog_consistency` is deliberately separate from `census_integrity`: a backlog record that contradicts task metadata must be reported and repaired, but it is not evidence that the fleet is physically saturated, and collapsing both into one health bit would close the fleet for an unrelated bookkeeping error.
 `admission_queue_pressure` counts `hold_kind=load` requests; its oldest-wait age stays unmeasured because backlog age is task age, not admission wait age.
 `active_workers` records the live worker count as an explanatory baseline with no cap.
+
+`operator_attention` is the advisory signal: it names how many units are finished awaiting a merge or parked at a gate, and how long they have accumulated waiting there.
+It is measured because that fan-in point, not worker capacity, is where fleet throughput has been observed to be decided, and it is reported so the size of that queue is visible at intake, at cleanup, and at session start.
+It is advisory by ruling: it never contributes a band, and `enforce: true` is refused independently of `enforcement_mode`, so a later evidence-gated mode cannot make it close the fleet either.
+Its thresholds exist so a home can record the reference points it judges by, exactly as the provider concurrency caps in `_governance` are recorded and applied by judgment rather than by machine enforcement.
+A unit counts when the census reports its current state as `done` or `parked`; a `paused` unit is a bounded external wait expected to clear on its own, a `blocked` unit belongs to the supervision queue rather than the operator landing queue, and a unit whose current state cannot be read stays in `active_workers`'s unknown-state count rather than being guessed into this one.
+Each unit's wait is the age of its last recorded event, and units whose event time cannot be read are disclosed in the rule rather than dropped from the count or estimated.
+
 `coordination_debt`, `host_resources`, and `reservation_pressure` have no collector in this home yet and must stay `enabled: false`; enabling one would record an invented value instead of an observation.
 
 `authority` accepts only `mode: "single-primary"`.
@@ -414,7 +428,7 @@ When the file exists, bootstrap validates the policy with `jq` on every session 
 A home with no policy, or a note-only policy, stays silent; with `FM_BOOTSTRAP_VERBOSE_FACTS=1` bootstrap emits `BOOTSTRAP_INFO: fleet admission control inert|active` for a policy that exists, while an absent policy stays silent even then.
 Anything malformed is reported as `ADMISSION_CONTROL: invalid config/crew-dispatch.json _scheduling.admission_control - <reason>` and must be corrected rather than worked around.
 
-Validation refuses a policy that has an unknown field at any level, a threshold that is not null or a non-negative number, a soft threshold more restrictive than its hard counterpart, a threshold key without a `_count` or `_seconds` unit suffix, an unrecognized signal source, a signal enabled while its source is uncollectable, `enforce` set while its signal is disabled or while `enforcement_mode` is `safety-only`, a queue action naming any hold kind other than `load`, a `hold_kind` or `auto_reconsider` on the admitting `preferred` band, a `queue.release_triggers` value other than exactly `["teardown", "session-start"]`, a second queue substrate, telemetry disabled while admission is enabled, reservations or a non-single-primary authority enabled before their dormant trigger fires, or a dormant trigger with no named checkpoint.
+Validation refuses a policy that has an unknown field at any level, a threshold that is not null or a non-negative number, a soft threshold more restrictive than its hard counterpart, a threshold key without a `_count` or `_seconds` unit suffix, an unrecognized signal source, a signal enabled while its source is uncollectable, `enforce` set on an advisory signal, `enforce` set while its signal is disabled or while `enforcement_mode` is `safety-only`, a queue action naming any hold kind other than `load`, a `hold_kind` or `auto_reconsider` on the admitting `preferred` band, a `queue.release_triggers` value other than exactly `["teardown", "session-start"]`, a second queue substrate, telemetry disabled while admission is enabled, reservations or a non-single-primary authority enabled before their dormant trigger fires, or a dormant trigger with no named checkpoint.
 Unknown fields are refused rather than ignored so a typo cannot silently disable a safety condition.
 
 `bin/fm-admission.sh` prints the band and its explanation and exits `0` for preferred, `3` for soft, `4` for hard, and `2` when the policy is malformed or the census cannot be evaluated, so a caller that ignores the output still stops safely.

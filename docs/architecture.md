@@ -165,6 +165,7 @@ The existing per-home session lock is the single-primary admission authority, so
 
 Nothing numeric enforces.
 Only the deterministic safety conditions - admission authority, census integrity, and snapshot freshness - can set a band, and the schema refuses a configuration that tries to enable a threshold whose predictive value is unmeasured.
+Operator attention - the count and accumulated wait of units finished awaiting a merge or parked at a gate - is measured and reported on the same seams but is advisory by captain ruling, so the schema refuses to let it enforce independently of `enforcement_mode`, keeping the ruling structural rather than dependent on the mode that happens to be configured.
 The dormant distributed machinery (reservations, remote nodes, a second intake authority) is settled as a validated schema contract rather than as running code, so activating it later cannot change admission's semantics.
 `docs/configuration.md` "Fleet admission control" owns the schema and [`fleet-admission`](../.agents/skills/fleet-admission/SKILL.md) owns firstmate's procedure for each band.
 

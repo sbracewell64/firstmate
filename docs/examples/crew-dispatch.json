@@ -69,6 +69,16 @@
           "soft_count": null,
           "hard_count": null
         },
+        "_operator_attention_note": "ADVISORY by ruling: reported in the observe bands, never binding. enforce:true is refused whatever the enforcement_mode is.",
+        "operator_attention": {
+          "enabled": true,
+          "enforce": false,
+          "source": "fresh-authority-census",
+          "parked_units_soft_count": null,
+          "parked_units_hard_count": null,
+          "total_parked_soft_seconds": null,
+          "total_parked_hard_seconds": null
+        },
         "coordination_debt": {
           "enabled": false,
           "enforce": false,

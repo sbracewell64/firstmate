@@ -2,7 +2,7 @@
 name: fleet-admission
 description: >-
   Agent-only procedure for fleet admission control, the third layer above routing and scheduling.
-  Use at intake before dispatching new work in a home with an active admission policy, and whenever an admission band other than preferred is returned, released, or overridden.
+  Use at intake before dispatching new work in a home with an active admission policy, whenever an admission band other than preferred is returned, released, or overridden, and before acting on or reporting the advisory operator-attention observation.
 user-invocable: false
 metadata:
   internal: true
@@ -52,6 +52,29 @@ Read the band, not the exit code alone, and act on it:
 An unknown required signal has already been mapped to its configured band by the evaluator; treat the result as that band and name the missing or contradictory evidence when you report it.
 
 Admitting several requests in one intake means evaluating them one at a time: each admission changes the snapshot before the next is evaluated.
+
+## The advisory operator-attention signal
+
+Two rules in every decision record - `operator_attention.parked_units` and `operator_attention.parked_seconds` - name how many units are finished awaiting a merge or parked at a gate, and how long they have accumulated there.
+The captain ruled this signal advisory: it is reported and never binding, the same posture the provider concurrency caps hold.
+
+That ruling is enforced in the schema rather than left to memory, so there is nothing to decide here about whether it may change a band.
+It may not, in any enforcement mode.
+The one thing this procedure asks of you is the discipline that goes with an advisory number.
+
+- Never defer, refuse, hold, or slow a request because this observation is large.
+  A `preferred` band with a large parked count is still `preferred`, and the intake table above is the whole procedure.
+- Never read it as saturation.
+  It measures work the fleet has already finished or already stopped at a gate, not capacity the fleet is currently spending.
+- Report it as its own values, never as a score.
+  It is a count of units and an accumulated wait; both come from the census, and neither is combined into anything.
+- When a unit's wait cannot be measured, the rule discloses that instead of estimating.
+  Carry the disclosure with the number when you relay it; a total over some of the units is not a total.
+
+What it is for is evidence.
+A growing parked count and a growing accumulated wait are the measured shape of the fan-in the captain owns, and they belong in the captain's next fleet review with the actual numbers.
+Report it as the plain consequence - how many finished pieces of work are waiting on them, and for how long - never as a band, a signal name, a threshold, or a rule id.
+Follow the same rhythm as any other observation: it is digest-level, not an interrupt, unless the captain asked to be told sooner or a specific piece of waiting work has become urgent on its own.
 
 ## Queueing a deferred or refused request
 
@@ -108,4 +131,5 @@ If a telemetry write ever fails, surface the degraded evidence and apply the con
 
 Do not build a distributed registry, reservation store, lease daemon, RPC service, or remote agent while one local session is the only intake authority; the per-home session lock already serializes the real fleet.
 Do not populate a numeric threshold from intuition: the configured `enforcement_mode` refuses it, and the report checkpoint for each dormant mechanism is the place to revisit it with evidence.
+Do not propose making operator attention bind a band; that posture is a captain ruling, and only the captain can change it.
 An admission daemon, a task-weighted admission score, and provider quota inside the admission band are permanently rejected designs, not deferred ones.

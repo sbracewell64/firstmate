@@ -59,6 +59,7 @@ write_policy() {  # <home>
         "admission_queue_pressure": {"enabled": true, "enforce": false, "source": "tasks-axi-load-holds-plus-ledger", "queued_soft_count": null, "queued_hard_count": null, "oldest_wait_soft_seconds": null, "oldest_wait_hard_seconds": null},
         "coordination_debt": {"enabled": false, "enforce": false, "source": "wake-outcome-ledger", "pending_wakes_soft_count": null, "pending_wakes_hard_count": null, "oldest_unhandled_wake_soft_seconds": null, "oldest_unhandled_wake_hard_seconds": null, "handled_wake_latency_window_seconds": null, "handled_wake_latency_soft_seconds": null, "handled_wake_latency_hard_seconds": null},
         "active_workers": {"enabled": true, "enforce": false, "source": "fresh-authority-census", "soft_count": null, "hard_count": null},
+        "operator_attention": {"enabled": true, "enforce": false, "source": "fresh-authority-census", "parked_units_soft_count": null, "parked_units_hard_count": null, "total_parked_soft_seconds": null, "total_parked_hard_seconds": null},
         "host_resources": {"enabled": false, "enforce": false, "source": "node-summaries", "metrics": {}},
         "reservation_pressure": {"enabled": false, "enforce": false, "source": "admission-registry", "soft_count": null, "hard_count": null}
       },
@@ -93,6 +94,46 @@ write_snapshot() {  # <path>
     {"id": "decide-1", "hold_kind": "captain"}
   ]},
   "main_inventory": {"valid": false, "reason": "in-flight backlog item has no child metadata", "orphan_in_flight": ["old-task"]}
+}
+JSON
+}
+
+# A census holding the operator-attention population and, deliberately, every
+# state that must NOT be counted as waiting on the operator.
+#   done-old      finished 35.1 h ago with a PR - the classic parked completion
+#   done-recent   finished 1 h ago, no PR yet
+#   gate          parked at a gate 2 h ago
+#   done-undated  finished, but its event time is unreadable
+#   busy          still working
+#   external      paused on a bounded external wait that clears on its own
+#   stuck         blocked, which is the supervision queue, not the landing queue
+write_parked_snapshot() {  # <path>
+  cat > "$1" <<JSON
+{
+  "schema": "fm-fleet-snapshot.v1",
+  "generated": "$SNAP_GENERATED",
+  "tasks": [
+    {"id": "done-old", "kind": "crewmate", "current_state": {"state": "done"},
+     "pr": {"url": "https://example.test/pull/1"},
+     "paths": {"status_log": {"last_event": {"age_seconds": 126360}}}},
+    {"id": "done-recent", "kind": "crewmate", "current_state": {"state": "done"},
+     "pr": {"url": null},
+     "paths": {"status_log": {"last_event": {"age_seconds": 3600}}}},
+    {"id": "gate", "kind": "crewmate", "current_state": {"state": "parked"},
+     "pr": {"url": "https://example.test/pull/2"},
+     "paths": {"status_log": {"last_event": {"age_seconds": 7200}}}},
+    {"id": "done-undated", "kind": "crewmate", "current_state": {"state": "done"},
+     "pr": {"url": null},
+     "paths": {"status_log": {"last_event": {"age_seconds": null}}}},
+    {"id": "busy", "kind": "crewmate", "current_state": {"state": "working"},
+     "paths": {"status_log": {"last_event": {"age_seconds": 30}}}},
+    {"id": "external", "kind": "crewmate", "current_state": {"state": "paused"},
+     "paths": {"status_log": {"last_event": {"age_seconds": 999999}}}},
+    {"id": "stuck", "kind": "crewmate", "current_state": {"state": "blocked"},
+     "paths": {"status_log": {"last_event": {"age_seconds": 888888}}}}
+  ],
+  "backlog": {"records": []},
+  "main_inventory": {"valid": true, "reason": null}
 }
 JSON
 }
@@ -426,6 +467,109 @@ test_active_workers_are_observed_and_never_capped() {
   pass "active workers and queue depth are observed with no cap and no invented values"
 }
 
+# The captain ruled operator attention ADVISORY: measured and reported, never
+# binding. The load-bearing case is the last one - thresholds set BELOW the
+# observed values still leave the fleet admitting.
+test_operator_attention_is_measured_and_never_binds() {
+  local home snap rec units seconds
+  home=$(make_home attention)
+  write_policy "$home"
+  snap="$home/snap.json"
+  write_parked_snapshot "$snap"
+  run_owned "$home" --json --snapshot "$snap"; rec=$OUT
+  expect_code 0 "$ADMISSION_RC" "a fleet with parked completions still admits"
+
+  [ "$(printf '%s' "$rec" | jq -r '.parked_unit_count')" = 4 ] \
+    || fail "finished-awaiting-merge and awaiting-gate units must be counted: $rec"
+  # 126360 + 3600 + 7200; done-undated contributes nothing because it is unmeasured.
+  [ "$(printf '%s' "$rec" | jq -r '.total_parked_seconds')" = 137160 ] \
+    || fail "the accumulated operator-facing wait must be the sum of the measured units: $rec"
+  [ "$(printf '%s' "$rec" | jq -r '.oldest_parked_seconds')" = 126360 ] \
+    || fail "the oldest parked unit must be named: $rec"
+
+  units=$(printf '%s' "$rec" | jq -r '.rules[] | select(.rule_id == "operator_attention.parked_units")')
+  seconds=$(printf '%s' "$rec" | jq -r '.rules[] | select(.rule_id == "operator_attention.parked_seconds")')
+  [ -n "$units" ] && [ -n "$seconds" ] \
+    || fail "operator attention must appear as named rules in the census"
+  [ "$(printf '%s' "$units" | jq -r '.operator')" = observe ] \
+    || fail "operator attention must be an observation, not a comparison"
+  [ "$(printf '%s' "$units" | jq -r '.source')" = fresh-authority-census ] \
+    || fail "the rule must name the source its values came from"
+  assert_contains "$(printf '%s' "$units" | jq -r '.detail')" "done=3 parked=1" \
+    "the rule must name which states it counted"
+  assert_contains "$(printf '%s' "$units" | jq -r '.detail')" "with-pr=2" \
+    "the rule must name how much of the wait is a merge queue"
+  assert_contains "$(printf '%s' "$seconds" | jq -r '.detail')" "oldest 126360s" \
+    "the accumulated wait must name its oldest contributor"
+
+  # Working, paused, and blocked units are all excluded, and each for its own
+  # reason: still spending capacity, waiting on something that clears itself,
+  # and sitting in the supervision queue rather than the operator's.
+  [ "$(printf '%s' "$rec" | jq -r '.active_worker_count')" = 7 ] \
+    || fail "every census row must still be counted as a live worker"
+
+  # The ruling itself: thresholds below the observed values change nothing.
+  patch_policy "$home" '
+    ._scheduling.admission_control.signals.operator_attention.parked_units_soft_count = 1
+    | ._scheduling.admission_control.signals.operator_attention.parked_units_hard_count = 2
+    | ._scheduling.admission_control.signals.operator_attention.total_parked_soft_seconds = 60
+    | ._scheduling.admission_control.signals.operator_attention.total_parked_hard_seconds = 120'
+  run_owned "$home" --json --snapshot "$snap"; rec=$OUT
+  expect_code 0 "$ADMISSION_RC" "an advisory signal past its reference points still admits"
+  [ "$(printf '%s' "$rec" | jq -r '.decision_band')" = preferred ] \
+    || fail "operator attention must never move the fleet band: $rec"
+  [ "$(printf '%s' "$rec" | jq -r '.controlling_rules | length')" = 0 ] \
+    || fail "an advisory signal must never become a controlling rule: $rec"
+  [ "$(printf '%s' "$rec" | jq -r '.rules[] | select(.rule_id | startswith("operator_attention")) | .signal_band' | sort -u)" = preferred ] \
+    || fail "every operator-attention rule must resolve preferred whatever the thresholds say"
+  pass "operator attention is measured, explained, and never binds a band"
+}
+
+# The advisory numbers reach firstmate through the one line session start and
+# cleanup already print, so they have to be on it.
+test_operator_attention_appears_in_the_brief_line() {
+  local home snap
+  home=$(make_home attentionbrief)
+  write_policy "$home"
+  snap="$home/snap.json"
+  write_parked_snapshot "$snap"
+  run_owned "$home" --brief --snapshot "$snap"
+  assert_contains "$OUT" "4 awaiting the operator" \
+    "the summary line must name how many units are waiting on the operator"
+  # 137160s is 38.1 h.
+  assert_contains "$OUT" "38.1h" \
+    "the summary line must name the accumulated wait in hours"
+  pass "the summary line names the parked count and its accumulated wait"
+}
+
+test_operator_attention_discloses_an_unmeasurable_wait() {
+  local home snap rec seconds
+  home=$(make_home attentionunmeasured)
+  write_policy "$home"
+  snap="$home/snap.json"
+  write_parked_snapshot "$snap"
+  run_owned "$home" --json --snapshot "$snap"; rec=$OUT
+
+  seconds=$(printf '%s' "$rec" | jq -r '.rules[] | select(.rule_id == "operator_attention.parked_seconds")')
+  [ "$(printf '%s' "$seconds" | jq -r '.valid')" = false ] \
+    || fail "a total that covers only some of its units must not claim to be valid"
+  assert_contains "$(printf '%s' "$seconds" | jq -r '.unmeasured_reason')" "1 parked unit" \
+    "the rule must say how many units it could not measure"
+  [ "$(printf '%s' "$rec" | jq -r '.unmeasured_parked_count')" = 1 ] \
+    || fail "the record must carry the unmeasured count for a reader that never opens the rules"
+  [ "$(printf '%s' "$rec" | jq -r '.decision_band')" = preferred ] \
+    || fail "an unmeasurable advisory wait must not close the fleet either: $rec"
+
+  # A census with no parked unit at all reports null, never a fabricated zero.
+  write_snapshot "$snap"
+  run_owned "$home" --json --snapshot "$snap"; rec=$OUT
+  [ "$(printf '%s' "$rec" | jq -r '.parked_unit_count')" = 0 ] \
+    || fail "a fleet with nothing parked must report zero units"
+  [ "$(printf '%s' "$rec" | jq -r '.total_parked_seconds')" = null ] \
+    || fail "no measured unit means no total, not a total of zero: $rec"
+  pass "an unmeasurable parked wait is disclosed rather than estimated or zeroed"
+}
+
 test_uncollectable_signals_are_recorded_as_unmeasured() {
   local home snap rec name
   home=$(make_home unmeasured)
@@ -517,6 +661,15 @@ test_schema_validation_refuses_every_named_failure() {
     'source is not collectable yet' 'a signal enabled without a collector'
   check_invalid '._scheduling.admission_control.signals.mystery = {"enabled": false}' \
     'unknown signal: mystery' 'an unknown signal'
+  # The advisory ruling is refused on its own terms, not merely as a side effect
+  # of safety-only, so a future evidence-gated mode cannot quietly unlock it.
+  check_invalid '._scheduling.admission_control.signals.operator_attention.enforce = true' \
+    'advisory by ruling' 'enforcement on an advisory signal'
+  check_invalid '._scheduling.admission_control.signals.operator_attention.total_parked_soft_seconds = 900
+                 | ._scheduling.admission_control.signals.operator_attention.total_parked_hard_seconds = 300' \
+    'soft threshold must not be more restrictive than hard' 'an inverted advisory threshold pair'
+  check_invalid '._scheduling.admission_control.signals.operator_attention.parked_hours = 3' \
+    'unknown signals.operator_attention field: parked_hours' 'an unrecognized advisory threshold key'
   check_invalid '._scheduling.admission_control.reservations.enabled = true' \
     'reservations are dormant' 'reservations enabled before their trigger'
   check_invalid '._scheduling.admission_control.authority.mode = "multi-writer"' \
@@ -610,6 +763,9 @@ test_unmeasurable_snapshot_age_fails_closed_when_a_limit_is_configured
 test_single_primary_authority_is_the_existing_session_lock
 test_every_rule_carries_the_five_part_explanation
 test_active_workers_are_observed_and_never_capped
+test_operator_attention_is_measured_and_never_binds
+test_operator_attention_appears_in_the_brief_line
+test_operator_attention_discloses_an_unmeasurable_wait
 test_uncollectable_signals_are_recorded_as_unmeasured
 test_ledger_extension_seam_is_named_but_not_integrated
 test_schema_validation_refuses_every_named_failure
