@@ -82,14 +82,47 @@ give_unlanded_branch() {  # <slot> <branch> [n]
 }
 
 # A fake `treehouse` whose `status --json` echoes the fixture, on a PATH shim.
-# Any other subcommand fails loudly: the guard must never invoke one.
+# `status --help` advertises --json, which is how the guard probes capability
+# (treehouse v2.1.0 and newer). Any other subcommand fails loudly: the guard
+# must never invoke one.
 install_fake_treehouse() {  # <fakebin> <json>
   local fakebin=$1 json=$2
   printf '%s' "$json" > "$fakebin/../treehouse-status.json"
   cat > "$fakebin/treehouse" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" = status ] && [ "${2:-}" = --help ]; then
+  printf 'Usage:\n  treehouse status [flags]\n\nFlags:\n  -h, --help   help for status\n      --json   Print pool status as JSON\n'
+  exit 0
+fi
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
   cat "$(dirname "$0")/../treehouse-status.json"
+  exit 0
+fi
+echo "fake treehouse: unexpected invocation: $*" >&2
+exit 3
+SH
+  chmod +x "$fakebin/treehouse"
+}
+
+# A fake `treehouse` with NO --json support, modelling the CI-pinned v2.0.1:
+# `status --help` advertises no --json flag, and plain `status` prints the
+# human-readable table. Passing --json to the real v2.0.1 exits 1 with
+# "unknown flag", so this fake refuses it the same way.
+install_fake_treehouse_plain() {  # <fakebin> <table>
+  local fakebin=$1 table=$2
+  printf '%s' "$table" > "$fakebin/../treehouse-status.txt"
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = status ] && [ "${2:-}" = --help ]; then
+  printf 'Usage:\n  treehouse status [flags]\n\nFlags:\n  -h, --help   help for status\n'
+  exit 0
+fi
+if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then
+  echo "unknown flag: --json" >&2
+  exit 1
+fi
+if [ "${1:-}" = status ]; then
+  cat "$(dirname "$0")/../treehouse-status.txt"
   exit 0
 fi
 echo "fake treehouse: unexpected invocation: $*" >&2
@@ -114,6 +147,15 @@ run_guard() {  # <proj> <json> [state-dir]
   local proj=$1 json=$2 state=${3:-} fakebin
   fakebin=$(fm_fakebin "$(dirname "$proj")")
   install_fake_treehouse "$fakebin" "$json"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="${state:-$(dirname "$proj")/state}" \
+    "$GUARD" check "$proj" 2>&1
+}
+
+# Run the guard for <proj> against a no-json treehouse serving <table>.
+run_guard_plain() {  # <proj> <table> [state-dir]
+  local proj=$1 table=$2 state=${3:-} fakebin
+  fakebin=$(fm_fakebin "$(dirname "$proj")")
+  install_fake_treehouse_plain "$fakebin" "$table"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="${state:-$(dirname "$proj")/state}" \
     "$GUARD" check "$proj" 2>&1
 }
@@ -332,5 +374,57 @@ assert_contains "$out" "worktree_owner_identity=" "(l) emits the identity field"
 [ "$(printf '%s\n' "$out" | grep -c '=$')" = 2 ] \
   || fail "(l) owner-fields invented an owner with no resolvable occupant: $out"
 pass "(l) owner-fields records empty fields rather than fabricating ownership"
+
+# --- (n) no-json treehouse: the CI-pinned v2.0.1 path ----------------------
+#
+# treehouse before v2.1.0 has no `status --json` at all, and CI pins v2.0.1, so
+# the guard must still inspect the pool through the human-readable table rather
+# than refusing every spawn. These pin the compensations that table needs.
+
+proj=$(make_pool plain-unlanded 1)
+slot=$(slot_path "$proj" 1)
+give_unlanded_branch "$slot" fm/plain-unlanded 2
+out=$(run_guard_plain "$proj" "1     available    $slot
+") && fail "(n) guard accepted an unlanded slot read from the plain table"
+assert_contains "$out" "branch fm/plain-unlanded with 2 commits not on heads/main" "(n) names the evidence from the plain table"
+pass "(n) a no-json treehouse still refuses an unlanded slot instead of failing the spawn"
+
+proj=$(make_pool plain-empty-slot 1)
+slot=$(slot_path "$proj" 1)
+out=$(run_guard_plain "$proj" "1     available    $slot
+") || fail "(n2) guard refused a demonstrably empty slot on the plain table: $out"
+[ -z "$out" ] || fail "(n2) guard was not silent on a clean plain-table pool: $out"
+out=$(run_guard_plain "$proj" "") || fail "(n3) guard refused an empty plain-table pool: $out"
+pass "(n2) a clean slot passes silently and empty plain output is an empty pool"
+
+# Process continuation lines are INDENTED under their slot and must be skipped,
+# while a real row that cannot be parsed must refuse rather than be dropped.
+proj=$(make_pool plain-continuation 1)
+slot=$(slot_path "$proj" 1)
+give_unlanded_branch "$slot" fm/plain-continuation
+out=$(run_guard_plain "$proj" "1     in-use       $slot
+                   bash (4242), claude (4243)
+") || fail "(n4) guard refused because it treated a process continuation line as a slot: $out"
+[ -z "$out" ] || fail "(n4) guard was not silent for an in-use slot with continuation lines: $out"
+out=$(run_guard_plain "$proj" "1     available
+") && fail "(n5) guard passed on a plain row with no path"
+assert_contains "$out" "could not parse" "(n5) reports the unparseable row"
+pass "(n4) indented process lines are skipped while an unparseable row refuses"
+
+# A path under $HOME is printed abbreviated with a leading tilde.
+proj=$(make_pool plain-tilde 1)
+slot=$(slot_path "$proj" 1)
+give_unlanded_branch "$slot" fm/plain-tilde
+tilde_row=$(printf '1     available    ~/%s\n' "${slot#"$HOME"/}")
+case "$slot" in
+  "$HOME"/*)
+    out=$(run_guard_plain "$proj" "$tilde_row") && fail "(n6) guard accepted a tilde-abbreviated unlanded slot"
+    assert_contains "$out" "branch fm/plain-tilde" "(n6) expanded the tilde and found the evidence"
+    pass "(n6) a \$HOME-abbreviated slot path is expanded, not skipped"
+    ;;
+  *)
+    printf 'ok - (n6) skipped: temp root %s is not under the home directory\n' "$slot"
+    ;;
+esac
 
 printf '\nall fm-worktree-guard tests passed\n'

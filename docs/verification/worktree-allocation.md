@@ -60,11 +60,31 @@ $ treehouse status --json
 So the exposure the guard closes is specifically a clean working tree plus commits not reachable from the default branch.
 `get` also prefers reusing an available slot over creating a new one below `max_trees`, so an at-risk available slot is the next one handed out rather than a remote possibility.
 
-## Why `--json` and not the status table
+## Why `--json` is preferred, and why a fallback is still required
 
-Verified 2026-08-02 against treehouse v2.1.0.
+Verified 2026-08-02 against treehouse v2.1.0 and v2.0.1.
 
-The human-readable table abbreviates paths under `$HOME` to a leading `~` and appends per-slot process continuation lines, so it is not a parseable contract:
+`treehouse status --json` reports absolute paths and a stable per-slot schema, and prints `[]` for a pool with no slots.
+An empty stdout is therefore never a valid empty-pool signal on that format, and the guard refuses rather than treating it as one.
+`jq` is required whenever that format is used, and its absence is a refusal.
+
+That flag does not exist before v2.1.0, and `bin/fm-install-treehouse.sh` pins v2.0.1 for CI:
+
+```
+$ treehouse --version
+v2.0.1
+$ treehouse status --json
+unknown flag: --json
+$ treehouse status --help
+Flags:
+  -h, --help   help for status
+```
+
+The same defect is present there - v2.0.1 also reports a clean slot holding an unlanded branch as `available` - so the guard must still inspect the pool on that build rather than refuse every spawn.
+Capability is probed from `status --help` advertising `--json`, not from the error text and not from a version string.
+
+The fallback parses the human-readable table, which needs two compensations the machine format does not.
+A path under `$HOME` is printed abbreviated with a leading `~`, and a slot may be followed by indented per-slot process continuation lines:
 
 ```
 1     in-use       ~/.treehouse/kun-agent-workspace-8bf1b0/1/kun-agent-workspace
@@ -72,9 +92,8 @@ The human-readable table abbreviates paths under `$HOME` to a leading `~` and ap
 2     dirty        ~/.treehouse/kun-agent-workspace-8bf1b0/2/kun-agent-workspace
 ```
 
-`treehouse status --json` reports absolute paths and a stable per-slot schema, and prints `[]` for a pool with no slots.
-An empty stdout is therefore never a valid empty-pool signal, and the guard refuses rather than treating it as one.
-This is why `jq` is required on the crewmate spawn path and its absence is a refusal.
+An empty pool prints nothing at all in this format, unlike `[]` in the machine format.
+Every non-blank, non-indented line must parse as a slot row; an unparseable one refuses rather than being skipped, since dropping a row would silently leave a slot uninspected.
 
 ## treehouse must be executable from fm-spawn's own environment
 

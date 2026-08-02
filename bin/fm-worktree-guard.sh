@@ -235,6 +235,61 @@ cmd_owner_fields() {  # <worktree>
   printf 'worktree_owner_identity=%s\n' "$identity"
 }
 
+# Available slots as "<name>\t<absolute-path>" rows read from the human-readable
+# `treehouse status` table, for builds older than v2.1.0 that have no --json.
+# That table needs two compensations the machine format does not: a path under
+# $HOME is printed abbreviated with a leading `~`, and a slot may be followed by
+# INDENTED per-slot process continuation lines.
+#
+# Fail-closed: every non-blank, non-indented line must parse as a slot row.
+# Skipping an unparseable row would silently yield fewer slots to inspect, which
+# is the same fail-open shape as dropping an entry with no `.status`.
+plain_available_rows() {  # <project-dir>
+  local proj=$1 raw line name status path rest tilde='~'
+  if ! raw=$(cd "$proj" && treehouse status 2>/dev/null); then
+    echo "error: worktree guard cannot verify pool safety: 'treehouse status' failed in $proj." >&2
+    echo "       Refusing rather than allocating blind." >&2
+    return 1
+  fi
+  # An empty pool prints nothing in this format (the JSON format prints []).
+  [ -n "$raw" ] || return 0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in [[:space:]]*) continue ;; esac
+    read -r name status path rest <<INNER
+$line
+INNER
+    [ -z "$rest" ] || path="$path $rest"
+    # A literal tilde, held in a variable so it reads as the abbreviation
+    # treehouse printed rather than as a path this shell should expand.
+    case "$path" in
+      "$tilde"/*)
+        if [ -z "${HOME:-}" ]; then
+          echo "error: worktree guard read a \$HOME-abbreviated slot path ('$path') but HOME is unset, in $proj." >&2
+          echo "       Refusing rather than allocating blind." >&2
+          return 1
+        fi
+        path="$HOME/${path#"$tilde"/}"
+        ;;
+      /*) ;;
+      *)
+        echo "error: worktree guard could not parse a 'treehouse status' row ('$line') in $proj." >&2
+        echo "       The output format may have changed; refusing rather than allocating blind." >&2
+        return 1
+        ;;
+    esac
+    if [ -z "$name" ] || [ -z "$status" ]; then
+      echo "error: worktree guard read a 'treehouse status' row with no slot name or status ('$line') in $proj." >&2
+      echo "       The output format may have changed; refusing rather than allocating blind." >&2
+      return 1
+    fi
+    [ "$status" = available ] || continue
+    printf '%s\t%s\n' "$name" "$path"
+  done <<OUTER
+$raw
+OUTER
+}
+
 cmd_check() {  # <project-dir>
   local proj proj_real raw total rows refusals=0 name path wt evidence owner ostate oid
 
@@ -249,40 +304,47 @@ cmd_check() {  # <project-dir>
     echo "       This spawn is about to run 'treehouse get', so refusing rather than allocating blind." >&2
     return 1
   fi
-  # --json, not the human-readable table: the table abbreviates paths under
-  # $HOME to a leading ~ and appends per-slot process continuation lines, so it
-  # is not a parseable contract. jq is required here rather than optional
-  # because a guard that cannot inspect the pool must not let the spawn proceed.
-  if ! command -v jq >/dev/null 2>&1; then
-    echo "error: worktree guard cannot verify pool safety: jq is not on PATH." >&2
-    echo "       Install jq (brew install jq, or the platform's package manager), then retry." >&2
-    return 1
-  fi
-  if ! raw=$(cd "$proj_real" && treehouse status --json 2>/dev/null); then
-    echo "error: worktree guard cannot verify pool safety: 'treehouse status --json' failed in $proj_real." >&2
-    echo "       Refusing rather than allocating blind." >&2
-    return 1
-  fi
-  if ! printf '%s' "$raw" | jq -e '
-    type == "array" and
-    all(.[];
-      type == "object" and
-      (.name | type == "string" and length > 0) and
-      (.status | type == "string" and length > 0) and
-      (.path | type == "string" and length > 0)
-    )
-  ' >/dev/null 2>&1; then
-    echo "error: worktree guard could not parse 'treehouse status --json' in $proj_real." >&2
-    echo "       The output format may have changed; refusing rather than allocating blind." >&2
-    return 1
-  fi
-  total=$(printf '%s' "$raw" | jq -r 'length')
-  # An empty pool is legitimately safe: treehouse creates a fresh slot.
-  [ "$total" -eq 0 ] && return 0
-  if ! rows=$(printf '%s' "$raw" | jq -r '.[] | select(.status == "available") | [.name, .path] | @tsv' 2>/dev/null); then
-    echo "error: worktree guard could not read slot fields from 'treehouse status --json' in $proj_real." >&2
-    echo "       The output format may have changed; refusing rather than allocating blind." >&2
-    return 1
+  # Prefer `status --json`: absolute paths and a stable per-slot schema. That
+  # flag does not exist before treehouse v2.1.0 (`status --help` advertises no
+  # --json, and passing it exits 1 with "unknown flag"), and CI pins v2.0.1, so
+  # capability is probed from treehouse's own help rather than assumed or
+  # inferred from an error string.
+  if (cd "$proj_real" && treehouse status --help 2>/dev/null) | grep -q -- '--json'; then
+    if ! command -v jq >/dev/null 2>&1; then
+      echo "error: worktree guard cannot verify pool safety: jq is not on PATH." >&2
+      echo "       Install jq (brew install jq, or the platform's package manager), then retry." >&2
+      return 1
+    fi
+    if ! raw=$(cd "$proj_real" && treehouse status --json 2>/dev/null); then
+      echo "error: worktree guard cannot verify pool safety: 'treehouse status --json' failed in $proj_real." >&2
+      echo "       Refusing rather than allocating blind." >&2
+      return 1
+    fi
+    if ! printf '%s' "$raw" | jq -e '
+      type == "array" and
+      all(.[];
+        type == "object" and
+        (.name | type == "string" and length > 0) and
+        (.status | type == "string" and length > 0) and
+        (.path | type == "string" and length > 0)
+      )
+    ' >/dev/null 2>&1; then
+      echo "error: worktree guard could not parse 'treehouse status --json' in $proj_real." >&2
+      echo "       The output format may have changed; refusing rather than allocating blind." >&2
+      return 1
+    fi
+    total=$(printf '%s' "$raw" | jq -r 'length')
+    # An empty pool is legitimately safe: treehouse creates a fresh slot.
+    [ "$total" -eq 0 ] && return 0
+    if ! rows=$(printf '%s' "$raw" | jq -r '.[] | select(.status == "available") | [.name, .path] | @tsv' 2>/dev/null); then
+      echo "error: worktree guard could not read slot fields from 'treehouse status --json' in $proj_real." >&2
+      echo "       The output format may have changed; refusing rather than allocating blind." >&2
+      return 1
+    fi
+  else
+    if ! rows=$(plain_available_rows "$proj_real"); then
+      return 1
+    fi
   fi
   [ -n "$rows" ] || return 0
 
