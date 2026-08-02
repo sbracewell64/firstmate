@@ -55,9 +55,15 @@ set -u
 printf 'treehouse %s\n' "$*" >> "${FM_FAKE_TMUX_LOG:-/dev/null}"
 case "${1:-}" in
   status)
-    # An empty pool prints "[]", never nothing: bin/fm-worktree-guard.sh refuses
-    # a pool it cannot read.
-    echo '[]'
+    # bin/fm-worktree-guard.sh probes `status --help` for --json, then reads the
+    # format that probe selected. An empty pool is "[]" in the machine format
+    # and nothing at all in the human-readable one.
+    case "${2:-}" in
+      --help)
+        printf 'Usage:\n  treehouse status [flags]\n\nFlags:\n  -h, --help   help for status\n      --json   Print pool status as JSON\n'
+        ;;
+      --json) echo '[]' ;;
+    esac
     exit 0
     ;;
   get)
