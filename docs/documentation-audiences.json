@@ -173,7 +173,9 @@
     },
     {
       "path": ".agents/skills/fleet-admission/SKILL.md",
-      "audience": "agent-runtime"
+      "audience": "agent-runtime",
+      "injection": "lazy",
+      "responsibility": "Owns the fleet admission-control decision at intake, the third layer above routing and scheduling."
     },
     {
       "path": ".agents/skills/fmx-respond/SKILL.md",
@@ -189,7 +191,9 @@
     },
     {
       "path": ".agents/skills/model-onboarding/SKILL.md",
-      "audience": "agent-runtime"
+      "audience": "agent-runtime",
+      "injection": "lazy",
+      "responsibility": "Owns the admission policy for routing a new model and the promotion and demotion authority for models already routed."
     },
     {
       "path": ".agents/skills/project-management/SKILL.md",
@@ -319,7 +323,9 @@
     },
     {
       "path": "docs/examples/models.json",
-      "audience": "operator-example"
+      "audience": "operator-example",
+      "injection": "referenced",
+      "responsibility": "Supplies a copyable model-registry example an operator adapts into config/models.json with their own verified evidence."
     },
     {
       "path": "docs/examples/wedge-alarm",
@@ -353,7 +359,9 @@
     },
     {
       "path": "docs/launcher.md",
-      "audience": "operator-current"
+      "audience": "operator-current",
+      "injection": "referenced",
+      "responsibility": "Owns the current user-facing contract for the bin/fm-launch.sh fleet launcher menu and its limits."
     },
     {
       "path": "docs/orca-backend.md",
@@ -459,7 +467,9 @@
     },
     {
       "path": "docs/verification/worktree-allocation.md",
-      "audience": "maintainer-verification"
+      "audience": "maintainer-verification",
+      "injection": "referenced",
+      "responsibility": "Records the measured treehouse behavior the pre-allocation guard in bin/fm-worktree-guard.sh depends on."
     },
     {
       "path": "docs/watcher-continuity.md",
