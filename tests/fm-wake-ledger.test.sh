@@ -1,8 +1,14 @@
 #!/usr/bin/env bash
 # tests/fm-wake-ledger.test.sh - the wake-outcome ledger's contract:
 # record format, the closed outcome vocabulary, sanitization, task attribution,
-# drain integration, the never-block guarantee, concurrent-append safety, and
-# the report's counts and coverage.
+# drain integration, the never-block guarantee, concurrent-append safety, the
+# report's counts and coverage, and the terminal record's critic fields.
+#
+# The critic cases cover all three resolvable, partially resolvable, and none
+# resolvable, because a reviewing configuration recorded only when it resolves
+# would make the verifier's independence look answerable while under-reporting
+# it. The unresolvable case is proved positively: the fields are present, say
+# unknown, and never inherit the previous task's values.
 #
 # The never-block guarantee is the safety-critical half. Two cases prove it:
 # an unwritable ledger leaves the drain's raw rows and exit status untouched,
@@ -412,6 +418,194 @@ test_seq_reuse_across_a_state_reset_never_collapses_records() {
   pass "a reused wake-queue sequence never collapses distinct wakes or outcomes"
 }
 
+# --- critic independence ----------------------------------------------------
+#
+# The terminal record must carry which process, vendor and model reviewed the
+# task, read from the pipeline's own run records. The cases below cover all
+# three resolvable, partially resolvable, and none resolvable, because a field
+# populated only on the happy path would make the vendor question look
+# answerable while under-reporting it.
+
+critic_of() {  # <ledger file> -> "<process> <vendor> <model>"
+  printf '%s %s %s\n' \
+    "$(field_of "$1" task critic_process)" \
+    "$(field_of "$1" task critic_vendor)" \
+    "$(field_of "$1" task critic_model)"
+}
+
+test_critic_fields_resolve_from_the_pipeline_record() {
+  local home file db repo got
+  home=$(make_home critic-resolvable)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  fm_test_pipeline_db "$db" "$repo" \
+    "fm/alpha|anthropic|claude-opus-5" "fm/alpha|anthropic|claude-opus-5" \
+    || { pass "SKIP (python3 unavailable): critic fields resolve from the pipeline record"; return; }
+
+  FM_PIPELINE_STATE_DB="$db" ledger "$home" task alpha --harness claude \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic: a resolvable terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "separate anthropic claude-opus-5" ] \
+    || fail "critic: resolved '$got', expected 'separate anthropic claude-opus-5'"
+
+  # The join is on this task's own branch, never on any review in the database.
+  : > "$file"
+  FM_PIPELINE_STATE_DB="$db" ledger "$home" task alpha --harness claude \
+    --critic-repo "$repo" --critic-branch fm/other \
+    || fail "critic: a foreign-branch terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "unknown unknown unknown" ] \
+    || fail "critic: another branch's review was claimed as this task's: '$got'"
+
+  # Two reviews that genuinely disagree are reported as mixed, not as one of them.
+  : > "$file"
+  rm -f "$db"
+  fm_test_pipeline_db "$db" "$repo" \
+    "fm/beta|anthropic|claude-opus-5" "fm/beta|openai|gpt-5.6-sol" \
+    || fail "critic: mixed fixture failed"
+  FM_PIPELINE_STATE_DB="$db" ledger "$home" task beta --harness claude \
+    --critic-repo "$repo" --critic-branch fm/beta \
+    || fail "critic: a mixed terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "separate mixed mixed" ] \
+    || fail "critic: disagreeing reviews recorded '$got', expected 'separate mixed mixed'"
+  pass "the terminal record carries the reviewing process, vendor, and model"
+}
+
+test_critic_fields_record_unknown_for_what_is_unresolvable() {
+  local home file db repo got
+  home=$(make_home critic-partial)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  # A review the pipeline recorded without a provider or model: process
+  # separation is witnessed, the rest is not.
+  fm_test_pipeline_db "$db" "$repo" "fm/alpha||" \
+    || { pass "SKIP (python3 unavailable): partially resolvable critic fields"; return; }
+
+  FM_PIPELINE_STATE_DB="$db" ledger "$home" task alpha --harness claude \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic partial: terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "separate unknown unknown" ] \
+    || fail "critic partial: recorded '$got', expected 'separate unknown unknown'"
+
+  # One resolvable value beside one unresolvable one, still on the same record.
+  : > "$file"
+  rm -f "$db"
+  fm_test_pipeline_db "$db" "$repo" "fm/alpha|openai|" || fail "critic partial: fixture failed"
+  FM_PIPELINE_STATE_DB="$db" ledger "$home" task alpha \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic partial: terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "separate openai unknown" ] \
+    || fail "critic partial: recorded '$got', expected 'separate openai unknown'"
+  pass "a partially resolvable reviewing configuration records only what it resolved"
+}
+
+test_unresolvable_critic_records_unknown_and_never_inherits() {
+  local home file db repo got line
+  home=$(make_home critic-unresolvable)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+
+  # The negative control the whole field exists for: a task whose reviewing
+  # configuration cannot be resolved must say unknown on its own line - never
+  # omit the fields, and never inherit the previous task's values.
+  if fm_test_pipeline_db "$db" "$repo" "fm/alpha|anthropic|claude-opus-5"; then
+    FM_PIPELINE_STATE_DB="$db" ledger "$home" task alpha --harness claude \
+      --critic-repo "$repo" --critic-branch fm/alpha \
+      || fail "critic unknown: the resolvable record failed"
+    got=$(critic_of "$file")
+    [ "$got" = "separate anthropic claude-opus-5" ] \
+      || fail "critic unknown: the preceding record did not resolve: '$got'"
+  fi
+
+  # Same ledger file, same home, no pipeline database at all.
+  FM_PIPELINE_STATE_DB="$home/absent.sqlite" ledger "$home" task bravo --harness claude \
+    --critic-repo "$repo" --critic-branch fm/bravo \
+    || fail "critic unknown: an unresolvable record must still be written"
+  line=$(grep "task=bravo" "$file") || fail "critic unknown: no terminal record for bravo"
+  case "$line" in
+    *"critic_process=unknown"*) ;;
+    *) fail "critic unknown: bravo did not record an unknown process: $line" ;;
+  esac
+  case "$line" in
+    *"critic_vendor=unknown"*"critic_model=unknown"*) ;;
+    *) fail "critic unknown: bravo omitted or inherited a critic field: $line" ;;
+  esac
+  case "$line" in
+    *anthropic*|*claude-opus-5*) fail "critic unknown: bravo inherited alpha's critic: $line" ;;
+  esac
+
+  # No join key at all is the same answer, explicitly recorded.
+  ledger "$home" task charlie --harness claude || fail "critic unknown: keyless record failed"
+  line=$(grep "task=charlie" "$file") || fail "critic unknown: no terminal record for charlie"
+  case "$line" in
+    *"critic_process=unknown"*"critic_vendor=unknown"*"critic_model=unknown"*) ;;
+    *) fail "critic unknown: a record with no join key omitted the critic fields: $line" ;;
+  esac
+  pass "an unresolvable reviewing configuration records unknown and never inherits"
+}
+
+test_explicit_critic_values_win_and_are_validated() {
+  local home file db repo got
+  home=$(make_home critic-explicit)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+
+  ledger "$home" task alpha --critic-process maybe >/dev/null 2>&1 \
+    && fail "critic explicit: an unknown process value should be refused"
+  [ ! -s "$file" ] || fail "critic explicit: a refused record still wrote a line"
+
+  if fm_test_pipeline_db "$db" "$repo" "fm/alpha|anthropic|claude-opus-5"; then
+    FM_PIPELINE_STATE_DB="$db" ledger "$home" task alpha \
+      --critic-repo "$repo" --critic-branch fm/alpha \
+      --critic-vendor openai --critic-model gpt-5.6-sol \
+      || fail "critic explicit: terminal record failed"
+    got=$(critic_of "$file")
+    [ "$got" = "separate openai gpt-5.6-sol" ] \
+      || fail "critic explicit: a stated value lost to the resolver: '$got'"
+    : > "$file"
+  fi
+
+  ledger "$home" task bravo --critic-process same --critic-vendor anthropic \
+    --critic-model claude-opus-5 || fail "critic explicit: stated record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "same anthropic claude-opus-5" ] \
+    || fail "critic explicit: stated values were not recorded: '$got'"
+  pass "stated critic values win over resolution and are validated"
+}
+
+test_report_surfaces_critic_independence() {
+  local home file out
+  home=$(make_home critic-report)
+  file=$(ledger_file "$home")
+
+  ledger "$home" task alpha --harness claude --model opus --effort xhigh \
+    --critic-process separate --critic-vendor openai --critic-model gpt-5.6-sol \
+    || fail "critic report: terminal record failed"
+  ledger "$home" task bravo --harness claude --model opus --effort xhigh \
+    || fail "critic report: unresolved terminal record failed"
+
+  out=$(ledger "$home" report) || fail "critic report: report failed"
+  printf '%s\n' "$out" | grep -q "critic independence" \
+    || fail "critic report: the critic section is missing:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "process:.*separate 1" \
+    || fail "critic report: process separation was not counted:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "vendor:.*openai 1" \
+    || fail "critic report: the critic vendor was not counted:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "vendor:.*unknown 1" \
+    || fail "critic report: an unresolved critic was not reported:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "claude maker -> openai critic" \
+    || fail "critic report: the maker/critic pairing is missing:"$'\n'"$out"
+  pass "the report surfaces critic independence, including what stayed unknown"
+}
+
 
 test_a_bare_outcome_records_against_the_newest_unrecorded_wake() {
   local home file now
@@ -716,3 +910,8 @@ test_the_terminal_outcome_derivation_reads_the_task_declaration
 test_terminal_outcome_source_is_closed_and_defaults_to_assumed
 test_a_failure_that_is_never_torn_down_is_recorded_not_silent
 test_the_report_names_evidence_and_refuses_a_rate
+test_critic_fields_resolve_from_the_pipeline_record
+test_critic_fields_record_unknown_for_what_is_unresolvable
+test_unresolvable_critic_records_unknown_and_never_inherits
+test_explicit_critic_values_win_and_are_validated
+test_report_surfaces_critic_independence

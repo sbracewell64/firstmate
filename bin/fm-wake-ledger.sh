@@ -47,7 +47,8 @@
 #            `sweep` for a task that declared failure and was never torn down.
 #            Fields: task, harness, model, effort, mode, role, deliverable,
 #            project, backend, outcome, outcome_source, route, escalated,
-#            findings, pr. role and deliverable are the task identity axes; a
+#            findings, critic_process, critic_vendor, critic_model, pr.
+#            role and deliverable are the task identity axes; a
 #            record written before that split carries the retired single kind
 #            field instead and is never rewritten, because this ledger is
 #            append-only evidence.
@@ -106,6 +107,39 @@
 # `reconcile` counts the records that join nothing so a silent corruption
 # becomes a number a session start can report.
 #
+# THE CRITIC FIELDS: harness/model/effort describe the MAKER. critic_process,
+# critic_vendor and critic_model describe the independent verifier that reviewed
+# that task, so "was the checker independent of the maker, and on whose model?"
+# is answerable from the record instead of by archaeology through pipeline
+# history. Their source is the validation pipeline's own run records - the same
+# place data/loop-ld-control-safety/report.md section B.3 had to measure by hand
+# - and this reads them rather than introducing a second accounting store.
+#
+#   critic_process   separate  a pipeline-spawned reviewer invocation exists for
+#                              this task's branch, so the review ran in its own
+#                              agent process rather than the maker's
+#                    same      only a caller can state this: the pipeline's
+#                              record can witness separation, never its absence
+#                    unknown   no reviewer invocation is resolvable
+#   critic_vendor    the model provider that reviewed (e.g. anthropic, openai)
+#   critic_model     the reviewing model (e.g. claude-opus-5, gpt-5.6-sol)
+#
+# A review the pipeline recorded without a vendor or model contributes no such
+# fact and therefore never makes a field "mixed": absence is not evidence of a
+# second vendor. A field is "mixed" only when two reviews of that task recorded
+# genuinely different values.
+#
+# All three record "unknown" when they cannot be resolved, and "mixed" when the
+# task's reviews genuinely disagree - never a guess, and never omitted, because
+# a field that appears only on the happy path would make the vendor question
+# look answerable while under-reporting it. "unknown" means NOT RESOLVABLE, not
+# "no reviewer ran": the same record's mode field says whether a task took a
+# pipeline-validated path at all, so that fact is never serialized twice.
+#
+# Whether the critic's vendor differed from the maker's is deliberately NOT
+# stored: harness, model and the three critic fields sit on the same line, so a
+# consumer joins them without a derived field that could drift.
+#
 # The wake half is written deterministically and the outcome half by the
 # coordinator ON PURPOSE. A single coordinator-written line would make measured
 # attention cost fall whenever the coordinator skipped the recording step, so
@@ -159,10 +193,14 @@
 #                     [--role R] [--deliverable D] [--project P]
 #                     [--backend B] [--pr URL]
 #                     [--route R] [--escalated yes|no] [--findings N]
+#                     [--critic-process separate|same] [--critic-vendor V]
+#                     [--critic-model M] [--critic-repo PATH] [--critic-branch B]
 #       Append one terminal task record. Absent facts record as unknown rather
 #       than being guessed, and an absent --source records assumed rather than
 #       implying evidence nobody produced. Called by teardown, which supplies
-#       them from the task metadata it is about to delete.
+#       them from the task metadata it is about to delete. --critic-repo with
+#       --critic-branch resolves the reviewing configuration from the pipeline's
+#       own records; an explicit --critic-* value wins over what that resolves.
 #   fm-wake-ledger.sh derive <status-file>
 #       Print "<outcome> <outcome_source>" for a task's status log: the LAST
 #       `done:` or `failed:` line decides, and a log with neither prints
@@ -326,6 +364,91 @@ ledger_task_for_key() {  # <kind> <key>
       ;;
   esac
   printf '%s' -
+}
+
+# --- critic independence ----------------------------------------------------
+
+# The validation pipeline's own state database, the only place the reviewing
+# configuration exists. FM_PIPELINE_STATE_DB overrides the full path.
+ledger_pipeline_db() {
+  printf '%s' "${FM_PIPELINE_STATE_DB:-$HOME/.no-mistakes/state.sqlite}"
+}
+
+# Echo "<process>\t<vendor>\t<model>" for the reviews the pipeline recorded
+# against <repo>'s <branch>: the single distinct value where the reviews agree,
+# "mixed" where they genuinely disagree, and "unknown" where the pipeline
+# recorded nothing. Returns nonzero when nothing is resolvable at all, which the
+# caller records as three unknowns.
+#
+# Reading the pipeline's tables is a deliberate soft coupling: an absent
+# database, a schema that moves, or a host without python3 resolves to unknown
+# and can never fail a teardown. The read is read-only and takes no lock.
+ledger_resolve_critic() {  # <repo> <branch>
+  local repo=$1 branch=$2 db out
+  [ -n "$repo" ] && [ -n "$branch" ] || return 1
+  db=$(ledger_pipeline_db)
+  [ -f "$db" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  out=$(
+    python3 - "$db" "$repo" "$branch" 2>/dev/null <<'PY'
+import os
+import sqlite3
+import sys
+import urllib.parse
+
+db, repo, branch = sys.argv[1], sys.argv[2], sys.argv[3]
+
+
+def collapse(values):
+    seen = {v.strip() for v in values if v and v.strip()}
+    if not seen:
+        return "unknown"
+    if len(seen) > 1:
+        return "mixed"
+    return seen.pop()
+
+
+try:
+    uri = "file:%s?mode=ro" % urllib.parse.quote(db)
+    conn = sqlite3.connect(uri, uri=True, timeout=2)
+    # Match the repository on the resolved path: a symlinked or differently
+    # spelled project path is the same repository, and reading it as a
+    # different one would silently record unknown.
+    wanted = os.path.realpath(repo)
+    repo_ids = [
+        r[0]
+        for r in conn.execute("select id, working_path from repos")
+        if r[1] and os.path.realpath(r[1]) == wanted
+    ]
+    rows = []
+    for repo_id in repo_ids:
+        rows.extend(
+            conn.execute(
+                "select ai.model_provider, ai.model "
+                "from agent_invocations ai "
+                "join runs r on r.id = ai.run_id "
+                "where r.repo_id = ? and r.branch = ? and ai.step_name = 'review'",
+                (repo_id, branch),
+            ).fetchall()
+        )
+    conn.close()
+except Exception:
+    sys.exit(1)
+
+if not rows:
+    # The database was readable and holds no review for this branch. That is a
+    # resolved absence, but it cannot tell "no reviewer ran" from "this branch
+    # was never validated here", so it stays unknown rather than claiming none.
+    print("unknown\tunknown\tunknown")
+    sys.exit(0)
+
+# A recorded review invocation is itself the evidence of process separation: the
+# pipeline spawns its reviewer as its own agent process, never the maker's.
+print("separate\t%s\t%s" % (collapse(r[0] for r in rows), collapse(r[1] for r in rows)))
+PY
+  ) || return 1
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
 }
 
 # --- subcommands ------------------------------------------------------------
@@ -573,8 +696,15 @@ cmd_task() {
   local harness=unknown model=unknown effort=unknown mode=unknown
   local role=unknown deliverable=unknown
   local project=unknown backend=unknown pr='' now
+  local critic_process='' critic_vendor='' critic_model=''
+  local critic_repo='' critic_branch='' resolved
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --critic-process) [ "$#" -ge 2 ] || die "--critic-process needs a value"; critic_process=$2; shift 2 ;;
+      --critic-vendor) [ "$#" -ge 2 ] || die "--critic-vendor needs a value"; critic_vendor=$2; shift 2 ;;
+      --critic-model) [ "$#" -ge 2 ] || die "--critic-model needs a value"; critic_model=$2; shift 2 ;;
+      --critic-repo) [ "$#" -ge 2 ] || die "--critic-repo needs a value"; critic_repo=$2; shift 2 ;;
+      --critic-branch) [ "$#" -ge 2 ] || die "--critic-branch needs a value"; critic_branch=$2; shift 2 ;;
       --outcome) [ "$#" -ge 2 ] || die "--outcome needs a value"; outcome=$2; shift 2 ;;
       --source) [ "$#" -ge 2 ] || die "--source needs a value"; osource=$2; shift 2 ;;
       --harness) [ "$#" -ge 2 ] || die "--harness needs a value"; harness=$2; shift 2 ;;
@@ -615,6 +745,24 @@ cmd_task() {
     unknown|'') findings=unknown ;;
     *[!0-9]*) die "--findings must be a count or unknown: $findings" ;;
   esac
+  case "$critic_process" in
+    ''|separate|same|unknown) ;;
+    *) die "--critic-process must be separate, same, or unknown: $critic_process" ;;
+  esac
+
+  # Resolve only what the caller did not state. An explicit value always wins,
+  # and anything still unresolved records unknown rather than a guess.
+  if [ -z "$critic_process" ] || [ -z "$critic_vendor" ] || [ -z "$critic_model" ]; then
+    if resolved=$(ledger_resolve_critic "$critic_repo" "$critic_branch"); then
+      [ -n "$critic_process" ] || critic_process=${resolved%%"$TAB"*}
+      resolved=${resolved#*"$TAB"}
+      [ -n "$critic_vendor" ] || critic_vendor=${resolved%%"$TAB"*}
+      [ -n "$critic_model" ] || critic_model=${resolved#*"$TAB"}
+    fi
+  fi
+  [ -n "$critic_process" ] || critic_process=unknown
+  [ -n "$critic_vendor" ] || critic_vendor=unknown
+  [ -n "$critic_model" ] || critic_model=unknown
 
   # A project path never enters the ledger; only its basename identifies it.
   project=$(basename "$project")
@@ -634,7 +782,10 @@ cmd_task() {
     "outcome_source=$osource" \
     "route=$(ledger_sanitize "${route:-unknown}" "$LEDGER_SHORT_MAX")" \
     "escalated=$escalated" \
-    "findings=$findings"
+    "findings=$findings" \
+    "critic_process=$critic_process" \
+    "critic_vendor=$(ledger_sanitize "$critic_vendor" "$LEDGER_SHORT_MAX")" \
+    "critic_model=$(ledger_sanitize "$critic_model" "$LEDGER_KEY_MAX")"
   [ -z "$pr" ] || set -- "$@" "pr=$(ledger_sanitize "$pr" "$LEDGER_KEY_MAX")"
   ledger_append "$now" task "$@" || {
     printf 'error: could not append terminal record for task %s to %s\n' "$id" "$LEDGER" >&2
@@ -882,6 +1033,12 @@ cmd_report() {
       # that is exactly what assumed means, so the absent field maps onto it
       # rather than needing the file rewritten.
       terminal_source[t] = (f["outcome_source"] == "" ? "assumed" : f["outcome_source"])
+      maker[t] = f["harness"] == "" ? "unknown" : f["harness"]
+      # A record written before the critic fields existed carries none of them,
+      # and reads exactly like one that could not resolve them: unknown.
+      cproc[t] = f["critic_process"] == "" ? "unknown" : f["critic_process"]
+      cvendor[t] = f["critic_vendor"] == "" ? "unknown" : f["critic_vendor"]
+      cmodel[t] = f["critic_model"] == "" ? "unknown" : f["critic_model"]
       next
     }
     END {
@@ -959,6 +1116,24 @@ cmd_report() {
             p_out[p, "steered"] + 0, p_out[p, "repaired"] + 0,
             p_out[p, "escalated"] + 0, p_out[p, "false-positive"] + 0
         }
+      }
+
+      if (tasks > 0) {
+        printf "\ncritic independence (which process, vendor and model reviewed the task):\n"
+        for (t in terminal) {
+          n_process[cproc[t]]++
+          n_vendor[cvendor[t]]++
+          n_model[cmodel[t]]++
+          pairing[maker[t] " maker -> " cvendor[t] " critic"]++
+        }
+        printf "  process:"
+        for (k in n_process) printf "  %s %d", k, n_process[k]
+        printf "\n  vendor: "
+        for (k in n_vendor) printf "  %s %d", k, n_vendor[k]
+        printf "\n  model:  "
+        for (k in n_model) printf "  %s %d", k, n_model[k]
+        printf "\n"
+        for (k in pairing) printf "  %-52s %d\n", k, pairing[k]
       }
 
       shown = 0
