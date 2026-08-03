@@ -2058,6 +2058,70 @@ test_teardown_force_records_abandoned() {
   pass "a --force teardown records the task as abandoned rather than landed"
 }
 
+# Tear down task-x1 with the validation pipeline's state database pointed at
+# <db>, which is how the terminal record learns who reviewed the task.
+run_teardown_with_pipeline_db() {  # <case_dir> <db> [teardown args...]
+  local case_dir=$1 db=$2
+  shift 2
+  FM_ROOT_OVERRIDE="$ROOT" \
+  FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_PIPELINE_STATE_DB="$db" \
+  PATH="$case_dir/fakebin:$PATH" \
+    "$TEARDOWN" task-x1 "$@"
+}
+
+test_teardown_records_the_reviewing_configuration() {
+  local case_dir ledger
+  case_dir=$(make_case ledger-critic)
+  write_profiled_meta "$case_dir" local-only
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+  fm_test_pipeline_db "$case_dir/pipeline.sqlite" "$case_dir/project" \
+    "fm/task-x1|anthropic|claude-opus-5" \
+    || { pass "SKIP (python3 unavailable): teardown records the reviewing configuration"; return; }
+
+  run_teardown_with_pipeline_db "$case_dir" "$case_dir/pipeline.sqlite" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "ledger-critic: teardown should succeed"
+
+  # The branch is the join onto the pipeline's own review records, and teardown
+  # returns the worktree long before the terminal record is written, so this
+  # also proves the branch is captured while it is still readable.
+  ledger="$case_dir/data/wake-ledger.tsv"
+  grep -q "critic_process=separate" "$ledger" \
+    || fail "ledger-critic: process separation not recorded: $(cat "$ledger")"
+  grep -q "critic_vendor=anthropic" "$ledger" \
+    || fail "ledger-critic: reviewing vendor not recorded: $(cat "$ledger")"
+  grep -q "critic_model=claude-opus-5" "$ledger" \
+    || fail "ledger-critic: reviewing model not recorded: $(cat "$ledger")"
+  pass "teardown records which process, vendor, and model reviewed the task"
+}
+
+test_teardown_records_unknown_when_the_critic_is_unresolvable() {
+  local case_dir line
+  case_dir=$(make_case ledger-critic-unknown)
+  write_profiled_meta "$case_dir" local-only
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+
+  # No pipeline record exists for this task at all. The fields must still be on
+  # the record, saying unknown - a field that appears only when it resolves
+  # would make the reviewing configuration look better covered than it is.
+  run_teardown_with_pipeline_db "$case_dir" "$case_dir/absent.sqlite" \
+    > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "ledger-critic-unknown: teardown should succeed"
+
+  line=$(grep "task=task-x1" "$case_dir/data/wake-ledger.tsv") \
+    || fail "ledger-critic-unknown: no terminal record was written"
+  case "$line" in
+    *"critic_process=unknown"*"critic_vendor=unknown"*"critic_model=unknown"*) ;;
+    *) fail "ledger-critic-unknown: the critic fields were omitted or guessed: $line" ;;
+  esac
+  pass "teardown records an unresolvable reviewing configuration as unknown"
+}
+
 test_unwritable_ledger_never_fails_teardown() {
   local case_dir rc
   case_dir=$(make_case ledger-unwritable)
@@ -2128,4 +2192,6 @@ test_empty_retry_wait_uses_default_without_aborting
 test_fractional_legacy_retry_wait_refuses_without_arithmetic_error
 test_teardown_records_the_terminal_ledger_line
 test_teardown_force_records_abandoned
+test_teardown_records_the_reviewing_configuration
+test_teardown_records_unknown_when_the_critic_is_unresolvable
 test_unwritable_ledger_never_fails_teardown

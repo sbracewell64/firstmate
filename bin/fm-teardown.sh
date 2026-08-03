@@ -142,6 +142,16 @@ BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
+# Read for the wake ledger's terminal record only, here because the worktree is
+# returned long before that record is written and its branch is the join key
+# onto the pipeline's own review records. A read-only rev-parse: it inspects
+# nothing the landed-work test depends on, and an empty value simply records the
+# reviewing configuration as unknown.
+LEDGER_CRITIC_BRANCH=
+if [ -n "$WT" ] && [ -d "$WT" ]; then
+  LEDGER_CRITIC_BRANCH=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+  [ "$LEDGER_CRITIC_BRANCH" != HEAD ] || LEDGER_CRITIC_BRANCH=
+fi
 T_ORCA=
 [ "$BACKEND" != orca ] || T_ORCA=$T
 "$FM_ROOT/bin/fm-guard.sh" || true
@@ -1785,6 +1795,8 @@ FM_WAKE_LEDGER="${FM_WAKE_LEDGER:-$DATA/wake-ledger.tsv}" \
   --backend "$BACKEND" \
   --route "$(meta_value "$META" route)" \
   --escalated "$LEDGER_ESCALATED" \
+  --critic-repo "$PROJ" \
+  --critic-branch "$LEDGER_CRITIC_BRANCH" \
   --pr "$PR_URL" >/dev/null \
   || echo "warning: wake ledger terminal line not recorded for $ID" >&2
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
