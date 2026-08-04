@@ -50,7 +50,7 @@ Run `bin/fm-research-scan.sh schema` when, and only when, you need to parse the 
 bin/fm-research-scan.sh evidence <identifier> --token <artifact> --token <artifact>
 ```
 
-The two provers answer different questions and neither may stand in for the other.
+Approval and implementation are different questions and neither prover may stand in for the other.
 Never conclude "unimplemented" from one absent filename: pass at least two concrete artifacts the work would have created - a config key, a recorded field, a function name, a flag - and the prover refuses an absence verdict below that threshold.
 Add `--landing` to check delivery, which is a separate question again.
 
@@ -59,7 +59,7 @@ Add `--landing` to check delivery, which is a separate question again.
 Read every `approval_hit=` excerpt and decide whether it approves, commissions, cites, or declines.
 `implementation=matches-at-head` means a token appeared in a tracked file - `route=` matches a local shell variable as readily as the recorded dispatch field a recommendation asked for.
 Open the `impl_match=` paths and confirm the match is the artifact before calling anything implemented.
-`landing=no-title-or-branch-match` searched only pull request titles and branch names, so it is never proof that nothing was delivered.
+`landing=no-title-match` searched only a bounded window of pull request titles, so it is never proof that nothing was delivered, and `landing=unavailable-listing-failed` means the forge could not be read at all.
 
 Treating any of these three as a verdict reproduces exactly the false answers this skill exists to prevent.
 
@@ -81,8 +81,7 @@ A numbered register inside a report reads like a work list and authorises nothin
 ## Classes
 
 Assign the first class whose evidence is satisfied, in this order.
-
-Every class below needs a *graded* excerpt or path, never a bare prover verdict.
+Every class needs a *graded* excerpt or path, never a bare prover verdict.
 
 | Class | Required evidence |
 |---|---|
@@ -99,7 +98,7 @@ Every class below needs a *graded* excerpt or path, never a bare prover verdict.
 ## Evidence discipline
 
 State the evidence, not your confidence in it.
-"Likely unimplemented" and "high confidence" are not findings; `no-code-evidence-at-head across 3 signals in 2 repositories, no delivery evidence` is.
+"Likely unimplemented" and "high confidence" are not findings; "no matches at HEAD across 3 signals in 2 repositories, and no delivery in the searched window" is.
 Every classification must cite the approval evidence and the implementation evidence that produced it, separately, and name any source that was silent.
 Where a captain instruction conflicts with a report's recommendation, the instruction governs and the conflict is reported, not quietly resolved.
 
