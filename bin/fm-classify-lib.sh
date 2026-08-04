@@ -693,9 +693,44 @@ crew_child_cpu_advancing() {  # <id> [state-dir]
   [ "$(fm_child_cpu_state "$state" "$id")" = advancing ]
 }
 
-# Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced,
-# from bin/fm-crew-state.sh's one authoritative current-state line
-# ("state: <s> · source: <src> · <detail>"). Prints exactly one token:
+# The ONE read of bin/fm-crew-state.sh's authoritative current-state line
+# ("state: <s> · source: <src> · <detail>") that both classifications below
+# share. Prints "<class> <reconciled-state>", because the two callers need
+# different halves of the same read and that read may make a bounded
+# no-mistakes call - splitting it into two reads would double that cost for
+# every definite verdict. FM_CREW_STATE_BIN lets tests stub it.
+_fm_crew_read_class() {  # <id>
+  local id=$1 line state src
+  [ -n "$id" ] || { printf 'definite unreadable'; return; }
+  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
+  state=unreadable
+  case "$line" in
+    state:*)
+      state=${line#state: }; state=${state%% *}
+      if [ "$state" = paused ]; then printf 'paused %s' "$state"; return; fi
+      if [ "$state" = working ]; then
+        src=${line#*source: }; src=${src%% *}
+        case "$src" in run-step|pane) printf 'working %s' "$state"; return ;; esac
+      fi
+      ;;
+  esac
+  case "$state" in
+    working|unknown|unreadable) printf 'inconclusive %s' "$state" ;;
+    *) printf 'definite %s' "$state" ;;
+  esac
+}
+
+# Classify bin/fm-crew-state.sh's authoritative current-state line without
+# consulting process liveness. Prints working, paused, definite, or inconclusive.
+# FM_CREW_STATE_BIN lets tests stub the semantic verdict.
+crew_semantic_class() {  # <id>
+  local read
+  read=$(_fm_crew_read_class "$1")
+  printf '%s' "${read%% *}"
+}
+
+# Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced.
+# Prints exactly one token:
 #   working - an actively-running no-mistakes step (running/fixing/ci), a busy
 #             pane, or advancing descendant CPU; the crew is legitimately
 #             mid-work on a static-looking pane (e.g. waiting on CI, or
@@ -704,56 +739,39 @@ crew_child_cpu_advancing() {  # <id> [state-dir]
 #             pause (paused:), which is EXPECTED to idle;
 #   settled - the crew's reconciled state is terminal and the idle pane is the
 #             expected finished/waiting condition (crew_state_is_settled above);
-#   none    - none of those, so the wake must surface (a stopped/failed/
-#             torn-down/unknown crew whose descendants are hung, dead, or absent,
-#             a run parked at a gate the crew owns, or an unreadable verdict).
-# One fm-crew-state.sh read serves EVERY absorb reason at once, and the
-# process-liveness probe runs only where that read came back INCONCLUSIVE, so the
-# semantic sources keep their precedence in every direction: a crew that appended
-# paused: but then STARTED a run reports working, never paused, a crew whose log
-# still shows a pre-validation done: reports working, not settled, and a definite
-# done/parked/failed/blocked verdict is never overridden by whatever its process
-# tree happens to still be doing.
-# NOT a pure read: fm-crew-state.sh may make a bounded no-mistakes call and the
-# probe maintains its own sample, so callers run it only on no-verb signal and
-# first-sighting stale paths, never every wake.
-# FM_CREW_STATE_BIN lets tests stub the verdict.
+#   none    - none of those, so the wake must surface (a failed or cancelled run,
+#             a torn-down or unknown crew whose descendants are hung, dead, or
+#             absent, a run parked at a gate the crew owns, or an unreadable
+#             verdict).
+# The two extra sources are consulted on exactly the semantic verdicts they
+# answer for and never both: process liveness only after an INCONCLUSIVE read,
+# the settled test only after a DEFINITE one. So the semantic sources keep their
+# precedence in every direction - a crew that appended paused: but then STARTED a
+# run reports working, never paused, a crew whose log still shows a
+# pre-validation done: reports working, not settled, and a definite verdict is
+# never overridden by whatever its process tree happens to still be doing.
+# NOT a pure read: the shared current-state read may make a bounded no-mistakes
+# call and the probe maintains its own sample, so callers run it only on no-verb
+# signal and first-sighting stale paths, never every wake.
 crew_absorb_class() {  # <id> [state-dir]
-  local id=$1 state_dir=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} line state src
+  local id=$1 state_dir=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} read semantic state
   [ -n "$id" ] || { printf 'none'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
-  state=unreadable
-  case "$line" in
-    state:*)
-      state=${line#state: }; state=${state%% *}
-      if [ "$state" = paused ]; then printf 'paused'; return; fi
-      if [ "$state" = working ]; then
-        src=${line#*source: }; src=${src%% *}
-        case "$src" in run-step|pane) printf 'working'; return ;; esac
-      fi
+  read=$(_fm_crew_read_class "$id")
+  semantic=${read%% *}
+  state=${read#* }
+  case "$semantic" in
+    working|paused) printf '%s' "$semantic"; return ;;
+    definite)
+      crew_state_is_settled "$id" "$state" ${state_dir:+"$state_dir"} \
+        && { printf 'settled'; return; }
+      printf 'none'
+      return
       ;;
   esac
-  # A DEFINITE verdict is final for the PROCESS signal: a done, failed, blocked,
-  # or gate-parked run has an answer already, and whatever its process tree is
-  # still doing must not mask it. Only an INCONCLUSIVE read reaches the probe -
-  # `unknown`, an unreadable verdict, or a `working` claim from a source that
-  # cannot prove it (the status log). That inconclusive set is exactly what every
-  # semantic source reports for an agent that backgrounded a long command and
-  # then ended its turn, so it is the one place the process-liveness signal
-  # belongs: descendant CPU that ADVANCED since the last poll. Existence alone
-  # never counts, so a hung, dead, or absent child still falls through.
-  case "$state" in
-    working|unknown|unreadable)
-      if [ "$(fm_child_cpu_state "$state_dir" "$id")" = advancing ]; then
-        printf 'working'
-        return
-      fi
-      ;;
-  esac
-  # The SEMANTIC settled test is independent of that probe and must stay reachable
-  # for exactly the definite verdicts the probe declines to score, so a finished or
-  # decision-parked crew is still absorbed as settled rather than aged as a wedge.
-  crew_state_is_settled "$id" "$state" ${state_dir:+"$state_dir"} && { printf 'settled'; return; }
+  if [ "$(fm_child_cpu_state "$state_dir" "$id")" = advancing ]; then
+    printf 'working'
+    return
+  fi
   printf 'none'
 }
 
