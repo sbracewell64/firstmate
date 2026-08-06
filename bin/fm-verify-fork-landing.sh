@@ -90,7 +90,15 @@ fi
 # entirely the wrong reason.
 summary=$(printf '%s\n' "$checks" | sed -n 's/^summary:[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' | head -1)
 if [ -z "$summary" ]; then
-  printf 'unavailable: pull request %s returned no parsable check summary\n' "$number"
+  # A pull request whose checks have not been registered yet reports a different
+  # shape entirely. It is unavailable, not resolved: treating "no checks
+  # configured" as a resolved empty set would pass a pull request that nothing
+  # has examined, which is the exact shape of a verifier that verifies nothing.
+  if printf '%s\n' "$checks" | grep -q 'no CI checks configured'; then
+    printf 'unavailable: pull request %s has no checks registered yet, so nothing has examined it\n' "$number"
+  else
+    printf 'unavailable: pull request %s returned no parsable check summary\n' "$number"
+  fi
   exit 2
 fi
 
