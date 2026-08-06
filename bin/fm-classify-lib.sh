@@ -183,6 +183,24 @@ stale_detail_is_blocked_on_human() {  # <stale-detail>
   return 1
 }
 
+# The COMPLETE crew-state verdict vocabulary, in one place. bin/fm-crew-state.sh
+# derives these and every consumer must handle all of them: a consumer that
+# silently defaults an unlisted verdict is how a correct reader still produced a
+# wrong supervision outcome (wedge aging tested one class and defaulted the
+# rest). Adding a verdict means adding it here, which makes the conformance test
+# in tests/fm-crew-state.test.sh fail until every consumer handles it - the
+# whole point is that the next verdict cannot be added silently.
+FM_CREW_STATE_VOCABULARY='working parked blocked paused done failed aborted interrupted idle stale unknown'
+
+# 0 if <state> is a verdict this fleet knows about.
+crew_state_is_known() {  # <state>
+  [ -n "${1:-}" ] || return 1
+  case " $FM_CREW_STATE_VOCABULARY " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
 # --- pause kind: can this wait change without the captain? -------------------
 #
 # status_is_paused answers "does this pane idle by design". It does NOT answer the
@@ -233,6 +251,40 @@ task_hold_kind() {  # <task-id> [home]
 # the away-mode return catch-up - it simply stops being re-asked on a timer.
 pause_is_captain_gated() {  # <task-id> [home]
   [ "$(task_hold_kind "$@")" = "${FM_CLASSIFY_CAPTAIN_HOLD_KIND:-$FM_CLASSIFY_CAPTAIN_HOLD_KIND_DEFAULT}" ]
+}
+
+# Read one string field out of bin/fm-crew-state.sh's --json object. The object
+# is flat and this reader owns its shape, so a bounded extraction is exact for
+# the TOKEN fields (state, source, precedence_applied), whose values are
+# constrained identifiers that never contain a quote or backslash. Free-text
+# fields (detail, terminal_error) are deliberately NOT read through this:
+# consumers branch on the typed fields, which is the entire point of retiring
+# prose matching.
+crew_state_json_token() {  # <json> <field>
+  local json=$1 field=$2 frag
+  frag=${json##*\""$field"\":\"}
+  case "$frag" in
+    "$json") printf ''; return 1 ;;
+  esac
+  printf '%s' "${frag%%\"*}"
+}
+
+# 0 if a verb CLOSES a keyed decision rather than declaring a state. These verbs
+# are legitimate and sanctioned - bin/fm-brief.sh instructs every crew to write
+# `resolved:` when a decision is answered - but they say "that decision is
+# settled", not "here is what I am doing now". A reader must therefore not
+# derive a current state from them, and must equally not mistake them for an
+# UNRECOGNIZED verb: "the crew closed a decision and declared nothing since" is
+# a known condition, while an unrecognized verb genuinely is not. This library
+# owns the verb vocabulary, so the membership test lives here instead of being
+# restated by each reader that needs it.
+status_verb_is_decision_closing() {  # <verb>
+  [ -n "${1:-}" ] || return 1
+  case "$1" in
+    "${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}") return 0 ;;
+    "${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}") return 0 ;;
+  esac
+  return 1
 }
 
 # --- durable keyed decisions ------------------------------------------------
@@ -693,31 +745,54 @@ crew_child_cpu_advancing() {  # <id> [state-dir]
   [ "$(fm_child_cpu_state "$state" "$id")" = advancing ]
 }
 
-# The ONE read of bin/fm-crew-state.sh's authoritative current-state line
-# ("state: <s> · source: <src> · <detail>") that both classifications below
-# share. Prints "<class> <reconciled-state>", because the two callers need
-# different halves of the same read and that read may make a bounded
-# no-mistakes call - splitting it into two reads would double that cost for
-# every definite verdict. FM_CREW_STATE_BIN lets tests stub it.
+# The ONE read of bin/fm-crew-state.sh's authoritative verdict that both
+# classifications below share. Prints "<class> <reconciled-state>", because the
+# two callers need different halves of the same read and that read may make a
+# bounded no-mistakes call - splitting it into two reads would double that cost
+# for every definite verdict.
+# The read is TYPED. This used to recover `state` and `source` by slicing the
+# prose line apart on its separators, which is what CFVC-05 retires: the reader
+# now emits the same derivation as fields, so no consumer reconstructs structure
+# from a sentence written for a human. FM_CREW_STATE_BIN lets tests stub it.
 _fm_crew_read_class() {  # <id>
-  local id=$1 line state src
+  local id=$1 json state src
   [ -n "$id" ] || { printf 'definite unreadable'; return; }
-  line=$("$FM_CREW_STATE_BIN" "$id" 2>/dev/null) || true
-  state=unreadable
-  case "$line" in
-    state:*)
-      state=${line#state: }; state=${state%% *}
-      if [ "$state" = paused ]; then printf 'paused %s' "$state"; return; fi
-      if [ "$state" = working ]; then
-        src=${line#*source: }; src=${src%% *}
-        case "$src" in run-step|pane) printf 'working %s' "$state"; return ;; esac
-      fi
-      ;;
-  esac
+  json=$("$FM_CREW_STATE_BIN" --json "$id" 2>/dev/null) || true
+  [ -n "$json" ] || { printf 'inconclusive unreadable'; return; }
+  state=$(crew_state_json_token "$json" state) || { printf 'inconclusive unreadable'; return; }
+  # Every verdict is enumerated. A consumer that silently defaults an unlisted
+  # verdict is how a correct reader still produced a wrong supervision outcome,
+  # so each case says what it means ON PURPOSE.
   case "$state" in
-    working|unknown|unreadable) printf 'inconclusive %s' "$state" ;;
-    *) printf 'definite %s' "$state" ;;
+    paused) printf 'paused %s' "$state"; return ;;
+    working)
+      # Only run-step and pane are POSITIVE evidence of work in flight. A
+      # `working` derived from the status log is a crew's own claim, and a
+      # claim is not a verdict, so it falls through to the weaker sources.
+      src=$(crew_state_json_token "$json" source) || src=''
+      case "$src" in run-step|pane) printf 'working %s' "$state"; return ;; esac
+      printf 'inconclusive %s' "$state"
+      return
+      ;;
+    # Terminal or waiting verdicts, definite enough to test for settledness:
+    #   parked/blocked        need a decision or help
+    #   done/failed/aborted   are outcomes to act on
+    #   interrupted           needs a re-run, and is NOT a rejection
+    #   idle                  alive but doing nothing, so a wake still matters
+    #   stale                 the evidence aged out; a worker that died
+    #                         mid-turn must surface, never be absorbed as work
+    parked|blocked|done|failed|aborted|interrupted|idle|stale)
+      printf 'definite %s' "$state"
+      return
+      ;;
+    # Unproven, and unproven never absorbs on the semantic read alone.
+    unknown) printf 'inconclusive %s' "$state"; return ;;
   esac
+  # A verdict this consumer has not been taught. `definite` is the safe answer -
+  # it cannot absorb unless the settled test independently says so - but it is a
+  # real gap: crew_state_is_known plus the conformance test in
+  # tests/fm-crew-state.test.sh exist so this is unreachable in a tested tree.
+  printf 'definite %s' "$state"
 }
 
 # Classify bin/fm-crew-state.sh's authoritative current-state line without
