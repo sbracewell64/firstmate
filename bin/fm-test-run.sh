@@ -194,8 +194,9 @@ family_for_basename() {
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
       ;;
-    fm-merge-local.test.sh|fm-pr-check-security.test.sh|fm-pr-merge.test.sh|\
-    fm-review-diff.test.sh|fm-teardown.test.sh|fm-x-mode.test.sh)
+    fm-attest.test.sh|fm-merge-local.test.sh|fm-pr-check-security.test.sh|\
+    fm-pr-merge.test.sh|fm-review-diff.test.sh|\
+    fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge
       ;;
     fm-afk-inject-e2e.test.sh|fm-afk-return.test.sh)
@@ -899,6 +900,13 @@ families_for_changed_path() {
     bin/fm-gate-refuse*|bin/fm-lock*|bin/fm-quota-axi-lib.sh)
       printf '%s\n' session-bootstrap
       ;;
+    bin/fm-timeout-lib.sh)
+      # The shared hard bound. On this trunk its only caller is
+      # bin/fm-nm-run-lib.sh, so every bounded `axi status` read depends on it
+      # and it selects the same families that file does.
+      printf '%s\n' pure-contract-unit
+      printf '%s\n' pr-forge
+      ;;
     bin/fm-pr-*|bin/fm-merge-local.sh|bin/fm-teardown.sh|bin/fm-review-diff.sh|\
     bin/fm-x-*|bin/fm-check*)
       printf '%s\n' pr-forge
@@ -938,6 +946,13 @@ families_for_changed_path() {
       printf '%s\n' live-harness-optin
       ;;
     .agents/skills/*/SKILL.md)
+      printf '%s\n' pure-contract-unit
+      ;;
+    .github/workflows/no-mistakes-required.yml)
+      # The required attestation gate. Its step scripts are exercised by
+      # tests/fm-attest.test.sh alongside the verifier they drive, so a change
+      # to the workflow has to select that suite and not only the doc lane.
+      printf '%s\n' pr-forge
       printf '%s\n' pure-contract-unit
       ;;
     .github/workflows/ci.yml|.no-mistakes.yaml)
