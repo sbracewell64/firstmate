@@ -1910,6 +1910,19 @@ cf_prose_field() {  # <prose-line> <state|source|detail>
   esac
 }
 
+# Normalize the MEASURED age out of a rendered detail. The two modes compared
+# below are two separate invocations of the reader, each measuring the age at its
+# own instant, so an expired-record detail renders "7200s ago" in one and
+# "7201s ago" in the other whenever a second boundary falls between them - the
+# same correct answer, reported one tick apart. Comparing that verbatim tests the
+# clock rather than the rendering, which is a flake, not a guarantee. The age
+# VALUE keeps its own assertion against a SINGLE read
+# (test_busy_verdict_carries_its_evidence_age), which is the only place the two
+# can be compared without a race.
+cf_normalize_age() {  # <detail>
+  printf '%s' "$1" | sed -E 's/\([0-9]+s ago\)/(<age>s ago)/g'
+}
+
 # Evaluate one row. Echoes "PASS" or a diagnosis; never exits, so the verifier
 # can be pointed at a deliberately wrong expectation to prove it goes red.
 cf_check_row() {  # <name> <setup-fn> <want-state> <want-source> <want-precedence>
@@ -1936,7 +1949,7 @@ cf_check_row() {  # <name> <setup-fn> <want-state> <want-source> <want-precedenc
     printf '%s: prose state %s, structured state %s' "$name" "$prose_state" "$got_state"; return; }
   [ "$prose_source" = "$got_source" ] || {
     printf '%s: prose source %s, structured source %s' "$name" "$prose_source" "$got_source"; return; }
-  [ "$prose_detail" = "$got_detail" ] || {
+  [ "$(cf_normalize_age "$prose_detail")" = "$(cf_normalize_age "$got_detail")" ] || {
     printf '%s: prose detail [%s], structured detail [%s]' "$name" "$prose_detail" "$got_detail"; return; }
   [ "$got_state" = "$want_state" ] || {
     printf '%s: want state %s, got %s' "$name" "$want_state" "$got_state"; return; }
