@@ -851,6 +851,11 @@ _fm_crew_read_class() {  # <id>
   json=$("$FM_CREW_STATE_BIN" --json "$id" 2>/dev/null) || true
   [ -n "$json" ] || { printf 'inconclusive unreadable'; return; }
   state=$(crew_state_json_token "$json" state) || { printf 'inconclusive unreadable'; return; }
+  # A present-but-empty state field is the field carrying no answer, which is the
+  # same condition as an absent one. Both are `unreadable` rather than a verdict,
+  # so process liveness still gets its turn instead of the read silently
+  # narrowing to a decided-looking class on malformed output.
+  [ -n "$state" ] || { printf 'inconclusive unreadable'; return; }
   src=$(crew_state_json_token "$json" source) || src=''
   # crew_state_absorb_class owns the verdict-to-class mapping, beside the
   # vocabulary it must cover. This function's job is the read, and its
