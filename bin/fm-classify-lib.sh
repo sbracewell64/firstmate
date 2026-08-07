@@ -597,10 +597,13 @@ signal_reason_is_actionable() {  # <file> ...
 #                     it is supposed to answer ITSELF opens no decision, so it
 #                     keeps aging and still escalates as a possible wedge.
 #
-# `failed` is deliberately NOT settled: it also reconciles a CANCELLED run, the
+# `failed` is deliberately NOT settled: a run the pipeline judged and rejected
+# leaves the crew work to do, so an idle pane there is a genuine stall. Neither
+# are `aborted` and `interrupted`, the two re-run verdicts - `aborted` is the
 # mid-supersession state in which a crew is expected to recover custody and
-# resume, so an idle pane there is a genuine stall. `unknown` is never settled
-# either - a dead endpoint or torn-down worktree must keep aging.
+# resume, and `interrupted` means the pipeline broke without judging the work.
+# `stale` and `unknown` are never settled either: a record that aged out, a dead
+# endpoint, or a torn-down worktree must keep aging.
 #
 # A missing or unreadable status file yields no open decision, so parked/blocked
 # stay unsettled and keep escalating.
@@ -868,8 +871,8 @@ _fm_crew_read_class() {  # <id>
   esac
 }
 
-# Classify bin/fm-crew-state.sh's authoritative current-state line without
-# consulting process liveness. Prints working, paused, definite, or inconclusive.
+# Classify bin/fm-crew-state.sh's authoritative typed verdict without consulting
+# process liveness. Prints working, paused, definite, or inconclusive.
 # FM_CREW_STATE_BIN lets tests stub the semantic verdict.
 crew_semantic_class() {  # <id>
   local read
