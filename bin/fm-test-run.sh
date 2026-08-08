@@ -904,10 +904,11 @@ families_for_changed_path() {
     bin/fm-x-*|bin/fm-check*)
       printf '%s\n' pr-forge
       ;;
-    bin/fm-nm-run-lib.sh)
+    bin/fm-nm-run-lib.sh|bin/fm-timeout-lib.sh)
       # Shared no-mistakes run-attribution primitives, sourced by both
       # bin/fm-crew-state.sh (pure-contract-unit) and bin/fm-teardown.sh's
-      # pre-teardown run abort (pr-forge).
+      # pre-teardown run abort (pr-forge). The shared hard bound those reads go
+      # through is owned by bin/fm-timeout-lib.sh, so it selects the same lanes.
       printf '%s\n' pure-contract-unit
       printf '%s\n' pr-forge
       ;;
