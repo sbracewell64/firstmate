@@ -95,9 +95,10 @@
 #          refresh relays any completed fm-fleet-sync.sh output before the
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
-#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the six MUTATING sweeps
-#          (PR-check migration, secondmate_sync, secondmate_liveness_sweep,
-#          secondmate_handoff_resume, x_mode_setup, fleet_sync) while still
+#          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the seven MUTATING sweeps
+#          (PR-check migration, task_axis_backfill_sweep, secondmate_sync,
+#          secondmate_liveness_sweep, secondmate_handoff_resume, x_mode_setup,
+#          fleet_sync) while still
 #          printing every read-only detect line
 #          above; the TANGLE line switches to advisory-only wording with no
 #          checkout command. Used by
@@ -136,6 +137,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-x-lib.sh"
 # shellcheck source=bin/fm-backend.sh disable=SC1091
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-task-axis-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-task-axis-lib.sh"
 # shellcheck source=bin/fm-model-registry-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-model-registry-lib.sh"
 # shellcheck source=bin/fm-admission-lib.sh disable=SC1091
@@ -246,7 +249,7 @@ secondmate_sync() {
     local meta id
     for meta in "$STATE"/*.meta; do
       [ -f "$meta" ] || continue
-      grep -q '^kind=secondmate' "$meta" 2>/dev/null || continue
+      [ "$(fm_task_role "$meta")" = secondmate ] || continue
       id=$(basename "$meta" .meta)
       echo "SECONDMATE_SYNC: secondmate $id: skipped: primary default-branch commit cannot be resolved"
     done
@@ -331,7 +334,7 @@ secondmate_sync() {
       esac
       [ "$remote" -ne 1 ] || continue
       meta="$STATE/$id.meta"
-      [ -f "$meta" ] && [ "$(fm_meta_get "$meta" kind)" = secondmate ] || {
+      [ -f "$meta" ] && [ "$(fm_task_role "$meta")" = secondmate ] || {
         echo "NUDGE_SECONDMATES: secondmate ${id:-unknown}: send failed: retry target has no live secondmate metadata"
         continue
       }
@@ -518,7 +521,7 @@ secondmate_liveness_sweep() {
   # adding the missing-session path the original bare-shell and Herdr-husk sweep
   # lacked.
   # A meta with no window remains owned by secondmate-provisioning recovery.
-  # Secondmate homes never contain kind=secondmate meta, so this is naturally a
+  # Secondmate homes never contain a role=secondmate record, so this is naturally a
   # primary-only no-op there. Mid-session liveness remains explicitly out of
   # scope and requires a separate periodic signal.
   [ -d "$STATE" ] || return 0
@@ -526,7 +529,7 @@ secondmate_liveness_sweep() {
   SECONDMATE_RESPAWNED_IDS=""
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
-    grep -q '^kind=secondmate$' "$meta" 2>/dev/null || continue
+    [ "$(fm_task_role "$meta")" = secondmate ] || continue
     id=$(basename "$meta" .meta)
     window=$(fm_meta_get "$meta" window)
     [ -n "$window" ] || continue
@@ -992,6 +995,31 @@ wake_ledger_reconcile() {
   echo "WAKE_LEDGER: $unjoined outcome record(s) join no wake record - supervision-cost figures drawn from this ledger overcount until they are purged (bin/fm-wake-ledger.sh reconcile)"
 }
 
+# Converge every task record onto the three identity axes. A MUTATING sweep, so
+# it runs only when this session holds the fleet lock. Idempotent and
+# forward-only: bin/fm-task-axis-lib.sh appends only the axes a record does not
+# already state, so a converged home is left byte-identical and repeated sweeps
+# cost one read each. Silent on success, because a routine confirmation is not
+# an actionable line. A record whose deprecated kind= alias disagrees with an
+# explicit axis is REFUSED rather than converged: either value could be the
+# stale one, so resolving it silently would pick a task's identity by luck.
+task_axis_backfill_sweep() {
+  local meta conflicted=0 ids=''
+  [ -d "$STATE" ] || return 0
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    if fm_task_axes_conflict "$meta"; then
+      conflicted=$((conflicted + 1))
+      meta=${meta##*/}
+      ids="$ids ${meta%.meta}"
+      continue
+    fi
+    fm_task_axes_backfill "$meta" >/dev/null 2>&1 || true
+  done
+  [ "$conflicted" -gt 0 ] || return 0
+  echo "TASK_AXIS_BACKFILL: $conflicted task record(s) state an identity the deprecated kind= alias contradicts -$ids - each task's role, deliverable, or stage is unreliable until the disagreement is settled by inspection"
+}
+
 # The entitlement probe half of the observation floor. A MUTATING sweep: it makes
 # live requests and writes state/model-health.json, so it runs only when this
 # session actually holds the fleet lock, alongside the other mutating sweeps.
@@ -1201,6 +1229,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
   echo "BOOTSTRAP_INFO: tasks-axi available"
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
+  task_axis_backfill_sweep
   secondmate_liveness_sweep
   secondmate_sync
   secondmate_handoff_resume

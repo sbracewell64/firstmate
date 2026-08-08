@@ -86,6 +86,8 @@ fi
 
 # shellcheck source=bin/fm-backend.sh
 . "$SCRIPT_DIR/fm-backend.sh"
+# shellcheck source=bin/fm-task-axis-lib.sh
+. "$SCRIPT_DIR/fm-task-axis-lib.sh"
 # shellcheck source=bin/fm-marker-lib.sh
 . "$SCRIPT_DIR/fm-marker-lib.sh"
 # shellcheck source=bin/fm-pending-reply-lib.sh
@@ -266,7 +268,7 @@ TARGET_TASK_ID=
 if [ -n "$TARGET_SELECTOR" ] && [ -n "$TARGET_META" ]; then
   MARK_FROM_FIRSTMATE=1
   TARGET_TASK_ID=$(fm_send_id_from_meta "$TARGET_META")
-  if [ "$(fm_meta_get "$TARGET_META" kind)" = secondmate ]; then
+  if [ "$(fm_task_role "$TARGET_META")" = secondmate ]; then
     MARK_PENDING_REPLY=1
   fi
 fi
