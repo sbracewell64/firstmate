@@ -232,7 +232,7 @@ run_pool_lock_spawn() {  # <id>
     FM_FAKE_PANE_PATH="$SLOT_DIR" FM_FAKE_PANE_STALE='' \
     FM_FAKE_PANE_STALE_READS=0 FM_FAKE_PANE_COUNTFILE="$CASE_DIR/pane-call-count" \
     PATH="$FAKEBIN_DIR:$PATH" \
-    "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off 2>&1
+    "$SPAWN" "$id" "$PROJ_DIR" --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION 2>&1
 }
 
 # The full directed path: the guard selects the clean slot, the spawn enters it
