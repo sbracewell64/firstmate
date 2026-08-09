@@ -43,7 +43,8 @@ write_snapshot() {  # <path>
   "schema": "fm-fleet-snapshot.v1",
   "generated": "2026-08-09T00:00:00Z",
   "tasks": [
-    {"id": "alpha", "kind": "ship", "mode": "no-mistakes", "yolo": "0",
+    {"id": "alpha", "kind": "ship", "role": "crew", "deliverable": "ship", "stage": "commissioned",
+     "mode": "no-mistakes", "yolo": "0",
      "project": "demo", "harness": "claude", "backend": "tmux",
      "current_state": {"state": "working", "source": "run-step", "detail": "running", "raw": "state: working · source: run-step · running"},
      "endpoint": {"target": "demo:0", "exists": true, "status": "present"},
@@ -486,6 +487,17 @@ test_the_surface_renders_both_scopes_and_refuses_an_unknown_task() {
   [ "$(printf '%s' "$OUT" | jq -r '.work.id')" = alpha ] || fail "the task surface must carry the task"
   [ "$(printf '%s' "$OUT" | jq -r '.work.status_log_is_event_history_only')" = true ] \
     || fail "the surface must keep the status log marked as event history, never current state"
+
+  # Task identity is three axes, not the deprecated single alias. Projecting
+  # `kind` again would read a field the census only keeps for compatibility.
+  [ "$(printf '%s' "$OUT" | jq -r '.work.role')" = crew ] \
+    || fail "the task surface must carry the role axis"
+  [ "$(printf '%s' "$OUT" | jq -r '.work.deliverable')" = ship ] \
+    || fail "the task surface must carry the deliverable axis"
+  [ "$(printf '%s' "$OUT" | jq -r '.work.stage')" = commissioned ] \
+    || fail "the task surface must carry the stage axis"
+  [ "$(printf '%s' "$OUT" | jq -r '.work | has("kind")')" = false ] \
+    || fail "the surface must not project the deprecated kind alias once the axes exist"
 
   # An id with no live record cannot be described. Rendering an empty surface
   # would invite exactly the confident-but-unsourced narration this prevents.

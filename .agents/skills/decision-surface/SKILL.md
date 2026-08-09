@@ -60,7 +60,6 @@ A pending row means the compensating instruction in `AGENTS.md` is retained deli
 
 | Pending row | The instruction it keeps alive |
 |---|---|
-| `attempt_and_retry_counting` | firstmate still judges when a repeated failure has become a real blocker |
 | `verifier_verdict_vocabulary` | firstmate still reads each verifier in that verifier's own terms |
 | `invoking_known_next_stage` | firstmate still triggers validation on the worker rather than calling the pipeline |
 | `deadline_and_time_gate_elapsed` | firstmate still re-reads queued time gates at teardown and heartbeat |

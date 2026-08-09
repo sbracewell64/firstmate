@@ -259,10 +259,9 @@ owners_json() {
  {"compensation":"loopspec_continuation","status":"owned",
   "owner":"bin/fm-loopspec.sh state|claim|finish",
   "note":"iteration memory is persisted; a repeated event key is refused"},
- {"compensation":"attempt_and_retry_counting","status":"pending",
-  "owner":null,
-  "pending_owner":"a durable per-work attempt and retry budget, so a retry decision reads a count instead of recalling one",
-  "note":"until it lands, retry judgment stays with firstmate and its instruction stays in place"},
+ {"compensation":"attempt_and_retry_counting","status":"owned",
+  "owner":"bin/fm-attempt.sh over state/<id>.attempt",
+  "note":"retry is arithmetic over a recorded count, and exhaustion is a named terminal stop rather than a judgment made inside the worker that is failing"},
  {"compensation":"verifier_verdict_vocabulary","status":"pending",
   "owner":null,
   "pending_owner":"a shared PASS/FAIL/NO_VERIFIER_RAN verdict contract spanning every verifier, so no unobserved result can pass",
@@ -452,7 +451,7 @@ surface_json() {
     task_doc=$(snap --arg id "$TARGET" '
       (.tasks[] | select(.id == $id)) // null
       | if . == null then null else {
-          id, kind, mode, yolo, project, harness, backend,
+          id, role, deliverable, stage, mode, yolo, project, harness, backend,
           current_state,
           endpoint: {target: .endpoint.target, exists: .endpoint.exists, status: .endpoint.status},
           pr,
