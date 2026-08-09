@@ -21,6 +21,34 @@
 # metadata sees the count without learning a second file. This record is the
 # authority; meta carries the readable copy.
 #
+# WHAT SPENDS AN ATTEMPT: A RECORDED FAILURE, NOT A LAUNCH. An attempt
+# increments only when the PRIOR attempt has a recorded FAILED terminal outcome.
+# A spawn that follows no recorded failure - a dead runtime, an agent-free husk
+# left by a session restart, a freeze, any recovery reclaim - is a CONTINUATION
+# of the same attempt: the count persists and does not move, and a continuation
+# is never refused however often it happens.
+#
+# The outcome record draws that line, not the spawn event, which is the whole
+# reason this increment depends on CFVC-12: "a retry is meaningless without a
+# terminal outcome that can say the prior attempt failed". Counting launches
+# instead conflates recovering a task whose RUNTIME died with retrying work that
+# FAILED, and would refuse to bring a healthy task back after two session
+# restarts.
+#
+# The failure signal read here is the `failed:` verb on the task's own status
+# log - the same declaration bin/fm-wake-ledger.sh derives outcome=failed from,
+# so this reads CFVC-12's evidence rather than a private second signal. failures=
+# records how many such declarations had been seen when the count last moved, so
+# only a failure NEWER than the last counted attempt spends the next one. This
+# script's own budget-exhaustion declaration is deliberately excluded from that
+# tally: it announces a stop that already happened and must never itself look
+# like the failure that justifies another attempt.
+#
+# A wedged worker is no exception. Relaunching one continues the same attempt
+# unless the wedge was recorded as a failure first, which is what makes the
+# decision arithmetic over a record rather than a judgment about how stuck it
+# looked.
+#
 # MIGRATION - AN ABSENT FIELD READS AS ATTEMPT 1. A task dispatched before this
 # existed has no record and no meta field, yet it plainly had an attempt. So the
 # prior count is resolved in this order: the durable record when present; else 1
@@ -70,14 +98,22 @@
 #       Print "attempt=<n> attempt_budget=<b>" for the resolved prior count.
 #       An unknown task prints attempt=0 with the default budget.
 #   fm-attempt.sh check <id> [--budget <n>]
-#       Decide whether one more attempt is within budget, committing nothing.
-#       Exit 0 when it is, 3 when the budget is exhausted. Called before a spawn
-#       creates anything, so a refused retry allocates no worktree or endpoint.
+#       Decide whether the next spawn is within budget, committing nothing.
+#       Exit 0 when it is, 3 when a NEW attempt would exceed the budget. A
+#       continuation always exits 0. Called before a spawn creates anything, so
+#       a refused retry allocates no worktree or endpoint.
 #   fm-attempt.sh open <id> [--budget <n>]
-#       Same decision, then COMMIT the increment durably and print
-#       "attempt=<n> attempt_budget=<b>" for the attempt now opened. Called at
+#       Same decision, then COMMIT the result durably and print
+#       "attempt=<n> attempt_budget=<b>" for the attempt now open - incremented
+#       when a new failure justified it, unchanged on a continuation. Called at
 #       the moment a spawn publishes task metadata, so an attempt that never
 #       reached a launch does not spend budget.
+#   fm-attempt.sh end <id>
+#       Record that the open attempt ENDED without landing, so the next spawn is
+#       a new attempt rather than a continuation. Teardown's --force hook: a
+#       discard deletes the status log along with the task's own failure
+#       declaration, so the end is recorded here or the evidence goes with it.
+#       A task with no open attempt records nothing.
 #   fm-attempt.sh retire <id>
 #       Remove the record. Teardown's ordinary-release hook.
 #
@@ -151,6 +187,34 @@ attempt_prior() {  # <id> -> count on stdout
   printf '0'
 }
 
+# Declared failures on the task's own status log - the same `failed:` verb
+# bin/fm-wake-ledger.sh derives outcome=failed from, so the two read one signal.
+# This script's OWN budget-exhaustion declaration is excluded: it reports a stop
+# that already happened, and counting it would let one refusal manufacture the
+# very failure that justifies the next attempt.
+attempt_failures() {  # <id> -> count on stdout
+  local file="$STATE/$1.status"
+  [ -f "$file" ] || { printf '0'; return 0; }
+  # One pass, and never `grep -c`, which prints 0 AND exits 1 on no match, so a
+  # `|| printf 0` fallback silently yields "0\n0" and every later comparison
+  # errors out into a false "not exceeded".
+  LC_ALL=C awk '
+    /^failed: attempt budget exhausted/ { next }
+    /^failed:/ { n += 1 }
+    END { printf "%d", n + 0 }
+  ' "$file" 2>/dev/null || printf '0'
+}
+
+# How many declared failures had been seen when the count last moved. An absent
+# field reads as 0, so a pre-existing record whose task already failed treats
+# that failure as new exactly once.
+attempt_failures_seen() {  # <id> -> count on stdout
+  local n
+  n=$(attempt_field "$STATE/$1.attempt" failures)
+  attempt_is_count "$n" || n=0
+  printf '%s' "$n"
+}
+
 # Explicit flag wins, then the record, then the task metadata, then the default.
 attempt_budget() {  # <id> <explicit-or-empty> -> budget on stdout
   local id=$1 explicit=${2-} b
@@ -172,27 +236,42 @@ attempt_budget() {  # <id> <explicit-or-empty> -> budget on stdout
 # Whole record rewritten from the values passed, so a field can never be left
 # behind from an earlier state. Written to a temp file and moved into place, so
 # a concurrent reader sees either the old record or the new one.
-attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty>
-  local id=$1 n=$2 b=$3 term=${4-} rec tmp
+attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty> <failures> <ended>
+  local id=$1 n=$2 b=$3 term=${4-} failures=${5-0} ended=${6-0} rec tmp
   rec="$STATE/$id.attempt"
   [ -d "$STATE" ] || mkdir -p "$STATE" 2>/dev/null || return 1
   tmp="$rec.tmp.$$"
   {
     printf 'attempt=%s\n' "$n"
     printf 'attempt_budget=%s\n' "$b"
+    printf 'failures=%s\n' "$failures"
+    printf 'ended=%s\n' "$ended"
     [ -z "$term" ] || printf 'terminal=%s\n' "$term"
     printf 'updated=%s\n' "$(date +%s)"
   } > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
   mv -f -- "$tmp" "$rec" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
 }
 
+# Did an authority record that the open attempt ENDED without landing? A forced
+# teardown discards the work AND deletes the status log that would otherwise
+# carry the failure declaration, so the end has to be recorded here or the
+# evidence disappears with the log - and discarding between attempts would
+# silently make the budget unbounded.
+attempt_ended() {  # <id>
+  [ "$(attempt_field "$STATE/$1.attempt" ended)" = 1 ]
+}
+
 # The refusal. Recorded once per exhaustion: a second refused spawn must not
 # append a second failure declaration for the same stop, because the status log
 # is a wake surface and the terminal fact has not changed.
-attempt_refuse() {  # <id> <prior> <budget>
-  local id=$1 prior=$2 budget=$3 already
+# The tally passed in is the one ALREADY SEEN, never the current count: a
+# refusal opens nothing, so it must not consume the pending failure and quietly
+# turn the next spawn into a continuation of an attempt that never started.
+attempt_refuse() {  # <id> <prior> <budget> <failures-already-seen>
+  local id=$1 prior=$2 budget=$3 failures=${4-0} already
   already=$(attempt_field "$STATE/$id.attempt" terminal)
-  attempt_write "$id" "$prior" "$budget" "$FM_ATTEMPT_TERMINAL_STATE" \
+  attempt_write "$id" "$prior" "$budget" "$FM_ATTEMPT_TERMINAL_STATE" "$failures" \
+    "$(attempt_field "$STATE/$id.attempt" ended)" \
     || printf 'warning: could not record the exhausted attempt budget for %s\n' "$id" >&2
   if [ "$already" != "$FM_ATTEMPT_TERMINAL_STATE" ]; then
     printf '%s: attempt budget exhausted after %s of %s attempts (%s)\n' \
@@ -234,37 +313,81 @@ cmd_show() {
   printf 'attempt=%s attempt_budget=%s\n' "$(attempt_prior "$id")" "$(attempt_budget "$id" '')"
 }
 
+# The one decision both check and open make: is the next spawn a NEW attempt or
+# a CONTINUATION of the one already open? A failure declared since the count
+# last moved is what makes it new; anything else - a dead runtime, a husk, a
+# reclaim - continues. Sets ATTEMPT_PRIOR, ATTEMPT_BUDGET_RESOLVED,
+# ATTEMPT_FAILURES, ATTEMPT_NEXT, and ATTEMPT_IS_NEW.
+attempt_resolve() {  # <id> <explicit-budget-or-empty>
+  local id=$1 explicit=${2-}
+  ATTEMPT_BUDGET_RESOLVED=$(attempt_budget "$id" "$explicit")
+  ATTEMPT_PRIOR=$(attempt_prior "$id")
+  ATTEMPT_FAILURES=$(attempt_failures "$id")
+  if [ "$ATTEMPT_PRIOR" -eq 0 ]; then
+    # Nothing has been attempted yet, so the first launch opens attempt 1
+    # whether or not anything ever failed.
+    ATTEMPT_IS_NEW=1
+    ATTEMPT_NEXT=1
+    return 0
+  fi
+  if attempt_ended "$id" || [ "$ATTEMPT_FAILURES" -gt "$(attempt_failures_seen "$id")" ]; then
+    ATTEMPT_IS_NEW=1
+    ATTEMPT_NEXT=$((ATTEMPT_PRIOR + 1))
+    return 0
+  fi
+  ATTEMPT_IS_NEW=0
+  ATTEMPT_NEXT=$ATTEMPT_PRIOR
+}
+
 cmd_check() {
-  local id=${1-} prior budget
+  local id=${1-}
   require_id "$id"
   shift
   parse_budget_flag "$@"
-  budget=$(attempt_budget "$id" "$PARSED_BUDGET")
-  prior=$(attempt_prior "$id")
-  if [ "$prior" -ge "$budget" ]; then
-    attempt_refuse "$id" "$prior" "$budget"
+  attempt_resolve "$id" "$PARSED_BUDGET"
+  # Only a NEW attempt can exceed the budget. A continuation is never refused,
+  # however many times a dead runtime has to be replaced.
+  if [ "$ATTEMPT_IS_NEW" -eq 1 ] && [ "$ATTEMPT_PRIOR" -ge "$ATTEMPT_BUDGET_RESOLVED" ]; then
+    attempt_refuse "$id" "$ATTEMPT_PRIOR" "$ATTEMPT_BUDGET_RESOLVED" "$(attempt_failures_seen "$id")"
     exit "$ATTEMPT_EXHAUSTED_EXIT"
   fi
-  printf 'attempt=%s attempt_budget=%s\n' "$((prior + 1))" "$budget"
+  printf 'attempt=%s attempt_budget=%s\n' "$ATTEMPT_NEXT" "$ATTEMPT_BUDGET_RESOLVED"
 }
 
 cmd_open() {
-  local id=${1-} prior budget next
+  local id=${1-}
   require_id "$id"
   shift
   parse_budget_flag "$@"
-  budget=$(attempt_budget "$id" "$PARSED_BUDGET")
-  prior=$(attempt_prior "$id")
-  if [ "$prior" -ge "$budget" ]; then
-    attempt_refuse "$id" "$prior" "$budget"
+  attempt_resolve "$id" "$PARSED_BUDGET"
+  if [ "$ATTEMPT_IS_NEW" -eq 1 ] && [ "$ATTEMPT_PRIOR" -ge "$ATTEMPT_BUDGET_RESOLVED" ]; then
+    attempt_refuse "$id" "$ATTEMPT_PRIOR" "$ATTEMPT_BUDGET_RESOLVED" "$(attempt_failures_seen "$id")"
     exit "$ATTEMPT_EXHAUSTED_EXIT"
   fi
-  next=$((prior + 1))
+  # The failure tally is committed with the count, so the failure that justified
+  # this attempt can never justify a second one. A continuation rewrites the
+  # same count and tally, which is what keeps a repeated reclaim free.
+  #
   # A commit that cannot be made durable is refused rather than launched
   # uncounted: an attempt nobody recorded is exactly the state this replaces.
-  attempt_write "$id" "$next" "$budget" '' \
-    || die "could not record attempt $next for $id at $STATE/$id.attempt"
-  printf 'attempt=%s attempt_budget=%s\n' "$next" "$budget"
+  attempt_write "$id" "$ATTEMPT_NEXT" "$ATTEMPT_BUDGET_RESOLVED" '' "$ATTEMPT_FAILURES" 0 \
+    || die "could not record attempt $ATTEMPT_NEXT for $id at $STATE/$id.attempt"
+  printf 'attempt=%s attempt_budget=%s\n' "$ATTEMPT_NEXT" "$ATTEMPT_BUDGET_RESOLVED"
+}
+
+cmd_end() {
+  local id=${1-} prior budget
+  require_id "$id"
+  shift
+  [ "$#" -eq 0 ] || die "end takes only a task id"
+  # Only a task that has an open attempt can end one. Recording an end for a
+  # task nobody attempted would invent a retry out of nothing.
+  prior=$(attempt_prior "$id")
+  [ "$prior" -gt 0 ] || return 0
+  budget=$(attempt_budget "$id" '')
+  attempt_write "$id" "$prior" "$budget" \
+    "$(attempt_field "$STATE/$id.attempt" terminal)" "$(attempt_failures "$id")" 1 \
+    || die "could not record the end of attempt $prior for $id"
 }
 
 cmd_retire() {
@@ -283,9 +406,10 @@ SUBCOMMAND=$1
 shift
 case "$SUBCOMMAND" in
   show) cmd_show "$@" ;;
+  end) cmd_end "$@" ;;
   check) cmd_check "$@" ;;
   open) cmd_open "$@" ;;
   retire) cmd_retire "$@" ;;
   -h|--help|help) usage ;;
-  *) die "unknown subcommand: $SUBCOMMAND (show check open retire)" ;;
+  *) die "unknown subcommand: $SUBCOMMAND (show check open end retire)" ;;
 esac

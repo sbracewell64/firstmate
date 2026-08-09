@@ -2469,6 +2469,8 @@ test_forced_teardown_keeps_the_attempt_record_and_the_count_survives() {
 
   assert_present "$case_dir/state/task-x1.attempt" \
     "attempt-force: discarding the work must not clear the count, or discarding between attempts makes the budget unbounded"
+  assert_grep "ended=1" "$case_dir/state/task-x1.attempt" \
+    "attempt-force: the discard must RECORD that the attempt ended - this cleanup deletes the status log that carried the failure declaration"
   [ ! -f "$case_dir/state/task-x1.meta" ] || fail "attempt-force: the metadata should be gone"
 
   # The metadata is gone - this is the state a restart leaves behind - and the
@@ -2477,6 +2479,17 @@ test_forced_teardown_keeps_the_attempt_record_and_the_count_survives() {
     "$ROOT/bin/fm-attempt.sh" open task-x1 2>&1)
   assert_contains "$out" "attempt=2 attempt_budget=2" \
     "attempt-force: the retry after a discarded attempt must be attempt 2"
+  # A relaunch with nothing newly recorded continues attempt 2 rather than
+  # spending a third - only a recorded end or failure moves the count.
+  out=$(FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-attempt.sh" open task-x1 2>&1) \
+    || fail "attempt-force: a reclaim after the counted discard must not be refused"$'\n'"$out"
+  assert_contains "$out" "attempt=2 attempt_budget=2" \
+    "attempt-force: a reclaim must continue the attempt the discard opened"
+  # A second discard ends that attempt too, and the budget is then spent.
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
+    "$ROOT/bin/fm-attempt.sh" end task-x1 \
+    || fail "attempt-force: recording the second discarded attempt failed"
   out=$(FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$case_dir/state" \
     "$ROOT/bin/fm-attempt.sh" open task-x1 2>&1) && \
     fail "attempt-force: a third attempt must be refused"$'\n'"$out"

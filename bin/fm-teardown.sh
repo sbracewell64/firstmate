@@ -37,7 +37,9 @@
 # bin/fm-attempt.sh) is retired on an ordinary release, because that release
 # means a sanctioned completion (including a parked release whose PR is still
 # open) and a re-dispatch of that id then starts a fresh budget; it is KEPT
-# under --force, because discarded work makes a re-dispatch a genuine retry.
+# under --force, which additionally RECORDS that the attempt ended, because
+# discarded work makes a re-dispatch a genuine retry and this cleanup removes
+# the status log that would otherwise carry that evidence.
 # A ship task released while its PR is still open leaves state/<task-id>.landing
 # behind: a minimal durable record (pr, pr_head, project) that keeps the PR
 # landable through bin/fm-pr-merge.sh and rearmable through bin/fm-pr-check.sh
@@ -660,7 +662,16 @@ write_landing_record_if_unlanded() {
 # discarded, a re-dispatch of that id is a genuine retry, and clearing the count
 # here would make the budget unbounded by simply discarding between attempts.
 retire_attempt_record() {
-  [ "$FORCE" != "--force" ] || return 0
+  if [ "$FORCE" = "--force" ]; then
+    # The discard ENDS the open attempt, and this cleanup deletes the status log
+    # that carried the task's own failure declaration, so the end is recorded on
+    # the attempt record itself. Without it the next dispatch of that id would
+    # read as a continuation, and discarding between attempts would make the
+    # budget unbounded - the exact hole keeping the record was meant to close.
+    "$FM_ROOT/bin/fm-attempt.sh" end "$ID" \
+      || echo "warning: could not record the discarded attempt for $ID" >&2
+    return 0
+  fi
   "$FM_ROOT/bin/fm-attempt.sh" retire "$ID" \
     || echo "warning: could not retire the attempt record for $ID" >&2
 }
