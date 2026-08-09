@@ -92,7 +92,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
 projects/            cloned repos; gitignored; read-only except under hard rule 1's concrete captain-approved project operation exception
 state/               volatile runtime signals; gitignored
-  <id>.status        appended by crewmates: "<state>: <note>" wake-event lines, not current-state truth
+  <id>.status        appended by crewmates, plus fm-spawn.sh launch-failure and fm-attempt.sh budget-exhaustion declarations: "<state>: <note>" wake-event lines, not current-state truth
   <id>.turn-ended    touched by turn-end hooks
   <id>.childcpu      identity-bound sample of the CPU consumed by the task agent's descendants, so supervision can see work happening in a child process; written by the watcher, removed by teardown
   <id>.terminal-recorded  receipt proving the ledger already holds a terminal record for a task that declared failure and was never torn down, so the recording sweep never repeats it; written only by bin/fm-wake-ledger.sh, removed by teardown
