@@ -29,11 +29,13 @@
 # restarting its budget at 1.
 #
 # WHAT SURVIVES A TEARDOWN. bin/fm-teardown.sh retires the record on an ordinary
-# release and PRESERVES it under --force. An ordinary teardown is only reachable
-# once the work landed, so the count retires with the task it measured. --force
-# is the discard path: the work was thrown away, a re-dispatch of that id is a
-# genuine retry, and resetting its count there would make the budget unbounded
-# by simply discarding between attempts.
+# release and PRESERVES it under --force. An ordinary release means the task
+# reached a sanctioned completion - landed work, or a parked release whose pull
+# request is still open - so the count retires with the task it measured and a
+# re-dispatch of that id starts a fresh budget. --force is the discard path:
+# the work was thrown away, a re-dispatch of that id is a genuine retry, and
+# resetting its count there would make the budget unbounded by simply
+# discarding between attempts.
 #
 # EXHAUSTION IS A NAMED TERMINAL STATE, NOT A SILENT STOP. When the budget is
 # spent, `open` and `check` refuse the next attempt, record
@@ -81,7 +83,9 @@
 #
 # --budget sets the budget for this task id from here on and is recorded; absent,
 # a recorded budget stands, and an unrecorded one defaults to
-# FM_ATTEMPT_BUDGET_DEFAULT (2). Two is not arbitrary: it is the same threshold
+# FM_ATTEMPT_BUDGET_DEFAULT (2). A default that is not a positive integer is
+# refused outright rather than compared, so a misconfigured environment can
+# never unbind the budget. Two is not arbitrary: it is the same threshold
 # the prose it replaces used, and the one LoopSpec's no_progress block already
 # encodes.
 set -u
@@ -270,6 +274,9 @@ cmd_retire() {
   [ "$#" -eq 0 ] || die "retire takes only a task id"
   rm -f -- "$STATE/$id.attempt"
 }
+
+attempt_is_count "$ATTEMPT_BUDGET_DEFAULT" && [ "$ATTEMPT_BUDGET_DEFAULT" -gt 0 ] \
+  || die "FM_ATTEMPT_BUDGET_DEFAULT must be a positive integer: $ATTEMPT_BUDGET_DEFAULT"
 
 [ "$#" -ge 1 ] || { usage; exit 2; }
 SUBCOMMAND=$1
