@@ -114,17 +114,19 @@ fi
 # was necessary did not change (bin/fm-reasoning-lib.sh).
 ESCALATION_POLICY=$(fm_escalation_policy_for ship "$MODE" "$YOLO")
 
+# Drop the fields this transition replaces, then write the new ones back through
+# the ordering-safe path: a task's record doubles as PR identity, and anything
+# unrecognized landing after a `pr=` line would invalidate it
+# (bin/fm-task-axis-lib.sh explains why that position is a contract).
 TMP="$META.tmp"
 grep -v -e '^kind=' -e '^mode=' -e '^yolo=' -e '^role=' -e '^deliverable=' -e '^stage=' \
   -e '^escalation_policy=' "$META" > "$TMP"
-{
-  echo "kind=ship"
-  fm_task_axes_emit ship reflagged
-  echo "mode=$MODE"
-  echo "yolo=$YOLO"
-  echo "escalation_policy=$ESCALATION_POLICY"
-} >> "$TMP"
 mv "$TMP" "$META"
+readarray -t REFLAG_LINES < <(printf 'kind=ship\n'; fm_task_axes_emit ship reflagged; printf 'mode=%s\nyolo=%s\nescalation_policy=%s\n' "$MODE" "$YOLO" "$ESCALATION_POLICY")
+fm_task_axes_write_before_pr "$META" "${REFLAG_LINES[@]}" || {
+  echo "error: task $ID metadata could not be updated" >&2
+  exit 1
+}
 
 HOME_Q=$(printf '%q' "$FM_HOME")
 echo "reflagged $ID to ship mode=$MODE yolo=$YOLO (teardown protection restored)"
