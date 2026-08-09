@@ -308,6 +308,12 @@ Verification reads the head, mergeability, review decision, and check rollup in 
 The final verification is not atomically bound to the merge: it narrows the remaining race window to the verification metadata write, but a race remains however small, and closing it requires a server-side head precondition tracked by decision `pipeline-reports-green-on-absent-ci-decision-merge-atomic-binding`.
 An empty check rollup refuses on its own count instead of being read as green, because a cross-repo fork pull request held for maintainer approval dispatches no workflows and therefore reports no failures.
 [`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh)'s header owns the full refusal list and the `--allow-unverified` override, which is never inferred and is recorded in the task's metadata so an unverified merge stays visible.
+Whether a task may be attempted again is arithmetic over a durable count rather than a judgment made inside the worker that is failing.
+[`bin/fm-attempt.sh`](../bin/fm-attempt.sh) owns `state/<task-id>.attempt` and its header owns the record format, the migration rule, and the refusal; every ship or scout spawn checks the budget before it creates anything and commits the increment when it publishes task metadata, so an attempt that never reached a launch costs nothing and a launched one is always counted.
+Exhaustion is a named stop rather than a silent one: the spawn refuses, records the unified `budget_exhausted` terminal state, and declares the failure on the task's own status log, which is both the wake surface and the input the terminal-outcome derivation reads.
+The count outlives the task metadata deliberately - an ordinary teardown retires it because that release is only reachable once the work landed, while a `--force` release keeps it because discarded work makes a re-dispatch of that id a genuine retry.
+Secondmate relaunches are exempt, since their relaunch is unattended liveness recovery rather than a retry.
+
 Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
 [`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, landing-record rule, PR-discovery fallback, and stale-lock recovery procedure.
 
