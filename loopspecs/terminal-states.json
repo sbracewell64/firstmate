@@ -79,6 +79,16 @@
           "note": "The second goal-met success. It already shared a class with delta_emitted before the merge."
         },
         {
+          "state": "already_carried",
+          "unified": "no_delta",
+          "note": "The fork already carries the contribution, so there is nothing to do. It shares no_delta's zero-model-turn rule, which is why it lands here rather than on a success."
+        },
+        {
+          "state": "carried_and_checks_resolved",
+          "unified": "goal_met",
+          "note": "A third goal-met success. What the success produced - here, a carried contribution whose checks finished - is the spec's own business, not a vocabulary distinction."
+        },
+        {
           "state": "needs_ruling",
           "unified": "needs_ruling",
           "note": "Carried through unchanged. Deliberately not merged with cancelled: a ruling is owed here and is not owed there."
