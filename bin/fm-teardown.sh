@@ -33,6 +33,10 @@
 # declared scratch and the report at data/<task-id>/report.md is the work
 # product. Teardown proceeds only once the report exists and the shared
 # unresolved-decision completion gate verifies its captain-held inventory.
+# The task's durable attempt count (state/<task-id>.attempt, owned by
+# bin/fm-attempt.sh) is retired on an ordinary release, because that release is
+# only reachable once the work landed, and is KEPT under --force, because
+# discarded work makes a re-dispatch of that id a genuine retry.
 # A ship task released while its PR is still open leaves state/<task-id>.landing
 # behind: a minimal durable record (pr, pr_head, project) that keeps the PR
 # landable through bin/fm-pr-merge.sh and rearmable through bin/fm-pr-check.sh
@@ -638,6 +642,22 @@ write_landing_record_if_unlanded() {
     return 0
   fi
   LANDING_PENDING_URL=$PR_URL
+}
+
+# The task's durable attempt count (bin/fm-attempt.sh) outlives its metadata on
+# purpose, so the retry budget is retired here and only here.
+#
+# An ordinary release is only reachable once the work landed, so the count has
+# nothing left to bound and retires with the task it measured - otherwise a task
+# id reused for new work would inherit a spent budget it never earned.
+#
+# --force is the opposite case and KEEPS the record: the work was deliberately
+# discarded, a re-dispatch of that id is a genuine retry, and clearing the count
+# here would make the budget unbounded by simply discarding between attempts.
+retire_attempt_record() {
+  [ "$FORCE" != "--force" ] || return 0
+  "$FM_ROOT/bin/fm-attempt.sh" retire "$ID" \
+    || echo "warning: could not retire the attempt record for $ID" >&2
 }
 
 # Reported after cleanup so the released PR is not silently forgotten: the task
@@ -2424,6 +2444,7 @@ FM_WAKE_LEDGER="$LEDGER_PATH" \
 rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
   "$STATE/$ID.pi-ext.ts" "$STATE/$ID.grok-turnend-token" \
   "$STATE/$ID.kimi-turnend-token" "$STATE/$ID.childcpu"
+retire_attempt_record
 if [ "$KIND" != scout ] && [ "$KIND" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

@@ -35,6 +35,15 @@
 #   REFUSES a mismatch, exactly like the delivery contract above. A slot holding
 #   uncommitted work, or sitting on a task branch, is left untouched and launched
 #   as-is with a notice. Refused on --secondmate, which syncs its whole home.
+#   Every ship or scout spawn is one ATTEMPT against a durable count, so whether
+#   a task may be retried is arithmetic rather than a judgment: the budget is
+#   checked before anything is created and the increment is committed when the
+#   task's metadata is published, which also carries the count as attempt= and
+#   attempt_budget=. A spent budget refuses the spawn and records the terminal
+#   state. --attempt-budget <n> sets that budget for this task id and is
+#   recorded, which is the only way past an exhausted one; it is refused on
+#   --secondmate, whose relaunch is liveness recovery rather than a retry.
+#   bin/fm-attempt.sh owns the record, the migration rule, and the refusal.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -262,6 +271,7 @@ YOLO=
 TRACEPARENT_ARG=
 SLOT_BASE_ARG=
 CONTRIB_ARG=
+ATTEMPT_BUDGET_ARG=
 HARNESS_SET=0
 MODEL_SET=0
 EFFORT_SET=0
@@ -271,6 +281,7 @@ YOLO_SET=0
 TRACEPARENT_SET=0
 SLOT_BASE_SET=0
 CONTRIB_SET=0
+ATTEMPT_BUDGET_SET=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -288,6 +299,7 @@ for a in "$@"; do
       traceparent) TRACEPARENT_ARG=$a; TRACEPARENT_SET=1 ;;
       slot-base) SLOT_BASE_ARG=$a; SLOT_BASE_SET=1 ;;
       contribution-target) CONTRIB_ARG=$a; CONTRIB_SET=1 ;;
+      attempt-budget) ATTEMPT_BUDGET_ARG=$a; ATTEMPT_BUDGET_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -314,6 +326,8 @@ for a in "$@"; do
     --slot-base=*) SLOT_BASE_ARG=${a#--slot-base=}; SLOT_BASE_SET=1 ;;
     --contribution-target) want_value=contribution-target ;;
     --contribution-target=*) CONTRIB_ARG=${a#--contribution-target=}; CONTRIB_SET=1 ;;
+    --attempt-budget) want_value='attempt-budget' ;;
+    --attempt-budget=*) ATTEMPT_BUDGET_ARG=${a#--attempt-budget=}; ATTEMPT_BUDGET_SET=1 ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -340,6 +354,17 @@ if [ "$TRACEPARENT_SET" -eq 1 ]; then
 fi
 [ "$SLOT_BASE_SET" -eq 0 ] || [ -n "$SLOT_BASE_ARG" ] || { echo "error: --slot-base requires a non-empty value" >&2; exit 1; }
 [ "$CONTRIB_SET" -eq 0 ] || [ -n "$CONTRIB_ARG" ] || { echo "error: --contribution-target requires a non-empty value" >&2; exit 1; }
+# The retry budget is a deliberate number, so a raise is stated rather than
+# inferred, and bin/fm-attempt.sh records the value it was raised to.
+if [ "$ATTEMPT_BUDGET_SET" -eq 1 ]; then
+  case "$ATTEMPT_BUDGET_ARG" in
+    ''|*[!0-9]*|0) echo "error: --attempt-budget must be a positive integer" >&2; exit 1 ;;
+  esac
+  [ "$KIND" != secondmate ] || {
+    echo "error: --attempt-budget applies only to ship and scout spawns; a secondmate relaunch is routine liveness recovery, not a retry, and is never counted against a budget" >&2
+    exit 1
+  }
+fi
 case "$EFFORT" in
   ''|low|medium|high|xhigh|max) ;;
   *) echo "error: --effort must be one of low, medium, high, xhigh, max" >&2; exit 1 ;;
@@ -815,6 +840,7 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   if [ "$KIND" = ship ] && [ "$CONTRIB_SET" -eq 1 ]; then
     shared_args+=(--contribution-target "$CONTRIB_ARG")
   fi
+  [ "$ATTEMPT_BUDGET_SET" -eq 0 ] || shared_args+=(--attempt-budget "$ATTEMPT_BUDGET_ARG")
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -840,6 +866,21 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
   exit 1
 fi
 SPAWN_TASK_LOCK_HELD=1
+
+# The retry budget, before anything is created. Whether this task id may be
+# attempted again is arithmetic over its durable count, which bin/fm-attempt.sh
+# owns; a spent budget refuses here so a refused retry allocates no worktree and
+# no endpoint, and records the named terminal state rather than stopping
+# quietly. The increment itself is committed later, at metadata publication, so
+# a spawn that never reached a launch does not spend an attempt.
+# Secondmates are exempt: their relaunch is routine liveness recovery, not a
+# retry (fm-attempt.sh's header owns that reasoning).
+ATTEMPT_FLAGS=()
+[ "$ATTEMPT_BUDGET_SET" -eq 0 ] || ATTEMPT_FLAGS=(--budget "$ATTEMPT_BUDGET_ARG")
+if [ "$KIND" != secondmate ]; then
+  "$FM_ROOT/bin/fm-attempt.sh" check "$ID" "${ATTEMPT_FLAGS[@]+"${ATTEMPT_FLAGS[@]}"}" >/dev/null || exit 1
+fi
+
 PROJ=
 ARG3=
 FIRSTMATE_HOME=
@@ -2135,6 +2176,25 @@ fi
 
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
+# Commit the attempt now that a launch is actually happening, and publish the
+# resulting count onto the metadata every other reader already joins on. The
+# durable record is the authority; these two fields are its readable copy, and
+# an absent attempt= on an older task's metadata reads as attempt 1.
+ATTEMPT_N=
+ATTEMPT_BUDGET=
+if [ "$KIND" != secondmate ]; then
+  if ATTEMPT_OPENED=$("$FM_ROOT/bin/fm-attempt.sh" open "$ID" "${ATTEMPT_FLAGS[@]+"${ATTEMPT_FLAGS[@]}"}"); then
+    ATTEMPT_N=${ATTEMPT_OPENED#attempt=}
+    ATTEMPT_N=${ATTEMPT_N%% *}
+    ATTEMPT_BUDGET=${ATTEMPT_OPENED##*attempt_budget=}
+  else
+    # The count could not be made durable. Refuse rather than launch an attempt
+    # nobody counted: an uncounted attempt is exactly the state this replaces,
+    # and the budget silently stops bounding anything.
+    echo "error: could not record the attempt count for $ID; refusing to launch an uncounted attempt" >&2
+    exit 1
+  fi
+fi
 {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
@@ -2163,6 +2223,8 @@ META_WINDOW=$T
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
+  [ -z "$ATTEMPT_N" ] || echo "attempt=$ATTEMPT_N"
+  [ -z "$ATTEMPT_BUDGET" ] || echo "attempt_budget=$ATTEMPT_BUDGET"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   # Default-off writes no traceparent= line (meta stays byte-identical).
   # backend= is written only for a non-default (non-tmux) backend, so the
