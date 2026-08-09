@@ -2331,9 +2331,11 @@ if [ "$BACKEND" = herdr ]; then
     exit 1
   fi
 fi
+REMOVED_SECONDMATE_HOME=
 if [ "$KIND" = secondmate ]; then
   [ -n "$HOME_PATH" ] || HOME_PATH=$WT
   remove_firstmate_home "$HOME_PATH" "secondmate home" "$ID" || exit $?
+  REMOVED_SECONDMATE_HOME=$HOME_PATH
   remove_secondmate_registry_entry "$ID"
 fi
 remove_grok_turnend_auth "$STATE" "$ID"
@@ -2359,7 +2361,22 @@ case "$LEDGER_ESCALATED" in
   yes|no) ;;
   *) LEDGER_ESCALATED=unknown ;;
 esac
-FM_WAKE_LEDGER="${FM_WAKE_LEDGER:-$DATA/wake-ledger.tsv}" \
+LEDGER_PATH="${FM_WAKE_LEDGER:-$DATA/wake-ledger.tsv}"
+# Never write into a home this teardown just removed. A remote secondmate is
+# retired by a host-local teardown whose DATA is a private directory INSIDE that
+# home (bin/fm-remote-secondmate-control.sh), and bin/fm-wake-ledger.sh creates
+# its ledger's directory, so an unguarded append rebuilds the retired home as a
+# stray tree that outlives the retirement. The line is unreachable evidence
+# there anyway: it would live only in the tree that was just deleted.
+# The path test carries the intent; the vanished-directory test catches the same
+# home reached through a differently spelled path, so neither spelling resurrects it.
+if [ -n "$REMOVED_SECONDMATE_HOME" ] \
+  && { path_is_ancestor_of "$REMOVED_SECONDMATE_HOME" "$LEDGER_PATH" \
+    || [ ! -d "$(dirname "$LEDGER_PATH")" ]; }; then
+  LEDGER_PATH=
+fi
+[ -z "$LEDGER_PATH" ] || \
+FM_WAKE_LEDGER="$LEDGER_PATH" \
 "$SCRIPT_DIR/fm-wake-ledger.sh" task "$ID" \
   --outcome "$LEDGER_OUTCOME" \
   --harness "$(meta_value "$META" harness)" \
