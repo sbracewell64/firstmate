@@ -324,7 +324,7 @@ EOF
   meta="$home/state/$id.meta"
   write_spawn_brief "$home" "$id"
 
-  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
   [ "$rc" -eq 0 ] || fail "the first spawn must succeed"$'\n'"$out"
   [ "$(meta_field "$meta" attempt)" = 1 ] || fail "the first spawn must publish attempt=1"$'\n'"$(cat "$meta")"
   [ "$(meta_field "$meta" attempt_budget)" = 2 ] || fail "the spawn must publish the budget it checked against"
@@ -333,14 +333,14 @@ EOF
   # deleted first, so only the durable record can supply the count, and it must
   # come back unchanged - surviving the restart without being spent by it.
   rm -f "$meta"
-  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
   [ "$rc" -eq 0 ] || fail "the restart spawn must succeed"$'\n'"$out"
   [ "$(meta_field "$meta" attempt)" = 1 ] \
     || fail "the count must survive losing the task metadata unchanged, got attempt=$(meta_field "$meta" attempt)"
 
   # A declared failure is what spends the next attempt.
   printf 'failed: the work did not land\n' >> "$home/state/$id.status"
-  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
   [ "$rc" -eq 0 ] || fail "the retry after a declared failure must succeed"$'\n'"$out"
   [ "$(meta_field "$meta" attempt)" = 2 ] \
     || fail "a declared failure must spend the next attempt, got attempt=$(meta_field "$meta" attempt)"
@@ -349,7 +349,7 @@ EOF
   # anything is created, so the published metadata is left exactly as it was.
   printf 'failed: it did not land again\n' >> "$home/state/$id.status"
   before=$(cat "$meta")
-  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
   [ "$rc" -ne 0 ] || fail "the third spawn must be refused"$'\n'"$out"
   assert_contains "$out" "budget_exhausted" "the refused spawn must name the terminal state"
   [ "$(cat "$meta")" = "$before" ] || fail "a refused spawn must not rewrite the task metadata"
@@ -357,7 +357,7 @@ EOF
     "the refused spawn must declare the failure rather than stopping quietly"
 
   # The stated override, and the only one.
-  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --attempt-budget 3); rc=$?
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --attempt-budget 3); rc=$?
   [ "$rc" -eq 0 ] || fail "a deliberately raised budget must let the spawn through"$'\n'"$out"
   [ "$(meta_field "$meta" attempt)" = 3 ] || fail "the raised attempt must publish attempt=3"
   [ "$(meta_field "$meta" attempt_budget)" = 3 ] || fail "the raised budget must be published"
@@ -378,7 +378,7 @@ EOF
   record="$home/state/$id.attempt"
   log="$TMP_ROOT/steer/tmux.log"
   write_spawn_brief "$home" "$id"
-  run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off >/dev/null \
+  run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION >/dev/null \
     || fail "the spawn under test must succeed"
   [ "$(record_field "$home/state" "$id" attempt)" = 1 ] || fail "the spawn must have opened attempt 1"
   before=$(cat "$record")
