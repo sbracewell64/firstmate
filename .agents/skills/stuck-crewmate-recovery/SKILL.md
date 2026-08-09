@@ -47,6 +47,7 @@ Escalate in order:
    A low context reading is not wedging; modern harnesses auto-compact and keep going.
    The worktree and commits persist, so relaunch is cheap.
 5. Whether to relaunch again is arithmetic, not a judgment: read the task's durable attempt count with `bin/fm-attempt.sh show <id>`.
-   A relaunch through `bin/fm-spawn.sh` spends one attempt and refuses outright once the count reaches the budget, recording the `budget_exhausted` terminal state; an in-pane restart that never goes through the spawn is not counted, so read the count rather than assuming the restarts you remember are all of them.
+   A relaunch spends an attempt only when the task's prior attempt was RECORDED as failed; recovering a dead runtime, an agent-free husk, or a wedge that was never recorded as a failure continues the attempt already open and is never refused.
+   So when a relaunch must count against the budget, the failure has to be on the record first - that is what keeps the decision arithmetic instead of a judgment about how stuck the worker looked.
    When the budget is spent, write `failed` to the backlog and tell the captain the plain failure, preserved work, and consequence using `AGENTS.md` section 9; do not mention metadata, harness, window, or worktree unless the path itself is needed for action.
    Another attempt beyond that budget is a deliberate act with a stated reason, made by raising it with `--attempt-budget <n>`, which is recorded.

@@ -35,12 +35,14 @@
 #   REFUSES a mismatch, exactly like the delivery contract above. A slot holding
 #   uncommitted work, or sitting on a task branch, is left untouched and launched
 #   as-is with a notice. Refused on --secondmate, which syncs its whole home.
-#   Every ship or scout spawn is one ATTEMPT against a durable count, so whether
-#   a task may be retried is arithmetic rather than a judgment: the budget is
-#   checked before anything is created and the increment is committed when the
-#   task's metadata is published, which also carries the count as attempt= and
-#   attempt_budget=. A spent budget refuses the spawn and records the terminal
-#   state. --attempt-budget <n> sets that budget for this task id and is
+#   Every ship or scout spawn resolves the task's durable attempt count, so
+#   whether a task may be retried is arithmetic rather than a judgment: the
+#   budget is checked before anything is created and the result is committed
+#   when the task's metadata is published, which also carries the count as
+#   attempt= and attempt_budget=. The count moves only when the prior attempt was
+#   RECORDED as failed; a spawn recovering a dead runtime or husk continues the
+#   attempt already open and is never refused. A spent budget refuses the spawn
+#   and records the terminal state. --attempt-budget <n> sets that budget for this task id and is
 #   recorded, which is the only way past an exhausted one; it is refused on
 #   --secondmate, whose relaunch is liveness recovery rather than a retry.
 #   bin/fm-attempt.sh owns the record, the migration rule, and the refusal.
@@ -871,8 +873,10 @@ SPAWN_TASK_LOCK_HELD=1
 # attempted again is arithmetic over its durable count, which bin/fm-attempt.sh
 # owns; a spent budget refuses here so a refused retry allocates no worktree and
 # no endpoint, and records the named terminal state rather than stopping
-# quietly. The increment itself is committed later, at metadata publication, so
-# a spawn that never reached a launch does not spend an attempt.
+# quietly. Only a spawn following a RECORDED FAILURE can be refused - one
+# recovering a dead runtime continues the attempt already open. The result is
+# committed later, at metadata publication, so a spawn that never reached a
+# launch does not spend an attempt.
 # Secondmates are exempt: their relaunch is routine liveness recovery, not a
 # retry (fm-attempt.sh's header owns that reasoning).
 ATTEMPT_FLAGS=()
@@ -2177,7 +2181,8 @@ fi
 META_WINDOW=$T
 [ "$BACKEND" = orca ] && META_WINDOW=$W
 # Commit the attempt now that a launch is actually happening, and publish the
-# resulting count onto the metadata every other reader already joins on. The
+# resulting count onto the metadata every other reader already joins on. A
+# continuation republishes the same count rather than a new one. The
 # durable record is the authority; these two fields are its readable copy, and
 # an absent attempt= on an older task's metadata reads as attempt 1.
 ATTEMPT_N=

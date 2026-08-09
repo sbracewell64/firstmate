@@ -49,8 +49,11 @@ test_attempts_are_counted_and_persisted() {
 
   out=$(run_attempt "$state" open t1)
   assert_contains "$out" "attempt=1 attempt_budget=2" "the first open is attempt 1"
+  # A recorded failure is what spends the next attempt (see the continuation
+  # case below for the other half of this rule).
+  printf 'failed: the work did not land\n' >> "$state/t1.status"
   out=$(run_attempt "$state" open t1)
-  assert_contains "$out" "attempt=2 attempt_budget=2" "the second open is attempt 2"
+  assert_contains "$out" "attempt=2 attempt_budget=2" "a declared failure must spend the next attempt"
 
   # The count is on disk, not in the process that produced it: every command
   # above was a separate invocation, and this one reads what they left.
@@ -59,6 +62,7 @@ test_attempts_are_counted_and_persisted() {
   out=$(run_attempt "$state" show t1)
   assert_contains "$out" "attempt=2 attempt_budget=2" "show must read the durable count back"
 
+  printf 'failed: it did not land again\n' >> "$state/t1.status"
   out=$(run_attempt "$state" check t1); rc=$?
   [ "$rc" -eq 3 ] || fail "a check past the budget must exit 3, got $rc"
   out=$(run_attempt "$state" open t1); rc=$?
@@ -76,7 +80,7 @@ test_attempts_are_counted_and_persisted() {
   assert_present "$state/t1.status" "exhaustion must declare a failure on the status log"
   assert_grep "failed: attempt budget exhausted after 2 of 2 attempts (budget_exhausted)" "$state/t1.status" \
     "the declared failure must name the count, the budget, and the terminal state"
-  [ "$(grep -c '^failed:' "$state/t1.status")" = 1 ] \
+  [ "$(grep -c '^failed: attempt budget exhausted' "$state/t1.status")" = 1 ] \
     || fail "a second refusal must not re-declare the same terminal fact"$'\n'"$(cat "$state/t1.status")"
 
   pass "fm-attempt: attempts are counted durably and a spent budget refuses with a named terminal state"
@@ -92,6 +96,7 @@ test_absent_field_reads_as_attempt_one() {
 
   out=$(run_attempt "$state" show old)
   assert_contains "$out" "attempt=1 attempt_budget=2" "an absent attempt= field must read as attempt 1"
+  printf 'failed: the pre-existing attempt failed\n' >> "$state/old.status"
   out=$(run_attempt "$state" open old)
   assert_contains "$out" "attempt=2 attempt_budget=2" "the pre-existing task's retry must be attempt 2"
 
@@ -107,7 +112,9 @@ test_raising_the_budget_is_the_only_way_past_it_and_is_recorded() {
   local state out rc
   state=$(make_state raise)
   run_attempt "$state" open t2 >/dev/null
+  printf 'failed: one\n' >> "$state/t2.status"
   run_attempt "$state" open t2 >/dev/null
+  printf 'failed: two\n' >> "$state/t2.status"
   run_attempt "$state" open t2 >/dev/null 2>&1; rc=$?
   [ "$rc" -eq 3 ] || fail "the third attempt must be refused at the default budget"
 
@@ -116,6 +123,7 @@ test_raising_the_budget_is_the_only_way_past_it_and_is_recorded() {
   [ "$(record_field "$state" t2 attempt_budget)" = 3 ] \
     || fail "the raised budget must be recorded, so the override is inspectable"
   # The raise sticks without being restated, and still bounds the task.
+  printf 'failed: three\n' >> "$state/t2.status"
   out=$(run_attempt "$state" open t2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "the raised budget must still bound the task, got $rc"
 
@@ -150,11 +158,72 @@ test_a_garbage_default_budget_refuses_instead_of_failing_open() {
     FM_ATTEMPT_BUDGET_DEFAULT=1 "$ATTEMPT" open t5) \
     || fail "a valid overridden default must still open the attempt"$'\n'"$out"
   assert_contains "$out" "attempt=1 attempt_budget=1" "a valid overridden default must be the budget"
+  # A launch never spends the budget on its own, so the bound only bites once a
+  # failure is recorded: without one this is a continuation and must be allowed.
   FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
     FM_ATTEMPT_BUDGET_DEFAULT=1 "$ATTEMPT" check t5 >/dev/null 2>&1; rc=$?
-  [ "$rc" -eq 3 ] || fail "the overridden default must still bound the task, got $rc"
+  [ "$rc" -eq 0 ] || fail "a reclaim under a spent-looking budget must continue, got $rc"
+  printf 'failed: the work did not land\n' >> "$state/t5.status"
+  FM_ROOT_OVERRIDE="$ROOT" FM_STATE_OVERRIDE="$state" \
+    FM_ATTEMPT_BUDGET_DEFAULT=1 "$ATTEMPT" check t5 >/dev/null 2>&1; rc=$?
+  [ "$rc" -eq 3 ] || fail "the overridden default must still bound the task after a failure, got $rc"
 
   pass "fm-attempt: a default budget that is not a positive integer refuses instead of failing open"
+}
+
+# The contract: a recorded FAILURE spends an attempt, a launch does not. A
+# spawn following no recorded failure - dead runtime, agent-free husk, freeze,
+# any recovery reclaim - continues the attempt already open. Counting launches
+# instead would refuse to bring a healthy task back after two session restarts,
+# which is the defect this pins.
+test_only_a_recorded_failure_spends_an_attempt() {
+  local state out rc i
+  state=$(make_state continuation)
+
+  out=$(run_attempt "$state" open reclaim-a)
+  assert_contains "$out" "attempt=1 attempt_budget=2" "the first launch opens attempt 1"
+
+  # Six reclaims, well past the budget of 2, with nothing ever declared failed.
+  i=0
+  while [ "$i" -lt 6 ]; do
+    i=$((i + 1))
+    out=$(run_attempt "$state" open reclaim-a 2>&1); rc=$?
+    [ "$rc" -eq 0 ] || fail "reclaim $i must never be refused (rc=$rc): $out"
+    assert_contains "$out" "attempt=1 attempt_budget=2" \
+      "reclaim $i must continue attempt 1 rather than spend a new one"
+  done
+  [ "$(record_field "$state" reclaim-a attempt)" = 1 ] \
+    || fail "six reclaims must leave the durable count at 1"
+
+  # One declared failure, and exactly one attempt is spent by it.
+  printf 'failed: the work did not land\n' >> "$state/reclaim-a.status"
+  out=$(run_attempt "$state" open reclaim-a)
+  assert_contains "$out" "attempt=2 attempt_budget=2" "a declared failure must spend the next attempt"
+  # The SAME failure must not keep spending attempts.
+  out=$(run_attempt "$state" open reclaim-a 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a reclaim after the counted failure must not be refused: $out"
+  assert_contains "$out" "attempt=2 attempt_budget=2" \
+    "the failure that justified attempt 2 must not also justify attempt 3"
+
+  # A second, newer failure exhausts the budget.
+  printf 'failed: it did not land again\n' >> "$state/reclaim-a.status"
+  out=$(run_attempt "$state" open reclaim-a 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a new failure past the budget must be refused, got rc=$rc"
+  assert_contains "$out" "budget_exhausted" "the refusal must name the terminal state"
+
+  # The pending failure stays pending: a refusal opens nothing, so it must not
+  # consume the marker and turn the next spawn into a continuation of an attempt
+  # that never started.
+  out=$(run_attempt "$state" open reclaim-a 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "an exhausted budget must keep refusing, got rc=$rc: $out"
+  # And the refusal's OWN declaration must never inflate the count that justifies
+  # the next attempt - it still reads 2 of 2, not 3 of 2.
+  assert_contains "$out" "2 of 2 attempts used" \
+    "the exhaustion declaration must not count as a failure of its own"
+  [ "$(grep -c '^failed: attempt budget exhausted' "$state/reclaim-a.status")" = 1 ] \
+    || fail "the terminal fact must be declared once, not once per refused spawn"
+
+  pass "fm-attempt: only a recorded failure spends an attempt; every reclaim continues the one already open"
 }
 
 test_there_is_no_reset_verb() {
@@ -174,7 +243,9 @@ test_terminal_state_is_in_the_unified_vocabulary() {
   local state out
   state=$(make_state vocab)
   run_attempt "$state" open t4 >/dev/null
+  printf 'failed: one\n' >> "$state/t4.status"
   run_attempt "$state" open t4 >/dev/null
+  printf 'failed: two\n' >> "$state/t4.status"
   out=$(run_attempt "$state" open t4 2>&1 || true)
   assert_contains "$out" "budget_exhausted" "the produced terminal state must be budget_exhausted"
 
@@ -258,17 +329,25 @@ EOF
   [ "$(meta_field "$meta" attempt)" = 1 ] || fail "the first spawn must publish attempt=1"$'\n'"$(cat "$meta")"
   [ "$(meta_field "$meta" attempt_budget)" = 2 ] || fail "the spawn must publish the budget it checked against"
 
-  # A relaunch on the same task id is a retry, and it is counted. The metadata
-  # is deleted first, so only the durable record can supply the prior count -
-  # this is the restart case, where nothing but the record survives.
+  # A relaunch after a lost runtime is a RESTART, not a retry: the metadata is
+  # deleted first, so only the durable record can supply the count, and it must
+  # come back unchanged - surviving the restart without being spent by it.
   rm -f "$meta"
   out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
-  [ "$rc" -eq 0 ] || fail "the second spawn must succeed"$'\n'"$out"
-  [ "$(meta_field "$meta" attempt)" = 2 ] \
-    || fail "the count must survive losing the task metadata, got attempt=$(meta_field "$meta" attempt)"
+  [ "$rc" -eq 0 ] || fail "the restart spawn must succeed"$'\n'"$out"
+  [ "$(meta_field "$meta" attempt)" = 1 ] \
+    || fail "the count must survive losing the task metadata unchanged, got attempt=$(meta_field "$meta" attempt)"
 
-  # Budget spent. The refusal happens before anything is created, so the
-  # published metadata from attempt 2 is left exactly as it was.
+  # A declared failure is what spends the next attempt.
+  printf 'failed: the work did not land\n' >> "$home/state/$id.status"
+  out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
+  [ "$rc" -eq 0 ] || fail "the retry after a declared failure must succeed"$'\n'"$out"
+  [ "$(meta_field "$meta" attempt)" = 2 ] \
+    || fail "a declared failure must spend the next attempt, got attempt=$(meta_field "$meta" attempt)"
+
+  # Budget spent by a second declared failure. The refusal happens before
+  # anything is created, so the published metadata is left exactly as it was.
+  printf 'failed: it did not land again\n' >> "$home/state/$id.status"
   before=$(cat "$meta")
   out=$(run_spawn "$home" "$wt" "$fakebin" "$id" "$proj" claude --mode no-mistakes --yolo off); rc=$?
   [ "$rc" -ne 0 ] || fail "the third spawn must be refused"$'\n'"$out"
@@ -366,6 +445,7 @@ test_attempts_are_counted_and_persisted
 test_absent_field_reads_as_attempt_one
 test_raising_the_budget_is_the_only_way_past_it_and_is_recorded
 test_a_garbage_default_budget_refuses_instead_of_failing_open
+test_only_a_recorded_failure_spends_an_attempt
 test_there_is_no_reset_verb
 test_terminal_state_is_in_the_unified_vocabulary
 test_spawn_spends_the_budget_and_publishes_the_count
