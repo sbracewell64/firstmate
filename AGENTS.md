@@ -259,7 +259,7 @@ The delivery lifecycle is an always-loaded operational contract; referenced scri
 
 CODE resolves operational truth before firstmate reasons about work.
 `bin/fm-decision-surface.sh` composes the landed owners into that surface - capacity, live work, dependencies, open decisions, delivery state - and its `check` verdicts refuse a claim structured state contradicts.
-Never assert a capacity, dependency, decision-status, in-flight, verifier, or landing fact from memory or inference when that command answers it, and never state one it contradicts.
+Never assert a capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact from memory or inference when that command answers it, and never state one it contradicts.
 An unevaluable verdict means the fact may not be asserted at all, not that the claim is safe.
 Its `owners` ledger names the deterministic work with no landed owner yet; that work remains firstmate's, and the instructions compensating for it stay in force until its owner lands.
 Load `decision-surface` before asserting any of those facts, before dispatching work that may already exist, and whenever a check returns contradicted or unevaluable.
@@ -536,7 +536,7 @@ It performs guarded fast-forward updates of firstmate and registered secondmate 
 These skills are not captain-invocable; load them only at their precise triggers.
 
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `MODEL_REGISTRY:`, `MODEL_PRICE:`, `MODEL_VERIFY:`, `ADMISSION_CONTROL:`, `WAKE_LEDGER:`, `TASK_AXIS_BACKFILL:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `VALIDATION_DAEMON:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
-- `decision-surface` - load before asserting any capacity, dependency, decision-status, in-flight, verifier, or landing fact, before dispatching work that may already exist, and whenever a `bin/fm-decision-surface.sh check` returns contradicted or unevaluable.
+- `decision-surface` - load before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact, before dispatching work that may already exist, and whenever a `bin/fm-decision-surface.sh check` returns contradicted or unevaluable.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi output.

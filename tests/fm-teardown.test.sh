@@ -2530,13 +2530,17 @@ test_teardown_records_the_reviewing_configuration() {
   # returns the worktree long before the terminal record is written, so this
   # also proves the branch is captured while it is still readable.
   ledger="$case_dir/data/wake-ledger.tsv"
-  grep -q "critic_process=separate" "$ledger" \
-    || fail "ledger-critic: process separation not recorded: $(cat "$ledger")"
   grep -q "critic_vendor=anthropic" "$ledger" \
     || fail "ledger-critic: reviewing vendor not recorded: $(cat "$ledger")"
   grep -q "critic_model=claude-opus-5" "$ledger" \
     || fail "ledger-critic: reviewing model not recorded: $(cat "$ledger")"
-  pass "teardown records which process, vendor, and model reviewed the task"
+  # The derived verdict rides on the same record. This home declares no model
+  # registry, so the dimensions that need one read unknown - never independent.
+  grep -q "critic_independence=.*process:independent" "$ledger" \
+    || fail "ledger-critic: the derived process dimension not recorded: $(cat "$ledger")"
+  grep -q "critic_independence=.*pool:unknown" "$ledger" \
+    || fail "ledger-critic: an underivable pool dimension did not read unknown: $(cat "$ledger")"
+  pass "teardown records the reviewing vendor, model, and derived independence"
 }
 
 test_teardown_records_unknown_when_the_critic_is_unresolvable() {
@@ -2556,7 +2560,7 @@ test_teardown_records_unknown_when_the_critic_is_unresolvable() {
   line=$(grep "task=task-x1" "$case_dir/data/wake-ledger.tsv") \
     || fail "ledger-critic-unknown: no terminal record was written"
   case "$line" in
-    *"critic_process=unknown"*"critic_vendor=unknown"*"critic_model=unknown"*) ;;
+    *"critic_vendor=unknown"*"critic_model=unknown"*"critic_independence=unknown"*) ;;
     *) fail "ledger-critic-unknown: the critic fields were omitted or guessed: $line" ;;
   esac
   pass "teardown records an unresolvable reviewing configuration as unknown"

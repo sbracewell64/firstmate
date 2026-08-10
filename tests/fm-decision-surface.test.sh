@@ -538,6 +538,64 @@ test_usage_errors_are_refused_before_any_read() {
   pass "usage errors are refused before any state is read"
 }
 
+test_a_certification_claim_is_unevaluable_without_verifier_identity() {
+  local home
+  home=$(make_home certified-unobserved)
+  mkdir -p "$home/repo"
+  git -C "$home/repo" init --quiet 2>/dev/null
+  git -C "$home/repo" remote add origin https://example.invalid/upstream.git
+  git -C "$home/repo" remote set-url --push origin https://example.invalid/fork.git
+  fm_test_model_registry "$home/config/models.json" yes
+  fm_write_meta "$home/state/alpha.meta" \
+    "project=$home/repo" "harness=claude" "model=opus" "mode=local-only" \
+    "worktree=$home/repo"
+
+  # No pipeline record exists for these bytes, so the checker's identity was
+  # never captured. Firstmate must not be able to say this work is certified.
+  OUT=$(FM_HOME="$home" FM_PIPELINE_STATE_DB="$home/absent.sqlite" \
+    "$SURFACE" check certified alpha 2>&1) && RC=0 || RC=$?
+  expect_code 4 "$RC" "an uncapturable verifier identity must be unevaluable, never a pass"
+  assert_contains "$OUT" "unevaluable" \
+    "the certified check did not report unevaluable"
+  case "$OUT" in
+    *"not-contradicted"*)
+      fail "a certification claim passed with no verifier identity:"$'\n'"$OUT" ;;
+  esac
+  pass "a certification claim with no captured verifier identity is unevaluable, not a pass"
+}
+
+test_a_certification_claim_is_contradicted_by_a_dependent_checker() {
+  local home
+  command -v python3 >/dev/null 2>&1 || {
+    pass "SKIP (python3 unavailable): a dependent checker contradicts the claim"; return; }
+  home=$(make_home certified-dependent)
+  mkdir -p "$home/repo"
+  git -C "$home/repo" init --quiet 2>/dev/null
+  git -C "$home/repo" remote add origin https://example.invalid/upstream.git
+  git -C "$home/repo" remote set-url --push origin https://example.invalid/fork.git
+  fm_test_model_registry "$home/config/models.json" yes
+  # A branch with a commit on it: an unborn branch resolves to no branch at
+  # all, which is correctly could-not-observe and would not exercise this case.
+  git -C "$home/repo" checkout -q -b fm/alpha 2>/dev/null
+  : > "$home/repo/file"
+  git -C "$home/repo" add file
+  git -C "$home/repo" -c user.email=t@example.invalid -c user.name=t \
+    commit -q -m "work" 2>/dev/null
+  fm_write_meta "$home/state/alpha.meta" \
+    "project=$home/repo" "harness=claude" "model=opus" "mode=local-only" \
+    "worktree=$home/repo"
+  fm_test_pipeline_db "$home/pipeline.sqlite" "$home/repo" "fm/alpha|anthropic|claude-opus-5" \
+    || { pass "SKIP (fixture unavailable): a dependent checker contradicts the claim"; return; }
+
+  # The checker ran the maker's own model, on the maker's own credential pool.
+  OUT=$(FM_HOME="$home" FM_PIPELINE_STATE_DB="$home/pipeline.sqlite" \
+    "$SURFACE" check certified alpha 2>&1) && RC=0 || RC=$?
+  expect_code 3 "$RC" "a checker that was the maker must contradict the certified claim"
+  assert_contains "$OUT" "pool:not-independent" \
+    "the contradiction did not name the dimension that failed"
+  pass "a certification claim is contradicted when the checker was not independent, and the dimension is named"
+}
+
 # --- runner -----------------------------------------------------------------
 
 test_capacity_claim_is_contradicted_while_the_fleet_admits_work
@@ -553,3 +611,5 @@ test_a_probe_that_cannot_be_bounded_does_not_run
 test_a_launcher_that_ignores_term_cannot_outlive_the_probe_bound
 test_the_surface_renders_both_scopes_and_refuses_an_unknown_task
 test_usage_errors_are_refused_before_any_read
+test_a_certification_claim_is_unevaluable_without_verifier_identity
+test_a_certification_claim_is_contradicted_by_a_dependent_checker

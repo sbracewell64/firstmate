@@ -61,6 +61,9 @@
 #       <decision-id> is a backlog identity; bin/fm-decision-hold.sh id builds it.
 #   fm-decision-surface.sh check duplicate-dispatch <task-id>
 #       Is dispatching this identity contradicted by work already in flight?
+#   fm-decision-surface.sh check certified <task-id>
+#       Is "this work is certified" contradicted, or unevaluable, on the
+#       evidence bound to its own bytes? bin/fm-certify.sh is the owner.
 #   fm-decision-surface.sh owners [--json]
 #       The compensation ledger: owned deterministic work, and pending gaps.
 #   fm-decision-surface.sh platform-seam [--json] [--probe-platform]
@@ -120,16 +123,16 @@ while [ $# -gt 0 ]; do
       [ -z "$SUBCOMMAND" ] || die "unexpected argument '$1'"
       SUBCOMMAND=check
       shift
-      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, or duplicate-dispatch"
+      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, or certified"
       CHECK_CLAIM=$1
       case "$CHECK_CLAIM" in
         capacity-blocked) ;;
-        decision-pending|duplicate-dispatch)
+        decision-pending|duplicate-dispatch|certified)
           shift
           [ $# -gt 0 ] || die "check $CHECK_CLAIM needs an id"
           TARGET=$1
           ;;
-        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch" ;;
+        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified" ;;
       esac
       ;;
     owners)
@@ -262,6 +265,12 @@ owners_json() {
  {"compensation":"attempt_and_retry_counting","status":"owned",
   "owner":"bin/fm-attempt.sh over state/<id>.attempt",
   "note":"retry is arithmetic over a recorded count, and exhaustion is a named terminal stop rather than a judgment made inside the worker that is failing"},
+ {"compensation":"verifier_independence","status":"owned",
+  "owner":"bin/fm-independence-lib.sh, refused at bin/fm-certify.sh and fm-decision-surface.sh check certified",
+  "note":"independence is derived per dimension from invocation-time evidence and this fleet's declared routing config; there is no argument anywhere that can assert it, and an unobservable dimension can never read as independent"},
+ {"compensation":"certification_claim","status":"owned",
+  "owner":"bin/fm-certify.sh",
+  "note":"CERTIFIED is computed over the applicable predicates for those exact bytes; a route that structurally cannot produce a piece of evidence reports not-applicable with its route rather than being forced into a pass or a failure"},
  {"compensation":"verifier_verdict_vocabulary","status":"pending",
   "owner":null,
   "pending_owner":"a shared PASS/FAIL/NO_VERIFIER_RAN verdict contract spanning every verifier, so no unobserved result can pass",
@@ -595,6 +604,42 @@ check_decision_pending() {
     "the decision record is $state and still open"
 }
 
+# "Certified" is the claim this fleet could least afford to have been writable:
+# a closure audit found the durable record asserting certified work while the
+# attestation namespace held one note, for a commit not even on the trunk.
+# bin/fm-certify.sh owns the predicate; this composes it, so firstmate reads a
+# machine-produced answer instead of deriving one. A predicate that could not be
+# observed is unevaluable, NOT a pass: unevaluable means the fact may not be
+# asserted at all.
+check_certified() {
+  local certify out rc
+  certify="$SCRIPT_DIR/fm-certify.sh"
+  if [ ! -x "$certify" ]; then
+    verdict unevaluable "certified $TARGET" \
+      "the certification predicate is not executable at $certify; certification cannot be evaluated"
+    return $?
+  fi
+  out=$("$certify" "$TARGET" 2>&1) && rc=0 || rc=$?
+  case "$rc" in
+    0)
+      verdict not-contradicted "certified $TARGET" \
+        "$(printf '%s' "$out" | head -1)"
+      ;;
+    3)
+      verdict contradicted "certified $TARGET" \
+        "a required certification predicate was observed unmet · $(printf '%s' "$out" | sed -n 's/^gap=/gap /p' | head -1)"
+      ;;
+    4)
+      verdict unevaluable "certified $TARGET" \
+        "a required certification predicate could not be observed · $(printf '%s' "$out" | sed -n 's/^gap=/gap /p' | head -1)"
+      ;;
+    *)
+      verdict unevaluable "certified $TARGET" \
+        "the certification predicate reached no verdict: $(printf '%s' "$out" | head -1)"
+      ;;
+  esac
+}
+
 check_duplicate_dispatch() {
   read_snapshot || {
     verdict unevaluable duplicate-dispatch "fleet census unreadable; existing work could not be enumerated"
@@ -636,6 +681,7 @@ case "$SUBCOMMAND" in
       capacity-blocked) check_capacity_blocked; exit $? ;;
       decision-pending) check_decision_pending; exit $? ;;
       duplicate-dispatch) check_duplicate_dispatch; exit $? ;;
+      certified) check_certified; exit $? ;;
     esac
     ;;
 esac
