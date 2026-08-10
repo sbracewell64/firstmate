@@ -210,6 +210,17 @@ write_meta() {
     "mode=$mode"
 }
 
+# Point the case worktree's origin push URL at the forge repository its pull
+# request lives in. The fixture's origin is a local bare repository, and
+# fm-pr-check.sh reads the landing repository from that push URL, so a case that
+# arms a pull request watch has to say where its branch lands. Push-only, so the
+# fixture's own fetch and landing mechanics are untouched.
+set_case_pr_origin() {
+  local case_dir=$1 url=$2
+  git -C "$case_dir/wt" remote set-url --push origin "$url" \
+    || fail "could not set the case pull request origin"
+}
+
 # Commit something on the worktree's task branch. Args: case_dir [message]
 wt_commit() {
   local case_dir=$1 msg=${2:-wt work}
@@ -817,6 +828,7 @@ test_pr_check_does_not_refresh_stale_pr_head() {
   wt_commit_file "$case_dir" feature.txt hello "add feature"
   pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
   add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  set_case_pr_origin "$case_dir" https://github.com/example/repo.git
 
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
@@ -854,6 +866,7 @@ test_pr_check_records_remote_head_when_local_lags() {
   local_head=$(git -C "$case_dir/wt" rev-parse HEAD)
   pr_head=$(commit_tree_from_wt_head "$case_dir" "$local_head" "no-mistakes follow-up")
   add_gh_pr_merged_for_head "$case_dir" "$pr_head"
+  set_case_pr_origin "$case_dir" https://github.com/example/repo.git
 
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \

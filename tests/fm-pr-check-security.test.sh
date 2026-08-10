@@ -50,12 +50,33 @@ state_snapshot() {
   )
 }
 
+# Point the fixture worktree's origin at a fetch URL and, when given, a
+# separate push URL - the fork-landing shape where one branch carries both a
+# contribution and the request that actually lands.
+set_landing_origin() {
+  local dir=$1 fetch=$2 push=${3:-} repo
+  for repo in "$dir/wt" "$dir/project"; do
+    git -C "$repo" remote remove origin 2>/dev/null || true
+    git -C "$repo" remote add origin "$fetch" || fail "could not set the fixture origin"
+    [ -z "$push" ] || git -C "$repo" remote set-url --push origin "$push" \
+      || fail "could not set the fixture origin push URL"
+  done
+}
+
 make_case() {
   local name=$1 dir fakebin fake_root
   dir="$TMP_ROOT/$name"
   fakebin="$dir/fakebin"
   fake_root="$dir/root"
-  mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/wt" "$fakebin" "$fake_root/bin"
+  mkdir -p "$dir/home/state" "$dir/home/data" "$dir/home/config" "$dir/wt" "$dir/project" \
+    "$fakebin" "$fake_root/bin"
+  # A real task worktree and the project clone behind it, because arming reads
+  # the landing repository from the task's own origin push URL and falls back to
+  # the project when the worktree is gone. The default matches the o/r requests
+  # these cases arm; set_landing_origin overrides it where a case uses another.
+  git -C "$dir/wt" init -q 2>/dev/null || fail "could not initialize the fixture worktree"
+  git -C "$dir/project" init -q 2>/dev/null || fail "could not initialize the fixture project"
+  set_landing_origin "$dir" https://github.com/o/r.git
   cat > "$fake_root/bin/fm-guard.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'guard\n' >> "$FM_TEST_GUARD_LOG"
@@ -65,6 +86,13 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case " $* " in
+  *" pr list "*)
+    # Open pull requests on the landing repository sharing this head branch,
+    # one URL per line, exactly as `gh pr list --json url -q '.[].url'` prints.
+    [ "${FM_TEST_GH_LIST_FAIL:-0}" = 0 ] || exit 1
+    [ -z "${FM_TEST_GH_LIST:-}" ] || printf '%s\n' "$FM_TEST_GH_LIST"
+    ;;
+  *" headRefName "*) printf '%s\n' "${FM_TEST_GH_HEAD_BRANCH:-fm/branch}" ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
   *" state "*)
     [ "${FM_TEST_GH_FAIL:-0}" = 0 ] || exit 1
@@ -107,9 +135,13 @@ write_task_meta() {
 }
 
 write_poll_meta() {
-  local state=$1 id=$2 url=$3
+  local state=$1 id=$2 url=$3 dir=${1%/home/state}
+  # worktree= precedes pr= because the canonical identity block starts at pr=
+  # and refuses an unknown key after it.
   fm_write_meta "$state/$id.meta" \
     "window=fm-$id" \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
     "pr=$url"
 }
 
@@ -117,6 +149,8 @@ write_ambiguous_poll() {
   local dir=$1 id=${2:-task-a}
   fm_write_meta "$dir/home/state/$id.meta" \
     "window=fm-$id" \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
     'pr=https://github.com/o/r/pull/10' \
     'window=unexpected-after-pr'
   printf 'legacy ambiguous bytes\n' > "$dir/home/state/$id.check.sh"
@@ -517,6 +551,7 @@ test_valid_recording_and_merge_derivation() {
   local dir expected sidecar count rc
   dir=$(make_case valid-recording)
   write_task_meta "$dir"
+  set_landing_origin "$dir" https://github.com/my-org/repo_name.with-dots.git
   expected=0123456789abcdef0123456789abcdef01234567
   FM_TEST_GH_HEAD=$expected run_check_entry "$dir" task-a https://github.com/my-org/repo_name.with-dots/pull/37 \
     > "$dir/stdout" 2> "$dir/stderr" || fail "valid direct check failed"
@@ -647,6 +682,203 @@ run_watcher_bounded() {
   perl -e 'my $pid=fork; die unless defined $pid; if (!$pid) { exec @ARGV } local $SIG{ALRM}=sub { kill "TERM", $pid; waitpid $pid, 0; exit 124 }; alarm 10; waitpid $pid, 0; alarm 0; exit($? >> 8)' \
     env FM_HOME="$home" FM_ROOT_OVERRIDE="$watch_root" FM_CHECK_INTERVAL="$check_interval" FM_CHECK_TIMEOUT=1 \
       FM_POLL=0.02 FM_HEARTBEAT=999999 FM_SIGNAL_GRACE=0 PATH="$fakebin:$BASE_PATH" "$WATCH" "$@"
+}
+
+test_remote_identity_reduces_every_git_url_form() {
+  local url rc
+  for url in \
+    'https://github.com/o/r.git' \
+    'https://github.com/o/r' \
+    'https://user@github.com/o/r.git' \
+    'https://GitHub.com/O/R.git' \
+    'git@github.com:o/r.git' \
+    'ssh://git@github.com/o/r.git' \
+    'ssh://git@github.com:22/o/r.git' \
+    'https://github.com/o/r/'; do
+    fm_pr_remote_identity "$url" || fail "remote URL form was refused: $url"
+    [ "$FM_PR_REMOTE_HOST" = github.com ] || fail "remote host was not reduced for $url: $FM_PR_REMOTE_HOST"
+    [ "$FM_PR_REMOTE_PATH" = o/r ] || fail "remote path was not reduced for $url: $FM_PR_REMOTE_PATH"
+  done
+
+  # A self-hosted GitLab instance keeps its host and its subgroup path.
+  fm_pr_remote_identity 'git@code.internal:team/tools/ci-runner.git' \
+    || fail "a subgroup remote was refused"
+  [ "$FM_PR_REMOTE_HOST" = code.internal ] || fail "subgroup remote host was not reduced"
+  [ "$FM_PR_REMOTE_PATH" = team/tools/ci-runner ] || fail "subgroup remote path was not reduced"
+
+  # Anything that does not name a forge repository is refused rather than
+  # guessed at, because the result decides which request gets watched.
+  for url in \
+    '' \
+    '/srv/git/repo.git' \
+    'https://github.com/o' \
+    'https://github.com/' \
+    'https://github.com/o/../r' \
+    'https://github.com/o//r' \
+    'https://github.com/o/r+x' \
+    'file:///srv/git/repo.git' \
+    'https://gith ub.com/o/r'; do
+    set +e
+    fm_pr_remote_identity "$url"
+    rc=$?
+    set -e
+    [ "$rc" -ne 0 ] || fail "unrecognized remote URL was accepted: $url"
+  done
+  pass "git remote URLs reduce to a comparable forge repository or are refused"
+}
+
+# origin fetches from an upstream repository and pushes to a fork, so one branch
+# carries a contribution upstream and the request that actually lands on the
+# fork. These cases pin which of the two the watch follows.
+test_landing_request_is_resolved_from_the_push_target() {
+  local dir state rc out
+  local upstream='https://github.com/up/stream/pull/5'
+  local landing='https://github.com/fork/repo/pull/9'
+
+  # Both requests exist: the fork request lands here, so it is the one armed,
+  # and the record says which decided it and what it superseded.
+  dir=$(make_case landing-supersedes-contribution)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  set_landing_origin "$dir" https://github.com/up/stream.git https://github.com/fork/repo.git
+  FM_TEST_GH_LIST="$landing" run_check_entry "$dir" task-a "$upstream" \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "arming with both requests failed: $(cat "$dir/stderr")"
+  grep -qxF "pr=$landing" "$state/task-a.meta" \
+    || fail "the watch was not armed on the request that lands here"
+  grep -qxF 'pr_role=landing' "$state/task-a.meta" || fail "the armed role was not recorded"
+  grep -qxF 'pr_landing_repo=github.com/fork/repo' "$state/task-a.meta" \
+    || fail "the landing repository evidence was not recorded"
+  grep -qxF "pr_contribution=$upstream" "$state/task-a.meta" \
+    || fail "the superseded contribution was not recorded"
+  assert_grep "$landing" "$dir/stdout" "the resolved landing request was not reported"
+  grep -qF "$landing" "$state/task-a.pr-poll" \
+    || fail "the armed poll did not follow the landing request"
+  assert_no_grep "$upstream" "$state/task-a.pr-poll" "the armed poll still watched the contribution"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "resolved landing request did not publish a valid poll pair"
+  # The record survives its own rewrite rather than accumulating.
+  FM_TEST_GH_LIST="$landing" run_check_entry "$dir" task-a "$upstream" >/dev/null 2>/dev/null \
+    || fail "re-arming a resolved landing request failed"
+  [ "$(grep -c '^pr_role=' "$state/task-a.meta")" -eq 1 ] || fail "duplicate pr_role metadata was appended"
+  [ "$(grep -c '^pr_contribution=' "$state/task-a.meta")" -eq 1 ] \
+    || fail "duplicate pr_contribution metadata was appended"
+  fm_pr_metadata_identity_parse "$state/task-a.meta" \
+    || fail "landing evidence broke the canonical identity record"
+  [ "$FM_PR_META_URL" = "$landing" ] || fail "canonical identity did not resolve to the landing request"
+
+  # Only the upstream request exists, so there is nothing else to watch and the
+  # armed request is unchanged - recorded as the contribution it is.
+  dir=$(make_case landing-contribution-only)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  set_landing_origin "$dir" https://github.com/up/stream.git https://github.com/fork/repo.git
+  FM_TEST_GH_LIST='' run_check_entry "$dir" task-a "$upstream" \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "arming with only an upstream request failed: $(cat "$dir/stderr")"
+  grep -qxF "pr=$upstream" "$state/task-a.meta" \
+    || fail "the only existing request was not armed"
+  grep -qxF 'pr_role=contribution-only' "$state/task-a.meta" \
+    || fail "the contribution-only role was not recorded"
+  ! grep -q '^pr_contribution=' "$state/task-a.meta" \
+    || fail "a contribution-only record superseded something"
+  fm_pr_poll_artifacts_valid "$state" task-a "$POLL" \
+    || fail "contribution-only arming did not publish a valid poll pair"
+
+  # An ordinary repository pushes where it fetches, so the request handed in is
+  # the only venue and no forge enumeration is needed to know it.
+  dir=$(make_case landing-single-venue)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/1 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "arming an ordinary single-venue request failed: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/o/r/pull/1' "$state/task-a.meta" \
+    || fail "single-venue request was not armed"
+  grep -qxF 'pr_role=landing' "$state/task-a.meta" || fail "single-venue role was not landing"
+  grep -qxF 'pr_landing_repo=github.com/o/r' "$state/task-a.meta" \
+    || fail "single-venue landing repository was not recorded"
+  assert_no_grep 'pr list' "$dir/gh.log" "a single-venue request enumerated the forge"
+
+  # Two open requests on the landing repository share the branch, so which one
+  # lands is genuinely unknown: refuse loudly and arm nothing.
+  dir=$(make_case landing-ambiguous)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  set_landing_origin "$dir" https://github.com/up/stream.git https://github.com/fork/repo.git
+  set +e
+  out=$(FM_TEST_GH_LIST=$'https://github.com/fork/repo/pull/9\nhttps://github.com/fork/repo/pull/12' \
+    run_check_entry "$dir" task-a "$upstream" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "two landing candidates were silently narrowed to one"
+  case "$out" in
+    *'pull/9'*'pull/12'*) ;;
+    *) fail "the ambiguous refusal did not name the candidates it could not choose between" ;;
+  esac
+  [ ! -e "$state/task-a.check.sh" ] || fail "an ambiguous landing choice left a poll armed"
+  ! grep -q '^pr=' "$state/task-a.meta" || fail "an ambiguous landing choice recorded a request"
+
+  # The landing repository could not be enumerated at all, which is not the same
+  # as finding nothing there.
+  dir=$(make_case landing-unlistable)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  set_landing_origin "$dir" https://github.com/up/stream.git https://github.com/fork/repo.git
+  set +e
+  out=$(FM_TEST_GH_LIST_FAIL=1 run_check_entry "$dir" task-a "$upstream" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unreadable landing repository was treated as having no request"
+  printf '%s\n' "$out" > "$dir/refusal.out"
+  assert_grep 'could not be listed' "$dir/refusal.out" "the unreadable landing repository was not named"
+  [ ! -e "$state/task-a.check.sh" ] || fail "an unreadable landing repository left a poll armed"
+
+  # No recorded repository can answer where this branch lands.
+  dir=$(make_case landing-unknown-venue)
+  state="$dir/home/state"
+  fm_write_meta "$state/task-a.meta" \
+    'window=fm-task-a' \
+    "worktree=$dir/gone" \
+    "project=$dir/also-gone"
+  set +e
+  out=$(run_check_entry "$dir" task-a "$upstream" 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "an unknown landing repository still armed a watch"
+  printf '%s\n' "$out" > "$dir/refusal.out"
+  assert_grep 'landing repository is unknown' "$dir/refusal.out" \
+    "the unknown landing repository was not reported"
+  [ ! -e "$state/task-a.check.sh" ] || fail "an unknown landing repository left a poll armed"
+
+  # A merge request outside its landing project cannot be enumerated without a
+  # JSON processor firstmate does not require, so it refuses rather than guess.
+  dir=$(make_case landing-gitlab-elsewhere)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  set_landing_origin "$dir" https://gitlab.com/g/p.git https://gitlab.com/g/fork.git
+  set +e
+  out=$(run_check_entry "$dir" task-a https://gitlab.com/g/p/-/merge_requests/7 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "a merge request outside its landing project was armed"
+  printf '%s\n' "$out" > "$dir/refusal.out"
+  assert_grep 'cannot be enumerated' "$dir/refusal.out" \
+    "the unenumerable landing project was not reported"
+  [ ! -e "$state/task-a.check.sh" ] || fail "an unenumerable landing project left a poll armed"
+
+  # A task re-armed after its worktree is gone still resolves, because the
+  # project clone it was cut from answers the same question.
+  dir=$(make_case landing-worktree-gone)
+  state="$dir/home/state"
+  write_task_meta "$dir"
+  rm -rf "$dir/wt"
+  run_check_entry "$dir" task-a https://github.com/o/r/pull/2 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "arming after the worktree was removed failed: $(cat "$dir/stderr")"
+  grep -qxF 'pr_landing_repo=github.com/o/r' "$state/task-a.meta" \
+    || fail "the project clone did not supply the landing repository"
+  pass "the armed watch follows the request that lands here, or refuses to guess"
 }
 
 test_rejected_metacharacter_bytes_are_inert() {
@@ -2237,7 +2469,8 @@ test_direct_registration_refreshes_v1_x_shim() {
     dir=$(make_case "direct-registration-x-transition-$marker_kind")
     state="$dir/home/state"
     shim="$state/x-watch.check.sh"
-    fm_write_meta "$state/task-a.meta" 'window=fm-task-a'
+    fm_write_meta "$state/task-a.meta" 'window=fm-task-a' \
+      "worktree=$dir/wt" "project=$dir/project"
     write_v1_x_shim "$shim" "$dir/home" "$dir/root"
     chmod 0755 "$shim"
     case "$marker_kind" in
@@ -2276,7 +2509,8 @@ test_direct_registration_refreshes_v1_x_shim() {
   dir=$(make_case direct-registration-x-lookalike)
   state="$dir/home/state"
   shim="$state/x-watch.check.sh"
-  fm_write_meta "$state/task-a.meta" 'window=fm-task-a'
+  fm_write_meta "$state/task-a.meta" 'window=fm-task-a' \
+    "worktree=$dir/wt" "project=$dir/project"
   write_v1_x_shim "$shim" "$dir/home" "$dir/root"
   printf '# unrecognized version\n' >> "$shim"
   chmod 0755 "$shim"
@@ -3336,6 +3570,8 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
+test_remote_identity_reduces_every_git_url_form
+test_landing_request_is_resolved_from_the_push_target
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_atomic_interruption_leaves_no_partial_artifact

@@ -5,6 +5,16 @@
 # live only in a private sidecar and are never interpolated into shell source.
 # A GitHub pull request URL and a GitLab merge request URL are both accepted,
 # including a merge request on a self-hosted GitLab instance.
+#
+# The request armed is the one that lands in the repository the task's own
+# origin pushes to, which is not always the request handed in: where origin
+# fetches from one repository and pushes to another, a branch carries both a
+# contribution against the fetch remote and the request that lands against the
+# push remote. The choice is recorded alongside pr= as pr_role=landing or
+# pr_role=contribution-only, the deciding pr_landing_repo=<host>/<path>, and
+# pr_contribution=<url> naming a superseded contribution. A landing repository
+# that cannot be read, and one carrying more than one open request for the
+# branch, refuse instead of arming a watch on a guess.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -64,6 +74,81 @@ fi
 "$SCRIPT_DIR/fm-pr-check-migrate.sh" --checks-safe || exit 1
 "$FM_ROOT/bin/fm-guard.sh" || true
 
+WT=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2- || true)
+
+# Which request lands here. A repository whose origin pushes somewhere other
+# than it fetches from carries two requests for one branch: a contribution
+# against the fetch remote, which lands on the maintainer's schedule, and the
+# request against the push remote, which is the one that lands here. Arming the
+# request that was handed in would watch the contribution and miss the landing,
+# so the landing repository is read from the task's own repository and the
+# choice is recorded with the evidence that decided it. Nothing is inferred: a
+# landing repository that cannot be read, and one carrying more than one open
+# request for this branch, both refuse rather than pick.
+refuse_landing() {
+  echo "error: cannot determine which pull request lands for task $ID" >&2
+  printf '%s\n' "$1" >&2
+  exit 1
+}
+# The task worktree answers this, and the project clone it was cut from answers
+# it identically while outliving it, so a task re-armed after its worktree is
+# gone still resolves rather than refusing.
+PROJECT=$(grep '^project=' "$META" | tail -1 | cut -d= -f2- || true)
+PUSH_URL=
+PUSH_SOURCE=
+for candidate in "$WT" "$PROJECT"; do
+  [ -n "$candidate" ] && [ -d "$candidate" ] || continue
+  PUSH_URL=$(cd "$candidate" && git remote get-url --push origin 2>/dev/null) || PUSH_URL=
+  if [ -n "$PUSH_URL" ]; then
+    PUSH_SOURCE=$candidate
+    break
+  fi
+done
+[ -n "$PUSH_URL" ] \
+  || refuse_landing "No recorded repository for task $ID has an origin push URL, so the landing repository is unknown."
+fm_pr_remote_identity "$PUSH_URL" \
+  || refuse_landing "$PUSH_SOURCE pushes to $PUSH_URL, which names no forge repository."
+LANDING_REPO="$FM_PR_REMOTE_HOST/$FM_PR_REMOTE_PATH"
+PR_ROLE=landing
+PR_CONTRIBUTION=
+if ! fm_pr_repo_identity_same "$HOST/$PROJECT_PATH" "$LANDING_REPO"; then
+  # The handed request is on a different repository than this branch pushes to,
+  # so it is a contribution. Its landing counterpart is whichever open request
+  # on the landing repository shares this branch.
+  [ "$PROVIDER" = github ] \
+    || refuse_landing "$URL is not in $LANDING_REPO, where this branch lands, and merge requests on the landing project cannot be enumerated."
+  command -v gh >/dev/null 2>&1 \
+    || refuse_landing "$URL is not in $LANDING_REPO, where this branch lands, and gh is not on PATH to look for its landing pull request."
+  HEAD_BRANCH=$(cd "$PUSH_SOURCE" && gh pr view "$URL" --json headRefName -q .headRefName 2>/dev/null) \
+    || refuse_landing "the head branch of $URL could not be read from its forge."
+  [ -n "$HEAD_BRANCH" ] \
+    || refuse_landing "the head branch of $URL could not be read from its forge."
+  LANDING_CANDIDATES=$(cd "$PUSH_SOURCE" \
+    && gh pr list --repo "$LANDING_REPO" --head "$HEAD_BRANCH" --state open --json url -q '.[].url' 2>/dev/null) \
+    || refuse_landing "open pull requests for $HEAD_BRANCH in $LANDING_REPO could not be listed."
+  LANDING_COUNT=$(printf '%s' "$LANDING_CANDIDATES" | grep -c . || true)
+  if [ "$LANDING_COUNT" -gt 1 ]; then
+    refuse_landing "$LANDING_COUNT open pull requests in $LANDING_REPO share branch $HEAD_BRANCH: $(printf '%s' "$LANDING_CANDIDATES" | tr '\n' ' ')"
+  fi
+  if [ "$LANDING_COUNT" -eq 0 ]; then
+    # Nothing lands here yet, so the contribution is all there is to watch.
+    PR_ROLE=contribution-only
+    printf 'contribution-only: %s is not in %s, where this branch lands\n' "$URL" "$LANDING_REPO"
+  else
+    PR_CONTRIBUTION=$URL
+    fm_pr_url_parse "$LANDING_CANDIDATES" \
+      || refuse_landing "$LANDING_REPO returned $LANDING_CANDIDATES, which is not a pull request URL."
+    fm_pr_repo_identity_same "$FM_PR_HOST/$FM_PR_PATH" "$LANDING_REPO" \
+      || refuse_landing "$FM_PR_URL was listed for $LANDING_REPO but is not in it."
+    URL=$FM_PR_URL
+    PROVIDER=$FM_PR_PROVIDER
+    HOST=$FM_PR_HOST
+    PROJECT_PATH=$FM_PR_PATH
+    NUMBER=$FM_PR_NUMBER
+    printf 'landing: %s supersedes %s\n' "$URL" "$PR_CONTRIBUTION"
+  fi
+fi
+
 # pr_head is recorded only when the forge's CLI can supply it. gh exposes the
 # head commit as a selectable field; plain glab exposes it only inside its JSON
 # output, which would need a JSON processor firstmate does not require, so a
@@ -71,7 +156,6 @@ fi
 # bin/fm-teardown.sh reads the head from the forge at teardown rather than from
 # metadata and falls back to its provider-agnostic content check, and
 # bin/fm-review-diff.sh resolves the head from the remote when none is recorded.
-WT=$(grep '^worktree=' "$META" | tail -1 | cut -d= -f2- || true)
 PR_HEAD=
 if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
   if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
@@ -107,10 +191,16 @@ STATE_DEVICE=$(fm_pr_file_device "$STATE") || exit 1
 META_TMP=$(mktemp "$STATE/.fm-pr-meta.XXXXXX") || exit 1
 while IFS= read -r line || [ -n "$line" ]; do
   case "$line" in
-    pr=*|pr_head=*) ;;
+    pr=*|pr_head=*|pr_role=*|pr_landing_repo=*|pr_contribution=*) ;;
     *) printf '%s\n' "$line" >> "$META_TMP" || exit 1 ;;
   esac
 done < "$META"
+# The landing evidence is written ahead of pr= because fm_pr_metadata_identity_parse
+# reads pr= as the start of the canonical identity block and refuses an unknown
+# key after it.
+printf 'pr_role=%s\n' "$PR_ROLE" >> "$META_TMP" || exit 1
+printf 'pr_landing_repo=%s\n' "$LANDING_REPO" >> "$META_TMP" || exit 1
+[ -z "$PR_CONTRIBUTION" ] || printf 'pr_contribution=%s\n' "$PR_CONTRIBUTION" >> "$META_TMP" || exit 1
 printf 'pr=%s\n' "$URL" >> "$META_TMP" || exit 1
 [ -z "$PR_HEAD" ] || printf 'pr_head=%s\n' "$PR_HEAD" >> "$META_TMP" || exit 1
 chmod 0600 "$META_TMP" || exit 1

@@ -207,6 +207,68 @@ fm_pr_url_parse() {
   FM_PR_NUMBER=${BASH_REMATCH[3]}
 }
 
+# Reduce a git remote URL to the forge host and the owner/repository path that
+# a pull request URL on that forge carries, so a remote and a request can be
+# compared as the same repository. Accepts the https, ssh://, and scp-like
+# forms git writes, with optional userinfo, an optional port, and an optional
+# trailing ".git" - the last of which is stripped once, matching git's own
+# convention that a ".git" suffix names the repository rather than belongs to
+# it. Both parts are lowercased because a forge host is case-insensitive and
+# neither GitHub nor GitLab lets two repositories differ only by case, so a
+# case difference between a clone URL and a request URL is spelling rather than
+# a different repository. Anything else is refused rather than guessed at.
+fm_pr_remote_identity() {
+  local raw=${1-} rest host path
+  local LC_ALL=C
+  FM_PR_REMOTE_HOST=
+  FM_PR_REMOTE_PATH=
+  case "$raw" in
+    https://*) rest=${raw#https://} ;;
+    ssh://*) rest=${raw#ssh://} ;;
+    *://*) return 1 ;;
+    *:*) rest="${raw%%:*}/${raw#*:}" ;;
+    *) return 1 ;;
+  esac
+  host=${rest%%/*}
+  [ "$host" != "$rest" ] || return 1
+  path=${rest#*/}
+  host=${host##*@}
+  host=${host%%:*}
+  host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+  [[ "$host" =~ ^[a-z0-9]([a-z0-9.-]{0,251}[a-z0-9])?$ ]] || return 1
+  case "$host" in *..*) return 1 ;; esac
+  while [ "${path%/}" != "$path" ]; do path=${path%/}; done
+  [ "${path%.git}" = "$path" ] || path=${path%.git}
+  path=$(printf '%s' "$path" | tr '[:upper:]' '[:lower:]')
+  # At least two segments, because a pull request always names owner/repository.
+  case "$path" in
+    */*) ;;
+    *) return 1 ;;
+  esac
+  case "/$path/" in
+    *//*|*/./*|*/../*) return 1 ;;
+  esac
+  case "$path" in
+    *[!a-z0-9._/-]*) return 1 ;;
+  esac
+  # Consumed by bin/fm-pr-check.sh, which compares the landing repository
+  # against the request it was handed.
+  # shellcheck disable=SC2034
+  FM_PR_REMOTE_HOST=$host
+  # shellcheck disable=SC2034
+  FM_PR_REMOTE_PATH=$path
+}
+
+# Compare a "<host>/<path>" repository identity from either source, under the
+# same case folding fm_pr_remote_identity applies.
+fm_pr_repo_identity_same() {
+  local a=${1-} b=${2-}
+  local LC_ALL=C
+  a=$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')
+  b=$(printf '%s' "$b" | tr '[:upper:]' '[:lower:]')
+  [ -n "$a" ] && [ "$a" = "$b" ]
+}
+
 fm_pr_head_valid() {
   local head=${1-}
   local LC_ALL=C

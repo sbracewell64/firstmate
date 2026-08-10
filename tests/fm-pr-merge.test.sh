@@ -29,17 +29,28 @@ make_case() {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$fakebin"
+  mkdir -p "$case_dir/state" "$case_dir/project" "$fakebin"
   fm_write_meta "$case_dir/state/task-x1.meta" \
     "window=fm-task-x1" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
     "kind=ship" \
     "mode=no-mistakes"
-  # No worktree/project on disk; fm-pr-check.sh tolerates a worktree it cannot
-  # stat and simply skips the pr_head lookup via `gh` in that case, so give it
-  # one that resolves for cases that want pr_head recorded.
+  # The project clone is a real repository because fm-pr-check.sh reads the
+  # landing repository from its origin push URL. No worktree on disk: it
+  # tolerates a worktree it cannot stat and simply skips the pr_head lookup via
+  # `gh`, so cases that want pr_head recorded create one themselves.
+  set_case_origin "$case_dir" https://github.com/example/repo.git
   printf '%s\n' "$case_dir"
+}
+
+# Point a case's project clone at the repository its pull request lives in, so
+# arming resolves that request as the one that lands.
+set_case_origin() {
+  local case_dir=$1 url=$2
+  git -C "$case_dir/project" init -q 2>/dev/null || true
+  git -C "$case_dir/project" remote remove origin 2>/dev/null || true
+  git -C "$case_dir/project" remote add origin "$url" || fail "could not set the case origin"
 }
 
 # gh-axi mock recording every invocation to a log file, and gh mock answering
@@ -289,6 +300,7 @@ test_method_equals_merge_method_not_overridden() {
 test_parses_pr_url_for_gh_axi() {
   local case_dir
   case_dir=$(make_case url-parsing)
+  set_case_origin "$case_dir" https://github.com/my-org/my-repo.git
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" 6666666666666666666666666666666666666666
   : > "$case_dir/gh-axi.log"
