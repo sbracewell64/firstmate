@@ -222,13 +222,18 @@ The intake and authority contract in `AGENTS.md` owns when separate scout resear
 ## Dispatch profiles
 
 Crewmate and scout dispatch can stay on the static crewmate harness resolved by `config/crew-harness`, or it can use local dispatch profiles in `config/crew-dispatch.json`.
-The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves profile arrays itself from current quota output under the `AGENTS.md` section 4 intake boundary and the `quota-array-dispatch` selection procedure, and passes only concrete `--harness`, `--model`, `--effort`, and `--capability-floor` axes to `fm-spawn.sh`.
+The dispatch file is intentionally judgment-based: firstmate reads the natural-language rules at intake, chooses the best matching rule, resolves profile arrays itself from current quota output under the `AGENTS.md` section 4 intake boundary and the `quota-array-dispatch` selection procedure, and passes only concrete `--harness`, `--model`, `--effort`, and `--capability-floor` axes to `fm-spawn.sh`, plus the `--route` a dispatch claims once this home configures routed pools.
 The shell scripts validate the JSON shape, verified harness/effort combinations, and a recorded `--capability-floor` against the floor vocabulary the file defines ([configuration.md](configuration.md#crew-dispatch-profiles-configcrew-dispatchjson)), but they do not parse task intent, match natural-language rules, or own array selection.
 The session-start bootstrap step keeps valid dispatch configuration silent unless verbose facts are enabled and surfaces a concise invalid-config line when validation fails.
 When the file exists, `fm-spawn.sh` refuses crewmate and scout launches without an explicit harness, so `config/crew-harness` is only automatic when no dispatch profile file is active.
 Secondmate launches are exempt because they resolve the secondmate harness and any optional secondmate model or effort tokens instead.
 Unsupported effort values are still recorded in task meta when passed to `fm-spawn.sh`, but the launch template omits any effort flag that the selected harness does not accept.
 That keeps spawn launch compatible across claude, codex, grok, pi, opencode, and kimi while preserving the requested profile for later audit.
+
+A home may go further and give a rule a route id with an ordered pool, which is the one part of that file the scripts read as policy.
+Which route a task belongs to stays firstmate's judgment; what the scripts then enforce is the claim, at the spawn chokepoint: the model must be inside that route's pool and must meet the route's floor on the axes the config records evidence for, a substitute after a failure comes only from the same pool in pool order, and a route whose candidates are all ineligible stops and reports rather than degrading below its floor.
+`bin/fm-route-lib.sh` owns those rules, `bin/fm-route.sh` reads them, and `state/model-health.json` is the narrow availability record failover writes ([configuration.md](configuration.md#routed-pools-optional)).
+Enforcement is per dispatch, so activating it never re-checks work already under way.
 
 ## Optional fleet admission control
 

@@ -484,7 +484,11 @@ EOF
     "a refused floor under an array-form default still wrote task metadata"
 
   # The shipped example is what a new home copies into config/, so the file the
-  # docs hand out has to be readable by the code that reads it.
+  # docs hand out has to be readable by the code that reads it - verbatim,
+  # including its `_scheduling` block. That block ships switched off, so copying
+  # the example arms no admission policy; tests/fm-route-enforcement.test.sh
+  # pins that directly, and this case pins that the example's floor vocabulary
+  # dispatches.
   cp "$ROOT/docs/examples/crew-dispatch.json" "$home/config/crew-dispatch.json"
   write_brief "$home" array-shipped no-mistakes
   out=$(run_record_spawn "$home" "$proj" "$wt" "$fakebin" array-shipped "$proj" codex \

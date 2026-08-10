@@ -306,7 +306,7 @@ The other verified worker runtimes do not expose this verified Claude `statusLin
 ## Crew dispatch profiles (config/crew-dispatch.json)
 
 `config/crew-dispatch.json` is an optional local, gitignored file containing natural-language rules that firstmate reads before dispatching a crewmate or scout.
-The shell scripts do not match those rules; firstmate chooses the best matching rule with judgment, resolves its profile object or array under the operating contract in `AGENTS.md` section 4 and `quota-array-dispatch`, and passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`.
+The shell scripts do not match those rules; firstmate chooses the best matching rule with judgment, resolves its profile object or array under the operating contract in `AGENTS.md` section 4 and `quota-array-dispatch`, and passes only concrete `--harness`, `--model`, and `--effort` flags to `fm-spawn.sh`, plus the `--route` a dispatch claims once this home configures routed pools ([below](#routed-pools-optional)).
 When the file exists, `fm-spawn.sh` enforces that contract by refusing crewmate and scout spawns that lack an explicit harness (`--harness`, a positional adapter, or a raw launch command).
 Batch spawns satisfy the same requirement with a shared `--harness`.
 Secondmate spawns are exempt and still resolve through `config/secondmate-harness` and its optional model and effort tokens.
@@ -341,7 +341,7 @@ Profile `model` and `effort` fields and rule `why` are optional.
 An omitted model or effort means the selected harness uses its own default for that axis.
 Every profile array is an implicit quota-aware choice resolved through `quota-array-dispatch`.
 If no dispatch rule fits, firstmate resolves `default` through the same object-or-array path before falling back to `config/crew-harness`.
-The optional top-level `_floors` object declares this home's capability floor vocabulary: each key names a floor, and each value is a free-form note the shell scripts never read.
+The optional top-level `_floors` object declares this home's capability floor vocabulary: each key names a floor, and each value is a free-form note the shell scripts never read unless this home also configures routed pools, where an object value declares axes they do check ([below](#routed-pools-optional)).
 The optional `floor` field names the capability floor a route resolves against, and it is accepted on a rule, on any `use` profile, and on `default` in either its object or its array form.
 [`bin/fm-reasoning-lib.sh`](../bin/fm-reasoning-lib.sh) reads the vocabulary as the union of the `_floors` keys and every `floor` value the file defines, and `fm-spawn.sh` refuses a `--capability-floor` outside it rather than recording a capability band this config never granted.
 A dispatch that names no floor inherits the default route's floor, which for an array-form `default` is the first floor its profiles define.
@@ -353,6 +353,72 @@ Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstr
 Malformed JSON, an empty or malformed rule/default array, an unverified harness, or an effort value unsupported by that harness is reported as `CREW_DISPATCH: invalid config/crew-dispatch.json - ...`; missing `jq` is reported through the normal `MISSING: jq` install-consent flow.
 While the file remains present, no crewmate or scout spawn may proceed without an explicit resolved harness; malformed configuration must be reported and corrected rather than selected around.
 Secondmate homes inherit this file from the primary, so a secondmate's own crewmates apply the same dispatch profile behavior.
+
+### Routed pools (optional)
+
+A rule may additionally carry a `route` id and an ordered `pool`, which turns that rule into a route the shell scripts enforce.
+This is the one part of this file the scripts read as policy rather than as prose, so it is opt-in per home: a config with no `pool` anywhere behaves exactly as the section above describes, and so does a home with no config at all.
+
+```json
+{
+  "_floors": {
+    "<floor name>": { "effort_floor": "<band|WAIVED - why>", "context_ceiling": 0,
+                      "tool_loop": "<verified-agentic|required|not-required>",
+                      "selectable_by_crew_rule": true }
+  },
+  "_models": {
+    "<provider>/<model-id>": { "smart_zone": 0, "effort_expressible": ["<band>"],
+                               "tool_loop": "<verified-agentic|required|not-required>" }
+  },
+  "rules": [
+    { "when": "...", "route": "<ROUTE-ID>", "floor": "<floor name>",
+      "use": { "harness": "<adapter>", "model": "<name>", "effort": "<band>" },
+      "pool": ["<provider>/<model-id>"], "promotion_target": "<ROUTE-ID|NONE - terminal rung>" }
+  ]
+}
+```
+
+A route id is defined by a rule, or by the top-level `default` in either its object or its array form; a `default` pointing at an existing rule is not a second definition.
+Every reader agrees on that one rule: `fm-route.sh routes` lists a route defined only under `default` alongside the rest with its `defined_at` path, and a pool that lives only under `default` turns enforcement on exactly as a pool on a rule does.
+The same id on two rules is refused, because every check against it would be meaningless.
+Pool entries and `_models` keys always use the fully qualified `provider/model-id` form; a bare model name resolves against the pool by its model half and is refused when it matches more than one entry.
+Pool order is the failover order, and `promotion_target` names the route a promotion escalates to; neither is traversed automatically.
+
+`_floors` values may stay free-form strings, in which case there is nothing to check.
+An object value declares the three axes a check can mechanically test against `_models`: `effort_floor` as a minimum band that a higher band satisfies and a provider default never establishes, `context_ceiling` as the minimum `smart_zone` a candidate must carry, and `tool_loop` as the minimum recorded loop evidence.
+An `effort_floor` string beginning `WAIVED` waives the effort axis outright, and `selectable_by_crew_rule: false` puts the floor out of reach of every rule.
+A candidate the config lists in a pool but records no evidence for is refused as unverifiable rather than admitted, because unmeasured is not the same as met - including when the config carries no `_models` block at all, which records no evidence for anything.
+A missing input is a refusal and never a skipped check: a dispatch that names no model is refused as unverifiable against the pool it claims, and a rule whose `floor` names an id `_floors` does not define is refused rather than enforcing nothing.
+An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `context_ceiling` and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
+A model or provider the availability record currently holds is refused at the same point, naming the held state, the scope, the subject and its recorded expiry, so `check` and `eligible` can never give opposite answers about one model.
+
+`bin/fm-route-lib.sh` owns these rules, `bin/fm-route.sh` reads them, and `fm-spawn.sh` enforces them at the chokepoint: a ship or scout dispatch in a home with routed pools must name the route it claims with `--route` - or an explicit `--capability-floor` naming exactly one route - and a dispatch outside that route's pool or below its floor is refused naming the route, the exact JSON config path, the configured value and the observed one.
+The route and a digest of the enforced policy surface land in `state/<id>.meta` as `route=` and `route_policy_digest=`, and the recorded `capability_floor=` becomes the route's own.
+Enforcement applies to the next dispatch only; work already under way keeps the record it was dispatched under.
+
+### Model availability record (state/model-health.json)
+
+A private, gitignored, mode-0600 record of which models and providers the fleet currently cannot reach.
+`bin/fm-route-lib.sh` is its only writer, through `bin/fm-route.sh availability hold|release`, and it writes availability alone: a model that keeps failing is recorded unavailable, never demoted, because demotion is a policy change that belongs in the routing config under review.
+
+A hold names a model by default and is resolved against the configured pools exactly as a dispatch's `--model` is: a fully qualified name must be a pool entry, and a bare name must match exactly one.
+Holding a whole provider is asked for with `--scope provider`, and the provider must be one a pool entry names.
+Scope is never inferred from the presence of a slash, and a subject that could not remove any candidate is refused rather than recorded, so the command never reports a hold that silently does nothing.
+A release resolves against what is actually recorded first, so a hold can still be cleared after a config edit dropped its subject from every pool.
+
+```json
+{
+  "schema": "fm-model-health.v1",
+  "models":    { "<provider>/<model-id>": { "state": "<state>", "until": 0, "recorded_at": 0, "evidence": "<text>" } },
+  "providers": { "<provider>":            { "state": "<state>", "until": null, "recorded_at": 0, "evidence": "<text>" } }
+}
+```
+
+The state vocabulary is closed to the states the routing config's own failover conditions set: `degraded`, `rate_limited`, `model_unavailable`, `provider_unavailable`, `auth_failure`, `subscription_quota_exhausted`, `daily_quota_exhausted`, and `admin_disabled`.
+A hold with a numeric `until` stops binding on read once that epoch passes, so nothing has to run to forget it; a `null` `until` holds until released explicitly, which is what an authentication failure needs.
+An absent file means no remembered cooldown and never that a model is healthy, while a file that exists and cannot be parsed refuses rather than reading as an empty one.
+That refusal names this record and not `crew-dispatch.json`: the two inputs fail independently and are repaired differently, so a refusal that points at the file which parses perfectly costs the whole diagnosis.
+Eligibility reads this record and never probes: a route's ordered pool costs nothing to resolve on the happy path, and probing belongs to failure handling.
 
 ## Model registry (config/models.json)
 
@@ -480,8 +546,10 @@ The policy lives in the optional local, gitignored `config/crew-dispatch.json` u
 This section is the single owner of the schema and its per-field semantics.
 `bin/fm-admission-lib.sh` owns the executable check of that schema, `bin/fm-admission.sh` owns the evaluator and its decision record, and [`fleet-admission`](../.agents/skills/fleet-admission/SKILL.md) owns what firstmate does with each band.
 
-Admission ships inert.
-A home with no `admission_control` object, or one carrying only `_`-prefixed operator notes, changes nothing about dispatch and costs one cheap config read.
+Admission ships inert, and activation is an explicit per-home opt-in.
+A home with no `admission_control` object, one carrying only `_`-prefixed operator notes, or one whose `enabled` is `false` changes nothing about dispatch and costs one cheap config read.
+[`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) therefore ships the whole block with `"enabled": false`, so copying that file is never what switches admission on: setting `enabled` to `true` is a deliberate act, and it is what makes every ship and scout spawn consult the fleet band before allocating anything.
+An enabled policy's `authority.single_primary` rule bands an invocation that does not hold this home's session lock, so switching it on changes when spawns are admitted and not only what is reported.
 Enabling it adds no concurrency cap: every numeric threshold ships `null` with `enforce: false`, and `enforcement_mode: "safety-only"` makes numeric enforcement structurally unreachable until an evidence-gated mode is added.
 The standing contract that isolated work dispatches immediately with no concurrency cap is therefore unchanged.
 
@@ -625,8 +693,8 @@ Unknown fields are refused rather than ignored so a typo cannot silently disable
 Every rule in that explanation names the observed value, its source and freshness, the exact JSON configuration path, the configured value, and the resulting band.
 The decision record from `--json` is the unit of admission telemetry; when the wake-outcome ledger exposes its extension seam, that record is what gets appended, and admission never opens a competing store.
 
-See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a copyable starting point.
-Secondmate homes inherit `config/crew-dispatch.json` from the primary, so an admission policy applies in each inheriting home against that home's own fleet.
+See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a copyable starting point; its `_scheduling.admission_control` block is complete but switched off, so it is a schema reference until a home turns it on.
+Secondmate homes inherit `config/crew-dispatch.json` from the primary, so an admission policy applies in each inheriting home against that home's own fleet - which is the other reason activation is deliberate rather than inherited from an example.
 
 ## Toolchain
 

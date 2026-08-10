@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --reason-code <CODE> [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout --reason-code <CODE> [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -50,6 +50,29 @@
 #   against, verbatim from config/crew-dispatch.json; an undefined floor is refused
 #   and an omitted one falls back to that file's default route floor. A home with no
 #   dispatch profiles records "unconfigured" and refuses an explicit floor.
+#   --route <ROUTE> names the configured route this dispatch CLAIMS, and the spawn
+#   checks the claim: the model must be in that route's ordered pool and must meet
+#   the route's capability floor on every axis the config declares. A violation is
+#   REFUSED naming the route, the exact JSON config path, the configured value and
+#   the observed one, and a MISSING input is a violation too: an unstated model, a
+#   floor id _floors does not define, an axis the config records no evidence for,
+#   and a model the availability record holds each refuse rather than passing
+#   unchecked. Required for ship and scout spawns in a
+#   home whose config/crew-dispatch.json carries routed pools, unless an explicit
+#   --capability-floor already names exactly one route; refused on --secondmate.
+#   A home with no routed pool - which is every home using the documented profile
+#   schema, and every home with no dispatch config - is unaffected. The route and
+#   a digest of the policy surface that checked it land in state/<id>.meta, and
+#   the recorded capability floor becomes the route's own so the two can never
+#   describe different rungs. bin/fm-route-lib.sh owns the rules; run
+#   bin/fm-route.sh to read them, list a route's eligible candidates in pool
+#   order, or resolve a failover substitute inside the same pool.
+#   Ship and scout spawns also consult bin/fm-admission.sh before allocating
+#   anything: a fleet that is not accepting another task stops the spawn and the
+#   request is queued as a `load` hold rather than dropped. The two non-preferred
+#   bands are distinct answers - a `queue` action is FM_SPAWN_ADMISSION_DEFERRED
+#   and a `refuse` action is FM_SPAWN_ADMISSION_REFUSED - and a batch takes one
+#   fleet census for every pair rather than one per pair.
 #   The spawn additionally derives reasoning_required from the reason code and
 #   escalation_policy from kind plus the delivery contract, so neither can be
 #   declared into disagreement with the record it summarizes. All of it lands in
@@ -283,6 +306,10 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
 # shellcheck source=bin/fm-reasoning-lib.sh
 . "$SCRIPT_DIR/fm-reasoning-lib.sh"
+# shellcheck source=bin/fm-route-lib.sh
+. "$SCRIPT_DIR/fm-route-lib.sh"
+# shellcheck source=bin/fm-tasks-axi-lib.sh
+. "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -302,9 +329,11 @@ CONTRIB_ARG=
 REASON_CODE=
 CAPABILITY_FLOOR=
 TOOLING_GAP_ITEM=
+ROUTE=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
+ROUTE_SET=0
 ATTEMPT_BUDGET_ARG=
 HARNESS_SET=0
 MODEL_SET=0
@@ -335,6 +364,7 @@ for a in "$@"; do
       contribution-target) CONTRIB_ARG=$a; CONTRIB_SET=1 ;;
       reason-code) REASON_CODE=$a; REASON_CODE_SET=1 ;;
       capability-floor) CAPABILITY_FLOOR=$a; CAPABILITY_FLOOR_SET=1 ;;
+      route) ROUTE=$a; ROUTE_SET=1 ;;
       tooling-gap-item) TOOLING_GAP_ITEM=$a; TOOLING_GAP_ITEM_SET=1 ;;
       attempt-budget) ATTEMPT_BUDGET_ARG=$a; ATTEMPT_BUDGET_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
@@ -367,6 +397,8 @@ for a in "$@"; do
     --reason-code=*) REASON_CODE=${a#--reason-code=}; REASON_CODE_SET=1 ;;
     --capability-floor) want_value='capability-floor' ;;
     --capability-floor=*) CAPABILITY_FLOOR=${a#--capability-floor=}; CAPABILITY_FLOOR_SET=1 ;;
+    --route) want_value='route' ;;
+    --route=*) ROUTE=${a#--route=}; ROUTE_SET=1 ;;
     --tooling-gap-item) want_value='tooling-gap-item' ;;
     --tooling-gap-item=*) TOOLING_GAP_ITEM=${a#--tooling-gap-item=}; TOOLING_GAP_ITEM_SET=1 ;;
     --attempt-budget) want_value='attempt-budget' ;;
@@ -384,11 +416,12 @@ done
 [ "$TRACEPARENT_SET" -eq 0 ] || [ -n "$TRACEPARENT_ARG" ] || { echo "error: --traceparent requires a non-empty value" >&2; exit 1; }
 [ "$REASON_CODE_SET" -eq 0 ] || [ -n "$REASON_CODE" ] || { echo "error: --reason-code requires a non-empty value" >&2; exit 1; }
 [ "$CAPABILITY_FLOOR_SET" -eq 0 ] || [ -n "$CAPABILITY_FLOOR" ] || { echo "error: --capability-floor requires a non-empty value" >&2; exit 1; }
+[ "$ROUTE_SET" -eq 0 ] || [ -n "$ROUTE" ] || { echo "error: --route requires a non-empty value" >&2; exit 1; }
 [ "$TOOLING_GAP_ITEM_SET" -eq 0 ] || [ -n "$TOOLING_GAP_ITEM" ] || { echo "error: --tooling-gap-item requires a non-empty value" >&2; exit 1; }
 # Each justification value becomes one line of state/<id>.meta, so a value that
 # is not one line is refused here, before anything downstream can read a forged
 # key line as authority (bin/fm-reasoning-lib.sh).
-for justification_flag in "reason-code=$REASON_CODE" "capability-floor=$CAPABILITY_FLOOR" "tooling-gap-item=$TOOLING_GAP_ITEM"; do
+for justification_flag in "reason-code=$REASON_CODE" "capability-floor=$CAPABILITY_FLOOR" "route=$ROUTE" "tooling-gap-item=$TOOLING_GAP_ITEM"; do
   fm_justification_value_recordable "${justification_flag#*=}" || {
     echo "error: $FM_REASON_TOKEN_VALUE_MALFORMED: --${justification_flag%%=*} must be a single line without control characters; each justification field is one line of state/<id>.meta and a newline would forge further key lines in it" >&2
     exit 1
@@ -477,6 +510,10 @@ if [ "$KIND" = secondmate ]; then
   }
   [ "$CAPABILITY_FLOOR_SET" -eq 0 ] || {
     echo "error: $FM_REASON_TOKEN_REFUSED: --capability-floor applies to ship and scout dispatches; a --secondmate spawn matches no dispatch rule" >&2
+    exit 1
+  }
+  [ "$ROUTE_SET" -eq 0 ] || {
+    echo "error: $FM_REASON_TOKEN_REFUSED: --route applies to ship and scout dispatches; a --secondmate spawn provisions a standing home and claims no route" >&2
     exit 1
   }
   [ "$TOOLING_GAP_ITEM_SET" -eq 0 ] || {
@@ -941,6 +978,10 @@ spawn_abort_cleanup() {
     CONFIG_INHERIT_LOCK_HELD=0
     fm_lock_release "$CONFIG_INHERIT_LOCK" || true
   fi
+  if [ -n "${BATCH_ADMISSION_SNAPSHOT:-}" ]; then
+    rm -f "$BATCH_ADMISSION_SNAPSHOT"
+    BATCH_ADMISSION_SNAPSHOT=
+  fi
   return "$status"
 }
 trap spawn_abort_cleanup EXIT
@@ -1085,8 +1126,44 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
   fi
   [ "$REASON_CODE_SET" -eq 0 ] || shared_args+=(--reason-code "$REASON_CODE")
   [ "$CAPABILITY_FLOOR_SET" -eq 0 ] || shared_args+=(--capability-floor "$CAPABILITY_FLOOR")
+  # A batch carries one concrete profile, so it claims one route: the same
+  # model and effort cannot be inside two different routes' floors at once.
+  [ "$ROUTE_SET" -eq 0 ] || shared_args+=(--route "$ROUTE")
   [ "$TOOLING_GAP_ITEM_SET" -eq 0 ] || shared_args+=(--tooling-gap-item "$TOOLING_GAP_ITEM")
   [ "$ATTEMPT_BUDGET_SET" -eq 0 ] || shared_args+=(--attempt-budget "$ATTEMPT_BUDGET_ARG")
+  # ADMIT is a property of the FLEET, never of the pair, so one census answers it
+  # for the whole batch. Without this each pair re-runs a full fm-fleet-snapshot
+  # census serially, which is N censuses to answer one fleet-wide question. The
+  # snapshot carries its own generation time and fm-admission.sh still ages it
+  # against the configured freshness limit, so the census-integrity signal is
+  # bounded exactly as before: a batch slow enough to stale the census is refused
+  # exactly as a stale one always was.
+  #
+  # What a shared census CANNOT bound is saturation. `active_workers.count` and
+  # `admission_queue_pressure.load_hold_depth` are measured once, before the
+  # loop, so pair N is weighed against a fleet that does not yet contain pairs
+  # 1..N-1. Today that cannot move the band: both ship `enforce: false` and
+  # `enforcement_mode: "safety-only"` makes numeric enforcement unreachable. When
+  # an evidence-gated mode makes either enforce, this sharing has to be revisited
+  # - a per-pair census, or an in-loop headcount, is what that mode would need.
+  BATCH_ADMISSION_SNAPSHOT=
+  # shellcheck source=bin/fm-admission-lib.sh
+  . "$SCRIPT_DIR/fm-admission-lib.sh"
+  if [ "$(fm_admission_state "$(fm_admission_config_file "$CONFIG")")" = active ] \
+    && [ -x "$FM_ROOT/bin/fm-fleet-snapshot.sh" ]; then
+    BATCH_ADMISSION_SNAPSHOT=$(mktemp "${TMPDIR:-/tmp}/fm-spawn-admission-snapshot.XXXXXX") \
+      || BATCH_ADMISSION_SNAPSHOT=
+    if [ -n "$BATCH_ADMISSION_SNAPSHOT" ]; then
+      chmod 600 "$BATCH_ADMISSION_SNAPSHOT" 2>/dev/null || true
+      if ! "$FM_ROOT/bin/fm-fleet-snapshot.sh" --json > "$BATCH_ADMISSION_SNAPSHOT" 2>/dev/null; then
+        # A census that could not be taken is not a shared census. Drop it and
+        # let each pair ask for its own, so a batch never admits on a snapshot
+        # the fleet snapshot owner refused to produce.
+        rm -f "$BATCH_ADMISSION_SNAPSHOT"
+        BATCH_ADMISSION_SNAPSHOT=
+      fi
+    fi
+  fi
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -1097,11 +1174,15 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
       rc=2
       continue
     elif [ "$KIND" = scout ]; then
-      if FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" --scout; then :; else echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2; rc=1; fi
+      if FM_SPAWN_NO_GUARD=1 FM_SPAWN_ADMISSION_SNAPSHOT="$BATCH_ADMISSION_SNAPSHOT" "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" --scout; then :; else echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2; rc=1; fi
     else
-      if FM_SPAWN_NO_GUARD=1 "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}"; then :; else echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2; rc=1; fi
+      if FM_SPAWN_NO_GUARD=1 FM_SPAWN_ADMISSION_SNAPSHOT="$BATCH_ADMISSION_SNAPSHOT" "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}"; then :; else echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2; rc=1; fi
     fi
   done
+  if [ -n "$BATCH_ADMISSION_SNAPSHOT" ]; then
+    rm -f "$BATCH_ADMISSION_SNAPSHOT"
+    BATCH_ADMISSION_SNAPSHOT=
+  fi
   exit "$rc"
 fi
 ID=${POS[0]}
@@ -1230,6 +1311,210 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
     fi
   fi
 fi
+
+# ADMIT. bin/fm-admission.sh is read-only by contract and returns the fleet band
+# as its exit status; this is the caller that applies the outcome. A home with no
+# admission policy exits 0 and nothing here changes.
+#
+# The two non-preferred bands are NOT the same answer and must not read as one.
+# The decision record's own `action` splits them: `queue` is a DEFERRAL - the
+# work is held and reconsidered - and `refuse` is a refusal. Each carries its own
+# stable token and its own prose, because a caller matching tokens cannot act on
+# a deferral it cannot tell from a refusal. Both place the hold the record's own
+# `hold_kind` names, which is the whole queue substrate -
+# .agents/skills/fleet-admission/SKILL.md owns that procedure and admission never
+# opens a second queue - and both name the controlling condition, because a band
+# without the condition that must clear is something nobody can act on. What the
+# hold PROMISES comes from the band's own `auto_reconsider`: a band that records
+# no automatic reconsideration gets a hold that waits for an explicit release,
+# because promising a retake that will not happen is how a queued request is
+# quietly lost. A hold that cannot be placed softens neither answer: the spawn
+# stops either way and the failure is said out loud, so a request can never be
+# silently dropped instead of queued.
+#
+# A batch parent may take one fleet census for the whole batch and hand it down
+# through FM_SPAWN_ADMISSION_SNAPSHOT; admission still ages that snapshot against
+# its own configured freshness limit, so sharing it cannot smuggle a stale census
+# past the census-integrity signal.
+spawn_admission_gate() {
+  local record band action hold_kind auto_reconsider rc reason controlling token headline
+  [ -x "$FM_ROOT/bin/fm-admission.sh" ] || return 0
+  if [ -n "${FM_SPAWN_ADMISSION_SNAPSHOT:-}" ] && [ -f "${FM_SPAWN_ADMISSION_SNAPSHOT:-}" ]; then
+    record=$("$FM_ROOT/bin/fm-admission.sh" --json --snapshot "$FM_SPAWN_ADMISSION_SNAPSHOT" 2>/dev/null)
+  else
+    record=$("$FM_ROOT/bin/fm-admission.sh" --json 2>/dev/null)
+  fi
+  rc=$?
+  [ "$rc" -ne 0 ] || return 0
+  if [ -z "$record" ] || ! band=$(printf '%s' "$record" | jq -r '.decision_band // empty' 2>/dev/null) \
+    || [ -z "$band" ]; then
+    echo "error: FM_SPAWN_ADMISSION_UNREADABLE: fleet admission returned no readable decision, so whether the fleet can accept this task could not be observed; that is not an admission" >&2
+    return 1
+  fi
+  # controlling_rules names the deciding rule ids; the full observation, its
+  # exact config path and the configured value it was measured against live in
+  # the rules array. Both halves are quoted, because a band without the
+  # condition that produced it is not something a reader can act on.
+  controlling=$(printf '%s' "$record" | jq -r '
+    (.controlling_rules // []) as $c
+    | [ (.rules // [])[] | select(.rule_id as $r | $c | index($r))
+        | .rule_id + " observed " + (.observed | tostring)
+          + " against " + (.config_path // "an unrecorded config path")
+          + " configured " + (.configured_value | tostring) ]
+    | if length > 0 then join("; ") else ($c | join("; ")) end' 2>/dev/null)
+  reason="Fleet admission $band: ${controlling:-no controlling rule recorded}; config $(printf '%s' "$record" | jq -r '.config_digest // "unknown"')"
+  reason=$(printf '%s' "$reason" | tr -d '()' | tr '\n' ' ')
+  action=$(printf '%s' "$record" | jq -r '.action // empty' 2>/dev/null)
+  hold_kind=$(printf '%s' "$record" | jq -r '.hold_kind // empty' 2>/dev/null)
+  [ -n "$hold_kind" ] || hold_kind=load
+  auto_reconsider=$(printf '%s' "$record" | jq -r '.auto_reconsider // empty' 2>/dev/null)
+  case "$action" in
+    queue)
+      token=FM_SPAWN_ADMISSION_DEFERRED
+      headline="the fleet is not accepting another task right now, so this dispatch is deferred and queued for reconsideration rather than started"
+      ;;
+    *)
+      token=FM_SPAWN_ADMISSION_REFUSED
+      headline="the fleet is not accepting another task right now, so this dispatch is refused"
+      ;;
+  esac
+  echo "error: $token: $headline - $reason" >&2
+  if fm_tasks_axi_backend_available "$CONFIG" \
+    && tasks-axi hold "$ID" --file "$DATA/backlog.md" --kind "$hold_kind" --reason "$reason" >/dev/null 2>&1; then
+    if [ "$auto_reconsider" = true ]; then
+      echo "queued $ID for reconsideration at the next successful cleanup or session start" >&2
+    else
+      echo "queued $ID as a $hold_kind hold; this band records no automatic reconsideration, so the hold waits for an explicit release" >&2
+    fi
+  else
+    echo "warning: could not queue $ID; record the hold by hand so this request is not lost" >&2
+  fi
+  return 1
+}
+
+# The registry verdict for every candidate in a route decision, as the
+# "<model><TAB><refusal>" lines bin/fm-route-lib.sh merges. Cost, reachability
+# and concurrency stay with bin/fm-model-registry-lib.sh and are asked here,
+# where they are already sourced; the routing library records the answer and
+# never asks for itself.
+spawn_route_registry_verdicts() {  # <decision-json>
+  local model out
+  while IFS= read -r model; do
+    [ -n "$model" ] || continue
+    out=
+    if out=$(fm_model_zero_budget_decision "$model") \
+      && out=$(fm_model_routable_decision "$model") \
+      && out=$(fm_model_concurrency_decision "$model"); then
+      out=
+    fi
+    printf '%s\t%s\n' "$model" "$(printf '%s' "$out" | tr '\n\t' '  ')"
+  done <<EOF
+$(printf '%s' "$1" | jq -r '.candidates[]?.model' 2>/dev/null)
+EOF
+}
+
+# ROUTE, ADMIT, ELIGIBLE - the routing policy's own intake order
+# (`_interfaces.order_at_intake`), enforced at the one point where HARNESS,
+# MODEL and EFFORT are all final and nothing has been created yet. A refusal
+# anywhere below leaves no worktree, no endpoint and no metadata behind.
+#
+# ROUTE. A ship or scout dispatch names the route it claims, and this checks the
+# claim against the configured route: the model is in that route's ordered pool,
+# and it meets the route's capability floor. bin/fm-route-lib.sh owns the rules
+# and every refusal names the route, the exact config path, the configured value
+# and the observed one. Enforcement turns on only for a home whose
+# config/crew-dispatch.json actually carries routed pools; the documented
+# profile schema has none, so every other home is unaffected and a home with no
+# dispatch config at all keeps the judgment-guided behavior it has today.
+#
+# The claim is the DISPATCH's, not this script's: nothing here matches a rule to
+# a task, because natural-language rule matching is firstmate's judgment and a
+# routed model has been measured mis-tiering the work it was asked to classify.
+# A dispatch that supplies an explicit --capability-floor naming exactly one
+# route needs no second flag; anything else states --route outright.
+if [ "$KIND" != secondmate ]; then
+  ROUTE_ENFORCING=0
+  fm_route_pools_configured "$CONFIG" && ROUTE_CFG_RC=0 || ROUTE_CFG_RC=$?
+  case "$ROUTE_CFG_RC" in
+    0) ROUTE_ENFORCING=1 ;;
+    2)
+      echo "error: $FM_ROUTE_TOKEN_UNREADABLE: $CONFIG/crew-dispatch.json exists but cannot be read (missing jq or malformed JSON), so a dispatch cannot be checked against the routes it configures" >&2
+      exit 1
+      ;;
+    *)
+      # No routed pool to check against, so a route claim would be recorded
+      # unverified. A record nothing checked is worse than no record.
+      [ "$ROUTE_SET" -eq 0 ] || {
+        echo "error: $FM_ROUTE_TOKEN_UNKNOWN: --route needs $CONFIG/crew-dispatch.json to configure a route with an ordered pool; this home configures none, so the claim could only be recorded unchecked" >&2
+        exit 1
+      }
+      ;;
+  esac
+  if [ "$ROUTE_ENFORCING" -eq 1 ]; then
+    if [ "$ROUTE_SET" -eq 0 ] && [ "$CAPABILITY_FLOOR_SET" -eq 1 ]; then
+      ROUTE=$(fm_route_for_floor "$CONFIG" "$CAPABILITY_FLOOR" || true)
+      [ -z "$ROUTE" ] || ROUTE_SET=1
+    fi
+    if [ "$ROUTE_SET" -eq 0 ]; then
+      echo "error: $FM_ROUTE_TOKEN_REQUIRED: $CONFIG/crew-dispatch.json configures routed pools, so this dispatch must name the route it claims: pass --route <$(fm_route_ids "$CONFIG" | tr '\n' '|' | sed 's/|$//')>, or a --capability-floor that names exactly one of them." >&2
+      exit 1
+    fi
+    # ONE evaluation answers both questions below. Evaluating twice would open a
+    # window where the check and the recorded floor observe different config or
+    # different availability state, and a record that disagrees with the check
+    # that produced it is exactly what this enforcement exists to prevent.
+    ROUTE_DECISION_RC=0
+    ROUTE_DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE") || ROUTE_DECISION_RC=$?
+    if [ "$ROUTE_DECISION_RC" -ne 0 ]; then
+      # The refusal names the file that is ACTUALLY unreadable. The routing
+      # config and the availability record fail independently and are repaired
+      # differently, so sending an operator to the one that parses perfectly
+      # costs them the whole diagnosis.
+      echo "error: $(fm_route_undetermined_refusal "$ROUTE_DECISION_RC" "$CONFIG" "$STATE")" >&2
+      exit 1
+    fi
+    # Only the held-model refusal names substitutes, so the registry verdicts a
+    # substitute list has to carry are computed only when one is about to be
+    # printed. The happy path stays a single route evaluation with no registry
+    # probe per candidate.
+    if [ -n "$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.held // empty' 2>/dev/null)" ]; then
+      ROUTE_DECISION=$(fm_route_decision_with_registry "$ROUTE_DECISION" \
+        "$(spawn_route_registry_verdicts "$ROUTE_DECISION")")
+    fi
+    if ! ROUTE_REFUSAL=$(fm_route_refusal_from_decision "$CONFIG" "$ROUTE" "$MODEL" "$ROUTE_DECISION" "$STATE"); then
+      echo "error: $ROUTE_REFUSAL" >&2
+      exit 1
+    fi
+    # The floor is the route's own, so the recorded capability band and the
+    # enforced route can never describe two different rungs of the ladder. The
+    # check above already refused a floor id `_floors` does not define, so a
+    # floor recorded here is always one that was measured against a definition.
+    ROUTE_FLOOR=$(printf '%s' "$ROUTE_DECISION" | jq -r '.floor // empty' 2>/dev/null || true)
+    if [ -n "$ROUTE_FLOOR" ]; then
+      if [ "$CAPABILITY_FLOOR_SET" -eq 1 ] && [ "$CAPABILITY_FLOOR" != "$ROUTE_FLOOR" ]; then
+        echo "error: $FM_ROUTE_TOKEN_FLOOR_MISMATCH: route $ROUTE resolves against floor $ROUTE_FLOOR, but this dispatch recorded --capability-floor $CAPABILITY_FLOOR; a record that disagrees with the route it was checked against is worse than no record" >&2
+        exit 1
+      fi
+      CAPABILITY_FLOOR=$ROUTE_FLOOR
+    fi
+    ROUTE_POLICY_DIGEST=$(fm_route_policy_digest "$CONFIG")
+  fi
+
+  # ADMIT. Asked after the route and before anything is allocated, because it is
+  # a property of the FLEET and not of this task. bin/fm-admission.sh is
+  # read-only by contract and returns the band as its exit status; applying the
+  # outcome is this caller's job. A home with no admission policy exits 0 and
+  # nothing changes.
+  spawn_admission_gate || exit 1
+fi
+
+# The shared census a batch parent hands down is THIS process's input and nothing
+# else's. Dropped from the environment the moment the gate above has consumed it,
+# so no child - the backend that opens the pane, a hook, the worker itself - can
+# inherit a census taken before it existed and admit against it. Dropping it here
+# rather than clearing it on the launch line covers every one of those channels
+# at once and leaves the literal launch command tests pin unchanged.
+unset FM_SPAWN_ADMISSION_SNAPSHOT
 
 # ZERO-BUDGET AND QUOTA GATE. This is the first point where HARNESS and MODEL are
 # both final (the harness resolves above; config/secondmate-harness can still
@@ -2540,6 +2825,12 @@ fi
   [ -z "$REASONING_REQUIRED" ] || echo "reasoning_required=$REASONING_REQUIRED"
   [ -z "$REASON_CODE" ] || echo "reason_code=$REASON_CODE"
   [ -z "$CAPABILITY_FLOOR" ] || echo "capability_floor=$CAPABILITY_FLOOR"
+  # The route this dispatch was checked against, and a digest of the exact
+  # policy surface that checked it. Assigned once and never rewritten: no later
+  # layer may write a scheduling, admission, or failover outcome back onto the
+  # tier the work IS. An absent pair means this home enforces no routed pool.
+  [ -z "$ROUTE" ] || echo "route=$ROUTE"
+  [ -z "${ROUTE_POLICY_DIGEST:-}" ] || echo "route_policy_digest=$ROUTE_POLICY_DIGEST"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
   echo "tasktmp=$TASK_TMP"
