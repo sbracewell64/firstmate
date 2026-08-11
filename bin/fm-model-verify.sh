@@ -326,9 +326,9 @@ EOF
     # here rather than widened into the wire format.
     HARNESS_OF[$key]=$harness
     n=$((n + 1))
-    PROBE_KEYS[$n]=$key
+    PROBE_KEYS[n]=$key
     probe_one "$key" "$harness" "$provider" "$model_id" > "$TMPD/$n.out" 2>/dev/null &
-    PROBE_PIDS[$n]=$!
+    PROBE_PIDS[n]=$!
   done <<EOF
 $DUE
 EOF
