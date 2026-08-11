@@ -19,10 +19,14 @@
 #                               Availability-blind by construction: nothing here
 #                               reads quota, fleet load, or an outage.
 #   ADMIT     bin/fm-admission.sh  whether the fleet accepts another task at all.
-#   ELIGIBLE  this library      the route's pool filtered by the floor and by the
-#                               availability record, in pool order. It reads the
-#                               record and never probes: routine intake costs
-#                               nothing.
+#   ELIGIBLE  this library      the route's pool filtered by the floor, by the
+#                               availability record, and by the caller's quota
+#                               observation, in pool order. It reads records and
+#                               merges what the caller hands it; it never probes
+#                               a provider itself, so the shape of this seam is
+#                               unchanged - bin/fm-capacity-lib.sh owns the
+#                               observation exactly as the model registry owns
+#                               cost and reachability.
 #   FAILOVER  this library      the ONLY writer of availability state, and it
 #                               writes availability alone. A model that keeps
 #                               failing is recorded UNAVAILABLE, never demoted;
@@ -532,6 +536,87 @@ fm_route_decision_with_registry() {  # <decision-json> <verdict-lines>
               registry_checked:($r != null),
               eligible:($c.floor_met and ($c.held == null) and ($rr == null))} ]' \
     || { printf '%s' "$decision"; return 1; }
+}
+
+# fm_route_decision_with_capacity <decision-json> <capacity-lines>
+# Record the CALLER's quota observations on a decision record and recompute
+# eligibility with them. <capacity-lines> is one
+# "<model><TAB><verdict><TAB><until><TAB><evidence>" line per candidate, exactly
+# the shape bin/fm-capacity-lib.sh emits and the same merge shape the registry
+# verdicts already use.
+#
+# This library asks quota-axi nothing, for the same reason it asks the model
+# registry nothing: ROUTE is availability-blind by construction and ELIGIBLE
+# reads records rather than probing, so a live provider read belongs to the
+# caller that decided to pay for it. What this owns is the SHAPE - one merge -
+# so a refusal can tell a substitute list that was checked against capacity from
+# one that was not.
+#
+# ONLY `exhausted` REMOVES A CANDIDATE. `could_not_observe` leaves eligibility
+# exactly as it was and is carried through for disclosure, because an
+# unmeasurable candidate stays eligible with its uncertainty disclosed. There is
+# no branch here that adds a candidate or relaxes an axis: capacity can subtract
+# from the schedulable set and nothing else.
+fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
+  local decision=$1 lines=${2:-} merged
+  command -v jq >/dev/null 2>&1 || { printf '%s' "$decision"; return 0; }
+  merged=$(printf '%s' "$lines" | jq -R -s -c '
+    [ split("\n")[] | select(length > 0) | (. / "\t")
+      | {model: .[0],
+         verdict: (.[1] // "could_not_observe"),
+         until: (if (((.[2] // "") | length) > 0) then ((.[2] | tonumber?) // null) else null end),
+         evidence: (.[3] // "")} ]') \
+    || { printf '%s' "$decision"; return 1; }
+  # The subject model is bound BEFORE the lookup. Inside a select the input is
+  # the capacity row and not the decision, so reading .subject there compares
+  # against null and leaves every dispatch unobserved while the read had in fact
+  # succeeded - a failure indistinguishable from an honest disclosure, which is
+  # exactly why it is spelled out here.
+  printf '%s' "$decision" | jq -c --argjson cap "$merged" '
+    def with_cap($row):
+      (first($cap[] | select(.model == $row.model)) // null) as $c
+      | $row + {capacity: $c, capacity_checked: ($c != null)}
+      | . + {eligible: (.floor_met
+                        and (.held == null)
+                        and ((.registry_refusal // null) == null)
+                        and (($c.verdict // "could_not_observe") != "exhausted"))};
+    (.subject.resolved // "") as $subject
+    | .candidates = [ .candidates[]? | with_cap(.) ]
+    | .subject = (.subject
+        + {capacity: (first($cap[] | select(.model == $subject)) // null)})
+    | .capacity_merged = true' \
+    || { printf '%s' "$decision"; return 1; }
+}
+
+# fm_route_capacity_refusal <route> <model> <decision-json>
+# The verdict for the ONE model a dispatch names, once capacity has been merged.
+# Returns 0 when the dispatch may proceed - including when its capacity could not
+# be observed - and 1 with the refusal on stdout when the named model's capacity
+# is spent.
+#
+# The two refusals below are DIFFERENT ANSWERS and must not read as one. A pool
+# that still holds a floor-meeting candidate is a SUBSTITUTION: the work can run
+# now, on another model, and the caller re-dispatches. A pool with nothing left
+# is a DEFERRAL: the work cannot run at all until capacity returns, and the
+# lawful outcomes are to wait or to escalate. Neither is ever a reason to lower
+# the floor, which is why both name the pool they stayed inside.
+fm_route_capacity_refusal() {  # <route> <model> <decision-json>
+  local route=$1 model=$2 decision=$3 verdict evidence substitutes until_epoch
+  verdict=$(printf '%s' "$decision" | jq -r '.subject.capacity.verdict // "could_not_observe"' 2>/dev/null)
+  [ "$verdict" = exhausted ] || return 0
+  evidence=$(printf '%s' "$decision" | jq -r '.subject.capacity.evidence // "no evidence recorded"' 2>/dev/null)
+  substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")' 2>/dev/null)
+  until_epoch=$(printf '%s' "$decision" | jq -r '
+    [ .candidates[]? | .capacity.until // empty ] | if length > 0 then min else empty end' 2>/dev/null)
+  if [ -n "$substitutes" ]; then
+    printf '%s: route %s: %s is out of capacity - %s - so it is not an eligible candidate right now. Fail over to the next eligible model inside this route pool, in pool order (%s); every one of those meets the same floor %s requires. Never substitute outside this pool and never lower the floor\n' \
+      "$FM_CAPACITY_TOKEN_EXHAUSTED" "$route" "$model" "$evidence" "$substitutes" "$route"
+    return 1
+  fi
+  printf '%s: route %s: %s is out of capacity - %s - and no other candidate in this route pool is eligible either, so there is nothing to fail over to and this work is deferred until capacity returns%s. Do not substitute outside this pool and do not lower the floor: a floor that is required and currently unavailable is a wait, not a weaker model\n' \
+    "$FM_CAPACITY_TOKEN_DEFERRED" "$route" "$model" "$evidence" \
+    "$( [ -n "$until_epoch" ] && printf ' (earliest known recovery: epoch %s)' "$until_epoch" || printf ', with no recovery time published by any provider' )"
+  return 1
 }
 
 # The routes this home defines, one per line, for a refusal that has to name
