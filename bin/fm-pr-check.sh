@@ -14,6 +14,14 @@
 # of the request itself. An existing landing record must be valid and name the
 # requested URL before any forge read or poll mutation. A request the forge
 # cannot resolve refuses instead.
+#
+# A request whose venue contradicts the task's recorded contribution_venue= is
+# refused before anything is armed, because on a fork layout a pull request
+# raised at the wrong trunk contributes every commit the two trunks do not
+# share. A task that recorded no venue is reported as unchecked and still armed;
+# the absence of a record is never read as agreement. A recorded venue addressed
+# through an SSH host alias is the same venue spelled differently, so the alias
+# is resolved before anything is called a contradiction.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -24,6 +32,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-task-base-lib.sh
+. "$SCRIPT_DIR/fm-task-base-lib.sh"
 
 if [ "$#" -ne 2 ]; then
   echo "error: invalid PR check request" >&2
@@ -86,6 +96,51 @@ if [ "$RECORD" = "$STATE/$ID.landing" ]; then
     echo "error: task landing record names $RECORD_URL, but $URL was requested" >&2
     exit 1
   fi
+fi
+
+# VENUE GUARD - the recorded contribution venue against the venue this pull
+# request is actually at. bin/fm-spawn.sh derives the record from the task's
+# contribution target (bin/fm-task-base-lib.sh owns that derivation), so this
+# refuses the case that keeps recurring on a fork layout: work based on one
+# trunk raised as a pull request against the other, which contributes every
+# commit the two trunks do not share.
+#
+# Three-valued on purpose, and only a CONTRADICTION refuses. A task with no
+# recorded venue - one spawned before this record existed, or a durable landing
+# record, which carries only landing identity - is UNEVALUABLE, and an
+# unevaluable venue is reported rather than read as agreement. Nothing here
+# infers a venue from the pull request itself; that would make the guard agree
+# with whatever it was shown.
+#
+# The recorded venue is derived from a git remote URL, which may address the
+# forge through an SSH HOST ALIAS - `git@gh-work:owner/repo`, the ordinary way
+# one machine addresses two accounts at the same forge - while the pull request
+# is always at the forge's real host. That is one venue written two ways, not a
+# contradiction, so the recorded contribution_venue_url= is also compared with
+# its alias resolved. It is an ADDITIONAL accepted spelling and never a
+# replacement: the owner and repository still have to agree, so the fork-versus-
+# upstream contradiction this guard exists for is refused either way. The
+# resolution reads the local ssh configuration, so it runs only in the one
+# branch that needs it - never for a task with no venue, the unresolved
+# sentinel, or a venue that already matches literally.
+VENUE=$(grep '^contribution_venue=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+VENUE_URL=$(grep '^contribution_venue_url=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+PR_VENUE=$(printf '%s/%s' "$HOST" "$PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
+if [ -z "$VENUE" ]; then
+  printf 'venue: unchecked (task %s records no contribution venue)\n' "$ID"
+elif [ "$VENUE" = unresolved ]; then
+  printf 'venue: unchecked (task %s recorded its contribution venue as unresolved)\n' "$ID"
+elif [ "$VENUE" = "$PR_VENUE" ]; then
+  printf 'venue: %s matches the recorded contribution venue\n' "$PR_VENUE"
+elif [ -n "$VENUE_URL" ] \
+  && VENUE_ALIAS=$(task_base_venue_identity_alias "$VENUE_URL") \
+  && [ "$VENUE_ALIAS" = "$PR_VENUE" ]; then
+  printf 'venue: %s matches the recorded contribution venue %s, whose host is an ssh alias for it\n' \
+    "$PR_VENUE" "$VENUE"
+else
+  echo "error: $URL is at $PR_VENUE, but task $ID records its contribution venue as $VENUE" >&2
+  echo "This task was based on $VENUE, so raising its pull request at $PR_VENUE would contribute every commit those two repositories do not share. Reopen the pull request at $VENUE, or re-dispatch the task against the venue you meant." >&2
+  exit 1
 fi
 
 # A prior exact merged result may have queued its durable wake immediately

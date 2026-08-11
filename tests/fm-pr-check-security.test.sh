@@ -920,6 +920,170 @@ SH
   pass "concurrent watchers observe only complete private poll publications"
 }
 
+# VENUE GUARD. bin/fm-spawn.sh records the venue a task's contribution target
+# names; a pull request raised somewhere else contributes every commit the two
+# repositories do not share, so it is refused before anything is armed.
+# The guard is three-valued: only a contradiction refuses, and a task with no
+# recorded venue is reported unchecked rather than read as agreement.
+write_task_meta_with_venue() {  # <dir> <venue> [id]
+  local dir=$1 venue=$2 id=${3:-task-a}
+  fm_write_meta "$dir/home/state/$id.meta" \
+    "window=firstmate:fm-$id" \
+    "endpoint_task_id=$id" \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
+    "kind=ship" \
+    "mode=no-mistakes" \
+    "contribution_venue=$venue"
+}
+
+test_venue_guard_refuses_a_pull_request_at_the_wrong_venue() {
+  local dir rc
+  dir=$(make_case venue-wrong)
+  # The task was based on the fork trunk, so its work belongs at the fork.
+  write_task_meta_with_venue "$dir" github.com/fixture-fork/proj
+  rc=0
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/fixture-up/proj/pull/5 \
+    > "$dir/stdout" 2> "$dir/stderr" || rc=$?
+  [ "$rc" -eq 1 ] \
+    || fail "venue-wrong: a contradicting venue must refuse (rc=$rc)"
+  assert_contains "$(cat "$dir/stderr")" 'github.com/fixture-fork/proj' \
+    "venue-wrong: the refusal must name the venue the task recorded"
+  assert_contains "$(cat "$dir/stderr")" 'github.com/fixture-up/proj' \
+    "venue-wrong: the refusal must name the venue the pull request is at"
+  # Refusing after arming would leave firstmate watching the wrong pull request.
+  assert_absent "$dir/home/state/task-a.check.sh" \
+    "venue-wrong: a refused venue must arm no poll"
+  grep -q '^pr=' "$dir/home/state/task-a.meta" \
+    && fail "venue-wrong: a refused venue must record no pull request"
+  pass "fm-pr-check: a pull request contradicting the recorded contribution venue is refused before arming"
+}
+
+test_venue_guard_accepts_a_pull_request_at_the_recorded_venue() {
+  local dir
+  dir=$(make_case venue-right)
+  write_task_meta_with_venue "$dir" github.com/fixture-fork/proj
+  # The same task, same guard, at the venue it was actually based on. Without
+  # this control the refusal above would prove only that the guard says no.
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/fixture-fork/proj/pull/5 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "venue-right: a matching venue must be accepted: $(cat "$dir/stderr")"
+  grep -qxF 'pr=https://github.com/fixture-fork/proj/pull/5' "$dir/home/state/task-a.meta" \
+    || fail "venue-right: an accepted venue must record its pull request"
+  assert_present "$dir/home/state/task-a.check.sh" \
+    "venue-right: an accepted venue must arm its poll"
+  pass "fm-pr-check: a pull request at the recorded contribution venue is accepted and armed"
+}
+
+test_venue_guard_reports_an_unrecorded_venue_as_unchecked() {
+  local dir
+  dir=$(make_case venue-unrecorded)
+  # A task spawned before the venue record existed. Absence is not agreement,
+  # so this must arm and SAY it could not check, never claim a match.
+  write_task_meta "$dir"
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/fixture-up/proj/pull/5 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "venue-unrecorded: an unrecorded venue must not refuse: $(cat "$dir/stderr")"
+  assert_contains "$(cat "$dir/stdout")" 'venue: unchecked' \
+    "venue-unrecorded: an unevaluable venue must be reported as unchecked"
+  assert_not_contains "$(cat "$dir/stdout")" 'matches the recorded' \
+    "venue-unrecorded: an unevaluable venue must never be reported as a match"
+  assert_present "$dir/home/state/task-a.check.sh" \
+    "venue-unrecorded: an unevaluable venue must still arm its poll"
+  pass "fm-pr-check: a task with no recorded venue is reported unchecked rather than assumed to match"
+}
+
+# The literal sentinel bin/fm-spawn.sh records when nothing could derive the
+# venue. It is a recorded non-answer, so it must read like the absent record
+# above rather than like a venue no pull request can ever equal - which would
+# hard-refuse exactly the tasks the sentinel exists to keep moving.
+test_venue_guard_reports_an_unresolved_venue_as_unchecked() {
+  local dir
+  dir=$(make_case venue-unresolved)
+  write_task_meta_with_venue "$dir" unresolved
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/fixture-up/proj/pull/5 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "venue-unresolved: an unresolved venue must not refuse: $(cat "$dir/stderr")"
+  assert_contains "$(cat "$dir/stdout")" 'venue: unchecked' \
+    "venue-unresolved: an unresolved venue must be reported as unchecked"
+  assert_not_contains "$(cat "$dir/stdout")" 'matches the recorded' \
+    "venue-unresolved: an unresolved venue must never be reported as a match"
+  assert_present "$dir/home/state/task-a.check.sh" \
+    "venue-unresolved: an unresolved venue must still arm its poll"
+  pass "fm-pr-check: a task recording an unresolved venue is reported unchecked and still armed"
+}
+
+# One machine addressing two accounts at the same forge writes its remotes
+# through an SSH host alias, so the venue is recorded as `gh-work/owner/repo`
+# while every pull request at that repository is `github.com/owner/repo`. That
+# is one venue spelled two ways; refusing it would make every ship task in such
+# a project permanently unlandable, with hand-editing state/<id>.meta the only
+# way out. The alias is resolved from the recorded url - hermetically here,
+# through a stub ssh that answers exactly as `ssh -G` does.
+write_alias_resolving_ssh() {  # <dir> <alias> <hostname>
+  local dir=$1 alias=$2 hostname=$3
+  cat > "$dir/fakebin/ssh" <<SH
+#!/usr/bin/env bash
+host=\${*: -1}
+printf 'user git\n'
+case "\$host" in
+  $alias) printf 'hostname %s\n' '$hostname' ;;
+  *) printf 'hostname %s\n' "\$host" ;;
+esac
+SH
+  chmod +x "$dir/fakebin/ssh"
+}
+
+test_venue_guard_sees_through_an_ssh_host_alias() {
+  local dir rc
+  dir=$(make_case venue-alias)
+  write_alias_resolving_ssh "$dir" gh-work github.com
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    'window=firstmate:fm-task-a' \
+    'endpoint_task_id=task-a' \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=no-mistakes' \
+    'contribution_venue=gh-work/fixture-fork/proj' \
+    'contribution_venue_url=git@gh-work:fixture-fork/proj.git'
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/fixture-fork/proj/pull/5 \
+    > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "venue-alias: an aliased host naming the same repository must be accepted: $(cat "$dir/stderr")"
+  assert_contains "$(cat "$dir/stdout")" 'ssh alias' \
+    "venue-alias: the match must say the host was an alias rather than claim a literal match"
+  assert_present "$dir/home/state/task-a.check.sh" \
+    "venue-alias: an aliased venue that agrees must arm its poll"
+
+  # The control the acceptance above is worthless without: resolving the alias
+  # must not make the guard agree with a DIFFERENT repository at that host.
+  dir=$(make_case venue-alias-wrong)
+  write_alias_resolving_ssh "$dir" gh-work github.com
+  fm_write_meta "$dir/home/state/task-a.meta" \
+    'window=firstmate:fm-task-a' \
+    'endpoint_task_id=task-a' \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
+    'kind=ship' \
+    'mode=no-mistakes' \
+    'contribution_venue=gh-work/fixture-fork/proj' \
+    'contribution_venue_url=git@gh-work:fixture-fork/proj.git'
+  rc=0
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/fixture-up/proj/pull/5 \
+    > "$dir/stdout" 2> "$dir/stderr" || rc=$?
+  [ "$rc" -eq 1 ] \
+    || fail "venue-alias-wrong: alias resolution must not excuse a different repository (rc=$rc)"
+  assert_absent "$dir/home/state/task-a.check.sh" \
+    "venue-alias-wrong: a refused venue must arm no poll"
+  pass "fm-pr-check: an ssh host alias is one venue spelled twice, and resolving it still refuses the wrong repository"
+}
+
 test_migration_excludes_older_watcher_before_scan() {
   local dir state gate sentinel older_pid rc
   dir=$(make_case migration-pause-before-scan)
@@ -3754,3 +3918,8 @@ test_head_comparison_never_blocks_a_merge() {
   pass 'head comparison never blocks a merge'
 }
 test_head_comparison_never_blocks_a_merge
+test_venue_guard_refuses_a_pull_request_at_the_wrong_venue
+test_venue_guard_accepts_a_pull_request_at_the_recorded_venue
+test_venue_guard_reports_an_unrecorded_venue_as_unchecked
+test_venue_guard_reports_an_unresolved_venue_as_unchecked
+test_venue_guard_sees_through_an_ssh_host_alias
