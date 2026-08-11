@@ -91,7 +91,50 @@ test_non_capacity_refusal_keeps_a_counted_wait() {
   pass "a non-capacity substitute refusal leaves the capacity wait active and counted"
 }
 
+test_moved_capacity_picture_resets_stagnation() {
+  local rec out
+  rec=$(make_refusal_home moved-picture); read_home_record "$rec"
+  write_brief "$HOME_DIR" movingtask no-mistakes
+  out=$(FM_ATTEMPT_DEFER_STAGNATION_DEFAULT=2 \
+    run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
+      movingtask "$PROJ_DIR" --mode no-mistakes --yolo off \
+      --reason-code NL_RULE_CLASSIFICATION --harness codex \
+      --route R-PAIR --model vendor/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
+  out=$(FM_ATTEMPT_DEFER_STAGNATION_DEFAULT=2 \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id movingtask --force)
+  assert_no_grep "terminal=" "$HOME_DIR/state/movingtask.attempt" "a changed capacity picture was counted as stagnant"
+  assert_grep "defer_stagnant=1" "$HOME_DIR/state/movingtask.attempt" "a changed capacity picture did not reset stagnation"
+  assert_grep "alt/large=available" "$HOME_DIR/state/movingtask.capacity" "the current capacity signature was not persisted"
+  pass "a moved capacity picture advances the wait without accumulating stagnation"
+}
+
+test_record_refresh_failure_stops_durably() {
+  local rec out rc stub
+  rec=$(make_refusal_home record-refresh); read_home_record "$rec"
+  write_brief "$HOME_DIR" refreshtask no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
+    refreshtask "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --harness codex \
+    --route R-PAIR --model vendor/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
+  stub="$TMP_ROOT/record-refresh/fail-commit"
+  printf '#!/bin/sh\nexit 1\n' > "$stub"
+  chmod +x "$stub"
+  rc=0
+  out=$(FM_CAPACITY_RECORD_COMMIT_BIN="$stub" \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id refreshtask --force) || rc=$?
+  expect_code 1 "$rc" "a failed deferral-record refresh must stop the wait"
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/refreshtask.attempt" "the attempt owner did not record the unified stop"
+  assert_contains "$out" "deferral record could not be written" "the stop did not distinguish the failed record refresh"
+  assert_contains "$out" "$HOME_DIR/state/refreshtask.capacity" "the stop did not name the failed deferral record path"
+  assert_grep "failed: waiting for capacity ended because the deferral record could not be written" "$HOME_DIR/state/refreshtask.status" "supervision did not receive the record-write stop"
+  pass "a retry that cannot refresh its deferral record stops and names the failed record"
+}
+
 test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
 test_inexpressive_and_unverified_substitutes_keep_waiting
 test_non_capacity_refusal_keeps_a_counted_wait
+test_moved_capacity_picture_resets_stagnation
+test_record_refresh_failure_stops_durably

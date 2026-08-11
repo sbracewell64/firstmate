@@ -144,6 +144,9 @@
 #       when it is; exit 3, record terminal=budget_exhausted and append one
 #       `failed:` line when either bound is spent. Spends no attempt: a task the
 #       fleet had no capacity for did not fail.
+#   fm-attempt.sh stop-defer <id> --reason <text>
+#       Stop a capacity wait in the unified terminal state when its retry owner
+#       cannot durably maintain the record that makes another check safe.
 #   fm-attempt.sh retire <id>
 #       Remove the record. Teardown's ordinary-release hook.
 #
@@ -388,9 +391,10 @@ cmd_show() {
   require_id "$id"
   shift
   [ "$#" -eq 0 ] || die "show takes only a task id"
-  printf 'attempt=%s attempt_budget=%s deferrals=%s deferral_budget=%s\n' \
+  printf 'attempt=%s attempt_budget=%s deferrals=%s deferral_budget=%s terminal=%s\n' \
     "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
-    "$(attempt_defer_count "$id")" "$(attempt_defer_budget "$id")"
+    "$(attempt_defer_count "$id")" "$(attempt_defer_budget "$id")" \
+    "$(attempt_field "$STATE/$id.attempt" terminal)"
 }
 
 # The one decision both check and open make: is the next spawn a NEW attempt or
@@ -580,6 +584,30 @@ cmd_defer() {
     "$deferrals" "$budget" "$stagnant" "$stagnation"
 }
 
+cmd_stop_defer() {
+  local id=${1-} reason='' already
+  require_id "$id"
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --reason) [ "$#" -ge 2 ] || die "--reason needs a value"; reason=$2; shift 2 ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  [ -n "$reason" ] || die "stop-defer needs --reason"
+  reason=$(attempt_clean_signature "$reason")
+  already=$(attempt_field "$STATE/$id.attempt" terminal)
+  attempt_write "$id" "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
+    "$FM_ATTEMPT_TERMINAL_STATE" "$(attempt_failures_seen "$id")" \
+    "$(attempt_field "$STATE/$id.attempt" ended)" \
+    || die "could not stop the capacity deferral for $id at $STATE/$id.attempt"
+  if [ "$already" != "$FM_ATTEMPT_TERMINAL_STATE" ]; then
+    printf 'failed: waiting for capacity ended because %s (%s)\n' "$reason" "$FM_ATTEMPT_TERMINAL_STATE" \
+      >> "$STATE/$id.status" 2>/dev/null \
+      || die "could not declare the stopped capacity deferral for $id at $STATE/$id.status"
+  fi
+}
+
 cmd_retire() {
   local id=${1-}
   require_id "$id"
@@ -606,7 +634,8 @@ case "$SUBCOMMAND" in
   check) cmd_check "$@" ;;
   open) cmd_open "$@" ;;
   defer) cmd_defer "$@" ;;
+  stop-defer) cmd_stop_defer "$@" ;;
   retire) cmd_retire "$@" ;;
   -h|--help|help) usage ;;
-  *) die "unknown subcommand: $SUBCOMMAND (show check open defer end retire)" ;;
+  *) die "unknown subcommand: $SUBCOMMAND (show check open defer stop-defer end retire)" ;;
 esac

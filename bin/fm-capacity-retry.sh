@@ -107,11 +107,14 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-route-lib.sh
 . "$SCRIPT_DIR/fm-route-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
 
 RECHECK_BASE=${FM_CAPACITY_RECHECK_BASE:-900}
 RECHECK_CAP=${FM_CAPACITY_RECHECK_CAP:-10800}
 CAPACITY_SCHEMA=fm-capacity-deferral.v1
 ATTEMPT_BIN=${FM_ATTEMPT_BIN:-$FM_ROOT/bin/fm-attempt.sh}
+RECORD_COMMIT_BIN=${FM_CAPACITY_RECORD_COMMIT_BIN:-mv}
 # The stable token a resumed dispatch prints, so a supervisor can tell an
 # automatic resume from an operator one without reading prose.
 CAPACITY_RESUMED_TOKEN=FM_CAPACITY_RESUMED
@@ -286,21 +289,48 @@ mark_terminal() {  # <id> <why>
   printf 'terminal=%s\n' "$(clean "$why")" >> "$rec" 2>/dev/null || true
 }
 
+current_capacity_signature() {  # <record-file>
+  local rec=$1 route decision models observation config_file
+  route=$(field "$rec" route)
+  config_file=$(fm_route_config_path "$CONFIG")
+  if ! decision=$(fm_route_decision "$CONFIG" "$route" "" "" "$STATE"); then
+    printf 'capacity=could_not_observe@none\n'
+    return 0
+  fi
+  models=$(printf '%s' "$decision" | jq -r '.candidates[]?.model' 2>/dev/null)
+  if [ -z "$models" ]; then
+    printf 'capacity=could_not_observe@none\n'
+    return 0
+  fi
+  observation=$(fm_capacity_observe "$config_file" "$models")
+  if [ "$(printf '%s' "$observation" | jq -r '.source.status // "unreadable"' 2>/dev/null)" != read ]; then
+    printf 'capacity=could_not_observe@none\n'
+    return 0
+  fi
+  printf '%s' "$observation" | jq -r '
+    [ .models[]? | .model + "=" + (.verdict // "could_not_observe")
+        + "@" + ((.until // "none") | tostring) ] | sort | join(" ")' 2>/dev/null \
+    || printf 'capacity=could_not_observe@none\n'
+}
+
+stop_wait_for_record_failure() {  # <id> <record-file> <detail>
+  local id=$1 rec=$2 detail=$3 reason out rc=0
+  reason="the deferral record could not be written at $rec: $detail"
+  out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" stop-defer "$id" --reason "$reason" 2>&1) || rc=$?
+  mark_terminal "$id" "deferral record could not be written"
+  if [ "$rc" -ne 0 ]; then
+    printf 'error: capacity wait for %s could not be durably stopped after %s: %s\n' "$id" "$reason" "$out" >&2
+    return 1
+  fi
+  printf 'error: capacity deferral for %s ended because the deferral record could not be written at %s; capacity had not remained exhausted: %s\n' \
+    "$id" "$rec" "$detail" >&2
+  return 1
+}
+
 keep_waiting() {  # <record-file> <refusal>
   local rec=$1 refusal=$2 id signature now tmp rc=0 defer_out sig line
   id=$(field "$rec" task)
-  signature=$(field "$rec" signature)
-  now=$(date -u +%s)
-  tmp="$rec.tmp.$$"
-  if ! awk -F= -v now="$now" '
-    $1 == "last_checked" { print "last_checked=" now; seen=1; next }
-    { print }
-    END { if (!seen) print "last_checked=" now }
-  ' "$rec" > "$tmp" 2>/dev/null || ! mv -f -- "$tmp" "$rec" 2>/dev/null; then
-    rm -f -- "$tmp"
-    printf 'error: could not refresh capacity deferral %s\n' "$rec" >&2
-    return 1
-  fi
+  signature=$(current_capacity_signature "$rec")
   case "$refusal" in
     *FM_SPAWN_CAPACITY_DEFERRED*|*FM_SPAWN_CAPACITY_EXHAUSTED*) sig= ;;
     *) sig=$(printf '%s' "$refusal" | LC_ALL=C tr '\t\r\n' '   ' | LC_ALL=C cut -c1-300) ;;
@@ -324,6 +354,21 @@ keep_waiting() {  # <record-file> <refusal>
     printf 'error: capacity deferral for %s ended because the attempt count could not be recorded; command %s defer %s could not write %s: %s\n' \
       "$id" "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$defer_out" >&2
     return 1
+  fi
+  now=$(date -u +%s)
+  tmp="$rec.tmp.$$"
+  if ! awk -F= -v now="$now" -v signature="$(clean "$signature")" '
+    $1 == "last_checked" { print "last_checked=" now; checked=1; next }
+    $1 == "signature" { print "signature=" signature; signed=1; next }
+    { print }
+    END {
+      if (!checked) print "last_checked=" now
+      if (!signed) print "signature=" signature
+    }
+  ' "$rec" > "$tmp" 2>/dev/null || ! "$RECORD_COMMIT_BIN" -f -- "$tmp" "$rec" 2>/dev/null; then
+    rm -f -- "$tmp"
+    stop_wait_for_record_failure "$id" "$rec" "the atomic refresh command $RECORD_COMMIT_BIN -f -- $tmp $rec failed"
+    return $?
   fi
   return 0
 }
@@ -415,13 +460,24 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
   return 0
 }
 
-# One deferral. Prints exactly one line when it acted and nothing when it did
-# not, because a sweep that narrates every quiet check is a sweep nobody reads.
+# One deferral has exactly three durable outcomes after a due check: RESUMED,
+# ADVANCED through the attempt-owned bound, or STOPPED with a declaration.
+# A not-due record retains the durable future check established by its prior
+# advance, a terminal record is already stopped, and an already-dispatched task
+# retires the obsolete wait rather than creating a second worker.
 tick_one() {  # <record-file> <force>
   local rec=$1 force=$2 id now due out rc route effort candidate eligible
   id=$(field "$rec" task)
-  [ -n "$id" ] || return 0
+  if [ -z "$id" ]; then
+    printf 'terminal=the deferral record has no task id\n' >> "$rec" 2>/dev/null || true
+    printf 'capacity deferral stopped: %s has no task id and cannot be resumed\n' "$rec" >&2
+    return 1
+  fi
   if [ -n "$(field "$rec" terminal)" ]; then
+    return 0
+  fi
+  if "$ATTEMPT_BIN" show "$id" 2>/dev/null | grep -q 'terminal=budget_exhausted'; then
+    mark_terminal "$id" "attempt owner stopped the deferral"
     return 0
   fi
   # Work that is already live is not waiting for capacity. This is the one
@@ -439,6 +495,8 @@ tick_one() {  # <record-file> <force>
   fi
   if ! build_spawn_args "$rec"; then
     mark_terminal "$id" "the deferral record could not be turned back into a dispatch"
+    printf 'failed: waiting for capacity ended because the deferral record could not be turned back into a dispatch\n' \
+      >> "$STATE/$id.status" 2>/dev/null || true
     printf 'capacity deferral for %s stopped: its recorded dispatch no longer validates, so it was not resumed\n' "$id" >&2
     return 1
   fi

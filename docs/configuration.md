@@ -511,9 +511,11 @@ No model turn is spent asking whether capacity has returned, and the resume reco
 
 Every deferral is counted by `bin/fm-attempt.sh defer`, which owns both bounds and spends no retry attempt, because a task the fleet had no capacity for did not fail.
 `deferral_budget` (default 24) bounds the total so a wait can never become an infinite poll, and `defer_stagnant` against `FM_ATTEMPT_DEFER_STAGNATION_DEFAULT` (default 8) stops a wait whose observed capacity picture has not moved for that many consecutive checks.
+Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature so repeated blindness can still stagnate.
 Either bound reaching its limit is the unified terminal state `budget_exhausted`, declared as one `failed:` line on the task's status log, and session start reports the stopped waits as a `CAPACITY_DEFERRED:` diagnostic.
 If `bin/fm-attempt.sh defer` cannot record the count, the deferral fails closed, marks the capacity record terminal and declares the failed command and attempt-record path on the task status log.
 If every offered substitute is refused by another dispatch gate, the wait remains active and gains one durable deferral count, while the first distinct refusal is recorded once as a `blocked:` status line.
+Every due retry must durably resume, advance its bound or stop, and a failure to refresh the deferral record after counting stops through the attempt owner's unified terminal state with the failed record path declared.
 The work was never dispatched into a pool that could not run it and is not lost; raising a bound is deliberate, explicit and recorded.
 
 ### Model availability record (state/model-health.json)
