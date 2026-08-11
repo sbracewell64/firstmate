@@ -346,11 +346,11 @@ fi
 subsection "BOOTSTRAP"
 if [ "$READ_ONLY" -eq 1 ]; then
   BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_COMMITMENT_NO_DECISION_RUN=1 \
-    FM_COMMITMENT_NO_DECISION_RUN=1 "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
+    "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
   BOOT_OUT=$(
     "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
-    "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
+    FM_COMMITMENT_NO_DECISION_RUN=1 "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1
   )
 fi
 if [ -n "$BOOT_OUT" ]; then
