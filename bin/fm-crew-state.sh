@@ -76,6 +76,11 @@
 #      the run's own ci log before it is repeated: a claim the evidence does not
 #      record reports blocked, because a head no check run examined is not work
 #      ready for review. See nm_ci_checks_state for the measured defect.
+#      A RUN-LEVEL terminal verdict (failed, aborted, interrupted) additionally
+#      records the crew's own turn signal in busy_signal. That verdict answers
+#      for the run and never observed the crew, so without the extra reading a
+#      crew starting its replacement run has no liveness evidence anywhere; the
+#      verdict, its source and its precedence are unchanged by it.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -149,6 +154,12 @@ FM_CREW_STATE_SCHEMA=1
 # rather than left implicit; emitting it makes the declaration visible to the
 # consumer instead of hiding it in this file's control flow.
 PRECEDENCE=""
+# The crew's semantic turn signal, "<verdict> <source>", whenever this reader
+# measured it. It is EVIDENCE, never the answer: it is set on the no-run
+# fallback, where it decides the verdict, and additionally on a run-level
+# terminal verdict, where it decides nothing here and the run-step still wins
+# outright. Consumers that must know whether the CREW is live after its run
+# ended read it there (fm-classify-lib.sh's crew_absorb_class).
 BUSY_SIGNAL=""
 RUN_STEP=""
 EVIDENCE_AGE=""
@@ -829,6 +840,37 @@ if [ "$HAVE_RUN" = 1 ]; then
       fi
       ;;
   esac
+
+  # A run-level terminal verdict - the pipeline rejected the work, the run was
+  # cancelled, or it broke without judging anything - is the outcome of a RUN. It
+  # observes nothing about the crew, which is then free to start a replacement
+  # run and routinely does. The run-step path deliberately never reads the pane
+  # (it is authoritative and does not need one), so nothing measured the crew at
+  # all, and a supervisor asking "is this crew working?" got the dead run's step
+  # back and escalated a live worker (fm-classify-lib.sh's crew_state_is_run_ended
+  # records the measured cost).
+  #
+  # Measure the crew-level signal here and report it ALONGSIDE the verdict. The
+  # verdict itself is untouched: state stays what the run-step said, source stays
+  # run-step, and precedence is unchanged - this adds evidence a consumer can use,
+  # never a second opinion that could override the pipeline. EVIDENCE_AGE stays
+  # unset for the same reason: it reports the age of the WINNING evidence, and the
+  # winner here is still the run step.
+  #
+  # The cost is one endpoint probe plus one busy-record read, paid only by a read
+  # whose verdict actually leaves that question open - never by a working, parked,
+  # blocked or finished run, whose verdict already accounts for the crew.
+  if crew_state_is_run_ended "$RUN_STATE" \
+    && [ "$(fm_task_role "$META")" != secondmate ] && [ -n "$BACKEND_TARGET" ]; then
+    if pane_readable "$BACKEND_TARGET"; then
+      BUSY_SIGNAL=$(crew_busy_verdict "$BACKEND_TARGET")
+    else
+      # A gone endpoint is an OBSERVATION that the crew is not working, not a
+      # failure to observe, and fm_busy_classify_live names it with this exact
+      # pair; a consumer must be able to tell it from evidence it could not read.
+      BUSY_SIGNAL='dead endpoint-gone'
+    fi
+  fi
 
   emit "$RUN_STATE" run-step "$RUN_DETAIL"
 fi

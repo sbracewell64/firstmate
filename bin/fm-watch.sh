@@ -25,7 +25,11 @@
 #                          RECONCILED state is settled terminal - done, or
 #                          parked/blocked with a decision still open above it - is
 #                          absorbed with no wedge timer at all, because the idle
-#                          pane is that task's correct condition. Only when no
+#                          pane is that task's correct condition. A crew whose
+#                          own liveness could NOT be observed surfaces exactly
+#                          like any other non-absorbing verdict and only names
+#                          that in its reason, since an unobservable wedge is
+#                          what this alarm is for. Only when no
 #                          absorb class applies does the log's last line decide:
 #                          terminal (captain-relevant) or non-terminal (no verb),
 #                          both surfaced at once. A provably-working stale past the
@@ -147,7 +151,10 @@ SIGNAL_GRACE=${FM_SIGNAL_GRACE:-30}   # seconds to linger after a signal so trai
 # no-mistakes step or a busy pane, via crew_is_provably_working over
 # fm-crew-state.sh, or descendant CPU that advanced since the previous poll, via
 # fm_child_cpu_state - the only source that can see work an agent backgrounded
-# before ending its turn); a crew that stopped its turn with no running pipeline,
+# before ending its turn). Once a run has ENDED - rejected, cancelled, or broken
+# without a verdict - that run's step is not an observation of the crew at all,
+# so those two crew-level sources answer for it instead of the dead run's step;
+# a crew that stopped its turn with no running pipeline,
 # no busy pane, and no advancing child is SURFACED, so a finish reported only
 # through interactive pane menus (no done: status) is never swallowed, and so is
 # a crew whose child has hung. An ACTIONABLE wake (a captain-relevant signal, a
@@ -476,10 +483,18 @@ pause_state_class() {  # <window> <task>
   printf '%s' "$class"
 }
 
-surface_nonterminal_stale() {  # <window> <hash>
-  local win=$1 h=$2 key task last
+# The optional <note> names WHY the wake surfaced when that is not the ordinary
+# "nothing absorbed it" case - specifically, when the crew's own liveness could
+# not be observed at all. It changes nothing about the surfacing: an unobservable
+# crew is exactly the case the wedge alarm exists for, so it wakes firstmate on
+# the unchanged path and the note only stops the wake from reading as a
+# measurement that was taken and came back idle.
+surface_nonterminal_stale() {  # <window> <hash> [note]
+  local win=$1 h=$2 note=${3:-} key task last reason
   key=$(printf '%s' "$win" | tr ':/.' '___')
-  fm_wake_append stale "$win" "stale: $win" || exit 1
+  reason="stale: $win"
+  [ -n "$note" ] && reason="stale: $win ($note)"
+  fm_wake_append stale "$win" "$reason" || exit 1
   printf '%s' "$h" > "$STATE/.stale-$key"
   rm -f "$STATE/.stale-since-$key" "$STATE/.settled-$key"
   task=$(window_to_task "$win" "$STATE")
@@ -491,7 +506,7 @@ surface_nonterminal_stale() {  # <window> <hash>
   else
     rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
   fi
-  wake "stale: $win"
+  wake "$reason"
 }
 
 # Check and heartbeat cadence must survive actionable exits and restarts: the
@@ -1064,14 +1079,17 @@ EOF
     # runs in a child process. Sampled every poll for every window - including
     # while the pane is busy - so a baseline is always warm and the busy->idle
     # transition never has to spend a false escalation rebuilding one.
-    # An inconclusive semantic read with ADVANCING descendant CPU folds into the
-    # same work_now gate a busy pane uses, so it inherits that bound too:
-    # BUSY_TURN_MAX_SECS still routes the pane through the wedge timer once the
-    # task has gone that long with no completed turn, and a definite semantic
-    # verdict or hung, dead, or absent child leaves work_now at the busy verdict.
+    # A semantic read that leaves the crew's own liveness open - it could not
+    # decide, or it decided only about a RUN that ended - plus ADVANCING
+    # descendant CPU folds into the same work_now gate a busy pane uses, so it
+    # inherits that bound too: BUSY_TURN_MAX_SECS still routes the pane through
+    # the wedge timer once the task has gone that long with no completed turn,
+    # and a definite semantic verdict or hung, dead, or absent child leaves
+    # work_now at the busy verdict. fm-classify-lib.sh owns which classes qualify,
+    # so this gate and crew_absorb_class cannot drift apart.
     child_cpu=$(fm_child_cpu_state "$STATE" "$task")
     work_now=$busy_now
-    if [ "$child_cpu" = advancing ] && [ "$(crew_semantic_class "$task")" = inconclusive ]; then
+    if [ "$child_cpu" = advancing ] && crew_semantic_leaves_liveness_open "$task"; then
       work_now=0
     fi
     if [ "$h" = "$prev" ]; then
@@ -1114,7 +1132,8 @@ EOF
             # means the idle pane is the expected finished/waiting condition
             # rather than a wedge - the measured stale-fires-on-finished-task
             # false alarms.
-            case "$(crew_absorb_class "$(window_to_task "$w" "$STATE")" "$STATE")" in
+            absorb_class=$(crew_absorb_class "$(window_to_task "$w" "$STATE")" "$STATE")
+            case "$absorb_class" in
               working)
                 printf '%s' "$h" > "$sf"
                 date +%s > "$ssf"
@@ -1125,11 +1144,17 @@ EOF
                 absorb_settled_stale "$w" "$h"
                 ;;
               *)
-                fm_wake_append stale "$w" "stale: $w" || exit 1
+                # An `unobserved` class surfaces here on exactly the same path as
+                # any other non-absorbing verdict, and only names itself: a wedge
+                # nobody could observe is the case this alarm exists for.
+                stale_reason="stale: $w"
+                [ "$absorb_class" = unobserved ] \
+                  && stale_reason="stale: $w ($FM_CLASSIFY_UNOBSERVED_NOTE)"
+                fm_wake_append stale "$w" "$stale_reason" || exit 1
                 printf '%s' "$h" > "$sf"
                 rm -f "$ssf" "$stf"
                 mark_surfaced "$STATE/$(window_to_task "$w" "$STATE").status"
-                wake "stale: $w"
+                wake "$stale_reason"
                 ;;
             esac
           elif [ -e "$stf" ]; then
@@ -1163,7 +1188,8 @@ EOF
           #     wait out the timer.
           if [ "$(cat "$sf" 2>/dev/null || true)" != "$h" ]; then
             task=$(window_to_task "$w" "$STATE")
-            case "$(pause_state_class "$w" "$task")" in
+            absorb_class=$(pause_state_class "$w" "$task")
+            case "$absorb_class" in
               working)
                 clear_pause_tracking "$w"
                 printf '%s' "$h" > "$sf"
@@ -1175,6 +1201,9 @@ EOF
                 ;;
               settled)
                 absorb_settled_stale "$w" "$h"
+                ;;
+              unobserved)
+                surface_nonterminal_stale "$w" "$h" "$FM_CLASSIFY_UNOBSERVED_NOTE"
                 ;;
               *)
                 surface_nonterminal_stale "$w" "$h"

@@ -250,6 +250,50 @@ crew_state_is_known() {  # <state>
   return 1
 }
 
+# Is <state> a verdict about the RUN rather than about the CREW? Three verdicts
+# are: the pipeline judged the work and rejected it, the run was deliberately
+# cancelled, or the run broke without judging anything. Each describes how a run
+# ENDED and observes nothing about the crew, which is free to act next - and
+# routinely is, by starting a replacement run.
+#
+# Measured 2026-08-10: three lanes were wedge-escalated while their workers were
+# actively starting fresh runs. Each held a run left `failed` by an earlier
+# session-limit kill; the wedge guard asked whether the crew was provably
+# working; and bin/fm-crew-state.sh answered from that dead run's step, because
+# the run-step is authoritative and never consults the pane. A lane BETWEEN an
+# interrupted run and its replacement had no working evidence anywhere the guard
+# looked, even though its pane showed a live shell and an advancing turn. So this
+# predicate names the class, and crew_absorb_class below treats it as the ABSENCE
+# of a crew-level verdict rather than as a crew-level idle one.
+#
+# `done` is equally run-level but deliberately NOT here: a crew whose run passed
+# has nothing left to do on its own, and crew_state_is_settled already answers
+# for its idle pane. `parked` and `blocked` are a run WAITING, not one that
+# ended, and the crew owes the next move at a gate it can see.
+#
+# Three-valued for the same reason as its two neighbours below: 0 run-level
+# terminal, 1 a declared verdict that is not, 3 a verdict this fleet declares but
+# this rule was never taught, 2 a verdict outside FM_CREW_STATE_VOCABULARY
+# entirely. The coverage gate in tests/fm-watch-triage.test.sh walks the
+# vocabulary and fails on any 3.
+crew_state_is_run_ended() {  # <state>
+  case "${1:-}" in
+    failed|aborted|interrupted) return 0 ;;
+    working|parked|blocked|paused|done|idle|stale|unknown) return 1 ;;
+  esac
+  crew_state_is_known "${1:-}" && return 3
+  return 2
+}
+
+# What a supervisor is told when a crew's own liveness could not be observed at
+# all - the third value, kept distinct from "observed idle" in the escalation
+# wording as well as in the classification. Both supervisors escalate on it
+# exactly as they escalate on an idle crew, because an unobservable wedge is the
+# case the alarm exists for; naming it is what stops the escalation from being
+# read as a measurement that was actually taken.
+# shellcheck disable=SC2034 # Read by the watcher and daemon (fm-watch.sh, fm-supervise-daemon.sh), not this lib.
+FM_CLASSIFY_UNOBSERVED_NOTE='crew liveness could not be observed'
+
 # --- pause kind: can this wait change without the captain? -------------------
 #
 # status_is_paused answers "does this pane idle by design". It does NOT answer the
@@ -392,8 +436,10 @@ crew_state_absorb_class() {  # <state> <source>
 
 # Read one string field out of bin/fm-crew-state.sh's --json object. The object
 # is flat and this reader owns its shape, so a bounded extraction is exact for
-# the TOKEN fields (state, source, precedence_applied), whose values are
-# constrained identifiers that never contain a quote or backslash. Free-text
+# the TOKEN fields (state, source, precedence_applied, and busy_signal's
+# "<verdict> <source>" pair), whose values are constrained identifiers that never
+# contain a quote or backslash - which is also why a free-text field later in the
+# object can never impersonate one of them. Free-text
 # fields (detail, terminal_error) are deliberately NOT read through this:
 # consumers branch on the typed fields, which is the entire point of retiring
 # prose matching.
@@ -1078,52 +1124,88 @@ crew_child_cpu_advancing() {  # <id> [state-dir]
 }
 
 # The ONE read of bin/fm-crew-state.sh's authoritative verdict that both
-# classifications below share. Prints "<class> <reconciled-state>", because the
-# two callers need different halves of the same read and that read may make a
-# bounded no-mistakes call - splitting it into two reads would double that cost
-# for every definite verdict.
+# classifications below share. Prints "<class> <reconciled-state> <live>",
+# because the callers need different parts of the same read and that read may
+# make a bounded no-mistakes call - splitting it into several reads would
+# multiply that cost for every definite verdict.
+#
+# <live> is the crew-level harness turn signal the reader measured, reduced to
+# its verdict word (busy, idle, stale, unknown, dead), or `unmeasured` when the
+# reader reported none. It is NOT a second opinion on the state: it is carried
+# for exactly the verdicts that answer only for a RUN (crew_state_is_run_ended),
+# where the crew's own liveness is otherwise unobserved.
 # The read is TYPED. This used to recover `state` and `source` by slicing the
 # prose line apart on its separators, which is what CFVC-05 retires: the reader
 # now emits the same derivation as fields, so no consumer reconstructs structure
 # from a sentence written for a human. FM_CREW_STATE_BIN lets tests stub it.
 _fm_crew_read_class() {  # <id>
-  local id=$1 json state src class
-  [ -n "$id" ] || { printf 'definite unreadable'; return; }
+  local id=$1 json state src class live
+  [ -n "$id" ] || { printf 'definite unreadable unmeasured'; return; }
   json=$("$FM_CREW_STATE_BIN" --json "$id" 2>/dev/null) || true
-  [ -n "$json" ] || { printf 'inconclusive unreadable'; return; }
-  state=$(crew_state_json_token "$json" state) || { printf 'inconclusive unreadable'; return; }
+  [ -n "$json" ] || { printf 'inconclusive unreadable unmeasured'; return; }
+  state=$(crew_state_json_token "$json" state) || { printf 'inconclusive unreadable unmeasured'; return; }
   # A present-but-empty state field is the field carrying no answer, which is the
   # same condition as an absent one. Both are `unreadable` rather than a verdict,
   # so process liveness still gets its turn instead of the read silently
   # narrowing to a decided-looking class on malformed output.
-  [ -n "$state" ] || { printf 'inconclusive unreadable'; return; }
+  [ -n "$state" ] || { printf 'inconclusive unreadable unmeasured'; return; }
   src=$(crew_state_json_token "$json" source) || src=''
+  # The reader's busy_signal is "<verdict> <source>"; only the verdict word is a
+  # classification input. A null or absent field is `unmeasured`, which is the
+  # third value and never narrowed into either of the other two.
+  live=$(crew_state_json_token "$json" busy_signal) || live=''
+  live=${live%% *}
+  [ -n "$live" ] || live=unmeasured
   # crew_state_absorb_class owns the verdict-to-class mapping, beside the
   # vocabulary it must cover. This function's job is the read, and its
   # three-valued code is for the coverage gate, not for a caller here.
   class=$(crew_state_absorb_class "$state" "$src") || true
   case "$class" in
-    working|paused) printf '%s %s' "$class" "$state"; return ;;
+    working|paused) printf '%s %s %s' "$class" "$state" "$live"; return ;;
   esac
   # `none` from the mapper means "the semantic read alone does not absorb". The
-  # two extra sources below still need to know WHY, because they answer for
+  # extra sources below still need to know WHY, because they answer for
   # different verdicts: an UNPROVEN verdict may yet be answered by process
-  # liveness, while a DECIDED one may only be answered by the settled test. An
-  # untaught verdict lands in `definite`, which cannot absorb unless the settled
-  # test independently says so.
+  # liveness, a RUN-LEVEL terminal one is answered by the crew-level sources
+  # because it never observed the crew at all, and a DECIDED one may only be
+  # answered by the settled test. An untaught verdict lands in `definite`, which
+  # cannot absorb unless the settled test independently says so.
   case "$state" in
-    working|unknown) printf 'inconclusive %s' "$state" ;;
-    *) printf 'definite %s' "$state" ;;
+    working|unknown) printf 'inconclusive %s %s' "$state" "$live" ;;
+    *)
+      if crew_state_is_run_ended "$state"; then
+        printf 'run-ended %s %s' "$state" "$live"
+      else
+        printf 'definite %s %s' "$state" "$live"
+      fi
+      ;;
   esac
 }
 
 # Classify bin/fm-crew-state.sh's authoritative typed verdict without consulting
-# process liveness. Prints working, paused, definite, or inconclusive.
+# process liveness. Prints working, paused, definite, run-ended, or inconclusive.
 # FM_CREW_STATE_BIN lets tests stub the semantic verdict.
 crew_semantic_class() {  # <id>
   local read
   read=$(_fm_crew_read_class "$1")
   printf '%s' "${read%% *}"
+}
+
+# 0 if the semantic read for crew <id> leaves the crew's OWN liveness open, so a
+# process-liveness reading is entitled to answer for it. Two classes qualify, for
+# different reasons that come to the same thing: `inconclusive`, where the reader
+# could not decide, and `run-ended`, where it decided about a RUN and never
+# observed the crew. Both consumers ask through this predicate instead of naming
+# classes themselves, so the watcher's stale DETECTION and crew_absorb_class
+# cannot end up disagreeing about which verdicts the process tree may answer for
+# - which is not a cosmetic risk: they would then absorb the same crew at
+# different layers and re-create the escalate-every-threshold noise on a crew
+# whose descendants are demonstrably advancing.
+crew_semantic_leaves_liveness_open() {  # <id>
+  case "$(crew_semantic_class "$1")" in
+    inconclusive|run-ended) return 0 ;;
+  esac
+  return 1
 }
 
 # Classify WHY an idle/stale crew MIGHT be safely absorbed instead of surfaced.
@@ -1136,32 +1218,68 @@ crew_semantic_class() {  # <id>
 #             pause (paused:), which is EXPECTED to idle;
 #   settled - the crew's reconciled state is terminal and the idle pane is the
 #             expected finished/waiting condition (crew_state_is_settled above);
-#   none    - none of those, so the wake must surface (a failed or cancelled run,
-#             a torn-down or unknown crew whose descendants are hung, dead, or
-#             absent, a run parked at a gate the crew owns, or an unreadable
-#             verdict).
-# The two extra sources are consulted on exactly the semantic verdicts they
-# answer for and never both: process liveness only after an INCONCLUSIVE read,
-# the settled test only after a DEFINITE one. So the semantic sources keep their
-# precedence in every direction - a crew that appended paused: but then STARTED a
-# run reports working, never paused, a crew whose log still shows a
-# pre-validation done: reports working, not settled, and a definite verdict is
-# never overridden by whatever its process tree happens to still be doing.
+#   unobserved - the verdict answered only for a RUN and the crew's own liveness
+#             could not be observed at all; the wake must surface, and the
+#             supervisor must be told WHICH of the three values this was;
+#   none    - none of those, so the wake must surface (a crew observed idle after
+#             its run ended, a torn-down or unknown crew whose descendants are
+#             hung, dead, or absent, a run parked at a gate the crew owns, or an
+#             unreadable verdict).
+# The extra sources are consulted on exactly the semantic verdicts they answer
+# for: process liveness after an INCONCLUSIVE read, the settled test after a
+# DEFINITE one, and the crew-level pair (pane liveness, then process liveness)
+# after a RUN-ENDED one. So the semantic sources keep their precedence in every
+# direction - a crew that appended paused: but then STARTED a run reports
+# working, never paused, a crew whose log still shows a pre-validation done:
+# reports working, not settled, and a definite verdict is never overridden by
+# whatever its process tree happens to still be doing.
+#
+# The run-ended arm is the exception that proves that rule rather than breaking
+# it: `failed`, `aborted` and `interrupted` are not verdicts about the crew at
+# all (crew_state_is_run_ended records what that cost), so there is no definite
+# reading for the crew sources to override. They answer a question the run-step
+# left open, which is why a lane holding a dead run's `failed` while its worker
+# starts the replacement stops reading as a wedge.
 # NOT a pure read: the shared current-state read may make a bounded no-mistakes
 # call and the probe maintains its own sample, so callers run it only on no-verb
 # signal and first-sighting stale paths, never every wake.
 crew_absorb_class() {  # <id> [state-dir]
-  local id=$1 state_dir=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} read semantic state
+  local id=$1 state_dir=${2:-${STATE:-${FM_STATE_OVERRIDE:-}}} read semantic rest state live
   [ -n "$id" ] || { printf 'none'; return; }
   read=$(_fm_crew_read_class "$id")
   semantic=${read%% *}
-  state=${read#* }
+  rest=${read#* }
+  state=${rest%% *}
+  live=${rest##* }
   case "$semantic" in
     working|paused) printf '%s' "$semantic"; return ;;
     definite)
       crew_state_is_settled "$id" "$state" ${state_dir:+"$state_dir"} \
         && { printf 'settled'; return; }
       printf 'none'
+      return
+      ;;
+    run-ended)
+      # A live turn on the crew's own pane is the positive evidence the run-step
+      # could not carry. It is the SAME source the reader already treats as
+      # working when no run is attributed (source: pane), so this adds no new
+      # class of trust - only a reading the run-step path had skipped.
+      [ "$live" = busy ] && { printf 'working'; return; }
+      # Then the same process-liveness question an inconclusive read asks: a crew
+      # that backgrounded a long command leaves an idle pane and an idle turn
+      # signal while the work continues in a child. Advancement, never existence.
+      if [ "$(fm_child_cpu_state "$state_dir" "$id")" = advancing ]; then
+        printf 'working'
+        return
+      fi
+      # Three values, and the third is not folded into either of the others: an
+      # observed-idle crew (or one whose endpoint is gone) escalates on the
+      # unchanged schedule, while evidence that expired, was never written, or
+      # could not be read escalates SAYING it could not be observed.
+      case "$live" in
+        idle|dead) printf 'none' ;;
+        *)         printf 'unobserved' ;;
+      esac
       return
       ;;
   esac

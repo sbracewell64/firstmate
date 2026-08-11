@@ -576,6 +576,70 @@ test_housekeeping_provably_working_stale_not_escalated() {
   pass "housekeeping refreshes a persistent stale that is provably working, while an unreadable crew still escalates"
 }
 
+# The measured lane, at the away-mode gate. Roughly eight false wedge escalations
+# in one day, 2026-08-10, all of this shape: a run left `failed` by an earlier
+# session-limit kill, and a worker demonstrably mid-turn starting its replacement.
+# The gate read the run step, got the dead run's verdict, and escalated a healthy
+# worker. Each leg runs against the SAME aged marker and the SAME static pane, so
+# the only variable is what the crew's own liveness says.
+test_housekeeping_run_ended_gate_reads_crew_liveness() {
+  local dir state fakebin win pane key before after
+  dir=$(make_supercase stale-run-ended-housekeeping)
+  state="$dir/state"; fakebin="$dir/fakebin"
+  win="sess:fm-rerun-w1"; pane="$dir/pane.txt"
+  printf 'working: driving the pipeline\n' > "$state/rerun-w1.status"
+  printf 'idle prompt $\n' > "$pane"
+  key=$(printf '%s' "rerun-w1" | tr ':/.' '___')
+  export FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
+  export FM_FAKE_CREW_BUSY
+
+  # Negative control, and the bug itself: with the crew observed idle, the ended
+  # run still escalates on the unchanged schedule. Watch the alarm fire before
+  # trusting anything below to silence it.
+  FM_FAKE_CREW_BUSY='idle claude-hook'
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" housekeeping "$state"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a genuinely idle crew after an ended run stopped wedge-escalating"
+  ! grep -F "$FM_CLASSIFY_UNOBSERVED_NOTE" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "an OBSERVED idle crew was reported as one that could not be observed"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "wedge marker not cleared after escalation"
+  : > "$state/.subsuper-escalations"
+
+  # The fix: same ended run, same static pane, crew mid-turn on its own pane.
+  before=$(( $(date +%s) - 500 ))
+  FM_FAKE_CREW_BUSY='busy claude-hook'
+  echo "$before" > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a live worker starting its replacement run escalated: $(cat "$state/.subsuper-escalations")"
+  [ -e "$state/.subsuper-stale-$key" ] \
+    || fail "a live worker after an ended run LOST its wedge marker; silence must stay conditional"
+  after=$(cat "$state/.subsuper-stale-$key")
+  [ "$after" -gt "$before" ] \
+    || fail "the wedge marker was not refreshed ($after not newer than $before), so aging did not restart"
+
+  # The third value: evidence that expired, was never written, or could not be
+  # read is NOT idle and NOT working. It escalates on the unchanged schedule and
+  # says so, because a wedge nobody can observe is what this alarm is for.
+  FM_FAKE_CREW_BUSY='stale record-expired'
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" housekeeping "$state"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "an unobservable crew after an ended run was silently absorbed"
+  grep -F "$FM_CLASSIFY_UNOBSERVED_NOTE" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "the escalation did not say the crew's liveness could not be observed"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "wedge marker not cleared after an unobserved escalation"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY
+  pass "the wedge gate asks the crew's own liveness after a run ends, and keeps all three answers apart"
+}
+
 # Simulate one threshold elapsing WITHOUT re-creating anything: back-date only a
 # marker that is already there. A design that removed the marker instead of
 # refreshing it leaves nothing to age, so the escalation legs below go silent
@@ -2853,6 +2917,7 @@ test_housekeeping_seeds_pause_marker_from_status
 test_housekeeping_persistent_stale_escalates
 test_housekeeping_settled_stale_not_escalated
 test_housekeeping_provably_working_stale_not_escalated
+test_housekeeping_run_ended_gate_reads_crew_liveness
 test_housekeeping_working_stale_escalates_once_refresh_stops
 test_housekeeping_working_gate_read_is_bounded_per_threshold
 test_housekeeping_working_gate_budget_defers_without_suppressing

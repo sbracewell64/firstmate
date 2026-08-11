@@ -682,9 +682,14 @@ test_crew_absorb_class_settled_classifier() {
   [ "$(crew_absorb_class a)" = settled ] || fail "blocked with an open decision not classed settled"
 
   # failed also reconciles a CANCELLED run - the mid-supersession state in which
-  # the crew must recover custody and resume - so it keeps aging.
+  # the crew must recover custody and resume - so it is never settled and keeps
+  # aging. With no crew-level liveness measured for it, the verdict this fleet
+  # reports is `unobserved`: it escalates exactly like `none` and additionally
+  # says the crew itself was never seen, which is the whole distinction.
   FM_FAKE_CREW_STATE='state: failed · source: run-step · run cancelled'
-  [ "$(crew_absorb_class a)" = none ] || fail "a cancelled/failed run classed settled"
+  [ "$(crew_absorb_class a)" != settled ] || fail "a cancelled/failed run classed settled"
+  [ "$(crew_absorb_class a)" = unobserved ] \
+    || fail "an unmeasured crew after a cancelled/failed run was not reported as unobserved"
   FM_FAKE_CREW_STATE='state: unknown · source: none · no current-state source available'
   [ "$(crew_absorb_class a)" = none ] || fail "unknown crew classed settled"
 
@@ -695,6 +700,105 @@ test_crew_absorb_class_settled_classifier() {
   [ "$(crew_absorb_class a)" = paused ] || fail "declared pause no longer classed paused"
   unset FM_FAKE_CREW_STATE FM_CREW_STATE_BIN FM_STATE_OVERRIDE
   pass "crew_absorb_class: reconciled done and decision-open parked/blocked are settled; failed, unknown and gate-owned parked keep aging"
+}
+
+# A RUN-LEVEL terminal verdict answers for a run, not for the crew that owned it.
+# Measured 2026-08-10: three lanes were wedge-escalated while their workers were
+# actively starting replacement runs, because each still held a run left `failed`
+# by an earlier session-limit kill and the guard asked only the run step. The
+# crew's own turn signal is what closes that gap, and it must close it in all
+# three directions - the two the alarm already had, plus the third value, which
+# is the one a fix like this is most likely to quietly turn into silence.
+test_crew_absorb_class_run_ended_consults_crew_liveness() {
+  local dir state fakebin verdict
+  dir=$(make_case absorb-run-ended); state="$dir/state"; fakebin="$dir/fakebin"
+  export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
+  export FM_STATE_OVERRIDE="$state"
+  export FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY
+  printf 'working: driving the gate\n' > "$state/a.status"
+
+  for verdict in failed aborted interrupted; do
+    FM_FAKE_CREW_STATE="state: $verdict · source: run-step · the run ended"
+
+    # 1. Provably working: the crew is mid-turn on its own pane. The run that
+    #    ended says nothing about that, so the wake is absorbed.
+    FM_FAKE_CREW_BUSY='busy claude-hook'
+    [ "$(crew_absorb_class a)" = working ] \
+      || fail "a live turn after a $verdict run was not classed working"
+    crew_is_provably_working a \
+      || fail "a live turn after a $verdict run was not provably working"
+
+    # 2. Provably idle: the crew's own turn signal says the turn ended, so this
+    #    escalates on the unchanged schedule. A gone endpoint is equally an
+    #    observation, not a failure to observe.
+    FM_FAKE_CREW_BUSY='idle claude-hook'
+    [ "$(crew_absorb_class a)" = none ] \
+      || fail "an idle crew after a $verdict run did not keep aging"
+    FM_FAKE_CREW_BUSY='dead endpoint-gone'
+    [ "$(crew_absorb_class a)" = none ] \
+      || fail "a gone endpoint after a $verdict run was not treated as observed"
+
+    # 3. Could not observe: evidence that expired, was never written, or could
+    #    not be read is NOT idle. It still escalates - silence here would be a
+    #    worse defect than the noise this change removes - and says which value
+    #    it was.
+    FM_FAKE_CREW_BUSY='stale record-expired'
+    [ "$(crew_absorb_class a)" = unobserved ] \
+      || fail "expired turn evidence after a $verdict run was narrowed to idle"
+    FM_FAKE_CREW_BUSY='unknown missing'
+    [ "$(crew_absorb_class a)" = unobserved ] \
+      || fail "a missing turn record after a $verdict run was narrowed to idle"
+    FM_FAKE_CREW_BUSY=''
+    [ "$(crew_absorb_class a)" = unobserved ] \
+      || fail "an unmeasured turn signal after a $verdict run was narrowed to idle"
+    ! crew_is_provably_working a \
+      || fail "an unobservable crew after a $verdict run was treated as provably working"
+  done
+
+  # The crew signal answers ONLY for run-level verdicts. A live turn never talks
+  # a gate-parked run, a finished run, or a declared pause out of its own verdict:
+  # those did observe the crew's situation, and this is not a general override.
+  FM_FAKE_CREW_BUSY='busy claude-hook'
+  FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
+  [ "$(crew_absorb_class a)" = none ] \
+    || fail "a live turn overrode a gate-parked run"
+  FM_FAKE_CREW_STATE='state: done · source: run-step · checks green'
+  [ "$(crew_absorb_class a)" = settled ] \
+    || fail "a live turn overrode a finished run"
+  FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting upstream'
+  [ "$(crew_absorb_class a)" = paused ] \
+    || fail "a live turn overrode a declared pause"
+
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY FM_CREW_STATE_BIN FM_STATE_OVERRIDE
+  pass "crew_absorb_class: a run-level terminal verdict defers to the crew's own liveness, in all three values"
+}
+
+# The coverage gate for crew_state_is_run_ended, mirroring the ones
+# crew_state_absorb_class and the blocking_on helpers already carry: exit 3 means
+# this fleet DECLARES a crew verdict this rule was never taught. Whether the next
+# verdict answers for a run or for the crew decides whether an idle-looking pane
+# gets asked a second question at all, which is far too load-bearing to be
+# settled by a default branch nobody chose.
+test_run_ended_covers_every_crew_verdict() {
+  local state_word rc
+  for state_word in $FM_CREW_STATE_VOCABULARY; do
+    rc=0; crew_state_is_run_ended "$state_word" || rc=$?
+    [ "$rc" -ne 3 ] || fail "crew_state_is_run_ended was never taught the declared verdict '$state_word'"
+    [ "$rc" -ne 2 ] || fail "crew_state_is_run_ended reported the declared verdict '$state_word' as outside the vocabulary"
+  done
+  rc=0; crew_state_is_run_ended not-a-verdict || rc=$?
+  [ "$rc" -eq 2 ] || fail "crew_state_is_run_ended did not report an unknown verdict as outside the vocabulary (got $rc)"
+  # And the membership itself, since a rule that is total but wrong is no better:
+  # exactly the three run outcomes that leave the crew free to act next.
+  for state_word in failed aborted interrupted; do
+    crew_state_is_run_ended "$state_word" \
+      || fail "'$state_word' is a run-level terminal verdict and was not classified as one"
+  done
+  for state_word in working parked blocked paused 'done' idle stale unknown; do
+    ! crew_state_is_run_ended "$state_word" \
+      || fail "'$state_word' is not a run-level terminal verdict but was classified as one"
+  done
+  pass "crew_state_is_run_ended is total over the declared crew-verdict vocabulary"
 }
 
 # --- process liveness: descendant CPU advancement ---------------------------
@@ -859,9 +963,14 @@ test_crew_absorb_class_process_liveness() {
   FM_FAKE_CREW_STATE='state: done · source: run-step · checks green'
   [ "$(crew_absorb_class a "$state")" = settled ] \
     || fail "a finished run was overridden by its process tree"
+  # A RUN-LEVEL terminal verdict is the deliberate exception, and it is not an
+  # override: `failed` is what happened to a RUN and never observed the crew, so
+  # there is no crew-level reading for the process tree to contradict. A crew
+  # whose descendants are advancing after its run ended is working - which is
+  # exactly the lane the wedge alarm kept escalating.
   FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
-  [ "$(crew_absorb_class a "$state")" = none ] \
-    || fail "a failed run was overridden by its process tree"
+  [ "$(crew_absorb_class a "$state")" = working ] \
+    || fail "a crew with advancing descendants after its run ended was not classed working"
   FM_FAKE_CREW_STATE='state: paused · source: status-log · awaiting upstream'
   [ "$(crew_absorb_class a "$state")" = paused ] \
     || fail "a declared pause was overridden by its process tree"
@@ -873,8 +982,14 @@ test_crew_absorb_class_process_liveness() {
   crew_absorb_class a "$state" >/dev/null
   [ "$(crew_absorb_class a "$state")" = none ] \
     || fail "an unknown crew with no advancing descendant was absorbed"
+  # A run-ended verdict with no advancing descendant and no measured turn signal
+  # is the third value, not a pass: it surfaces, and reports that it surfaced
+  # without ever observing the crew.
+  FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
+  [ "$(crew_absorb_class a "$state")" = unobserved ] \
+    || fail "an unobservable crew after its run ended was not reported as unobserved"
   unset FM_FAKE_CREW_STATE FM_PROC_ROOT_OVERRIDE FM_CHILD_CPU_SAMPLE_INTERVAL
-  pass "crew_absorb_class: process liveness only breaks an inconclusive tie, never a definite verdict"
+  pass "crew_absorb_class: process liveness breaks an inconclusive or run-ended tie, never a definite verdict"
 }
 
 # The fixtures above drive a synthetic /proc so the four directions are exact
@@ -1499,19 +1614,22 @@ test_default_interval_advancing_child_is_absorbed() {
   pass "the watcher absorbs advancing child work at the default sample interval"
 }
 
-# The verdict here is `failed` rather than `done` on purpose. Both are definite,
-# but a settled-terminal verdict such as done - or parked/blocked with a durable
-# open decision - is absorbed by crew_state_is_settled for its own reason, which
-# would make this fixture pass without proving anything about process liveness.
-# `failed` also reconciles a CANCELLED run, so it is deliberately never settled
-# and isolates exactly the question asked here: does an advancing child talk the
-# watcher out of surfacing a definite semantic verdict?
+# The verdict here is a gate-parked run on purpose. A settled-terminal verdict
+# such as done - or parked/blocked with a durable open decision - is absorbed by
+# crew_state_is_settled for its own reason, which would make this fixture pass
+# without proving anything about process liveness. This fixture's status log
+# opens no decision, so `parked` is definite and never settled, and it isolates
+# exactly the question asked here: does an advancing child talk the watcher out
+# of surfacing a definite semantic verdict? (A run-level terminal verdict such as
+# `failed` is deliberately NOT usable here any more: it answers for a run and
+# never observed the crew, so the crew sources are supposed to answer for it -
+# see the run-ended counterpart below.)
 test_definite_verdict_with_advancing_child_still_surfaces() {
   local dir state proc fakebin capture window pid drain_out
   window="test:fm-childdone"
   read -r dir state proc fakebin capture < <(setup_child_cpu_watch_case child-work-definite "$window" childdone 5000)
   drain_out="$dir/drain.out"
-  export FM_FAKE_CREW_STATE='state: failed · source: run-step · run cancelled'
+  export FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
 
   # Keep the synthetic fixed-tick interval available until stale triage surfaces it.
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \
@@ -1528,6 +1646,67 @@ test_definite_verdict_with_advancing_child_still_surfaces() {
     || fail "the definite-verdict stale wake was not queued"
   unset FM_FAKE_CREW_STATE
   pass "a definite semantic verdict wins over advancing descendant CPU at the watcher gate"
+}
+
+# The counterpart, end to end through the real watcher: the lane the alarm kept
+# firing on. The run record is `failed` - killed mid-step earlier - while the
+# worker is demonstrably working. Nothing about this fixture is idle except the
+# rendered pane, which is what made every earlier reading say wedge.
+test_run_ended_verdict_with_advancing_child_is_absorbed() {
+  local dir state proc fakebin capture window key pid
+  window="test:fm-childrerun"
+  read -r dir state proc fakebin capture < <(setup_child_cpu_watch_case child-work-rerun "$window" childrerun 5000)
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  export FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PROC_ROOT_OVERRIDE="$proc" FM_CHILD_CPU_SAMPLE_INTERVAL=99999 \
+    FM_STALE_ESCALATE_SECS=1 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$dir/watch.out" &
+  pid=$!
+  fm_test_reap "$pid"
+  if ! wait_live "$pid" 45; then
+    reap "$pid"; fail "a lane working past its ended run was escalated: $(cat "$dir/watch.out")"
+  fi
+  [ ! -s "$dir/watch.out" ] || fail "a lane working past its ended run printed a wake reason"
+  [ ! -s "$state/.wake-queue" ] || fail "a lane working past its ended run enqueued a wake"
+  [ ! -e "$state/.stale-since-$key" ] || fail "a lane working past its ended run started a wedge timer"
+  reap "$pid"
+  unset FM_FAKE_CREW_STATE
+  pass "a lane between an ended run and its replacement is absorbed, not wedge-escalated"
+}
+
+# And the direction that must NOT change: the same ended run over a lane with no
+# live evidence at all still surfaces, and names the third value in its reason.
+# Suppressing this case would trade the measured noise for silence on exactly the
+# wedge the alarm exists to catch.
+test_run_ended_verdict_without_liveness_still_surfaces() {
+  local dir state proc fakebin capture window pid drain_out
+  window="test:fm-childdark"
+  read -r dir state proc fakebin capture < <(setup_child_cpu_watch_case child-work-dark "$window" childdark 0)
+  drain_out="$dir/drain.out"
+  # No advancing descendant (the fixture's child burns no ticks), and the canned
+  # reader measured no turn signal at all: could-not-observe, not idle.
+  export FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
+
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PROC_ROOT_OVERRIDE="$proc" FM_CHILD_CPU_SAMPLE_INTERVAL=99999 \
+    FM_STALE_ESCALATE_SECS=999 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$dir/watch.out" &
+  pid=$!
+  fm_test_reap "$pid"
+  wait_for_exit "$pid" 45 || fail "an unobservable lane after an ended run was absorbed"
+  grep -F "stale: $window" "$dir/watch.out" >/dev/null \
+    || fail "an unobservable lane after an ended run did not reach stale triage"
+  grep -F "$FM_CLASSIFY_UNOBSERVED_NOTE" "$dir/watch.out" >/dev/null \
+    || fail "the wake did not say the crew's liveness could not be observed"
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after unobservable stale failed"
+  grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$FM_CLASSIFY_UNOBSERVED_NOTE" >/dev/null \
+    || fail "the queued wake did not carry the could-not-observe reason"
+  unset FM_FAKE_CREW_STATE
+  pass "an unobservable lane after an ended run still escalates, and says it could not be observed"
 }
 
 # The control that separates a fix from a blindfold: same fixture, same idle
@@ -2800,6 +2979,8 @@ test_crew_is_provably_working_classifier
 test_status_is_paused_classifier
 test_crew_absorb_class_classifier
 test_crew_absorb_class_settled_classifier
+test_crew_absorb_class_run_ended_consults_crew_liveness
+test_run_ended_covers_every_crew_verdict
 test_child_cpu_state_four_directions
 test_child_cpu_counts_already_reaped_descendants
 test_child_cpu_sample_is_identity_bound
@@ -2809,6 +2990,8 @@ test_child_cpu_real_process_tree
 test_stale_pane_with_advancing_child_is_absorbed
 test_default_interval_advancing_child_is_absorbed
 test_definite_verdict_with_advancing_child_still_surfaces
+test_run_ended_verdict_with_advancing_child_is_absorbed
+test_run_ended_verdict_without_liveness_still_surfaces
 test_stale_pane_with_hung_child_still_surfaces
 test_advancing_child_still_bounded_by_turn_age
 test_signal_crew_provably_working_classifier

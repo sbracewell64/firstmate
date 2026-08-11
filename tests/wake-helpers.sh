@@ -104,6 +104,13 @@ SH
 # same state and source the prose line carries. Tests keep declaring the canned
 # verdict in the readable prose form; only the fake knows how to render it as
 # fields, so no call site changes and the two modes cannot disagree here either.
+#
+# FM_FAKE_CREW_BUSY (or the per-id FM_FAKE_CREW_BUSY_<sanitized-id>) cans the
+# structured mode's busy_signal - the crew's own turn signal, which the real
+# reader records ALONGSIDE a run-level terminal verdict. Unset means the field
+# stays null, which is exactly what the reader emits when it measured nothing,
+# so the default keeps meaning "unmeasured" rather than quietly meaning idle.
+# The prose mode never carried this field and still does not.
 make_fake_crew_state() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/fm-crew-state.sh" <<'SH'
@@ -136,9 +143,12 @@ case "$val" in
 esac
 detail=${detail//\\/\\\\}
 detail=${detail//\"/\\\"}
+busyvar="FM_FAKE_CREW_BUSY_$key"
+busy=${!busyvar:-${FM_FAKE_CREW_BUSY:-}}
+if [ -n "$busy" ]; then busy_field="\"$busy\""; else busy_field=null; fi
 printf '{"schema":1,"id":"%s","state":"%s","source":"%s","precedence_applied":"fake",' \
   "$id" "$state" "$source"
-printf '"busy_signal":null,"run_step":null,"run_id":null,"terminal_error":null,'
+printf '"busy_signal":%s,"run_step":null,"run_id":null,"terminal_error":null,' "$busy_field"
 printf '"evidence_age_secs":null,"detail":"%s"}\n' "$detail"
 exit 0
 SH
