@@ -73,7 +73,8 @@ Every new head needs its own.
 ## Repairing a missing final-head attestation
 
 A successful pipeline can create review or documentation commits after the contributor's original commit, so the commit that needs evidence is the pipeline's final pushed head rather than the commit that entered the run.
-After the run reaches `checks-passed` or `passed`, run `bin/fm-attest.sh write`, then run `bin/fm-attest.sh verify --head "$(git rev-parse HEAD)"` before asking GitHub to re-evaluate the pull request.
+After the run reaches `checks-passed` or `passed`, run `bin/fm-attest.sh write`, note the exact commit printed in its `recorded` line, then pass that commit to `bin/fm-attest.sh verify --head <commit>` before asking GitHub to re-evaluate the pull request.
+Use the printed commit rather than assuming local `HEAD` is the attested head, because the pipeline may have advanced its run tip with fix commits.
 Do not reuse an earlier note or write a note by hand, because either action bypasses the run-record check that binds the completed gates to the exact final head.
 
 ## What it does not attest
