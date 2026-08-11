@@ -500,6 +500,7 @@ When every floor-meeting candidate in a route's pool is out of capacity, the dis
 `bin/fm-capacity-retry.sh` owns the record and the resume; nothing else writes it.
 
 The record is a private key=value file holding the route, floor, pool, reason, retry condition and the typed dispatch fields of the call that was deferred.
+Every command refuses a record that is not an ordinary regular file with exactly one link, and leaves the suspect path untouched.
 It stores no command line: every field is re-validated against its own closed vocabulary or path-safety rule and passed as a separate argument to `bin/fm-spawn.sh`, so a state file can never name something to run.
 Because it is a file and keys on the task id rather than a pid, a deferral survives firstmate restart, terminal closure, host reboot and session replacement.
 

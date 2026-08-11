@@ -133,6 +133,15 @@ is_count() { case "${1-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
 record_path() { printf '%s/%s.capacity\n' "$STATE" "$1"; }
 
+capacity_record_private() {  # <record-file>
+  [ -f "$1" ] && [ ! -L "$1" ] \
+    && [ "$(fm_pr_file_link_count "$1" 2>/dev/null)" = 1 ]
+}
+
+reject_capacity_record() {  # <record-file>
+  printf 'error: capacity record %s was rejected because it is not an ordinary private single-link record\n' "$1" >&2
+}
+
 # One key's value from a key=value record, last assignment winning. An absent
 # file or key yields the empty string, and every caller decides what absence
 # means rather than being handed a guess.
@@ -585,7 +594,12 @@ cmd_tick() {
   [ "$force" -eq 0 ] || [ -n "$only" ] || die "--force applies to one named --id"
   [ -d "$STATE" ] || return 0
   for rec in "$STATE"/*.capacity; do
-    [ -e "$rec" ] || continue
+    [ -e "$rec" ] || [ -L "$rec" ] || continue
+    if ! capacity_record_private "$rec"; then
+      reject_capacity_record "$rec"
+      status=1
+      continue
+    fi
     if [ -n "$only" ]; then
       [ "$(field "$rec" task)" = "$only" ] || continue
     fi
@@ -599,7 +613,7 @@ cmd_tick() {
 # ---------------------------------------------------------------------------
 
 cmd_list() {
-  local json=0 rec id now due state
+  local json=0 rec id now due state status=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --json) json=1; shift ;;
@@ -610,7 +624,12 @@ cmd_list() {
   [ -d "$STATE" ] || return 0
   now=$(date -u +%s)
   for rec in "$STATE"/*.capacity; do
-    [ -e "$rec" ] || continue
+    [ -e "$rec" ] || [ -L "$rec" ] || continue
+    if ! capacity_record_private "$rec"; then
+      reject_capacity_record "$rec"
+      status=1
+      continue
+    fi
     id=$(field "$rec" task)
     due=$(next_check_epoch "$rec")
     if [ "$json" -eq 1 ]; then
@@ -636,13 +655,17 @@ cmd_list() {
         "$state" "$due" "$(field "$rec" reason)"
     fi
   done
+  return "$status"
 }
 
 cmd_release() {
-  local id=${1-}
+  local id=${1-} rec
   [ -n "$id" ] || die "release needs a task id"
   fm_task_id_path_safe "$id" || die "invalid task id: $id"
-  rm -f -- "$(record_path "$id")"
+  rec=$(record_path "$id")
+  [ -e "$rec" ] || [ -L "$rec" ] || return 0
+  capacity_record_private "$rec" || { reject_capacity_record "$rec"; return 1; }
+  rm -f -- "$rec"
 }
 
 [ "$#" -ge 1 ] || { usage; exit 2; }

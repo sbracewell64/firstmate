@@ -156,6 +156,31 @@ test_unsafe_recorded_id_stops_without_escaping_state() {
   pass "an unsafe recorded task id stops without writing outside the state directory"
 }
 
+test_linked_capacity_record_is_refused_untouched() {
+  local rec target out rc
+  rec=$(make_refusal_home linked-record); read_home_record "$rec"
+  target="$HOME_DIR/outside-record"
+  printf 'task=linkedtask\nsentinel=unchanged\n' > "$target"
+  ln -s "$target" "$HOME_DIR/state/linkedtask.capacity"
+  rc=0
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0)" tick 2>&1) || rc=$?
+  expect_code 1 "$rc" "tick must refuse a symlinked capacity record"
+  assert_contains "$out" "$HOME_DIR/state/linkedtask.capacity" "tick did not name the rejected capacity path"
+  assert_contains "$out" "not an ordinary private single-link record" "tick did not name the record trust failure"
+  [ "$(cat "$target")" = $'task=linkedtask\nsentinel=unchanged' ] || fail "tick wrote through the capacity symlink"
+  rc=0
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0)" list 2>&1) || rc=$?
+  expect_code 1 "$rc" "list must refuse a symlinked capacity record"
+  assert_contains "$out" "not an ordinary private single-link record" "list bypassed the record trust guard"
+  rc=0
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0)" release linkedtask 2>&1) || rc=$?
+  expect_code 1 "$rc" "release must refuse a symlinked capacity record"
+  assert_contains "$out" "not an ordinary private single-link record" "release bypassed the record trust guard"
+  assert_present "$HOME_DIR/state/linkedtask.capacity" "release removed the suspect capacity link"
+  [ "$(cat "$target")" = $'task=linkedtask\nsentinel=unchanged' ] || fail "a capacity command changed the symlink target"
+  pass "a symlinked capacity record is refused without touching its target"
+}
+
 test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
 test_inexpressive_and_unverified_substitutes_keep_waiting
@@ -163,3 +188,4 @@ test_non_capacity_refusal_keeps_a_counted_wait
 test_moved_capacity_picture_resets_stagnation
 test_record_refresh_failure_stops_durably
 test_unsafe_recorded_id_stops_without_escaping_state
+test_linked_capacity_record_is_refused_untouched
