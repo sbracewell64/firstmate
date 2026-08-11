@@ -591,7 +591,8 @@ test_housekeeping_run_ended_gate_reads_crew_liveness() {
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "rerun-w1" | tr ':/.' '___')
   export FM_FAKE_CREW_STATE='state: failed · source: run-step · run failed'
-  export FM_FAKE_CREW_BUSY
+  export FM_FAKE_CREW_BUSY FM_FAKE_CREW_AGENT
+  FM_FAKE_CREW_AGENT=alive
 
   # Negative control, and the bug itself: with the crew observed idle, the ended
   # run still escalates on the unchanged schedule. Watch the alarm fire before
@@ -636,7 +637,22 @@ test_housekeeping_run_ended_gate_reads_crew_liveness() {
   grep -F "$FM_CLASSIFY_UNOBSERVED_NOTE" "$state/.subsuper-escalations" >/dev/null 2>&1 \
     || fail "the escalation did not say the crew's liveness could not be observed"
   [ ! -e "$state/.subsuper-stale-$key" ] || fail "wedge marker not cleared after an unobserved escalation"
-  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY
+  : > "$state/.subsuper-escalations"
+
+  # And the lane that made the first fix dangerous: a busy turn record whose
+  # agent the backend probe reports dead. The record stays trusted for up to an
+  # hour past the kill, so absorbing on it would answer could-not-observe with
+  # silence for an hour on the exact lane the alarm is for.
+  FM_FAKE_CREW_BUSY='busy claude-hook'
+  FM_FAKE_CREW_AGENT=dead
+  echo $(( $(date +%s) - 500 )) > "$state/.subsuper-stale-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_STALE_ESCALATE_SECS=240 \
+    FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" housekeeping "$state"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a dead agent behind a still-busy turn record was absorbed instead of escalated"
+  [ ! -e "$state/.subsuper-stale-$key" ] || fail "wedge marker not cleared after a dead-agent escalation"
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY FM_FAKE_CREW_AGENT
   pass "the wedge gate asks the crew's own liveness after a run ends, and keeps all three answers apart"
 }
 

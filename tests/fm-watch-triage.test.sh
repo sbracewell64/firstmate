@@ -714,15 +714,17 @@ test_crew_absorb_class_run_ended_consults_crew_liveness() {
   dir=$(make_case absorb-run-ended); state="$dir/state"; fakebin="$dir/fakebin"
   export FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh"
   export FM_STATE_OVERRIDE="$state"
-  export FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY
+  export FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY FM_FAKE_CREW_AGENT
   printf 'working: driving the gate\n' > "$state/a.status"
 
   for verdict in failed aborted interrupted; do
     FM_FAKE_CREW_STATE="state: $verdict · source: run-step · the run ended"
 
-    # 1. Provably working: the crew is mid-turn on its own pane. The run that
-    #    ended says nothing about that, so the wake is absorbed.
+    # 1. Provably working: the crew is mid-turn on its own pane AND the agent
+    #    that would be taking that turn is established alive. The run that ended
+    #    says nothing about either, so the wake is absorbed.
     FM_FAKE_CREW_BUSY='busy claude-hook'
+    FM_FAKE_CREW_AGENT=alive
     [ "$(crew_absorb_class a)" = working ] \
       || fail "a live turn after a $verdict run was not classed working"
     crew_is_provably_working a \
@@ -730,18 +732,26 @@ test_crew_absorb_class_run_ended_consults_crew_liveness() {
 
     # 2. Provably idle: the crew's own turn signal says the turn ended, so this
     #    escalates on the unchanged schedule. A gone endpoint is equally an
-    #    observation, not a failure to observe.
+    #    observation, not a failure to observe, and so is an agent the backend
+    #    probe confidently reports absent.
     FM_FAKE_CREW_BUSY='idle claude-hook'
     [ "$(crew_absorb_class a)" = none ] \
       || fail "an idle crew after a $verdict run did not keep aging"
     FM_FAKE_CREW_BUSY='dead endpoint-gone'
+    FM_FAKE_CREW_AGENT=missing
     [ "$(crew_absorb_class a)" = none ] \
       || fail "a gone endpoint after a $verdict run was not treated as observed"
+    FM_FAKE_CREW_BUSY='busy claude-hook'
+    FM_FAKE_CREW_AGENT=dead
+    [ "$(crew_absorb_class a)" = none ] \
+      || fail "a busy record behind a dead agent after a $verdict run did not keep aging"
 
     # 3. Could not observe: evidence that expired, was never written, or could
     #    not be read is NOT idle. It still escalates - silence here would be a
     #    worse defect than the noise this change removes - and says which value
-    #    it was.
+    #    it was. An uncorroborated busy record belongs to this value too: an
+    #    hour-long trust window is cannot-tell wearing the word "working".
+    FM_FAKE_CREW_AGENT=alive
     FM_FAKE_CREW_BUSY='stale record-expired'
     [ "$(crew_absorb_class a)" = unobserved ] \
       || fail "expired turn evidence after a $verdict run was narrowed to idle"
@@ -751,6 +761,11 @@ test_crew_absorb_class_run_ended_consults_crew_liveness() {
     FM_FAKE_CREW_BUSY=''
     [ "$(crew_absorb_class a)" = unobserved ] \
       || fail "an unmeasured turn signal after a $verdict run was narrowed to idle"
+    FM_FAKE_CREW_BUSY='busy claude-hook'
+    for FM_FAKE_CREW_AGENT in ambiguous unreadable unverified ''; do
+      [ "$(crew_absorb_class a)" = unobserved ] \
+        || fail "a busy record with agent liveness '${FM_FAKE_CREW_AGENT:-unmeasured}' after a $verdict run was absorbed"
+    done
     ! crew_is_provably_working a \
       || fail "an unobservable crew after a $verdict run was treated as provably working"
   done
@@ -759,6 +774,7 @@ test_crew_absorb_class_run_ended_consults_crew_liveness() {
   # a gate-parked run, a finished run, or a declared pause out of its own verdict:
   # those did observe the crew's situation, and this is not a general override.
   FM_FAKE_CREW_BUSY='busy claude-hook'
+  FM_FAKE_CREW_AGENT=alive
   FM_FAKE_CREW_STATE='state: parked · source: run-step · parked at review'
   [ "$(crew_absorb_class a)" = none ] \
     || fail "a live turn overrode a gate-parked run"
@@ -769,7 +785,7 @@ test_crew_absorb_class_run_ended_consults_crew_liveness() {
   [ "$(crew_absorb_class a)" = paused ] \
     || fail "a live turn overrode a declared pause"
 
-  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY FM_CREW_STATE_BIN FM_STATE_OVERRIDE
+  unset FM_FAKE_CREW_STATE FM_FAKE_CREW_BUSY FM_FAKE_CREW_AGENT FM_CREW_STATE_BIN FM_STATE_OVERRIDE
   pass "crew_absorb_class: a run-level terminal verdict defers to the crew's own liveness, in all three values"
 }
 

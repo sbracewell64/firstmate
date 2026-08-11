@@ -77,10 +77,12 @@
 #      record reports blocked, because a head no check run examined is not work
 #      ready for review. See nm_ci_checks_state for the measured defect.
 #      A RUN-LEVEL terminal verdict (failed, aborted, interrupted) additionally
-#      records the crew's own turn signal in busy_signal. That verdict answers
-#      for the run and never observed the crew, so without the extra reading a
-#      crew starting its replacement run has no liveness evidence anywhere; the
-#      verdict, its source and its precedence are unchanged by it.
+#      records the crew's own turn signal in busy_signal and the crew's agent
+#      liveness in agent_liveness. That verdict answers for the run and never
+#      observed the crew, so without the extra readings a crew starting its
+#      replacement run has no liveness evidence anywhere; the verdict, its source
+#      and its precedence are unchanged by them. Both are recorded because a busy
+#      turn record alone cannot tell a live agent from a shell that outlived one.
 #   3. Reconcile the status log: if its last line says needs-decision/blocked but
 #      the run-step shows the run moved on, the log is deterministically stale and
 #      is flagged superseded. A genuinely parked run plus a needs-decision log
@@ -161,6 +163,15 @@ PRECEDENCE=""
 # outright. Consumers that must know whether the CREW is live after its run
 # ended read it there (fm-classify-lib.sh's crew_absorb_class).
 BUSY_SIGNAL=""
+# The crew's AGENT liveness (fm_backend_agent_state's vocabulary: alive, dead,
+# missing, ambiguous, unreadable, unverified), measured beside BUSY_SIGNAL and
+# for the same reason. It is the second half of that evidence, never a verdict
+# here either. A busy turn record is trusted for up to FM_BUSY_MAX_BUSY_AGE_SECS
+# and its ts= is stamped when the turn OPENS, so a shell that outlives its agent
+# keeps reading busy for up to an hour; the backend probe is backend-native and
+# re-derived on every read, so the pair distinguishes a live worker from a live
+# shell. Empty means this reader did not measure it, exactly as elsewhere.
+AGENT_LIVENESS=""
 RUN_STEP=""
 EVIDENCE_AGE=""
 TERMINAL_ERROR=""
@@ -219,6 +230,7 @@ emit() {  # <state> <source> [detail]
       "$FM_CREW_STATE_SCHEMA" "$(json_escape "$ID")" "$(json_escape "$1")" \
       "$(json_escape "$2")" "$(json_escape "$PRECEDENCE")"
     printf ',"busy_signal":%s' "$(json_field_or_null "$BUSY_SIGNAL")"
+    printf ',"agent_liveness":%s' "$(json_field_or_null "$AGENT_LIVENESS")"
     printf ',"busy_seq":%s' "${BUSY_SEQ:-null}"
     printf ',"run_step":%s' "$(json_field_or_null "$RUN_STEP")"
     printf ',"run_id":%s' "$(json_field_or_null "$RUN_ID")"
@@ -857,18 +869,35 @@ if [ "$HAVE_RUN" = 1 ]; then
   # unset for the same reason: it reports the age of the WINNING evidence, and the
   # winner here is still the run step.
   #
-  # The cost is one endpoint probe plus one busy-record read, paid only by a read
-  # whose verdict actually leaves that question open - never by a working, parked,
-  # blocked or finished run, whose verdict already accounts for the crew.
+  # TWO readings, because one of them cannot answer alone. The turn signal says a
+  # turn opened; it does not say the agent is still there to be taking it, and its
+  # busy record stays trusted for up to FM_BUSY_MAX_BUSY_AGE_SECS from a timestamp
+  # stamped when the turn OPENED (bin/fm-busy-lib.sh records that bound). So a
+  # worker killed behind a shell that outlives it reads `busy` for up to an hour,
+  # which is precisely the dead-agent case a wedge alarm exists to catch. The
+  # backend agent probe is the corroborating reading: backend-native, bound to this
+  # crew's recorded endpoint, and re-derived on every call rather than cached.
+  # Neither reading is a verdict here; fm-classify-lib.sh owns what the pair means.
+  #
+  # The cost is one endpoint probe, one busy-record read and one agent-state read,
+  # paid only by a read whose verdict actually leaves that question open - never by
+  # a working, parked, blocked or finished run, whose verdict already accounts for
+  # the crew.
   if crew_state_is_run_ended "$RUN_STATE" \
     && [ "$(fm_task_role "$META")" != secondmate ] && [ -n "$BACKEND_TARGET" ]; then
     if pane_readable "$BACKEND_TARGET"; then
       BUSY_SIGNAL=$(crew_busy_verdict "$BACKEND_TARGET")
+      AGENT_LIVENESS=$(fm_backend_agent_state "$TASK_BACKEND" "$BACKEND_TARGET" 2>/dev/null) || AGENT_LIVENESS=''
+      # A probe that printed nothing measured nothing, and must not be reported as
+      # a reading that was taken.
+      [ -n "$AGENT_LIVENESS" ] || AGENT_LIVENESS=unreadable
     else
       # A gone endpoint is an OBSERVATION that the crew is not working, not a
       # failure to observe, and fm_busy_classify_live names it with this exact
       # pair; a consumer must be able to tell it from evidence it could not read.
+      # The agent is authoritatively absent along with the endpoint that held it.
       BUSY_SIGNAL='dead endpoint-gone'
+      AGENT_LIVENESS=missing
     fi
   fi
 

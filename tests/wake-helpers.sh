@@ -107,10 +107,15 @@ SH
 #
 # FM_FAKE_CREW_BUSY (or the per-id FM_FAKE_CREW_BUSY_<sanitized-id>) cans the
 # structured mode's busy_signal - the crew's own turn signal, which the real
-# reader records ALONGSIDE a run-level terminal verdict. Unset means the field
-# stays null, which is exactly what the reader emits when it measured nothing,
-# so the default keeps meaning "unmeasured" rather than quietly meaning idle.
-# The prose mode never carried this field and still does not.
+# reader records ALONGSIDE a run-level terminal verdict. FM_FAKE_CREW_AGENT (or
+# the per-id FM_FAKE_CREW_AGENT_<sanitized-id>) cans agent_liveness, the second
+# half of that same evidence: a busy turn record is trusted for up to an hour
+# from when its turn OPENED, so a shell that outlived its agent still reads busy
+# and only the agent probe separates the two.
+# Unset means either field stays null, which is exactly what the reader emits
+# when it measured nothing, so the default keeps meaning "unmeasured" rather than
+# quietly meaning idle or alive.
+# The prose mode never carried these fields and still does not.
 make_fake_crew_state() {  # <fakebin>
   local fakebin=$1
   cat > "$fakebin/fm-crew-state.sh" <<'SH'
@@ -146,9 +151,13 @@ detail=${detail//\"/\\\"}
 busyvar="FM_FAKE_CREW_BUSY_$key"
 busy=${!busyvar:-${FM_FAKE_CREW_BUSY:-}}
 if [ -n "$busy" ]; then busy_field="\"$busy\""; else busy_field=null; fi
+agentvar="FM_FAKE_CREW_AGENT_$key"
+agent=${!agentvar:-${FM_FAKE_CREW_AGENT:-}}
+if [ -n "$agent" ]; then agent_field="\"$agent\""; else agent_field=null; fi
 printf '{"schema":1,"id":"%s","state":"%s","source":"%s","precedence_applied":"fake",' \
   "$id" "$state" "$source"
-printf '"busy_signal":%s,"run_step":null,"run_id":null,"terminal_error":null,' "$busy_field"
+printf '"busy_signal":%s,"agent_liveness":%s,"run_step":null,"run_id":null,"terminal_error":null,' \
+  "$busy_field" "$agent_field"
 printf '"evidence_age_secs":null,"detail":"%s"}\n' "$detail"
 exit 0
 SH
