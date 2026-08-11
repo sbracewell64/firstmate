@@ -144,6 +144,7 @@ fi
 NOW_EPOCH=$(date -u +%s)
 NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 declare -A HARNESS_OF=()
+declare -a PROBE_PIDS=() PROBE_KEYS=()
 
 # ---------------------------------------------------------------------------
 # Select the models to probe
@@ -325,20 +326,33 @@ EOF
     # here rather than widened into the wire format.
     HARNESS_OF[$key]=$harness
     n=$((n + 1))
+    PROBE_KEYS[$n]=$key
     probe_one "$key" "$harness" "$provider" "$model_id" > "$TMPD/$n.out" 2>/dev/null &
+    PROBE_PIDS[$n]=$!
   done <<EOF
 $DUE
 EOF
   # Hard total ceiling for the whole sweep: reap whatever finished by the
-  # deadline rather than waiting on a straggler. An unfinished probe simply
-  # leaves that model's prior health record untouched.
+  # deadline and turn every straggler into an observation of the failed reader.
   deadline=$((NOW_EPOCH + TOTAL_TIMEOUT))
   while [ -n "$(jobs -pr)" ]; do
     [ "$(date +%s)" -lt "$deadline" ] || break
     sleep 1
   done
-  for pid in $(jobs -pr); do kill "$pid" 2>/dev/null || true; done
+  running="$(jobs -pr)"
+  timed_out=()
+  for i in "${!PROBE_PIDS[@]}"; do
+    pid=${PROBE_PIDS[$i]}
+    if printf '%s\n' "$running" | grep -qx "$pid"; then
+      timed_out+=("$i")
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
   wait 2>/dev/null || true
+  for i in "${timed_out[@]}"; do
+    probe_record "${PROBE_KEYS[$i]}" 'timeout' 124 "$TOTAL_TIMEOUT" \
+      "sweep exceeded its ${TOTAL_TIMEOUT}s total ceiling before this probe returned" > "$TMPD/$i.out"
+  done
   RESULTS=$(cat "$TMPD"/*.out 2>/dev/null || true)
 fi
 

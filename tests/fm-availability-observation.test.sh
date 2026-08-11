@@ -56,6 +56,7 @@ case "${FAKE_PI_MODE:-ok}" in
   client)   echo "Unknown provider vendr"; exit 1 ;;
   weird)    echo "the reader died in a way nobody classified"; exit 1 ;;
   silent)   exit 1 ;;
+  hang)     sleep 10; echo ok; exit 0 ;;
 esac
 SH
   chmod +x "$1/pi"
@@ -285,6 +286,21 @@ test_a_structurally_failed_reader_is_not_narrowed_into_unavailable() {
     || fail "a local configuration error must never be recorded as a provider outage"
   assert_absent "$HOME_DIR/state/model-health.json" "a local configuration error must record no hold"
   pass "a structurally failed or client-side reader failure is could-not-observe, never a fabricated provider fact"
+}
+
+test_a_sweep_timeout_records_every_unfinished_probe() {
+  local rec out gap
+  rec=$(make_home sweep-timeout); read_home "$rec"
+  out=$(run_sweep "$HOME_DIR" "$BIN_DIR" hang --timeout 1)
+  [ "$(observation_of "$HOME_DIR" vendor/only)" = UNOBSERVABLE ] \
+    || fail "a probe killed by the sweep ceiling disappeared instead of recording UNOBSERVABLE"
+  assert_contains "$out" "TOOLING_GAP" "a sweep timeout must report the broken observation path"
+  assert_contains "$out" "sweep exceeded its 1s total ceiling" \
+    "a sweep timeout must identify the ceiling that stopped the probe"
+  gap=$(jq -c '.models["vendor/only"].tooling_gap' "$HOME_DIR/state/model-observation.json")
+  assert_contains "$gap" '"failure_class":"timeout"' "the tooling gap must classify the sweep timeout"
+  assert_contains "$gap" '"candidate":"vendor/only"' "the tooling gap must retain the unfinished candidate"
+  pass "a sweep timeout records every unfinished probe as an UNOBSERVABLE tooling gap"
 }
 
 # ---------------------------------------------------------------------------
@@ -518,6 +534,7 @@ test_a_positive_probe_records_available_and_holds_nothing
 test_a_server_refusal_records_unavailable_through_the_supported_writer
 test_a_broken_reader_records_a_tooling_gap_and_never_a_hold
 test_a_structurally_failed_reader_is_not_narrowed_into_unavailable
+test_a_sweep_timeout_records_every_unfinished_probe
 test_unobservable_is_never_eligible_and_the_refusal_names_the_reader
 test_a_single_candidate_pool_fails_closed_with_an_explicit_reason
 test_an_unreadable_observation_record_refuses_and_names_the_right_file
