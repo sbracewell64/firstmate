@@ -285,6 +285,11 @@ cmd_defer() {
 mark_terminal() {  # <id> <why>
   local id=$1 why=$2 rec
   rec=$(record_path "$id")
+  mark_record_terminal "$rec" "$why"
+}
+
+mark_record_terminal() {  # <record-file> <why>
+  local rec=$1 why=$2
   [ -f "$rec" ] || return 0
   printf 'terminal=%s\n' "$(clean "$why")" >> "$rec" 2>/dev/null || true
 }
@@ -469,8 +474,13 @@ tick_one() {  # <record-file> <force>
   local rec=$1 force=$2 id now due out rc route effort candidate eligible
   id=$(field "$rec" task)
   if [ -z "$id" ]; then
-    printf 'terminal=the deferral record has no task id\n' >> "$rec" 2>/dev/null || true
+    mark_record_terminal "$rec" "the deferral record has no task id"
     printf 'capacity deferral stopped: %s has no task id and cannot be resumed\n' "$rec" >&2
+    return 1
+  fi
+  if ! fm_task_id_path_safe "$id"; then
+    mark_record_terminal "$rec" "unsafe recorded task id rejected: $id"
+    printf 'capacity deferral stopped: %s records rejected unsafe task id %s and cannot be resumed\n' "$rec" "$id" >&2
     return 1
   fi
   if [ -n "$(field "$rec" terminal)" ]; then

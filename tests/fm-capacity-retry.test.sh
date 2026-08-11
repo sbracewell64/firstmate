@@ -132,9 +132,34 @@ test_record_refresh_failure_stops_durably() {
   pass "a retry that cannot refresh its deferral record stops and names the failed record"
 }
 
+test_unsafe_recorded_id_stops_without_escaping_state() {
+  local rec outside out rc
+  rec=$(make_refusal_home unsafe-record); read_home_record "$rec"
+  rec="$HOME_DIR/state/unsafe.capacity"
+  outside="$HOME_DIR/outside.capacity"
+  printf 'sentinel\n' > "$outside"
+  {
+    printf 'schema=fm-capacity-deferral.v1\n'
+    printf 'task=../outside\n'
+    printf 'last_checked=0\n'
+    printf 'retry_after=0\n'
+  } > "$rec"
+  rc=0
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0)" tick 2>&1) || rc=$?
+  expect_code 1 "$rc" "an unsafe recorded task id must stop the wait"
+  assert_grep "terminal=unsafe recorded task id rejected: ../outside" "$rec" "the trusted record was not marked terminal"
+  assert_contains "$out" "rejected unsafe task id ../outside" "the stop did not name the rejected id"
+  [ "$(cat "$outside")" = sentinel ] || fail "the unsafe recorded id modified a file outside state"
+  assert_absent "$HOME_DIR/outside.status" "the unsafe recorded id created a status path outside state"
+  assert_absent "$HOME_DIR/outside.attempt" "the unsafe recorded id reached the attempt owner outside state"
+  assert_absent "$HOME_DIR/outside.meta" "the unsafe recorded id reached a metadata path outside state"
+  pass "an unsafe recorded task id stops without writing outside the state directory"
+}
+
 test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
 test_inexpressive_and_unverified_substitutes_keep_waiting
 test_non_capacity_refusal_keeps_a_counted_wait
 test_moved_capacity_picture_resets_stagnation
 test_record_refresh_failure_stops_durably
+test_unsafe_recorded_id_stops_without_escaping_state
