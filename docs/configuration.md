@@ -443,7 +443,8 @@ That catches a bad model at config-edit time, before any worker is launched agai
       "credential_env": "<ENV VAR NAME ONLY, never a value>",
       "catalogue_sources": ["<path to a harness price catalogue>"],
       "status": "<active|blocked|dropped>",
-      "status_reason": "<required when status is not active>"
+      "status_reason": "<required when status is not active>",
+      "pipeline_providers": ["<vendor name another system records for this pool>"]
     }
   },
   "models": {
@@ -459,6 +460,7 @@ That catches a bad model at config-edit time, before any worker is launched agai
       "context": { "advertised": 0, "operational_ceiling": 0, "max_output": 0 },
       "controls": { "effort_bands": [], "tool_calling": true, "structured_output": true },
       "limits": { "concurrency": null, "shared_quota_pool": "<pool id>" },
+      "pipeline_model_ids": ["<model id another system records for this model>"],
       "observation_level": "<O1|O2|O3|O4>",
       "evidence": {
         "probe": { "result": "ok", "rc": 0, "latency_s": 0, "at": "<ISO8601>" },
@@ -512,6 +514,13 @@ A `harness-fetched-cache` price is refreshed by the provider underneath you and 
 An allowlist entry must also record `verified_at` and a `price_at_verification` that is zero in every field.
 
 `limits.concurrency` caps how many workers may run on a model at once, and `limits.shared_quota_pool` makes siblings that draw on one free-tier pool count against the same cap, so several workers cannot collectively breach one quota.
+`shared_quota_pool` is also the credential pool `bin/fm-independence-lib.sh` compares when deriving whether a checker was billed to the maker's own account, which is the fact a harness name cannot answer.
+
+`pipeline_providers` and `pipeline_model_ids` are the optional declared mapping from another system's model vocabulary onto this registry's.
+The validation pipeline records the vendor and model that actually ran in its own names (`anthropic`, `claude-opus-5`) while this registry names the same things in the fleet's routing vocabulary (`claude`, `opus`).
+Two names that differ are not evidence of two vendors, and two names that match are not evidence of one, so only this declaration may relate them.
+Where it is absent the independence dimensions that depend on it read could-not-observe rather than independent, which keeps an undeclared mapping honest instead of turning it into a false independence claim.
+Both fields are validated as arrays of strings, because a broken safety declaration must never read as an absent one.
 `observation.levels[<level>].probe_max_age_days` sets how stale a model's probe evidence may become before it is reported, which is what keeps the session-start probe sweep interval-gated rather than probing every routed model every time.
 
 `promotion.authority` is validated as a ceiling in each direction: a home may be equally or more conservative than the values above, never more permissive.
@@ -946,6 +955,10 @@ FMX_FOLLOWUP_MAX_AGE_SECS=604800   # local window for posting X-mode completion 
 FMX_FOLLOWUP_MAX_COUNT=3   # local cap on X-mode completion follow-ups per linked mention
 FM_PF_RETRY_BACKOFF_SECS=900   # seconds before the next attempt after a retryable promised-public-reply delivery error
 FM_WAKE_LEDGER=         # alternate wake-outcome ledger path, default data/wake-ledger.tsv (bin/fm-wake-ledger.sh)
+FM_PIPELINE_STATE_DB=   # alternate validation-pipeline state database, default ~/.no-mistakes/state.sqlite; read-only, for the invocation-time evidence of which vendor and model reviewed a task, and could-not-observe when it cannot be read (bin/fm-independence-lib.sh)
+FM_CERTIFY_ATTEST=      # alternate head-bound attestation verifier, default bin/fm-attest.sh (bin/fm-certify.sh)
+FM_CERTIFY_PR_VERIFIER= # alternate pull-request check verifier, default bin/fm-verify.sh (bin/fm-certify.sh)
+FM_CERTIFY_LEDGER=      # alternate terminal-record reader, default bin/fm-wake-ledger.sh; read for a task whose task-local state teardown already removed (bin/fm-certify.sh)
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
 FM_SPAWN_POOL_LOCK_POLLS=1200   # 0.1s attempts fm-spawn.sh waits for the cross-home worktree pool slot-selection lock before refusing the spawn
 FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale

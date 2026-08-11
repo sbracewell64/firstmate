@@ -2,7 +2,7 @@
 name: decision-surface
 description: >-
   Agent-only procedure for consuming the resolved operational decision surface instead of reconstructing operational truth.
-  Use before asserting any capacity, dependency, decision-status, in-flight, verifier, or landing fact, before dispatching work that may already exist, and whenever a decision-surface check returns contradicted or unevaluable.
+  Use before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact, before dispatching work that may already exist, and whenever a decision-surface check returns contradicted or unevaluable.
 user-invocable: false
 metadata:
   internal: true
@@ -23,12 +23,12 @@ Every fact needed to refute that sentence was already recorded; nothing made it 
 
 Consume the surface before reasoning about work.
 Interpret it, explain it, and reason about what it means, but never re-derive what it already states.
-No firstmate prose may contradict its capacity, dependency, decision-status, in-flight, verifier, or landing fields.
+No firstmate prose may contradict its capacity, dependency, decision-status, in-flight, verifier, certification, or landing fields.
 
 Run `bin/fm-decision-surface.sh` for the fleet, or with a task id for one task.
 It is read-only: no lock, no wake drain, no mutation.
 
-## The three checks
+## The four checks
 
 Each answers one question - does structured state contradict the claim - and nothing else.
 
@@ -37,6 +37,7 @@ Each answers one question - does structured state contradict the claim - and not
 | `check capacity-blocked` | "this is waiting on capacity" / "it will dispatch as capacity frees" |
 | `check decision-pending <decision-id>` | "that decision is still with the captain" |
 | `check duplicate-dispatch <task-id>` | "dispatch this work" when the identity may already be live |
+| `check certified <task-id>` | "this work is certified" / "it passed review" / "it is verified" |
 
 Build the decision id with `bin/fm-decision-hold.sh id <origin-id> <decision-key>`.
 
@@ -52,6 +53,28 @@ Read the verdict, not the exit status alone:
 - **unevaluable** - no landed owner could answer.
   The fact may not be asserted at all.
   Unevaluable is never a quiet pass: an unreadable census, an invalid admission policy, or an absent decision record each mean firstmate does not know, and saying so plainly is the correct captain-facing outcome.
+
+### Certification, and the two ways it is not certified
+
+`bin/fm-certify.sh` owns the predicate; the check composes it.
+Certification is computed over the predicates that APPLY to the route the work actually took, and neither the result nor a predicate's applicability can be stated by any argument.
+
+Read which of two different things the gap is, because they need different repairs:
+
+- **A predicate was observed unmet** - the checker really was not independent of the maker, or a check really failed.
+  The gap names the dimension, so relay that dimension rather than "review failed".
+- **A predicate could not be observed** - the checker's identity was never captured for those bytes, or this fleet declares no mapping that would let the vendor and pool be compared.
+  This is not a weaker pass; the work is landed with a named verification gap, and saying it is certified is forbidden.
+
+A predicate marked **not-applicable** is a third, structural thing and is neither of the above.
+A fork-landing branch is deliberately unsigned because signing it would duplicate a live contribution, and a local-only route opens no pull request at all, so those routes cannot produce that evidence by design.
+Never report a not-applicable predicate as a gap, and never let it vanish: it rides on the state line with the route that caused it, and a captain-facing summary that drops it overstates what was certified.
+
+Independence is reported on four dimensions - process, model, vendor, and credential pool - because the pipeline's checkers draw on shared subscription windows, so a different runtime does not by itself mean an independent checker.
+"Independent model, same billing account" is a real and different answer from "independent vendor entirely"; relay which one the evidence gives.
+
+A finished task has no task-local state left, because teardown removes it immediately after the terminal ledger record is written, so the check reads that durable record instead.
+That record carries the maker's identity, the delivery mode, the pull request and the derived independence for exactly those bytes, but no landed head, so the attestation predicate on a finished task reads could-not-observe until a caller names the bytes with `bin/fm-certify.sh --repo` and `--head`.
 
 ## What is still firstmate's
 

@@ -1,8 +1,20 @@
 #!/usr/bin/env bash
 # tests/fm-wake-ledger.test.sh - the wake-outcome ledger's contract:
 # record format, the closed outcome vocabulary, sanitization, task attribution,
-# drain integration, the never-block guarantee, concurrent-append safety, and
-# the report's counts and coverage.
+# drain integration, the never-block guarantee, concurrent-append safety, the
+# report's counts and coverage, and the terminal record's critic fields.
+#
+# The critic cases cover resolvable, partially resolvable, and none resolvable,
+# because a reviewing configuration recorded only when it resolves would make
+# the verifier's independence look answerable while under-reporting it. The
+# unresolvable case is proved positively: the fields are present, say unknown,
+# and never inherit the previous task's values.
+#
+# One case covers the recurrence path rather than the feature. An earlier build
+# let a caller STATE the reviewing identity, and a stated value won over what
+# the pipeline recorded; that is a writable independence claim, and a claim
+# anyone can write is one that will eventually be written wrongly. Every such
+# argument must now be refused outright, writing nothing.
 #
 # The never-block guarantee is the safety-critical half. Two cases prove it:
 # an unwritable ledger leaves the drain's raw rows and exit status untouched,
@@ -412,6 +424,402 @@ test_seq_reuse_across_a_state_reset_never_collapses_records() {
   pass "a reused wake-queue sequence never collapses distinct wakes or outcomes"
 }
 
+# --- critic independence ----------------------------------------------------
+#
+# The terminal record must carry which vendor and model reviewed the task and
+# the DERIVED per-dimension independence verdict, all read from the pipeline's
+# own invocation records. The cases below cover resolvable, partially
+# resolvable, and none resolvable, because a field populated only on the happy
+# path would make the independence question look answerable while
+# under-reporting it. One case proves there is no writable path at all.
+
+test_task_record_holds_an_absent_record_apart_from_an_unreadable_ledger() {
+  local home file rc out
+  home=$(make_home task-record-reader)
+  file=$(ledger_file "$home")
+
+  # No ledger file at all. This host cannot see, which is no evidence about the
+  # task whatsoever - so it must NOT answer in the words of a task that was
+  # never recorded, and the two statuses are what keep them apart.
+  ledger "$home" task-record alpha >/dev/null 2>&1 && rc=0 || rc=$?
+  expect_code 3 "$rc" "an unreadable ledger must not read as a task with no record"
+
+  ledger "$home" task alpha --outcome landed --source declared --harness claude \
+    || fail "task-record: writing the terminal record failed"
+
+  # The ledger is readable now and genuinely holds no record for this id. That
+  # IS an observation about the task, and it is the other status.
+  ledger "$home" task-record beta >/dev/null 2>&1 && rc=0 || rc=$?
+  expect_code 1 "$rc" "a readable ledger with no record for the id must report exactly that"
+
+  out=$(ledger "$home" task-record alpha) \
+    || fail "task-record: a recorded task did not read back: $(cat "$file")"
+  case "$out" in
+    *"task=alpha"*) ;;
+    *) fail "task-record: the record's fields were not returned:"$'\n'"$out" ;;
+  esac
+  case "$out" in
+    *"harness=claude"*) ;;
+    *) fail "task-record: the maker identity was not returned:"$'\n'"$out" ;;
+  esac
+  pass "an unreadable ledger and a task with no record are different answers"
+}
+
+critic_of() {  # <ledger file> -> "<vendor> <model>"
+  printf '%s %s\n' \
+    "$(field_of "$1" task critic_vendor)" \
+    "$(field_of "$1" task critic_model)"
+}
+
+# Write a registry beside the home so the vendor and pool dimensions can resolve.
+critic_home() {  # <name> [declare-mapping]
+  local home
+  home=$(make_home "$1")
+  mkdir -p "$home/config"
+  fm_test_model_registry "$home/config/models.json" "${2:-yes}"
+  printf '%s' "$home"
+}
+
+test_critic_fields_resolve_from_the_pipeline_record() {
+  local home file db repo got
+  home=$(critic_home critic-resolvable)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  fm_test_pipeline_db "$db" "$repo" \
+    "fm/alpha|openai|gpt-5.6-sol" "fm/alpha|openai|gpt-5.6-sol" \
+    || { pass "SKIP (python3 unavailable): critic fields resolve from the pipeline record"; return; }
+
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic: a resolvable terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "openai gpt-5.6-sol" ] \
+    || fail "critic: resolved '$got', expected 'openai gpt-5.6-sol'"
+
+  # The join is on this task's own branch, never on any review in the database.
+  : > "$file"
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/other \
+    || fail "critic: a foreign-branch terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "unknown unknown" ] \
+    || fail "critic: another branch's review was claimed as this task's: '$got'"
+
+  # Two reviews that genuinely disagree are reported as mixed, not as one of them.
+  : > "$file"
+  rm -f "$db"
+  fm_test_pipeline_db "$db" "$repo" \
+    "fm/beta|anthropic|claude-opus-5" "fm/beta|openai|gpt-5.6-sol" \
+    || fail "critic: mixed fixture failed"
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task beta --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/beta \
+    || fail "critic: a mixed terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "mixed mixed" ] \
+    || fail "critic: disagreeing reviews recorded '$got', expected 'mixed mixed'"
+  pass "the terminal record carries the reviewing vendor and model"
+}
+
+test_critic_independence_is_recorded_per_dimension() {
+  local home file db repo ind
+  home=$(critic_home critic-dimensions)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  fm_test_pipeline_db "$db" "$repo" "fm/alpha|anthropic|claude-fable-5" \
+    || { pass "SKIP (python3 unavailable): per-dimension independence"; return; }
+
+  # THE CASE THE WHOLE FIELD EXISTS FOR: a different MODEL on the SAME
+  # credential pool. A single boolean would call this independent; the record
+  # has to say on which dimensions it is and on which it is not.
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic dims: terminal record failed"
+  ind=$(field_of "$file" task critic_independence)
+  case "$ind" in
+    *"model:independent"*) ;;
+    *) fail "critic dims: a different reviewing model was not recorded independent: '$ind'" ;;
+  esac
+  case "$ind" in
+    *"pool:not-independent"*) ;;
+    *) fail "critic dims: a shared credential pool was not recorded: '$ind'" ;;
+  esac
+  case "$ind" in
+    *"vendor:not-independent"*) ;;
+    *) fail "critic dims: a shared vendor was not recorded: '$ind'" ;;
+  esac
+
+  # A fully independent checker records every dimension independent.
+  : > "$file"
+  rm -f "$db"
+  fm_test_pipeline_db "$db" "$repo" "fm/beta|openai|gpt-5.6-sol" \
+    || fail "critic dims: independent fixture failed"
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task beta --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/beta \
+    || fail "critic dims: independent record failed"
+  ind=$(field_of "$file" task critic_independence)
+  case "$ind" in
+    *not-independent*) fail "critic dims: an independent checker recorded a dependence: '$ind'" ;;
+    *unknown*) fail "critic dims: an independent checker recorded an unknown: '$ind'" ;;
+  esac
+
+  # A reviewer sharing its session with the agent that fixes its own findings is
+  # observably NOT process-independent.
+  : > "$file"
+  rm -f "$db"
+  fm_test_pipeline_db "$db" "$repo" "fm/gamma|openai|gpt-5.6-sol|review|1" \
+    || fail "critic dims: shared-session fixture failed"
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task gamma --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/gamma \
+    || fail "critic dims: shared-session record failed"
+  ind=$(field_of "$file" task critic_independence)
+  case "$ind" in
+    *"process:not-independent"*) ;;
+    *) fail "critic dims: a reviewer sharing the fixer's session read as separate: '$ind'" ;;
+  esac
+  pass "independence is recorded per dimension, so a shared pool is never reported as plain independent"
+}
+
+test_identity_is_derived_per_run_and_the_branch_reports_its_weakest() {
+  local home file db repo ind
+  home=$(critic_home critic-per-run)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  # ONE branch, TWO runs, two genuinely different reviewers: the first ran the
+  # maker's own model, the second ran another vendor's. That is two answers, not
+  # an absence of answers, so the branch reports its WEAKEST member. Folding the
+  # identity across runs first would manufacture "the reviews disagree" and hand
+  # back could-not-observe, which is an ambiguity the record does not contain.
+  fm_test_pipeline_db "$db" "$repo" \
+    "fm/alpha|anthropic|claude-opus-5" "fm/alpha|openai|gpt-5.6-sol" \
+    || { pass "SKIP (python3 unavailable): identity per run"; return; }
+
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic per-run: terminal record failed"
+  ind=$(field_of "$file" task critic_independence)
+  case "$ind" in
+    *"model:not-independent"*) ;;
+    *) fail "critic per-run: the run that reran the maker's own model was not the weakest: '$ind'" ;;
+  esac
+  case "$ind" in
+    *"model:unknown"*)
+      fail "critic per-run: two different reviewers dissolved into could-not-observe: '$ind'" ;;
+  esac
+  case "$ind" in
+    *"pool:not-independent"*) ;;
+    *) fail "critic per-run: a run on the maker's own pool was not reported: '$ind'" ;;
+  esac
+  pass "identity computed per run, branch view reports weakest member"
+}
+
+test_an_observed_dependence_is_never_erased_by_an_unobserved_run() {
+  local home file db repo ind
+  home=$(critic_home critic-dependence-survives)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  # One run whose reviewer demonstrably shared the fixer's session, and one run
+  # whose sessions were never recorded at all. What nobody looked at may weaken
+  # a claim of independence; it may NEVER erase a finding of dependence, or a
+  # gap launders a known problem into an unknown one.
+  fm_test_pipeline_db "$db" "$repo" \
+    "fm/alpha|openai|gpt-5.6-sol|review|1" "fm/alpha|openai|gpt-5.6-sol||none" \
+    || { pass "SKIP (python3 unavailable): observed dependence survives"; return; }
+
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic survives: terminal record failed"
+  ind=$(field_of "$file" task critic_independence)
+  case "$ind" in
+    *"process:not-independent"*) ;;
+    *) fail "critic survives: an observed dependence was erased by an unobserved run: '$ind'" ;;
+  esac
+  case "$ind" in
+    *"process:unknown"*)
+      fail "critic survives: a known dependence was laundered into an unknown: '$ind'" ;;
+  esac
+  pass "observed dependence survives an unobserved sibling run"
+}
+
+test_undeclared_mapping_records_unknown_never_independent() {
+  local home file db repo ind
+  home=$(critic_home critic-undeclared no)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  fm_test_pipeline_db "$db" "$repo" "fm/alpha|openai|gpt-5.6-sol" \
+    || { pass "SKIP (python3 unavailable): undeclared mapping"; return; }
+
+  # The registry declares no mapping from the pipeline's vocabulary onto this
+  # fleet's. Two names that differ are NOT evidence of two vendors, so the
+  # dimensions that depend on that mapping must read unknown - never
+  # independent, which is the inference this refuses to make.
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic undeclared: terminal record failed"
+  ind=$(field_of "$file" task critic_independence)
+  case "$ind" in
+    *"vendor:independent"*|*"pool:independent"*)
+      fail "critic undeclared: independence was inferred from differing names: '$ind'" ;;
+  esac
+  case "$ind" in
+    *"vendor:unknown"*"pool:unknown"*) ;;
+    *) fail "critic undeclared: an undeclared mapping did not record unknown: '$ind'" ;;
+  esac
+  pass "an undeclared vocabulary mapping records unknown and never infers independence"
+}
+
+test_critic_fields_record_unknown_for_what_is_unresolvable() {
+  local home file db repo got
+  home=$(critic_home critic-partial)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+  # A review the pipeline recorded without a provider or model: the invocation
+  # is witnessed, the identity is not.
+  fm_test_pipeline_db "$db" "$repo" "fm/alpha||" \
+    || { pass "SKIP (python3 unavailable): partially resolvable critic fields"; return; }
+
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic partial: terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "unknown unknown" ] \
+    || fail "critic partial: recorded '$got', expected 'unknown unknown'"
+
+  # One resolvable value beside one unresolvable one, still on the same record.
+  : > "$file"
+  rm -f "$db"
+  fm_test_pipeline_db "$db" "$repo" "fm/alpha|openai|" || fail "critic partial: fixture failed"
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+    ledger "$home" task alpha --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/alpha \
+    || fail "critic partial: terminal record failed"
+  got=$(critic_of "$file")
+  [ "$got" = "openai unknown" ] \
+    || fail "critic partial: recorded '$got', expected 'openai unknown'"
+  pass "a partially resolvable reviewing configuration records only what it resolved"
+}
+
+test_unresolvable_critic_records_unknown_and_never_inherits() {
+  local home file db repo got line
+  home=$(critic_home critic-unresolvable)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+
+  # The negative control the whole field exists for: a task whose reviewing
+  # configuration cannot be resolved must say unknown on its own line - never
+  # omit the fields, and never inherit the previous task's values.
+  if fm_test_pipeline_db "$db" "$repo" "fm/alpha|anthropic|claude-opus-5"; then
+    FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+      ledger "$home" task alpha --harness claude --model opus \
+      --critic-repo "$repo" --critic-branch fm/alpha \
+      || fail "critic unknown: the resolvable record failed"
+    got=$(critic_of "$file")
+    [ "$got" = "anthropic claude-opus-5" ] \
+      || fail "critic unknown: the preceding record did not resolve: '$got'"
+  fi
+
+  # Same ledger file, same home, no pipeline database at all.
+  FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$home/absent.sqlite" \
+    ledger "$home" task bravo --harness claude --model opus \
+    --critic-repo "$repo" --critic-branch fm/bravo \
+    || fail "critic unknown: an unresolvable record must still be written"
+  line=$(grep "task=bravo" "$file") || fail "critic unknown: no terminal record for bravo"
+  case "$line" in
+    *"critic_vendor=unknown"*"critic_model=unknown"*"critic_independence=unknown"*) ;;
+    *) fail "critic unknown: bravo omitted or inherited a critic field: $line" ;;
+  esac
+  case "$line" in
+    *anthropic*|*claude-opus-5*) fail "critic unknown: bravo inherited alpha's critic: $line" ;;
+  esac
+
+  # No join key at all is the same answer, explicitly recorded.
+  ledger "$home" task charlie --harness claude || fail "critic unknown: keyless record failed"
+  line=$(grep "task=charlie" "$file") || fail "critic unknown: no terminal record for charlie"
+  case "$line" in
+    *"critic_vendor=unknown"*"critic_model=unknown"*"critic_independence=unknown"*) ;;
+    *) fail "critic unknown: a record with no join key omitted the critic fields: $line" ;;
+  esac
+  pass "an unresolvable reviewing configuration records unknown and never inherits"
+}
+
+test_independence_cannot_be_asserted_by_any_caller() {
+  local home file db repo flag out ind
+  home=$(critic_home critic-unwritable)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+
+  # THE RECURRENCE PATH THIS CLOSES. An earlier build accepted --critic-process,
+  # --critic-vendor and --critic-model, and a stated value WON over what the
+  # pipeline recorded. That is a writable independence claim, and a claim
+  # anyone can write is one that will eventually be written wrongly. Every one
+  # of them must now be refused outright, writing nothing.
+  for flag in --critic-process --critic-vendor --critic-model --critic-independence; do
+    out=$(ledger "$home" task alpha "$flag" anything 2>&1) \
+      && fail "unwritable: $flag was accepted, so independence is still assertable: $out"
+    [ ! -s "$file" ] \
+      || fail "unwritable: a refused $flag still wrote a record: $(cat "$file")"
+  done
+
+  # And the derived value stands even when a caller tries to talk past it: with
+  # a real pipeline record present, what lands is what was observed.
+  if fm_test_pipeline_db "$db" "$repo" "fm/alpha|anthropic|claude-opus-5"; then
+    FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+      ledger "$home" task alpha --harness claude --model opus \
+      --critic-repo "$repo" --critic-branch fm/alpha \
+      || fail "unwritable: the derived record failed"
+    ind=$(field_of "$file" task critic_independence)
+    case "$ind" in
+      *"pool:not-independent"*) ;;
+      *) fail "unwritable: the observed dependence was not recorded: '$ind'" ;;
+    esac
+  fi
+  pass "no argument can assert an independence result; every one is refused"
+}
+
+test_report_surfaces_critic_independence() {
+  local home file db repo out
+  home=$(critic_home critic-report)
+  file=$(ledger_file "$home")
+  db="$home/pipeline.sqlite"
+  repo="$home/repo"
+
+  if fm_test_pipeline_db "$db" "$repo" "fm/alpha|openai|gpt-5.6-sol"; then
+    FM_CONFIG_OVERRIDE="$home/config" FM_PIPELINE_STATE_DB="$db" \
+      ledger "$home" task alpha --harness claude --model opus --effort xhigh \
+      --critic-repo "$repo" --critic-branch fm/alpha \
+      || fail "critic report: terminal record failed"
+  fi
+  ledger "$home" task bravo --harness claude --model opus --effort xhigh \
+    || fail "critic report: unresolved terminal record failed"
+
+  out=$(ledger "$home" report) || fail "critic report: report failed"
+  printf '%s\n' "$out" | grep -q "critic independence" \
+    || fail "critic report: the critic section is missing:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "vendor:.*unknown 1" \
+    || fail "critic report: an unresolved critic was not reported:"$'\n'"$out"
+  # The unresolved task must contribute unknown on every dimension, never a pass.
+  printf '%s\n' "$out" | grep -qE "pool:unknown" \
+    || fail "critic report: an unresolved pool dimension was not counted:"$'\n'"$out"
+  pass "the report surfaces critic independence, including what stayed unknown"
+}
+
 
 test_a_bare_outcome_records_against_the_newest_unrecorded_wake() {
   local home file now
@@ -716,3 +1124,13 @@ test_the_terminal_outcome_derivation_reads_the_task_declaration
 test_terminal_outcome_source_is_closed_and_defaults_to_assumed
 test_a_failure_that_is_never_torn_down_is_recorded_not_silent
 test_the_report_names_evidence_and_refuses_a_rate
+test_task_record_holds_an_absent_record_apart_from_an_unreadable_ledger
+test_critic_fields_resolve_from_the_pipeline_record
+test_critic_independence_is_recorded_per_dimension
+test_identity_is_derived_per_run_and_the_branch_reports_its_weakest
+test_an_observed_dependence_is_never_erased_by_an_unobserved_run
+test_undeclared_mapping_records_unknown_never_independent
+test_critic_fields_record_unknown_for_what_is_unresolvable
+test_unresolvable_critic_records_unknown_and_never_inherits
+test_independence_cannot_be_asserted_by_any_caller
+test_report_surfaces_critic_independence

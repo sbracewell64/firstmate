@@ -364,6 +364,150 @@ fm_git_worktree() {
   git -C "$repo" worktree add --quiet -b "$branch" "$worktree"
 }
 
+# --- validation-pipeline state database -------------------------------------
+
+# fm_test_pipeline_db <db> <repo working path> <invocation>...: build a stand-in
+# for the validation pipeline's state database, holding exactly the tables and
+# columns the independence derivation joins.
+#
+# Each <invocation> is
+# "<branch>|<provider>|<model>[|<purpose>[|<sessions>[|<status>]]]".
+# An empty provider or model writes SQL NULL, the shape the real database uses
+# when it recorded no such fact. <purpose> defaults to review, the reviewing
+# invocation; pass review-fix for the agent that rewrites code in response,
+# which is maker-side and must never be read as the critic, or none for a run
+# that recorded NO agent invocation at all - the run that touched these bytes
+# and never reached the review step.
+#
+# <sessions> selects which of the three recorded session shapes this run has,
+# because all three have to be expressible or the derivation's three values
+# cannot each be reached from a fixture:
+#
+#   ''      the reviewer and the review-fixer hold distinct sessions
+#   1       they share one session - process independence observably ABSENT
+#   none    the run records NO session rows at all - the reviewing invocation
+#           happened and whose process ran it was never captured, which is
+#           could-not-observe and must never read as independent
+#
+# <status> is the run's own status and defaults to completed. cancelled and
+# failed are the statuses that make a run a NON-MEMBER of the branch fold: it
+# never finished verifying anything, so its reviewer does not decide whether
+# these bytes were verified independently. running and pending are in flight.
+# Pass none to write an EMPTY status, the shape a row whose state was never
+# recorded would have - which is could-not-observe and must never read as a run
+# that is merely still going.
+#
+# Returns nonzero when python3 is unavailable, which callers report as a
+# skipped case.
+fm_test_pipeline_db() {
+  local db=$1 repo=$2
+  shift 2
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$db" "$repo" "$@" <<'PYDB'
+import sqlite3
+import sys
+
+db, repo, specs = sys.argv[1], sys.argv[2], sys.argv[3:]
+conn = sqlite3.connect(db)
+conn.executescript(
+    "create table repos (id text primary key, working_path text);"
+    "create table runs (id text primary key, repo_id text, branch text,"
+    "  status text not null default 'completed');"
+    "create table agent_invocations ("
+    "  id text primary key, run_id text, step_name text, round integer,"
+    "  purpose text, agent text, model_provider text, model text,"
+    "  started_at integer, exit_status text);"
+    "create table run_agent_sessions ("
+    "  run_id text, role text, agent text, session_id text);"
+)
+conn.execute("insert into repos values ('r1', ?)", (repo,))
+for n, spec in enumerate(specs):
+    parts = spec.split("|")
+    branch, provider, model = parts[0], parts[1], parts[2]
+    purpose = parts[3] if len(parts) > 3 and parts[3] else "review"
+    sessions = parts[4] if len(parts) > 4 else ""
+    status = parts[5] if len(parts) > 5 and parts[5] else "completed"
+    if status == "none":
+        status = ""
+    run = "run%d" % n
+    conn.execute("insert into runs values (?, 'r1', ?, ?)", (run, branch, status))
+    # A run that recorded no agent invocation at all: it touched these bytes and
+    # never reached the review step. It has no invocation row and no session
+    # rows, because there was nothing to hold either.
+    if purpose == "none":
+        continue
+    conn.execute(
+        "insert into agent_invocations"
+        " values (?, ?, 'review', 1, ?, 'codex', ?, ?, ?, 'success')",
+        ("inv%d" % n, run, purpose, provider or None, model or None, n),
+    )
+    # The invocation above is written either way: this run reviewed. Only the
+    # SESSION rows are withheld, which is the whole point of the shape - the
+    # derivation must not be able to reach it through "no invocation was
+    # recorded for these bytes" and call the case proven.
+    if sessions == "none":
+        continue
+    # The reviewer and the review-fixer are distinct sessions unless the spec
+    # deliberately collapses them.
+    fixer = "s-review-%d" % n if sessions == "1" else "s-fix-%d" % n
+    conn.execute(
+        "insert into run_agent_sessions values (?, 'reviewer', 'codex', ?)",
+        (run, "s-review-%d" % n),
+    )
+    conn.execute(
+        "insert into run_agent_sessions values (?, 'review-fixer', 'codex', ?)",
+        (run, fixer),
+    )
+# A non-review step on the same run must never be read as a review. It is not
+# added to a run declared to have recorded no invocation at all, which would
+# quietly undo that shape.
+if specs and (specs[0].split("|") + ["", "", ""])[3] != "none":
+    conn.execute(
+        "insert into agent_invocations"
+        " values ('other', 'run0', 'test', 1, 'test', 'codex', 'nobody', 'no-model', 99, 'success')"
+    )
+conn.commit()
+conn.close()
+PYDB
+}
+
+# fm_test_model_registry <file> [yes|no]: write a config/models.json holding two
+# providers on two credential pools, optionally declaring the mapping from the
+# validation pipeline's own vocabulary onto this fleet's. Without that
+# declaration the vendor and pool dimensions are could-not-observe, which is the
+# honest reading and the one this fleet actually has today.
+fm_test_model_registry() {
+  local file=$1 declare_map=${2:-yes}
+  local anthropic='' openai='' opus='' fable='' sol=''
+  if [ "$declare_map" = yes ]; then
+    anthropic='"pipeline_providers": ["anthropic"],'
+    openai='"pipeline_providers": ["openai"],'
+    opus='"pipeline_model_ids": ["claude-opus-5"],'
+    fable='"pipeline_model_ids": ["claude-fable-5"],'
+    sol='"pipeline_model_ids": ["gpt-5.6-sol"],'
+  fi
+  cat > "$file" <<JSON
+{
+  "schema": "fm-model-registry.v1",
+  "providers": {
+    "claude": {$anthropic "access_class": "A", "cost_posture": "subscription-flat", "status": "active"},
+    "openai-codex": {$openai "access_class": "A", "cost_posture": "subscription-flat", "status": "active"}
+  },
+  "models": {
+    "claude/opus": {"provider": "claude", "model_id": "opus", "harness": "claude",
+      $opus "cost_class": "subscription-flat", "status": "approved-primary",
+      "limits": {"shared_quota_pool": "claude-max"}},
+    "claude/fable": {"provider": "claude", "model_id": "fable", "harness": "claude",
+      $fable "cost_class": "subscription-flat", "status": "approved-specialist",
+      "limits": {"shared_quota_pool": "claude-max"}},
+    "openai-codex/gpt-5.6-sol": {"provider": "openai-codex", "model_id": "gpt-5.6-sol",
+      "harness": "pi", $sol "cost_class": "subscription-flat", "status": "approved-primary",
+      "limits": {"shared_quota_pool": "openai-codex-oauth"}}
+  }
+}
+JSON
+}
+
 # --- state/<id>.meta writers ------------------------------------------------
 
 # fm_write_meta <file> <key=val> ...: write the given key=val lines to a meta

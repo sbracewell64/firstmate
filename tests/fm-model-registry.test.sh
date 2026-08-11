@@ -586,7 +586,113 @@ test_ruled_authority_validates
 test_rejected_model_in_dispatch_fails
 test_unregistered_model_in_dispatch_fails
 test_unprobed_model_in_dispatch_fails
+# --- the declared identity mapping ------------------------------------------
+#
+# These resolvers exist so bin/fm-independence-lib.sh can tell whether a checker
+# drew on the maker's own credential pool. The rule they encode is that the
+# relation between two systems' vocabularies is DECLARED, never inferred: names
+# that differ are not evidence of two vendors, and names that match are not
+# evidence of one.
+
+mapping_registry() {  # <file> [declare: yes|no]
+  fm_test_model_registry "$1" "${2:-yes}"
+}
+
+test_route_key_resolves_only_on_an_exact_declared_pair() {
+  local dir
+  dir="$TMP/route-key"
+  mkdir -p "$dir"
+  mapping_registry "$dir/models.json"
+
+  [ "$(CONFIG="$dir" fm_model_key_for_route claude opus)" = "claude/opus" ] \
+    || fail "route key: harness+model_id did not resolve the registry key"
+  # A name that already carries a provider is used as written.
+  [ "$(CONFIG="$dir" fm_model_key_for_route pi openai-codex/gpt-5.6-sol)" = "openai-codex/gpt-5.6-sol" ] \
+    || fail "route key: an explicit provider/model name was not used as written"
+  # The harness is part of the identity: the same model id under another harness
+  # is not the same routed model.
+  [ -z "$(CONFIG="$dir" fm_model_key_for_route pi opus)" ] \
+    || fail "route key: a model id resolved under the wrong harness"
+  [ -z "$(CONFIG="$dir" fm_model_key_for_route claude nosuchmodel)" ] \
+    || fail "route key: an unknown model resolved to something"
+  pass "a routed model resolves only on an exact declared harness and model id"
+}
+
+test_pipeline_key_resolves_only_through_a_declared_mapping() {
+  local dir
+  dir="$TMP/pipeline-key"
+  mkdir -p "$dir"
+  mapping_registry "$dir/models.json" yes
+  [ "$(CONFIG="$dir" fm_model_key_for_pipeline anthropic claude-opus-5)" = "claude/opus" ] \
+    || fail "pipeline key: a declared mapping did not resolve"
+  [ "$(CONFIG="$dir" fm_model_key_for_pipeline openai gpt-5.6-sol)" = "openai-codex/gpt-5.6-sol" ] \
+    || fail "pipeline key: a declared mapping on the second provider did not resolve"
+
+  # The vendor half must match too: the right model id under a vendor this
+  # registry never mapped resolves to nothing.
+  [ -z "$(CONFIG="$dir" fm_model_key_for_pipeline openai claude-opus-5)" ] \
+    || fail "pipeline key: a model resolved under an unmapped vendor"
+
+  # WITHOUT the declaration, nothing resolves. This is the case that keeps an
+  # absent declaration honest instead of turning it into a false independence
+  # claim: the caller reports could-not-observe rather than guessing.
+  local undeclared="$TMP/pipeline-key-undeclared"
+  mkdir -p "$undeclared"
+  mapping_registry "$undeclared/models.json" no
+  [ -z "$(CONFIG="$undeclared" fm_model_key_for_pipeline anthropic claude-opus-5)" ] \
+    || fail "pipeline key: a mapping resolved that the registry never declared"
+  pass "another system's model resolves only through a mapping this registry declared"
+}
+
+test_the_credential_pool_comes_from_the_registry_not_a_name() {
+  local dir
+  dir="$TMP/pool"
+  mkdir -p "$dir"
+  mapping_registry "$dir/models.json"
+  [ "$(CONFIG="$dir" fm_model_pool_of claude/opus)" = "claude-max" ] \
+    || fail "pool: the declared shared_quota_pool was not returned"
+  # Two DIFFERENT models on ONE pool: the fact a harness or model name cannot
+  # answer, and the reason independence is not one boolean.
+  [ "$(CONFIG="$dir" fm_model_pool_of claude/fable)" = "claude-max" ] \
+    || fail "pool: a sibling model did not report the shared pool"
+  [ "$(CONFIG="$dir" fm_model_pool_of openai-codex/gpt-5.6-sol)" = "openai-codex-oauth" ] \
+    || fail "pool: a distinct pool was not distinguished"
+  # No pool recorded is not "its own pool".
+  [ -z "$(CONFIG="$dir" fm_model_pool_of claude/nosuch)" ] \
+    || fail "pool: an unknown model was given a pool"
+  pass "the credential pool is read from the registry, never inferred from a name"
+}
+
+test_a_malformed_mapping_declaration_is_refused() {
+  local dir out
+  dir="$TMP/bad-mapping"
+  mkdir -p "$dir"
+  mapping_registry "$dir/models.json"
+  # A broken safety declaration must never read as an absent one.
+  jq '.providers.claude.pipeline_providers = "anthropic"' "$dir/models.json" > "$dir/bad.json"
+  out=$(fm_model_registry_validate "$dir/bad.json") \
+    && fail "bad mapping: a string pipeline_providers validated clean"
+  assert_contains "$out" "pipeline_providers must be an array of strings" \
+    "bad mapping: the refusal did not name the offending field"
+
+  jq '.models["claude/opus"].pipeline_model_ids = [1,2]' "$dir/models.json" > "$dir/bad2.json"
+  out=$(fm_model_registry_validate "$dir/bad2.json") \
+    && fail "bad mapping: a non-string pipeline_model_ids validated clean"
+  assert_contains "$out" "pipeline_model_ids must be an array of strings" \
+    "bad mapping: the refusal did not name the offending field"
+
+  # And the well-formed declaration still validates, so the check is not simply
+  # rejecting the new fields outright.
+  fm_model_registry_validate "$dir/models.json" >/dev/null \
+    || fail "bad mapping: a well-formed declaration was refused"
+  pass "a malformed vocabulary-mapping declaration is refused, not silently ignored"
+}
+
 test_registered_probed_model_passes
+test_route_key_resolves_only_on_an_exact_declared_pair
+test_pipeline_key_resolves_only_through_a_declared_mapping
+test_the_credential_pool_comes_from_the_registry_not_a_name
+test_a_malformed_mapping_declaration_is_refused
 test_bare_model_name_ignored_by_integrity
 test_stale_probe_evidence_reported
 test_allowlisted_model_repriced_is_critical

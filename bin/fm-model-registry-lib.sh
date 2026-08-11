@@ -95,6 +95,111 @@ fm_model_provider_of() {
 }
 
 # ---------------------------------------------------------------------------
+# Declared identity mapping, for readers of another system's vocabulary
+# ---------------------------------------------------------------------------
+#
+# The validation pipeline records the vendor and model that actually ran in ITS
+# vocabulary (anthropic, claude-opus-5) while this registry names the same things
+# in the fleet's routing vocabulary (claude, opus). Relating them is what lets
+# bin/fm-independence-lib.sh answer whether a checker drew on the maker's own
+# credential pool.
+#
+# THE RELATION IS DECLARED, NEVER INFERRED. Two names that differ are not
+# evidence of two vendors, and two names that match are not evidence of one. Only
+# the optional `pipeline_providers` (per provider) and `pipeline_model_ids` (per
+# model) arrays may relate them. Every resolver below echoes NOTHING when this
+# registry declares no mapping, and its caller reports could-not-observe rather
+# than guessing - which keeps an absent declaration honest instead of turning it
+# into a false independence claim. docs/configuration.md owns both fields.
+
+# Echo the registry key ("provider/model") for a model this fleet ROUTED, given
+# the harness and model recorded for the worker. A name already carrying a
+# provider is used as written ONCE THIS REGISTRY DECLARES IT: echoing back an
+# undeclared name would hand its caller a key that resolves to no provider and
+# no pool, and a comparison against a real key would then differ purely because
+# the two names differ - the inference every resolver here exists to refuse. A
+# bare name is resolved by matching both harness and model_id, and an ambiguous
+# match echoes nothing: two entries fitting one bare name means the fleet cannot
+# say which one ran.
+fm_model_key_for_route() {  # <harness> <model>
+  local harness=${1:-} model=${2:-} reg
+  [ -n "$model" ] && [ "$model" != default ] || return 0
+  reg=$(fm_model_registry_path)
+  [ -f "$reg" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  case "$model" in
+    */*)
+      jq -r --arg m "$model" --arg schema "$FM_MODEL_SCHEMA_VERSION" '
+        if type != "object" or (.schema? // "") != $schema then empty
+        elif (.models[$m]? // null) == null then empty
+        else $m
+        end
+      ' "$reg" 2>/dev/null || true
+      return 0
+      ;;
+  esac
+  [ -n "$harness" ] || return 0
+  jq -r --arg h "$harness" --arg m "$model" --arg schema "$FM_MODEL_SCHEMA_VERSION" '
+    if type != "object" or (.schema? // "") != $schema then empty
+    else
+      [ (.models // {}) | to_entries[]
+        | select((.value.harness? // "") == $h and (.value.model_id? // "") == $m)
+        | .key ]
+      | if length == 1 then .[0] else empty end
+    end
+  ' "$reg" 2>/dev/null || true
+}
+
+# Echo the registry key for a model the PIPELINE recorded, given the vendor and
+# model id in the pipeline's own vocabulary. Resolves only through declared
+# pipeline_providers / pipeline_model_ids, and echoes nothing when either is
+# undeclared or when more than one entry claims the pair.
+fm_model_key_for_pipeline() {  # <pipeline-vendor> <pipeline-model-id>
+  local vendor=${1:-} model=${2:-} reg
+  [ -n "$vendor" ] && [ -n "$model" ] || return 0
+  reg=$(fm_model_registry_path)
+  [ -f "$reg" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r --arg v "$vendor" --arg m "$model" --arg schema "$FM_MODEL_SCHEMA_VERSION" '
+    if type != "object" or (.schema? // "") != $schema then empty
+    else
+      [ (.providers // {}) | to_entries[]
+        | select([ .value.pipeline_providers[]? ] | index($v))
+        | .key ] as $providers
+      | [ (.models // {}) | to_entries[]
+          | . as $e
+          | select($providers | index($e.value.provider? // ""))
+          | select([ $e.value.pipeline_model_ids[]? ] | index($m))
+          | .key ]
+      | if length == 1 then .[0] else empty end
+    end
+  ' "$reg" 2>/dev/null || true
+}
+
+# Echo the credential pool a registry key draws on - the account or quota window
+# that one call is billed to, which is the fact a harness name cannot answer.
+# limits.shared_quota_pool is the declaration; an entry without one echoes
+# nothing, because "no pool recorded" is not "its own pool".
+fm_model_pool_of() {  # <registry-key>
+  local key=${1:-} reg
+  [ -n "$key" ] || return 0
+  reg=$(fm_model_registry_path)
+  [ -f "$reg" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r --arg k "$key" '.models[$k]?.limits?.shared_quota_pool? // empty' "$reg" 2>/dev/null || true
+}
+
+# Echo the provider a registry key belongs to, per the registry's own record.
+fm_model_registry_provider_of() {  # <registry-key>
+  local key=${1:-} reg
+  [ -n "$key" ] || return 0
+  reg=$(fm_model_registry_path)
+  [ -f "$reg" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+  jq -r --arg k "$key" '.models[$k]?.provider? // empty' "$reg" 2>/dev/null || true
+}
+
+# ---------------------------------------------------------------------------
 # Schema validation
 # ---------------------------------------------------------------------------
 
@@ -157,6 +262,11 @@ fm_model_registry_validate() {
       "provider status must be one of active, blocked, dropped: " + (entries(.providers) | map(select(has("status") and ((.value.status) as $s | provstatuses | index($s) | not))) | map(.key) | join(", "))
     elif (entries(.providers) | map(select((.value.status? // "active") != "active" and (((.value.status_reason? // "") | length) == 0))) | length) > 0 then
       "a blocked or dropped provider needs status_reason: " + (entries(.providers) | map(select((.value.status? // "active") != "active" and (((.value.status_reason? // "") | length) == 0))) | map(.key) | join(", "))
+    # The declared vocabulary mapping other systems are read through. A
+    # malformed declaration must refuse rather than silently resolve nothing,
+    # because "no mapping" and "broken mapping" need different repairs.
+    elif (entries(.providers) | map(select((.value | has("pipeline_providers")) and ((.value.pipeline_providers | type) != "array" or ((.value.pipeline_providers | map(select(type != "string")) | length) > 0)))) | length) > 0 then
+      "pipeline_providers must be an array of strings: " + (entries(.providers) | map(select((.value | has("pipeline_providers")) and ((.value.pipeline_providers | type) != "array" or ((.value.pipeline_providers | map(select(type != "string")) | length) > 0)))) | map(.key) | join(", "))
 
     # --- models ------------------------------------------------------------
     elif has("models") and (.models | type) != "object" then "models must be an object"
@@ -168,6 +278,8 @@ fm_model_registry_validate() {
       "model needs a known status: " + (entries(.models) | map(select((.value.status? // null) as $s | ($s == null) or (modelstatuses | index($s) | not))) | map(.key) | join(", "))
     elif (entries(.models) | map(select((.value.status? // "") as $s | (($s == "rejected") or ($s == "blocked")) and (((.value.status_reason? // "") | length) == 0))) | length) > 0 then
       "a rejected or blocked model needs status_reason so the refusal is not rediscovered: " + (entries(.models) | map(select((.value.status? // "") as $s | (($s == "rejected") or ($s == "blocked")) and (((.value.status_reason? // "") | length) == 0))) | map(.key) | join(", "))
+    elif (entries(.models) | map(select((.value | has("pipeline_model_ids")) and ((.value.pipeline_model_ids | type) != "array" or ((.value.pipeline_model_ids | map(select(type != "string")) | length) > 0)))) | length) > 0 then
+      "pipeline_model_ids must be an array of strings: " + (entries(.models) | map(select((.value | has("pipeline_model_ids")) and ((.value.pipeline_model_ids | type) != "array" or ((.value.pipeline_model_ids | map(select(type != "string")) | length) > 0)))) | map(.key) | join(", "))
     elif (entries(.models) | map(select(has("observation_level") and ((.value.observation_level) as $o | obslevels | index($o) | not))) | length) > 0 then
       "observation_level must be one of O1, O2, O3, O4: " + (entries(.models) | map(select(has("observation_level") and ((.value.observation_level) as $o | obslevels | index($o) | not))) | map(.key) | join(", "))
     elif (entries(.models) | map(select((.value.evidence?.price?.sources? // null) != null and ((bad_kinds(.value.evidence.price.sources) | length) > 0))) | length) > 0 then
