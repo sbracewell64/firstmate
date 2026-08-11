@@ -34,9 +34,11 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 
    ```sh
    bin/fm-attest.sh write
+   bin/fm-attest.sh verify --head "$(git rev-parse HEAD)"
    ```
 
    It publishes to the push target of `origin`, which step 3 pointed at your fork, and prints the repository it reached.
+   Do not continue until verification succeeds for the exact final head.
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
    If your `origin` pushes to the parent rather than your fork, name the fork explicitly: `bin/fm-attest.sh write --remote <your-fork-remote>`.
    Repeat this after any later push, because the attestation names one commit and a new commit is a new head.
