@@ -131,8 +131,6 @@ die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 
 is_count() { case "${1-}" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac; }
 
-record_path() { printf '%s/%s.capacity\n' "$STATE" "$1"; }
-
 capacity_record_private() {  # <record-file>
   [ -f "$1" ] && [ ! -L "$1" ] \
     && [ "$(fm_pr_file_link_count "$1" 2>/dev/null)" = 1 ]
@@ -140,6 +138,29 @@ capacity_record_private() {  # <record-file>
 
 reject_capacity_record() {  # <record-file>
   printf 'error: capacity record %s was rejected because it is not an ordinary private single-link record\n' "$1" >&2
+}
+
+capacity_record_access() {  # <id|discovered-path> <id|discovered> <allow-absent>
+  local subject=$1 source=$2 allow_absent=$3 rec
+  CAPACITY_RECORD=
+  case "$source" in
+    id)
+      fm_task_id_path_safe "$subject" || return 2
+      rec="$STATE/$subject.capacity"
+      ;;
+    discovered)
+      rec=$subject
+      case "$rec" in "$STATE"/*.capacity) ;; *) return 2 ;; esac
+      ;;
+    *) return 2 ;;
+  esac
+  if [ -e "$rec" ] || [ -L "$rec" ]; then
+    capacity_record_private "$rec" || { reject_capacity_record "$rec"; return 1; }
+    CAPACITY_RECORD=$rec
+    return 0
+  fi
+  [ "$allow_absent" = 1 ] || return 3
+  CAPACITY_RECORD=$rec
 }
 
 # One key's value from a key=value record, last assignment winning. An absent
@@ -232,7 +253,8 @@ cmd_defer() {
   # work would then be held by nothing at all and would never resume.
   [ -d "$STATE" ] || mkdir -p "$STATE" 2>/dev/null \
     || { echo "error: could not create $STATE to record the capacity deferral for $id" >&2; return 1; }
-  rec=$(record_path "$id")
+  capacity_record_access "$id" id 1 || return 1
+  rec=$CAPACITY_RECORD
   tmp="$rec.tmp.$$"
   now=$(date -u +%s)
   # A refresh keeps the moment the wait STARTED, because that is what makes a
@@ -293,7 +315,8 @@ cmd_defer() {
 # record so the two never race to define the same field.
 mark_terminal() {  # <id> <why>
   local id=$1 why=$2 rec
-  rec=$(record_path "$id")
+  capacity_record_access "$id" id 0 || return 0
+  rec=$CAPACITY_RECORD
   mark_record_terminal "$rec" "$why"
 }
 
@@ -582,7 +605,7 @@ EOF
 }
 
 cmd_tick() {
-  local only='' force=0 rec status=0
+  local only='' force=0 candidate rec status=0 access_rc
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --id) [ "$#" -ge 2 ] || die "--id needs a value"; only=$2; shift 2 ;;
@@ -593,13 +616,17 @@ cmd_tick() {
   done
   [ "$force" -eq 0 ] || [ -n "$only" ] || die "--force applies to one named --id"
   [ -d "$STATE" ] || return 0
-  for rec in "$STATE"/*.capacity; do
-    [ -e "$rec" ] || [ -L "$rec" ] || continue
-    if ! capacity_record_private "$rec"; then
-      reject_capacity_record "$rec"
+  for candidate in "$STATE"/*.capacity; do
+    access_rc=0
+    capacity_record_access "$candidate" discovered 0 || access_rc=$?
+    if [ "$access_rc" -eq 3 ]; then
+      continue
+    fi
+    if [ "$access_rc" -ne 0 ]; then
       status=1
       continue
     fi
+    rec=$CAPACITY_RECORD
     if [ -n "$only" ]; then
       [ "$(field "$rec" task)" = "$only" ] || continue
     fi
@@ -613,7 +640,7 @@ cmd_tick() {
 # ---------------------------------------------------------------------------
 
 cmd_list() {
-  local json=0 rec id now due state status=0
+  local json=0 candidate rec id now due state status=0 access_rc
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --json) json=1; shift ;;
@@ -623,13 +650,17 @@ cmd_list() {
   done
   [ -d "$STATE" ] || return 0
   now=$(date -u +%s)
-  for rec in "$STATE"/*.capacity; do
-    [ -e "$rec" ] || [ -L "$rec" ] || continue
-    if ! capacity_record_private "$rec"; then
-      reject_capacity_record "$rec"
+  for candidate in "$STATE"/*.capacity; do
+    access_rc=0
+    capacity_record_access "$candidate" discovered 0 || access_rc=$?
+    if [ "$access_rc" -eq 3 ]; then
+      continue
+    fi
+    if [ "$access_rc" -ne 0 ]; then
       status=1
       continue
     fi
+    rec=$CAPACITY_RECORD
     id=$(field "$rec" task)
     due=$(next_check_epoch "$rec")
     if [ "$json" -eq 1 ]; then
@@ -659,12 +690,13 @@ cmd_list() {
 }
 
 cmd_release() {
-  local id=${1-} rec
+  local id=${1-} rec access_rc=0
   [ -n "$id" ] || die "release needs a task id"
   fm_task_id_path_safe "$id" || die "invalid task id: $id"
-  rec=$(record_path "$id")
-  [ -e "$rec" ] || [ -L "$rec" ] || return 0
-  capacity_record_private "$rec" || { reject_capacity_record "$rec"; return 1; }
+  capacity_record_access "$id" id 0 || access_rc=$?
+  [ "$access_rc" -ne 3 ] || return 0
+  [ "$access_rc" -eq 0 ] || return 1
+  rec=$CAPACITY_RECORD
   rm -f -- "$rec"
 }
 

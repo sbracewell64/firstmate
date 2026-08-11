@@ -177,6 +177,14 @@ test_linked_capacity_record_is_refused_untouched() {
   expect_code 1 "$rc" "release must refuse a symlinked capacity record"
   assert_contains "$out" "not an ordinary private single-link record" "release bypassed the record trust guard"
   assert_present "$HOME_DIR/state/linkedtask.capacity" "release removed the suspect capacity link"
+  rc=0
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer linkedtask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium 2>&1) || rc=$?
+  expect_code 1 "$rc" "defer must refuse an existing symlinked capacity record"
+  assert_contains "$out" "not an ordinary private single-link record" "defer bypassed the record accessor"
+  [ -L "$HOME_DIR/state/linkedtask.capacity" ] || fail "defer replaced the suspect capacity link"
   [ "$(cat "$target")" = $'task=linkedtask\nsentinel=unchanged' ] || fail "a capacity command changed the symlink target"
   pass "a symlinked capacity record is refused without touching its target"
 }
