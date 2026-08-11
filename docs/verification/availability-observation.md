@@ -52,6 +52,9 @@ Verified 2026-08-11 by three further controlled mutations of the shipped files, 
 
 The last row is the measured defect itself: tab is an IFS whitespace character, so `read` folds a run of consecutive tabs into one delimiter and the reason arrives in the wrong field.
 
+Verified 2026-08-11 with `bash tests/fm-availability-observation.test.sh`.
+The command passed every deterministic mapping, fail-closed routing, repairable `TOOLING_GAP`, non-empty reason, and red-capable recurrence case.
+
 ## Runtime evidence as a second source
 
 Not built, and `bin/fm-availability-lib.sh`'s header owns the reason.
