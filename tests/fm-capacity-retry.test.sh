@@ -50,6 +50,9 @@ test_inexpressive_and_unverified_substitutes_keep_waiting() {
   local variant rec out
   for variant in inexpressive unverified; do
     rec=$(make_refusal_home "band-$variant"); read_home_record "$rec"
+    jq '._floors["F-MED"].effort_floor = "WAIVED - retry predicate owns the recorded band"' \
+      "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/crew-dispatch.json.tmp"
+    mv "$HOME_DIR/config/crew-dispatch.json.tmp" "$HOME_DIR/config/crew-dispatch.json"
     if [ "$variant" = unverified ]; then
       jq 'del(._models["weak/tiny"].effort_expressible)' "$HOME_DIR/config/crew-dispatch.json" \
         > "$HOME_DIR/config/crew-dispatch.json.tmp"
@@ -68,6 +71,27 @@ test_inexpressive_and_unverified_substitutes_keep_waiting() {
   pass "a substitute that cannot express the route effort band is refused and the task keeps waiting"
 }
 
+test_non_capacity_refusal_keeps_a_counted_wait() {
+  local rec out
+  rec=$(make_refusal_home secondary-refusal); read_home_record "$rec"
+  write_brief "$HOME_DIR" blockedtask no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
+    blockedtask "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --harness codex \
+    --route R-PAIR --model vendor/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id blockedtask --force)
+  assert_present "$HOME_DIR/state/blockedtask.capacity" "a secondary refusal ended the capacity wait"
+  assert_no_grep "terminal=" "$HOME_DIR/state/blockedtask.capacity" "a secondary refusal marked the capacity wait terminal"
+  assert_grep "deferrals=2" "$HOME_DIR/state/blockedtask.attempt" "the secondary refusal did not advance the durable bound"
+  assert_grep "blocked: waiting for capacity remains active" "$HOME_DIR/state/blockedtask.status" "the secondary refusal was not disclosed"
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id blockedtask --force)
+  [ "$(grep -c '^blocked: waiting for capacity remains active' "$HOME_DIR/state/blockedtask.status")" -eq 1 ] \
+    || fail "the unchanged secondary refusal was declared more than once"
+  pass "a non-capacity substitute refusal leaves the capacity wait active and counted"
+}
+
 test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
 test_inexpressive_and_unverified_substitutes_keep_waiting
+test_non_capacity_refusal_keeps_a_counted_wait

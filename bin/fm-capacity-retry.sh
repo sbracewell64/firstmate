@@ -286,6 +286,48 @@ mark_terminal() {  # <id> <why>
   printf 'terminal=%s\n' "$(clean "$why")" >> "$rec" 2>/dev/null || true
 }
 
+keep_waiting() {  # <record-file> <refusal>
+  local rec=$1 refusal=$2 id signature now tmp rc=0 defer_out sig line
+  id=$(field "$rec" task)
+  signature=$(field "$rec" signature)
+  now=$(date -u +%s)
+  tmp="$rec.tmp.$$"
+  if ! awk -F= -v now="$now" '
+    $1 == "last_checked" { print "last_checked=" now; seen=1; next }
+    { print }
+    END { if (!seen) print "last_checked=" now }
+  ' "$rec" > "$tmp" 2>/dev/null || ! mv -f -- "$tmp" "$rec" 2>/dev/null; then
+    rm -f -- "$tmp"
+    printf 'error: could not refresh capacity deferral %s\n' "$rec" >&2
+    return 1
+  fi
+  case "$refusal" in
+    *FM_SPAWN_CAPACITY_DEFERRED*|*FM_SPAWN_CAPACITY_EXHAUSTED*) sig= ;;
+    *) sig=$(printf '%s' "$refusal" | LC_ALL=C tr '\t\r\n' '   ' | LC_ALL=C cut -c1-300) ;;
+  esac
+  if [ -n "$sig" ]; then
+    line="blocked: waiting for capacity remains active after the resumed dispatch was refused: $sig"
+    grep -qxF -- "$line" "$STATE/$id.status" 2>/dev/null \
+      || printf '%s\n' "$line" >> "$STATE/$id.status" 2>/dev/null || true
+  fi
+  defer_out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" defer "$id" --signature "$signature" 2>&1) || rc=$?
+  if [ "$rc" -eq 3 ]; then
+    printf '%s\n' "$defer_out" >&2
+    mark_terminal "$id" "deferral bound spent"
+    return 3
+  fi
+  if [ "$rc" -ne 0 ]; then
+    mark_terminal "$id" "attempt count could not be recorded"
+    printf 'failed: waiting for capacity ended because the attempt count could not be recorded by %s defer %s against %s: %s\n' \
+      "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$(clean "$defer_out")" \
+      >> "$STATE/$id.status" 2>/dev/null || true
+    printf 'error: capacity deferral for %s ended because the attempt count could not be recorded; command %s defer %s could not write %s: %s\n' \
+      "$id" "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$defer_out" >&2
+    return 1
+  fi
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # tick - resume what is due
 # ---------------------------------------------------------------------------
@@ -376,7 +418,7 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
 # One deferral. Prints exactly one line when it acted and nothing when it did
 # not, because a sweep that narrates every quiet check is a sweep nobody reads.
 tick_one() {  # <record-file> <force>
-  local rec=$1 force=$2 id now due out rc sig route effort candidate eligible
+  local rec=$1 force=$2 id now due out rc route effort candidate eligible
   id=$(field "$rec" task)
   [ -n "$id" ] || return 0
   if [ -n "$(field "$rec" terminal)" ]; then
@@ -434,6 +476,7 @@ tick_one() {  # <record-file> <force>
       eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" eligible --route "$route" --effort "$effort" 2>/dev/null) || eligible=
       while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
+        fm_route_model_expresses_effort "$CONFIG" "$candidate" "$effort" || continue
         build_spawn_args "$rec" "$candidate" || continue
         rc=0
         out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-spawn.sh" "${SPAWN_ARGS[@]}" 2>&1) || rc=$?
@@ -454,20 +497,11 @@ tick_one() {  # <record-file> <force>
       done <<EOF
 $eligible
 EOF
-      build_spawn_args "$rec" || return 1
-      rc=0
-      out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-spawn.sh" "${SPAWN_ARGS[@]}" 2>&1) || rc=$?
-      case "$out" in *FM_SPAWN_CAPACITY_DEFERRED*) return 0 ;; esac
+      keep_waiting "$rec" "$out"
+      return $?
       ;;
   esac
-  # Refused for a reason capacity cannot fix. Stop ticking it and say so on the
-  # task's own status log, which is the surface supervision already reads.
-  sig=$(printf '%s' "$out" | LC_ALL=C tr '\t\r\n' '   ' | LC_ALL=C cut -c1-300)
-  mark_terminal "$id" "resume refused for a non-capacity reason"
-  printf 'blocked: waiting for capacity ended without dispatching - the resumed dispatch was refused for a reason capacity cannot fix: %s\n' \
-    "$sig" >> "$STATE/$id.status" 2>/dev/null || true
-  printf 'capacity deferral for %s stopped: %s\n' "$id" "$sig" >&2
-  return 1
+  keep_waiting "$rec" "$out"
 }
 
 cmd_tick() {

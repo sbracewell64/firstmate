@@ -403,7 +403,7 @@ def effective_route_profile($rule; $path; $model; $harness):
            then {rule:"effort_floor_malformed", config_path:($floor_path + "/effort_floor"),
                  configured:($ef_raw | tostring), observed:"unreadable"}
            else empty end),
-          (if (($e | length) > 0) and (rank($e) != null)
+          (if ($ef != null) and (($e | length) > 0) and (rank($e) != null)
            then ($models[$m].effort_expressible? // null) as $ee
              | if $ee == null
                then {rule:"effort_unverifiable", config_path:("/_models/" + $m + "/effort_expressible"),
@@ -645,6 +645,17 @@ fm_route_for_floor() {  # <config-dir> <floor>
   ' "$file" 2>/dev/null) || return 1
   [ "$(printf '%s\n' "$matches" | grep -c .)" = 1 ] || return 1
   printf '%s\n' "$matches"
+}
+
+fm_route_model_expresses_effort() {  # <config-dir> <model> <band>
+  local file=$1 model=$2 band=$3
+  file=$(fm_route_config_path "$file")
+  [ -f "$file" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+  jq -e --arg model "$model" --arg band "$band" \
+    '._models[$model].effort_expressible as $bands
+     | ($bands | type) == "array" and ($bands | index($band) != null)' \
+    "$file" >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
