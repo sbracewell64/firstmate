@@ -3216,6 +3216,35 @@ EOF
   pass "the run abort and the leaked-process reap both complete before the destructive worktree return"
 }
 
+# bin/fm-commitment-register.sh stores one decision-probe result per task and key
+# under state/commitment-probe-cache/. Left behind, the directory grows without
+# bound and a recycled task id could be answered from a previous task's
+# observation until the fingerprint check happened to reject it.
+test_teardown_reaps_the_commitment_probe_cache() {
+  local case_dir cache
+  case_dir=$(make_case probe-cache)
+  write_meta "$case_dir" local-only ship
+  cache="$case_dir/state/commitment-probe-cache"
+  mkdir -p "$cache"
+  printf 'stored\n' > "$cache/task-x1__crit"
+  printf 'stored\n' > "$cache/task-x1__other"
+  # Another task's stored result, which this release has no business removing.
+  printf 'stored\n' > "$cache/task-x2__crit"
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "probe-cache: teardown should succeed"
+
+  assert_absent "$cache/task-x1__crit" \
+    "probe-cache: the released task's stored verdict outlived it"
+  assert_absent "$cache/task-x1__other" \
+    "probe-cache: a second key's stored verdict outlived the released task"
+  [ -f "$cache/task-x2__crit" ] \
+    || fail "probe-cache: releasing one task removed another task's stored verdict"
+  pass "teardown reaps the released task's decision-probe cache and leaves other tasks' alone"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
@@ -3295,3 +3324,4 @@ test_process_spawned_during_grace_is_reaped_on_later_pass
 test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
+test_teardown_reaps_the_commitment_probe_cache

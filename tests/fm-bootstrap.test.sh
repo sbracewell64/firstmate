@@ -1291,6 +1291,110 @@ test_wake_ledger_terminal_sweep_reports_only_durable_records() {
   pass "session start records declared failures when locked, reports them read-only, and counts only durable appends"
 }
 
+# Session start must not be able to report a clean or quiet state while a recorded
+# commitment's probe says it is not real yet. Bootstrap's whole contract is
+# "silent = all good", so the property under test is that silence becomes
+# unavailable - and that it comes BACK on its own once the probe passes, because a
+# register that needs a hand edit to go quiet is the defect it was built to fix.
+test_open_commitment_denies_a_quiet_session_start() {
+  local case_dir fakebin home register owner out
+  case_dir="$TMP_ROOT/commitment"
+  home="$case_dir/home"
+  register="$case_dir/commitments"
+  owner="$home/owner.sh"
+  mkdir -p "$home/config" "$register"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  cp "$ROOT/commitments/schema.json" "$register/schema.json"
+  cat > "$register/session-start-cannot-be-quiet.json" <<JSON
+{
+  "commitment_schema_version": 1,
+  "id": "session-start-cannot-be-quiet",
+  "recorded": "the declared owner enforces this commitment",
+  "authority": "tests/fm-bootstrap.test.sh",
+  "unmet_state": "RULED-NOT-ENFORCED",
+  "satisfied_when": "the declared owner exists and answers",
+  "assurance": "executable",
+  "probe": {"kind": "command_answers", "command": "owner.sh"}
+}
+JSON
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  # The negative control first: with no register at all, this exact home is
+  # silent. Without it, a bootstrap that printed for some unrelated reason would
+  # make the case below vacuous.
+  mkdir -p "$case_dir/empty-register"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_COMMITMENT_DIR="$case_dir/empty-register" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "control: this home is not otherwise silent, so the case proves nothing: $out"
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_COMMITMENT_DIR="$register" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: session-start-cannot-be-quiet UNMET (RULED-NOT-ENFORCED)" \
+    "session start must surface an unmet commitment"
+  assert_contains "$out" "is not present and executable" \
+    "the surfaced line must carry the evidence"
+
+  # Detect-only sessions see it too: a lock-refused second session needs the same
+  # truth, and this check mutates nothing.
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_COMMITMENT_DIR="$register" \
+    FM_BOOTSTRAP_DETECT_ONLY=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: session-start-cannot-be-quiet" \
+    "a read-only session must still see an unmet commitment"
+
+  # Satisfy the probe. Nothing edits the entry.
+  cat > "$owner" <<'SH'
+#!/usr/bin/env bash
+printf 'enforced\n'
+SH
+  chmod +x "$owner"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_COMMITMENT_DIR="$register" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  [ -z "$out" ] || fail "a satisfied commitment must let session start go quiet again, got: $out"
+
+  # An unreadable register is could-not-observe, and still denies silence.
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_COMMITMENT_DIR="$case_dir/no-such-register" \
+    "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: register unreadable" \
+    "a register that cannot be read must not read as all-clear"
+  pass "an open commitment denies session start a quiet state, and retires on its probe"
+}
+
+# The one way this relay could go quietly vacuous: no interpreter to run at all.
+# A home on a bin/ that predates the register, or one whose exec bit a checkout
+# dropped, would otherwise report "silent - all good" while every recorded
+# commitment went unchecked - which is the reads-as-protection-while-protecting-
+# nothing shape the register exists to refuse, reproduced inside the register.
+test_missing_commitment_interpreter_is_not_a_quiet_session_start() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/commitment-nointerp"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  # A bin/ that is this repo's, minus the interpreter. Every other check has to
+  # keep working, or a silent run would prove nothing about this one.
+  for f in "$ROOT"/bin/*; do
+    case "${f##*/}" in fm-commitment-register.sh) continue ;; esac
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  [ ! -e "$fakescripts/fm-commitment-register.sh" ] \
+    || fail "the fixture still carries the interpreter, so this case proves nothing"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: register unreadable" \
+    "an absent interpreter must not let session start report a clean state"
+  assert_contains "$out" "fm-commitment-register.sh" \
+    "the line must name what is missing"
+  pass "an absent commitment interpreter is reported, never silently skipped"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
@@ -1323,3 +1427,5 @@ test_validation_daemon_missing_pid_file_is_down
 test_validation_daemon_malformed_pid_file_is_unknown_not_down
 test_validation_daemon_unused_root_is_silent
 test_wake_ledger_terminal_sweep_reports_only_durable_records
+test_open_commitment_denies_a_quiet_session_start
+test_missing_commitment_interpreter_is_not_a_quiet_session_start

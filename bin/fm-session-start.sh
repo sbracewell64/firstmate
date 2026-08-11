@@ -22,6 +22,20 @@
 # sweeps - is an opt-in FM_BOOTSTRAP_DETECT_ONLY=1 flag on fm-bootstrap.sh
 # itself (default unset/0 = unchanged behavior), not a fork.
 #
+# SESSION START RUNS NO DECISION-FILE `run:`. The commitment register's own typed
+# probes are a closed, audited, bounded set and they run here as usual, which is
+# how an entry whose commitment became real retires with no hand edit. A decision
+# file's `run:` is arbitrary text from a ruling author executed inside a task
+# worktree, and the open-decision fold would reach it - so every call below that
+# reaches that fold, and only those, carries
+# FM_COMMITMENT_NO_DECISION_RUN=1. Which calls those are is DERIVED in
+# tests/fm-session-start.test.sh rather than listed here, because the set grows
+# whenever a script this one invokes gains a fold read (fm-bootstrap.sh reaches it
+# through fm-send.sh). It is deliberately not exported: this script's
+# subtree relaunches secondmates through bin/fm-spawn.sh, which scrubs no
+# environment, and a safety flag that escaped into a long-lived agent would wedge
+# closure there for that agent's whole life.
+#
 # ORDERING, and why LOCK now runs before BOOTSTRAP (the old AGENTS.md order
 # was bootstrap-then-lock):
 #
@@ -331,7 +345,8 @@ fi
 # --- 2. bootstrap --------------------------------------------------------
 subsection "BOOTSTRAP"
 if [ "$READ_ONLY" -eq 1 ]; then
-  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
+  BOOT_OUT=$(FM_BOOTSTRAP_DETECT_ONLY=1 FM_COMMITMENT_NO_DECISION_RUN=1 \
+    FM_COMMITMENT_NO_DECISION_RUN=1 "$SCRIPT_DIR/fm-bootstrap.sh" 2>&1)
 else
   BOOT_OUT=$(
     "$SCRIPT_DIR/fm-herdr-session-cleanup.sh" 2>&1 || true
@@ -362,7 +377,10 @@ if [ "$READ_ONLY" -eq 1 ]; then
   GUARD_OUT=$(FM_GUARD_READ_ONLY=1 "$SCRIPT_DIR/fm-guard.sh" 2>&1)
   [ -n "$GUARD_OUT" ] && printf '%s\n' "$GUARD_OUT"
 else
-  DRAIN_OUT=$("$SCRIPT_DIR/fm-wake-drain.sh" 2>&1)
+  # One of the two calls that reach the open-decision fold; see SESSION START RUNS
+  # NO DECISION-FILE `run:` in the header. A probed key this drain does not
+  # evaluate stays listed as open with the reason, never silently closed.
+  DRAIN_OUT=$(FM_COMMITMENT_NO_DECISION_RUN=1 "$SCRIPT_DIR/fm-wake-drain.sh" 2>&1)
   if [ -n "$DRAIN_OUT" ]; then
     printf '%s\n' "$DRAIN_OUT"
   else
@@ -416,7 +434,9 @@ print_backlog_compact "$DATA/backlog.md" "data/backlog.md"
 # and pays only one cheap config read.
 if [ "$(fm_admission_state "$(fm_admission_config_file "$CONFIG")")" = active ]; then
   subsection "Fleet admission"
-  "$SCRIPT_DIR/fm-admission.sh" --brief || true
+  # The other call that reaches the open-decision fold, through
+  # bin/fm-fleet-snapshot.sh; see the header.
+  FM_COMMITMENT_NO_DECISION_RUN=1 "$SCRIPT_DIR/fm-admission.sh" --brief || true
   printf 'Re-examine load-held requests against this band; admit at most one at a time.\n'
 fi
 
