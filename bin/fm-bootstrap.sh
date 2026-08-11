@@ -13,7 +13,11 @@
 #                 "MODEL_REGISTRY: invalid config/models.json - <reason>",
 #                 "MODEL_REGISTRY: <model> <integrity problem>",
 #                 "MODEL_PRICE: <model> <price drift>",
-#                 "MODEL_VERIFY: <model> <probe problem>",
+#                 "MODEL_VERIFY: <model> <probe answered negatively>",
+#                 "MODEL_VERIFY: the availability record holds <scope> <subject>
+#                  under '<state>' <repair command>",
+#                 "TOOLING_GAP: <model> could not be observed by <reader>
+#                  <failure class and evidence>",
 #                 "ADMISSION_CONTROL: invalid config/crew-dispatch.json
 #                  _scheduling.admission_control - <reason>",
 #                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",

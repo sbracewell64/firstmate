@@ -363,6 +363,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/verification/availability-observation.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/decision-surface.md",
       "audience": "maintainer-verification"
     },

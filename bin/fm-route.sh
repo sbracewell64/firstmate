@@ -24,7 +24,18 @@
 #   fm-route.sh availability hold <model> [--scope provider] --state <state>
 #                                [--for-seconds <n>] [--evidence <text>]
 #   fm-route.sh availability release <model> [--scope provider]
+#   fm-route.sh availability observations    the last recorded probe observation
+#                                            per model, three-valued
+#   fm-route.sh availability gaps            only the candidates a FAILED reader
+#                                            is excluding, with the TOOLING_GAP
+#                                            evidence needed to repair each one
 #   fm-route.sh --help
+#
+# A HOLD AND A FAILED OBSERVATION ARE DIFFERENT ANSWERS and are listed
+# separately. A hold says the fleet cannot reach a model and is repaired by
+# waiting or by releasing it; a failed observation says the reader that would
+# answer for it broke, which no release ever fixes. Both exclude the candidate,
+# and `gaps` is the list whose repair is code rather than patience.
 #
 # A hold names a MODEL by default, resolved against the configured pools exactly
 # as a dispatch's --model is: a fully qualified entry must be in a pool, and a
@@ -193,6 +204,16 @@ terminal_report() {  # <decision-json>
       + ( if (.violations | length) > 0
           then ([.violations[] | .rule + " (" + .config_path + " configures "
                  + (.configured | tostring) + ", observed " + (.observed | tostring) + ")"] | join("; "))
+          elif .unobserved != null
+          then "UNOBSERVABLE - the reader " + (.unobserved.reader // "unnamed")
+               + " could not observe it ("
+               + (.unobserved.tooling_gap.failure_class // .unobserved.shape // "unclassified")
+               + ": " + (.unobserved.tooling_gap.failure_evidence // .unobserved.detail // "no evidence recorded")
+               + "), so this is neither available nor unavailable and no hold is what excludes it; repair the reader ("
+               + (.unobserved.tooling_gap.reason_code // "TOOLING_GAP")
+               + (if (.unobserved.tooling_gap.backlog_item // null) != null
+                  then ", tracked as " + .unobserved.tooling_gap.backlog_item
+                  else ", not yet filed as backlog work" end) + ")"
           elif .held != null
           then "held " + .held.state + " on the " + .held.scope + " "
                + .held.subject
@@ -243,7 +264,7 @@ case "$CMD" in
     # what lets a refusal name substitutes an operator can actually dispatch.
     # Only a held subject prints such a list, so only a held subject pays for
     # the whole pool's verdicts.
-    if [ -n "$(printf '%s' "$DECISION" | jq -r '.subject.held // empty')" ]; then
+    if [ -n "$(printf '%s' "$DECISION" | jq -r '.subject.held // .subject.unobserved // empty')" ]; then
       DECISION=$(enrich "$DECISION")
     fi
     if refusal=$(fm_route_refusal_from_decision "$CONFIG" "$ROUTE" "$MODEL" "$DECISION" "$STATE"); then
@@ -335,6 +356,35 @@ case "$CMD" in
                         + "  until=" + (.value.until // "released-explicitly" | tostring)
                         + "  " + (.value.evidence // ""))' \
             || die "the availability record is malformed: $(fm_route_health_path "$STATE")"
+        fi
+        ;;
+      observations|gaps)
+        # The observation record, not the hold record. Read-only here:
+        # bin/fm-model-verify.sh is its only writer, because the only thing that
+        # may record what a probe observed is the thing that ran the probe.
+        OBS=$(fm_availability_record_path "$STATE")
+        if [ ! -f "$OBS" ]; then
+          [ "$JSON" -eq 1 ] && printf '{"models":{}}\n'
+          exit 0
+        fi
+        if [ "$SUB" = gaps ]; then
+          FILTER=".models | with_entries(select(.value.observation == \"$FM_AVAIL_UNOBSERVABLE\"))"
+        else
+          FILTER='.models'
+        fi
+        if [ "$JSON" -eq 1 ]; then
+          jq -c "{models: ($FILTER)}" "$OBS" || die "the observation record is malformed: $OBS"
+        else
+          jq -r "($FILTER) | to_entries[]
+            | .key + \"  \" + .value.observation + \"  shape=\" + (.value.shape // \"-\")
+              + \"  reader=\" + (.value.reader // \"-\") + \"  at=\" + (.value.at // \"-\")
+              + (if .value.tooling_gap then \"  \" + .value.tooling_gap.reason_code
+                   + \" class=\" + .value.tooling_gap.failure_class
+                   + \" routes=\" + (.value.tooling_gap.affected_routes | join(\",\"))
+                   + \" item=\" + (.value.tooling_gap.backlog_item // \"UNFILED\")
+                   + \" evidence=\" + .value.tooling_gap.failure_evidence
+                 else \"\" end)" "$OBS" \
+            || die "the observation record is malformed: $OBS"
         fi
         ;;
       hold|release)

@@ -80,17 +80,19 @@ Run `bin/fm-model-verify.sh --model <provider>/<id>`.
 The command itself re-checks G2 first: a model the zero-budget decision refuses is not probed, and only `--force-probe` overrides that refusal.
 Where the provider offers real entitlement data, read it first and probe second - an empty entitlement set is a refusal that costs nothing to detect.
 
-Four distinguishable response shapes:
+Four distinguishable response shapes, each mapping to exactly one of the three availability observations that `bin/fm-availability-lib.sh` owns:
 
-| Shape | rc | Meaning | Handler |
-|---|---|---|---|
-| `ok` | 0 | entitled and live | admit to the next gate |
-| `entitlement-refused` | 1 | server-side refusal naming the account type | reject; never route |
-| `unknown-model` | 1 | unknown id, still sent upstream | reject; identity error at G0 |
-| `client-error` | 1 | request never left the machine | configuration error, not a provider fact |
+| Shape | rc | Meaning | Observation | Handler |
+|---|---|---|---|---|
+| `ok` | 0 | entitled and live | `AVAILABLE` | admit to the next gate |
+| `entitlement-refused` | 1 | server-side refusal naming the account type | `UNAVAILABLE` | reject; never route |
+| `unknown-model` | 1 | unknown id, still sent upstream | `UNAVAILABLE` | reject; identity error at G0 |
+| `client-error` | 1 | request never left the machine | `UNOBSERVABLE` | configuration error, not a provider fact |
 
 A client-side failure returns in well under a second; a server-side refusal takes seconds.
 That separation matters: a local typo must never be recorded as a provider outage.
+A timeout, a harness with no probe path, an uninstalled reader, and any shape nobody mapped are `UNOBSERVABLE` for the same reason - they establish nothing about the model, so they file a `TOOLING_GAP` naming the reader to repair rather than a fact about the provider.
+`AVAILABLE` and `UNAVAILABLE` are answers about the candidate; `UNOBSERVABLE` is an answer about the instrument, and reading it as either of the other two is the collapse this mapping exists to prevent.
 Every probe closes stdin - `pi -p` can hang unbounded otherwise, and a wedged probe presents to supervision as a stale worker, making the monitor the fault.
 
 **G4 Harness expressibility.** Can the harness express what the route requires *on this model*?

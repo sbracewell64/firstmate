@@ -80,6 +80,14 @@ if [ -n "${FM_ROUTE_LIB_SOURCED:-}" ]; then
 fi
 FM_ROUTE_LIB_SOURCED=1
 
+# ELIGIBLE's second exclusion input. bin/fm-availability-lib.sh owns what a
+# probe result MEANS and the record it lands in; this library owns only what
+# routing does with a candidate whose observation failed, which is to refuse to
+# consider it. Sourced here rather than by each caller so the two exclusions -
+# a hold, and a reader that could not observe - can never be half-wired.
+# shellcheck source=bin/fm-availability-lib.sh
+. "$(dirname "${BASH_SOURCE[0]}")/fm-availability-lib.sh"
+
 # The availability record's only schema, and the closed state vocabulary it
 # accepts. Every state is one a `_failover.conditions.*.sets` value names, so a
 # recorded hold always traces back to a condition the policy defines. An
@@ -107,6 +115,9 @@ FM_ROUTE_TOKEN_FLOOR_MISMATCH=FM_SPAWN_ROUTE_FLOOR_MISMATCH
 FM_ROUTE_TOKEN_POOL=FM_SPAWN_ROUTE_POOL_VIOLATION
 FM_ROUTE_TOKEN_FLOOR=FM_SPAWN_ROUTE_FLOOR_VIOLATION
 FM_ROUTE_TOKEN_HELD=FM_SPAWN_ROUTE_MODEL_HELD
+FM_ROUTE_TOKEN_UNOBSERVED=$FM_AVAIL_TOKEN_UNOBSERVED
+FM_ROUTE_TOKEN_OBSERVATION_UNREADABLE=FM_ROUTE_OBSERVATION_UNREADABLE
+FM_ROUTE_TOKEN_HEALTH_FOREIGN=FM_ROUTE_HEALTH_FOREIGN_ENTRY
 FM_ROUTE_TOKEN_NO_CANDIDATE=FM_ROUTE_NO_CANDIDATE
 FM_ROUTE_TOKEN_HEALTH_STATE=FM_ROUTE_HEALTH_STATE_UNKNOWN
 FM_ROUTE_TOKEN_HOLD_SUBJECT=FM_ROUTE_HOLD_SUBJECT_UNRESOLVED
@@ -176,6 +187,53 @@ fm_route_pool_models() {  # [<config-dir>]
   jq -r "$FM_ROUTE_ENTRIES_JQ"'
     [ route_entries[] | .rule.pool? | select(type == "array") | .[] | select(type == "string") ]
     | unique | .[]
+  ' "$file" 2>/dev/null || return 2
+}
+
+# The routes whose pool contains one model, comma-joined. A tooling-gap record
+# has to name the routing decisions a broken reader is blocking, and "which
+# routes does this candidate serve" is a question only the routing config can
+# answer. Empty when no routed pool names it.
+fm_route_routes_for_model() {  # <config-dir> <model>
+  local file
+  file=$(fm_route_config_path "$1")
+  [ -f "$file" ] || return 1
+  command -v jq >/dev/null 2>&1 || return 2
+  jq -r --arg m "$2" "$FM_ROUTE_ENTRIES_JQ"'
+    [ route_entries[]
+      | select((.rule.pool? | type) == "array" and ((.rule.pool | index($m)) != null))
+      | .id ] | unique | join(",")
+  ' "$file" 2>/dev/null || return 2
+}
+
+# Entries in the availability record whose state is outside the closed
+# vocabulary, one "<scope> <subject> <state>" per line.
+#
+# WHY THIS IS DETECT-ONLY. Such an entry can only come from a writer that is not
+# the supported one, and this fleet measured exactly that: a probe sweep merged
+# its own observation schema into this record, so every model it touched -
+# INCLUDING one whose probe positively said it was reachable - became a
+# permanent hold that no policy condition had ever set. Reinterpreting a foreign
+# entry here would silently re-admit candidates a reader never cleared, so the
+# entry keeps excluding (fail-closed, unchanged) and this function exists so the
+# repair can be NAMED and performed through `fm-route.sh availability release`.
+fm_route_health_foreign_entries() {  # [<state-dir>]
+  local file states
+  file=$(fm_route_health_path "${1:-}")
+  [ -f "$file" ] || return 0
+  command -v jq >/dev/null 2>&1 || return 2
+  states=$(printf '%s\n' "$FM_ROUTE_HEALTH_STATES" | jq -R -s -c 'split("\n") | map(select(length > 0))')
+  # The state is bound to a variable BEFORE the `$known | index(...)` pipe:
+  # inside a pipe the input rebinds, so `index(.value.state)` would index the
+  # entry's own field against the known ARRAY and fail the whole query. A
+  # swallowed failure here would read as "no foreign entries", which is the
+  # could-not-observe wearing the healthy answer's clothes.
+  jq -r --argjson known "$states" '
+    def foreign($scope): to_entries[] | . as $e | (($e.value.state? // "") | tostring) as $s
+      | select(($known | index($s)) == null)
+      | $scope + " " + $e.key + " " + (if ($s | length) > 0 then $s else "<none>" end);
+    ((.models // {}) | foreign("model")),
+    ((.providers // {}) | foreign("provider"))
   ' "$file" 2>/dev/null || return 2
 }
 
@@ -287,6 +345,17 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
           elif $ph != null then ($ph + {scope:"provider", subject:$p})
           else null end;
 
+    # The other exclusion, and deliberately NOT a hold. A hold says the fleet
+    # cannot reach this model; this says the reader that would answer for it
+    # failed, so nobody knows. Keeping them separate is the whole point: the
+    # first is repaired by waiting or by the provider, the second only by
+    # fixing the reader, and a refusal that names the wrong one sends an
+    # operator to release a hold that was never what excluded the candidate.
+    #
+    # Only an ATTEMPTED observation that failed appears here. A model nobody
+    # probed has no entry and is not excluded by this axis.
+    def unobserved($m): ($unobserved.models[$m] // null);
+
     def violations($m; $e):
         [ (if ($floor_undefined)
            then {rule:"floor_undefined", config_path:($route_path + "/floor"),
@@ -376,6 +445,7 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
      subject:( (resolve($model)) as $r
                | $r + {requested:$model, effort:$effort,
                        held:(if $r.resolved != null then held($r.resolved) else null end),
+                       unobserved:(if $r.resolved != null then unobserved($r.resolved) else null end),
                        violations:(if $r.resolved != null then violations($r.resolved; $effort)
                                    elif $r.resolution == "unstated"
                                    then [{rule:"model_unstated", config_path:$pool_path,
@@ -386,10 +456,11 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
      candidates:[ $pool | to_entries[]
                   | .value as $c
                   | (held($c)) as $h
+                  | (unobserved($c)) as $u
                   | (violations($c; (if ($effort | length) > 0 then $effort else ($ef // "") end))) as $v
-                  | {model:$c, position:(.key + 1), held:$h, violations:$v,
+                  | {model:$c, position:(.key + 1), held:$h, unobserved:$u, violations:$v,
                      floor_met:(($v | length) == 0),
-                     eligible:(($v | length) == 0 and $h == null)} ]}
+                     eligible:(($v | length) == 0 and $h == null and $u == null)} ]}
   end
 '
 
@@ -401,19 +472,23 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
 #
 #   2  the routing config is absent or unreadable
 #   3  the availability record exists and could not be parsed
+#   4  the observation record exists and could not be parsed
 #
-# Collapsing the two sends an operator to repair a crew-dispatch.json that
-# parses perfectly while the truncated model-health.json goes unmentioned, which
-# is the same misdirection class as naming a substitute nothing checked.
+# Collapsing them sends an operator to repair a crew-dispatch.json that parses
+# perfectly while the truncated model-health.json goes unmentioned, which is the
+# same misdirection class as naming a substitute nothing checked. The third
+# status exists for the same reason: the record that carries a broken reader's
+# exclusions fails independently of the one that carries holds.
 fm_route_decision() {
-  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} file holds now
+  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} file holds unobserved now
   file=$(fm_route_config_path "$cfg")
   [ -f "$file" ] || return 2
   command -v jq >/dev/null 2>&1 || return 2
   now=$(date -u +%s)
   holds=$(fm_route_health_active "$state" "$now") || return 3
+  unobserved=$(fm_availability_unobserved_active "$state") || return 4
   jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" \
-     --argjson holds "$holds" \
+     --argjson holds "$holds" --argjson unobserved "$unobserved" \
      "$FM_ROUTE_DECISION_JQ" "$file" 2>/dev/null || return 2
 }
 
@@ -443,7 +518,13 @@ fm_route_decision_with_registry() {  # <decision-json> <verdict-lines>
       | ($r.registry_refusal // null) as $rr
       | $c + {registry_refusal:$rr,
               registry_checked:($r != null),
-              eligible:($c.floor_met and ($c.held == null) and ($rr == null))} ]' \
+              # Every exclusion the decision already found, AND the registry
+              # verdict. Recomputing from a subset is how an exclusion gets
+              # silently dropped by the step that was only meant to add one:
+              # this expression narrows what the decision decided and must never
+              # be the place a new exclusion is forgotten.
+              eligible:($c.floor_met and ($c.held == null)
+                        and ($c.unobserved == null) and ($rr == null))} ]' \
     || { printf '%s' "$decision"; return 1; }
 }
 
@@ -517,8 +598,17 @@ fm_route_health_unreadable_refusal() {  # [<state-dir>]
 fm_route_undetermined_refusal() {
   case "$1" in
     3) fm_route_health_unreadable_refusal "${3:-}" ;;
+    4) fm_route_observation_unreadable_refusal "${3:-}" ;;
     *) fm_route_unreadable_refusal "$2" ;;
   esac
+}
+
+# The third unreadable input, named separately for the same reason the second
+# is: an operator sent to the availability record while the observation record
+# is the truncated one repairs a file that was never broken.
+fm_route_observation_unreadable_refusal() {  # [<state-dir>]
+  printf '%s: %s exists but could not be parsed, so which candidates a failed reader is currently excluding could not be determined and no dispatch can be checked against the route it claims. Repair or remove that record; neither the routing config nor the availability record is what failed here\n' \
+    "$FM_ROUTE_TOKEN_OBSERVATION_UNREADABLE" "$(fm_availability_record_path "${1:-}")"
 }
 
 # fm_route_refusal_from_decision <config-dir> <route> <model> <decision-json>
@@ -530,7 +620,7 @@ fm_route_undetermined_refusal() {
 # availability records, and then the refusal and the recorded floor no longer
 # describe the same decision.
 fm_route_refusal_from_decision() {
-  local cfg=$1 route=$2 model=${3:-} decision=$4 state=${5:-} known dup resolution count held substitutes checked
+  local cfg=$1 route=$2 model=${3:-} decision=$4 state=${5:-} known dup resolution count held unobserved substitutes checked
   known=$(printf '%s' "$decision" | jq -r '.route_known')
   if [ "$known" != true ]; then
     printf '%s: route %s is not defined by %s/crew-dispatch.json. Defined: %s\n' \
@@ -556,6 +646,28 @@ fm_route_refusal_from_decision() {
     printf 'this dispatch violates the route it claims (%s, floor %s):\n' \
       "$route" "$(printf '%s' "$decision" | jq -r '.floor // "unconfigured"')"
     fm_route_violation_lines "$route" "$decision" '.subject.violations'
+    return 1
+  fi
+  # OBSERVABILITY, before availability. The routing policy admits this model and
+  # the reader that would say whether the fleet can reach it FAILED, so there is
+  # no availability fact to apply. Refusing here keeps a could-not-observe from
+  # being reported as a hold: a hold sends an operator to release it, and
+  # releasing changes nothing while the reader is still broken.
+  unobserved=$(printf '%s' "$decision" | jq -c '.subject.unobserved // empty')
+  if [ -n "$unobserved" ]; then
+    fm_availability_unobserved_refusal \
+      "$(printf '%s' "$decision" | jq -r '.subject.resolved')" "$unobserved" "$state"
+    # The substitutes are the same eligible list a hold offers, and it is
+    # printed for the same reason: a refusal an operator cannot act on is a
+    # refusal that stops the fleet twice.
+    substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")')
+    if [ -n "$substitutes" ]; then
+      printf '  Fail over to the next eligible model inside this route pool, in pool order (%s); never substitute outside this pool and never lower the floor.\n' \
+        "$substitutes"
+    else
+      printf '  No other candidate in route %s is eligible either, so there is nothing to fail over to. A single-candidate pool blocked by a broken reader is the correct immediate behaviour: repair observability rather than making uncertainty permissive. Run fm-route.sh eligible --route %s for the terminal report, then stop and escalate.\n' \
+        "$route" "$route"
+    fi
     return 1
   fi
   # AVAILABILITY. The routing policy admits this model; the record says the

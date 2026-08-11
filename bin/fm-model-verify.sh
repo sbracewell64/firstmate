@@ -49,6 +49,28 @@
 # Conflating them would make every transient outage permanently degrade the
 # routing table, which is exactly the failure the demotion policy is built to
 # avoid. A rate-limited model is unavailable, not demoted.
+#
+# NOR DOES IT WRITE state/model-health.json DIRECTLY, and that is a repair. It
+# used to merge its own probe schema into that file, which bin/fm-route-lib.sh
+# owns as a NEGATIVE-ONLY hold register keyed on an entry's mere presence. Every
+# probed model therefore became a permanent hold - including models whose probe
+# had positively reported them reachable - and a harness with no probe path
+# recorded the same shape under a state, `unknown`, that no policy condition
+# defines and no reason accompanied. Holds now go through that library's
+# supported writer in its own closed vocabulary, and what the probe OBSERVED
+# goes to state/model-observation.json, whose schema is honest about the third
+# value: a probe that could not run observed nothing.
+#
+# WHERE EACH OF THE THREE OBSERVATIONS LANDS. bin/fm-availability-lib.sh owns
+# the mapping; this script owns only the writing.
+#   AVAILABLE     an observation entry. No hold, and no release either: a
+#                 positive probe never clears a hold somebody else recorded.
+#   UNAVAILABLE   an observation entry plus a hold through the supported writer.
+#   UNOBSERVABLE  an observation entry carrying a TOOLING_GAP evidence block and
+#                 NO hold, because a broken reader is not a provider fact. The
+#                 candidate is still excluded from routing - fail-closed is
+#                 preserved - but the refusal now names the reader to repair
+#                 instead of a hold that releasing would not fix.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -67,6 +89,11 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-model-registry-lib.sh
 . "$SCRIPT_DIR/fm-model-registry-lib.sh"
+# fm-route-lib.sh sources fm-availability-lib.sh, so both the supported hold
+# writer and the observation record's owner arrive together; wiring only one of
+# them is how a probe result reaches half a record.
+# shellcheck source=bin/fm-route-lib.sh
+. "$SCRIPT_DIR/fm-route-lib.sh"
 
 ALL=0
 ONE=
@@ -114,9 +141,9 @@ if ! err=$(fm_model_registry_validate "$REG"); then
   exit 0
 fi
 
-HEALTH="$STATE/model-health.json"
 NOW_EPOCH=$(date -u +%s)
 NOW_ISO=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+declare -A HARNESS_OF=()
 
 # ---------------------------------------------------------------------------
 # Select the models to probe
@@ -206,32 +233,75 @@ fi
 # ---------------------------------------------------------------------------
 # Probe
 # ---------------------------------------------------------------------------
-# One probe. Prints "<key>\t<shape>\t<rc>\t<latency>\t<first line of output>".
-# stdin closed (</dev/null) AND bounded by `timeout` - two independent reasons
-# this cannot wedge the caller.
+# One probe result as one line, and the ONLY place this file's wire format is
+# spelled: "<key>\t<shape>\t<rc>\t<latency>\t<detail>".
+#
+# NO FIELD IS EVER EMPTY, and that is a fix rather than a style. Tab is an IFS
+# WHITESPACE character, so bash's `read` collapses a run of consecutive tabs into
+# a single delimiter: a record printed as `key\tshape\t\t\tdetail` was read back
+# with the detail sitting in `rc` and the detail variable empty, which is exactly
+# how this fleet's session start came to report `claude/opus could not be probed
+# - ` with nothing after the dash. A failure that cannot say why is a failure
+# nobody can repair, so absent numbers are written `-` and an empty detail is
+# replaced by a statement that the reader produced none.
+probe_record() {  # <key> <shape> <rc-or-empty> <latency-or-empty> <detail>
+  local key=$1 shape=$2 rc=${3:-} lat=${4:-} detail=${5:-}
+  [ -n "$rc" ] || rc='-'
+  [ -n "$lat" ] || lat='-'
+  [ -n "$detail" ] || detail="the reader exited without producing any output to report"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$shape" "$rc" "$lat" "$(printf '%s' "$detail" | tr -d '\t\n')"
+}
+
+# One probe. stdin closed (</dev/null) AND bounded by `timeout` - two independent
+# reasons this cannot wedge the caller.
+#
+# TWO PROBE PATHS, because a harness with none is a reader that cannot observe.
+# `claude` had no arm here, so every claude-routed model recorded a
+# could-not-observe forever while being demonstrably entitled and live. Its
+# command shape is not invented: config/models.json's own identity evidence for
+# claude/opus records `claude -p --model opus` as how that model's resolved id
+# was established, so this is the already-verified path rather than a new one.
 probe_one() {
   local key=$1 harness=$2 provider=$3 model_id=$4 out rc t0 t1 lat shape
-  if [ "$harness" != pi ] && [ "$harness" != pi-signed ]; then
-    printf '%s\t%s\t\t\t%s\n' "$key" 'unprobeable' "no verified probe path for harness $harness"
-    return 0
-  fi
+  case "$harness" in
+    pi|pi-signed|claude) ;;
+    *)
+      probe_record "$key" 'unprobeable' '' '' \
+        "no verified probe path for harness $harness, so nothing observed this model"
+      return 0
+      ;;
+  esac
   if ! command -v "$harness" >/dev/null 2>&1; then
-    printf '%s\t%s\t\t\t%s\n' "$key" 'unprobeable' "$harness is not installed"
+    probe_record "$key" 'unprobeable' '' '' \
+      "$harness is not installed on this machine, so the reader could not run"
     return 0
   fi
   t0=$(date +%s)
-  out=$(timeout "$PROBE_TIMEOUT" "$harness" -p --provider "$provider" --model "$model_id" \
-        --no-tools --no-session --thinking off 'Reply with the single word: ok' \
-        </dev/null 2>&1)
-  rc=$?
+  case "$harness" in
+    claude)
+      # --strict-mcp-config keeps a probe from loading this home's MCP servers:
+      # the question is whether the provider serves this model, and a probe that
+      # drags in unrelated tooling can fail for reasons that say nothing about it.
+      out=$(timeout "$PROBE_TIMEOUT" "$harness" -p --model "$model_id" \
+            --strict-mcp-config 'Reply with the single word: ok' \
+            </dev/null 2>&1)
+      rc=$?
+      ;;
+    *)
+      out=$(timeout "$PROBE_TIMEOUT" "$harness" -p --provider "$provider" --model "$model_id" \
+            --no-tools --no-session --thinking off 'Reply with the single word: ok' \
+            </dev/null 2>&1)
+      rc=$?
+      ;;
+  esac
   t1=$(date +%s)
   lat=$((t1 - t0))
   if [ "$rc" = 124 ]; then
-    printf '%s\t%s\t%s\t%s\t%s\n' "$key" 'timeout' "$rc" "$lat" "probe exceeded ${PROBE_TIMEOUT}s"
+    probe_record "$key" 'timeout' "$rc" "$lat" "probe exceeded ${PROBE_TIMEOUT}s without returning"
     return 0
   fi
   shape=$(fm_model_probe_classify "$rc" "$out")
-  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$shape" "$rc" "$lat" "$(printf '%s' "$out" | head -1)"
+  probe_record "$key" "$shape" "$rc" "$lat" "$(printf '%s' "$out" | head -1)"
 }
 
 RESULTS=
@@ -250,6 +320,10 @@ EOF
   n=0
   while IFS=$'\t' read -r key harness provider model_id; do
     [ -n "$key" ] || continue
+    # Which reader was asked is part of a tooling gap's repair evidence, and the
+    # result line carries only what the reader observed, so the binding is kept
+    # here rather than widened into the wire format.
+    HARNESS_OF[$key]=$harness
     n=$((n + 1))
     probe_one "$key" "$harness" "$provider" "$model_id" > "$TMPD/$n.out" 2>/dev/null &
   done <<EOF
@@ -269,44 +343,69 @@ EOF
 fi
 
 # ---------------------------------------------------------------------------
-# Merge into the volatile health record
+# Record what each probe OBSERVED, in the three-valued type
 # ---------------------------------------------------------------------------
+# bin/fm-availability-lib.sh decides what each shape means and owns the
+# observation record; bin/fm-route-lib.sh's supported writer owns holds. This
+# loop only routes each result to the right one of them, so no schema is
+# authored here and none can cross into the other's file again.
 mkdir -p "$STATE"
-[ -f "$HEALTH" ] || printf '{"models":{}}\n' > "$HEALTH"
-if ! jq -e . "$HEALTH" >/dev/null 2>&1; then
-  printf '{"models":{}}\n' > "$HEALTH"
-fi
+
+record_results() {
+  local key shape rc lat detail observation hold_state routes gap reader
+  while IFS=$'\t' read -r key shape rc lat detail; do
+    [ -n "$key" ] || continue
+    [ "$rc" != '-' ] || rc=
+    [ "$lat" != '-' ] || lat=
+    reader="bin/fm-model-verify.sh probe via ${HARNESS_OF[$key]:-an unresolved harness}"
+    observation=$(fm_availability_from_shape "$shape" 2>/dev/null)
+    case "$observation" in
+      "$FM_AVAIL_UNOBSERVABLE")
+        # The routes a broken reader is currently blocking are part of the
+        # repair evidence: a gap on a candidate no pool names costs nothing,
+        # and one on a single-candidate pool has stopped a route outright.
+        routes=$(fm_route_routes_for_model "$CONFIG" "$key" 2>/dev/null || true)
+        gap=$(fm_availability_gap_block "$reader" \
+          "$key" 'entitlement-and-liveness' "$shape" "$detail" "$NOW_ISO" "$routes" '')
+        fm_availability_record_write "$STATE" "$key" "$observation" "$shape" \
+          "$reader" "$detail" "$lat" "$NOW_ISO" "$gap" || return 1
+        ;;
+      "$FM_AVAIL_UNAVAILABLE")
+        fm_availability_record_write "$STATE" "$key" "$observation" "$shape" \
+          "bin/fm-model-verify.sh" "$detail" "$lat" "$NOW_ISO" || return 1
+        # Through the supported writer, in ITS closed vocabulary. A hold this
+        # script authored directly is the defect this whole path exists to end.
+        if hold_state=$(fm_availability_hold_state "$shape"); then
+          fm_route_health_write "$STATE" model "$key" "$hold_state" '' \
+            "probe $shape at $NOW_ISO: $detail" || return 1
+        fi
+        # A model no routed pool names cannot be held by subject resolution and
+        # does not need to be: the observation record already carries the fact.
+        ;;
+      *)
+        # AVAILABLE records the observation and nothing else. It never releases
+        # a hold: releasing is an explicit decision with its own supported
+        # command, and a positive probe that quietly cleared an admin_disabled
+        # hold would be stale evidence overriding a deliberate one.
+        fm_availability_record_write "$STATE" "$key" "$observation" "$shape" \
+          "bin/fm-model-verify.sh" "$detail" "$lat" "$NOW_ISO" || return 1
+        ;;
+    esac
+  done <<EOF
+$RESULTS
+EOF
+}
 
 if [ -n "$RESULTS" ]; then
-  merged=$(printf '%s\n' "$RESULTS" | jq -R -s --arg at "$NOW_ISO" --slurpfile prior "$HEALTH" '
-    ($prior[0] // {"models":{}}) as $p
-    | [ split("\n")[] | select(length > 0) | split("\t")
-        | { key: .[0],
-            value: { shape: .[1], rc: (.[2] | tonumber? // null),
-                     latency_s: (.[3] | tonumber? // null),
-                     detail: (.[4] // ""), at: $at } } ]
-    | from_entries
-    | . as $new
-    | reduce ($new | to_entries[]) as $e
-        ($p; .models[$e.key] = (
-          ($p.models[$e.key]? // {}) as $old
-          | ($e.value.shape) as $shape
-          | $e.value
-            + { state: (if $shape == "ok" then "available"
-                        elif $shape == "unprobeable" then ($old.state? // "unknown")
-                        else "unavailable" end),
-                consecutive_failures: (
-                  if $shape == "ok" then 0
-                  elif $shape == "unprobeable" then ($old.consecutive_failures? // 0)
-                  else (($old.consecutive_failures? // 0) + 1) end) }
-        ))
-    | .updated_at = $at
-  ')
-  printf '%s\n' "$merged" > "$HEALTH"
+  record_results || echo "MODEL_VERIFY: one or more probe results could not be recorded, so this sweep observed less than it reports"
 fi
 
 if [ "$AS_JSON" = 1 ]; then
-  cat "$HEALTH"
+  # The observation record, because that is what this command produced. The hold
+  # record is a different question with a different owner: read it with
+  # fm-route.sh availability.
+  OBS=$(fm_availability_record_path "$STATE")
+  if [ -f "$OBS" ]; then cat "$OBS"; else printf '{"models":{}}\n'; fi
   exit 0
 fi
 
@@ -318,10 +417,6 @@ if [ -n "$RESULTS" ]; then
     [ -n "$key" ] || continue
     case "$shape" in
       ok) ;;
-      unprobeable)
-        echo "MODEL_VERIFY: $key could not be probed - $detail"
-        NEEDS_ACTION=1
-        ;;
       entitlement-refused)
         echo "MODEL_VERIFY: $key is REFUSED by the provider for this account - it must not be routed to: $detail"
         NEEDS_ACTION=1
@@ -330,21 +425,33 @@ if [ -n "$RESULTS" ]; then
         echo "MODEL_VERIFY: $key was not recognised by its provider (identity error, not an outage): $detail"
         NEEDS_ACTION=1
         ;;
-      client-error)
-        echo "MODEL_VERIFY: $key failed locally before the request left the machine (configuration error): $detail"
-        NEEDS_ACTION=1
-        ;;
-      timeout)
-        echo "MODEL_VERIFY: $key probe timed out after ${PROBE_TIMEOUT}s"
-        NEEDS_ACTION=1
-        ;;
       *)
-        echo "MODEL_VERIFY: $key probe returned an unrecognised result (rc=$rc, ${lat}s): $detail"
+        # Every remaining shape is a could-not-observe, and it is reported as
+        # repairable work rather than as a fact about the model. The reason is
+        # always present: this line existing with nothing after the dash is the
+        # exact defect the record format was changed to make impossible.
+        echo "TOOLING_GAP: $key could not be observed by bin/fm-model-verify.sh ($shape, rc=${rc:--}, ${lat:--}s) - $detail. This is a broken reader, not a provider fact: the candidate is excluded from routing until the reader is repaired, and releasing a hold will not restore it. File the repair as backlog work and see fm-route.sh availability gaps."
         NEEDS_ACTION=1
         ;;
     esac
   done <<EOF
 $RESULTS
+EOF
+fi
+
+# The hold record's own integrity, reported where the probe path can see it.
+# Foreign entries can only come from a writer that is not the supported one, and
+# each one is silently excluding a candidate under a state no policy defines.
+# Detect-only by design: reinterpreting them here would re-admit candidates
+# nothing ever cleared, so the repair is named and left to the supported writer.
+foreign=$(fm_route_health_foreign_entries "$STATE" 2>/dev/null || true)
+if [ -n "$foreign" ]; then
+  while read -r scope subject state; do
+    [ -n "$subject" ] || continue
+    echo "MODEL_VERIFY: the availability record holds $scope $subject under '$state', which is not an availability state this fleet defines, so it is excluding that candidate under a hold no policy condition set. Repair it with: bin/fm-route.sh availability release $subject$( [ "$scope" = provider ] && printf ' --scope provider')"
+    NEEDS_ACTION=1
+  done <<EOF
+$foreign
 EOF
 fi
 
