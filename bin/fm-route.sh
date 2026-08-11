@@ -303,7 +303,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "$CMD needs --route"
     [ "$CMD" != next ] || [ -n "$AFTER" ] || die "next needs --after <model>"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2

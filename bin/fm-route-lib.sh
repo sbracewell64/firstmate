@@ -403,7 +403,7 @@ def effective_route_profile($rule; $path; $model; $harness):
            then {rule:"effort_floor_malformed", config_path:($floor_path + "/effort_floor"),
                  configured:($ef_raw | tostring), observed:"unreadable"}
            else empty end),
-          (if ($ef != null) and (($e | length) > 0) and (rank($e) != null)
+          (if (($e | length) > 0) and (rank($e) != null)
            then ($models[$m].effort_expressible? // null) as $ee
              | if $ee == null
                then {rule:"effort_unverifiable", config_path:("/_models/" + $m + "/effort_expressible"),

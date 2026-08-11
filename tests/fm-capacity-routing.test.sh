@@ -551,6 +551,10 @@ test_every_enforcing_dispatch_shape_records_its_capacity() {
   pass "every enforcing dispatch shape records the capacity it was admitted against"
 }
 
+if [ "${FM_CAPACITY_ROUTING_HELPERS_ONLY:-0}" = 1 ]; then
+  return 0
+fi
+
 test_exhausted_floor_pool_defers_rather_than_dispatching
 test_available_capacity_dispatches_and_records_what_it_was_admitted_against
 test_an_available_model_below_the_floor_is_not_a_substitute

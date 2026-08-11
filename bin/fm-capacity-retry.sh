@@ -12,15 +12,12 @@
 # has cleared.
 #
 # THIS IS NOT A SECOND SCHEDULER, AND THE DISTINCTION IS THE WHOLE DESIGN. It
-# selects no model, evaluates no route, reads no floor and applies no policy.
-# What it does on resume is re-run bin/fm-spawn.sh with the SAME typed dispatch
-# fields the deferred call carried, so ROUTE, capacity, ADMIT, the model
-# registry, the attempt budget and the pool-slot check all run again, at the one
-# chokepoint that owns them, against whatever the world looks like now. If a
-# floor became unmeetable while the work waited, the resumed dispatch is refused
-# by the same code that would have refused it originally. There is deliberately
-# no path here that picks a substitute, because a resume that could choose a
-# model would be exactly the silent downgrade this whole seam exists to prevent.
+# evaluates no route, reads no floor and applies no policy of its own. What it
+# does on resume is offer the route owner's eligible pool, in pool order, back
+# to bin/fm-spawn.sh with the SAME typed dispatch fields and recorded effort
+# band. The route owner excludes candidates that cannot express that band, and
+# spawn rechecks ROUTE, capacity, ADMIT, the model registry, the attempt budget
+# and the pool-slot check at the one chokepoint that owns them.
 #
 # NO STORED COMMAND LINE. The record holds TYPED FIELDS and nothing else, and
 # every one is re-validated against its own closed vocabulary or path-safety
@@ -55,7 +52,8 @@
 # total deferral budget and the stagnation rule that stops a wait whose observed
 # capacity picture has not moved. Reaching either bound is the unified terminal
 # state budget_exhausted, declared as a `failed:` status line by that owner. This
-# file never invents a second counter and never stops a wait on its own judgment.
+# file never invents a second counter. If that owner cannot record the count,
+# the wait fails closed because no enforceable bound remains.
 #
 # Usage:
 #   fm-capacity-retry.sh defer <id> --route <R> --floor <F> --pool <a,b,...>
@@ -107,10 +105,13 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-reasoning-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-route-lib.sh
+. "$SCRIPT_DIR/fm-route-lib.sh"
 
 RECHECK_BASE=${FM_CAPACITY_RECHECK_BASE:-900}
 RECHECK_CAP=${FM_CAPACITY_RECHECK_CAP:-10800}
 CAPACITY_SCHEMA=fm-capacity-deferral.v1
+ATTEMPT_BIN=${FM_ATTEMPT_BIN:-$FM_ROOT/bin/fm-attempt.sh}
 # The stable token a resumed dispatch prints, so a supervisor can tell an
 # automatic resume from an operator one without reading prose.
 CAPACITY_RESUMED_TOKEN=FM_CAPACITY_RESUMED
@@ -257,15 +258,20 @@ cmd_defer() {
   # record in place and marked terminal, so the wait is inspectable rather than
   # silently gone, and so nothing ticks it again.
   rc=0
-  defer_out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-attempt.sh" defer "$id" --signature "$signature" 2>&1) || rc=$?
+  defer_out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" defer "$id" --signature "$signature" 2>&1) || rc=$?
   if [ "$rc" -eq 3 ]; then
     printf '%s\n' "$defer_out" >&2
     mark_terminal "$id" "deferral bound spent"
     return 3
   fi
   if [ "$rc" -ne 0 ]; then
-    printf 'warning: the capacity deferral for %s was recorded but could not be counted: %s\n' "$id" "$defer_out" >&2
-    return 0
+    mark_terminal "$id" "attempt count could not be recorded"
+    printf 'failed: waiting for capacity ended because the attempt count could not be recorded by %s defer %s against %s: %s\n' \
+      "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$(clean "$defer_out")" \
+      >> "$STATE/$id.status" 2>/dev/null || true
+    printf 'error: capacity deferral for %s ended because the attempt count could not be recorded; command %s defer %s could not write %s: %s\n' \
+      "$id" "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$defer_out" >&2
+    return 1
   fi
   printf 'deferred %s route=%s retry_after=%s %s\n' "$id" "$route" "$retry_after" "$defer_out"
 }
@@ -293,7 +299,7 @@ next_check_epoch() {  # <record-file>
   retry_after=$(field "$rec" retry_after); is_count "$retry_after" || retry_after=0
   last=$(field "$rec" last_checked); is_count "$last" || last=$(field "$rec" deferred_at)
   is_count "$last" || last=0
-  deferrals=$("$FM_ROOT/bin/fm-attempt.sh" show "$(field "$rec" task)" 2>/dev/null \
+  deferrals=$("$ATTEMPT_BIN" show "$(field "$rec" task)" 2>/dev/null \
     | LC_ALL=C sed -n 's/.*deferrals=\([0-9]*\).*/\1/p')
   is_count "$deferrals" || deferrals=0
   backoff=$RECHECK_BASE
@@ -315,8 +321,8 @@ next_check_epoch() {  # <record-file>
 # survive its own check. A field that fails is a stop, not a substitution: a
 # resume that dropped an unreadable --mode would run the work under a delivery
 # posture nobody chose.
-build_spawn_args() {  # <record-file> -> sets SPAWN_ARGS
-  local rec=$1 id project scout mode yolo reason_code v k
+build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
+  local rec=$1 model_override=${2:-} id project scout mode yolo reason_code v k
   SPAWN_ARGS=()
   id=$(field "$rec" task)
   fm_task_id_path_safe "$id" || { echo "the recorded task id is not path-safe: $id" >&2; return 1; }
@@ -351,19 +357,26 @@ build_spawn_args() {  # <record-file> -> sets SPAWN_ARGS
   # call firstmate actually made, which is a different task wearing the same id.
   # --traceparent is deliberately NOT replayed: a trace id names one attempt in
   # flight, and reusing a stale one would attach this run to a trace that ended.
-  for k in harness model effort backend tooling-gap-item attempt-budget slot-base contribution-target; do
+  for k in harness effort backend tooling-gap-item attempt-budget slot-base contribution-target; do
     v=$(field "$rec" "$(printf '%s' "$k" | tr '-' '_')")
     [ -n "$v" ] || continue
     plain_value "$v" || { echo "the recorded $k is not a plain value: $v" >&2; return 1; }
     SPAWN_ARGS+=("--$k" "$v")
   done
+  if [ -n "$model_override" ]; then
+    plain_value "$model_override" || { echo "the substitute model is not a plain value: $model_override" >&2; return 1; }
+    SPAWN_ARGS+=(--model "$model_override")
+  else
+    v=$(field "$rec" model)
+    [ -z "$v" ] || { plain_value "$v" || { echo "the recorded model is not a plain value: $v" >&2; return 1; }; SPAWN_ARGS+=(--model "$v"); }
+  fi
   return 0
 }
 
 # One deferral. Prints exactly one line when it acted and nothing when it did
 # not, because a sweep that narrates every quiet check is a sweep nobody reads.
 tick_one() {  # <record-file> <force>
-  local rec=$1 force=$2 id now due out rc sig route
+  local rec=$1 force=$2 id now due out rc sig route effort candidate eligible
   id=$(field "$rec" task)
   [ -n "$id" ] || return 0
   if [ -n "$(field "$rec" terminal)" ]; then
@@ -410,11 +423,41 @@ tick_one() {  # <record-file> <force>
     return 0
   fi
   case "$out" in
-    *FM_SPAWN_CAPACITY_DEFERRED*|*FM_SPAWN_CAPACITY_EXHAUSTED*)
+    *FM_SPAWN_CAPACITY_DEFERRED*)
       # Still blocked. bin/fm-spawn.sh has already refreshed this record and
       # counted the deferral through bin/fm-attempt.sh, including stopping the
       # wait when a bound is spent, so there is nothing to do but stay quiet.
       return 0
+      ;;
+    *FM_SPAWN_CAPACITY_EXHAUSTED*)
+      effort=$(field "$rec" effort)
+      eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" eligible --route "$route" --effort "$effort" 2>/dev/null) || eligible=
+      while IFS= read -r candidate; do
+        [ -n "$candidate" ] || continue
+        build_spawn_args "$rec" "$candidate" || continue
+        rc=0
+        out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-spawn.sh" "${SPAWN_ARGS[@]}" 2>&1) || rc=$?
+        if [ "$rc" -eq 0 ]; then
+          rm -f -- "$rec"
+          if fm_tasks_axi_backend_available "$CONFIG"; then
+            tasks-axi unhold "$id" --file "$DATA/backlog.md" >/dev/null 2>&1 \
+              || printf 'warning: %s resumed but its backlog hold could not be cleared\n' "$id" >&2
+          fi
+          printf '%s: %s resumed onto %s in route %s because it can express recorded effort band %s\n' \
+            "$CAPACITY_RESUMED_TOKEN" "$id" "$candidate" "$route" "$effort" \
+            >> "$STATE/$id.status" 2>/dev/null || true
+          printf '%s resumed automatically onto %s in route %s because it can express recorded effort band %s\n' \
+            "$id" "$candidate" "$route" "$effort"
+          return 0
+        fi
+        case "$out" in *FM_SPAWN_CAPACITY_DEFERRED*) return 0 ;; esac
+      done <<EOF
+$eligible
+EOF
+      build_spawn_args "$rec" || return 1
+      rc=0
+      out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-spawn.sh" "${SPAWN_ARGS[@]}" 2>&1) || rc=$?
+      case "$out" in *FM_SPAWN_CAPACITY_DEFERRED*) return 0 ;; esac
       ;;
   esac
   # Refused for a reason capacity cannot fix. Stop ticking it and say so on the
