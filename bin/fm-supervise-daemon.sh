@@ -1134,7 +1134,7 @@ stale_gate_read_budget() {  # sets STALE_GATE_READ_BUDGET; call directly, never 
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
   local state=$1 now due f key task win marker age last max_defer oldest pause_secs
-  local working_reads=0 working_reads_max absorb
+  local working_reads=0 working_reads_max absorb wedge_reason
   stale_gate_read_budget
   working_reads_max=$STALE_GATE_READ_BUDGET
   now=$(_now)
@@ -1265,7 +1265,15 @@ housekeeping() {  # <state>
            # ${age} is time since positive evidence was last seen, NOT time since
            # the pane first went idle: a refresh restarts it. The wording says so
            # because this line is what a human reads for triage.
-           escalate_add "$state" "no progress evidence for ${age}s (possible wedge): $win"
+           #
+           # `unobserved` escalates on exactly the same schedule as an observed
+           # idle crew - silence is never the answer to a wedge nobody could see -
+           # but says which of the three values it was, so the reader knows this
+           # is an unread crew rather than a measured stall.
+           wedge_reason="no progress evidence for ${age}s (possible wedge): $win"
+           [ "$absorb" = unobserved ] \
+             && wedge_reason="no progress evidence for ${age}s (possible wedge; ${FM_CLASSIFY_UNOBSERVED_NOTE}): $win"
+           escalate_add "$state" "$wedge_reason"
            stale_marker_remove "$win" "$state"
          fi ;;
     esac
