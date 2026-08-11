@@ -100,7 +100,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-landed-lib.sh`       | Shared "has this content already landed?" containment test, default-branch name, push-remote landing target, and landing-target candidate refs |
 | `fm-config-inherit-lib.sh` | Shared primary-to-secondmate inherited local-material propagation and config-reread delivery |
 | `fm-tasks-axi-lib.sh`    | Shared backlog-backend selector and `tasks-axi` compatibility probe                  |
-| `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor for the bootstrap diagnostic                  |
+| `fm-quota-axi-lib.sh`    | Shared `quota-axi` compatibility floor and bounded JSON reader for bootstrap and capacity routing |
 | `fm-vendor-auth-probe.sh`| Run one hard-bounded, non-destructive authentication probe of a named vendor CLI and report the fact |
 | `fm-wake-drain.sh`       | Atomically drain queued watcher wakes, emit bounded best-effort status-event annotations and a fleet-wide OPEN DECISIONS section, record the ledger's wake half, then assert supervision health |
 | `fm-wake-ledger.sh`      | Own the append-only wake-outcome and terminal-task evidence record, and summarize it |
@@ -117,6 +117,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-model-verify.sh`     | Live entitlement probes and local price-drift checks for routed models              |
 | `fm-route.sh`            | Read a route's floor, pool, eligible candidates and same-pool failover substitute, and record model or provider availability holds |
 | `fm-route-lib.sh`        | Own the routed-pool, capability-floor and availability rules every route decision applies |
+| `fm-capacity-lib.sh`     | Map current `quota-axi` evidence to three-valued routed-model capacity without changing the capability floor |
+| `fm-capacity-retry.sh`   | Persist, bound, inspect and automatically resume dispatches deferred for provider capacity |
 | `fm-check-register.sh`   | Bind an intentional custom watcher check to its current bytes                       |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication and identity-bound retirement |
