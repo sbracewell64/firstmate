@@ -16,6 +16,8 @@
 #                 "MODEL_VERIFY: <model> <probe problem>",
 #                 "ADMISSION_CONTROL: invalid config/crew-dispatch.json
 #                  _scheduling.admission_control - <reason>",
+#                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",
+#                 "COMMITMENT: register unreadable - <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "VALIDATION_DAEMON: down|unknown - <evidence>",
@@ -926,6 +928,40 @@ EOF
 # honest: with no config/models.json the spawn-time refusal cannot run, so if the
 # dispatch config routes to any provider-prefixed model this says so plainly
 # rather than leaving the zero-budget rule quietly unenforced.
+# Relay every registered commitment whose probe does not say it is real yet.
+#
+# This is the structural half of the commitment register: bootstrap's contract is
+# "silent = all good", so an open commitment printing here is what makes it
+# impossible for session start to report a clean or quiet state while a recorded
+# commitment is unenforced or its authorised work is unowned. A commitment whose
+# probe now passes retires itself and prints nothing, with no hand edit.
+#
+# Read-only, detect-only, and bounded by the register's own per-probe timeout, so
+# it runs in a lock-refused session too. It is never suppressed by age, count, or
+# rate: quieting the question would hide a genuine unmet commitment along with the
+# noise, which is the failure it exists to prevent.
+# bin/fm-commitment-register.sh owns the register, the probes, and the exact line
+# wording; this function only relays it.
+#
+# An ABSENT interpreter is the one way this relay could go quietly vacuous, so it
+# is the loudest case here rather than the silent one. The register already
+# reports an unreadable register rather than an empty one; a home running a bin/
+# that predates it, or one whose exec bit a checkout dropped, would otherwise
+# report "silent - all good" while every recorded commitment went unchecked -
+# which is the reads-as-protection-while-protecting-nothing shape this whole
+# mechanism exists to refuse.
+commitment_register_report() {
+  local bin="$SCRIPT_DIR/fm-commitment-register.sh" out
+  if [ ! -x "$bin" ]; then
+    printf 'COMMITMENT: register unreadable - %s is missing or not executable, so no recorded commitment could be checked\n' \
+      "bin/fm-commitment-register.sh"
+    return 0
+  fi
+  out=$(FM_HOME="$FM_HOME" "$bin" --open 2>/dev/null || true)
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out"
+}
+
 model_registry_validate() {
   local reg dispatch err drift routed
   reg="$CONFIG/models.json"
@@ -1273,6 +1309,7 @@ crew=
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != "default" ]; then
   echo "BOOTSTRAP_INFO: crew harness override active: $crew"
 fi
+commitment_register_report
 crew_dispatch_validate
 model_registry_validate
 admission_control_validate

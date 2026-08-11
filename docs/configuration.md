@@ -200,6 +200,46 @@ Fleet-local operational facts and gotchas live locally in `data/learnings.md`; i
 The file is created lazily on first learning and follows the same dated, evidence-backed, curated style as `data/captain.md`: inspect the current file first, then rewrite or prune stale entries instead of appending forever.
 There is no shared learnings file by captain decision.
 
+## Home-private commitments (data/commitments/)
+
+The tracked `commitments/` registry holds commitments about firstmate's own shared code and ships to every home.
+`data/commitments/` is an optional, gitignored overlay for commitments that are private to one home - a captain authorisation, a local exception - which must not reach a shared template repo.
+Entries use the same field contract, validated against the tracked `commitments/schema.json`, and an id must be unique across the two sources.
+
+The two sources differ deliberately in what their absence means.
+An absent tracked registry is could-not-observe and is reported, because that directory ships with `bin/`, so a missing one means the register itself is not working.
+An absent overlay is silent, because most homes have no private commitments.
+
+`bin/fm-commitment-register.sh` is the only interpreter, and its header and `--help` own the mechanics.
+Every state it prints is computed from that entry's probe on the spot and is never stored, so an entry retires by itself when its commitment becomes real, and no hand-written status word can satisfy one.
+
+The one thing it writes is `state/commitment-probe-cache/`, and only for the probes pinned into decision files, which are consulted on the open-decision fold's hot path rather than once per session.
+That cache is an accelerator for an answer and never a substitute for one: a stored result carries its observation time into whatever reads it, and past `FM_COMMITMENT_PROBE_CACHE_TTL` seconds (default 120, `0` to disable) it is not served at all.
+It is keyed on what the probe's answer depends on - the decision file's bytes, the task worktree, and that worktree's head - and deliberately not on the task's status stream, because the open-decision fold is driven by status appends, so keying on those would invalidate the entry precisely on the append where the cache was meant to help while saying nothing about the worktree the answer actually lives in.
+`bin/fm-teardown.sh` reaps a task's stored results with the task, and the directory is listed in the `AGENTS.md` state inventory.
+
+There are two kinds of probe here and they are not the same question, so they do not share a switch.
+The register's own typed probes are a closed set this repository owns, can audit, and bounds at 10 seconds, so running one is a cost decision.
+A decision file's `run:` is arbitrary text written by whoever authored a ruling and executed by `bash -c` inside a task worktree, so running one is a trust decision.
+
+The probe kinds are closed but their targets are not, so every path a typed probe names is resolved only under the tracked code root.
+Which args are paths is derived from `commitments/schema.json`, which marks each one, rather than restated in the script where a second list could go vacuous the day a kind is added.
+An absolute path is refused verbatim, upward traversal is refused, and a symlinked target is refused wherever it points, because what a symlink resolves to is not what the register audited; a refused target makes the entry inadmissible and is reported, never silently skipped and never a pass.
+An absent target is not refused, because an owner or test that does not exist is an observed absence rather than an unobservable one.
+That constraint is what makes running typed probes at session start a cost decision rather than a trust one, because the overlay at `data/commitments/` is gitignored and unreviewed.
+
+Session start runs typed probes and never a decision file's `run:`, and that is a safety requirement rather than a performance one.
+`bin/fm-session-start.sh` sets `FM_COMMITMENT_NO_DECISION_RUN=1` on exactly the calls that reach the open-decision fold - its wake drain, its admission read through `fm-fleet-snapshot.sh`, its bootstrap relay, and its deferred network stage, the last two of which reach the fold through `fm-send.sh` - and on nothing else.
+Which calls those are is derived in `tests/fm-session-start.test.sh` rather than restated anywhere, because the set grows the day a script session start already invokes gains a fold read.
+It is deliberately not exported over the whole subtree, because that subtree relaunches secondmates through `bin/fm-spawn.sh`, which scrubs no environment, and a safety flag that escaped into a long-lived agent would wedge closure there for that agent's whole life.
+The typed probes keep running at session start, which is how an entry whose commitment became real still retires there with no hand edit rather than printing forever.
+Not running is not accepting: a criterion whose `run:` was not executed answers could-not-observe and no stored verdict stands in for it, so the resolution stays visibly unverified and still open.
+A wake drain, a decision-hold read, or a fleet snapshot run outside session start evaluates decision probes normally, while session start's own wake drain and admission read are inside the guard and report those keys as still open; `--no-decision-run` requests the same mode explicitly.
+
+The register's own typed probes are bounded by `FM_COMMITMENT_PROBE_TIMEOUT` (default 10 seconds) and a decision file's `run:` by `FM_COMMITMENT_DECISION_PROBE_TIMEOUT` (default 60 seconds).
+The larger second bound is derived rather than picked, and `commitments/schema.json`'s `probe_bounds` carries the same two numbers and the same derivation: the 2026-08-10 ruling makes `cited-control` the default tier and its `run` is a test invocation, `tests/fm-commitment-register.test.sh` runs in 7.8 seconds here and a pinned `cited-control` probe invokes it twice, so one probe costs about 15.6 seconds and 60 is roughly 4x observed with headroom for machine load.
+A probe stopped at its bound is reported as a `TIMEOUT`, distinct from every other could-not-observe cause, because could-not-observe cannot close a key and a chronically timing-out probe would otherwise block a closure forever while reading as an ordinary open item.
+
 ## Startup memory budget (config/startup-memory-budget)
 
 `config/startup-memory-budget` is the primary-authoritative per-home allowance for the startup prompt-memory surface: `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md` together.

@@ -1110,6 +1110,418 @@ EOF
   pass "fm-session-start.sh composes the real fm-lock.sh, fm-bootstrap.sh, and fm-wake-drain.sh output verbatim"
 }
 
+# --- session start executes no probe -----------------------------------------
+#
+# Read precisely, as in the register's own suite: no probe of the kind that is a
+# TRUST decision. Typed probes run here and are required to, which is what lets a
+# commitment that became real retire without a hand edit; what never runs is a
+# decision file's `run:`.
+#
+# A safety requirement, not a performance one, and it is a property of the WHOLE
+# composed chain rather than of any one script: session start's wake drain folds
+# every task's open decisions through fm-classify-lib.sh, and its admission read
+# does the same through fm-fleet-snapshot.sh, and both reach the commitment
+# register's closure gate - which would otherwise `bash -c` a ruling author's
+# `run:` text inside a task worktree on the critical path of every session.
+#
+# The guard is scoped to exactly that hazard, and this case pins both edges of the
+# scope against the real script. A decision file's `run:` must leave no mark. A
+# typed entry probe - a closed, audited, bounded kind this repository owns - must
+# still run, because suppressing those would leave every registered entry printing
+# forever, and because bin/fm-bootstrap.sh is what relays them and bin/fm-spawn.sh
+# relaunches secondmates from that same bootstrap: a typed probe that did not run
+# here is also the signature of the flag having been exported into everything
+# session start spawns.
+test_session_start_runs_no_commitment_probe() {
+  local rec root home fakebin out register owner entry_ran decision_ran wt
+  rec=$(new_world noprobe)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+
+  register="$TMP_ROOT/noprobe/commitments"
+  mkdir -p "$register"
+  cp "$ROOT/commitments/schema.json" "$register/schema.json"
+  entry_ran="$TMP_ROOT/noprobe/entry-probe-ran"
+  # A typed probe target resolves only under the tracked code root, which here is
+  # the fixture root run_session_start passes as FM_ROOT_OVERRIDE.
+  owner="$root/owner.sh"
+  cat > "$owner" <<SH
+#!/usr/bin/env bash
+: > "$entry_ran"
+printf 'enforced\n'
+SH
+  chmod +x "$owner"
+  cat > "$register/leaves-a-mark.json" <<JSON
+{
+  "commitment_schema_version": 1,
+  "id": "leaves-a-mark",
+  "recorded": "the declared owner enforces this commitment",
+  "authority": "tests/fm-session-start.test.sh",
+  "unmet_state": "RULED-NOT-ENFORCED",
+  "satisfied_when": "the declared owner exists and answers",
+  "assurance": "executable",
+  "probe": {"kind": "command_answers", "command": "owner.sh"}
+}
+JSON
+
+  decision_ran="$TMP_ROOT/noprobe/decision-probe-ran"
+  wt="$TMP_ROOT/noprobe/wt"
+  mkdir -p "$home/data/probed" "$wt"
+  printf 'worktree=%s\n' "$wt" > "$home/state/probed.meta"
+  {
+    printf '# decision\n\n'
+    # shellcheck disable=SC2016  # the backticks are the pinned fence, not a substitution
+    printf '```probe\ntier: executable\nrun: : > %s\n```\n' "$decision_ran"
+  } > "$home/data/probed/decision-crit.md"
+  printf 'needs-decision [key=crit]: the ruled finding\n' > "$home/state/probed.status"
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/probed.status"
+
+  # The control first, and it is the whole reason the case below means anything:
+  # asked by something that is NOT session start, both probes run.
+  FM_COMMITMENT_DIR="$register" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
+    "$ROOT/bin/fm-commitment-register.sh" --open >/dev/null 2>&1
+  FM_HOME="$home" bash -c '
+    . "$1/bin/fm-classify-lib.sh"
+    status_open_decisions "$2"
+  ' _ "$ROOT" "$home/state/probed.status" >/dev/null 2>&1
+  [ -e "$entry_ran" ] \
+    || fail "control: the entry probe never ran even when it was allowed to, so the case below proves nothing"
+  [ -e "$decision_ran" ] \
+    || fail "control: the decision probe never ran even when it was allowed to, so the case below proves nothing"
+
+  rm -f "$entry_ran" "$decision_ran"
+  rm -rf "$home/state/commitment-probe-cache"
+  out=$(FM_COMMITMENT_DIR="$register" run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  [ ! -e "$decision_ran" ] \
+    || fail "session start executed a decision file's run: inside a task worktree"
+  [ -e "$entry_ran" ] \
+    || fail "session start suppressed a typed probe; the guard is scoped to decision-file run commands, and a flag reaching bootstrap is a flag reaching everything it spawns"
+
+  # The typed probe passed, so its entry retires rather than printing.
+  assert_not_contains "$out" "COMMITMENT: leaves-a-mark" \
+    "a commitment whose typed probe passes must stop printing at session start, with no hand edit"
+
+  # Not running is not accepting: the probed key stays open, carrying the reason.
+  assert_contains "$out" "executes no decision-file run command" \
+    "a resolution whose run: session start declined to execute must stay visibly unverified, never silently closed"
+  pass "session start runs typed probes and never a decision-file run command"
+}
+
+# The guard used to be one export covering the whole subtree, pinned by one
+# assertion. It is now a per-call prefix, which is safer and easier to lose: a
+# refactor that drops one prefix, or a third call added that reaches the fold,
+# would widen what executes on every session's critical path with nothing failing.
+#
+# So the set of calls that must carry it is DERIVED here rather than listed. A
+# bin script reaches the open-decision fold if it calls the fold itself, or if it
+# INVOKES one that does - invocation, not mention, so a script that only names
+# another in prose is not swept in, and sourcing a library is not an edge because
+# the fold call it would imply is what the seed already looks for. Every
+# invocation of a reacher in bin/fm-session-start.sh must carry the prefix.
+session_start_fold_reachers() {  # -> one basename per line
+  local f name r out reach=' ' changed=1
+  while [ "$changed" -eq 1 ]; do
+    changed=0
+    for f in "$ROOT"/bin/fm-*.sh; do
+      name=${f##*/}
+      case "$reach" in *" $name "*) continue ;; esac
+      if grep -v '^[[:space:]]*#' "$f" \
+        | grep -q 'scan_open_decisions\|status_open_decisions'; then
+        reach="$reach$name "
+        changed=1
+        continue
+      fi
+      for r in $reach; do
+        if session_start_invokes "$f" "$r"; then
+          reach="$reach$name "
+          changed=1
+          break
+        fi
+      done
+    done
+  done
+  for out in $reach; do printf '%s\n' "$out"; done
+}
+
+session_start_invokes() {  # <file> <basename>
+  grep -v '^[[:space:]]*#' "$1" 2>/dev/null | grep -qE \
+    '(^|[;&|(]|\$\(|&&|\|\|)[[:space:]]*([A-Za-z_][A-Za-z0-9_]*=[^[:space:]]*[[:space:]]+)*(exec[[:space:]]+)?"?\$\{?[A-Za-z_][A-Za-z0-9_]*\}?(/bin)?/'"$2"'"'
+}
+
+test_every_session_start_call_that_reaches_the_fold_carries_the_guard() {
+  local self reacher lines line guarded=0
+  self="$ROOT/bin/fm-session-start.sh"
+
+  for reacher in $(session_start_fold_reachers); do
+    [ "$reacher" != fm-session-start.sh ] || continue
+    session_start_invokes "$self" "$reacher" || continue
+    lines=$(grep -v '^[[:space:]]*#' "$self" | grep -F "\$SCRIPT_DIR/$reacher\"" \
+      | grep -v '^\[ -x ' | grep -v 'if \[ -x ')
+    [ -n "$lines" ] || continue
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      case "$line" in
+        *FM_COMMITMENT_NO_DECISION_RUN=1*) guarded=$((guarded + 1)) ;;
+        *)
+          fail "bin/fm-session-start.sh invokes $reacher, which reaches the open-decision fold, without FM_COMMITMENT_NO_DECISION_RUN=1:
+$line"
+          ;;
+      esac
+    done <<EOF
+$lines
+EOF
+  done
+
+  # The derivation must not be vacuous: if it found nothing to guard, the check
+  # would pass on a session start that guards nothing at all.
+  [ "$guarded" -ge 2 ] \
+    || fail "the fold-reacher derivation found only $guarded guarded call(s); it is supposed to find the wake drain and the admission read"
+  pass "every session-start call that reaches the open-decision fold carries the guard"
+}
+
+# The full policy, so fm_admission_state reads active and session start actually
+# runs its admission read. Deliberately the shipped shape: all-null thresholds
+# and enforce:false.
+write_admission_policy() {  # <home>
+  cat > "$1/config/crew-dispatch.json" <<'JSON'
+{
+  "_scheduling": {
+    "admission_control": {
+      "schema_version": 1,
+      "enabled": true,
+      "enforcement_mode": "safety-only",
+      "fleet_id": "test-fleet",
+      "combine": "most_restrictive",
+      "severity_order": ["preferred", "soft", "hard"],
+      "unknown_band": "hard",
+      "bands": {
+        "preferred": {"action": "admit"},
+        "soft": {"action": "queue", "hold_kind": "load", "auto_reconsider": true},
+        "hard": {"action": "refuse", "hold_kind": "load", "auto_reconsider": true}
+      },
+      "signals": {
+        "census_integrity": {"enabled": true, "required": true, "source": "fresh-authority-census", "unknown_band": "hard", "max_snapshot_age_seconds": null},
+        "backlog_consistency": {"enabled": true, "enforce": false, "source": "main-inventory", "unknown_band": "hard"},
+        "admission_queue_pressure": {"enabled": true, "enforce": false, "source": "tasks-axi-load-holds-plus-ledger", "queued_soft_count": null, "queued_hard_count": null, "oldest_wait_soft_seconds": null, "oldest_wait_hard_seconds": null},
+        "coordination_debt": {"enabled": false, "enforce": false, "source": "wake-outcome-ledger", "pending_wakes_soft_count": null, "pending_wakes_hard_count": null, "oldest_unhandled_wake_soft_seconds": null, "oldest_unhandled_wake_hard_seconds": null, "handled_wake_latency_window_seconds": null, "handled_wake_latency_soft_seconds": null, "handled_wake_latency_hard_seconds": null},
+        "active_workers": {"enabled": true, "enforce": false, "source": "fresh-authority-census", "soft_count": null, "hard_count": null},
+        "host_resources": {"enabled": false, "enforce": false, "source": "node-summaries", "metrics": {}},
+        "reservation_pressure": {"enabled": false, "enforce": false, "source": "admission-registry", "soft_count": null, "hard_count": null}
+      },
+      "authority": {"mode": "single-primary", "authority_id": "test-authority", "config_mismatch_band": "hard", "unreachable_band": "hard"},
+      "reservations": {"enabled": false, "ttl_seconds": null, "heartbeat_seconds": null, "clock_skew_tolerance_seconds": null, "release_on": ["spawn-failure", "teardown"], "reconcile_on": ["session-start"]},
+      "queue": {"substrate": "tasks-axi hold --kind load", "release_triggers": ["teardown", "session-start"], "already_empty_fleet_recheck": "session-start-only"},
+      "notifications": {"policy_ref": "/_scheduling/notification_bands", "episode_dedupe_seconds": null},
+      "telemetry": {"sink": "wake-outcome-ledger", "record_every_decision": true, "record_signal_values": true, "record_config_paths": true, "record_config_digest": true, "credentials_forbidden": true},
+      "dormant_triggers": {"numeric_admission_enforcement": {"ledger_observation_days_gte": 30, "checkpoint": "first fleet review after the observation period completes"}}
+    }
+  }
+}
+JSON
+}
+
+# The admission read is the call site the hazard chain is named after -
+# fm-session-start.sh to fm-admission.sh to fm-fleet-snapshot.sh to
+# status_open_decisions to the closure gate - and it is the one the locked case
+# above cannot isolate, because the wake drain reaches the fold first. A
+# lock-refused session skips the drain and still runs admission, so it exercises
+# that prefix on its own.
+test_session_start_admission_read_runs_no_decision_run() {
+  local rec root home fakebin holder_pid decision_ran wt out
+  rec=$(new_world admissionguard)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  write_admission_policy "$home"
+  # fm-admission.sh reaches the fold through "$FM_ROOT/bin/fm-fleet-snapshot.sh",
+  # so the fixture root needs a bin/ or the census is simply unreadable and this
+  # case would pass without the guard ever being consulted.
+  ln -s "$ROOT/bin" "$root/bin"
+
+  decision_ran="$TMP_ROOT/admissionguard/decision-probe-ran"
+  wt="$TMP_ROOT/admissionguard/wt"
+  mkdir -p "$home/data/probed" "$wt" "$TMP_ROOT/admissionguard"
+  printf 'worktree=%s\n' "$wt" > "$home/state/probed.meta"
+  {
+    printf '# decision\n\n'
+    # shellcheck disable=SC2016  # the backticks are the pinned fence, not a substitution
+    printf '```probe\ntier: executable\nrun: : > %s\n```\n' "$decision_ran"
+  } > "$home/data/probed/decision-crit.md"
+  printf 'needs-decision [key=crit]: the ruled finding\n' > "$home/state/probed.status"
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/probed.status"
+
+  # The control: the same admission read, unguarded, does reach the probe.
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
+    "$ROOT/bin/fm-admission.sh" --brief >/dev/null 2>&1 || true
+  [ -e "$decision_ran" ] \
+    || fail "control: an unguarded admission read never reached the decision probe, so the case below proves nothing"
+
+  rm -f "$decision_ran"
+  rm -rf "$home/state/commitment-probe-cache"
+
+  # A held lock makes this session read-only, which skips the wake drain and
+  # leaves the admission read as the only path to the fold.
+  sleep 300 &
+  holder_pid=$!
+  printf '%s\n' "$holder_pid" > "$home/state/.lock"
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+  kill "$holder_pid" 2>/dev/null || true
+  wait "$holder_pid" 2>/dev/null || true
+
+  assert_contains "$out" "skipped (read-only session)" \
+    "this case needs the wake drain skipped, or it is not isolating the admission read"
+  assert_contains "$out" "Fleet admission" \
+    "the admission read did not run, so its guard was never exercised"
+  [ ! -e "$decision_ran" ] \
+    || fail "session start's admission read executed a decision file's run: inside a task worktree"
+  pass "session start's admission read reaches the fold without running a decision-file run command"
+}
+
+# --- deferred network stage -------------------------------------------------
+
+# install_slow_gh <fakebin> <seconds>: one external-network call the digest used
+# to make directly. Making it pathologically slow is how a test stands in for an
+# unreachable host without touching one: if any part of the blocking path still
+# waits on the network, the digest cannot finish before this does.
+install_slow_gh() {
+  local fakebin=$1 seconds=$2 finished_marker=${3:-}
+  cat > "$fakebin/gh" <<SH
+#!/usr/bin/env bash
+if [ "\${1:-}" = auth ]; then
+  sleep $seconds
+  [ -z '$finished_marker' ] || : > '$finished_marker'
+  exit 1
+fi
+exit 0
+SH
+  chmod +x "$fakebin/gh"
+}
+
+# The headline guarantee: an unreachable host delays a reported CHECK, never the
+# startup. The fake host hangs for 12s; the digest must be done long before that,
+# must say so rather than implying the checks passed, and the sweeps must still
+# run and land afterwards.
+test_unreachable_network_never_blocks_the_digest() {
+  local rec root home fakebin mate log spawned network_finished out started elapsed
+  rec=$(prepare_session_start_secondmate secondmate-slow-network)
+  IFS='|' read -r root home fakebin mate log spawned <<EOF
+$rec
+EOF
+  network_finished="${root%/root}/network-finished"
+  install_slow_gh "$fakebin" 12 "$network_finished"
+
+  started=$(date +%s)
+  out=$(run_session_start_secondmate "$root" "$home" "$fakebin" "$mate" "$log" "$spawned" missing)
+  elapsed=$(( $(date +%s) - started ))
+
+  [ ! -e "$network_finished" ] \
+    || fail "the digest waited for the 12s unreachable-host probe instead of returning from local state (${elapsed}s)"
+  assert_contains "$out" "SESSION START" "the digest did not complete"
+  assert_contains "$out" "IN PROGRESS - the deferred network checks have not finished yet." \
+    "the digest did not disclose that its network checks were still running"
+  assert_contains "$out" "NOT yet confirmed: GitHub authentication, dead-secondmate relaunch" \
+    "the digest did not name the checks it has not confirmed"
+  assert_not_contains "$out" "NEEDS_GH_AUTH" \
+    "the digest reported a GitHub-auth verdict it could not yet have"
+
+  # ... and the work itself still happens, off the blocking path.
+  wait_for_network_stage "$home" "$root" 60 \
+    || fail "the deferred stage never finished: $(network_stage_report "$home" "$root")"
+  assert_contains "$(network_stage_report "$home" "$root")" "NEEDS_GH_AUTH" \
+    "the deferred stage lost the GitHub-auth verdict it was deferring"
+  assert_contains "$(cat "$log")" "new-window" \
+    "the deferred stage lost the dead-secondmate relaunch"
+  pass "session start: an unreachable host delays a reported check, not the digest"
+}
+
+# A result the digest could not print must still reach the agent by itself. The
+# opposite half of the handshake - a printed result never ALSO queuing a wake -
+# is asserted deterministically in tests/fm-startup-network.test.sh, where the
+# claim can be set up directly instead of raced against digest composition.
+test_deferred_result_reaches_the_agent_when_the_digest_cannot_print_it() {
+  local rec root home fakebin mate log spawned queue
+  rec=$(prepare_session_start_secondmate secondmate-wake-once)
+  IFS='|' read -r root home fakebin mate log spawned <<EOF
+$rec
+EOF
+  install_slow_gh "$fakebin" 8
+  queue="$home/state/.wake-queue"
+
+  run_session_start_secondmate "$root" "$home" "$fakebin" "$mate" "$log" "$spawned" missing >/dev/null
+  wait_for_network_stage "$home" "$root" 60 || fail "the deferred stage never finished"
+  wait_for_network_wake "$home" 60 || fail "the deferred stage never settled wake delivery"
+  assert_grep 'check	startup-network' "$queue" \
+    "a result the digest could not print never reached the agent: $(cat "$queue" 2>/dev/null)"
+  pass "session start: a deferred result the digest outran still reaches the agent as a wake"
+}
+
+# A read-only session has no lock, so it neither owns the mutating sweeps nor has
+# any action a GitHub-auth verdict would gate. It must say that plainly instead of
+# quietly dropping the checks.
+test_read_only_session_declares_skipped_network_checks() {
+  local rec root home fakebin out
+  rec=$(new_world network-read-only)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  printf '999999\n' > "$home/state/.lock"
+  cat > "$fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"-p 999999"*) printf 'claude\n'; exit 0 ;;
+  *"comm="*|*"args="*) printf 'bash\n'; exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/ps"
+
+  out=$(run_session_start "$home" "$root" "$fakebin:$BASE_PATH")
+
+  assert_contains "$out" "READ-ONLY SESSION" "the read-only fixture did not actually refuse the lock"
+  assert_contains "$out" "skipped (read-only session) - GitHub authentication" \
+    "a read-only session did not declare its skipped network checks"
+  assert_absent "$home/state/.startup-network.status" \
+    "a read-only session started the deferred stage it has no authority for"
+  pass "session start: a read-only session declares its skipped network checks rather than dropping them"
+}
+
+# The compatibility verdict costs three tasks-axi subprocesses and one session
+# start needs it twice. The digest must pay for it once.
+test_tasks_axi_compatibility_is_probed_once() {
+  local rec root home fakebin log probes
+  rec=$(new_world tasks-axi-once)
+  IFS='|' read -r root home fakebin <<EOF
+$rec
+EOF
+  make_fake_toolchain "$fakebin"
+  make_fake_ps_claude "$fakebin"
+  make_fake_tasks_axi_compact "$fakebin"
+  log="$home/tasks-axi.log"
+  printf '# Backlog\n\n## In flight\n\n## Queued\n' > "$home/data/backlog.md"
+
+  FM_FAKE_TASKS_AXI_LOG="$log" run_session_start "$home" "$root" "$fakebin:$BASE_PATH" >/dev/null
+
+  probes=$(grep -c -- '--version' "$log" || true)
+  [ "$probes" -eq 1 ] \
+    || fail "tasks-axi was version-probed $probes times in one session start: $(cat "$log")"
+  probes=$(grep -c -- 'update --help' "$log" || true)
+  [ "$probes" -eq 1 ] \
+    || fail "tasks-axi update --help ran $probes times in one session start: $(cat "$log")"
+  assert_grep 'ready --file' "$log" "the backlog listing never ran, so the verdict was not actually reused"
+  pass "session start: the tasks-axi compatibility verdict is computed once and reused"
+}
+
 # --- fleet-state digest: compact backlog rendering --------------------------
 
 write_long_body_backlog() {
@@ -1450,6 +1862,9 @@ test_orphan_status_logs_are_printed
 test_endpoint_liveness_tmux
 test_endpoint_liveness_herdr
 test_composition_invokes_real_scripts
+test_session_start_runs_no_commitment_probe
+test_every_session_start_call_that_reaches_the_fold_carries_the_guard
+test_session_start_admission_read_runs_no_decision_run
 test_backlog_compact_tasks_axi_omits_bodies_and_keeps_metadata
 test_backlog_compact_manual_backend_skips_indented_bodies
 test_backlog_compact_tasks_axi_unavailable_uses_manual_fallback

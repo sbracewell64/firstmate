@@ -408,3 +408,151 @@ test_effort_flag_is_empty_when_unset_or_default
 test_flags_are_shell_quoted
 test_fm_spawn_takes_its_launch_decision_from_the_library
 test_fm_spawn_cannot_launch_without_the_library
+
+# launch_permission_posture publishes the CONSUMER OBLIGATION in the header as a
+# value, so a commitment about launched agents' permission posture can be probed
+# without grepping for a vendor flag string - a grep would go quietly vacuous the
+# day an adapter renames its flag.
+#
+# The property that matters is that the function CAN say all three things, and
+# that it never invents "enforced" for an adapter whose posture this repo has not
+# recorded. An unknown posture narrowed into enforced would be protection that
+# protects nothing, which is exactly what the register exists to refuse.
+test_permission_posture_is_declared_for_every_launchable_harness() {
+  local h posture listed
+  for h in "${HARNESSES[@]}"; do
+    posture=$(launch_permission_posture "$h") \
+      || fail "launch_permission_posture refused a harness the library can launch: $h"
+    case "$posture" in
+      unrestricted|enforced|unknown) ;;
+      *) fail "$h reported an out-of-vocabulary posture: $posture" ;;
+    esac
+    listed=$(launch_permission_posture | awk -v h="$h" '$1 == h { print $2 }')
+    [ "$listed" = "$posture" ] \
+      || fail "$h: the roster says '$listed' but the single read says '$posture'"
+  done
+  [ "$(launch_permission_posture | wc -l)" -eq "${#HARNESSES[@]}" ] \
+    || fail "the posture roster does not cover every harness exactly once"
+  pass "every launchable harness declares a posture, and the roster matches the single read"
+}
+
+test_permission_posture_never_invents_enforcement() {
+  local h posture unknown=0
+  for h in "${HARNESSES[@]}"; do
+    posture=$(launch_permission_posture "$h")
+    [ "$posture" != enforced ] \
+      || fail "$h claims enforced permissions; no adapter in this repo does, so this is a fabricated posture"
+    [ "$posture" != unknown ] || unknown=$((unknown + 1))
+  done
+  # kimi is the recorded unknown: the header accounts for six adapters and kimi
+  # is not one of them. Pinning that it stays UNKNOWN rather than drifting to
+  # enforced is the point - an unverified posture must never read as protection.
+  [ "$(launch_permission_posture kimi)" = unknown ] \
+    || fail "kimi's posture is not recorded anywhere in this repo, so it must read unknown"
+  [ "$unknown" -ge 1 ] \
+    || fail "no posture is unknown, so the third value is untested and could be unreachable"
+  launch_permission_posture no-such-harness >/dev/null 2>&1 \
+    && fail "an unverified adapter must be refused, not given a posture"
+  pass "an unrecorded posture stays unknown and an unverified adapter is refused"
+}
+
+# The roster the posture walks is DERIVED from launch_template's own case arms.
+# A second hand-maintained copy of the adapter list would go vacuous the day an
+# adapter is ADDED rather than renamed - the same failure the accessor exists to
+# refuse, one step over - and the consequence is specific: once the staged
+# enforcement work flips the recorded adapters to enforced, an adapter missing
+# from a hand-maintained roster would leave nothing unrestricted and nothing
+# unknown, so the commitment would retire while an unrestricted harness was still
+# launchable.
+#
+# So the case adds an adapter to launch_template exactly the way a real one is
+# added - a new case arm in the source - and requires that it appears, as unknown.
+# Silently excluding it is the failure; unknown is the honest third value.
+test_posture_roster_is_derived_so_a_new_adapter_cannot_be_excluded() {
+  local patched out
+  patched="$TMP_ROOT/launch-lib-plus-one-adapter.sh"
+  awk '{ print }
+       /^    kimi\) printf/ { print "    frobnicator) printf %s frobnicator ;;" }' \
+    "$LAUNCH_LIB" > "$patched"
+
+  # The control on the fixture itself: the shipped library must NOT list the
+  # invented adapter, or the case below would pass without proving anything.
+  launch_permission_posture | grep -q '^frobnicator ' \
+    && fail "the shipped roster already lists the invented adapter, so this case proves nothing"
+
+  out=$(bash -c '. "$1" && launch_permission_posture' _ "$patched") \
+    || fail "the patched library could not report a posture roster at all"
+  printf '%s\n' "$out" | grep -q '^frobnicator unknown$' \
+    || fail "an adapter added to launch_template was excluded from the posture roster instead of reading unknown, got:
+$out"
+  local h
+  for h in "${HARNESSES[@]}"; do
+    printf '%s\n' "$out" | grep -q "^$h " \
+      || fail "adding an adapter dropped $h from the roster"
+  done
+  [ "$(printf '%s\n' "$out" | wc -l)" -eq "$((${#HARNESSES[@]} + 1))" ] \
+    || fail "the derived roster is not exactly the shipped adapters plus the added one:
+$out"
+  pass "the posture roster is derived, so an added adapter reads unknown rather than vanishing"
+}
+
+# The same property for an arm the derivation cannot read as a plain lower-case
+# alternation - which is exactly what an alias or a renamed adapter produces
+# (`Kimi)`, `k2-thinking|k2-*)`). Skipping such an arm would be the failure this
+# derivation exists to prevent, one step over: with the arm gone, once the
+# recorded adapters flip to enforced the permission probe would find nothing
+# unrestricted and nothing unknown and PASS over a harness that is still
+# launchable. launch_template's own answer is the only filter, so a token it
+# answers for is a member, with posture unknown until someone records one.
+test_posture_roster_surfaces_an_arm_it_cannot_read_as_a_literal() {
+  local patched out tok
+  patched="$TMP_ROOT/launch-lib-non-literal-arm.sh"
+  awk '{ print }
+       /^    kimi\) printf/ { print "    K2-Thinking|k2-*) printf %s x ;;" }' \
+    "$LAUNCH_LIB" > "$patched"
+
+  # A roster member is the whole first field of a line, so every check below
+  # compares fields rather than substrings: one of these tokens ends in "*", and
+  # a substring match would find it inside its own line.
+  roster_has() {  # <roster> <name>
+    printf '%s\n' "$1" | awk -v want="$2" '$1 == want { found = 1 } END { exit !found }'
+  }
+  roster_posture() {  # <roster> <name>
+    printf '%s\n' "$1" | awk -v want="$2" '$1 == want { print $2; exit }'
+  }
+
+  # The control on the fixture: the shipped roster lists neither token, or the
+  # case below would pass without proving anything.
+  local shipped
+  shipped=$(launch_permission_posture)
+  for tok in 'K2-Thinking' 'k2-*'; do
+    roster_has "$shipped" "$tok" \
+      && fail "the shipped roster already lists $tok, so this case proves nothing"
+  done
+
+  out=$(bash -c '. "$1" && launch_permission_posture' _ "$patched") \
+    || fail "the patched library could not report a posture roster at all"
+  for tok in 'K2-Thinking' 'k2-*'; do
+    [ "$(roster_posture "$out" "$tok")" = unknown ] \
+      || fail "an arm the derivation cannot read as a literal was dropped from the roster instead of reading unknown, got:
+$out"
+  done
+  local h
+  for h in "${HARNESSES[@]}"; do
+    roster_has "$out" "$h" \
+      || fail "adding a non-literal arm dropped $h from the roster"
+  done
+  # A pattern launch_template refuses is still not a member: the catch-all arm
+  # and the kind arms must not become harnesses just because the literal filter
+  # is gone.
+  for tok in '*' 'primary' 'secondmate'; do
+    roster_has "$out" "$tok" \
+      && fail "$tok entered the roster; only a token launch_template answers for is a member"
+  done
+  pass "an unparseable arm stays in the roster: unknown harness member yields could-not-observe"
+}
+
+test_permission_posture_is_declared_for_every_launchable_harness
+test_permission_posture_never_invents_enforcement
+test_posture_roster_is_derived_so_a_new_adapter_cannot_be_excluded
+test_posture_roster_surfaces_an_arm_it_cannot_read_as_a_literal

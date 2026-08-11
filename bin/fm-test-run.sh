@@ -878,8 +878,18 @@ families_for_changed_path() {
       printf '%s\n' backend-dispatch
       printf '%s\n' real-herdr-gated
       ;;
+    bin/fm-classify-lib.sh)
+      printf '%s\n' watcher-wake-lock
+      # The registered-probe closure gate (decision_close_refused, the fenced
+      # pre-check, and the resolved branch of the open-decision fold) lives here,
+      # and every case that covers it lives in the register's own suite, which is
+      # in no family. Without this the gate could be inverted or dropped and a
+      # changed-files run would select only the watcher lanes, which assert
+      # nothing about it.
+      printf '%s\n' "__script__:fm-commitment-register.test.sh"
+      ;;
     bin/fm-watch*|bin/fm-wake*|\
-    bin/fm-classify-lib.sh|bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
+    bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
       printf '%s\n' watcher-wake-lock
       ;;
     bin/fm-afk*)
@@ -934,7 +944,16 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       printf '%s\n' pr-forge
       ;;
-    bin/fm-spawn.sh|bin/fm-launch-lib.sh|bin/fm-send.sh|bin/fm-harness.sh|\
+    bin/fm-launch-lib.sh)
+      printf '%s\n' backend-dispatch
+      printf '%s\n' pure-contract-unit
+      # The derived harness roster and launch_permission_posture live here, and
+      # the commitment register's launch probe reads them: a roster that goes
+      # vacuous retires a commitment while an unrestricted harness is still
+      # launchable, so that suite has to run on a change to this file too.
+      printf '%s\n' "__script__:fm-commitment-register.test.sh"
+      ;;
+    bin/fm-spawn.sh|bin/fm-send.sh|bin/fm-harness.sh|\
     bin/fm-peek.sh|bin/fm-composer*)
       printf '%s\n' backend-dispatch
       printf '%s\n' pure-contract-unit
@@ -957,6 +976,15 @@ families_for_changed_path() {
     bin/fm-reflag.sh|bin/fm-task-axis-lib.sh|\
     bin/fm-ff-lib.sh|bin/fm-gotmp*|bin/*pretool*)
       printf '%s\n' pure-contract-unit
+      ;;
+    commitments/*)
+      # The typed commitment register. Registering an entry is a routine
+      # operation, so this maps the directory rather than leaning on some test
+      # happening to mention each new entry's path: the interpreter's own suite,
+      # plus session start, which relays the open set and is the surface that
+      # must not be able to go quiet while an entry is open.
+      printf '%s\n' "__script__:fm-commitment-register.test.sh"
+      printf '%s\n' session-bootstrap
       ;;
     .agents/skills/quota-array-dispatch/SKILL.md)
       printf '%s\n' pure-contract-unit

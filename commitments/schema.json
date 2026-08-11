@@ -1,0 +1,141 @@
+{
+  "commitment_schema_version": 1,
+  "description": "Canonical field contract for one RECORDED-BUT-NOT-YET-REAL commitment. bin/fm-commitment-register.sh is the only interpreter; its header and --help own the mechanics. An entry answers one question and only that question: what was committed, and what would have to be observably true for that commitment to be real. It is not a ticket, a plan, a decision hold, or a backlog item - those record intent, and recorded intent reading as protection is exactly what this register refuses.",
+  "why": "A commitment recorded with no enforcement probe reads as protection while protecting nothing. The probe is the load-bearing field: an entry whose state is asserted rather than observed is the defect, not the record of it.",
+  "why_not_the_decision_surface": "bin/fm-decision-surface.sh is this fleet's derived-state composer and its typed verdicts are the right shape, and bin/fm-verify-lib.sh's three-valued observation type is consumed here rather than reinvented - so it is worth saying plainly why the register is its own interpreter instead of another decision-surface report. Three reasons, all properties of the input rather than preferences. The decision surface composes ONE home's live operational state through bin/fm-fleet-snapshot.sh; this register reads TRACKED repository material that ships to every home and must answer identically where there is no task, no snapshot, and no fleet. The decision surface is invoked once by a human or a composer; the register's --closes runs inside bin/fm-classify-lib.sh's open-decision fold on the wake-drain path, per resolved status line, so hosting it on a composer that loads a fleet snapshot first would make the fold pay for state it never reads. And a commitment that cannot be evaluated must take a fail-closed EXIT STATUS that a caller ignoring stdout still stops on, whereas the decision surface reports and is not a gate. The two are joined rather than parallel: the decision surface's owners ledger carries the unenforced_commitments row pointing at this register.",
+  "entry_classes": {
+    "ruling_not_enforced": "A ruling or standing rule is recorded and nothing enforces it. Probe: whatever would be observably true once it is enforced.",
+    "authorisation_not_owned": "Authorised work has no owner. Probe: whether a live task, branch, or backlog record owns the identity.",
+    "ruled_finding_not_met": "A review finding was ruled, a fix was reported APPLIED, and nothing establishes that the ruled criterion is MET. Applied is an action; met is a predicate, and a pipeline only ever knows the action happened. This class is NOT registered here: the captain ruling of 2026-08-10 pins its probe into the decision file firstmate already writes at data/<task-id>/decision-<key>.md, and bin/fm-commitment-register.sh discovers it there. One producer per class, so what firstmate writes and what the register reads cannot drift."
+  },
+  "assurance_tiers": {
+    "executable": "The probe runs directly and its result is the answer.",
+    "cited-control": "The probe confirms a named test exists and passes NOW, while the watched-it-fail observation is cited as a named artifact rather than a claim. This is the DEFAULT, because it is the strongest routinely achievable form. control is a NAME, as the ruling pins it: the register surfaces it and marks it when it also resolves on disk, and deliberately does not gate on resolution, because a legitimate citation need not be a path. What no mechanism can confirm is that the cited artifact records a real red observation - that is why the tier is \"cited\" rather than \"verified\".",
+    "attested": "For a criterion that genuinely cannot execute, such as a comment being accurate. This tier exists because forcing a probe where none is possible would recreate the same failure one level up. It is always MARKED and VISIBLE and never read as verified: an attested entry never reaches SATISFIED."
+  },
+  "not_a_replacement_for_diligence": "Every instance this register was built from was caught by a worker re-checking its own work. The probe is a floor beneath that diligence, never a substitute for it, and nothing here licenses skipping a self-check because an entry is green.",
+  "probe_bounds": {
+    "register_entry_probe_seconds": 10,
+    "decision_file_probe_seconds": 60,
+    "why_two_numbers": "The register's own typed probes read this repository and none of them is a test invocation, so 10s bounds them. A decision file's run: is bounded at 60s instead, and that number is derived rather than picked: the 2026-08-10 ruling makes cited-control the DEFAULT tier and its run is a test invocation, so a bound too small to let the pinned default finish would refuse every such closure forever, which is a park rather than a verdict.",
+    "derivation": "Measured on the machine this was written on: tests/fm-commitment-register.test.sh runs in 7.8s (three runs: 7.82, 7.82, 7.81), and a pinned cited-control probe invokes that suite TWICE - once per grep in the run - so one probe costs about 15.6s. 60s is therefore roughly 4x observed with headroom for machine load, and that ratio is what the next person changing this number is trading.",
+    "overrides": "FM_COMMITMENT_PROBE_TIMEOUT and FM_COMMITMENT_DECISION_PROBE_TIMEOUT. bin/fm-commitment-register.sh's header states the same two numbers and the same derivation, and a test pins its defaults equal to these.",
+    "a_timed_out_probe": "Reported as a TIMEOUT, distinct from every other could-not-observe cause. Could-not-observe can never wrongly pass, but it also cannot close a key, so a chronically timing-out probe would otherwise block a closure forever while reading as an ordinary open item.",
+    "two_kinds_of_probe_are_not_one_question": "The register's own typed probes are a closed set named in probe_kinds below: this repository owns each one, can audit what it does, and bounds it at register_entry_probe_seconds, so running one is a COST decision. A decision file's run: is arbitrary text written by whoever authored a ruling and executed by bash -c inside a task worktree, so running one is a TRUST decision. They do not share a switch, because a switch that answered the trust question would silence the cost one too.",
+    "session_start_runs_typed_probes_and_no_decision_run": "bin/fm-session-start.sh sets FM_COMMITMENT_NO_DECISION_RUN=1 on exactly the two calls that reach the open-decision fold - its wake drain and its admission read, the latter through fm-fleet-snapshot.sh - and on nothing else, so no ruling author's run: text executes on the critical path of a session. It is deliberately not exported, because session start's subtree relaunches secondmates through bin/fm-spawn.sh, which scrubs no environment. The typed probes keep running there, which is what lets an entry whose commitment became real retire with no hand edit rather than printing forever. A criterion whose run: was not executed answers could-not-observe and no stored verdict stands in for it, so the resolution stays visibly unverified and still open: not running is never accepting.",
+    "what_this_supersedes": "The rule was first accepted in the blanket form \"SESSION START MUST EXECUTE NO PROBE - session start may report RECORDED state; it may never execute a probe to find out.\" Built that way it defeated the criterion it shares a page with: with no probe running, nothing at session start is ever SATISFIED, so every registered entry prints a could-not-observe line forever and never retires when its commitment becomes real - the cry-wolf outcome the safety rule exists to prevent, since a session start that always shouts is one that gets turned off. The rule is therefore narrowed to its hazard, decision-file run: EXECUTION only. Typed probes remain permitted at session start precisely because typed_probe_targets constrains what they may run; if that constraint is relaxed, this permission has to be reconsidered with it. This supersession is recorded rather than quietly rewritten because the reasoning is the part worth inheriting.",
+    "typed_probe_targets": {
+      "rule": "Every path a typed probe names is resolved ONLY under the tracked code root. An absolute path is refused verbatim, upward traversal is refused, and a symlinked target is refused wherever it points - what a symlink resolves to is not what this register audited, so being inside the root does not save it. A refused target makes the entry INADMISSIBLE and is reported, never silently skipped and never a pass. The probe KINDS are a closed set this repository owns, but the TARGETS come out of the entry's own JSON and an entry can arrive from the gitignored data/commitments/ overlay, so without this one unreviewed file could name any absolute executable and have it run on the critical path of every session. An ABSENT target is not refused: an owner or test that does not exist is an observed absence, which is the answer its probe kind already gives it.",
+      "arg_marker": "resolved only under the tracked code root",
+      "which_args_are_paths_is_derived_here": "bin/fm-commitment-register.sh reads arg_marker from this object and treats every probe_kinds arg whose description contains it as a path-bearing field. The set is therefore DERIVED from this contract rather than restated in the script, so a probe kind added with an arg named script, path or binary is constrained the moment its description carries the marker, and no second list can go quietly vacuous the day a kind is added. A schema that defines no marker, or whose marker matches no arg, is refused as unreadable rather than admitting entries with an unconstrained target: a guard derived from nothing would be the vacuous list this rule exists to prevent."
+    }
+  },
+  "required": {
+    "commitment_schema_version": "must equal this file's commitment_schema_version",
+    "id": "stable slug, unique across the tracked register and the home overlay; must match the file basename",
+    "recorded": "one sentence: what was committed",
+    "authority": "where the authoritative record lives - a ruling file, a captain authorisation, a decision hold, a config exception",
+    "unmet_state": "the label to report while the criterion is not established (RULED-NOT-ENFORCED, AUTHORISED-NOT-OWNED, RULED-NOT-MET, ...)",
+    "satisfied_when": "one sentence: what a probe PASS means, so a reader can judge whether the probe actually answers the commitment",
+    "assurance": "one of assurance_tiers"
+  },
+  "required_by_assurance": {
+    "executable": [
+      "probe"
+    ],
+    "cited-control": [
+      "probe",
+      "control"
+    ],
+    "attested": [
+      "reason"
+    ]
+  },
+  "forbidden_by_assurance": {
+    "attested": [
+      "probe"
+    ]
+  },
+  "optional": {
+    "probe": "one probe object; see probe_kinds",
+    "control": "name of the test or artifact watched to fail first, as the 2026-08-10 ruling pins it. Required by cited-control. Surfaced, and marked when it also resolves on disk.",
+    "reason": "why no probe is possible. Required by attested, and never treated as verification.",
+    "deadline": "ISO date (YYYY-MM-DD). An entry still unmet after it is reported overdue. It never turns an unmet entry into a met one, and it never suppresses one.",
+    "unobserved_conditions": "array of one-sentence conditions this commitment includes that its probe does NOT observe. Use it when the recorded commitment has more than one half and only some of them have a landed artifact to probe. The covered half is reported exactly as the probe found it, and the declared-uncovered half is reported as could-not-observe, so the entry can never reach SATISFIED - and therefore never retire - on a partial answer. It can only withhold satisfaction, never grant it, which is why it is not one of the refused status words. It is not a place to record work that is merely unfinished: that is what a second entry with its own probe is for. THE TYPE IS VALIDATED: it must be a non-empty array of non-empty strings, and anything else - a bare string, an array of objects, a null member - makes the entry INADMISSIBLE. This is the one field that can withhold satisfaction, so a malformed one would silently skip the guard and let a passing probe reach SATISFIED on a partial answer, which is the exact outcome the field exists to prevent.",
+    "note": "free prose for a reader; never consumed"
+  },
+  "refused_keys": [
+    "state",
+    "status",
+    "current_state",
+    "derived_state",
+    "satisfied",
+    "enforced",
+    "verdict",
+    "result",
+    "applied"
+  ],
+  "refused_keys_why": "A hand-written status word must not be able to satisfy an entry. The interpreter refuses an entry carrying any of these keys outright rather than ignoring them, because an ignored field still reads to a human as the answer. \"applied\" is refused for the same reason it is the name of this failure: applying a fix is an action, and an action is not the predicate.",
+  "probe_kinds": {
+    "launch_permission_enforced": {
+      "args": {},
+      "pass_when": "every harness bin/fm-launch-lib.sh can launch composes a session whose permission enforcement is active",
+      "fail_when": "at least one harness composes a session with permission enforcement disabled",
+      "could_not_observe_when": "no harness is unrestricted but at least one posture is unknown, or the launch library cannot be read"
+    },
+    "command_answers": {
+      "args": {
+        "command": "path relative to the firstmate code root, resolved only under the tracked code root; see probe_bounds.typed_probe_targets",
+        "args": "optional array of literal arguments; never a shell string"
+      },
+      "pass_when": "the command exists, is executable, exits 0, and prints something",
+      "fail_when": "the command is absent, is not executable, or exits non-zero - an owner that does not exist is observed, not unobservable",
+      "could_not_observe_when": "the command exits 0 printing nothing, or is stopped by the probe timeout"
+    },
+    "command_answer_matches": {
+      "args": {
+        "command": "path relative to the firstmate code root, resolved only under the tracked code root; see probe_bounds.typed_probe_targets",
+        "args": "optional array of literal arguments; never a shell string",
+        "jq": "a jq filter over the command's JSON answer that must produce exactly true or false. A filter, not a command: the tracked register ships to every home and must never become a shell-execution seam."
+      },
+      "pass_when": "the command answers and the filter over that answer produces true",
+      "fail_when": "the command is absent or exits non-zero, or the filter produces false - the answer was read and it is not what was committed",
+      "could_not_observe_when": "the command answers nothing, the filter errors or produces anything other than true or false, or the probe timeout stops it",
+      "why_not_command_answers": "command_answers establishes that something answered, which is the right question for whether an owner exists and the wrong one for whether a derived row says what it should: a composer printing a stale row exits 0 and prints plenty. A commitment about the CONTENT of derived state has to read the content."
+    },
+    "test_passes": {
+      "args": {
+        "test": "path to the test, relative to the code root, resolved only under the tracked code root; see probe_bounds.typed_probe_targets",
+        "args": "optional array of literal arguments"
+      },
+      "pass_when": "the named test exists and passes now",
+      "fail_when": "the named test is absent or fails - a ruled criterion whose test does not exist was never established",
+      "could_not_observe_when": "the test is stopped by the probe timeout, or no timeout tool is available to bound it"
+    },
+    "symbol_called": {
+      "args": {
+        "symbol": "shell function name",
+        "defined_in": "path relative to the code root that defines it, resolved only under the tracked code root; see probe_bounds.typed_probe_targets"
+      },
+      "pass_when": "at least one file under bin/ other than defined_in CALLS the symbol - it appears at a command position on a line that is not a comment",
+      "fail_when": "no file under bin/ other than defined_in calls it - a guard with no runtime caller",
+      "could_not_observe_when": "defined_in or bin/ cannot be read, so a definition cannot be told from a call, or the declared symbol is not a plain shell function name",
+      "a_mention_is_not_a_caller": "This entry class IS \"a guard believed to close an inversion that has no runtime caller at all\", so matching any occurrence would let a comment like \"# task_base_verify_branch should be wired in here\" retire the entry while the guard still guards nothing - the register reproducing its own defect. Comment lines are dropped before the match and what remains must look like a call, not merely mention the name."
+    },
+    "work_owned": {
+      "args": {
+        "work_id": "the work identity the authorisation would be dispatched under"
+      },
+      "pass_when": "a live task record, a local fm/<work_id> branch, or a backlog record that is in flight or done owns the identity",
+      "fail_when": "every consulted source answered, and none of them owns it",
+      "could_not_observe_when": "a source that could have owned it could not answer - no readable backlog backend, or no git"
+    }
+  },
+  "derived_never_written": {
+    "state": "SATISFIED | UNMET | UNOBSERVED - computed on every read, never stored",
+    "SATISFIED": "the probe passed. The entry retires: it stops being surfaced, with no hand edit.",
+    "UNMET": "the probe reached a verdict and the commitment is not real yet. Surfaced at every session start.",
+    "UNOBSERVED": "the probe did not reach a verdict, the entry is inadmissible, or the entry is attested rather than probed. Surfaced at every session start, and never read as enforced."
+  },
+  "assurance_tiers_owner": "data/captain-rulings-2026-08-10/ruled-criterion-must-carry-a-probe.md pins these three tier names and the decision-file block format. They are restated here only as the enum this register validates against."
+}

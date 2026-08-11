@@ -14,7 +14,7 @@
 # daemon keeps its escalation-digest seen-markers; the watcher keeps its .seen-*
 # signatures).
 #
-# Two functions are exceptions. task_hold_kind reads the backlog through its own
+# Three functions are exceptions. task_hold_kind reads the backlog through its own
 # tool; see its own comment for the callers' cost contract. The other is the absorb
 # classification (crew_absorb_class and its
 # working/paused wrappers). It is NOT a pure status-file read: it reuses
@@ -581,6 +581,116 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
     *) printf 'default' ;;
   esac
 }
+# --- the registered-probe gate on decision closure ---------------------------
+#
+# Captain ruling 2026-08-10 (data/captain-rulings-2026-08-10/ruled-criterion-must-carry-a-probe.md):
+# a ruling that directs `fix` must carry a probe, and a `resolved` event for a
+# decision key that HAS a registered probe is not accepted as resolved until that
+# probe passes. Applied is an action the pipeline observes; met is a predicate
+# nobody was evaluating, and four ruled criteria in one day were reported applied
+# while not being met. Until the probe passes, the fold below keeps showing the
+# decision. That is the fail-closed step, and it lives here - inside the existing
+# keyed open/resolved fold - rather than as a second surface.
+#
+# COST CONTRACT, and the third exception to this library's pure-read rule (the
+# other two are task_hold_kind and the absorb classification). Only a `resolved`
+# line whose key has a real probe BLOCK spends a bounded subprocess, and only once
+# per such line. The gate proves that itself rather than asserting it: existing is
+# what a decision file usually does - every decision ruled before 2026-08-10 has
+# one and none of them carries a probe block, and the ruling forbids back-filling
+# them - so the fence below reads the file in-process and looks for the fence
+# line. A home carrying a dozen legacy decision files therefore spends a dozen
+# small reads on a fold, not a dozen interpreter subprocesses, and every such
+# decision folds exactly as it always did.
+FM_CLASSIFY_COMMITMENT_BIN="${FM_CLASSIFY_COMMITMENT_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-commitment-register.sh}"
+
+# 0 when a probe block cannot be ruled out for this decision file, so the
+# interpreter has to be asked; 1 when the file demonstrably carries none.
+#
+# An existing file this process cannot read is the first case, not the second: it
+# may carry a probe nobody here can see, and the interpreter is what turns that
+# into a refusal rather than a silent acceptance.
+_fm_decision_probe_fenced() {  # <decision-file>
+  local file=$1 line
+  [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in '```probe'|'```probe '*) return 0 ;; esac
+  done < "$file" 2>/dev/null
+  return 1
+}
+
+# 0 when a registered probe REFUSES this closure, printing why on stdout; 1 when
+# the closure may be accepted (no probe registered, the probe passed, or the
+# criterion is attested rather than probed).
+#
+# A probe that cannot run refuses the closure: could-not-observe is never a pass,
+# and accepting a resolution on an unobserved criterion is the exact failure the
+# ruling closes.
+#
+# THE ACCEPT PATH IS NOT SILENT, and the RETURN CODE is what says which path this
+# is - never the presence of output. The gate prints on acceptance too, for
+# exactly the two acceptances that rest on something other than a probe observed
+# just now: a result served from the freshness-bounded cache, which carries its
+# observation time, and an attested criterion, which is accepted as
+# ATTESTED-NOT-PROBED. If this function captured the interpreter's stdout and
+# dropped it on rc 0, the guarantee would exist only for a human running --closes
+# by hand, and the fold - the path that actually CONSUMES the answer - would close
+# the decision with no sign the verdict was not observed now. So the disclosure
+# comes back on stdout in both cases and the caller reads it; a probe that passed
+# just now prints nothing, because there is nothing to disclose about it.
+#
+# It has to be stdout rather than a variable: every caller invokes this inside a
+# command substitution, so a global set here dies with the subshell.
+decision_close_refused() {  # <task-id> <key> [home]
+  local task=$1 key=$2 home=${3:-${FM_HOME:-}} bin=$FM_CLASSIFY_COMMITMENT_BIN out rc
+  [ -n "$task" ] && [ -n "$key" ] || return 1
+  [ -n "$home" ] || return 1
+  # Cheap gate first: no decision file, no registered probe, no cost.
+  [ -f "$home/data/$task/decision-$key.md" ] || return 1
+  _fm_decision_probe_fenced "$home/data/$task/decision-$key.md" || return 1
+  if [ ! -x "$bin" ]; then
+    # Past the fence, so a registered probe for this key cannot be ruled out and
+    # there is no interpreter to evaluate one. Accepting here would read an
+    # unevaluated criterion as met, which is the failure the gate exists to
+    # close; refusing wedges nothing, because the decision simply keeps showing
+    # with the reason.
+    printf 'a registered probe for this criterion could not be ruled out and %s is not available to evaluate it, so the resolution is not accepted' \
+      "${bin##*/}"
+    return 0
+  fi
+  out=$(FM_HOME="$home" "$bin" --closes "$task" "$key" 2>/dev/null)
+  rc=$?
+  # Either way the text becomes a field beside TAB-separated fold records, and it
+  # carries text read out of a decision file, so a stray tab or newline there
+  # would corrupt the record rather than the note.
+  if [ "$rc" -eq 0 ]; then
+    [ -z "$out" ] || printf '%s' "$out" | tr '\n\t' '  '
+    return 1
+  fi
+  printf '%s' "${out:-a registered probe for this criterion did not pass}" | tr '\n\t' '  '
+  return 0
+}
+
+# The verb currently recorded for <key>, or empty when the key is not open. Used
+# by the closure gate so a refused resolution keeps the decision's own opening
+# verb rather than being relabelled by the refusal.
+_fm_decision_verb() {  # <open-set> <key>
+  local set=$1 key=$2 line rest
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      "$key"$'\t'*)
+        rest=${line#*$'\t'}
+        printf '%s' "${rest%%$'\t'*}"
+        return 0
+        ;;
+    esac
+  done <<EOF
+$set
+EOF
+  return 0
+}
+
 # Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>
@@ -609,10 +719,19 @@ EOF
 # subprocess read, which exists for that function's much narrower payload-driven
 # path resolution rather than this directory-local glob.
 status_open_decisions() {  # <status-file>
-  local f=$1 line verb key note resolve held open='' stripped
+  local f=$1 line verb key note resolve held open='' stripped task home refusal prior
   [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
+  task=${f##*/}; task=${task%.status}
+  # The home this status file belongs to, for the registered-probe gate below.
+  # FM_HOME when the caller set it, otherwise the parent of the state directory,
+  # which is the layout every home uses.
+  home=${FM_HOME:-}
+  if [ -z "$home" ]; then
+    home=${f%/*}
+    home=${home%/*}
+  fi
   while IFS= read -r line || [ -n "$line" ]; do
     stripped=${line//[[:space:]]/}
     [ -n "$stripped" ] || continue
@@ -625,7 +744,37 @@ status_open_decisions() {  # <status-file>
         [ -n "$open" ] && open="${open}"$'\n'
         open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
         ;;
-      "$resolve"|"$held")
+      "$resolve")
+        # A resolution is a CLAIM that the criterion is met. When the key carries
+        # a registered probe, the claim is checked and only a pass closes it; the
+        # decision keeps showing until then, carrying the reason it did not close.
+        # A key with no registered probe closes exactly as it always did.
+        if refusal=$(decision_close_refused "$task" "$key" "$home"); then
+          prior=$(_fm_decision_verb "$open" "$key")
+          open=$(_fm_decision_drop "$open" "$key")
+          [ -n "$open" ] && open="${open}"$'\n'
+          open="${open}${key}"$'\t'"${prior:-needs-decision}"$'\t'"${refusal}"$'\n'
+        else
+          # Accepted. `refusal` still holds whatever the gate disclosed about WHY
+          # - a stored observation with its time, or an attested criterion
+          # accepted without a probe - and that disclosure is surfaced rather than
+          # dropped. This function's stdout is the typed open set and an accepted
+          # key is by definition not in it, so the note goes to the reader on
+          # stderr, which every consumer of this fold either shows or logs.
+          # Discarding it would leave the fleet snapshot, the wake drain and the
+          # decision-hold read showing a clean closure with no sign the verdict
+          # was not observed just now.
+          [ -z "$refusal" ] \
+            || printf 'decision %s [key=%s] %s\n' "$task" "$key" "$refusal" >&2
+          open=$(_fm_decision_drop "$open" "$key")
+          [ -n "$open" ] && open="${open}"$'\n'
+        fi
+        ;;
+      "$held")
+        # A captain-held transfer moves the decision to the backlog; it never
+        # claims the criterion was met, so the probe gate deliberately does not
+        # apply to it. Gating a legitimate transfer would strand the decision in
+        # both places at once.
         open=$(_fm_decision_drop "$open" "$key")
         [ -n "$open" ] && open="${open}"$'\n'
         ;;

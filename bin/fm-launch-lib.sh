@@ -115,6 +115,110 @@ shell_quote() {
 # Pi's first-run project trust dialog (SKILL.md:286) is folder trust, not a
 # permission prompt, and is a separate concern that neither satisfies nor softens
 # this obligation.
+#
+# launch_permission_posture publishes that same list as a value a caller can act
+# on, so the obligation above stops being prose only. It exists because a
+# commitment about the permission posture of launched agents needs a probe that
+# reads THIS file's own decision rather than grepping for a vendor flag string:
+# a grep would go quietly vacuous the day an adapter renames its flag, which is
+# the exact shape of failure the commitment register was built to refuse.
+# It is not a harness-dependent check in the sense the firstmate-coding-guidelines
+# skill governs: it reports a posture this repo chose and encoded in the
+# templates below, and reads no vendor process, output, or rendered surface.
+#
+# The ROSTER it walks is derived, never hand-maintained. A second copy of the
+# adapter list would go vacuous the day an adapter is ADDED rather than renamed -
+# the same failure one step over, and a hand-maintained literal inside the very
+# accessor that exists to stop hand-maintaining state. launch_harnesses reads the
+# case arms launch_template itself dispatches on, so an adapter that can be
+# launched is in the roster by construction.
+
+# Every harness launch_template can compose a command for, one per line, read out
+# of that function's own case arms. A candidate is only accepted once
+# launch_template actually answers for it, so a pattern that merely looks like an
+# arm ("*", "primary", a stray line ending in a parenthesis) cannot enter the
+# roster. A non-zero return means the roster could not be derived at all, which
+# every consumer must treat as could-not-observe rather than as an empty fleet.
+#
+# launch_template's OWN ANSWER is the only filter, deliberately. An earlier version
+# also required each arm to be a plain alternation of lower-case literals and
+# silently skipped anything else, which reintroduced the failure this derivation
+# exists to prevent one step over: an adapter written as `Kimi)` or `kimi|kimi-*)`
+# would vanish from the roster entirely, and once the recorded adapters flip to
+# enforced the permission probe would find nothing unrestricted and nothing
+# unknown and PASS over a harness that is still launchable. So every token of
+# every arm is offered to launch_template, and one it answers for is a member -
+# with posture unknown until someone records one, which is could-not-observe
+# rather than silent exclusion. One it refuses ("*", "primary", "secondmate") is
+# not an adapter and was never a roster member to lose.
+launch_harnesses() {
+  local decl line arm rest tok out='' seen=' '
+  decl=$(declare -f launch_template 2>/dev/null) || return 1
+  [ -n "$decl" ] || return 1
+  while IFS= read -r line; do
+    case "$line" in *')') ;; *) continue ;; esac
+    arm=${line%)}
+    arm=${arm#"${arm%%[![:space:]]*}"}
+    arm=${arm%"${arm##*[![:space:]]}"}
+    [ -n "$arm" ] || continue
+    rest=$arm
+    while [ -n "$rest" ]; do
+      case "$rest" in
+        *'|'*) tok=${rest%%'|'*}; rest=${rest#*'|'} ;;
+        *) tok=$rest; rest='' ;;
+      esac
+      tok=${tok#"${tok%%[![:space:]]*}"}
+      tok=${tok%"${tok##*[![:space:]]}"}
+      [ -n "$tok" ] || continue
+      case "$seen" in *" $tok "*) continue ;; esac
+      launch_template "$tok" >/dev/null 2>&1 || continue
+      seen="$seen$tok "
+      out="$out$tok"$'\n'
+    done
+  done <<EOF
+$decl
+EOF
+  [ -n "$out" ] || return 1
+  printf '%s' "$out"
+}
+
+# The postures this repo has actually RECORDED, and nothing else. A harness absent
+# from here is not excluded and is never called enforced: launch_permission_posture
+# reports it unknown, which is the honest third value.
+#
+# kimi is the standing example. The CONSUMER OBLIGATION above accounts for six
+# adapters and kimi is not one of them: no record in this repo or in
+# .agents/skills/harness-adapters/SKILL.md states what `--auto` does to kimi's
+# permission gate. An unverified posture reading as protection is the failure this
+# accessor was added to make impossible, and that holds for the next adapter added
+# to launch_template exactly as it holds for kimi.
+launch_permission_recorded() {  # <harness> -> recorded posture, or non-zero
+  case "$1" in
+    # The four explicit bypasses and the two structurally-autonomous pi arms,
+    # exactly as the CONSUMER OBLIGATION above enumerates them.
+    claude|codex|opencode|grok|pi|pi-signed) printf 'unrestricted' ;;
+    *) return 1 ;;
+  esac
+}
+
+launch_permission_posture() {  # [<harness>] -> "<posture>" | "<harness> <posture>" lines
+  local harness=${1:-} h
+  if [ -z "$harness" ]; then
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      printf '%s %s\n' "$h" "$(launch_permission_posture "$h")"
+    done <<EOF
+$(launch_harnesses)
+EOF
+    return 0
+  fi
+  # A harness launch_template refuses is not an adapter at all, so it has no
+  # posture to report; that refusal is distinct from a launchable adapter whose
+  # posture nobody recorded, which is unknown.
+  launch_template "$harness" >/dev/null 2>&1 || return 1
+  launch_permission_recorded "$harness" || printf 'unknown'
+}
+
 launch_template() {
   local harness=$1 kind=${2:-ship}
   # shellcheck disable=SC2016  # single quotes are deliberate: $(cat ...) expands in the crewmate pane, not here
