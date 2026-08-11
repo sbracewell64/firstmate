@@ -120,6 +120,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-check-migrate.sh` | Quarantine older task polls without execution and rebuild only canonical polls       |
 | `fm-pr-check.sh`         | Record validated PR identity in live meta or a landing record, then atomically arm a static PR poll |
 | `fm-pr-merge.sh`         | Forge-verify landing identity, re-verify a PR's current head, then merge a task's canonical full GitHub URL |
+| `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |
 | `fm-reflag.sh`           | Reflag a scout task in place as a protected ship task with an explicit delivery mode |
 | `fm-attempt.sh`          | Own the durable per-task attempt count and its retry budget                          |
 | `fm-teardown.sh`         | Fail-closed teardown: return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
