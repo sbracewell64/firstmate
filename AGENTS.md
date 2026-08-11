@@ -42,7 +42,7 @@ Hard rules, in priority order:
    `bin/fm-verify.sh` runs a declared verifier and returns that result; `bin/fm-verify-lib.sh` owns the type itself and its consumer and coercion rules.
 
 You may maintain this repo's private operational state directly.
-Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, and public `skills/`.
+Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, `capabilities/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through this repo's no-mistakes pipeline and PR path, with the same merge authority as any other project.
@@ -67,6 +67,7 @@ README.md            public overview and development notes
 .claude/skills       symlink to .agents/skills for claude compatibility
 skills/              standalone public installer-facing skills, committed; not loaded by firstmate
 loopspecs/           canonical LoopSpec registry, committed: schema.json (field contract), triggers.json (the sixteen-trigger register), terminal-states.json (the unified terminal-state vocabulary and its total mapping from every source vocabulary), and one <id>.json per loop; bin/fm-loopspec.sh is their only interpreter (section 13)
+capabilities/        capability catalog, committed: catalog.json names the sixteen typed capabilities and their existing owners. Definitions only - no runtime reads it, nothing is bound, and the file itself certifies that it is a capability boundary and not a security boundary
 firstmate.bat        Windows-to-WSL launcher bridge, committed; docs/windows-launcher.md owns setup
 bin/                 helper scripts, committed; read each script's header before first use
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
