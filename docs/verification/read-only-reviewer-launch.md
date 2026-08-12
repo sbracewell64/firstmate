@@ -207,4 +207,39 @@ They establish that the mutation surface was removed at launch and observed to r
 They do not establish containment of an agent that finds another path, and they are not a sandbox around the host.
 `review-roles/schema.json` states the same boundary as part of the contract.
 
+## Current regression verification
+
+Executed 2026-08-12 from the repository root:
+
+```sh
+tests/fm-review-role.test.sh
+```
+
+```text
+ok - read-only requirement DELETED goes red
+ok - read-only requirement INVERTED goes red
+ok - an eligible read-only assignment carries the measured launch binding
+ok - read-only enforcement is per-harness and unmeasured harnesses report unknown
+ok - self-review refused while the same binding stays eligible elsewhere
+ok - author identity and undeclared identity both fail closed
+ok - a binding removed from the role is no longer qualified
+ok - an effort other than the one qualified for this binding goes red
+ok - omitting reviewer effort fails closed
+ok - the exact composed Codex reviewer command is read-only without a bypass
+ok - every one of the 18 required predicates goes red when deleted
+ok - a predicate value outside its vocabulary goes red
+ok - a predicate the contract does not define goes red
+ok - both roles match their transcribed source, and the drift reader fires when they do not
+ok - removing a required independence dimension goes red
+ok - inverting a required independence dimension is visible
+ok - the independence requirement changes the verdict, so it is enforcement rather than prose
+ok - contradictory policy claims are a deterministic reconciliation failure
+ok - design and change are separate contracts and the change role requires a pinned head
+ok - an unknown or inadmissible role is could-not-observe, never a silent pass
+ok - the spawn chokepoint refuses self-review, a missing author, an unenforceable harness and an unknown role
+ok: fm-review-role
+```
+
+Exit status `0`.
+
 Refresh this record after any upgrade to a listed harness, by re-running both halves of the probe for that harness and re-recording the raw output and exit status.
