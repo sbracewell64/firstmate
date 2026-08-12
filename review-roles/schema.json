@@ -102,14 +102,14 @@
   },
   "launch_outcomes": {
     "no_sixth_vocabulary": "Every name below reuses an existing owner. The RESULT is bin/fm-verify-lib.sh's three-valued observation type verbatim, so no new type is introduced and NO_VERIFIER_RAN keeps its non-coercible meaning. The TERMINAL STATE is a name already declared in loopspecs/terminal-states.json, whose unified vocabulary answers exactly the question a launch outcome asks - why did this stop. Nothing here adds a unified state, and this registry is not that file's interpreter: bin/fm-loopspec.sh remains its only one.",
-    "observed_from": "bin/fm-backend.sh's fm_backend_agent_state, the fleet's existing recovery-grade endpoint contract. Its six values are the observation, and it attributes a running agent process rather than reading a rendered banner, so the verdict rests on a kernel fact rather than on vendor output.",
+    "observed_from": "bin/fm-backend.sh's fm_backend_agent_state attributes the running process, while fm_backend_capture collects typed reviewer output that bin/fm-review-role.sh validates and records. Neither source establishes launch success alone.",
     "outcomes": [
       {
         "name": "launch_succeeded_as_requested",
         "result": "PASS",
         "maps_to": "goal_met",
-        "observed_as": ["alive without a matching reviewer-authored opening event"],
-        "meaning": "A verified harness agent is running at the recorded endpoint, so the requested role was established."
+        "observed_as": ["alive with a matching captured fm-review-ack.v1 acknowledgement"],
+        "meaning": "A verified harness agent is running at the recorded endpoint and its typed output acknowledges the assigned role, target and assignment id."
       },
       {
         "name": "launch_refused_by_policy",
@@ -132,7 +132,7 @@
         "name": "role_not_established",
         "result": "FAIL",
         "maps_to": "verification_failed",
-        "observed_as": ["alive"],
+        "observed_as": ["alive without a matching captured fm-review-ack.v1 acknowledgement"],
         "meaning": "An agent is alive at the endpoint but never took the role: the instructions were not delivered, so nothing is reviewing.",
         "distinction": "Shares verification_failed with launch_failed and is separated from it by having a live agent without the matching reviewer-authored opening event.",
         "why_verification_failed": "Same reason as launch_failed: no verifier ran, and an unavailable verifier can never become a pass."
@@ -152,13 +152,13 @@
     "facts": {
       "intended_binding": "state/<id>.meta model= - the binding the fleet meant to run.",
       "intended_role": "state/<id>.meta review_role= - the role it meant to discharge, resolvable in this registry.",
-      "role_established": "A reviewer-authored fm-status-event.v1 event with key=review-opening, phase equal to the assigned role, and evidence equal to the assigned target, composed with an attributed alive endpoint. Liveness alone never establishes the role.",
+      "role_established": "A fleet-captured fm-review-ack.v1 artifact naming the reviewer binding, assigned role, target and assignment id, composed with an attributed alive endpoint. Liveness alone never establishes the role.",
       "readonly_authority_active": "state/<id>.meta review_readonly_mechanism= and review_readonly_flags=, the binding measured in docs/verification/read-only-reviewer-launch.md and composed onto the launch command by bin/fm-spawn.sh. An instruction not to write is not this fact.",
       "review_target_commit": "state/<id>.meta reviewed_head= - the target identifier required for every role. requires_pinned_head additionally constrains it to the candidate worktree's full 40-character HEAD.",
-      "launch_result": "state/<id>.meta review_launch= - one launch_outcomes name, recorded from the endpoint observation composed with the matching reviewer-authored opening event.",
-      "review_result": "A reviewer-authored fm-status-event.v1 event with key=review-verdict, phase equal to PASS or FAIL, and evidence equal to the assigned target, following the matching opening event. Terminal lifecycle verbs carry no verdict."
+      "launch_result": "state/<id>.meta review_launch= - one launch_outcomes name, recorded from the endpoint observation composed with the matching captured acknowledgement.",
+      "review_result": "A fleet-captured fm-review-verdict.v1 artifact carrying reviewer_binding, review_role, review_target_commit, review_assignment_id, verdict, findings and evidence_refs. Terminal lifecycle verbs carry no verdict."
     },
-    "one_field_two_facts": "The one reviewer-authored opening event proves role understanding and target identification, while review_launch composes that evidence with endpoint attribution."
+    "one_field_two_facts": "The captured acknowledgement proves receipt and understanding of role, target and assignment only, while review_launch composes that evidence with endpoint attribution. Read-only authority and independence remain code-enforced facts."
   },
   "refused_keys": [
     "independent",

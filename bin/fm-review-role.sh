@@ -78,6 +78,8 @@ ROLES=${FM_REVIEW_ROLES_OVERRIDE:-$FM_ROOT/review-roles}
 . "$SCRIPT_DIR/fm-route-lib.sh"
 # shellcheck source=bin/fm-status-event-lib.sh
 . "$SCRIPT_DIR/fm-status-event-lib.sh"
+# shellcheck source=bin/fm-backend.sh
+. "$SCRIPT_DIR/fm-backend.sh"
 
 # Stable refusal tokens, matched by tests and callers rather than prose.
 FM_REVIEW_TOKEN_ROLE_UNKNOWN=FM_REVIEW_ROLE_UNKNOWN
@@ -108,6 +110,7 @@ Usage:
                           [--reviewed-head <sha>] [--candidate-worktree <path>]
                           [--route <ROUTE>] [--json]
   fm-review-role.sh assignment --task <id> [--json]
+  fm-review-role.sh capture --task <id> --kind <acknowledgement|verdict>
 
 check answers one question: may this reviewer be assigned to this maker's
 artifact, on this harness? Every input it needs is an input, not an assumption -
@@ -132,6 +135,79 @@ launch binding for. A harness with no record may not host a read-only role.
 Exit status: 0 eligible, 1 refused (a violation was observed), 2 unevaluable
 (could-not-observe). Both non-zero values fail closed.
 EOF
+}
+
+review_artifact_path() {  # <task> <kind>
+  case "$2" in
+    acknowledgement) printf '%s/%s.review-ack.json' "$STATE" "$1" ;;
+    verdict) printf '%s/%s.review-verdict.json' "$STATE" "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+review_artifact_filter() {  # <kind> <binding> <role> <target> <assignment>
+  case "$1" in
+    acknowledgement)
+      jq -ce --arg b "$2" --arg r "$3" --arg t "$4" --arg a "$5" '
+        select(type == "object")
+        | select(keys == ["assignment_received","review_assignment_id","review_role","review_target_commit","reviewer_binding","schema"])
+        | select(.schema == "fm-review-ack.v1" and .assignment_received == true
+          and .reviewer_binding == $b and .review_role == $r
+          and .review_target_commit == $t and .review_assignment_id == $a)'
+      ;;
+    verdict)
+      jq -ce --arg b "$2" --arg r "$3" --arg t "$4" --arg a "$5" '
+        select(type == "object")
+        | select(keys == ["evidence_refs","findings","review_assignment_id","review_role","review_target_commit","reviewer_binding","schema","verdict"])
+        | select(.schema == "fm-review-verdict.v1"
+          and .reviewer_binding == $b and .review_role == $r
+          and .review_target_commit == $t and .review_assignment_id == $a
+          and (.verdict == "approve" or .verdict == "reject")
+          and (.findings | type) == "array"
+          and (.evidence_refs | type) == "array"
+          and all(.evidence_refs[]; type == "string" and length > 0))'
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+capture_review_artifact() {  # <task> <kind> <captured-output>
+  local task=$1 kind=$2 capture=$3 meta=$STATE/$task.meta binding role target assignment line event json path tmp
+  [ -f "$meta" ] || return 1
+  binding=$(meta_field "$meta" model)
+  role=$(meta_field "$meta" review_role)
+  target=$(meta_field "$meta" reviewed_head)
+  assignment=$(meta_field "$meta" review_assignment_id)
+  [ -n "$binding" ] && [ -n "$role" ] && [ -n "$target" ] && [ "$assignment" = "$task" ] || return 1
+  if [ "$kind" = verdict ]; then
+    while IFS= read -r line; do
+      case "$line" in *"$FM_STATUS_EVENT_SCHEMA"*) event=$FM_STATUS_EVENT_SCHEMA${line#*"$FM_STATUS_EVENT_SCHEMA"} ;; *) continue ;; esac
+      fm_status_event_parse "$event" || continue
+      [ "$FM_STATUS_EVENT_KEY" = review-execution ] && [ "$FM_STATUS_EVENT_PHASE" = "$role" ] \
+        && printf '%s\n' "$FM_STATUS_EVENT_EVIDENCE" | grep -Fxq -- "$target" || continue
+      case "$FM_STATUS_EVENT_VERB" in done|failed) ;; *) continue ;; esac
+      if ! grep -Fqx "fm-status-event.v1 verb=$FM_STATUS_EVENT_VERB key=review-execution phase=$role evidence=$target summary=captured reviewer execution" "$STATE/$task.status" 2>/dev/null; then
+        printf 'fm-status-event.v1 verb=%s key=review-execution phase=%s evidence=%s summary=captured reviewer execution\n' \
+          "$FM_STATUS_EVENT_VERB" "$role" "$target" >> "$STATE/$task.status" || return 1
+      fi
+    done <<EOF
+$capture
+EOF
+  fi
+  while IFS= read -r line; do
+    case "$line" in *'{'*'}'*) ;; *) continue ;; esac
+    json=${line#*\{}
+    json="{${json%\}*}}"
+    json=$(printf '%s\n' "$json" | review_artifact_filter "$kind" "$binding" "$role" "$target" "$assignment" 2>/dev/null) || continue
+    path=$(review_artifact_path "$task" "$kind") || return 1
+    tmp=$path.tmp.$$
+    printf '%s\n' "$json" > "$tmp" || return 1
+    mv -f "$tmp" "$path" || return 1
+    return 0
+  done <<EOF
+$capture
+EOF
+  return 1
 }
 
 die_unevaluable() { echo "error: $*" >&2; exit 2; }
@@ -561,6 +637,9 @@ EOF
     add_viol review_target_unidentified \
       "--reviewed-head naming the review target" \
       "absent; no review can be shown to have read an assigned artifact"
+  elif [[ $head == *[[:space:]]* ]] || [[ $head == *$'\n'* ]] || [[ $head == *$'\r'* ]]; then
+    add_viol review_target_unencodable \
+      "a non-empty whitespace-free target identifier" "$head"
   elif [ "$requires_head" = true ]; then
     if [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
       add_viol reviewed_head_invalid \
@@ -719,27 +798,30 @@ launch_outcome_result() {  # <name> -> PASS|FAIL|NO_VERIFIER_RAN
   esac
 }
 
-# Read the reviewer-authored opening and verdict events. Lifecycle verbs never
-# carry a review verdict; the existing PASS/FAIL observation values do.
-task_review_evidence() {  # <status-path> <role> <target>
-  local line key phase evidence opened=0 verdict=''
+task_review_execution() {  # <status-path>
+  local line verb execution=''
   [ -f "$1" ] || return 1
   while IFS= read -r line; do
-    fm_status_event_is_typed "$line" || continue
-    key=$(fm_status_event_field "$line" key 2>/dev/null) || continue
-    phase=$(fm_status_event_field "$line" phase 2>/dev/null) || continue
-    evidence=$(fm_status_event_field "$line" evidence 2>/dev/null) || continue
-    if [ "$key" = review-opening ] && [ "$phase" = "$2" ] \
-      && printf '%s\n' "$evidence" | grep -Fxq -- "$3"; then
-      opened=1
+    verb=$(fm_status_event_field "$line" verb 2>/dev/null) || verb=''
+    case "$verb:$line" in done:*|:done:*) execution=done ;; failed:*|:failed:*) execution=failed ;; esac
+  done <"$1"
+  [ -n "$execution" ] || return 1
+  printf '%s' "$execution"
+}
+
+cmd_capture() {
+  local task='' kind='' want='' a capture
+  for a in "$@"; do
+    if [ -n "$want" ]; then
+      case "$want" in task) task=$a ;; kind) kind=$a ;; esac
+      want=''
       continue
     fi
-    if [ "$opened" -eq 1 ] && [ "$key" = review-verdict ] \
-      && printf '%s\n' "$evidence" | grep -Fxq -- "$3"; then
-      case "$phase" in PASS|FAIL) verdict=$phase ;; esac
-    fi
-  done <"$1"
-  printf '%s\t%s\n' "$opened" "$verdict"
+    case "$a" in --task) want=task ;; --task=*) task=${a#--task=} ;; --kind) want=kind ;; --kind=*) kind=${a#--kind=} ;; *) die_unevaluable "unknown argument to capture: $a" ;; esac
+  done
+  [ -n "$task" ] && [ -n "$kind" ] || die_unevaluable "capture requires --task and --kind"
+  capture=$(cat)
+  capture_review_artifact "$task" "$kind" "$capture" || return 2
 }
 
 cmd_assignment() {
@@ -765,7 +847,7 @@ cmd_assignment() {
   [ -f "$meta" ] && [ ! -L "$meta" ] \
     || die_unevaluable "$FM_REVIEW_TOKEN_ASSIGNMENT_UNPROVED: $meta is not a readable durable record, so nothing establishes that a review happened"
 
-  local binding role mech flags launch head verdict opened=0 review_evidence
+  local binding role mech flags launch head verdict='' opened=0 execution='' artifact ack_path verdict_path
   binding=$(meta_field "$meta" model)
   role=$(meta_field "$meta" review_role)
   mech=$(meta_field "$meta" review_readonly_mechanism)
@@ -794,9 +876,24 @@ cmd_assignment() {
     fi
   fi
 
-  review_evidence=$(task_review_evidence "$STATE/$task.status" "$role" "$head") || review_evidence=$'0\t'
-  opened=${review_evidence%%$'\t'*}
-  verdict=${review_evidence#*$'\t'}
+  ack_path=$(review_artifact_path "$task" acknowledgement)
+  verdict_path=$(review_artifact_path "$task" verdict)
+  if [ ! -s "$verdict_path" ]; then
+    local backend target capture
+    backend=$(fm_backend_of_meta "$meta")
+    target=$(fm_backend_target_of_meta "$meta")
+    if [ -n "$target" ]; then
+      capture=$(fm_backend_capture "$backend" "$target" 240 "$task" 2>/dev/null) || capture=''
+      [ -z "$capture" ] || capture_review_artifact "$task" verdict "$capture" || true
+    fi
+  fi
+  if [ -s "$ack_path" ] && artifact=$(review_artifact_filter acknowledgement "$binding" "$role" "$head" "$task" < "$ack_path" 2>/dev/null); then
+    opened=1
+  fi
+  if [ -s "$verdict_path" ] && artifact=$(review_artifact_filter verdict "$binding" "$role" "$head" "$task" < "$verdict_path" 2>/dev/null); then
+    verdict=$(printf '%s' "$artifact" | jq -r '.verdict')
+  fi
+  execution=$(task_review_execution "$STATE/$task.status") || execution=''
 
   [ -n "$binding" ] || add_missing intended_binding "the record names no model= so the reviewing binding is unknown"
   { [ -n "$mech" ] && [ -n "$flags" ]; } \
@@ -806,10 +903,16 @@ cmd_assignment() {
   elif [ "$requires_head" = true ]; then
     if [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
       add_missing review_target_commit "reviewed_head=$head is not a full commit id"
+    else
+      local recorded_worktree current_head
+      recorded_worktree=$(meta_field "$meta" worktree)
+      current_head=$(git -C "$recorded_worktree" rev-parse --verify HEAD 2>/dev/null) || current_head=''
+      [ -n "$current_head" ] && [ "${current_head,,}" = "${head,,}" ] \
+        || add_missing review_target_commit "the current candidate commit does not equal reviewed_head=$head"
     fi
   fi
   [ "$opened" = 1 ] || add_missing role_established "no reviewer-authored opening event agrees with role=$role and target=$head"
-  [ -n "$verdict" ] || add_missing review_result "no reviewer-authored PASS or FAIL verdict follows the matching opening event"
+  [ -n "$verdict" ] || add_missing review_result "no attributable structured verdict artifact is pinned to this assignment and target"
 
   # THE LAUNCH OUTCOME, consumed rather than inferred. An absent one is the
   # defect this task exists to close: it means the caller concluded a review
@@ -849,7 +952,10 @@ cmd_assignment() {
   elif [ "$opened" != 1 ]; then
     result=NO_VERIFIER_RAN
     reason="the reviewer role was not established from reviewer-authored evidence"
-  elif [ "$verdict" = FAIL ]; then
+  elif [ "$execution" != done ]; then
+    result=NO_VERIFIER_RAN
+    reason="review execution ${execution:-could not be observed}; no completed reviewer execution can support the verdict"
+  elif [ "$verdict" = reject ]; then
     result=FAIL
     reason="the reviewer recorded a negative verdict"
   elif [ "$n" != 0 ]; then
@@ -862,13 +968,14 @@ cmd_assignment() {
 
   if [ "$json" -eq 1 ]; then
     jq -n --arg t "$task" --arg role "$role" --arg b "$binding" --arg h "$head" \
-          --arg mech "$mech" --arg launch "$outcome" --arg v "$verdict" \
+          --arg mech "$mech" --arg launch "$outcome" --arg v "$verdict" --arg x "$execution" \
           --arg res "$result" --arg why "$reason" --argjson miss "$missing" \
       '{schema:"fm-review-assignment-proof.v1", task:$t, role:$role,
         binding:(if $b == "" then null else $b end),
         readonly_mechanism:(if $mech == "" then null else $mech end),
         reviewed_head:(if $h == "" then null else $h end),
-        launch_outcome:$launch, review_result:(if $v == "" then null else $v end),
+        launch_outcome:$launch, review_execution_state:(if $x == "" then null else $x end),
+        review_verdict:(if $v == "" then null else $v end),
         result:$res, reason:$why, unestablished:$miss,
         review_requirement:(if $res == "PASS" then "SATISFIED" else "UNSATISFIED" end)}'
   else
@@ -921,5 +1028,6 @@ case "${1:-}" in
   reconcile) shift; cmd_reconcile "${1:-}" ;;
   check) shift; cmd_check "$@" ;;
   assignment) shift; cmd_assignment "$@" ;;
+  capture) shift; cmd_capture "$@" ;;
   *) echo "error: unknown subcommand: $1" >&2; usage >&2; exit 2 ;;
 esac

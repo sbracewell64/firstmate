@@ -604,7 +604,9 @@ write_decision() {  # <home> <task> <key> <block-body>
   {
     printf '# decision\n\n'
     # shellcheck disable=SC2016  # the backticks are the pinned fence, not a substitution
-    printf '```probe\n%s\n```\n' "$4"
+    printf '```probe\n%s\n' "$4"
+    case "$4" in *'tier: attested'*) ;; *) printf 'target: %s\nbinding: decision:%s:%s\n' "$2" "$2" "$3" ;; esac
+    printf '```\n'
   } > "$1/data/$2/decision-$3.md"
 }
 
@@ -705,7 +707,42 @@ run: true'
 run: true'
   out=$(run_reg "$dir" "$home" --closes epsilon badtier); rc=$?
   expect_code 4 "$rc" "an unknown tier must not close"
+
+  write_decision "$home" epsilon unknownfield 'tier: executable
+run: true
+surprise: accepted'
+  out=$(run_reg "$dir" "$home" --closes epsilon unknownfield); rc=$?
+  expect_code 4 "$rc" "an unknown probe field must not close"
+  assert_contains "$out" "PROBE_INVALID" "an unsupported probe shape must be classified as invalid instrumentation"
+
+  write_decision "$home" epsilon missingtarget 'tier: executable
+run: true'
+  sed -i '/^target:/d' "$home/data/epsilon/decision-missingtarget.md"
+  out=$(run_reg "$dir" "$home" --closes epsilon missingtarget); rc=$?
+  expect_code 4 "$rc" "a probe with no target must not close"
+  assert_contains "$out" "declares no target" "probe admission must name the missing target"
+
+  write_decision "$home" epsilon prose 'tier: executable
+run: this criterion should be met'
+  out=$(run_reg "$dir" "$home" --closes epsilon prose); rc=$?
+  expect_code 4 "$rc" "prose in the executable field must be rejected before execution"
+  assert_contains "$out" "does not begin with an executable command" "probe admission must identify prose as non-executable"
   pass "a malformed probe block refuses the closure rather than being ignored"
+}
+
+decision_probe_execution_failure_is_not_assertion_failure() {
+  local dir home out rc
+  command -v jq >/dev/null 2>&1 || return 0
+  dir=$(make_register executionfailure)
+  home=$(make_home executionfailure)
+  give_worktree "$home" review-findings-5 >/dev/null
+  write_decision "$home" review-findings-5 recurrence 'tier: executable
+run: jq . file-that-does-not-exist.json'
+  out=$(run_reg "$dir" "$home" --closes review-findings-5 recurrence); rc=$?
+  expect_code 4 "$rc" "jq exit 2 must be could-not-observe, not a product verdict"
+  assert_contains "$out" "PROBE_EXECUTION_FAILED" "the live defect fixture must classify the execution failure"
+  assert_not_contains "$out" "the criterion is not met" "an assertion never reached must not claim the product criterion failed"
+  pass "decision probe execution failure stays distinct from assertion failure"
 }
 
 # A PATH carrying the tools the register actually uses and no jq.
@@ -1654,6 +1691,7 @@ unknown_harness_is_could_not_observe_not_excluded
 pinned_block_tiers
 pinned_block_cannot_observe
 pinned_block_malformed_is_refused
+decision_probe_execution_failure_is_not_assertion_failure
 no_backfill_for_older_decisions
 closes_reaches_a_verdict_without_jq
 cached_probe_result_never_reads_as_current

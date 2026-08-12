@@ -843,10 +843,10 @@ run_probe() {  # <probe-json>
 # pinned. The parser refuses a second block rather than choosing one: a file
 # carrying two probes has no single answer, and picking either would invent one.
 
-DP_TIER='' DP_RUN='' DP_CONTROL='' DP_REASON='' DP_FAULT=''
+DP_TIER='' DP_RUN='' DP_CONTROL='' DP_REASON='' DP_TARGET='' DP_BINDING='' DP_FAULT=''
 parse_decision_probe() {  # <decision-file> -> 0 with DP_* set, 1 when no block
-  local file=$1 line in_block=0 blocks=0 key value
-  DP_TIER='' DP_RUN='' DP_CONTROL='' DP_REASON='' DP_FAULT=''
+  local file=$1 line in_block=0 blocks=0 key value seen=' '
+  DP_TIER='' DP_RUN='' DP_CONTROL='' DP_REASON='' DP_TARGET='' DP_BINDING='' DP_FAULT=''
   # An existing file this process cannot read may carry a probe nobody can see,
   # so it is a fault rather than "no block" - and reading it unguarded would put a
   # shell error on stderr instead of an answer.
@@ -871,8 +871,9 @@ parse_decision_probe() {  # <decision-file> -> 0 with DP_* set, 1 when no block
         '```'*) in_block=0; continue ;;
       esac
       case "$line" in
+        '') continue ;;
         *:*) ;;
-        *) continue ;;
+        *) DP_FAULT="unsupported probe block structure: $line"; continue ;;
       esac
       key=${line%%:*}
       key=${key#"${key%%[![:space:]]*}"}
@@ -880,11 +881,16 @@ parse_decision_probe() {  # <decision-file> -> 0 with DP_* set, 1 when no block
       value=${line#*:}
       value=${value#"${value%%[![:space:]]*}"}
       value=${value%"${value##*[![:space:]]}"}
+      case "$seen" in *" $key "*) DP_FAULT="duplicate probe field: $key"; continue ;; esac
+      seen="$seen$key "
       case "$key" in
         tier) DP_TIER=$value ;;
         run) DP_RUN=$value ;;
         control) DP_CONTROL=$value ;;
         reason) DP_REASON=$value ;;
+        target) DP_TARGET=$value ;;
+        binding) DP_BINDING=$value ;;
+        *) DP_FAULT="unknown probe field: $key" ;;
       esac
     fi
   done < "$file"
@@ -900,22 +906,32 @@ parse_decision_probe() {  # <decision-file> -> 0 with DP_* set, 1 when no block
 # Validates DP_* against the pinned per-tier requirements. Prints one fault, or
 # nothing when the block is well formed.
 decision_probe_fault() {
+  local first
   [ -z "$DP_FAULT" ] || { printf '%s' "$DP_FAULT"; return 0; }
   case "$DP_TIER" in
     executable)
       [ -n "$DP_RUN" ] || { printf 'tier executable declares no run'; return 0; }
+      [ -n "$DP_TARGET" ] || { printf 'tier executable declares no target'; return 0; }
+      [ -n "$DP_BINDING" ] || { printf 'tier executable declares no binding'; return 0; }
       ;;
     cited-control)
       [ -n "$DP_RUN" ] || { printf 'tier cited-control declares no run'; return 0; }
       [ -n "$DP_CONTROL" ] || { printf 'tier cited-control declares no control'; return 0; }
+      [ -n "$DP_TARGET" ] || { printf 'tier cited-control declares no target'; return 0; }
+      [ -n "$DP_BINDING" ] || { printf 'tier cited-control declares no binding'; return 0; }
       ;;
     attested)
       [ -n "$DP_REASON" ] || { printf 'tier attested declares no reason'; return 0; }
       [ -z "$DP_RUN" ] || { printf 'tier attested carries a run; an attested criterion declares no probe'; return 0; }
       ;;
-    '') printf 'the probe block declares no tier' ;;
-    *) printf 'unknown tier "%s"' "$DP_TIER" ;;
+    '') printf 'the probe block declares no tier'; return 0 ;;
+    *) printf 'unknown tier "%s"' "$DP_TIER"; return 0 ;;
   esac
+  [ "$DP_TIER" = attested ] && return 0
+  case "$DP_TARGET$DP_BINDING" in *[[:space:]]*) printf 'probe target and binding must be whitespace-free'; return 0 ;; esac
+  bash -n -c "$DP_RUN" >/dev/null 2>&1 || { printf 'probe run is not valid shell syntax'; return 0; }
+  first=${DP_RUN%%[[:space:]]*}
+  command -v "$first" >/dev/null 2>&1 || { printf 'probe run does not begin with an executable command: %s' "$first"; return 0; }
 }
 
 decision_file() {  # <task> <key>
@@ -1073,15 +1089,18 @@ run_decision_probe() {  # <task> <key>
     probe_timed_out "the probe for $key" "$DECISION_PROBE_TIMEOUT"
   elif [ "$rc" -eq 125 ] || [ "$rc" -eq 126 ] || [ "$rc" -eq 127 ]; then
     probe_answer NO_VERIFIER_RAN verification_unreachable \
-      "the probe for $key could not execute (exit $rc): $(printf '%s' "$out" | tail -1)"
-  elif [ "$rc" -ne 0 ]; then
+      "PROBE_EXECUTION_FAILED: the probe for $key could not execute (exit $rc): $(printf '%s' "$out" | tail -1)"
+  elif [ "$rc" -eq 1 ]; then
     probe_answer FAIL verifier_reported_failure \
-      "the criterion is not met: the probe for $key exited $rc: $(printf '%s' "$out" | tail -1)"
+      "PROBE_ASSERTION_FAILED: the criterion is not met: the probe for $key exited $rc: $(printf '%s' "$out" | tail -1)"
+  elif [ "$rc" -ne 0 ]; then
+    probe_answer NO_VERIFIER_RAN verification_unreachable \
+      "PROBE_EXECUTION_FAILED: the probe for $key failed before its assertion reached a verdict (exit $rc): $(printf '%s' "$out" | tail -1)"
   elif [ "$DP_TIER" = cited-control ]; then
     probe_answer PASS verified \
-      "the probe for $key passes now, with $(control_citation "$DP_CONTROL") cited as the control watched to fail first"
+      "PROBE_PASSED: the probe for $key passes now, with $(control_citation "$DP_CONTROL") cited as the control watched to fail first"
   else
-    probe_answer PASS verified "the probe for $key exits 0, so the criterion is met"
+    probe_answer PASS verified "PROBE_PASSED: the probe for $key exits 0, so the criterion is met"
   fi
   [ -z "$now" ] || probe_cache_write "$task" "$key" "$fingerprint" "$now" "$iso"
   return 0
@@ -1405,7 +1424,7 @@ evaluate_decision_entry() {  # <id> <path>
   fault=$(decision_probe_fault)
   if [ -n "$fault" ]; then
     ENTRY_STATE=UNOBSERVED
-    probe_answer NO_VERIFIER_RAN usage_error "inadmissible probe block: $fault"
+    probe_answer NO_VERIFIER_RAN usage_error "PROBE_INVALID: inadmissible probe block: $fault"
     return 0
   fi
   run_decision_probe "$task" "$key"
@@ -1566,7 +1585,7 @@ render_closes() {
   local fault
   fault=$(decision_probe_fault)
   if [ -n "$fault" ]; then
-    printf 'the probe block in %s cannot be read (%s), so this resolution is not accepted\n' \
+    printf 'PROBE_INVALID: the probe block in %s cannot be read (%s), so this resolution is not accepted\n' \
       "${file#"$FM_HOME"/}" "$fault"
     return "$EXIT_UNOBSERVED"
   fi

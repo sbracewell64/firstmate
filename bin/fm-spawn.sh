@@ -315,8 +315,6 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-route-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
-# shellcheck source=bin/fm-status-event-lib.sh
-. "$SCRIPT_DIR/fm-status-event-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1869,13 +1867,16 @@ fi
 
 if [ -n "$REVIEW_ROLE" ]; then
   REVIEW_BRIEF="$DATA/$ID/reviewer-brief.md"
+  REVIEW_ACK=$(jq -cn --arg b "$MODEL" --arg r "$REVIEW_ROLE" --arg t "$REVIEWED_HEAD" --arg a "$ID" \
+    '{schema:"fm-review-ack.v1",assignment_received:true,reviewer_binding:$b,review_role:$r,review_target_commit:$t,review_assignment_id:$a}')
+  REVIEW_VERDICT=$(jq -cn --arg b "$MODEL" --arg r "$REVIEW_ROLE" --arg t "$REVIEWED_HEAD" --arg a "$ID" \
+    '{schema:"fm-review-verdict.v1",reviewer_binding:$b,review_role:$r,review_target_commit:$t,review_assignment_id:$a,verdict:"approve|reject",findings:[],evidence_refs:[]}')
   {
     sed -n '1,$p' "$BRIEF"
     printf '\n# Review evidence protocol\n'
-    printf 'Before reviewing, append exactly this opening event to `%s`:\n\n' "$STATE/$ID.status"
-    printf '`fm-status-event.v1 verb=working key=review-opening phase=%s evidence=%s summary=review role and target established`\n\n' "$REVIEW_ROLE" "$REVIEWED_HEAD"
-    printf 'After reviewing, append a `key=review-verdict` event with `phase=PASS` for an observed-good change or `phase=FAIL` for an observed-bad change, and the same `evidence=%s`.\n' "$REVIEWED_HEAD"
-    printf 'The event verb reports lifecycle state only and does not carry the verdict.\n'
+    printf 'Before reviewing, print this exact compact JSON acknowledgement as its own line:\n\n`%s`\n\n' "$REVIEW_ACK"
+    printf 'After reviewing, print one compact JSON verdict as its own line using this shape, replacing `approve|reject` and filling both arrays:\n\n`%s`\n' "$REVIEW_VERDICT"
+    printf 'Then print `fm-status-event.v1 verb=done key=review-execution phase=%s evidence=%s summary=review execution completed` as its own line.\n' "$REVIEW_ROLE" "$REVIEWED_HEAD"
   } > "$REVIEW_BRIEF" || {
     echo "error: could not create the reviewer evidence envelope for $ID" >&2
     exit 1
@@ -2520,18 +2521,10 @@ review_record_launch() {  # <outcome>
   return 0
 }
 
-review_opening_observed() {  # <status-path> <role> <target>
-  local line key phase evidence
-  [ -f "$1" ] || return 1
-  while IFS= read -r line; do
-    fm_status_event_is_typed "$line" || continue
-    key=$(fm_status_event_field "$line" key 2>/dev/null) || continue
-    phase=$(fm_status_event_field "$line" phase 2>/dev/null) || continue
-    evidence=$(fm_status_event_field "$line" evidence 2>/dev/null) || continue
-    [ "$key" = review-opening ] && [ "$phase" = "$2" ] \
-      && printf '%s\n' "$evidence" | grep -Fxq -- "$3" && return 0
-  done <"$1"
-  return 1
+review_capture_artifact() {  # <kind>
+  local capture
+  capture=$(fm_backend_capture "$BACKEND" "$T" 240 "$W" 2>/dev/null) || return 1
+  printf '%s\n' "$capture" | "$SCRIPT_DIR/fm-review-role.sh" capture --task "$ID" --kind "$1" >/dev/null 2>&1
 }
 
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
@@ -3024,6 +3017,7 @@ fi
   # the decorative claim this control exists to refuse, and a reader must be
   # able to see all three or none.
   [ -z "$REVIEW_ROLE" ] || echo "review_role=$REVIEW_ROLE"
+  [ -z "$REVIEW_ROLE" ] || echo "review_assignment_id=$ID"
   [ -z "$REVIEW_MAKER" ] || echo "review_maker=$REVIEW_MAKER"
   [ -z "$REVIEW_MAKER_PROCESS" ] || echo "review_maker_process=$REVIEW_MAKER_PROCESS"
   [ -z "$REVIEWED_HEAD" ] || echo "reviewed_head=$REVIEWED_HEAD"
@@ -3223,7 +3217,7 @@ if [ -n "$REVIEW_ROLE" ]; then
     REVIEW_AGENT_STATE=$(fm_backend_agent_state "$BACKEND" "$T" 2>/dev/null) \
       || REVIEW_AGENT_STATE=unreadable
     if [ "$REVIEW_AGENT_STATE" = alive ] \
-      && review_opening_observed "$STATE/$ID.status" "$REVIEW_ROLE" "$REVIEWED_HEAD"; then
+      && review_capture_artifact acknowledgement; then
       break
     fi
     REVIEW_POLL_I=$((REVIEW_POLL_I + 1))
@@ -3231,7 +3225,7 @@ if [ -n "$REVIEW_ROLE" ]; then
   done
   case "$REVIEW_AGENT_STATE" in
     alive)
-      if review_opening_observed "$STATE/$ID.status" "$REVIEW_ROLE" "$REVIEWED_HEAD"; then
+      if [ -s "$STATE/$ID.review-ack.json" ] || review_capture_artifact acknowledgement; then
         REVIEW_LAUNCH_OUTCOME=launch_succeeded_as_requested
       else
         REVIEW_LAUNCH_OUTCOME=role_not_established
