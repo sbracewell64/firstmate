@@ -482,8 +482,8 @@
     "location": "read-only harness classifier",
     "target_assertion_id": "the read-only control cites measured harness evidence",
     "expected_negative_failure": "portable classifier",
-    "search": "pi) printf 'allowlist\\t--tools read,grep,find,ls' ;;",
-    "replacement": "pi) return 1 ;;",
+    "search": "pi) printf",
+    "replacement": "pi) return 1 #",
     "assertion_command": [
       "bash",
       "tests/fm-review-recurrence-assertion.sh",
@@ -499,8 +499,8 @@
     "location": "review assignment acknowledgement binding",
     "target_assertion_id": "an active assignment consumes the generation it was dispatched with",
     "expected_negative_failure": "generation identity changed",
-    "search": "review_assignment_id:$a",
-    "replacement": "review_assignment_id:\"latest\"",
+    "search": "review_assignment_id=$ID",
+    "replacement": "review_assignment_id=latest",
     "assertion_command": [
       "bash",
       "tests/fm-review-recurrence-assertion.sh",
@@ -516,8 +516,8 @@
     "location": "raw artifact validation",
     "target_assertion_id": "a modified generation file is refused",
     "expected_negative_failure": "modified generation",
-    "search": "artifact=$(review_artifact_filter",
-    "replacement": "artifact=$(cat",
+    "search": "artifact=$(review_artifact_filter \"$kind\" \"$binding\" \"$role\" \"$target\" \"$assignment\" < \"$raw\" 2>/dev/null) || return 2",
+    "replacement": "artifact=$(cat \"$raw\")",
     "assertion_command": [
       "bash",
       "tests/fm-review-recurrence-assertion.sh",
@@ -581,8 +581,8 @@
     "location": "disposable clone",
     "target_assertion_id": "an interrupted run leaves the authoritative candidate byte-identical",
     "expected_negative_failure": "candidate changed",
-    "search": "--no-hardlinks",
-    "replacement": "--local",
+    "search": "git clone --quiet --no-local \"$ROOT\" \"$workspace\" || could_not_observe \"disposable local clone failed\"",
+    "replacement": "git clone --quiet --local \"$ROOT\" \"$workspace\" || could_not_observe \"disposable local clone failed\"",
     "assertion_command": [
       "bash",
       "tests/fm-review-recurrence.test.sh"
@@ -595,8 +595,8 @@
     "location": "executed assertion marker",
     "target_assertion_id": "the targeted assertion is proved to have executed",
     "expected_negative_failure": "assertion not reached",
-    "search": "grep -Fqx \"FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=PASS\"",
-    "replacement": "grep -Fq PASS",
+    "search": "baseline did not prove the targeted assertion executed",
+    "replacement": "baseline accepted without execution evidence",
     "assertion_command": [
       "bash",
       "tests/fm-review-recurrence.test.sh"
@@ -630,4 +630,161 @@
       "tests/fm-review-recurrence.test.sh"
     ]
   }
+,
+
+  {
+    "case": "a boundary marker does not prove the assertion executed",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a boundary marker does not prove the assertion executed",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "[ \"$baseline_rc\" -eq 0 ] || could_not_observe \"$name baseline assertion did not pass\"",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a failed run invalidates rather than preserves its artifact",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a failed run invalidates rather than preserves its artifact",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "previous evidence could not be marked superseded",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a failure before the target assertion is not a negative result",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a failure before the target assertion is not a negative result",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "[ \"$negative_rc\" -ne 0 ] || could_not_observe \"$name target assertion stayed green\"",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a mutation must alter the protection its case names",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a mutation must alter the protection its case names",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "[ \"$changed\" = \"$file\" ]",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a preserved flag spelling does not rescue a violated isolation property",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a preserved flag spelling does not rescue a violated isolation property",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "disposable workspace depends on candidate objects",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a setup failure is classified apart from an assertion failure",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a setup failure is classified apart from an assertion failure",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "baseline assertion did not pass",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a specification cannot require the commit that contains it",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a specification cannot require the commit that contains it",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "candidate commit is unreadable",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a stale evidence artifact is not read as current",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence-evidence.sh",
+    "location": "named protection",
+    "target_assertion_id": "a stale evidence artifact is not read as current",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "protected file changed after evidence was measured",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "an equivalent implementation satisfying every predicate is accepted",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "an equivalent implementation satisfying every predicate is accepted",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "disposable workspace shares repository administration",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "evidence is refused when any prerequisite is unknown",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence-evidence.sh",
+    "location": "named protection",
+    "target_assertion_id": "evidence is refused when any prerequisite is unknown",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "recurrence evidence is incomplete",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "the disposable clone shares no storage with the candidate",
+    "finding": "review recurrence mechanics",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "named protection",
+    "target_assertion_id": "the disposable clone shares no storage with the candidate",
+    "expected_negative_failure": "mechanics protection removed",
+    "search": "git clone --quiet --no-local \"$ROOT\" \"$workspace\"",
+    "replacement": "REMOVED_PROTECTION",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  }
+
 ]

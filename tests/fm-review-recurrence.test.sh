@@ -23,7 +23,7 @@ git -C "$origin" commit -qm fixture
 git -C "$origin" worktree add -q --detach "$candidate" HEAD
 sha=$(git -C "$candidate" rev-parse HEAD)
 spec=$TMP_ROOT/spec.json
-jq -n '[range(0;38) | {
+jq -n '[range(0;49) | {
   case:("case-" + tostring), finding:("finding-" + tostring), file:"bin/control.sh",
   location:"protection", assertion_command:["bash","tests/target.test.sh"], target_assertion_id:"case-0",
   expected_negative_failure:"expected protected identity", search:"PROTECTED=true",
@@ -75,7 +75,7 @@ if FM_REVIEW_RECURRENCE_ROOT=$candidate FM_REVIEW_RECURRENCE_SPEC=$TMP_ROOT/setu
 fi
 [ ! -e "$out" ] || fail "setup failure published evidence"
 grep -Fq 'baseline assertion did not pass' "$TMP_ROOT/setup.out" || fail "setup failure was classified as an assertion"
-pass "runner distinguishes setup failure and withholds evidence"
+pass "a setup failure is classified apart from an assertion failure"
 
 jq '.[0].file="../outside"' "$spec" > "$TMP_ROOT/escape.json"
 if FM_REVIEW_RECURRENCE_ROOT=$candidate FM_REVIEW_RECURRENCE_SPEC=$TMP_ROOT/escape.json \
@@ -92,7 +92,7 @@ if FM_REVIEW_RECURRENCE_ROOT=$origin FM_REVIEW_RECURRENCE_SPEC=$spec \
   fail "primary checkout was accepted"
 fi
 grep -Fq 'refuses the primary checkout' "$TMP_ROOT/primary.out" || fail "unsafe checkout refusal was not classified"
-pass "runner refuses an unsafe authoritative checkout"
+pass "the runner refuses to mutate the authoritative checkout"
 
 printf 'dirty\n' > "$candidate/dirty"
 if FM_REVIEW_RECURRENCE_ROOT=$candidate FM_REVIEW_RECURRENCE_SPEC=$spec \
@@ -121,3 +121,50 @@ if FM_REVIEW_RECURRENCE_ROOT=$candidate FM_REVIEW_RECURRENCE_SPEC=$TMP_ROOT/supp
 fi
 grep -Fq 'baseline assertion did not pass' "$TMP_ROOT/supplied.out" || fail "supplied strings bypassed observation"
 pass "supplied strings cannot fabricate observed evidence"
+
+printf '%s\n' '#!/usr/bin/env bash' 'echo "FM_RECURRENCE_ASSERTION_EXECUTED id=case-0 result=PASS"' 'exit 2' \
+  > "$candidate/tests/boundary.test.sh"
+git -C "$candidate" add tests/boundary.test.sh
+git -C "$candidate" commit -qm boundary
+sha=$(git -C "$candidate" rev-parse HEAD)
+jq '.[0].assertion_command=["bash","tests/boundary.test.sh"]' "$spec" > "$TMP_ROOT/boundary.json"
+if FM_REVIEW_RECURRENCE_ROOT=$candidate FM_REVIEW_RECURRENCE_SPEC=$TMP_ROOT/boundary.json \
+  FM_REVIEW_RECURRENCE_OUT=$out FM_REVIEW_RECURRENCE_TMP=$TMP_ROOT/runner-tmp \
+  "$ROOT/bin/fm-review-recurrence.sh" --case case-0 > "$TMP_ROOT/boundary.out" 2>&1; then
+  fail "boundary marker fabricated assertion execution"
+fi
+grep -Fq 'baseline assertion did not pass' "$TMP_ROOT/boundary.out" || fail "boundary failure was not setup"
+pass "a boundary marker does not prove the assertion executed"
+
+before_status=$(git -C "$candidate" status --porcelain=v1 --untracked-files=all)
+printf '%s\n' '#!/usr/bin/env bash' \
+  'if [ "${FM_RECURRENCE_PHASE:-}" = negative ]; then kill -TERM "$PPID"; fi' \
+  'echo "FM_RECURRENCE_ASSERTION_EXECUTED id=case-0 result=PASS"' > "$candidate/tests/boundary.test.sh"
+git -C "$candidate" add tests/boundary.test.sh
+git -C "$candidate" commit -qm interrupt
+sha=$(git -C "$candidate" rev-parse HEAD)
+jq '.[0].assertion_command=["bash","tests/boundary.test.sh"]' "$spec" > "$TMP_ROOT/interrupt.json"
+FM_REVIEW_RECURRENCE_ROOT=$candidate FM_REVIEW_RECURRENCE_SPEC=$TMP_ROOT/interrupt.json \
+  FM_REVIEW_RECURRENCE_OUT=$out FM_REVIEW_RECURRENCE_TMP=$TMP_ROOT/runner-tmp \
+  "$ROOT/bin/fm-review-recurrence.sh" --case case-0 >/dev/null 2>&1 || true
+[ "$before" = "$(git -C "$candidate" hash-object bin/control.sh)" ] || fail "interruption changed candidate bytes"
+[ "$before_status" = "$(git -C "$candidate" status --porcelain=v1 --untracked-files=all)" ] || fail "interruption changed candidate status"
+pass "an interrupted run leaves the authoritative candidate byte-identical"
+
+grep -Fqx 'FM_RECURRENCE_ASSERTION_EXECUTED id=case-0 result=PASS' < <(bash "$candidate/tests/target.test.sh") \
+  || fail "target assertion did not emit its execution event"
+pass "the targeted assertion is proved to have executed"
+
+fresh=$TMP_ROOT/fresh.json
+jq -n --arg commit "$sha" '[range(0;49) | {case:("fresh-"+tostring),protection:"bin/control.sh:protection",
+  target_assertion_id:("fresh-"+tostring),assertion_execution_observed:true,candidate_commit:$commit}]' > "$fresh"
+FM_REVIEW_RECURRENCE_ROOT=$candidate "$ROOT/bin/fm-review-recurrence-evidence.sh" "$fresh" >/dev/null \
+  || fail "unchanged protection evidence was rejected"
+printf 'changed\n' >> "$candidate/bin/control.sh"
+git -C "$candidate" add bin/control.sh
+git -C "$candidate" commit -qm changed
+if FM_REVIEW_RECURRENCE_ROOT=$candidate "$ROOT/bin/fm-review-recurrence-evidence.sh" "$fresh" >/dev/null 2>&1; then
+  fail "stale protection evidence was accepted"
+fi
+git -C "$candidate" reset -q --hard "$sha"
+pass "a stale evidence artifact is not read as current"

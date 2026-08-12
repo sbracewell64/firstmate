@@ -27,17 +27,22 @@ common_dir=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>
 
 candidate=$(git -C "$ROOT" rev-parse HEAD) || could_not_observe "candidate commit is unreadable"
 count=$(jq 'length' "$SPEC") || could_not_observe "mutation specification is invalid"
-[ "$count" -eq 38 ] || could_not_observe "expected 38 mutation specifications, found $count"
+[ "$count" -eq 49 ] || could_not_observe "expected 49 mutation specifications, found $count"
+if [ -e "$OUT" ]; then
+  superseded=$OUT.superseded.$(date -u +%Y%m%dT%H%M%SZ)
+  mv "$OUT" "$superseded" || could_not_observe "previous evidence could not be marked superseded"
+fi
 mkdir -p "$TMP_PARENT" || could_not_observe "temporary parent cannot be created"
 run_root=$(mktemp -d "$TMP_PARENT/run.XXXXXX") || could_not_observe "temporary directory cannot be created"
 workspace=$run_root/candidate
 results=$run_root/results.json
 cleanup() { rm -rf "$run_root"; }
 trap cleanup EXIT HUP INT TERM
-git clone --quiet --no-hardlinks "$ROOT" "$workspace" || could_not_observe "disposable local clone failed"
+git clone --quiet --no-local "$ROOT" "$workspace" || could_not_observe "disposable local clone failed"
 git -C "$workspace" checkout --quiet --detach "$candidate" || could_not_observe "candidate checkout failed"
 [ "$(git -C "$workspace" rev-parse HEAD)" = "$candidate" ] || could_not_observe "disposable clone does not match pinned candidate"
 [ "$(git -C "$workspace" rev-parse --git-common-dir)" = .git ] || could_not_observe "disposable workspace shares repository administration"
+[ ! -e "$workspace/.git/objects/info/alternates" ] || could_not_observe "disposable workspace depends on candidate objects"
 printf '[]\n' > "$results"
 
 while IFS= read -r row; do
@@ -59,7 +64,8 @@ while IFS= read -r row; do
   git -C "$workspace" reset --quiet --hard "$candidate" || could_not_observe "$name could not reset to its pinned base"
   git -C "$workspace" clean -qfdx || could_not_observe "$name could not clean its disposable base"
   [ "$(git -C "$workspace" rev-parse HEAD)" = "$candidate" ] || could_not_observe "$name base identity changed"
-  baseline=$(cd "$workspace" && eval "set -- $assertion_command; \"\$@\"" 2>&1); baseline_rc=$?
+  [ "$(git -C "$ROOT" rev-parse HEAD)" = "$candidate" ] || could_not_observe "candidate moved during recurrence execution"
+  baseline=$(cd "$workspace" && FM_RECURRENCE_PHASE=baseline eval "set -- $assertion_command; \"\$@\"" 2>&1); baseline_rc=$?
   [ "$baseline_rc" -eq 0 ] || could_not_observe "$name baseline assertion did not pass"
   printf '%s\n' "$baseline" | grep -Fqx "FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=PASS" \
     || could_not_observe "$name baseline did not prove the targeted assertion executed"
@@ -75,7 +81,7 @@ while IFS= read -r row; do
   patch=$(git -C "$workspace" diff -- "$file")
   [ -n "$patch" ] || could_not_observe "$name produced no re-executable patch"
 
-  negative=$(cd "$workspace" && eval "set -- $assertion_command; \"\$@\"" 2>&1); negative_rc=$?
+  negative=$(cd "$workspace" && FM_RECURRENCE_PHASE=negative eval "set -- $assertion_command; \"\$@\"" 2>&1); negative_rc=$?
   [ "$negative_rc" -ne 0 ] || could_not_observe "$name target assertion stayed green"
   printf '%s\n' "$negative" | grep -Fqx "FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=FAIL failure=$expected" \
     || could_not_observe "$name target failed with an unexpected identity or did not execute"
@@ -84,7 +90,7 @@ while IFS= read -r row; do
   git -C "$workspace" clean -qfdx || could_not_observe "$name restoration clean failed"
   [ -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)" ] || could_not_observe "$name restoration left dirty bytes"
   [ "$(git -C "$workspace" hash-object "$workspace/$file")" = "$before" ] || could_not_observe "$name restoration hash did not match"
-  confirm=$(cd "$workspace" && eval "set -- $assertion_command; \"\$@\"" 2>&1); confirm_rc=$?
+  confirm=$(cd "$workspace" && FM_RECURRENCE_PHASE=confirm eval "set -- $assertion_command; \"\$@\"" 2>&1); confirm_rc=$?
   [ "$confirm_rc" -eq 0 ] || could_not_observe "$name did not return to baseline"
   printf '%s\n' "$confirm" | grep -Fqx "FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=PASS" \
     || could_not_observe "$name confirmation did not prove the targeted assertion executed"
@@ -92,15 +98,16 @@ while IFS= read -r row; do
   tmp=$results.tmp
   jq --arg case "$name" --arg protection "$file:$location" --arg assertion "$assertion" --arg mutation "$patch" \
     --arg expected "$expected" --arg observed "$negative" --arg commit "$candidate" '. + [{case:$case,
-      protection:$protection,target_assertion_id:$assertion,mutation:$mutation,mutation_verified:true,
+      protection:$protection,target_assertion_id:$assertion,assertion_execution_observed:true,mutation:$mutation,mutation_verified:true,
       baseline_pass:true,expected_negative_failure:$expected,observed_negative_failure:$observed,
       failure_matches_expected:true,restored:true,confirm_pass:true,candidate_commit:$commit}]' "$results" > "$tmp" || exit 2
   mv "$tmp" "$results" || exit 2
 done < <(jq -c '.[]' "$SPEC")
 
-wanted=38
+wanted=49
 [ -z "$ONLY" ] || wanted=1
 [ "$(jq 'length' "$results")" -eq "$wanted" ] || could_not_observe "not every requested case produced evidence"
+[ "$(git -C "$ROOT" rev-parse HEAD)" = "$candidate" ] || could_not_observe "candidate moved before evidence publication"
 mkdir -p "$(dirname "$OUT")" || could_not_observe "evidence directory cannot be created"
 cp "$results" "$OUT" || could_not_observe "evidence artifact cannot be written"
 printf 'wrote %s\n' "$OUT"
