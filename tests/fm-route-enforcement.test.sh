@@ -835,6 +835,33 @@ JSON
   pass "a route defined only under default is listed, checked and enforced by every reader"
 }
 
+test_live_route_check_includes_default_only_route() {
+  local rec out rc
+  rec=$(make_refusal_home live-default none); read_home_record "$rec"
+  cat > "$HOME_DIR/config/crew-dispatch.json" <<'JSON'
+{
+  "_floors": {
+    "F-LOW": { "effort_floor": "low" },
+    "F-MED": { "effort_floor": "medium" }
+  },
+  "_models": {
+    "vendor/clean": { "effort_expressible": ["low"] },
+    "vendor/refused": { "effort_expressible": ["high"] }
+  },
+  "rules": [
+    { "route": "R-CLEAN", "floor": "F-LOW", "pool": ["vendor/clean"],
+      "use": { "harness": "codex", "model": "vendor/clean", "effort": "low" } }
+  ],
+  "default": { "route": "R-DEFAULT", "floor": "F-MED", "pool": ["vendor/refused"],
+               "harness": "codex", "model": "vendor/refused", "effort": "medium" }
+}
+JSON
+  out=$(FM_ROUTE_LIVE_E2E=1 FM_HOME="$HOME_DIR" "$ROOT/tests/fm-route-live-e2e.test.sh" 2>&1); rc=$?
+  expect_code 0 "$rc" "the live check must observe an unrelated exclusion on a default-only route"
+  assert_contains "$out" "ok - live routing" "the live route check did not complete"
+  pass "the live route check enumerates a route defined only under default"
+}
+
 # --- eligibility, failover and the terminal stop ----------------------------
 
 test_failover_stays_inside_the_pool_in_order() {
@@ -1756,6 +1783,7 @@ test_held_model_is_refused_at_the_chokepoint_and_check_agrees_with_eligible
 test_a_substitute_list_says_whether_it_was_registry_checked
 test_check_asks_the_registry_only_about_the_model_it_answers_for
 test_default_only_route_is_listed_and_enforced
+test_live_route_check_includes_default_only_route
 test_failover_stays_inside_the_pool_in_order
 test_an_ambiguous_failover_anchor_is_refused_rather_than_resolved
 test_availability_health_writes_merge_concurrent_independent_bindings

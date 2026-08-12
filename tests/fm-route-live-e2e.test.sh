@@ -14,7 +14,8 @@ ROUTE="$ROOT/bin/fm-route.sh"
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 
 [ -r "$CONFIG" ] || fail "live routing policy is unreadable: $CONFIG"
-routes=$(jq -r '.rules[]? | select(.route != null) | .route' "$CONFIG") || fail "live routing policy is invalid"
+routes=$(FM_HOME="$FM_HOME" "$ROUTE" routes 2>/dev/null | awk '/^policy_digest=/ { next } { print $1 }') \
+  || fail "live routing policy is invalid"
 [ -n "$routes" ] || fail "live routing policy contains no routes"
 
 records=
