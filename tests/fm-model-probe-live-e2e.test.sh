@@ -67,7 +67,7 @@ PROBED=0
 
 # One harness's command shape, end to end through the real binary.
 guard_harness() {  # <harness> <key> <provider> <model-id>
-  local harness=$1 key=$2 provider=$3 model_id=$4 home obs shape detail version
+  local harness=$1 key=$2 provider=$3 model_id=$4 home obs shape detail version latency
   if ! command -v "$harness" >/dev/null 2>&1; then
     # Reported, never silent: a guard that skips quietly is indistinguishable
     # from one that passed, which is the defect this whole change is about.
@@ -93,7 +93,12 @@ guard_harness() {  # <harness> <key> <provider> <model-id>
       ;;
   esac
   PROBED=$((PROBED + 1))
-  pass "$harness ($version): the probe command shape reaches the provider and $key answers AVAILABLE"
+  # The latency is reported because it is the timing discriminator the
+  # model-onboarding skill records: a client-side failure returns in well under
+  # a second while a server round trip takes seconds. A probe that answered
+  # AVAILABLE in no measurable time is worth looking at rather than trusting.
+  latency=$(jq -r --arg k "$key" '.models[$k].latency_s // "-"' "$home/state/model-observation.json")
+  pass "$harness ($version): the probe command shape reaches the provider and $key answers AVAILABLE in ${latency}s"
 }
 
 guard_harness claude claude/opus claude opus

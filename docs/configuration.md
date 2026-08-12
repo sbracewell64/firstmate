@@ -493,7 +493,8 @@ It is `bin/fm-verify-lib.sh`'s `PASS` / `FAIL` / `NO_VERIFIER_RAN` under the nam
         "reason_code": "TOOLING_GAP", "reader": "<what failed>", "candidate": "<provider>/<model-id>",
         "requested_observation": "entitlement-and-liveness", "failure_class": "<probe shape>",
         "failure_evidence": "<why>", "at": "<iso8601>",
-        "affected_routes": ["<route id>"], "backlog_item": null
+        "affected_routes": ["<route id>"],
+        "backlog_item": "<repair item id>", "backlog_item_status": "filed"
       }
     }
   }
@@ -505,7 +506,18 @@ An `UNOBSERVABLE` candidate is refused with the reader named, because it is neit
 A model nobody has probed has no entry and is not excluded: "not yet observed" and "observation attempted and failed" are themselves two facts, and collapsing them would make an unprobed fleet unroutable.
 An `AVAILABLE` observation only fails to exclude a candidate; it never admits one and never releases a hold, so a stale positive can never override a fresh negative.
 The `tooling_gap` block is evidence, not an issue store: the repair itself is an ordinary backlog item, which `bin/fm-reasoning-lib.sh` already requires a `TOOLING_GAP` dispatch to name and find open.
+`bin/fm-model-verify.sh` files that item through this home's own backlog backend under an id derived from the candidate, so repeated sweeps converge on one item rather than duplicating it, and confirms it through the same open-item reader the dispatch is certified against.
+`backlog_item` is `null` only when one could not be filed, and it then always travels with a `backlog_item_status` saying why, so an unfiled repair is explicitly incomplete rather than silent.
 Read it with `bin/fm-route.sh availability observations`, or `availability gaps` for only the candidates a failed reader is excluding.
+
+This record is validated on every read, not merely parsed.
+A file that is valid JSON but does not satisfy the schema - a wrong or absent schema string, `models` that is not an object, an entry outside the closed observation vocabulary, an `UNOBSERVABLE` entry with no `tooling_gap` block, or a string field carrying control characters - refuses with the reason rather than reading as an empty exclusion set, because recovering a corrupt safety record into "nothing is excluded" re-admits every candidate it was carrying.
+
+An `UNAVAILABLE` observation excludes on its own as well as through its hold.
+The two records are written by two calls, the fail-closed hold is written first, and routing refuses a candidate whose observation says unavailable while no hold records that fact, so a lost or raced hold write cannot leave a measured negative fact unenforced.
+Because that exclusion is independent, `bin/fm-route.sh availability release` also retires the `UNAVAILABLE` observation it overrides and reports which entries it retired; it never retires an `UNOBSERVABLE` one, since releasing a hold repairs nothing about a broken reader.
+
+Evidence stored here is sanitized before it is written: control characters are removed, credential-shaped strings are replaced by `[redacted]`, and the text is bounded, so a provider's error output cannot rewrite an operator's terminal, leak a key through a diagnostic, or fill the record.
 
 ## Model registry (config/models.json)
 
