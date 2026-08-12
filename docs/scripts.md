@@ -55,6 +55,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-home-seed.sh` | Register and provision a whole secondmate home on an SSH-reachable host              |
 | `fm-remote-readiness-lib.sh` | Shared remote second-mate readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | `fm-review-role.sh`      | List review roles, fail closed on ineligible or unevaluable assignments, and prove from the durable record whether a dispatched review actually ran |
+| `fm-review-recurrence.sh` | In a clean linked worktree, mutate each production review protection and generate hash-verified recurrence evidence |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
 | `fm-worktree-guard.sh`   | Choose the demonstrably empty Treehouse slot a spawn may use, and refuse when no available slot is one |
 | `fm-launch-lib.sh`       | Single owner of every verified harness launch command for crewmate, scout, secondmate, and primary sessions |

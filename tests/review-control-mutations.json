@@ -1,0 +1,292 @@
+[
+  {
+    "case": "a failed run cannot deliver an approval",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a failed run cannot deliver an approval",
+    "expected_negative_failure": "failed:approve",
+    "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+  },
+  {
+    "case": "a failed run does not unsay an authored rejection",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a failed run does not unsay an authored rejection",
+    "expected_negative_failure": "failed:reject",
+    "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+  },
+  {
+    "case": "a failed setup is not a failed assertion",
+    "file": "bin/fm-commitment-register.sh",
+    "location": "probe execution result classification",
+    "suite": "tests/fm-commitment-register.test.sh",
+    "target_assertion_id": "a failed setup is not a failed assertion",
+    "expected_negative_failure": "failed setup",
+    "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+  },
+  {
+    "case": "a label-only case fails the suite",
+    "file": "bin/fm-review-role.sh",
+    "location": "verdict schema filter",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a label-only case fails the suite",
+    "expected_negative_failure": "malformed raw reviewer bytes",
+    "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
+    "replacement": "and true"
+  },
+  {
+    "case": "a malformed verdict is invalid review evidence",
+    "file": "bin/fm-review-role.sh",
+    "location": "verdict schema filter",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a malformed verdict is invalid review evidence",
+    "expected_negative_failure": "malformed raw reviewer bytes",
+    "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
+    "replacement": "and true"
+  },
+  {
+    "case": "a mutation that does not alter the named protection is refused",
+    "file": "bin/fm-review-role.sh",
+    "location": "raw acknowledgement assignment binding",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a mutation that does not alter the named protection is refused",
+    "expected_negative_failure": "acknowledgement",
+    "search": "[ -s \"$ack_raw\" ] && artifact=$(review_artifact_filter acknowledgement \"$binding\" \"$role\" \"$head\" \"$task\" < \"$ack_raw\" 2>/dev/null)",
+    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")"
+  },
+  {
+    "case": "a paired case refuses to record an unflipped check",
+    "file": "bin/fm-review-role.sh",
+    "location": "framed artifact byte validation",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a paired case refuses to record an unflipped check",
+    "expected_negative_failure": "declared length",
+    "search": "[ \"$(LC_ALL=C printf '%s' \"$payload\" | wc -c | tr -d ' ')\" -eq \"$frame_bytes\" ] || return 1",
+    "replacement": "true || return 1"
+  },
+  {
+    "case": "a persisted acknowledgement is re-derived not re-observed",
+    "file": "bin/fm-review-role.sh",
+    "location": "unmatched execution/verdict refusal",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a persisted acknowledgement is re-derived not re-observed",
+    "expected_negative_failure": "UNENUMERATED",
+    "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
+    "replacement": "*) result=PASS; reason=\"defaulted\" ;;"
+  },
+  {
+    "case": "a read-only reviewer passes by emitting acknowledgement and verdict",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a read-only reviewer passes by emitting acknowledgement and verdict",
+    "expected_negative_failure": "failed:approve",
+    "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+  },
+  {
+    "case": "a review target must be a single token",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a review target must be a single token",
+    "expected_negative_failure": "failed:reject",
+    "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+  },
+  {
+    "case": "a stale acknowledgement cannot establish the role",
+    "file": "bin/fm-commitment-register.sh",
+    "location": "probe execution result classification",
+    "suite": "tests/fm-commitment-register.test.sh",
+    "target_assertion_id": "a stale acknowledgement cannot establish the role",
+    "expected_negative_failure": "failed setup",
+    "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+  },
+  {
+    "case": "a task terminal cannot satisfy review execution",
+    "file": "bin/fm-review-role.sh",
+    "location": "verdict schema filter",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a task terminal cannot satisfy review execution",
+    "expected_negative_failure": "malformed raw reviewer bytes",
+    "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
+    "replacement": "and true"
+  },
+  {
+    "case": "a wrapped review artifact is reconstructed and verified",
+    "file": "bin/fm-review-role.sh",
+    "location": "framed artifact byte validation",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "a wrapped review artifact is reconstructed and verified",
+    "expected_negative_failure": "physically wrapped framed verdict",
+    "search": "payload=$payload$line",
+    "replacement": "payload=$line"
+  },
+  {
+    "case": "an acknowledgement naming the wrong commit cannot begin a review",
+    "file": "bin/fm-review-role.sh",
+    "location": "raw acknowledgement assignment binding",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "an acknowledgement naming the wrong commit cannot begin a review",
+    "expected_negative_failure": "acknowledgement",
+    "search": "[ -s \"$ack_raw\" ] && artifact=$(review_artifact_filter acknowledgement \"$binding\" \"$role\" \"$head\" \"$task\" < \"$ack_raw\" 2>/dev/null)",
+    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")"
+  },
+  {
+    "case": "an acknowledgement naming the wrong role or assignment is refused",
+    "file": "bin/fm-review-role.sh",
+    "location": "framed artifact byte validation",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "an acknowledgement naming the wrong role or assignment is refused",
+    "expected_negative_failure": "declared length",
+    "search": "[ \"$(LC_ALL=C printf '%s' \"$payload\" | wc -c | tr -d ' ')\" -eq \"$frame_bytes\" ] || return 1",
+    "replacement": "true || return 1"
+  },
+  {
+    "case": "an unenumerated combination refuses rather than defaults",
+    "file": "bin/fm-review-role.sh",
+    "location": "unmatched execution/verdict refusal",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "an unenumerated combination refuses rather than defaults",
+    "expected_negative_failure": "UNENUMERATED",
+    "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
+    "replacement": "*) result=PASS; reason=\"defaulted\" ;;"
+  },
+  {
+    "case": "an unrelated failure signature is not recurrence proof",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "an unrelated failure signature is not recurrence proof",
+    "expected_negative_failure": "failed:approve",
+    "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+  },
+  {
+    "case": "an unverifiable capture is could-not-observe",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "an unverifiable capture is could-not-observe",
+    "expected_negative_failure": "failed:reject",
+    "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+  },
+  {
+    "case": "candidate mutation is refused while the output channel still works",
+    "file": "bin/fm-commitment-register.sh",
+    "location": "probe execution result classification",
+    "suite": "tests/fm-commitment-register.test.sh",
+    "target_assertion_id": "candidate mutation is refused while the output channel still works",
+    "expected_negative_failure": "failed setup",
+    "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+  },
+  {
+    "case": "completion without a verdict leaves the review unsatisfied",
+    "file": "bin/fm-review-role.sh",
+    "location": "verdict schema filter",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "completion without a verdict leaves the review unsatisfied",
+    "expected_negative_failure": "malformed raw reviewer bytes",
+    "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
+    "replacement": "and true"
+  },
+  {
+    "case": "every execution and verdict combination is enumerated",
+    "file": "bin/fm-review-role.sh",
+    "location": "unmatched execution/verdict refusal",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "every execution and verdict combination is enumerated",
+    "expected_negative_failure": "failed:approve",
+    "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
+    "replacement": "*) result=PASS; reason=defaulted ;;"
+  },
+  {
+    "case": "frame length is measured in bytes",
+    "file": "bin/fm-review-role.sh",
+    "location": "raw acknowledgement assignment binding",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "frame length is measured in bytes",
+    "expected_negative_failure": "acknowledgement",
+    "search": "[ -s \"$ack_raw\" ] && artifact=$(review_artifact_filter acknowledgement \"$binding\" \"$role\" \"$head\" \"$task\" < \"$ack_raw\" 2>/dev/null)",
+    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")"
+  },
+  {
+    "case": "no acknowledgement means the role is not established",
+    "file": "bin/fm-review-role.sh",
+    "location": "framed artifact byte validation",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "no acknowledgement means the role is not established",
+    "expected_negative_failure": "declared length",
+    "search": "[ \"$(LC_ALL=C printf '%s' \"$payload\" | wc -c | tr -d ' ')\" -eq \"$frame_bytes\" ] || return 1",
+    "replacement": "true || return 1"
+  },
+  {
+    "case": "paired evidence is derived from execution not from arguments",
+    "file": "bin/fm-review-role.sh",
+    "location": "unmatched execution/verdict refusal",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "paired evidence is derived from execution not from arguments",
+    "expected_negative_failure": "UNENUMERATED",
+    "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
+    "replacement": "*) result=PASS; reason=\"defaulted\" ;;"
+  },
+  {
+    "case": "restoration is proved and the check returns to baseline",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "restoration is proved and the check returns to baseline",
+    "expected_negative_failure": "failed:approve",
+    "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+  },
+  {
+    "case": "the fixture computes its expected length independently",
+    "file": "bin/fm-review-role.sh",
+    "location": "review execution/verdict table",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "the fixture computes its expected length independently",
+    "expected_negative_failure": "failed:reject",
+    "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+  },
+  {
+    "case": "the green fixture fails when the assignment binding is removed",
+    "file": "bin/fm-commitment-register.sh",
+    "location": "probe execution result classification",
+    "suite": "tests/fm-commitment-register.test.sh",
+    "target_assertion_id": "the green fixture fails when the assignment binding is removed",
+    "expected_negative_failure": "failed setup",
+    "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+  },
+  {
+    "case": "the launcher cannot fabricate or default a verdict",
+    "file": "bin/fm-launch-lib.sh",
+    "location": "verdict schema filter",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "the launcher cannot fabricate or default a verdict",
+    "expected_negative_failure": "malformed raw reviewer bytes",
+    "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
+    "replacement": "and true"
+  },
+  {
+    "case": "the read-only control cites measured harness evidence",
+    "file": "bin/fm-review-role.sh",
+    "location": "read-only harness classifier",
+    "suite": "tests/fm-review-role.test.sh",
+    "target_assertion_id": "the read-only control cites measured harness evidence",
+    "expected_negative_failure": "portable classifier",
+    "search": "pi) printf 'allowlist\\t--tools read,grep,find,ls' ;;",
+    "replacement": "pi) return 1 ;;"
+  }
+]

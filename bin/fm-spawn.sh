@@ -1871,10 +1871,11 @@ if [ -n "$REVIEW_ROLE" ]; then
     '{schema:"fm-review-ack.v1",assignment_received:true,reviewer_binding:$b,review_role:$r,review_target_commit:$t,review_assignment_id:$a}')
   REVIEW_VERDICT=$(jq -cn --arg b "$MODEL" --arg r "$REVIEW_ROLE" --arg t "$REVIEWED_HEAD" --arg a "$ID" \
     '{schema:"fm-review-verdict.v1",reviewer_binding:$b,review_role:$r,review_target_commit:$t,review_assignment_id:$a,verdict:"approve|reject",findings:[],evidence_refs:[]}')
+  REVIEW_ACK_BYTES=$(LC_ALL=C printf '%s' "$REVIEW_ACK" | wc -c | tr -d ' ')
   {
     sed -n '1,$p' "$BRIEF"
     printf '\n# Review evidence protocol\n'
-    printf 'Before reviewing, print `FM-REVIEW-ARTIFACT-BEGIN kind=acknowledgement bytes=%s`, then this exact compact JSON acknowledgement, then `FM-REVIEW-ARTIFACT-END kind=acknowledgement`, each on its own line:\n\n`%s`\n\n' "${#REVIEW_ACK}" "$REVIEW_ACK"
+    printf 'Before reviewing, print `FM-REVIEW-ARTIFACT-BEGIN kind=acknowledgement bytes=%s`, then this exact compact JSON acknowledgement, then `FM-REVIEW-ARTIFACT-END kind=acknowledgement`, each on its own line:\n\n`%s`\n\n' "$REVIEW_ACK_BYTES" "$REVIEW_ACK"
     printf 'After reviewing, create one compact JSON verdict using this shape, replacing `approve|reject` and filling both arrays, then print a begin line carrying its exact byte count, the compact JSON, and the matching end line:\n\n`FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=<exact-byte-count>`\n\n`%s`\n\n`FM-REVIEW-ARTIFACT-END kind=verdict`\n' "$REVIEW_VERDICT"
     printf 'Then print `fm-status-event.v1 verb=done key=review-execution phase=%s evidence=%s summary=review execution completed` as its own line.\n' "$REVIEW_ROLE" "$REVIEWED_HEAD"
   } > "$REVIEW_BRIEF" || {
