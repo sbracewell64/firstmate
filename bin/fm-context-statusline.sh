@@ -9,7 +9,7 @@
 # This command reads context_window.remaining_percentage, used_percentage,
 # total_tokens, and current_usage. It prints one compact display line and, when
 # --record is present, atomically writes the reading plus the derived
-# 70%-compaction advisory as JSON for the worker named by a generated brief.
+# compaction advisory as JSON for the worker named by a generated brief.
 #
 # The three context-governance inputs are resolved here into the smart-zone
 # ceiling governing this session: the minimum of the route's ceiling, the

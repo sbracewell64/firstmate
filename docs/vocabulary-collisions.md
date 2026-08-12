@@ -167,7 +167,7 @@ Until then it is a dual-written deprecated alias with exactly one owner, and a m
 | **Disposition** | DISSOLVED BY SPLIT |
 | **Routing-floor sense** | the `context_ceiling` field of `_floors.<id>` in `config/crew-dispatch.json`, split into `minimum_context` and `smart_zone_ceiling` |
 | **Model-evidence sense** | `_models.<m>.context_window`, the model's hard limit, and `_models.<m>.smart_zone`, its own smart-zone ceiling - both keep their names |
-| **Governor sense** | the `--ceiling` the context governor runs a session at, which is the resolved `effective_working_ceiling` and not a config field |
+| **Governor sense** | the effective working ceiling that the context governor resolves from its route-ceiling, model-ceiling, and hard-limit inputs, not a config field |
 
 One field named CEILING was enforced as a MINIMUM.
 The evaluator read `_floors.<id>.context_ceiling`, compared it against a candidate's `smart_zone`, and emitted a rejection rule named `context_below_floor` - so a number the captain chose to make sessions rotate EARLIER excluded every model whose smart zone sat below it, across nearly the whole routing table.
@@ -189,7 +189,7 @@ Two spellings of one number is exactly how the senses drifted apart the first ti
 Its retirement condition is: **remove the retired-spelling read once every home this repository serves has renamed `context_ceiling` to `smart_zone_ceiling` in its own `config/crew-dispatch.json`, which each home settles by confirming its file carries no `context_ceiling` key.**
 The decision record retired the name at the same time: `floor_axes` carries `minimum_context` and `smart_zone_ceiling`, and that surface's schema tag moved to `fm-route-decision.v2` rather than changing what a `v1` field meant underneath a reader.
 
-**Where it bites:** [`bin/fm-route-lib.sh`](../bin/fm-route-lib.sh); the routed-pool schema in [`docs/configuration.md`](configuration.md); the `--ceiling` governance seam in [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh) and the ceiling `fm-spawn.sh` hands it; `tests/fm-route-enforcement.test.sh`, which turns red if the ceiling is enforced as a minimum again.
+**Where it bites:** [`bin/fm-route-lib.sh`](../bin/fm-route-lib.sh); the routed-pool schema in [`docs/configuration.md`](configuration.md); the three-input governance seam in [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh) and the inputs `fm-spawn.sh` hands it; `tests/fm-route-enforcement.test.sh`, which turns red if the ceiling is enforced as a minimum again.
 
 ## Maintaining this file
 
