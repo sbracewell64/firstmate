@@ -42,7 +42,7 @@ Hard rules, in priority order:
    `bin/fm-verify.sh` runs a declared verifier and returns that result; `bin/fm-verify-lib.sh` owns the type itself and its consumer and coercion rules.
 
 You may maintain this repo's private operational state directly.
-Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, `capabilities/`, `commitments/`, and public `skills/`.
+Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, `capabilities/`, `commitments/`, `review-roles/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through this repo's no-mistakes pipeline and PR path, with the same merge authority as any other project.
@@ -69,6 +69,7 @@ skills/              standalone public installer-facing skills, committed; not l
 loopspecs/           canonical LoopSpec registry, committed: schema.json (field contract), triggers.json (the sixteen-trigger register), terminal-states.json (the unified terminal-state vocabulary and its total mapping from every source vocabulary), and one <id>.json per loop; bin/fm-loopspec.sh is their only interpreter (section 13)
 capabilities/        capability catalog, committed: catalog.json names the sixteen typed capabilities and their existing owners. Definitions only - no runtime reads it, nothing is bound, and the file itself certifies that it is a capability boundary and not a security boundary
 commitments/         canonical register of recorded-but-not-yet-real commitments, committed: schema.json (field contract, assurance tiers, refused keys) and one <id>.json per commitment; bin/fm-commitment-register.sh is their only interpreter, computes every state from a probe, and never stores one (section 7)
+review-roles/        canonical registry of REVIEW ROLE contracts, committed: schema.json (field contract, closed predicate vocabularies, refused derived keys) and one <id>.json per role; bin/fm-review-role.sh is their only interpreter and the single owner of the assignment decision "may this candidate review this maker's artifact?" (section 7)
 firstmate.bat        Windows-to-WSL launcher bridge, committed; docs/windows-launcher.md owns setup
 bin/                 helper scripts, committed; read each script's header before first use
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
@@ -315,6 +316,9 @@ A spawn allocates only a demonstrably empty pool slot and skips any that still h
 Every ship and scout spawn must also answer why an agent turn was necessary, through `--reason-code` in the closed vocabulary owned by `bin/fm-reasoning-lib.sh`; a broken or absent deterministic reader is never legitimate reasoning demand, so it is `TOOLING_GAP`, which is never counted as justified reasoning and requires `--tooling-gap-item` naming the open backlog item that repairs the reader.
 Where this home's dispatch config carries routed pools, every ship and scout spawn also names the route it claims with `--route` and the model it will run, and `fm-spawn` refuses a model outside that route's pool, below its floor, held by the availability record, or with no recorded evidence for an axis the floor declares; substitute a failed model only from the same pool in order, and treat an exhausted pool as a stop rather than a reason to reach outside it or lower the floor (`bin/fm-route.sh`, `bin/fm-route-lib.sh`).
 `fm-spawn` also consults admission before allocating anything, so a fleet that is not accepting work refuses the spawn and queues the request instead of starting it.
+A dispatch that discharges a review obligation names it with `--review-role <id>` from `review-roles/` and the author it reviews with `--maker`, and `fm-spawn` refuses unless `bin/fm-review-role.sh` observes every required predicate satisfied.
+That refusal is the control: a reviewer must be a binding the role qualifies, the author identity is required rather than assumed, an absent one refuses because it cannot be told from a self-review, and the harness must be one with a measured read-only launch binding, which is then substituted into the launch command so the reviewer cannot mutate the candidate rather than being asked not to.
+A review recorded only in prose discharges nothing, and this substrate itself landed uncertified under a one-time captain bootstrap exception that `commitments/review-control-bootstrap-uncertified.json` holds open until an independent review of it lands.
 After spawning, confirm the worker is processing the brief, handle any trust dialog through `harness-adapters`, and record ship or scout work as under way.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 

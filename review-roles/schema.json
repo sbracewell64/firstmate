@@ -1,0 +1,106 @@
+{
+  "review_role_schema_version": 1,
+  "description": "Canonical field contract for one REVIEW ROLE: the executable capability contract a reviewer must satisfy before it may be assigned to review someone else's work. bin/fm-review-role.sh is the only interpreter; its header and --help own the mechanics. A role answers one question and only that question: what must be true of a candidate, and of its binding to a specific artifact, for that candidate to lawfully discharge this review obligation.",
+  "why": "The runtime floor required a mandatory design review for a long time and it never happened, because the requirement was written as prose naming a MODEL. Nothing routes prose. When that model became unavailable the requirement did not fail loudly - it silently ceased to exist, and two runtime candidates were implemented with no review at all. The first repair replaced prose naming a model with prose naming PROPERTIES, and an independent checker rejected it by deleting each field, and separately inverting each field, and observing zero violations either way. The governing law is therefore: a requirement that only appears in prose is not an executable control, and a capability requirement must be enforceable, assignable, and capable of becoming RED.",
+  "what_this_retires": {
+    "prose_review_obligation": "config/crew-dispatch.json's _floors.F-RUNTIME.review_obligation string, which named a model in prose and could not be routed, dispatched, or enforced. A role id is now the routable thing that string tried to be.",
+    "drifted_predicate_copies": "The reviewer predicates existed in three places at once - a routing floor, a routing policy rule, and a qualification report - and the three had already drifted: the routing copy dropped the source's expert implementation-comprehension requirement and invented a fixed context threshold the source did not state. This registry is the one copy; every other surface projects from it.",
+    "reviewer_as_one_activity": "Design review, change review, security review and certification review were one undifferentiated word, so qualification for one read as qualification for all. activity makes them separate contracts that do not imply one another."
+  },
+  "not_a_review_system": "This registry executes no review, stores no finding, schedules nothing, and owns no lifecycle. It is a typed contract that existing owners project from: bin/fm-route-lib.sh still owns ROUTE and the capability floor, bin/fm-independence-lib.sh still owns the independence dimensions and their three-valued fold, bin/fm-launch-lib.sh still owns every verified launch command, and bin/fm-spawn.sh is still the only chokepoint. Adding a second routing engine, findings database, or orchestration source of truth is explicitly forbidden and nothing here is one.",
+  "not_a_security_boundary": {
+    "statement": "A satisfied role check constrains a MISTAKEN assignment, not a hostile one. It establishes that the fleet asked for an enforced read-only binding and that the harness refused a mutation attempt when it was measured. It does not establish containment of an agent that finds another path.",
+    "why": "The read-only bindings recorded here are harness features - a tool allowlist, a sandbox policy, a permission deny list - measured on specific versions. They are real refusals, not intentions, which is what separates this from capabilities/catalog.json. They are still not a sandbox around the whole host.",
+    "consequence": "Never read a green role check as proof that a reviewer could not have written. Read it as proof that the mutation surface was removed at launch and observed to refuse."
+  },
+  "activities": {
+    "design": "Judges a DESIGN before implementation exists. Its artifact is a rationale or specification, not final bytes.",
+    "change": "Judges the EXACT CHANGE before landing. Its artifact is a pinned head and its diff.",
+    "security": "Judges security and destructive-operation exposure as its own deliverable.",
+    "certification": "Judges whether a completed body of work may be certified.",
+    "rule": "Qualification for one activity is NEVER qualification for another, and neither discharges the other's obligation. A role declares exactly one activity and says outright which obligation it does not discharge."
+  },
+  "required": {
+    "review_role_schema_version": "must equal this file's review_role_schema_version",
+    "id": "stable slug, unique across the registry; must match the file basename",
+    "activity": "exactly one value from activities",
+    "reviews_floor": "the capability floor id whose work this role reviews, in the routing policy's own vocabulary (for example F-RUNTIME). The routing config is home-private, so this is a claim about which floor's obligation the role discharges, not a copy of that floor.",
+    "obligation_point": "when this review must have happened: before-implementation or before-landing",
+    "does_not_discharge": "the sibling obligation this role explicitly does NOT satisfy, so a later green gate can never erase an earlier mandatory gate that never happened",
+    "source": "the artifact these predicates were transcribed from, with line references, so a drifted copy can be detected against its source rather than argued about",
+    "predicates": "every name in required_predicates, each with a value from its vocabulary in predicate_vocabularies",
+    "independence": "one object naming each dimension in independence_dimensions with a value from independence_requirement",
+    "qualified_bindings": "the model bindings empirically qualified for THIS role, each with its own effort and evidence. Never a global effort floor: the source requires a binding-specific native setting empirically qualified for this reviewer contract, so one shared floor would assert evidence for bindings that have none."
+  },
+  "required_predicates": [
+    "reasoning",
+    "architecture_comprehension",
+    "implementation_comprehension",
+    "patch_generation",
+    "security_sensitive_judgment",
+    "destructive_operation_reasoning",
+    "specification_and_invariant_checking",
+    "adversarial_skepticism",
+    "scope_expansion_detection",
+    "weakened_test_and_acceptance_detection",
+    "exact_commit_and_diff_comprehension",
+    "context",
+    "tool_loop",
+    "structured_findings",
+    "criteria_resistance",
+    "autonomy",
+    "evidence_source",
+    "mutation_authority"
+  ],
+  "required_predicates_rule": "This list is CLOSED and every name in it is REQUIRED. A role file that omits one is INADMISSIBLE and the interpreter refuses it - it does not skip the missing predicate. That is the whole point: the rejected attempt's fields could each be deleted with no observable effect, so a deletion here must change the verdict rather than shrink the check.",
+  "predicate_vocabularies": {
+    "reasoning": ["frontier-risk-review"],
+    "architecture_comprehension": ["required", "not-required"],
+    "implementation_comprehension": ["expert", "required", "not-required"],
+    "patch_generation": ["required", "not-required"],
+    "security_sensitive_judgment": ["required", "not-required"],
+    "destructive_operation_reasoning": ["required", "not-required"],
+    "specification_and_invariant_checking": ["required", "not-required"],
+    "adversarial_skepticism": ["required", "not-required"],
+    "scope_expansion_detection": ["required", "not-required"],
+    "weakened_test_and_acceptance_detection": ["required", "not-required"],
+    "exact_commit_and_diff_comprehension": ["required", "not-required"],
+    "context": ["fitted-to-artifact", "fixed-ceiling"],
+    "tool_loop": ["verified-read-only-evidence-acquisition", "verified-agentic", "required", "not-required"],
+    "structured_findings": ["required", "not-required"],
+    "criteria_resistance": ["required", "not-required"],
+    "autonomy": ["bounded-review-to-defensible-verdict", "long-horizon"],
+    "evidence_source": ["direct-design-exact-bytes-tests-lifecycle", "maker-report"],
+    "mutation_authority": ["forbidden", "permitted"]
+  },
+  "predicate_notes": {
+    "implementation_comprehension": "Kept separate from patch_generation ON PURPOSE, because collapsing them is a transcription defect that already occurred: the rejected configuration wrote `coding: not-required`, which reads as though a reviewer need not understand code. The source says the opposite - expert implementation comprehension REMAINS necessary and it is expert patch GENERATION that is not. A role that writes no code must still read code expertly.",
+    "context": "fitted-to-artifact is the source's requirement: effective capacity must fit the actual artifact, with no inherited maker minimum. fixed-ceiling exists in the vocabulary only so a role that genuinely asserts a fixed number must say so explicitly and be seen doing it; the rejected configuration invented a 140000 threshold the source never stated and presented it as transcription.",
+    "tool_loop": "verified-read-only-evidence-acquisition is a DISTINCT value from verified-agentic and strictly stronger than required. The rejected configuration encoded the source's verified read-only evidence loop as `required`, which the routing policy itself already admits is not directly probed evidence, so a future model recording merely `required` would have passed a floor it does not meet.",
+    "mutation_authority": "forbidden is not a note to the agent. It SELECTS the launch binding: bin/fm-review-role.sh will emit only a harness binding recorded as enforcing read-only, and refuses every harness with no such record. Setting it to permitted, or deleting it, changes what the interpreter does and is refused."
+  },
+  "independence_dimensions_owner": "bin/fm-independence-lib.sh's FM_INDEPENDENCE_DIMENSIONS. This registry reuses those four names verbatim and never introduces a fifth. That library already owns the three-valued fold, the never-infer-a-name-match rule, and the asymmetry that unobserved evidence may only weaken a claim of independence and never weaken a finding of dependence.",
+  "independence_dimensions": ["process", "model", "vendor", "pool"],
+  "independence_requirement": {
+    "required": "the dimension must be observed to HOLD before the assignment is eligible. Could-not-observe is refused, never admitted.",
+    "reported": "the dimension is recorded on the decision and does not by itself refuse the assignment. Visible evidence, not an eligibility gate."
+  },
+  "independence_rule": "Independence is ASSIGNMENT-RELATIVE and never an intrinsic model property. Pool membership establishes capability only. A candidate that authored the artifact under review is ineligible FOR THAT ASSIGNMENT however capable, and eligibility is re-decided per assignment rather than inherited. A missing maker identity is not a satisfied dimension: it is could-not-observe, and a required dimension that could not be observed FAILS CLOSED.",
+  "qualified_bindings_contract": {
+    "binding": "the exact model binding, in the routing policy's vocabulary (provider/model)",
+    "effort": "the exact native effort setting qualified for THIS role and THIS binding. Never inherited from the maker floor and never assumed to be ordered against another spelling.",
+    "evidence_class": "empirical when a measured fixture qualified this binding for this role, policy when the binding is qualified by standing policy and no role fixture measured it. The two are NOT the same assurance and a projection may not present one as the other: the rejected configuration ran every pool member at max while the source supplied max reviewer evidence for one of them only.",
+    "evidence": "pointer to the record that qualified it, with what was measured",
+    "rule": "A binding absent from this list is NOT qualified for this role, whatever it is qualified for elsewhere. A maker-role failure is not a reviewer-role failure and a reviewer-role pass is not a maker-role pass."
+  },
+  "refused_keys": [
+    "independent",
+    "eligible",
+    "qualified",
+    "enforced",
+    "state",
+    "verdict",
+    "result"
+  ],
+  "refused_keys_why": "Every one of these is a DERIVED verdict, computed per assignment from the reviewer identity, the maker identity, and the launch binding. A stored copy is a claim anyone can write, and an independence claim that is merely asserted is worth nothing - which is exactly how the rejected configuration came to assert assignment-relative independence that nothing computed. bin/fm-review-role.sh computes these on every read and stores none of them."
+}

@@ -219,6 +219,113 @@ EOF
   launch_permission_recorded "$harness" || printf 'unknown'
 }
 
+# --- read-only reviewer bindings -------------------------------------------
+#
+# The launch flags that make a session STRUCTURALLY unable to mutate the
+# candidate it is reviewing, per harness, and nothing else. This is a separate
+# accessor from launch_permission_recorded above because it answers the opposite
+# question: that one reports the posture the SHIPPED templates already have
+# (every one of them unrestricted), while this one reports whether a harness can
+# be launched into a posture that REFUSES. A harness can be both - unrestricted
+# by default and restrictable on request - and collapsing the two would make the
+# fleet's own permissive default read as an answer about reviewer containment.
+#
+# WHY A LAUNCH BINDING RATHER THAN AN INSTRUCTION. A brief saying "do not write"
+# is not enforcement; it is the same prose defect one level down, and it fails
+# exactly when it matters - when the reviewer is wrong about what it is allowed
+# to do. Worktree isolation is not the mechanism either: an isolated worktree
+# still contains the candidate bytes under review, so a reviewer that edits them
+# has corrupted precisely the artifact its verdict is about.
+#
+# EACH ENTRY IS MEASURED, NOT READ OFF A FLAG NAME. Every binding below was
+# probed by asking a live agent to write a file and then looking for the file,
+# with a negative control first that watched the same probe go red under the
+# fleet's ordinary unrestricted launch. docs/verification/read-only-reviewer-launch.md
+# records the dated commands and exact output. A flag that merely LOOKS
+# restrictive is not admitted: two of the claude probe runs produced an empty
+# directory because the variadic flag had swallowed the prompt, and an empty
+# directory reads exactly like enforcement until someone reads the output.
+#
+# THE MECHANISM CLASS IS PART OF THE ANSWER, because the two classes fail
+# differently and a caller choosing between harnesses needs to know which it has:
+#
+#   allowlist  only the named tools exist in the session at all. A mutating tool
+#              added by a future harness release is absent by construction, so
+#              this class cannot go vacuous. STRONGEST.
+#   sandbox    the tools exist and the host refuses their writes. Also cannot go
+#              vacuous by a tool being added, and it additionally covers writes
+#              attempted through a shell.
+#   denylist   the tools exist and named ones are refused. A tool this repo does
+#              not name is NOT refused, and an unknown name in the list is only
+#              WARNED about rather than refused - measured on claude 2.1.228,
+#              where a misspelled rule printed "matches no known tool" and the
+#              launch continued. So this class can go quietly vacuous when a
+#              harness renames or adds a tool, and it is the weakest of the three.
+#
+# A harness with NO entry is unknown, never "not read-only" and never permitted:
+# bin/fm-review-role.sh refuses to bind a read-only role to it. That refusal is a
+# real constraint on which harnesses may host a reviewer, and it is reported as
+# one rather than papered over with a brief instruction.
+launch_readonly_recorded() {  # <harness> -> "<mechanism>\t<flags>", or non-zero
+  case "$1" in
+    # Pi's own --help documents this exact allowlist as "Read-only mode (no file
+    # modifications possible)", and it is the binding the reviewer qualification
+    # fixture itself ran under. bash is deliberately absent as well as edit/write:
+    # a shell is a write tool. The consequence is real and belongs to the caller -
+    # a reviewer with no shell cannot run git, so the diff and evidence must be
+    # materialised as files it can read, which is exactly how the qualifying
+    # fixture supplied them.
+    pi|pi-signed) printf 'allowlist\t--tools read,grep,find,ls' ;;
+    # An OS-level sandbox policy, so it holds for shell writes too, not only for
+    # the edit tool. --skip-git-repo-check rides with it because codex refuses to
+    # start outside a trusted directory and a reviewer is routinely pointed at a
+    # materialised evidence directory that is not a repo; without it the session
+    # never starts and the absent write reads as enforcement.
+    codex) printf 'sandbox\t--sandbox read-only --skip-git-repo-check' ;;
+    # Measured to survive --dangerously-skip-permissions on 2.1.228: the deny list
+    # still refused the write with the bypass flag present, so this binding
+    # composes with the shipped claude template instead of requiring a second one.
+    # The names are spelled as one comma-separated value BECAUSE the flag is
+    # variadic: space-separated names swallow whatever follows them, including a
+    # positional prompt. Weakest class - see the denylist note above.
+    claude) printf 'denylist\t--disallowedTools Write,Edit,NotebookEdit,Bash,Task,WebFetch' ;;
+    *) return 1 ;;
+  esac
+}
+
+# The read-only enforceability of one harness, or of every harness in the derived
+# roster. Values: "enforced <mechanism>" when this repo has a measured binding,
+# "unknown" when the adapter is launchable and nobody has measured one. A harness
+# launch_template refuses is not an adapter and returns non-zero, exactly as
+# launch_permission_posture treats it.
+launch_readonly_posture() {  # [<harness>] -> "<posture>" | "<harness> <posture>" lines
+  local harness=${1:-} h rec
+  if [ -z "$harness" ]; then
+    while IFS= read -r h; do
+      [ -n "$h" ] || continue
+      printf '%s %s\n' "$h" "$(launch_readonly_posture "$h")"
+    done <<EOF
+$(launch_harnesses)
+EOF
+    return 0
+  fi
+  launch_template "$harness" >/dev/null 2>&1 || return 1
+  if rec=$(launch_readonly_recorded "$harness"); then
+    printf 'enforced %s' "${rec%%$'\t'*}"
+  else
+    printf 'unknown'
+  fi
+}
+
+# The flags alone, for a caller composing a launch. Non-zero means this harness
+# may not host a read-only role - the caller must refuse the dispatch rather than
+# launch it unbound and rely on the brief.
+launch_readonly_flags() {  # <harness> -> "<flags>", or non-zero
+  local rec
+  rec=$(launch_readonly_recorded "$1") || return 1
+  printf '%s' "${rec#*$'\t'}"
+}
+
 launch_template() {
   local harness=$1 kind=${2:-ship}
   # shellcheck disable=SC2016  # single quotes are deliberate: $(cat ...) expands in the crewmate pane, not here

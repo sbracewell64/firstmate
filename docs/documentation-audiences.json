@@ -403,6 +403,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/read-only-reviewer-launch.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/vocabulary-collisions.md",
       "audience": "maintainer-architecture"
     },

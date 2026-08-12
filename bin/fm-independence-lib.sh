@@ -971,3 +971,120 @@ fm_independence_each_dimension() {  # <records> [unobserved-word]
 fm_independence_gaps() {
   fm_independence_each_dimension "${1:-}" | awk -F'\t' '$2 != "PASS" { print $1 ":" $3 }'
 }
+
+# --- prospective assignment independence --------------------------------------
+#
+# Everything above answers "was the checker independent of the maker?" from what
+# the validation pipeline RECORDED - a retrospective question about a run that
+# already happened. This section answers the same question in the other
+# direction and BEFORE the fact: "may this candidate be assigned to review this
+# maker's artifact?"
+#
+# It lives here rather than in a new file because it is the same question, and a
+# second owner would be a second vocabulary: the dimensions, the three values,
+# the fold asymmetry and the never-infer-a-name-match rule are all already
+# decided above and are reused verbatim. Nothing is added but the direction.
+#
+# WHY THE PROSPECTIVE FORM WAS MISSING, WHICH IS THE DEFECT IT REPAIRS. The
+# routing decision receives route, model, effort, holds and time. It receives no
+# artifact author and no maker identity, so it cannot tell a reviewer from a
+# self-reviewer, and a routing policy asserting assignment-relative independence
+# was therefore decorative: deleting the assertion and inverting it both left
+# the decision unchanged.
+#
+# INDEPENDENCE IS ASSIGNMENT-RELATIVE, never an intrinsic model property. The
+# same binding is a legitimate reviewer of one artifact and ineligible for
+# another purely by who made it, so nothing here may be cached against a model.
+#
+# A MISSING MAKER IDENTITY IS COULD-NOT-OBSERVE, never eligible. That is the
+# fail-closed direction: an assignment whose author nobody recorded is exactly
+# the assignment a self-review would slip through, so it must never read as the
+# clean case. The role contract decides which dimensions are REQUIRED, and a
+# required dimension that could not be observed refuses the assignment.
+
+# fm_independence_assignment <maker-key> <reviewer-key> [<maker-process>] [<reviewer-process>]
+# Echo one record block in bin/fm-verify.sh's shape, one line per dimension, for
+# a PROPOSED assignment. Keys are routing keys ("provider/model"), the vocabulary
+# bin/fm-route-lib.sh's pools are written in.
+fm_independence_assignment() {
+  local mkey=${1:-} rkey=${2:-} mproc=${3:-} rproc=${4:-}
+  local process=NO_VERIFIER_RAN process_why model=NO_VERIFIER_RAN model_why
+  local vendor=NO_VERIFIER_RAN vendor_why pool=NO_VERIFIER_RAN pool_why
+  local mprov rprov mpool rpool overall
+
+  # PROCESS. Two named processes that are the same one is a positive finding and
+  # survives; two different ones is separation. An unnamed process on either side
+  # is could-not-observe: a reviewer spawned as its own task is USUALLY a
+  # separate process, and "usually" is not an observation.
+  if [ -z "$mproc" ] || [ -z "$rproc" ]; then
+    process_why='no maker or reviewer process identity was supplied with this assignment; whether the review would run outside the making process is not observable'
+  elif [ "$mproc" = "$rproc" ]; then
+    process=FAIL
+    process_why="the reviewer would run in the making process itself ($rproc)"
+  else
+    process=PASS
+    process_why="reviewer process $rproc is not the making process $mproc"
+  fi
+
+  # MODEL. Identical routing keys are the same binding and that is decided here
+  # without the registry: it is one vocabulary compared against itself, not the
+  # cross-vocabulary inference the rule above forbids. DIFFERENT keys are a claim
+  # of separation, and a claim needs the registry to declare both - two spellings
+  # of one entry would otherwise read as two models.
+  if [ -z "$mkey" ] || [ -z "$rkey" ]; then
+    model_why='no maker or reviewer model identity was supplied with this assignment'
+  elif [ "$mkey" = "$rkey" ]; then
+    model=FAIL
+    model_why="the reviewer binding $rkey is the making binding"
+  else
+    mprov=$(fm_model_registry_provider_of "$mkey")
+    rprov=$(fm_model_registry_provider_of "$rkey")
+    if [ -z "$mprov" ] || [ -z "$rprov" ]; then
+      model_why="config/models.json declares no entry for $([ -z "$mprov" ] && printf '%s' "$mkey" || printf '%s' "$rkey"); two names that differ are not evidence of two models"
+    else
+      model=PASS
+      model_why="reviewer binding $rkey is a declared entry distinct from making binding $mkey"
+    fi
+  fi
+
+  # VENDOR and POOL. Reported dimensions on the runtime roles, and still computed
+  # rather than assumed: a reader deciding how much separation an assignment
+  # really has needs the two apart, and pool is the one a harness name cannot
+  # answer at all.
+  if [ -n "$mkey" ] && [ -n "$rkey" ]; then
+    mprov=${mprov:-$(fm_model_registry_provider_of "$mkey")}
+    rprov=${rprov:-$(fm_model_registry_provider_of "$rkey")}
+    if [ -z "$mprov" ] || [ -z "$rprov" ]; then
+      vendor_why='config/models.json declares no provider for one or both bindings'
+    elif [ "$mprov" = "$rprov" ]; then
+      vendor=FAIL
+      vendor_why="both bindings are declared under provider $rprov"
+    else
+      vendor=PASS
+      vendor_why="reviewer provider $rprov differs from making provider $mprov"
+    fi
+    mpool=$(fm_model_pool_of "$mkey")
+    rpool=$(fm_model_pool_of "$rkey")
+    if [ -z "$mpool" ] || [ -z "$rpool" ]; then
+      pool_why='config/models.json records no shared_quota_pool for one or both bindings; no pool recorded is not its own pool'
+    elif [ "$mpool" = "$rpool" ]; then
+      pool=FAIL
+      pool_why="both bindings draw on credential pool $rpool"
+    else
+      pool=PASS
+      pool_why="reviewer pool $rpool differs from making pool $mpool"
+    fi
+  else
+    vendor_why='no maker or reviewer model identity was supplied with this assignment'
+    pool_why=$vendor_why
+  fi
+
+  overall=$(fm_independence_overall_of "$process" "$model" "$vendor" "$pool")
+  {
+    fm_independence_record process "$process" "$process_why" assignment
+    fm_independence_record model "$model" "$model_why" assignment
+    fm_independence_record vendor "$vendor" "$vendor_why" assignment
+    fm_independence_record pool "$pool" "$pool_why" assignment
+    fm_independence_record overall "$overall" 'the weakest dimension above' assignment
+  }
+}

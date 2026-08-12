@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Spawn a direct report: a crewmate in a treehouse or Orca worktree, or a
 # secondmate in its isolated firstmate home.
-# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
-#        fm-spawn.sh <task-id> <project-dir> --scout --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+# Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--review-role <ID> --maker <binding>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --scout --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--review-role <ID> --maker <binding>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -335,6 +335,12 @@ REASON_CODE=
 CAPABILITY_FLOOR=
 TOOLING_GAP_ITEM=
 ROUTE=
+REVIEW_ROLE=
+REVIEW_MAKER=
+REVIEW_MAKER_PROCESS=
+REVIEWED_HEAD=
+REVIEW_READONLY_FLAGS=
+REVIEW_READONLY_MECHANISM=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
@@ -370,6 +376,10 @@ for a in "$@"; do
       reason-code) REASON_CODE=$a; REASON_CODE_SET=1 ;;
       capability-floor) CAPABILITY_FLOOR=$a; CAPABILITY_FLOOR_SET=1 ;;
       route) ROUTE=$a; ROUTE_SET=1 ;;
+      review-role) REVIEW_ROLE=$a ;;
+      maker) REVIEW_MAKER=$a ;;
+      maker-process) REVIEW_MAKER_PROCESS=$a ;;
+      reviewed-head) REVIEWED_HEAD=$a ;;
       tooling-gap-item) TOOLING_GAP_ITEM=$a; TOOLING_GAP_ITEM_SET=1 ;;
       attempt-budget) ATTEMPT_BUDGET_ARG=$a; ATTEMPT_BUDGET_SET=1 ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
@@ -404,6 +414,14 @@ for a in "$@"; do
     --capability-floor=*) CAPABILITY_FLOOR=${a#--capability-floor=}; CAPABILITY_FLOOR_SET=1 ;;
     --route) want_value='route' ;;
     --route=*) ROUTE=${a#--route=}; ROUTE_SET=1 ;;
+    --review-role) want_value='review-role' ;;
+    --review-role=*) REVIEW_ROLE=${a#--review-role=} ;;
+    --maker) want_value='maker' ;;
+    --maker=*) REVIEW_MAKER=${a#--maker=} ;;
+    --maker-process) want_value='maker-process' ;;
+    --maker-process=*) REVIEW_MAKER_PROCESS=${a#--maker-process=} ;;
+    --reviewed-head) want_value='reviewed-head' ;;
+    --reviewed-head=*) REVIEWED_HEAD=${a#--reviewed-head=} ;;
     --tooling-gap-item) want_value='tooling-gap-item' ;;
     --tooling-gap-item=*) TOOLING_GAP_ITEM=${a#--tooling-gap-item=}; TOOLING_GAP_ITEM_SET=1 ;;
     --attempt-budget) want_value='attempt-budget' ;;
@@ -426,7 +444,7 @@ done
 # Each justification value becomes one line of state/<id>.meta, so a value that
 # is not one line is refused here, before anything downstream can read a forged
 # key line as authority (bin/fm-reasoning-lib.sh).
-for justification_flag in "reason-code=$REASON_CODE" "capability-floor=$CAPABILITY_FLOOR" "route=$ROUTE" "tooling-gap-item=$TOOLING_GAP_ITEM"; do
+for justification_flag in "reason-code=$REASON_CODE" "capability-floor=$CAPABILITY_FLOOR" "route=$ROUTE" "tooling-gap-item=$TOOLING_GAP_ITEM" "review-role=$REVIEW_ROLE" "maker=$REVIEW_MAKER" "maker-process=$REVIEW_MAKER_PROCESS" "reviewed-head=$REVIEWED_HEAD"; do
   fm_justification_value_recordable "${justification_flag#*=}" || {
     echo "error: $FM_REASON_TOKEN_VALUE_MALFORMED: --${justification_flag%%=*} must be a single line without control characters; each justification field is one line of state/<id>.meta and a newline would forge further key lines in it" >&2
     exit 1
@@ -509,6 +527,10 @@ fi
 # manufacture exactly the rubber-stamp answer the enum exists to prevent. Its
 # meta carries none of these fields, and an absent field reads as unknown.
 if [ "$KIND" = secondmate ]; then
+  [ -z "$REVIEW_ROLE" ] || {
+    echo "error: $FM_REASON_TOKEN_REFUSED: --review-role applies to ship and scout dispatches; a --secondmate spawn provisions a standing home and discharges no review obligation" >&2
+    exit 1
+  }
   [ "$REASON_CODE_SET" -eq 0 ] || {
     echo "error: $FM_REASON_TOKEN_REFUSED: --reason-code applies to ship and scout dispatches; a --secondmate spawn provisions a standing home rather than dispatching a task" >&2
     exit 1
@@ -1544,6 +1566,52 @@ fi
 if ! CONC_REFUSAL=$(fm_model_concurrency_decision "$MODEL"); then
   echo "error: $CONC_REFUSAL" >&2
   exit 1
+fi
+
+# REVIEW ROLE. A dispatch that claims to discharge a review obligation is checked
+# HERE, at the same point and for the same reason as the gates above: HARNESS,
+# MODEL and EFFORT are final and nothing has been created yet, so a refusal
+# leaves no worktree, no endpoint and no metadata behind.
+#
+# This is what makes the review requirement a control rather than a sentence. The
+# obligation it replaces was prose naming a model, and its first repair was prose
+# naming properties; both were satisfiable by writing the words down. A claim
+# made here is checked against review-roles/ by bin/fm-review-role.sh, and the
+# read-only launch binding that check resolves is SUBSTITUTED INTO THE LAUNCH
+# COMMAND below rather than described in the brief - a reviewer that is told not
+# to write is not a reviewer that cannot.
+#
+# The reviewer process identity is this task id, which is a real observation
+# rather than an assumption: this dispatch creates that process.
+if [ -n "$REVIEW_ROLE" ]; then
+  REVIEW_ARGS=(check --role "$REVIEW_ROLE" --reviewer "$MODEL" --harness "$HARNESS"
+               --reviewer-process "$ID")
+  [ -z "$EFFORT" ] || REVIEW_ARGS+=(--effort "$EFFORT")
+  [ -z "$REVIEW_MAKER" ] || REVIEW_ARGS+=(--maker "$REVIEW_MAKER")
+  [ -z "$REVIEW_MAKER_PROCESS" ] || REVIEW_ARGS+=(--maker-process "$REVIEW_MAKER_PROCESS")
+  [ -z "$REVIEWED_HEAD" ] || REVIEW_ARGS+=(--reviewed-head "$REVIEWED_HEAD")
+  [ "$ROUTE_SET" -eq 0 ] || REVIEW_ARGS+=(--route "$ROUTE")
+  REVIEW_RC=0
+  REVIEW_OUT=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" 2>&1) || REVIEW_RC=$?
+  if [ "$REVIEW_RC" -ne 0 ]; then
+    # 1 is an observed violation and 2 is could-not-observe. Both refuse: an
+    # assignment nobody could evaluate is exactly the one a self-review passes
+    # through, so the third value may never open the gate.
+    echo "error: this dispatch claims review role $REVIEW_ROLE and may not discharge it:" >&2
+    printf '%s\n' "$REVIEW_OUT" >&2
+    exit 1
+  fi
+  REVIEW_READONLY_FLAGS=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" --json 2>/dev/null \
+    | jq -r '.readonly_flags // empty' 2>/dev/null || true)
+  REVIEW_READONLY_MECHANISM=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" --json 2>/dev/null \
+    | jq -r '.readonly_mechanism // empty' 2>/dev/null || true)
+  # An eligible read-only role with no resolved flags would launch an
+  # unrestricted session while the metadata recorded a review. Refuse rather
+  # than record a binding that is not on the command line.
+  if [ -z "$REVIEW_READONLY_FLAGS" ]; then
+    echo "error: review role $REVIEW_ROLE resolved no read-only launch binding for harness $HARNESS, so the session could not be launched unable to mutate the candidate; refusing rather than launching it unbound" >&2
+    exit 1
+  fi
 fi
 
 secondmate_registry_value() {
@@ -2850,6 +2918,17 @@ fi
   # non-forge venue has when the identity is empty.
   [ -z "$CONTRIB_VENUE" ] || echo "contribution_venue=$CONTRIB_VENUE"
   [ -z "$CONTRIB_VENUE_URL" ] || echo "contribution_venue_url=$CONTRIB_VENUE_URL"
+  # The review obligation this dispatch claims to discharge, the author it was
+  # checked against, and the read-only binding actually on its launch command.
+  # Recorded together on purpose: a review role with no maker and no binding is
+  # the decorative claim this control exists to refuse, and a reader must be
+  # able to see all three or none.
+  [ -z "$REVIEW_ROLE" ] || echo "review_role=$REVIEW_ROLE"
+  [ -z "$REVIEW_MAKER" ] || echo "review_maker=$REVIEW_MAKER"
+  [ -z "$REVIEW_MAKER_PROCESS" ] || echo "review_maker_process=$REVIEW_MAKER_PROCESS"
+  [ -z "$REVIEWED_HEAD" ] || echo "reviewed_head=$REVIEWED_HEAD"
+  [ -z "$REVIEW_READONLY_MECHANISM" ] || echo "review_readonly_mechanism=$REVIEW_READONLY_MECHANISM"
+  [ -z "$REVIEW_READONLY_FLAGS" ] || echo "review_readonly_flags=$REVIEW_READONLY_FLAGS"
   # Agent-justification record. Written for every task dispatch; a --secondmate
   # spawn provisions a home rather than dispatching a task and carries none.
   [ -z "$REASONING_REQUIRED" ] || echo "reasoning_required=$REASONING_REQUIRED"
@@ -2908,6 +2987,11 @@ sq_piwatch=$(shell_quote "$PROJ_ABS/.pi/extensions/fm-primary-pi-watch.ts")
 sq_opinput=$(shell_quote "$FM_ROOT/bin/fm-operational-input.sh")
 MODELFLAG=$(model_flag_for_harness "$HARNESS" "$MODEL")
 EFFORTFLAG=$(effort_flag_for_harness "$HARNESS" "$EFFORT")
+# The read-only reviewer binding rides the same substitution the model and
+# effort flags use, so launch_template stays the single owner of the command
+# shape and no second launch string exists to drift from it. Empty for every
+# ordinary dispatch, so nothing changes for one.
+[ -z "$REVIEW_READONLY_FLAGS" ] || MODELFLAG="$MODELFLAG$REVIEW_READONLY_FLAGS "
 LAUNCH=${LAUNCH//__MODELFLAG__/$MODELFLAG}
 LAUNCH=${LAUNCH//__EFFORTFLAG__/$EFFORTFLAG}
 LAUNCH=${LAUNCH//__BRIEF__/$sq_brief}

@@ -1,0 +1,66 @@
+{
+  "review_role_schema_version": 1,
+  "id": "runtime-change-review",
+  "activity": "change",
+  "reviews_floor": "F-RUNTIME",
+  "obligation_point": "before-landing",
+  "does_not_discharge": "runtime-design-review. Judging the final bytes never establishes that the design was independently challenged before anyone wrote them, and this obligation cannot be satisfied in advance: a review performed before the final head existed did not review this change. Neither obligation discharges the other and each must be recorded against the head it actually read.",
+  "source": "data/runtime-reviewer-role-qualification/report.md:65-96,126-142,386 (home-private). The predicate set is shared with the design role because the qualification source derived ONE read-only reviewer floor; what differs is the artifact, the obligation point, and the pinned-head requirement below.",
+  "predicates": {
+    "reasoning": "frontier-risk-review",
+    "architecture_comprehension": "required",
+    "implementation_comprehension": "expert",
+    "patch_generation": "not-required",
+    "security_sensitive_judgment": "required",
+    "destructive_operation_reasoning": "required",
+    "specification_and_invariant_checking": "required",
+    "adversarial_skepticism": "required",
+    "scope_expansion_detection": "required",
+    "weakened_test_and_acceptance_detection": "required",
+    "exact_commit_and_diff_comprehension": "required",
+    "context": "fitted-to-artifact",
+    "tool_loop": "verified-read-only-evidence-acquisition",
+    "structured_findings": "required",
+    "criteria_resistance": "required",
+    "autonomy": "bounded-review-to-defensible-verdict",
+    "evidence_source": "direct-design-exact-bytes-tests-lifecycle",
+    "mutation_authority": "forbidden"
+  },
+  "requires_pinned_head": true,
+  "requires_pinned_head_why": "A review of another head or of stale bytes does not satisfy this obligation. The reviewed head is therefore a required INPUT to the assignment decision rather than something recorded afterwards, and an assignment naming no head is refused rather than assumed to mean the current one - which is the only reading under which the head could silently change between the review and the landing.",
+  "independence": {
+    "process": "required",
+    "model": "required",
+    "vendor": "reported",
+    "pool": "reported"
+  },
+  "independence_note": "Identical to the design role's, and stated here rather than referenced because a role file is read on its own by the interpreter and a cross-reference would make one of the two roles unreadable in isolation. The dimension NAMES remain owned by bin/fm-independence-lib.sh.",
+  "qualified_bindings": [
+    {
+      "binding": "openai-codex/gpt-5.6-luna",
+      "effort": "max",
+      "evidence_class": "empirical",
+      "evidence": "data/runtime-reviewer-role-qualification/report.md:196-238. The qualifying fixture supplied an exact synthetic candidate and required exact-artifact grounding, seeded stale and wrong-head review evidence as one of its eleven defect categories, and this binding rejected it. That is the predicate this role most depends on.",
+      "not_qualified_for": "runtime MAKER work at F-RUNTIME - two corrupt patches, the second after explicit corruption feedback."
+    },
+    {
+      "binding": "claude/opus",
+      "effort": "xhigh",
+      "evidence_class": "policy",
+      "evidence": "data/runtime-reviewer-role-qualification/report.md:339,448 - capability-qualified for this role when the maker is not Opus, at its own existing policy-qualified setting. No role fixture measured Opus at max.",
+      "not_qualified_for": "any assignment whose artifact this binding authored."
+    },
+    {
+      "binding": "claude/fable",
+      "effort": "xhigh",
+      "evidence_class": "policy",
+      "evidence": "data/runtime-reviewer-role-qualification/report.md:338,452 - the preferred policy-qualified reviewer. Capability only; reachability is the availability record's question, not this registry's."
+    }
+  ],
+  "not_qualified": [
+    {
+      "binding": "opencode/deepseek-v4-flash-free",
+      "why": "data/runtime-reviewer-role-qualification/report.md:279-289 - no single response satisfied structured output, severity calibration, and the architecture floor together. Recorded rather than omitted, because a measured refusal and an absent entry are different facts."
+    }
+  ]
+}

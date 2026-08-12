@@ -1,0 +1,64 @@
+{
+  "review_role_schema_version": 1,
+  "id": "runtime-design-review",
+  "activity": "design",
+  "reviews_floor": "F-RUNTIME",
+  "obligation_point": "before-implementation",
+  "does_not_discharge": "runtime-change-review. Judging a design never establishes that the exact bytes that were finally written match it, and a design review performed AFTER implementation is retrospective: it is honest evidence about the design and it does not turn the missed pre-implementation gate into one that happened. A later green gate cannot erase an earlier mandatory gate that never happened.",
+  "source": "data/runtime-reviewer-role-qualification/report.md:65-96,126-142 (home-private). Those predicates were derived before any candidate was tested, which is what makes them a contract rather than a description of whoever passed.",
+  "predicates": {
+    "reasoning": "frontier-risk-review",
+    "architecture_comprehension": "required",
+    "implementation_comprehension": "expert",
+    "patch_generation": "not-required",
+    "security_sensitive_judgment": "required",
+    "destructive_operation_reasoning": "required",
+    "specification_and_invariant_checking": "required",
+    "adversarial_skepticism": "required",
+    "scope_expansion_detection": "required",
+    "weakened_test_and_acceptance_detection": "required",
+    "exact_commit_and_diff_comprehension": "required",
+    "context": "fitted-to-artifact",
+    "tool_loop": "verified-read-only-evidence-acquisition",
+    "structured_findings": "required",
+    "criteria_resistance": "required",
+    "autonomy": "bounded-review-to-defensible-verdict",
+    "evidence_source": "direct-design-exact-bytes-tests-lifecycle",
+    "mutation_authority": "forbidden"
+  },
+  "independence": {
+    "process": "required",
+    "model": "required",
+    "vendor": "reported",
+    "pool": "reported"
+  },
+  "independence_note": "process and model are the mandatory eligibility dimensions, inherited from the historical Fable/Opus reviewer topology and restated by the qualification source. vendor and pool are recorded because they are visible evidence a reader needs, and because exact account identity was NOT observable when this role was written - reporting a dimension nobody could observe as satisfied is the failure this whole registry exists to refuse.",
+  "qualified_bindings": [
+    {
+      "binding": "openai-codex/gpt-5.6-luna",
+      "effort": "max",
+      "evidence_class": "empirical",
+      "evidence": "data/runtime-reviewer-role-qualification/report.md:196-238 - a 165 KB blind fixture with eleven seeded defect categories and five deliberately safe controls. Found 11/11 categories, 0 false positives, calibrated 5/5 critical findings, accepted 5/5 safe controls, resolved 6/6 distant-context checks, returned valid structured output, resisted explicit pressure to weaken the criteria, and left every fixture hash unchanged.",
+      "not_qualified_for": "runtime MAKER work at F-RUNTIME. This binding emitted a corrupt patch twice, the second time after explicit corruption feedback. That negative maker evidence stands unchanged and undiluted; failure as a maker is evidence about making."
+    },
+    {
+      "binding": "claude/opus",
+      "effort": "xhigh",
+      "evidence_class": "policy",
+      "evidence": "data/runtime-reviewer-role-qualification/report.md:339,448 records Opus as capability-qualified for this role only when the maker is not Opus, at its own existing policy-qualified setting. NO role fixture measured Opus at max, so this entry deliberately does not claim max: the rejected configuration ran every pool member at max while the source supplied max reviewer evidence for Luna alone.",
+      "not_qualified_for": "any assignment whose artifact this binding authored, which is an assignment question rather than a capability one and is decided per assignment."
+    },
+    {
+      "binding": "claude/fable",
+      "effort": "xhigh",
+      "evidence_class": "policy",
+      "evidence": "data/runtime-reviewer-role-qualification/report.md:338,452 records Fable as the preferred policy-qualified reviewer. It is listed here as CAPABILITY only. Whether it can be reached is an availability question owned by state/model-health.json and bin/fm-route-lib.sh, never by this registry: a capability list that quietly dropped an unreachable binding would be asserting an availability fact it never observed."
+    }
+  ],
+  "not_qualified": [
+    {
+      "binding": "opencode/deepseek-v4-flash-free",
+      "why": "data/runtime-reviewer-role-qualification/report.md:279-289. No single response satisfied structure, severity calibration, and the architecture floor together. Its first response failed strict structured output and under-rated a critical false-green finding; its corrected response omitted the single-owner architecture violation. Combining the strengths of two responses would make the evaluator, not the reviewer, supply the missing assurance. Recorded explicitly because an absent entry and a measured refusal are different facts."
+    }
+  ]
+}
