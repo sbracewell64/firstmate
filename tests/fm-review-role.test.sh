@@ -459,6 +459,22 @@ out=$("$RR" check --role runtime-change-review \
   --candidate-worktree "$HEAD_REPO" 2>&1); rc=$?
 expect_code 1 "$rc" "a reviewed head other than the candidate head must be refused"
 assert_contains "$out" "reviewed_head_mismatch" "the wrong head must be named"
+
+printf 'dirty\n' >> "$HEAD_REPO/file"
+out=$("$RR" check --role runtime-change-review \
+  --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head "$EXPECTED_HEAD" --candidate-worktree "$HEAD_REPO" 2>&1); rc=$?
+expect_code 1 "$rc" "tracked candidate changes beyond the reviewed head must be refused"
+assert_contains "$out" "candidate_worktree_dirty" "the dirty candidate must be named"
+git -C "$HEAD_REPO" restore file
+printf 'untracked\n' > "$HEAD_REPO/untracked"
+out=$("$RR" check --role runtime-change-review \
+  --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head "$EXPECTED_HEAD" --candidate-worktree "$HEAD_REPO" 2>&1); rc=$?
+expect_code 1 "$rc" "untracked candidate bytes beyond the reviewed head must be refused"
+assert_contains "$out" "candidate_worktree_dirty" "untracked candidate bytes must be named"
 pass "design and change are separate contracts and the change role requires a pinned head"
 
 printf '{broken\n' > "$CONFIG/crew-dispatch.json"
@@ -498,6 +514,12 @@ printf '#!/bin/sh\nexit 1\n' > "$SPAWN_BIN/tmux"
 chmod +x "$SPAWN_BIN/tmux"
 fm_fake_treehouse "$SPAWN_BIN"
 cp "$CONFIG/models.json" "$SPAWN_HOME/config/models.json"
+git -C "$SPAWN_HOME/projects/proj" init -q
+git -C "$SPAWN_HOME/projects/proj" config user.name test
+git -C "$SPAWN_HOME/projects/proj" config user.email test@example.invalid
+printf 'candidate\n' > "$SPAWN_HOME/projects/proj/file"
+git -C "$SPAWN_HOME/projects/proj" add file
+git -C "$SPAWN_HOME/projects/proj" commit -qm candidate
 
 write_spawn_brief() {  # <id>
   mkdir -p "$SPAWN_HOME/data/$1"
@@ -543,6 +565,14 @@ out=$(run_spawn review-unknownrole "$SPAWN_HOME/projects/proj" --scout --reason-
   --review-role no-such-role --maker claude/opus); rc=$?
 [ "$rc" != 0 ] || fail "the spawn chokepoint admitted a claim against a role that does not exist"
 assert_contains "$out" "FM_REVIEW_ROLE_UNKNOWN" "an unknown role must refuse at the chokepoint, never pass unchecked"
+
+write_spawn_brief review-shorthand
+out=$(cd "$TMP_ROOT" && run_spawn review-shorthand projects/proj --scout --reason-code SEMANTIC_REVIEW \
+  --harness pi --model openai-codex/gpt-5.6-luna --effort max \
+  --review-role runtime-change-review --maker claude/opus --maker-process task-maker \
+  --reviewed-head "$(git -C "$SPAWN_HOME/projects/proj" rev-parse HEAD)"); rc=$?
+[ "$rc" != 0 ] || fail "the fake backend unexpectedly launched a shorthand review spawn"
+assert_not_contains "$out" "no readable git HEAD" "project shorthand must resolve before reviewed-head verification"
 
 # A secondmate provisions a standing home and discharges no review obligation,
 # so the claim is refused rather than silently recorded.

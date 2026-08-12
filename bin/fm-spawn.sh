@@ -1584,13 +1584,17 @@ fi
 # The reviewer process identity is this task id, which is a real observation
 # rather than an assumption: this dispatch creates that process.
 if [ -n "$REVIEW_ROLE" ]; then
+  REVIEW_CANDIDATE_WORKTREE=$PROJ
+  case "$REVIEW_CANDIDATE_WORKTREE" in
+    projects/*) REVIEW_CANDIDATE_WORKTREE="$PROJECTS/${REVIEW_CANDIDATE_WORKTREE#projects/}" ;;
+  esac
   REVIEW_ARGS=(check --role "$REVIEW_ROLE" --reviewer "$MODEL" --harness "$HARNESS"
                --reviewer-process "$ID")
   REVIEW_ARGS+=(--effort "$EFFORT")
   [ -z "$REVIEW_MAKER" ] || REVIEW_ARGS+=(--maker "$REVIEW_MAKER")
   [ -z "$REVIEW_MAKER_PROCESS" ] || REVIEW_ARGS+=(--maker-process "$REVIEW_MAKER_PROCESS")
   [ -z "$REVIEWED_HEAD" ] || REVIEW_ARGS+=(--reviewed-head "$REVIEWED_HEAD")
-  REVIEW_ARGS+=(--candidate-worktree "$PROJ")
+  REVIEW_ARGS+=(--candidate-worktree "$REVIEW_CANDIDATE_WORKTREE")
   [ "$ROUTE_SET" -eq 0 ] || REVIEW_ARGS+=(--route "$ROUTE")
   REVIEW_RC=0
   REVIEW_OUT=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" 2>&1) || REVIEW_RC=$?

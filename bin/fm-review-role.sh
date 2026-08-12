@@ -542,12 +542,19 @@ EOF
         "--candidate-worktree identifying the artifact whose head is reviewed" \
         "absent; the reviewed commit cannot be bound to candidate bytes"
     else
-      local candidate_head
+      local candidate_head candidate_status
       candidate_head=$(git -C "$candidate_worktree" rev-parse --verify HEAD 2>/dev/null) \
         || die_unevaluable "$candidate_worktree has no readable git HEAD, so the reviewed commit cannot be verified"
       if [ "${head,,}" != "${candidate_head,,}" ]; then
         add_viol reviewed_head_mismatch \
           "candidate worktree HEAD $candidate_head" "$head"
+      fi
+      candidate_status=$(git -C "$candidate_worktree" status --porcelain=v1 --untracked-files=all 2>/dev/null) \
+        || die_unevaluable "$candidate_worktree has no readable worktree status, so its bytes cannot be bound to the reviewed commit"
+      if [ -n "$candidate_status" ]; then
+        add_viol candidate_worktree_dirty \
+          "a clean candidate worktree whose bytes equal commit $candidate_head" \
+          "tracked or untracked changes make the candidate differ from the reviewed commit"
       fi
     fi
   fi
