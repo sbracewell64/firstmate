@@ -855,6 +855,31 @@ cmd_capture() {
   capture_review_artifact "$task" "$kind" "$capture" || return 2
 }
 
+cmd_validate() {
+  local task='' kind='' want='' a meta binding role target assignment raw path artifact
+  for a in "$@"; do
+    if [ -n "$want" ]; then
+      case "$want" in task) task=$a ;; kind) kind=$a ;; esac
+      want=''
+      continue
+    fi
+    case "$a" in --task) want=task ;; --task=*) task=${a#--task=} ;; --kind) want=kind ;; --kind=*) kind=${a#--kind=} ;; *) die_unevaluable "unknown argument to validate: $a" ;; esac
+  done
+  [ -n "$task" ] && [ -n "$kind" ] || die_unevaluable "validate requires --task and --kind"
+  meta=$STATE/$task.meta
+  [ -f "$meta" ] || return 2
+  binding=$(meta_field "$meta" model)
+  role=$(meta_field "$meta" review_role)
+  target=$(meta_field "$meta" reviewed_head)
+  assignment=$(meta_field "$meta" review_assignment_id)
+  [ "$assignment" = "$task" ] || return 2
+  raw=$(review_artifact_raw_path "$task" "$kind") || return 2
+  path=$(review_artifact_path "$task" "$kind") || return 2
+  [ -s "$raw" ] && [ -s "$path" ] || return 2
+  artifact=$(review_artifact_filter "$kind" "$binding" "$role" "$target" "$assignment" < "$raw" 2>/dev/null) || return 2
+  [ "$artifact" = "$(cat "$path" 2>/dev/null)" ] || return 2
+}
+
 cmd_assignment() {
   local task='' json=0 want='' a
   for a in "$@"; do
@@ -1066,5 +1091,6 @@ case "${1:-}" in
   check) shift; cmd_check "$@" ;;
   assignment) shift; cmd_assignment "$@" ;;
   capture) shift; cmd_capture "$@" ;;
+  validate) shift; cmd_validate "$@" ;;
   *) echo "error: unknown subcommand: $1" >&2; usage >&2; exit 2 ;;
 esac

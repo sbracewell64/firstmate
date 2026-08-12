@@ -1585,7 +1585,6 @@ fi
 # The reviewer process identity is this task id, which is a real observation
 # rather than an assumption: this dispatch creates that process.
 if [ -n "$REVIEW_ROLE" ]; then
-  rm -f "$STATE/$ID.review-ack.json" "$STATE/$ID.review-ack.raw"
   REVIEW_CANDIDATE_WORKTREE=$PROJ
   case "$REVIEW_CANDIDATE_WORKTREE" in
     projects/*) REVIEW_CANDIDATE_WORKTREE="$PROJECTS/${REVIEW_CANDIDATE_WORKTREE#projects/}" ;;
@@ -2182,6 +2181,7 @@ herdr_projection_existing_meta_allows_flat() {  # <meta>
 }
 
 W="fm-$ID"
+[ -z "$REVIEW_ROLE" ] || rm -f "$STATE/$ID.review-ack.json" "$STATE/$ID.review-ack.raw"
 case "$BACKEND" in
   tmux)
     SES=$(fm_backend_tmux_container_ensure)
@@ -3226,7 +3226,7 @@ if [ -n "$REVIEW_ROLE" ]; then
   done
   case "$REVIEW_AGENT_STATE" in
     alive)
-      if review_capture_artifact acknowledgement; then
+      if "$SCRIPT_DIR/fm-review-role.sh" validate --task "$ID" --kind acknowledgement >/dev/null 2>&1; then
         REVIEW_LAUNCH_OUTCOME=launch_succeeded_as_requested
       else
         REVIEW_LAUNCH_OUTCOME=role_not_established

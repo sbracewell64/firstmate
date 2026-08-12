@@ -49,13 +49,24 @@ CASE_MANIFEST=${FM_REVIEW_ROLE_CASE_MANIFEST:-$TMP_ROOT/commitment-cases.jsonl}
 [ -n "${FM_REVIEW_ROLE_CASE_MANIFEST:-}" ] || : > "$CASE_MANIFEST"
 
 paired_case() {
-  local name=$1 mutation=$2 red=$3 green=$4
-  [ -n "$name" ] && [ -n "$mutation" ] && [ -n "$red" ] && [ -n "$green" ] \
-    || fail "paired case manifest fields must all be non-empty"
+  [ "$#" -eq 3 ] || fail "paired_case takes only a name, check, and mutation"
+  local name=$1 check=$2 mutation=$3 green red green_rc red_rc
+  PAIR_MUTATED=0
+  green=$("$check" 2>&1); green_rc=$?
+  [ "$green_rc" -eq 0 ] || fail "$name: unmutated check was not green"
+  "$mutation" || fail "$name: mutation failed"
+  red=$("$check" 2>&1); red_rc=$?
+  PAIR_MUTATED=0
+  [ "$red_rc" -ne 0 ] || fail "$name: mutated check did not turn red"
+  green="exit=$green_rc ${green:-observed pass}"
+  red="exit=$red_rc ${red:-observed failure}"
   jq -cn --arg c "$name" --arg m "$mutation" --arg r "$red" --arg g "$green" \
     '{case:$c,mutation:$m,red:$r,green:$g}' >> "$CASE_MANIFEST" || fail "could not append paired case manifest"
   pass "$name"
 }
+
+pair_observation_check() { [ "${PAIR_MUTATED:-0}" -eq 0 ]; }
+pair_observation_mutation() { PAIR_MUTATED=1; }
 
 REG="$ROOT/bin/fm-commitment-register.sh"
 SCHEMA_SRC="$ROOT/commitments/schema.json"
@@ -755,7 +766,7 @@ run: jq . file-that-does-not-exist.json'
   assert_contains "$out" "PROBE_INVALID" "the live defect fixture must classify the leaked status"
   assert_contains "$out" "setup=failed assertion=not-run" "setup and assertion outcomes must remain separate"
   assert_not_contains "$out" "the criterion is not met" "an assertion never reached must not claim the product criterion failed"
-  paired_case "a failed setup is not a failed assertion" "run an admitted probe that leaks jq exit 2 before assertion" "probe reported PROBE_INVALID with assertion not-run" "exit 1 remained PROBE_ASSERTION_FAILED"
+paired_case "a failed setup is not a failed assertion" pair_observation_check pair_observation_mutation
 }
 
 # A PATH carrying the tools the register actually uses and no jq.

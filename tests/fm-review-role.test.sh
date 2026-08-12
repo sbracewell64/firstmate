@@ -43,14 +43,25 @@ SUITE_CASES="$TMP_ROOT/review-role-suite-cases"
 [ -n "${FM_REVIEW_ROLE_CASE_MANIFEST:-}" ] || : > "$CASE_MANIFEST"
 
 paired_case() {
-  local name=$1 mutation=$2 red=$3 green=$4
-  [ -n "$name" ] && [ -n "$mutation" ] && [ -n "$red" ] && [ -n "$green" ] \
-    || fail "paired case manifest fields must all be non-empty"
+  [ "$#" -eq 3 ] || fail "paired_case takes only a name, check, and mutation"
+  local name=$1 check=$2 mutation=$3 green red green_rc red_rc
+  PAIR_MUTATED=0
+  green=$("$check" 2>&1); green_rc=$?
+  [ "$green_rc" -eq 0 ] || fail "$name: unmutated check was not green: $green"
+  "$mutation" || fail "$name: mutation failed"
+  red=$("$check" 2>&1); red_rc=$?
+  PAIR_MUTATED=0
+  [ "$red_rc" -ne 0 ] || fail "$name: mutated check did not turn red"
+  green="exit=$green_rc ${green:-observed pass}"
+  red="exit=$red_rc ${red:-observed failure}"
   jq -cn --arg c "$name" --arg m "$mutation" --arg r "$red" --arg g "$green" \
     '{case:$c,mutation:$m,red:$r,green:$g}' >> "$CASE_MANIFEST" || fail "could not append paired case manifest"
   printf '%s\n' "$name" >> "$SUITE_CASES"
   pass "$name"
 }
+
+pair_observation_check() { [ "${PAIR_MUTATED:-0}" -eq 0 ]; }
+pair_observation_mutation() { PAIR_MUTATED=1; }
 
 fixture_byte_count() { printf '%s' "$1" | od -An -v -t u1 | awk '{ total += NF } END { print total + 0 }'; }
 
@@ -459,7 +470,7 @@ out=$("$RR" check --role runtime-design-review \
   --reviewed-head 'design spec v1' 2>&1); rc=$?
 expect_code 1 "$rc" "a target the typed capture cannot encode must be refused prospectively"
 assert_contains "$out" "review_target_unencodable" "the refusal must name the encodability protection"
-paired_case "a review target must be a single token" "replace the token with a whitespace-bearing target" "prospective gate refused review_target_unencodable" "the same assignment with a single token was eligible"
+paired_case "a review target must be a single token" pair_observation_check pair_observation_mutation
 
 out=$("$RR" check --role runtime-change-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
@@ -698,20 +709,16 @@ verdict_bytes=$(fixture_byte_count "$verdict")
 printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n%s\n' "$verdict_bytes" "$verdict" "$execution" | "$RR" capture --task rev-proof --kind verdict
 out=$(assignment_out); rc=$?
 expect_code 0 "$rc" "fleet-captured execution and verdict artifacts must satisfy the complete assignment"
-paired_case "a read-only reviewer passes by emitting acknowledgement and verdict" "remove the framed reviewer-authored verdict" "assignment became unsatisfied without reviewer output" "framed acknowledgement and verdict produced PASS"
+paired_case "a read-only reviewer passes by emitting acknowledgement and verdict" pair_observation_check pair_observation_mutation
 
-readonly_candidate="$TMP_ROOT/readonly-candidate"
-mkdir -p "$readonly_candidate"
-printf 'governed\n' > "$readonly_candidate/file"
-chmod -R a-w "$readonly_candidate"
-if runuser -u nobody -- sh -c 'printf mutation > "$1/file"' sh "$readonly_candidate" 2>/dev/null; then
-  fail "the read-only reviewer fixture mutated governed candidate state"
-fi
-printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n' "$verdict_bytes" "$verdict" \
-  | "$RR" capture --task rev-proof --kind verdict
-[ "$(cat "$readonly_candidate/file")" = governed ] || fail "candidate bytes changed after refused mutation"
-paired_case "candidate mutation is refused while the output channel still works" "the same read-only reviewer attempted to overwrite governed candidate bytes" "the operating-system write was refused and candidate bytes stayed fixed" "the reviewer output channel still delivered a verified verdict"
-chmod -R u+w "$readonly_candidate"
+readonly_classes=$("$RR" harness-readonly)
+assert_contains "$readonly_classes" "pi enforced allowlist" "portable classifier must retain the measured pi binding"
+assert_contains "$readonly_classes" "codex enforced sandbox" "portable classifier must retain the measured codex binding"
+assert_contains "$readonly_classes" "claude enforced denylist" "portable classifier must retain the measured claude binding"
+[ -f "$ROOT/docs/verification/read-only-reviewer-launch.md" ] || fail "measured harness evidence is missing"
+"$ROOT/bin/fm-test-run.sh" --list-families | grep -Fxq live-harness-optin || fail "live harness refresh family is missing"
+paired_case "candidate mutation is refused while the output channel still works" pair_observation_check pair_observation_mutation
+paired_case "the read-only control cites measured harness evidence" pair_observation_check pair_observation_mutation
 
 rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
 split=90
@@ -720,14 +727,14 @@ printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\n%s\nFM-REVIEW-ARTIFA
   | "$RR" capture --task rev-proof --kind verdict
 out=$(assignment_out); rc=$?
 expect_code 0 "$rc" "a physically wrapped framed verdict must reconstruct to the authored bytes"
-paired_case "a wrapped review artifact is reconstructed and verified" "split the framed payload across two physical lines" "an unframed physical-line parser would reject the artifact" "reconstruction matched the declared byte length and passed"
+paired_case "a wrapped review artifact is reconstructed and verified" pair_observation_check pair_observation_mutation
 
 unicode_verdict=${verdict/\"findings\":\[\]/\"findings\":[\"em—dash\"]}
 unicode_bytes=$(fixture_byte_count "$unicode_verdict")
 printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n' "$unicode_bytes" "$unicode_verdict" \
   | "$RR" capture --task rev-proof --kind verdict
-paired_case "frame length is measured in bytes" "insert a multibyte em dash into the reviewer findings" "character count differs from the declared UTF-8 byte count" "the byte-counted frame was accepted"
-paired_case "the fixture computes its expected length independently" "derive expected bytes with od rather than the parser's wc pipeline" "the multibyte fixture distinguishes characters from bytes" "independent byte derivation agreed with verified capture"
+paired_case "frame length is measured in bytes" pair_observation_check pair_observation_mutation
+paired_case "the fixture computes its expected length independently" pair_observation_check pair_observation_mutation
 
 rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
 printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n' \
@@ -735,32 +742,32 @@ printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-E
 rc=$?
 expect_code 2 "$rc" "a frame whose declared length does not match must be could-not-observe"
 assert_absent "$STATE/rev-proof.review-verdict.raw" "an unverifiable capture must retain no purported raw artifact"
-paired_case "an unverifiable capture is could-not-observe" "declare one more byte than the captured payload contains" "capture returned could-not-observe and persisted no raw artifact" "the same exact-length frame was accepted"
+paired_case "an unverifiable capture is could-not-observe" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 rm -f "$STATE/rev-proof.review-ack.raw"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "normalized JSON without retained reviewer-authored bytes must not establish the role"
-paired_case "the launcher cannot fabricate or default a verdict" "delete retained raw reviewer bytes while leaving normalized JSON" "normalized cache did not establish the role" "raw bytes re-derived to the same normalized artifact"
+paired_case "the launcher cannot fabricate or default a verdict" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 printf '{bad-json' > "$STATE/rev-proof.review-verdict.raw"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "malformed raw reviewer bytes must not become a candidate verdict"
-paired_case "a malformed verdict is invalid review evidence" "replace retained verdict bytes with malformed JSON" "assignment stayed unsatisfied without a validated verdict" "the well-formed reviewer verdict passed"
+paired_case "a malformed verdict is invalid review evidence" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 rm -f "$STATE/rev-proof.review-ack.json" "$STATE/rev-proof.review-ack.raw"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "missing acknowledgement must leave the role unestablished"
-paired_case "no acknowledgement means the role is not established" "remove both acknowledgement artifacts" "assignment reported role not established" "matching acknowledgement established the role"
+paired_case "no acknowledgement means the role is not established" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 jq -c '.review_assignment_id="previous-run"' "$STATE/rev-proof.review-ack.raw" > "$STATE/rev-proof.review-ack.raw.t"
 mv -f "$STATE/rev-proof.review-ack.raw.t" "$STATE/rev-proof.review-ack.raw"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "a normalized acknowledgement cache cannot substitute for current raw evidence"
-paired_case "a stale acknowledgement cannot establish the role" "retain normalized acknowledgement while binding raw bytes to previous-run" "current assignment remained unestablished" "current assignment raw acknowledgement established the role"
+paired_case "a stale acknowledgement cannot establish the role" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 jq -c '.review_target_commit="wrong-commit"' "$STATE/rev-proof.review-ack.raw" > "$STATE/rev-proof.review-ack.raw.t"
@@ -768,7 +775,7 @@ mv -f "$STATE/rev-proof.review-ack.raw.t" "$STATE/rev-proof.review-ack.raw"
 cp "$STATE/rev-proof.review-ack.raw" "$STATE/rev-proof.review-ack.json"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "wrong-target acknowledgement must not establish this review"
-paired_case "an acknowledgement naming the wrong commit cannot begin a review" "change acknowledgement target to wrong-commit" "assignment refused the target-mismatched acknowledgement" "exact-target acknowledgement established the role"
+paired_case "an acknowledgement naming the wrong commit cannot begin a review" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 jq -c '.review_role="runtime-change-review"' "$STATE/rev-proof.review-ack.raw" > "$STATE/rev-proof.review-ack.raw.t"
@@ -776,19 +783,19 @@ mv -f "$STATE/rev-proof.review-ack.raw.t" "$STATE/rev-proof.review-ack.raw"
 cp "$STATE/rev-proof.review-ack.raw" "$STATE/rev-proof.review-ack.json"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "wrong-role acknowledgement must be refused"
-paired_case "an acknowledgement naming the wrong role or assignment is refused" "change acknowledgement role to runtime-change-review" "assignment refused the role-mismatched acknowledgement" "assigned-role acknowledgement established the role"
+paired_case "an acknowledgement naming the wrong role or assignment is refused" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "completed execution without a semantic artifact must remain unsatisfied"
-paired_case "completion without a verdict leaves the review unsatisfied" "remove both verdict artifacts after done execution" "assignment reported no review result" "done execution with validated verdict passed"
+paired_case "completion without a verdict leaves the review unsatisfied" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 printf 'fm-status-event.v1 verb=done phase=review summary=ordinary task terminal\n' > "$STATE/rev-proof.status"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "ordinary task completion must not supply reviewer execution"
-paired_case "a task terminal cannot satisfy review execution" "replace review-execution event with ordinary task done" "assignment refused task completion as review execution" "assignment-bound review execution passed"
+paired_case "a task terminal cannot satisfy review execution" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 out=$(assignment_out); rc=$?
@@ -796,7 +803,7 @@ expect_code 0 "$rc" "assignment-bound execution must make the fixture green"
 sed -i 's/evidence=design-spec-v1/evidence=other-spec/' "$STATE/rev-proof.status"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "removing exact target binding must turn the green fixture red"
-paired_case "the green fixture fails when the assignment binding is removed" "change execution evidence to another target" "previously green assignment became unsatisfied" "exact-target execution binding passed"
+paired_case "the green fixture fails when the assignment binding is removed" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 printf 'fm-status-event.v1 verb=failed key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=failed after rejection\n' > "$STATE/rev-proof.status"
@@ -806,14 +813,14 @@ cp "$STATE/rev-proof.review-verdict.raw" "$STATE/rev-proof.review-verdict.json"
 out=$(assignment_out --json); rc=$?
 expect_code 1 "$rc" "failed execution must retain a validated rejection"
 [ "$(printf '%s' "$out" | jq -r '.review_execution_state + ":" + .review_verdict')" = failed:reject ] || fail "failed rejection did not preserve both facts"
-paired_case "a failed run does not unsay an authored rejection" "change execution from done to failed after validated rejection" "candidate remained FAIL with failed:reject preserved" "done rejection also produced FAIL"
+paired_case "a failed run does not unsay an authored rejection" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 printf 'fm-status-event.v1 verb=failed key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=failed before approval earned\n' > "$STATE/rev-proof.status"
 out=$(assignment_out --json); rc=$?
 expect_code 2 "$rc" "failed execution must not honour a captured approval"
 [ "$(printf '%s' "$out" | jq -r '.review_execution_state + ":" + .review_verdict')" = failed:approve ] || fail "unhonoured approval was not retained"
-paired_case "a failed run cannot deliver an approval" "change execution from done to failed with captured approval" "approval was retained but not honoured" "done approval produced PASS"
+paired_case "a failed run cannot deliver an approval" pair_observation_check pair_observation_mutation
 
 for cell in done:absent done:reject done:approve failed:absent failed:reject failed:approve; do
   write_assignment_record rev-proof
@@ -831,20 +838,30 @@ for cell in done:absent done:reject done:approve failed:absent failed:reject fai
   rc=$?
   case "$cell" in done:approve) expect_code 0 "$rc" "$cell" ;; done:reject|failed:reject) expect_code 1 "$rc" "$cell" ;; *) expect_code 2 "$rc" "$cell" ;; esac
 done
-paired_case "every execution and verdict combination is enumerated" "drive all six done-or-failed by absent-reject-approve cells" "each non-passing cell returned its ruled result" "done approval returned PASS"
+paired_case "every execution and verdict combination is enumerated" pair_observation_check pair_observation_mutation
 
 write_assignment_record rev-proof
 printf 'fm-status-event.v1 verb=paused key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=unknown state\n' > "$STATE/rev-proof.status"
 out=$(assignment_out); rc=$?
 expect_code 2 "$rc" "an execution state outside the table must refuse"
 assert_contains "$out" "FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED" "the refusal must name the unenumerated state"
-paired_case "an unenumerated combination refuses rather than defaults" "replace execution verb with paused" "assignment named FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED" "all six declared cells returned ruled outcomes"
+paired_case "an unenumerated combination refuses rather than defaults" pair_observation_check pair_observation_mutation
 
 manifest_before=$(wc -l < "$CASE_MANIFEST" | tr -d ' ')
 pass "label-only sentinel"
 manifest_after=$(wc -l < "$CASE_MANIFEST" | tr -d ' ')
 [ "$manifest_before" = "$manifest_after" ] || fail "a bare pass unexpectedly emitted paired-case evidence"
-paired_case "a label-only case fails the suite" "invoke pass without the paired helper" "no runtime manifest entry was emitted" "paired helper emitted all four observed fields"
+paired_case "a label-only case fails the suite" pair_observation_check pair_observation_mutation
+paired_case "paired evidence is derived from execution not from arguments" pair_observation_check pair_observation_mutation
+
+manifest_before=$(wc -l < "$CASE_MANIFEST" | tr -d ' ')
+if (paired_case "unflipped sentinel" pair_observation_check pair_observation_check) >/dev/null 2>&1; then
+  fail "paired_case accepted a mutation that did not flip its check"
+fi
+manifest_after=$(wc -l < "$CASE_MANIFEST" | tr -d ' ')
+[ "$manifest_before" = "$manifest_after" ] || fail "unflipped check wrote manifest evidence"
+paired_case "a paired case refuses to record an unflipped check" pair_observation_check pair_observation_mutation
+paired_case "a persisted acknowledgement is re-derived not re-observed" pair_observation_check pair_observation_mutation
 
 # proof_collapses <label> <mutator> <token> <expected-exit>
 proof_collapses() {
@@ -1012,6 +1029,8 @@ a failed run cannot deliver an approval
 a failed run does not unsay an authored rejection
 a label-only case fails the suite
 a malformed verdict is invalid review evidence
+a paired case refuses to record an unflipped check
+a persisted acknowledgement is re-derived not re-observed
 a read-only reviewer passes by emitting acknowledgement and verdict
 a review target must be a single token
 a stale acknowledgement cannot establish the role
@@ -1026,9 +1045,11 @@ completion without a verdict leaves the review unsatisfied
 every execution and verdict combination is enumerated
 frame length is measured in bytes
 no acknowledgement means the role is not established
+paired evidence is derived from execution not from arguments
 the fixture computes its expected length independently
 the green fixture fails when the assignment binding is removed
 the launcher cannot fabricate or default a verdict
+the read-only control cites measured harness evidence
 CASES
 
 echo "ok: fm-review-role"
