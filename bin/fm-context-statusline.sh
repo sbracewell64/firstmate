@@ -19,12 +19,12 @@
 # more capacity than the ceiling is fully eligible and simply runs governed at
 # it. This is the only place a ceiling changes behavior.
 #
-# The ceiling advises compaction the moment resident tokens reach it, which is
-# usually EARLIER than the 70% host trigger and never later: the two are
-# independent, either alone recommends compaction, and neither cancels the
-# other. Resident tokens come from the host's own total_tokens and
-# used_percentage; without total_tokens the ceiling CANNOT BE EVALUATED, and
-# that is recorded as unevaluated rather than resolved either way. A ceiling
+# The ceiling advises compaction the moment resident tokens reach it. The
+# ceiling and the 70% host trigger are independent: either alone recommends
+# compaction, and neither cancels the other. Resident tokens come from the
+# host's own total_tokens and used_percentage; without total_tokens the ceiling
+# CANNOT BE EVALUATED, and that is recorded as unevaluated rather than resolved
+# either way. A ceiling
 # that could not be checked has not been observed to be met, and it has not
 # been observed to be exceeded either.
 # Only used_percentage and remaining_percentage are required: they alone drive

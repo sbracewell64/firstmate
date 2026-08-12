@@ -448,9 +448,9 @@ It is absent by default, and **absent means no minimum**: a route that states no
 Where a route does state one, the missing-input rule binds as it does on every other declared axis and unrecorded capacity refuses as `context_unverifiable`.
 
 `smart_zone_ceiling` never excludes anyone.
-It is where a running session compacts, rotates or decomposes, so a model exposing 200K or 1M is fully eligible on a 120K-ceiling route and simply runs governed at 120K.
+It is where a running session compacts, rotates or decomposes, so models exposing 120K, 200K, or 1M are fully eligible on a 120K-ceiling route and simply run governed at no more than 120K.
 The governed answer is `effective_working_ceiling`, the minimum of the route ceiling, the model's own smart zone, and the model's hard limit; `fm-route.sh --json` carries the three inputs per candidate as `governed_context`, and `fm-spawn.sh` hands them separately to [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh), which computes the minimum and is the one place it changes behavior.
-That governor recommends compaction as soon as resident tokens reach the ceiling, which is usually earlier than its own 70%-used trigger and never later; the two are independent and neither cancels the other.
+That governor recommends compaction as soon as resident tokens reach the ceiling; this and its 70%-used trigger are independent, and either one recommends compaction without cancelling the other.
 
 `context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read as one, because a ceiling is what its name always said.
 It never contributes a minimum, so a floor carrying only the retired field states no minimum at all.
