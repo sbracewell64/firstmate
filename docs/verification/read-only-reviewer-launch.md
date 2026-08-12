@@ -199,6 +199,7 @@ Each entry names its blocker. None of these is a pass, and none may be read as o
 - **The composed reviewer command as an interactive session.** Every probe above executed the harness's headless mode (`codex exec`, `pi -p`, `claude -p`) carrying the same read-only flags. The composed reviewer strings launch interactive TUI sessions with a brief argument and a turn-end hook, and those cannot be driven to completion non-interactively in this capture. Blocker: no non-interactive path through the interactive launch. What is established is the behaviour of the read-only flag composition, not an end-to-end interactive reviewer session.
 - **`opencode`, `grok`, `kimi`, `pi-signed`.** Blocker: no installed executable on this machine. `pi-signed` shares Pi's flag surface but is a distinct executable and was not separately probed, so it inherits nothing. `bin/fm-review-role.sh harness-readonly` reports all four `unknown`, and `bin/fm-review-role.sh` refuses an enforced-read-only reviewer assignment onto any of them. That refusal is a real constraint on where a reviewer may run, not a gap papered over with an instruction in the brief.
 - **The qualified reviewer models themselves.** The probes ran on `deepseek-v4-flash-free` through pi and `claude-haiku-4-5-20251001` through claude, chosen to measure the harness rather than the model. The mechanism under test is the harness's tool surface and sandbox, which is model-independent, but no probe here was run on `openai-codex/gpt-5.6-luna` or `claude/opus`. Blocker: none beyond cost; this is a deliberate scope limit, recorded so nobody reads these results as evidence about those bindings.
+- **A live agent that came up and never took its instructions.** `role_not_established` is a declared launch outcome and `bin/fm-review-role.sh assignment` refuses it, but `bin/fm-spawn.sh` can only record it on `kimi`, the one harness with a verified brief-delivery confirmation. On every other harness an agent that starts and silently ignores its brief is observed as `alive` and recorded as a successful launch. Blocker: no delivery confirmation exists for those harnesses. What catches this case instead is the separate requirement that the task reach a terminal verdict, which is why `review_result` is one of the seven facts rather than a formality; an agent that never took the brief produces none.
 
 ## What this evidence does not establish
 
@@ -207,9 +208,75 @@ They establish that the mutation surface was removed at launch and observed to r
 They do not establish containment of an agent that finds another path, and they are not a sandbox around the host.
 `review-roles/schema.json` states the same boundary as part of the contract.
 
+## The launch outcome is consumed, not inferred - controls observed RED
+
+Measured 2026-08-12T11:16Z.
+Each control mutates `bin/fm-review-role.sh` itself - the enforcement, not the test - and re-runs the suite.
+The suite stops at its first failure, so each mutation is narrowed to break exactly one protection and the case before it is shown still green, which is what proves the mutation reached the case under test rather than tripping an earlier one.
+`bin/fm-review-role.sh` was restored from a byte-identical copy after each control and the full suite re-run green.
+
+### 1. An absent launch outcome falls through as if the launch had succeeded
+
+Applied: in `cmd_assignment`, the branch that reports a missing `review_launch=` as could-not-observe was changed to set `outcome=$FM_REVIEW_LAUNCH_OK` and `lresult=PASS`.
+This is the defect exactly: a review concluded from a spawn having been attempted.
+
+```text
+ok - a complete review record proves the assignment
+not ok - a record with no launch outcome cannot prove a review: the proof stayed SATISFIED after its evidence was removed, which proves nothing
+```
+
+Suite exit status `1`.
+
+### 2. An observed launch FAILURE is no longer treated as a failure
+
+Applied: `if [ "$lresult" = FAIL ]; then` became `if false; then`, so the recorded outcome is read and then ignored.
+This is the misordered-launch shape from the hazard measured above: the process exits, nothing is written, and the endpoint is indistinguishable from an enforced reviewer that found nothing to change.
+
+```text
+ok - a record with no launch outcome cannot prove a review
+not ok - a launch that failed is never counted as a review: the proof stayed SATISFIED after its evidence was removed, which proves nothing
+```
+
+Suite exit status `1`.
+
+### 3. The success outcome is hardcoded instead of read from the contract
+
+Applied: `launch_outcome_result` gained an early `[ "$1" != launch_succeeded_as_requested ] || { printf PASS; return 0; }` ahead of its schema read.
+The outcome names must be read from `review-roles/schema.json`, or inverting one there is documentation rather than enforcement.
+
+```text
+ok - a change review with no pinned head cannot prove which bytes were read
+not ok - inverting the success outcome in the contract changes the verdict: the proof stayed SATISFIED after its evidence was removed, which proves nothing
+```
+
+Suite exit status `1`.
+
+### 4. The vocabulary-reuse check is no longer run
+
+Applied: the `launch_outcomes_admissible` call was deleted from `cmd_assignment`.
+Without it a schema may quietly map an outcome onto a terminal state `loopspecs/terminal-states.json` does not declare, which is a sixth vocabulary arriving unannounced.
+
+```text
+not ok - an outcome mapped onto a terminal state nothing declares must be could-not-observe: expected exit 2, got 0
+```
+
+Suite exit status `1`.
+
+### 5. The outcome name and its result no longer have to agree
+
+Applied: `elif [ "$outcome" != "$FM_REVIEW_LAUNCH_OK" ]; then` became `elif false; then`.
+Reading the result from the contract alone is not enough on its own: a contract that relabels some other outcome a pass would otherwise smuggle it through as an established review.
+
+```text
+ok - inverting the success outcome in the contract changes the verdict
+not ok - a contract that relabels another outcome a pass still cannot establish the role: the proof stayed SATISFIED after its evidence was removed, which proves nothing
+```
+
+Suite exit status `1`.
+
 ## Current regression verification
 
-Re-executed 2026-08-12T04:47:03Z from the repository root:
+Re-executed 2026-08-12T11:27:23Z from the repository root:
 
 ```sh
 tests/fm-review-role.test.sh
@@ -237,6 +304,19 @@ ok - contradictory policy claims are a deterministic reconciliation failure
 ok - design and change are separate contracts and the change role requires a pinned head
 ok - an unknown or inadmissible role is could-not-observe, never a silent pass
 ok - the spawn chokepoint refuses self-review, a missing author, an unenforceable harness and an unknown role
+ok - a complete review record proves the assignment
+ok - a record with no launch outcome cannot prove a review
+ok - a launch that failed is never counted as a review
+ok - a live agent that never took the role is never counted as a review
+ok - an unknown reviewing binding cannot prove a review
+ok - a review with no enforced read-only binding cannot prove itself
+ok - recording a mechanism without the flags that carried it cannot prove a review
+ok - a review that never reached a verdict is not a completed review
+ok - a change review with no pinned head cannot prove which bytes were read
+ok - inverting the success outcome in the contract changes the verdict
+ok - a contract that relabels another outcome a pass still cannot establish the role
+ok - the launch-outcome vocabulary reuses its owners and refuses to drift from them
+ok - an eligible assignment is not evidence that a review happened
 ok: fm-review-role
 ```
 

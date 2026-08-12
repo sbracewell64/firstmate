@@ -2487,6 +2487,21 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
+# Record the OBSERVED launch outcome of a review dispatch into the task's
+# durable record. Everything before this point establishes only that a launch
+# command was delivered to an endpoint, and a process invocation is not proof
+# that the intended agent role started. The names are the launch_outcomes
+# declared in review-roles/schema.json; bin/fm-review-role.sh assignment is the
+# only reader and it refuses an outcome that file does not declare.
+review_record_launch() {  # <outcome>
+  [ -n "$REVIEW_ROLE" ] || return 0
+  echo "review_launch=$1" >> "$STATE/$ID.meta" 2>/dev/null || {
+    echo "error: review dispatch $ID could not record its launch outcome ($1), so no later reader could tell a review that ran from one that never started" >&2
+    return 1
+  }
+  return 0
+}
+
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   if [ -n "$WT_SLOT_NAME" ]; then
     # `enter` is deliberate: unlike `get` it acquires the slot chosen above
@@ -3114,6 +3129,9 @@ fi
 spawn_send_key "$T" Enter
 if [ "$HARNESS" = kimi ]; then
   if ! kimi_wait_for_ready; then
+    # The agent never came up at all, which is launch_failed rather than a role
+    # that was offered instructions and did not take them.
+    review_record_launch launch_failed || true
     kimi_spawn_fail "kimi did not show a verified ready signal before brief delivery"
     exit 1
   fi
@@ -3124,14 +3142,21 @@ if [ "$HARNESS" = kimi ]; then
   KIMI_SUBMIT_VERDICT=$(fm_backend_send_text_submit \
     "$BACKEND" "$T" "$KIMI_POINTER" "$KIMI_SUBMIT_RETRIES" \
     "$KIMI_SUBMIT_SLEEP" "$KIMI_SUBMIT_SETTLE" "$W") || {
+    # A live agent whose instructions were not delivered: alive, and reviewing
+    # nothing. This is the one place the fleet can currently tell that apart
+    # from a successful launch, because kimi is the one harness with a verified
+    # delivery confirmation.
+    review_record_launch role_not_established || true
     kimi_spawn_fail "kimi brief pointer could not be submitted"
     exit 1
   }
   if [ "$KIMI_SUBMIT_VERDICT" = send-failed ]; then
+    review_record_launch role_not_established || true
     kimi_spawn_fail "kimi brief pointer could not be submitted"
     exit 1
   fi
   if ! kimi_wait_for_delivery; then
+    review_record_launch role_not_established || true
     kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
     exit 1
   fi
@@ -3146,6 +3171,50 @@ if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   fi
 fi
 
+# THE LAUNCH OUTCOME OF A REVIEW DISPATCH, OBSERVED RATHER THAN ASSUMED.
+#
+# Up to here this script has typed a launch command into an endpoint and pressed
+# Enter. That is keystroke delivery, and concluding a review from it is the
+# defect this closes: a misordered launch exits 1 with the brief swallowed, so
+# the endpoint looks quiet, nothing is written, and a reader who wanted a review
+# sees one. A reviewer that never started and a reviewer that started and
+# lawfully refused to write are almost identical from the outside.
+#
+# fm_backend_agent_state is the fleet's existing recovery-grade endpoint
+# contract and attributes a running agent PROCESS rather than reading a vendor
+# banner, so this rests on a kernel fact. Its six values map onto the outcomes
+# review-roles/schema.json declares; nothing new classifies anything here.
+if [ -n "$REVIEW_ROLE" ]; then
+  REVIEW_LAUNCH_POLLS=${FM_REVIEW_LAUNCH_POLLS:-40}
+  REVIEW_LAUNCH_INTERVAL=${FM_REVIEW_LAUNCH_INTERVAL:-0.5}
+  REVIEW_AGENT_STATE=unreadable
+  REVIEW_POLL_I=0
+  while [ "$REVIEW_POLL_I" -lt "$REVIEW_LAUNCH_POLLS" ]; do
+    REVIEW_AGENT_STATE=$(fm_backend_agent_state "$BACKEND" "$T" 2>/dev/null) \
+      || REVIEW_AGENT_STATE=unreadable
+    [ "$REVIEW_AGENT_STATE" != alive ] || break
+    REVIEW_POLL_I=$((REVIEW_POLL_I + 1))
+    [ "$REVIEW_POLL_I" -ge "$REVIEW_LAUNCH_POLLS" ] || sleep "$REVIEW_LAUNCH_INTERVAL"
+  done
+  case "$REVIEW_AGENT_STATE" in
+    alive) REVIEW_LAUNCH_OUTCOME=launch_succeeded_as_requested ;;
+    dead|missing) REVIEW_LAUNCH_OUTCOME=launch_failed ;;
+    # ambiguous, unreadable, unverified: the third value, never a pass.
+    *) REVIEW_LAUNCH_OUTCOME=could_not_observe ;;
+  esac
+  review_record_launch "$REVIEW_LAUNCH_OUTCOME" || exit 1
+  if [ "$REVIEW_LAUNCH_OUTCOME" != launch_succeeded_as_requested ]; then
+    printf 'failed: review role %s was not established (%s: endpoint %s)\n' \
+      "$REVIEW_ROLE" "$REVIEW_LAUNCH_OUTCOME" "$REVIEW_AGENT_STATE" >> "$STATE/$ID.status"
+    echo "error: review dispatch $ID claims role $REVIEW_ROLE but its launch outcome is $REVIEW_LAUNCH_OUTCOME (endpoint state $REVIEW_AGENT_STATE), so no review may be counted from it; inspect window $T" >&2
+    exit 1
+  fi
+fi
+
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
-echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+SPAWN_REVIEW=
+# The success line names the observed launch outcome, so no caller can read a
+# bare "spawned" as an established review role.
+[ -z "$REVIEW_ROLE" ] || SPAWN_REVIEW=" review_role=$REVIEW_ROLE review_launch=$REVIEW_LAUNCH_OUTCOME"
+echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT$SPAWN_REVIEW"

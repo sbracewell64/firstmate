@@ -593,4 +593,181 @@ out=$(run_spawn review-sm "$SPAWN_HOME/projects/proj" --secondmate --review-role
 assert_contains "$out" "review-role applies to ship and scout" "the secondmate refusal must say why"
 pass "the spawn chokepoint refuses self-review, a missing author, an unenforceable harness and an unknown role"
 
+# --- 9. the launch outcome must be CONSUMED, never inferred -----------------
+#
+# check answers "may this assignment be made". Passing it is an INTENTION, and
+# the defect this section closes is that the intention was the only durable
+# record: state/<id>.meta carried review_role= written at dispatch and nothing
+# ever read it again.
+#
+#   A process invocation is not proof that the intended agent role started.
+#   Absence of mutation is not proof that read-only enforcement worked if the
+#   reviewer never successfully started.
+#
+# A reviewer that never started and a reviewer that started and lawfully refused
+# to write look almost identical from outside: no writes, a quiet endpoint, a
+# plausible terminal state. So every case here mutates a COMPLETE, satisfied
+# record and requires the proof to collapse.
+
+SCHEMA_COPY=$ROLES/schema.json
+restore_schema() { cp "$ROOT/review-roles/schema.json" "$SCHEMA_COPY"; }
+
+write_assignment_record() {  # <id>
+  {
+    echo "model=openai-codex/gpt-5.6-luna"
+    echo "review_role=runtime-design-review"
+    echo "review_maker=claude/opus"
+    echo "review_readonly_mechanism=allowlist"
+    echo "review_readonly_flags=--tools read,grep,find,ls"
+    echo "review_launch=launch_succeeded_as_requested"
+  } > "$STATE/$1.meta"
+  printf 'fm-status-event.v1 verb=done phase=review evidence=data/%s/report.md summary=the review reached a verdict\n' \
+    "$1" > "$STATE/$1.status"
+}
+
+assignment_out() { "$RR" assignment --task rev-proof 2>&1; }
+
+# strip_meta <key>: remove one recorded fact from an otherwise complete record.
+strip_meta() { grep -v "^$1=" "$STATE/rev-proof.meta" > "$STATE/rev-proof.meta.tmp" \
+  && mv -f "$STATE/rev-proof.meta.tmp" "$STATE/rev-proof.meta"; }
+
+# The green half, asserted once here and re-asserted inside every pair below: a
+# complete record must PROVE the review, or no mutation proves anything.
+write_assignment_record rev-proof
+out=$(assignment_out); rc=$?
+expect_code 0 "$rc" "a complete review record must prove the assignment, or every red half below is vacuous"
+assert_contains "$out" "SATISFIED" "the complete record must report the requirement satisfied"
+assert_contains "$out" "review-assignment:rev-proof,PASS," "the answer must be a fm-verify-lib result record so it is read through fm_verify_case"
+pass "a complete review record proves the assignment"
+
+# proof_collapses <label> <mutator> <token> <expected-exit>
+proof_collapses() {
+  local label=$1 mutator=$2 token=$3 want=$4 out rc
+  restore_schema
+  write_assignment_record rev-proof
+  out=$(assignment_out); rc=$?
+  expect_code 0 "$rc" "$label: the unmutated record must be SATISFIED first"
+
+  declare -F "$mutator" >/dev/null 2>&1 \
+    || fail "$label: mutator $mutator is not a defined function, so nothing would have been mutated and the case would pass for the wrong reason"
+  "$mutator" || fail "$label: the mutation itself failed, so the red half would not be measuring what it claims"
+  out=$(assignment_out); rc=$?
+  [ "$rc" != 0 ] || fail "$label: the proof stayed SATISFIED after its evidence was removed, which proves nothing"
+  expect_code "$want" "$rc" "$label: the collapse must be reported as the right kind of result"
+  assert_contains "$out" "UNSATISFIED" "$label: the review requirement must read UNSATISFIED, never waived or downgraded"
+  assert_contains "$out" "$token" "$label: the answer must name what was not established"
+  restore_schema
+  pass "$label"
+}
+
+# Each mutation is a FUNCTION rather than a string handed to eval: the mutators
+# manipulate the fixture, and a fixture step that silently failed to apply would
+# leave the record intact and the case would pass for the wrong reason.
+set_launch() { grep -v "^review_launch=" "$STATE/rev-proof.meta" > "$STATE/rev-proof.meta.k" \
+  && { cat "$STATE/rev-proof.meta.k"; echo "review_launch=$1"; } > "$STATE/rev-proof.meta"; }
+
+mut_no_launch() { strip_meta review_launch; }
+mut_launch_failed() { set_launch launch_failed; }
+mut_role_not_established() { set_launch role_not_established; }
+mut_no_binding() { strip_meta model; }
+mut_no_mechanism() { strip_meta review_readonly_mechanism; }
+mut_no_flags() { strip_meta review_readonly_flags; }
+mut_no_verdict() { rm -f "$STATE/rev-proof.status"; }
+mut_change_role() { sed -i "s/^review_role=.*/review_role=runtime-change-review/" "$STATE/rev-proof.meta"; }
+mut_invert_success() {
+  jq '(.launch_outcomes.outcomes[] | select(.name == "launch_succeeded_as_requested") | .result) = "FAIL"' \
+    "$SCHEMA_COPY" > "$SCHEMA_COPY.t" && mv -f "$SCHEMA_COPY.t" "$SCHEMA_COPY"
+}
+
+# THE DEFECT ITSELF: a record that never consumed a launch outcome. This is a
+# review concluded from a spawn having been attempted.
+proof_collapses "a record with no launch outcome cannot prove a review" \
+  mut_no_launch 'FM_REVIEW_LAUNCH_OUTCOME_NOT_CONSUMED' 2
+
+# THE MEASURED MISORDERED-LAUNCH SHAPE. The probe in
+# docs/verification/read-only-reviewer-launch.md recorded a claude launch whose
+# flags were ordered so the brief was swallowed: it exits 1, writes nothing, and
+# leaves an endpoint that looks exactly like an enforced read-only reviewer that
+# found nothing to change. A caller that does not inspect the launch result
+# would count it as a valid review; this must refuse it as an observed failure,
+# not as could-not-observe and not as a pass.
+proof_collapses "a launch that failed is never counted as a review" \
+  mut_launch_failed 'the reviewer did not run' 1
+
+# A live agent that never took its instructions: alive, and reviewing nothing.
+proof_collapses "a live agent that never took the role is never counted as a review" \
+  mut_role_not_established 'the reviewer did not run' 1
+
+# Each remaining required fact, removed one at a time. Six established facts and
+# one missing fact is could-not-observe, never a pass.
+proof_collapses "an unknown reviewing binding cannot prove a review" \
+  mut_no_binding 'intended_binding' 2
+proof_collapses "a review with no enforced read-only binding cannot prove itself" \
+  mut_no_mechanism 'readonly_authority_active' 2
+proof_collapses "recording a mechanism without the flags that carried it cannot prove a review" \
+  mut_no_flags 'readonly_authority_active' 2
+proof_collapses "a review that never reached a verdict is not a completed review" \
+  mut_no_verdict 'review_result' 2
+
+# A change role additionally requires the exact reviewed commit.
+proof_collapses "a change review with no pinned head cannot prove which bytes were read" \
+  mut_change_role 'review_target_commit' 2
+
+# --- 10. the outcome vocabulary is read from the contract, not hardcoded -----
+#
+# If the names below were written into the script, deleting or inverting them in
+# the contract would change nothing - documentation, not enforcement.
+
+proof_collapses "inverting the success outcome in the contract changes the verdict" \
+  mut_invert_success 'the reviewer did not run' 1
+
+# The name and the result must AGREE. Reading the result from the contract alone
+# would let a contract relabel some other outcome a pass and smuggle it through
+# as an established review, so only one named outcome establishes the role.
+mut_relabel_other_outcome_pass() {
+  jq '(.launch_outcomes.outcomes[] | select(.name == "role_not_established") | .result) = "PASS"' \
+    "$SCHEMA_COPY" > "$SCHEMA_COPY.t" && mv -f "$SCHEMA_COPY.t" "$SCHEMA_COPY" \
+    && set_launch role_not_established
+}
+proof_collapses "a contract that relabels another outcome a pass still cannot establish the role" \
+  mut_relabel_other_outcome_pass 'is the only outcome that establishes the role' 2
+
+# The vocabulary borrows from two existing owners and owns nothing itself, so a
+# schema that quietly grew a sixth vocabulary must be refused rather than read.
+restore_schema
+write_assignment_record rev-proof
+out=$(assignment_out); rc=$?
+expect_code 0 "$rc" "the shipped contract must be admissible before the drift cases"
+jq '(.launch_outcomes.outcomes[] | select(.name == "launch_failed") | .maps_to) = "launch_went_wrong"' \
+  "$SCHEMA_COPY" > "$SCHEMA_COPY.t" && mv -f "$SCHEMA_COPY.t" "$SCHEMA_COPY"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "an outcome mapped onto a terminal state nothing declares must be could-not-observe"
+assert_contains "$out" "launch_failed" "the refusal must name the outcome that stopped reusing the unified vocabulary"
+restore_schema
+
+jq '(.launch_outcomes.outcomes[] | select(.name == "could_not_observe") | .result) = "OBSERVED_ENOUGH"' \
+  "$SCHEMA_COPY" > "$SCHEMA_COPY.t" && mv -f "$SCHEMA_COPY.t" "$SCHEMA_COPY"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "a result outside the three-valued observation type must be refused"
+restore_schema
+
+jq 'del(.launch_outcomes)' "$SCHEMA_COPY" > "$SCHEMA_COPY.t" && mv -f "$SCHEMA_COPY.t" "$SCHEMA_COPY"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "deleting the launch outcomes entirely must refuse, not fall back to trusting the spawn"
+assert_contains "$out" "declares no launch outcomes" "the refusal must say the contract went missing"
+restore_schema
+pass "the launch-outcome vocabulary reuses its owners and refuses to drift from them"
+
+# The two questions must stay separate: an eligible assignment is not a proof.
+# This is the inference the whole section refuses, stated as a test.
+restore_schema
+write_assignment_record rev-proof
+strip_meta review_launch
+out=$(check_baseline); rc=$?
+expect_code 0 "$rc" "check must still say this assignment MAY be made"
+out=$(assignment_out); rc=$?
+[ "$rc" != 0 ] || fail "an assignment that check approved was read as a review that happened"
+assert_contains "$out" "UNSATISFIED" "passing check must never discharge the review obligation on its own"
+pass "an eligible assignment is not evidence that a review happened"
+
 echo "ok: fm-review-role"

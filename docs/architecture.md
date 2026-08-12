@@ -250,6 +250,9 @@ Which route a task belongs to stays firstmate's judgment; what the scripts then 
 Enforcement is per dispatch, so activating it never re-checks work already under way.
 
 Review eligibility is a separate assignment-relative decision: `review-roles/schema.json` owns the contract shape, each role file owns its qualified bindings and predicates, `bin/fm-review-role.sh` composes those facts with maker identity and independence evidence, and `fm-spawn.sh` refuses a claimed obligation before launch unless that decision also yields a measured read-only harness binding.
+That decision is prospective, so eligibility and proof are deliberately two subcommands: `check` answers whether an assignment may be made, while `assignment` answers what the task's durable record establishes about one that was, and only the second can discharge an obligation.
+The record it reads is the launch outcome `fm-spawn.sh` observes through `bin/fm-backend.sh`'s `fm_backend_agent_state` after the launch command is delivered, because keystroke delivery proves only that a command was typed: a misordered launch exits without ever starting the agent, and the endpoint it leaves behind is indistinguishable from a reviewer that ran and lawfully wrote nothing.
+The outcome names reuse two existing owners rather than adding a sixth vocabulary, and `assignment` refuses a schema that drifts from them: every result is a value of `bin/fm-verify-lib.sh`'s three-valued observation type, and every mapped terminal state is one `loopspecs/terminal-states.json` declares.
 [`verification/read-only-reviewer-launch.md`](verification/read-only-reviewer-launch.md) owns the version-scoped evidence for those harness bindings and their stated containment limit.
 
 ## Optional fleet admission control

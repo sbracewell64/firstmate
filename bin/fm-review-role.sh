@@ -41,6 +41,15 @@
 #
 # SUBCOMMANDS (see --help):
 #   list | show <role> | harness-readonly [<harness>] | reconcile | check ...
+#   | assignment --task <id>
+#
+# check and assignment answer two different questions on purpose. check is
+# PROSPECTIVE - may this assignment be made - and passing it is an intention.
+# assignment is RETROSPECTIVE - what does the durable record establish about a
+# review that was dispatched - and only it can discharge a review obligation. A
+# process invocation is not proof that the intended agent role started, and
+# absence of mutation is not proof of enforcement by a reviewer that never
+# started, so "produced no writes" never reads as "reviewed".
 #
 # EXIT STATUS, and the third value is a real one:
 #   0  ELIGIBLE     every required predicate observed satisfied
@@ -67,6 +76,8 @@ ROLES=${FM_REVIEW_ROLES_OVERRIDE:-$FM_ROOT/review-roles}
 . "$SCRIPT_DIR/fm-independence-lib.sh"
 # shellcheck source=bin/fm-route-lib.sh
 . "$SCRIPT_DIR/fm-route-lib.sh"
+# shellcheck source=bin/fm-status-event-lib.sh
+. "$SCRIPT_DIR/fm-status-event-lib.sh"
 
 # Stable refusal tokens, matched by tests and callers rather than prose.
 FM_REVIEW_TOKEN_ROLE_UNKNOWN=FM_REVIEW_ROLE_UNKNOWN
@@ -76,6 +87,13 @@ FM_REVIEW_TOKEN_SELF_REVIEW=FM_REVIEW_SELF_REVIEW_REFUSED
 FM_REVIEW_TOKEN_MAKER_UNKNOWN=FM_REVIEW_MAKER_IDENTITY_MISSING
 FM_REVIEW_TOKEN_NOT_QUALIFIED=FM_REVIEW_BINDING_NOT_QUALIFIED
 FM_REVIEW_TOKEN_CONTRADICTION=FM_REVIEW_POLICY_CONTRADICTION
+FM_REVIEW_TOKEN_ASSIGNMENT_UNPROVED=FM_REVIEW_ASSIGNMENT_UNPROVED
+FM_REVIEW_TOKEN_LAUNCH_NOT_CONSUMED=FM_REVIEW_LAUNCH_OUTCOME_NOT_CONSUMED
+
+# The one launch outcome that establishes the role. Named once, read from the
+# schema everywhere else, so renaming it in the contract cannot leave a second
+# spelling behind in the code.
+FM_REVIEW_LAUNCH_OK=launch_succeeded_as_requested
 
 usage() {
   cat <<'EOF'
@@ -89,11 +107,20 @@ Usage:
                           [--maker-process <id>] [--reviewer-process <id>]
                           [--reviewed-head <sha>] [--candidate-worktree <path>]
                           [--route <ROUTE>] [--json]
+  fm-review-role.sh assignment --task <id> [--json]
 
 check answers one question: may this reviewer be assigned to this maker's
 artifact, on this harness? Every input it needs is an input, not an assumption -
 a missing maker identity is could-not-observe and refuses, it does not default
-to eligible.
+to eligible. check is PROSPECTIVE and is never evidence that a review happened.
+
+assignment answers the retrospective question from the task's durable record:
+what does it establish about a review that was dispatched? It requires all seven
+facts in the schema's assignment_evidence, consumes the recorded launch outcome
+rather than inferring one from the spawn having been attempted, and leaves the
+review requirement UNSATISFIED when any fact is missing. It prints a
+bin/fm-verify-lib.sh result record so the answer is read through fm_verify_case.
+A reviewer that produced no writes is NOT thereby a reviewer that ran.
 
 reconcile reads this home's routing config and reports pooled models whose
 actual route membership contradicts an exclusivity claim the same file makes
@@ -621,6 +648,237 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# assignment: the RETROSPECTIVE half, and the reason it exists as a separate
+# subcommand rather than a flag on check.
+#
+#   check       may this reviewer be assigned? Answered BEFORE anything runs.
+#   assignment  what does the durable record establish about one that was?
+#
+# Collapsing them is the defect this closes. A dispatch that passed check wrote
+# review_role= into the task's metadata and nothing ever read it again, so the
+# presence of that field was the only thing between a later reader and the
+# conclusion that a review had happened - a conclusion drawn from an intention.
+#
+#   A process invocation is not proof that the intended agent role started.
+#   Absence of mutation is not proof that read-only enforcement worked if the
+#   reviewer never successfully started.
+#
+# So this command refuses the inference "produced no writes -> reviewed", and
+# requires all seven facts in the schema's assignment_evidence. Six established
+# and one missing is could-not-observe, which leaves the review requirement
+# UNSATISFIED rather than waived, assumed, or degraded to a warning.
+#
+# It prints a bin/fm-verify-lib.sh result record, so a consumer reads it through
+# fm_verify_case and cannot write a two-branch read of a three-valued answer.
+
+meta_field() {  # <meta> <key>
+  sed -n "s/^$2=//p" "$1" 2>/dev/null | head -1
+}
+
+# The launch-outcome vocabulary borrows from two existing owners and owns
+# nothing itself, so this refuses a schema that has quietly grown a sixth
+# vocabulary: every result must be a value of bin/fm-verify-lib.sh's three-valued
+# observation type, and every maps_to must be a unified state that
+# loopspecs/terminal-states.json actually declares. An unreadable terminal-state
+# file is could-not-observe and refuses too - it is never assumed to agree.
+TERMINAL_STATES=${FM_TERMINAL_STATES_OVERRIDE:-$FM_ROOT/loopspecs/terminal-states.json}
+
+launch_outcomes_admissible() {
+  local bad
+  [ -f "$TERMINAL_STATES" ] \
+    || die_unevaluable "$TERMINAL_STATES is unreadable, so the launch outcomes cannot be shown to reuse the unified terminal-state vocabulary rather than invent a sixth"
+  # Each outcome is bound to $o BEFORE it is inspected: a bare "." inside a
+  # function argument here would refer to the piped value rather than the
+  # outcome, which is exactly the rebinding that once made a detector on this
+  # branch report a self-contradicting configuration as clean.
+  bad=$(jq -r --slurpfile ts "$TERMINAL_STATES" '
+      ([$ts[0].unified[].name]) as $known
+      | [ .launch_outcomes.outcomes[]?
+          | . as $o
+          | select((["PASS","FAIL","NO_VERIFIER_RAN"] | index($o.result)) == null
+                   or ($known | index($o.maps_to)) == null)
+          | $o.name ]
+      | join(" ")' "$SCHEMA" 2>/dev/null) \
+    || die_unevaluable "$SCHEMA could not be read for its launch outcomes"
+  [ -z "$bad" ] \
+    || die_unevaluable "$FM_REVIEW_TOKEN_ROLE_INADMISSIBLE: launch outcome(s) $bad do not reuse an existing vocabulary; each result must be a bin/fm-verify-lib.sh value and each maps_to must be declared in $TERMINAL_STATES"
+  [ "$(jq -r '[.launch_outcomes.outcomes[]?] | length' "$SCHEMA" 2>/dev/null)" != 0 ] \
+    || die_unevaluable "$FM_REVIEW_TOKEN_ROLE_INADMISSIBLE: $SCHEMA declares no launch outcomes, so no launch result could be read and every review would rest on the spawn having been attempted"
+}
+
+# The outcome vocabulary is READ FROM THE SCHEMA rather than written here, so
+# deleting an outcome or inverting its result changes what this command does.
+launch_outcome_result() {  # <name> -> PASS|FAIL|NO_VERIFIER_RAN
+  local r
+  r=$(jq -r --arg n "$1" \
+    '.launch_outcomes.outcomes[]? | select(.name == $n) | .result' "$SCHEMA" 2>/dev/null) || return 1
+  case "$r" in
+    PASS|FAIL|NO_VERIFIER_RAN) printf '%s' "$r" ;;
+    *) return 1 ;;
+  esac
+}
+
+# The task's own durable verdict. done and failed are the two members of
+# bin/fm-classify-lib.sh's captain-terminal verbs that mean the work ENDED, as
+# opposed to needs-decision and blocked, which mean it stopped and is owed
+# something. The legacy prose form is still read while the fleet migrates.
+task_review_verdict() {  # <status-path>
+  local line v verdict=''
+  [ -f "$1" ] || return 1
+  while IFS= read -r line; do
+    v=$(fm_status_event_field "$line" verb 2>/dev/null) || v=''
+    if [ -z "$v" ]; then
+      case "$line" in
+        done:*) v='done' ;;
+        failed:*) v='failed' ;;
+      esac
+    fi
+    case "$v" in done|failed) verdict=$v ;; esac
+  done <"$1"
+  [ -n "$verdict" ] || return 1
+  printf '%s' "$verdict"
+}
+
+cmd_assignment() {
+  local task='' json=0 want='' a
+  for a in "$@"; do
+    if [ -n "$want" ]; then
+      case "$want" in task) task=$a ;; esac
+      want=''
+      continue
+    fi
+    case "$a" in
+      --task) want=task ;;
+      --task=*) task=${a#--task=} ;;
+      --json) json=1 ;;
+      *) die_unevaluable "unknown argument to assignment: $a" ;;
+    esac
+  done
+  [ -z "$want" ] || die_unevaluable "--$want requires a value"
+  [ -n "$task" ] || die_unevaluable "assignment requires --task"
+  launch_outcomes_admissible
+
+  local meta=$STATE/$task.meta
+  [ -f "$meta" ] && [ ! -L "$meta" ] \
+    || die_unevaluable "$FM_REVIEW_TOKEN_ASSIGNMENT_UNPROVED: $meta is not a readable durable record, so nothing establishes that a review happened"
+
+  local binding role mech flags launch head verdict
+  binding=$(meta_field "$meta" model)
+  role=$(meta_field "$meta" review_role)
+  mech=$(meta_field "$meta" review_readonly_mechanism)
+  flags=$(meta_field "$meta" review_readonly_flags)
+  launch=$(meta_field "$meta" review_launch)
+  head=$(meta_field "$meta" reviewed_head)
+  verdict=$(task_review_verdict "$STATE/$task.status") || verdict=''
+
+  [ -n "$role" ] \
+    || die_unevaluable "$FM_REVIEW_TOKEN_ASSIGNMENT_UNPROVED: $meta records no review_role=, so this task claims no review obligation and none may be read into it"
+
+  # The declared role decides whether a pinned head is one of the seven facts.
+  local requires_head=false file
+  file=$(role_path "$role") || die_unevaluable "$FM_REVIEW_TOKEN_ROLE_UNKNOWN: $role"
+  local missing='[]'
+  add_missing() {  # <fact> <why>
+    missing=$(printf '%s' "$missing" | jq -c --arg f "$1" --arg w "$2" '. + [{fact:$f, observed:$w}]')
+  }
+  if [ ! -f "$file" ]; then
+    add_missing intended_role "review_role=$role does not resolve to a role in $ROLES"
+  else
+    local rv
+    if rv=$(role_violations "$file" "$role") && [ "$(printf '%s' "$rv" | jq 'length')" = 0 ]; then
+      requires_head=$(jq -r '.requires_pinned_head // false' "$file")
+    else
+      add_missing intended_role "review_role=$role does not satisfy $SCHEMA, so the contract it claims to discharge cannot be read"
+    fi
+  fi
+
+  [ -n "$binding" ] || add_missing intended_binding "the record names no model= so the reviewing binding is unknown"
+  { [ -n "$mech" ] && [ -n "$flags" ]; } \
+    || add_missing readonly_authority_active "the record carries no enforced read-only launch binding; an instruction not to write is not this fact"
+  if [ "$requires_head" = true ]; then
+    if [ -z "$head" ]; then
+      add_missing review_target_commit "this role reviews the exact change before landing and the record pins no reviewed_head="
+    elif [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
+      add_missing review_target_commit "reviewed_head=$head is not a full commit id"
+    fi
+  fi
+  [ -n "$verdict" ] || add_missing review_result "no terminal event in $STATE/$task.status so nothing establishes that the review reached a verdict"
+
+  # THE LAUNCH OUTCOME, consumed rather than inferred. An absent one is the
+  # defect this task exists to close: it means the caller concluded a review
+  # from a spawn having been attempted.
+  local lresult='' reason='' outcome=''
+  if [ -z "$launch" ]; then
+    outcome=could_not_observe
+    lresult=NO_VERIFIER_RAN
+    reason="$FM_REVIEW_TOKEN_LAUNCH_NOT_CONSUMED: the record carries no review_launch= so the launch outcome was never observed; a spawn having been attempted is not a review"
+  elif ! lresult=$(launch_outcome_result "$launch"); then
+    outcome=could_not_observe
+    lresult=NO_VERIFIER_RAN
+    reason="review_launch=$launch is not an outcome declared in $SCHEMA so it cannot be read"
+  else
+    outcome=$launch
+  fi
+
+  local n
+  n=$(printf '%s' "$missing" | jq 'length')
+
+  # role_established is strictly stronger than launch_result: a live agent that
+  # never took its instructions is alive and reviewing nothing, and the review
+  # result is what separates them.
+  local result
+  if [ "$lresult" = FAIL ]; then
+    result=FAIL
+    reason="the reviewer did not run: launch outcome $outcome"
+  elif [ "$lresult" = NO_VERIFIER_RAN ]; then
+    result=NO_VERIFIER_RAN
+    [ -n "$reason" ] || reason="the launch outcome could not be observed: $outcome"
+  elif [ "$outcome" != "$FM_REVIEW_LAUNCH_OK" ]; then
+    # The contract calls this outcome a pass, but only one outcome establishes
+    # the role. Both must agree, so a contract that relabels some other outcome
+    # a pass cannot smuggle it through as an established review.
+    result=NO_VERIFIER_RAN
+    reason="outcome $outcome is recorded as a pass but $FM_REVIEW_LAUNCH_OK is the only outcome that establishes the role"
+  elif [ "$n" != 0 ]; then
+    result=NO_VERIFIER_RAN
+    reason="the launch established the role but the assignment is not proved: $(printf '%s' "$missing" | jq -r '[.[].fact] | join(" ")') not established"
+  else
+    result=PASS
+    reason="all seven assignment facts established with launch outcome $outcome"
+  fi
+
+  if [ "$json" -eq 1 ]; then
+    jq -n --arg t "$task" --arg role "$role" --arg b "$binding" --arg h "$head" \
+          --arg mech "$mech" --arg launch "$outcome" --arg v "$verdict" \
+          --arg res "$result" --arg why "$reason" --argjson miss "$missing" \
+      '{schema:"fm-review-assignment-proof.v1", task:$t, role:$role,
+        binding:(if $b == "" then null else $b end),
+        readonly_mechanism:(if $mech == "" then null else $mech end),
+        reviewed_head:(if $h == "" then null else $h end),
+        launch_outcome:$launch, review_result:(if $v == "" then null else $v end),
+        result:$res, reason:$why, unestablished:$miss,
+        review_requirement:(if $res == "PASS" then "SATISFIED" else "UNSATISFIED" end)}'
+  else
+    # bin/fm-verify-lib.sh record shape, so the answer is consumed through
+    # fm_verify_case rather than re-read as a two-valued one.
+    printf '  review-assignment:%s,%s,%s,%s\n' "$task" "$result" "$reason" "$meta"
+    if [ "$result" = PASS ]; then
+      printf 'SATISFIED: %s reviewed %s under role %s launched read-only (%s)\n' \
+        "$binding" "${head:-the declared artifact}" "$role" "$mech"
+    else
+      printf 'UNSATISFIED: the review requirement for %s is not discharged by this record\n' "$task"
+      [ "$n" = 0 ] || printf '%s' "$missing" | jq -r '.[] | "  " + .fact + ": " + .observed'
+    fi
+  fi
+
+  case "$result" in
+    PASS) exit 0 ;;
+    FAIL) exit 1 ;;
+    *) exit 2 ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 
 case "${1:-}" in
   -h|--help|'') usage; exit 0 ;;
@@ -649,5 +907,6 @@ case "${1:-}" in
   harness-readonly) shift; cmd_harness_readonly "$@" ;;
   reconcile) shift; cmd_reconcile "${1:-}" ;;
   check) shift; cmd_check "$@" ;;
+  assignment) shift; cmd_assignment "$@" ;;
   *) echo "error: unknown subcommand: $1" >&2; usage >&2; exit 2 ;;
 esac

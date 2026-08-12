@@ -94,6 +94,72 @@
     "evidence": "pointer to the record that qualified it, with what was measured",
     "rule": "A binding absent from this list is NOT qualified for this role, whatever it is qualified for elsewhere. A maker-role failure is not a reviewer-role failure and a reviewer-role pass is not a maker-role pass."
   },
+  "what_a_launch_proves": {
+    "law": "A process invocation is not proof that the intended agent role started. Absence of mutation is not proof that read-only enforcement worked if the reviewer never successfully started. This inference is therefore REFUSED outright: reviewer produced no writes -> read-only reviewer successfully ran.",
+    "why": "A reviewer that never started and a reviewer that started and lawfully refused to write look almost identical from the outside - no writes, a quiet endpoint, a plausible terminal state. The measured instance is a misordered launch that exits 1 with the brief swallowed, so only the exit status separates a launch failure from an enforced refusal.",
+    "consequence": "check is PROSPECTIVE - it answers whether an assignment may be made, and it is never evidence that a review happened. assignment is RETROSPECTIVE - it answers what the durable record actually establishes. They are deliberately separate subcommands so a caller cannot read one as the other.",
+    "what_this_retires": "The ambiguity between a recorded review ASSIGNMENT and an established review ROLE. state/<id>.meta carried review_role= written at dispatch time and nothing read it, so the mere presence of that field was all that stood between a later reader and the conclusion that a review had happened."
+  },
+  "launch_outcomes": {
+    "no_sixth_vocabulary": "Every name below reuses an existing owner. The RESULT is bin/fm-verify-lib.sh's three-valued observation type verbatim, so no new type is introduced and NO_VERIFIER_RAN keeps its non-coercible meaning. The TERMINAL STATE is a name already declared in loopspecs/terminal-states.json, whose unified vocabulary answers exactly the question a launch outcome asks - why did this stop. Nothing here adds a unified state, and this registry is not that file's interpreter: bin/fm-loopspec.sh remains its only one.",
+    "observed_from": "bin/fm-backend.sh's fm_backend_agent_state, the fleet's existing recovery-grade endpoint contract. Its six values are the observation, and it attributes a running agent process rather than reading a rendered banner, so the verdict rests on a kernel fact rather than on vendor output.",
+    "outcomes": [
+      {
+        "name": "launch_succeeded_as_requested",
+        "result": "PASS",
+        "maps_to": "goal_met",
+        "observed_as": ["alive"],
+        "meaning": "A verified harness agent is running at the recorded endpoint, so the requested role was established."
+      },
+      {
+        "name": "launch_refused_by_policy",
+        "result": "FAIL",
+        "maps_to": "needs_ruling",
+        "observed_as": [],
+        "meaning": "The fleet's own gate refused the assignment before any process was created, so no reviewer exists and none should. Not observed from the endpoint at all - it is the recorded refusal of bin/fm-review-role.sh check.",
+        "why_needs_ruling": "A ruling is owed: a lawful reviewer must still be assigned. That is what separates it from cancelled, where nothing is owed."
+      },
+      {
+        "name": "launch_failed",
+        "result": "FAIL",
+        "maps_to": "verification_failed",
+        "observed_as": ["dead", "missing"],
+        "meaning": "A process was created and no agent survives at the endpoint, so the reviewer never ran. This is the measured misordered-launch shape.",
+        "distinction": "Shares verification_failed with role_not_established and is separated from it by the observed endpoint value: dead or missing means no agent is there at all, where role_not_established has a live agent. The distinction is preserved in the recorded review_launch= name and its evidence, not collapsed into the unified state.",
+        "why_verification_failed": "The reviewer IS the verifier of the candidate, and that unified state already covers a verifier that was unavailable, which can never become a pass. A launch that produced no reviewer is precisely an unavailable verifier."
+      },
+      {
+        "name": "role_not_established",
+        "result": "FAIL",
+        "maps_to": "verification_failed",
+        "observed_as": ["alive"],
+        "meaning": "An agent is alive at the endpoint but never took the role: the instructions were not delivered, so nothing is reviewing.",
+        "distinction": "Shares verification_failed with launch_failed and is separated from it by having a live agent. It is NOT observable from the endpoint state alone, which is why it is never concluded from a live agent by itself - it is reached only when the assignment evidence below finds no review result behind a live launch.",
+        "why_verification_failed": "Same reason as launch_failed: no verifier ran, and an unavailable verifier can never become a pass."
+      },
+      {
+        "name": "could_not_observe",
+        "result": "NO_VERIFIER_RAN",
+        "maps_to": "blocked_by_evidence_integrity",
+        "observed_as": ["ambiguous", "unreadable", "unverified"],
+        "meaning": "The endpoint could not be attributed, a required record was unreadable, or the backend has no recovery classifier. The third value, and never a pass.",
+        "why_blocked_by_evidence_integrity": "That unified state names exactly this fact: a required source was unreadable, so absence of evidence could not be distinguished from evidence of absence."
+      }
+    ]
+  },
+  "assignment_evidence": {
+    "rule": "A valid reviewer assignment must PROVE all seven facts below from machine-readable evidence. If any one of them cannot be established, the review requirement remains UNSATISFIED - not waived, not assumed, and not degraded to a warning. Six established facts and one missing fact is could-not-observe, which is the third value and never a pass.",
+    "facts": {
+      "intended_binding": "state/<id>.meta model= - the binding the fleet meant to run.",
+      "intended_role": "state/<id>.meta review_role= - the role it meant to discharge, resolvable in this registry.",
+      "role_established": "state/<id>.meta review_launch= equal to launch_succeeded_as_requested, AND review_result below. A live agent alone does not establish the role, because an agent that came up and never took its instructions is alive and reviewing nothing; the review result is what separates them, which is why that fact is load-bearing rather than a formality.",
+      "readonly_authority_active": "state/<id>.meta review_readonly_mechanism= and review_readonly_flags=, the binding measured in docs/verification/read-only-reviewer-launch.md and composed onto the launch command by bin/fm-spawn.sh. An instruction not to write is not this fact.",
+      "review_target_commit": "state/<id>.meta reviewed_head= - the exact commit reviewed. Required for a change role by requires_pinned_head; a design role reviews an artifact that has no head, and its absence there is declared rather than silently tolerated.",
+      "launch_result": "state/<id>.meta review_launch= - one launch_outcomes name, recorded from the observed endpoint rather than inferred from the spawn having been attempted.",
+      "review_result": "the task's own durable status record: a terminal event for the task. No terminal event means nothing established that the review reached a verdict."
+    },
+    "one_field_two_facts": "role_established and launch_result both read review_launch=. That is one observation answering two of the brief's questions rather than two fields invented to match a list, and role_established additionally requires review_result so it is strictly stronger than launch_result alone."
+  },
   "refused_keys": [
     "independent",
     "eligible",
