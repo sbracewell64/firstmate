@@ -341,6 +341,7 @@ REVIEW_MAKER_PROCESS=
 REVIEWED_HEAD=
 REVIEW_READONLY_FLAGS=
 REVIEW_READONLY_MECHANISM=
+REVIEW_ACTIVITY=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
@@ -1606,10 +1607,24 @@ if [ -n "$REVIEW_ROLE" ]; then
     printf '%s\n' "$REVIEW_OUT" >&2
     exit 1
   fi
-  REVIEW_READONLY_FLAGS=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" --json 2>/dev/null \
-    | jq -r '.readonly_flags // empty' 2>/dev/null || true)
-  REVIEW_READONLY_MECHANISM=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" --json 2>/dev/null \
-    | jq -r '.readonly_mechanism // empty' 2>/dev/null || true)
+  REVIEW_DECISION=$("$SCRIPT_DIR/fm-review-role.sh" "${REVIEW_ARGS[@]}" --json 2>/dev/null) || {
+    echo "error: eligible review role $REVIEW_ROLE could not produce its assignment record" >&2
+    exit 1
+  }
+  REVIEW_READONLY_FLAGS=$(printf '%s' "$REVIEW_DECISION" | jq -r '.readonly_flags // empty' 2>/dev/null || true)
+  REVIEW_READONLY_MECHANISM=$(printf '%s' "$REVIEW_DECISION" | jq -r '.readonly_mechanism // empty' 2>/dev/null || true)
+  REVIEW_ACTIVITY=$(printf '%s' "$REVIEW_DECISION" | jq -r '.activity // empty' 2>/dev/null || true)
+  if [ "$REVIEW_ACTIVITY" = change ]; then
+    if [ "$SLOT_BASE_SET" -eq 1 ]; then
+      REVIEW_REQUESTED_SLOT=$(git -C "$REVIEW_CANDIDATE_WORKTREE" rev-parse --verify --quiet "$SLOT_BASE_ARG^{commit}" 2>/dev/null || true)
+      if [ "$REVIEW_REQUESTED_SLOT" != "$REVIEWED_HEAD" ]; then
+        echo "error: change review role $REVIEW_ROLE requires reviewer slot base $REVIEWED_HEAD, but --slot-base resolves to ${REVIEW_REQUESTED_SLOT:-unreadable}" >&2
+        exit 1
+      fi
+    fi
+    SLOT_BASE_ARG=$REVIEWED_HEAD
+    SLOT_BASE_SET=1
+  fi
   # An eligible read-only role with no resolved flags would launch an
   # unrestricted session while the metadata recorded a review. Refuse rather
   # than record a binding that is not on the command line.
@@ -2556,7 +2571,36 @@ fi
 # launched as-is with a loud notice rather than reset over.
 if [ "$KIND" != secondmate ] && [ -n "$WT" ] && [ -n "$SLOT_BASE" ]; then
   slot_head=$(git -C "$WT" rev-parse --verify --quiet HEAD 2>/dev/null || true)
-  if [ "$slot_head" = "$SLOT_BASE" ]; then
+  if [ "$REVIEW_ACTIVITY" = change ]; then
+    REVIEW_SLOT_STATUS=$(git -C "$WT" status --porcelain=v1 --untracked-files=all 2>/dev/null) || {
+      echo "error: change reviewer slot at $WT has no readable worktree status" >&2
+      exit 1
+    }
+    if [ -n "$REVIEW_SLOT_STATUS" ]; then
+      echo "error: change reviewer slot at $WT has uncommitted or untracked bytes and cannot be bound to reviewed head ${SLOT_BASE:0:12}" >&2
+      exit 1
+    fi
+    slot_branch=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
+    slot_default=$(default_branch "$WT" 2>/dev/null || true)
+    if [ -n "$slot_branch" ] && [ "$slot_branch" != "$slot_default" ]; then
+      echo "error: change reviewer slot at $WT is on branch '$slot_branch', which may hold unlanded work, and cannot be moved to reviewed head ${SLOT_BASE:0:12}" >&2
+      exit 1
+    fi
+    if [ "$slot_head" != "$SLOT_BASE" ] \
+       && ! git -C "$WT" checkout --quiet --detach "$SLOT_BASE" 2>/dev/null; then
+      echo "error: change reviewer slot at $WT could not be placed at reviewed head ${SLOT_BASE:0:12}" >&2
+      exit 1
+    fi
+    slot_head=$(git -C "$WT" rev-parse --verify --quiet HEAD 2>/dev/null || true)
+    REVIEW_SLOT_STATUS=$(git -C "$WT" status --porcelain=v1 --untracked-files=all 2>/dev/null) || {
+      echo "error: change reviewer slot at $WT has no readable worktree status after placement" >&2
+      exit 1
+    }
+    if [ "$slot_head" != "$SLOT_BASE" ] || [ -n "$REVIEW_SLOT_STATUS" ]; then
+      echo "error: change reviewer slot at $WT does not materialize reviewed head ${SLOT_BASE:0:12} exactly" >&2
+      exit 1
+    fi
+  elif [ "$slot_head" = "$SLOT_BASE" ]; then
     :
   elif [ -n "$(git -C "$WT" status --porcelain 2>/dev/null)" ]; then
     echo "warning: $ID slot at $WT has uncommitted changes; left at ${slot_head:0:12} instead of the slot base ${SLOT_BASE:0:12} - the brief's file and line citations may not match it" >&2

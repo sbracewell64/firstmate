@@ -574,6 +574,18 @@ out=$(cd "$TMP_ROOT" && run_spawn review-shorthand projects/proj --scout --reaso
 [ "$rc" != 0 ] || fail "the fake backend unexpectedly launched a shorthand review spawn"
 assert_not_contains "$out" "no readable git HEAD" "project shorthand must resolve before reviewed-head verification"
 
+printf 'next\n' >> "$SPAWN_HOME/projects/proj/file"
+git -C "$SPAWN_HOME/projects/proj" commit -qam next
+REVIEW_HEAD=$(git -C "$SPAWN_HOME/projects/proj" rev-parse HEAD)
+PREVIOUS_HEAD=$(git -C "$SPAWN_HOME/projects/proj" rev-parse HEAD^)
+write_spawn_brief review-wrong-slot
+out=$(run_spawn review-wrong-slot "$SPAWN_HOME/projects/proj" --scout --reason-code SEMANTIC_REVIEW \
+  --harness pi --model openai-codex/gpt-5.6-luna --effort max \
+  --review-role runtime-change-review --maker claude/opus --maker-process task-maker \
+  --reviewed-head "$REVIEW_HEAD" --slot-base "$PREVIOUS_HEAD"); rc=$?
+[ "$rc" != 0 ] || fail "a change review admitted a reviewer slot based on different bytes"
+assert_contains "$out" "requires reviewer slot base $REVIEW_HEAD" "change review must bind slot placement to its reviewed head"
+
 # A secondmate provisions a standing home and discharges no review obligation,
 # so the claim is refused rather than silently recorded.
 out=$(run_spawn review-sm "$SPAWN_HOME/projects/proj" --secondmate --review-role runtime-design-review 2>&1); rc=$?
