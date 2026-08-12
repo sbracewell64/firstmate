@@ -449,7 +449,7 @@ Where a route does state one, the missing-input rule binds as it does on every o
 
 `smart_zone_ceiling` never excludes anyone.
 It is where a running session compacts, rotates or decomposes, so a model exposing 200K or 1M is fully eligible on a 120K-ceiling route and simply runs governed at 120K.
-The governed answer is `effective_working_ceiling`, the minimum of the route ceiling, the model's own smart zone, and the model's hard limit; `fm-route.sh check` prints it on the success line, `fm-route.sh --json` carries it per candidate as `governed_context`, and `fm-spawn.sh` hands it to [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh) `--ceiling`, which is the one place it changes behavior.
+The governed answer is `effective_working_ceiling`, the minimum of the route ceiling, the model's own smart zone, and the model's hard limit; `fm-route.sh --json` carries the three inputs per candidate as `governed_context`, and `fm-spawn.sh` hands them separately to [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh), which computes the minimum and is the one place it changes behavior.
 That governor recommends compaction as soon as resident tokens reach the ceiling, which is usually earlier than its own 70%-used trigger and never later; the two are independent and neither cancels the other.
 
 `context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read as one, because a ceiling is what its name always said.

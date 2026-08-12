@@ -295,15 +295,13 @@ case "$CMD" in
       [ "$JSON" -eq 1 ] || printf 'error: %s\n' "$refusal" >&2
       exit 1
     fi
-    # The governed working ceiling is printed on the SUCCESS line, not as a
-    # rejection, because that is the whole point of the axis: a smart-zone
-    # ceiling says where an eligible session gets compacted or rotated, never
-    # who may run. An operator who sees only "ok" cannot tell a route that
-    # governs at 120k from one that governs at the host default.
+    # The success line reports that context governance is configured without
+    # resolving its inputs outside the context governor.
     governed=$(printf '%s' "$DECISION" | jq -r '
-      .subject.governed_context // {} | select(.effective_working_ceiling != null)
-      | "; governed at " + (.effective_working_ceiling | tostring)
-        + " tokens by " + (.bound_by | join(" and "))' 2>/dev/null || true)
+      .subject.governed_context // {}
+      | [ .route_smart_zone_ceiling, .model_smart_zone_ceiling, .model_hard_context_limit ]
+      | map(select(. != null))
+      | if length > 0 then "; context governance configured" else "" end' 2>/dev/null || true)
     [ "$JSON" -eq 1 ] || printf 'ok: %s at %s is inside route %s%s\n' \
       "$MODEL" "${EFFORT:-provider default}" "$ROUTE" "$governed"
     ;;

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Render Claude Code's host-computed context-window pressure for a Firstmate
 # session without estimating from transcript text.
-# Usage: fm-context-statusline.sh [--record <absolute-path>] [--ceiling <tokens>]
+# Usage: fm-context-statusline.sh [--record <absolute-path>]
+#        [--route-smart-zone-ceiling <tokens>]
+#        [--model-smart-zone-ceiling <tokens>] [--model-hard-context-limit <tokens>]
 #
 # Claude Code invokes a statusLine command with its JSON payload on stdin.
 # This command reads context_window.remaining_percentage, used_percentage,
@@ -9,8 +11,8 @@
 # --record is present, atomically writes the reading plus the derived
 # 70%-compaction advisory as JSON for the worker named by a generated brief.
 #
-# --ceiling is THE SMART-ZONE CEILING GOVERNING THIS SESSION, in tokens, as
-# resolved by bin/fm-route-lib.sh: the minimum of the route's ceiling, the
+# The three context-governance inputs are resolved here into the smart-zone
+# ceiling governing this session: the minimum of the route's ceiling, the
 # model's own smart zone, and the model's hard limit. A ceiling is an
 # EXECUTION-GOVERNANCE limit and never a routing question - it says when a
 # running session compacts, rotates or decomposes, and a model that exposes far
@@ -49,7 +51,15 @@ usage() {
 }
 
 record=
-ceiling=
+route_ceiling=
+model_ceiling=
+model_limit=
+read_token_count() {
+  case "$2" in
+    ''|*[!0-9]*) echo "error: $1 requires a positive whole number of tokens" >&2; exit 2 ;;
+  esac
+  [ "$2" -gt 0 ] 2>/dev/null || { echo "error: $1 requires a positive whole number of tokens" >&2; exit 2; }
+}
 while [ "$#" -gt 0 ]; do
   case "$1" in
     -h|--help) usage; exit 0 ;;
@@ -62,16 +72,25 @@ while [ "$#" -gt 0 ]; do
       esac
       shift 2
       ;;
-    --ceiling)
+    --route-smart-zone-ceiling)
       # A ceiling that cannot be read is refused rather than dropped. Silently
       # ignoring it would leave a session the operator believes is governed
       # running against the host default alone.
       [ "$#" -ge 2 ] || { usage >&2; exit 2; }
-      ceiling=$2
-      case "$ceiling" in
-        ''|*[!0-9]*) echo "error: --ceiling requires a positive whole number of tokens" >&2; exit 2 ;;
-      esac
-      [ "$ceiling" -gt 0 ] 2>/dev/null || { echo "error: --ceiling requires a positive whole number of tokens" >&2; exit 2; }
+      route_ceiling=$2
+      read_token_count "$1" "$2"
+      shift 2
+      ;;
+    --model-smart-zone-ceiling)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      model_ceiling=$2
+      read_token_count "$1" "$2"
+      shift 2
+      ;;
+    --model-hard-context-limit)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      model_limit=$2
+      read_token_count "$1" "$2"
       shift 2
       ;;
     *) usage >&2; exit 2 ;;
@@ -83,8 +102,15 @@ const fs = require("fs");
 const path = require("path");
 
 const record = process.argv[1] || "";
-const ceilingArg = process.argv[2] || "";
-const ceiling = ceilingArg ? Number(ceilingArg) : null;
+const governanceInputs = [
+  ["route_smart_zone_ceiling", process.argv[2]],
+  ["model_smart_zone_ceiling", process.argv[3]],
+  ["model_hard_context_limit", process.argv[4]],
+].filter(([, value]) => value).map(([key, value]) => [key, Number(value)]);
+const ceiling = governanceInputs.length > 0
+  ? Math.min(...governanceInputs.map(([, value]) => value))
+  : null;
+const boundBy = governanceInputs.filter(([, value]) => value === ceiling).map(([key]) => key);
 
 function clearStaleRecord() {
   if (!record) return;
@@ -140,6 +166,7 @@ try {
       const residentTokens = Math.round((total * used) / 100);
       governedCeiling = {
         ceiling_tokens: ceiling,
+        bound_by: boundBy,
         resident_tokens: residentTokens,
         evaluated: true,
         reached: residentTokens >= ceiling,
@@ -147,6 +174,7 @@ try {
     } else {
       governedCeiling = {
         ceiling_tokens: ceiling,
+        bound_by: boundBy,
         evaluated: false,
         unevaluated_reason: "total_tokens absent, so resident tokens cannot be derived",
       };
@@ -196,4 +224,4 @@ try {
 }
 NODE
 
-node -e "$node_program" "$record" "$ceiling"
+node -e "$node_program" "$record" "$route_ceiling" "$model_ceiling" "$model_limit"

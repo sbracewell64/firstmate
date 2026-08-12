@@ -192,7 +192,8 @@ test_the_governed_ceiling_rotates_before_the_host_threshold() {
   mkdir -p "${record%/*}"
 
   # 42% of a 200k window is 84k, comfortably inside a 120k ceiling.
-  out=$(payload 42 58 | "$STATUSLINE" --record "$record" --ceiling 120000)
+  out=$(payload 42 58 | "$STATUSLINE" --record "$record" \
+    --route-smart-zone-ceiling 120000 --model-smart-zone-ceiling 140000 --model-hard-context-limit 200000)
   assert_contains "$out" 'zone 84k/120k' "the governed ceiling and resident tokens are not displayed"
   assert_no_grep 'COMPACT NOW' <(printf '%s\n' "$out") \
     "a session inside its governed ceiling was told to compact"
@@ -200,12 +201,14 @@ test_the_governed_ceiling_rotates_before_the_host_threshold() {
   # 60% of the same window is exactly 120k: the ceiling is reached at 60% used,
   # ten points BELOW the host trigger. Rotating earlier is the whole point of a
   # ceiling, and it is why the number must never have decided eligibility.
-  out=$(payload 60 40 | "$STATUSLINE" --record "$record" --ceiling 120000)
+  out=$(payload 60 40 | "$STATUSLINE" --record "$record" \
+    --route-smart-zone-ceiling 120000 --model-smart-zone-ceiling 140000 --model-hard-context-limit 200000)
   assert_contains "$out" 'COMPACT NOW: /compact' \
     "reaching the governed ceiling below 70% used did not recommend compaction"
   node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
     if (s.compact_recommended !== true) process.exit(1);
     if (s.governed_ceiling.ceiling_tokens !== 120000) process.exit(1);
+    if (s.governed_ceiling.bound_by.join(",") !== "route_smart_zone_ceiling") process.exit(1);
     if (s.governed_ceiling.resident_tokens !== 120000) process.exit(1);
     if (s.governed_ceiling.evaluated !== true) process.exit(1);
     if (s.governed_ceiling.reached !== true) process.exit(1);' "$record" \
@@ -213,7 +216,7 @@ test_the_governed_ceiling_rotates_before_the_host_threshold() {
 
   # The two triggers are independent: a ceiling with room left never cancels the
   # host's own 70% advisory.
-  out=$(payload 75 25 | "$STATUSLINE" --record "$record" --ceiling 1000000)
+  out=$(payload 75 25 | "$STATUSLINE" --record "$record" --model-hard-context-limit 1000000)
   assert_contains "$out" 'COMPACT NOW: /compact' \
     "a roomy governed ceiling suppressed the 70% host trigger"
   pass "the governed smart-zone ceiling rotates a session early and never suppresses the host trigger"
@@ -227,7 +230,7 @@ test_an_unevaluable_ceiling_is_recorded_as_unevaluated_not_as_room_left() {
   # ceiling has not been observed to be met and has not been observed to be
   # exceeded. Recording it as either would be inventing an observation.
   out=$(printf '{"context_window":{"remaining_percentage":40,"used_percentage":60}}\n' \
-    | "$STATUSLINE" --record "$record" --ceiling 120000)
+    | "$STATUSLINE" --record "$record" --route-smart-zone-ceiling 120000)
   assert_contains "$out" 'zone 120k unevaluated' "an unevaluable ceiling is not shown as unevaluated"
   node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
     if (s.governed_ceiling.evaluated !== false) process.exit(1);
@@ -239,11 +242,11 @@ test_an_unevaluable_ceiling_is_recorded_as_unevaluated_not_as_room_left() {
 
 test_an_unreadable_ceiling_refuses_rather_than_running_ungoverned() {
   local out status
-  out=$(payload 50 50 | "$STATUSLINE" --ceiling 120k 2>&1); status=$?
+  out=$(payload 50 50 | "$STATUSLINE" --route-smart-zone-ceiling 120k 2>&1); status=$?
   expect_code 2 "$status" "a non-numeric ceiling must be refused"
-  assert_contains "$out" 'error: --ceiling requires a positive whole number of tokens' \
+  assert_contains "$out" 'error: --route-smart-zone-ceiling requires a positive whole number of tokens' \
     "the ceiling refusal did not explain the requirement"
-  out=$(payload 50 50 | "$STATUSLINE" --ceiling 0 2>&1); status=$?
+  out=$(payload 50 50 | "$STATUSLINE" --model-hard-context-limit 0 2>&1); status=$?
   expect_code 2 "$status" "a zero ceiling must be refused rather than governing at nothing"
   pass "a ceiling that cannot be read refuses instead of silently running the session ungoverned"
 }

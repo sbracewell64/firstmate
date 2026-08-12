@@ -1634,14 +1634,15 @@ if [ "$KIND" != secondmate ]; then
       CAPABILITY_FLOOR=$ROUTE_FLOOR
     fi
     ROUTE_POLICY_DIGEST=$(fm_route_policy_digest "$CONFIG")
-    # The smart-zone ceiling this dispatch runs governed at, taken from the SAME
-    # evaluation that produced the recorded route and floor. It excluded nobody
-    # above - it is an execution-governance limit, not an eligibility axis - so
-    # this is the one place it changes anything: the context governor compacts
-    # the session when resident tokens reach it. A route that configures no
-    # ceiling leaves it empty and the governor keeps its host default alone.
-    ROUTE_WORKING_CEILING=$(printf '%s' "$ROUTE_DECISION" \
-      | jq -r '.subject.governed_context.effective_working_ceiling // empty' 2>/dev/null || true)
+    # The context governor inputs for this dispatch, taken from the SAME
+    # evaluation that produced the recorded route and floor. They excluded
+    # nobody above; the governor resolves their execution relationship.
+    ROUTE_SMART_ZONE_CEILING=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.route_smart_zone_ceiling // empty' 2>/dev/null || true)
+    MODEL_SMART_ZONE_CEILING=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.model_smart_zone_ceiling // empty' 2>/dev/null || true)
+    MODEL_HARD_CONTEXT_LIMIT=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.model_hard_context_limit // empty' 2>/dev/null || true)
   fi
 
   # ADMIT. Asked after the route and before anything is allocated, because it is
@@ -2758,8 +2759,12 @@ if [ "$KIND" != secondmate ]; then
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
       context_statusline_args="--record $(shell_quote "$TASK_TMP/context-pressure.json")"
-      [ -z "${ROUTE_WORKING_CEILING:-}" ] \
-        || context_statusline_args="$context_statusline_args --ceiling $(shell_quote "$ROUTE_WORKING_CEILING")"
+      [ -z "${ROUTE_SMART_ZONE_CEILING:-}" ] \
+        || context_statusline_args="$context_statusline_args --route-smart-zone-ceiling $(shell_quote "$ROUTE_SMART_ZONE_CEILING")"
+      [ -z "${MODEL_SMART_ZONE_CEILING:-}" ] \
+        || context_statusline_args="$context_statusline_args --model-smart-zone-ceiling $(shell_quote "$MODEL_SMART_ZONE_CEILING")"
+      [ -z "${MODEL_HARD_CONTEXT_LIMIT:-}" ] \
+        || context_statusline_args="$context_statusline_args --model-hard-context-limit $(shell_quote "$MODEL_HARD_CONTEXT_LIMIT")"
       context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") $context_statusline_args")
       cat > "$WT/.claude/settings.local.json" <<EOF
 {"statusLine":{"type":"command","command":"$context_statusline_command"},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}

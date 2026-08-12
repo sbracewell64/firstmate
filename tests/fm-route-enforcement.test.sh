@@ -521,20 +521,18 @@ test_the_ceiling_is_reported_as_the_governed_working_ceiling() {
   rec=$(make_refusal_home ceiling-governed); read_home_record "$rec"
   # The ceiling has to keep MEANING something after it stops excluding people,
   # or the captain's rotation intent is silently dropped instead of moved. The
-  # decision record carries the effective working ceiling - the minimum of the
-  # route's, the model's own, and the model's hard limit - and names which one
-  # bound it, which is what bin/fm-context-statusline.sh governs the session at.
+  # decision record carries the route, model, and hard-limit inputs to the
+  # context governor without resolving their relationship in routing.
   out=$(run_route "$HOME_DIR" eligible --route R-ZONE --json)
-  assert_contains "$out" '"effective_working_ceiling":120000' \
-    "the governed working ceiling is not carried on the decision record"
   assert_contains "$out" '"route_smart_zone_ceiling"' "the route ceiling input is not reported"
   assert_contains "$out" '"model_hard_context_limit"' "the model hard limit input is not reported"
   # huge/window exposes 400k/1m and is governed down to the route's 120k; that
   # is the whole point - execution is bounded, eligibility is not.
-  out=$(printf '%s' "$out" | jq -r '.candidates[] | select(.model == "huge/window")
-    | (.governed_context.effective_working_ceiling | tostring) + " " + (.governed_context.bound_by | join(","))')
-  assert_contains "$out" "120000 route_smart_zone_ceiling" \
-    "a model above the route ceiling is not governed down to it"
+  out=$(printf '%s' "$out" | jq -r '.candidates[] | select(.model == "huge/window") | .governed_context
+    | (.route_smart_zone_ceiling | tostring) + " " + (.model_smart_zone_ceiling | tostring)
+      + " " + (.model_hard_context_limit | tostring)')
+  assert_contains "$out" "120000 400000 1000000" \
+    "the governor inputs for a model above the route ceiling are incomplete"
   pass "the smart-zone ceiling survives as the governed working ceiling rather than as an exclusion"
 }
 

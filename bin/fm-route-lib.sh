@@ -264,10 +264,9 @@ fm_route_policy_digest() {  # [<config-dir>]
 #       The model's own cognitive-quality target. Governance evidence, never
 #       eligibility evidence.
 #
-# The governed answer is `effective_working_ceiling`, the minimum of whichever
-# of the three ceilings are recorded, carried on the decision record for the
-# EXISTING context governor (`bin/fm-context-statusline.sh`) to apply. Nothing
-# here rotates a session; this library only says where the ceiling is.
+# The governed answer is `effective_working_ceiling`, computed by the EXISTING
+# context governor (`bin/fm-context-statusline.sh`) from the three validated
+# inputs this decision record carries. Nothing here rotates a session.
 #
 # `context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read
 # as one - it is a ceiling, exactly as its name always said. It never
@@ -532,23 +531,15 @@ def effective_route_profile($rule; $path; $model; $harness):
            else empty end) ];
 
     # What the EXISTING context governor is told, per candidate. Nothing here
-    # rejects: the ceilings that are recorded are reported, the effective one
-    # is their minimum, and `bound_by` names which of them the session is
-    # actually governed at so an operator can see whether the route or the
-    # model set the limit. All three absent means this route governs by the
-    # host default alone, which is `null` and never a zero.
+    # rejects: the three validated inputs are transported without resolving
+    # their execution-governance relationship in the routing evaluator.
     def governed($m):
         ($models[$m].smart_zone? // null) as $sz_raw
         | ($models[$m].context_window? // null) as $cw_raw
         | (if ($sz_raw | positive_integer) then $sz_raw else null end) as $sz
         | (if ($cw_raw | positive_integer) then $cw_raw else null end) as $cw
-        | [ {k:"route_smart_zone_ceiling", v:$szc},
-            {k:"model_smart_zone_ceiling", v:$sz},
-            {k:"model_hard_context_limit", v:$cw} ] as $inputs
-        | ([ $inputs[] | select(.v != null) | .v ] | min) as $eff
         | {route_smart_zone_ceiling:$szc, model_smart_zone_ceiling:$sz,
-           model_hard_context_limit:$cw, effective_working_ceiling:$eff,
-           bound_by:[ $inputs[] | select(.v != null and .v == $eff) | .k ]};
+           model_hard_context_limit:$cw};
 
     def resolve($want):
         if ($want | length) == 0 then {resolved:null, resolution:"unstated"}
