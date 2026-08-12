@@ -521,6 +521,9 @@ test_a_parseable_but_invalid_record_refuses_instead_of_reading_as_empty() {
     '{"schema":"fm-model-observation.v1","models":[]}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"MAYBE","shape":"x","reader":"r","detail":"d","at":"t"}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t"}}}' \
+    '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"","candidate":"vendor/only","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":"repair-1","backlog_item_status":"filed"}}}}' \
+    '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"r","candidate":"vendor/other","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":"repair-1","backlog_item_status":"filed"}}}}' \
+    '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"r","candidate":"vendor/only","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":null}}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":"not-an-object"}}' \
   ; do
     write_observation_record "$HOME_DIR" "$case_json"
@@ -636,6 +639,8 @@ test_the_probe_runs_isolated_from_this_machine() {
   assert_contains "$argv" "--setting-sources" \
     "the probe must load no user, project or local settings, which is where hooks live"
   assert_contains "$argv" "--strict-mcp-config" "the probe must load no MCP servers"
+  assert_contains "$argv" "--allowed-tools  --disallowed-tools" \
+    "the probe must use an empty tool allowlist before its known-tool deny list"
   assert_contains "$argv" "--disallowed-tools" "the probe must deny tools by name as well as by empty directory"
   assert_contains "$argv" "--no-session-persistence" "the probe must leave no session behind"
   assert_contains "$(grep '^claudecode=' "$evidence" | head -1)" "<unset>" \

@@ -498,6 +498,7 @@ fm_availability_record_retire() {  # <state-dir> <observation> <subject>
 FM_AVAIL_RECORD_VALID_JQ='
   def bad($why): {ok:false, reason:$why};
   def clean_string: type == "string" and (test("[[:cntrl:]]") | not);
+  def nonempty_clean_string: clean_string and length > 0;
   def obs_values: [$available, $unavailable, $unobservable];
   def entry_bad($k; $e):
     if ($e | type) != "object" then "model \($k) is not an object"
@@ -516,14 +517,19 @@ FM_AVAIL_RECORD_VALID_JQ='
     elif ($e.observation == $unobservable and ([$e.tooling_gap.reader, $e.tooling_gap.candidate,
             $e.tooling_gap.requested_observation, $e.tooling_gap.failure_class,
             $e.tooling_gap.failure_evidence, $e.tooling_gap.at]
-          | map(clean_string) | all | not))
+          | map(nonempty_clean_string) | all | not))
       then "model \($k) has an incomplete tooling-gap block, so the failure it records cannot be repaired from it"
+    elif ($e.observation == $unobservable and $e.tooling_gap.candidate != $k)
+      then "model \($k) carries tooling-gap evidence for \($e.tooling_gap.candidate)"
     elif ($e.observation == $unobservable and (($e.tooling_gap.affected_routes | type) != "array"
-            or ($e.tooling_gap.affected_routes | map(clean_string) | all | not)))
+            or ($e.tooling_gap.affected_routes | map(nonempty_clean_string) | all | not)))
       then "model \($k) does not name the routes its failed reader is blocking as a list of strings"
     elif ($e.observation == $unobservable and (($e.tooling_gap.backlog_item // null) != null
-            and ($e.tooling_gap.backlog_item | clean_string | not)))
+            and ($e.tooling_gap.backlog_item | nonempty_clean_string | not)))
       then "model \($k) records a backlog item that is not a plain string"
+    elif ($e.observation == $unobservable and (($e.tooling_gap.backlog_item // null) == null
+            and ($e.tooling_gap.backlog_item_status | nonempty_clean_string | not)))
+      then "model \($k) has no backlog item and does not say why repair work is unfiled"
     else null end;
   if type != "object" then bad("the record is not a JSON object")
   elif (.schema // "") != $schema

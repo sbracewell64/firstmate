@@ -328,8 +328,8 @@ probe_one() {
       #     which is where hooks live. This is the one that makes "a hostile
       #     hook cannot fabricate a positive result" true rather than hoped.
       #   --strict-mcp-config with an empty --mcp-config - no MCP servers.
-      #   --disallowed-tools        - deny by name on top of the empty
-      #     directory, so a tool call is refused rather than merely pointless.
+      #   --allowed-tools ''        - allowlist-based default denial of tools.
+      #   --disallowed-tools        - deny known tools by name as a second layer.
       #   --no-session-persistence  - the probe leaves no session behind, the
       #     same property --no-session gives the pi arm.
       #   --agents '{}' --system-prompt - no subagents, and a fixed prompt in
@@ -343,6 +343,7 @@ probe_one() {
                 -u CLAUDE_CODE_SIMPLE -u FM_HOME -u FM_TASK_ID \
             "$harness" -p --model "$model_id" \
             --setting-sources '' --strict-mcp-config --mcp-config '{"mcpServers":{}}' \
+            --allowed-tools '' \
             --disallowed-tools 'Bash,Edit,Write,Read,Glob,Grep,WebFetch,WebSearch,Task,NotebookEdit' \
             --no-session-persistence --agents '{}' \
             --system-prompt 'Answer with one word only.' \
