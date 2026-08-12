@@ -303,6 +303,35 @@ test_a_floor_meeting_sibling_is_named_rather_than_deferred() {
   pass "an exhausted primary with a floor-meeting sibling names the substitute and records no wait"
 }
 
+test_a_registry_ineligible_sibling_does_not_prevent_deferral() {
+  local rec out
+  rec=$(make_refusal_home registry-ineligible-sibling); read_home_record "$rec"
+  cat > "$HOME_DIR/config/models.json" <<'JSON'
+{
+  "schema": "fm-model-registry.v1",
+  "providers": {
+    "vendor": { "status": "active", "cost_posture": "subscription-flat" },
+    "alt": { "status": "active", "cost_posture": "subscription-flat" }
+  },
+  "models": {
+    "vendor/large": { "status": "approved-primary" },
+    "alt/large": { "status": "blocked", "status_reason": "account entitlement is unavailable" }
+  }
+}
+JSON
+  write_brief "$HOME_DIR" blockedpairtask no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=95)" \
+    blockedpairtask "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --harness codex \
+    --route R-PAIR --model vendor/large --effort medium); rc=$?
+  expect_code 1 "$rc" "a registry-ineligible sibling must not suppress the capacity deferral"
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the exhausted route must create a durable deferral"
+  assert_not_contains "$out" "FM_SPAWN_CAPACITY_EXHAUSTED" "a registry-ineligible substitute must not be offered"
+  assert_present "$HOME_DIR/state/blockedpairtask.capacity" "the automatic-resume deferral must be recorded"
+  assert_absent "$HOME_DIR/state/blockedpairtask.meta" "the deferred dispatch must leave no task metadata"
+  pass "a registry-ineligible sibling cannot suppress durable capacity deferral"
+}
+
 # --- 5. three values, never two ----------------------------------------------
 
 test_unobservable_quota_is_could_not_observe_and_keeps_the_candidate_eligible() {
@@ -559,6 +588,7 @@ test_exhausted_floor_pool_defers_rather_than_dispatching
 test_available_capacity_dispatches_and_records_what_it_was_admitted_against
 test_an_available_model_below_the_floor_is_not_a_substitute
 test_a_floor_meeting_sibling_is_named_rather_than_deferred
+test_a_registry_ineligible_sibling_does_not_prevent_deferral
 test_unobservable_quota_is_could_not_observe_and_keeps_the_candidate_eligible
 test_an_unreadable_quota_source_is_could_not_observe_rather_than_either_answer
 test_a_deferral_survives_a_restart_and_resumes_when_capacity_returns

@@ -542,7 +542,11 @@ fm_route_decision_with_registry() {  # <decision-json> <verdict-lines>
       | ($r.registry_refusal // null) as $rr
       | $c + {registry_refusal:$rr,
               registry_checked:($r != null),
-              eligible:($c.floor_met and ($c.held == null) and ($rr == null))} ]' \
+              eligible:($c.floor_met
+                        and ($c.held == null)
+                        and ($rr == null)
+                        and ($c.band_expressible != false)
+                        and (($c.capacity.verdict // "could_not_observe") != "exhausted"))} ]' \
     || { printf '%s' "$decision"; return 1; }
 }
 

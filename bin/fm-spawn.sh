@@ -1666,6 +1666,10 @@ if [ "$KIND" != secondmate ]; then
       "$(fm_capacity_lines "$CAPACITY_OBSERVATION")")
     CAPACITY_VERDICT=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.capacity.verdict // "could_not_observe"' 2>/dev/null)
     CAPACITY_EVIDENCE=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.capacity.evidence // "no capacity evidence was recorded for this model"' 2>/dev/null)
+    if [ "$CAPACITY_VERDICT" = exhausted ]; then
+      ROUTE_DECISION=$(fm_route_decision_with_registry "$ROUTE_DECISION" \
+        "$(spawn_route_registry_verdicts "$ROUTE_DECISION")")
+    fi
     if ! CAPACITY_REFUSAL=$(fm_route_capacity_refusal "$ROUTE" "$MODEL" "$ROUTE_DECISION"); then
       echo "error: $CAPACITY_REFUSAL" >&2
       fm_capacity_report_lines "$CAPACITY_OBSERVATION" >&2
