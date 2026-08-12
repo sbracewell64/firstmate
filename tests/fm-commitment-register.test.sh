@@ -45,6 +45,18 @@ TMP_ROOT=$(fm_test_tmproot fm-commitment-register-tests)
 
 command -v jq >/dev/null 2>&1 || { printf 'skip: jq not found\n'; exit 0; }
 
+CASE_MANIFEST=${FM_REVIEW_ROLE_CASE_MANIFEST:-$TMP_ROOT/commitment-cases.jsonl}
+[ -n "${FM_REVIEW_ROLE_CASE_MANIFEST:-}" ] || : > "$CASE_MANIFEST"
+
+paired_case() {
+  local name=$1 mutation=$2 red=$3 green=$4
+  [ -n "$name" ] && [ -n "$mutation" ] && [ -n "$red" ] && [ -n "$green" ] \
+    || fail "paired case manifest fields must all be non-empty"
+  jq -cn --arg c "$name" --arg m "$mutation" --arg r "$red" --arg g "$green" \
+    '{case:$c,mutation:$m,red:$r,green:$g}' >> "$CASE_MANIFEST" || fail "could not append paired case manifest"
+  pass "$name"
+}
+
 REG="$ROOT/bin/fm-commitment-register.sh"
 SCHEMA_SRC="$ROOT/commitments/schema.json"
 
@@ -743,7 +755,7 @@ run: jq . file-that-does-not-exist.json'
   assert_contains "$out" "PROBE_INVALID" "the live defect fixture must classify the leaked status"
   assert_contains "$out" "setup=failed assertion=not-run" "setup and assertion outcomes must remain separate"
   assert_not_contains "$out" "the criterion is not met" "an assertion never reached must not claim the product criterion failed"
-  pass "a failed setup is not a failed assertion"
+  paired_case "a failed setup is not a failed assertion" "run an admitted probe that leaks jq exit 2 before assertion" "probe reported PROBE_INVALID with assertion not-run" "exit 1 remained PROBE_ASSERTION_FAILED"
 }
 
 # A PATH carrying the tools the register actually uses and no jq.

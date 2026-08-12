@@ -1585,6 +1585,7 @@ fi
 # The reviewer process identity is this task id, which is a real observation
 # rather than an assumption: this dispatch creates that process.
 if [ -n "$REVIEW_ROLE" ]; then
+  rm -f "$STATE/$ID.review-ack.json" "$STATE/$ID.review-ack.raw"
   REVIEW_CANDIDATE_WORKTREE=$PROJ
   case "$REVIEW_CANDIDATE_WORKTREE" in
     projects/*) REVIEW_CANDIDATE_WORKTREE="$PROJECTS/${REVIEW_CANDIDATE_WORKTREE#projects/}" ;;
@@ -3225,7 +3226,7 @@ if [ -n "$REVIEW_ROLE" ]; then
   done
   case "$REVIEW_AGENT_STATE" in
     alive)
-      if [ -s "$STATE/$ID.review-ack.json" ] || review_capture_artifact acknowledgement; then
+      if review_capture_artifact acknowledgement; then
         REVIEW_LAUNCH_OUTCOME=launch_succeeded_as_requested
       else
         REVIEW_LAUNCH_OUTCOME=role_not_established

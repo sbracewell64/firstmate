@@ -219,7 +219,7 @@ EOF
       continue
     fi
     if [ "$line" = "FM-REVIEW-ARTIFACT-END kind=$kind" ]; then
-      [ "${#payload}" -eq "$frame_bytes" ] || return 1
+      [ "$(LC_ALL=C printf '%s' "$payload" | wc -c | tr -d ' ')" -eq "$frame_bytes" ] || return 1
       json=$(printf '%s' "$payload" | review_artifact_filter "$kind" "$binding" "$role" "$target" "$assignment" 2>/dev/null) || return 1
       path=$(review_artifact_path "$task" "$kind") || return 1
       raw_path=$(review_artifact_raw_path "$task" "$kind") || return 1
