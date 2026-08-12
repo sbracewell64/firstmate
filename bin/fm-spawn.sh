@@ -1634,6 +1634,14 @@ if [ "$KIND" != secondmate ]; then
       CAPABILITY_FLOOR=$ROUTE_FLOOR
     fi
     ROUTE_POLICY_DIGEST=$(fm_route_policy_digest "$CONFIG")
+    # The smart-zone ceiling this dispatch runs governed at, taken from the SAME
+    # evaluation that produced the recorded route and floor. It excluded nobody
+    # above - it is an execution-governance limit, not an eligibility axis - so
+    # this is the one place it changes anything: the context governor compacts
+    # the session when resident tokens reach it. A route that configures no
+    # ceiling leaves it empty and the governor keeps its host default alone.
+    ROUTE_WORKING_CEILING=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.effective_working_ceiling // empty' 2>/dev/null || true)
   fi
 
   # ADMIT. Asked after the route and before anything is allocated, because it is
@@ -2749,7 +2757,10 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
-      context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") --record $(shell_quote "$TASK_TMP/context-pressure.json")")
+      context_statusline_args="--record $(shell_quote "$TASK_TMP/context-pressure.json")"
+      [ -z "${ROUTE_WORKING_CEILING:-}" ] \
+        || context_statusline_args="$context_statusline_args --ceiling $(shell_quote "$ROUTE_WORKING_CEILING")"
+      context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") $context_statusline_args")
       cat > "$WT/.claude/settings.local.json" <<EOF
 {"statusLine":{"type":"command","command":"$context_statusline_command"},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF

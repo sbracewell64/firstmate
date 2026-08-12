@@ -160,6 +160,37 @@ Until then it is a dual-written deprecated alias with exactly one owner, and a m
 
 **Where it bites:** [`bin/fm-task-axis-lib.sh`](../bin/fm-task-axis-lib.sh); the metadata field list in [`AGENTS.md`](../AGENTS.md) section 2; [`docs/architecture.md`](architecture.md); the `active_workers.count` evidence detail in [`bin/fm-admission.sh`](../bin/fm-admission.sh); the `kind` wire fields of [`bin/fm-fleet-snapshot.sh`](../bin/fm-fleet-snapshot.sh) and [`bin/fm-bearings-snapshot.sh`](../bin/fm-bearings-snapshot.sh).
 
+### `context_ceiling`
+
+| | |
+|---|---|
+| **Disposition** | DISSOLVED BY SPLIT |
+| **Routing-floor sense** | the `context_ceiling` field of `_floors.<id>` in `config/crew-dispatch.json`, split into `minimum_context` and `smart_zone_ceiling` |
+| **Model-evidence sense** | `_models.<m>.context_window`, the model's hard limit, and `_models.<m>.smart_zone`, its own smart-zone ceiling - both keep their names |
+| **Governor sense** | the `--ceiling` the context governor runs a session at, which is the resolved `effective_working_ceiling` and not a config field |
+
+One field named CEILING was enforced as a MINIMUM.
+The evaluator read `_floors.<id>.context_ceiling`, compared it against a candidate's `smart_zone`, and emitted a rejection rule named `context_below_floor` - so a number the captain chose to make sessions rotate EARLIER excluded every model whose smart zone sat below it, across nearly the whole routing table.
+Two incompatible senses had been sharing one identifier: a ceiling that governs how much context a running session may accumulate, and a minimum that says how much a candidate must be able to hold for the work to be possible at all.
+Naming one thing after the first and enforcing it as the second is how the defect survived being read.
+
+The split is by sense, not by number, and the two never trade places: eligibility asks only whether capacity meets an explicit `minimum_context`, while `smart_zone_ceiling` governs execution and excludes nobody.
+Reversing the comparison would have been the same defect inverted, and re-enforcing the ceiling at a lower number would have been the same defect at a lower number.
+[`bin/fm-route-lib.sh`](../bin/fm-route-lib.sh) is the single owner of the four integers and their derivation; [`docs/configuration.md`](configuration.md) "Routed pools" owns the schema.
+
+**Classification of an existing floor.**
+A floor's `context_ceiling` classifies as SMART_ZONE_CEILING - that is what the name says and what the captain chose the number for - and it therefore demonstrates **no** minimum.
+So a floor carrying only the retired field states no minimum, and the evaluator infers none rather than copying the ceiling's value into one.
+A genuine minimum is recorded only where the work is demonstrated to need that much context resident, which is a claim about the task and not about any number already in the file.
+
+**Retirement of the deprecated field.**
+`context_ceiling` is read as `smart_zone_ceiling`, which is a bounded compatibility read and not an indefinite alias: it is accepted so a home that has not yet migrated its gitignored `config/crew-dispatch.json` keeps routing, and it can never mean anything but the ceiling.
+Two spellings of one number is exactly how the senses drifted apart the first time, so the pair is checked rather than merged - a floor carrying both with different values is refused as `smart_zone_ceiling_contradicted` rather than silently resolved to either.
+Its retirement condition is: **remove the retired-spelling read once every home this repository serves has renamed `context_ceiling` to `smart_zone_ceiling` in its own `config/crew-dispatch.json`, which each home settles by confirming its file carries no `context_ceiling` key.**
+The decision record retired the name at the same time: `floor_axes` carries `minimum_context` and `smart_zone_ceiling`, and that surface's schema tag moved to `fm-route-decision.v2` rather than changing what a `v1` field meant underneath a reader.
+
+**Where it bites:** [`bin/fm-route-lib.sh`](../bin/fm-route-lib.sh); the routed-pool schema in [`docs/configuration.md`](configuration.md); the `--ceiling` governance seam in [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh) and the ceiling `fm-spawn.sh` hands it; `tests/fm-route-enforcement.test.sh`, which turns red if the ceiling is enforced as a minimum again.
+
 ## Maintaining this file
 
 Add a row when a word acquires a second live sense in any repository the fleet reads or writes, not when a rename is proposed.

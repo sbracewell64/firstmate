@@ -290,7 +290,8 @@ IFS= read -r -d '' CONTEXT_SECTION <<EOF || true
 Claude Code sessions receive host-computed context-window telemetry in the bottom status line.
 For a spawned Claude worker, the same reading is written to \`/tmp/fm-$ID/context-pressure.json\`.
 At natural phase boundaries, read that file when it exists and use it instead of a self-estimate.
-When \`compact_recommended\` is \`true\` (70 percent used or higher), run \`/compact\` before continuing.
+When \`compact_recommended\` is \`true\`, run \`/compact\` before continuing.
+Two independent things set it: the host reaching 70 percent used, and this route's own smart-zone ceiling being reached, which is usually earlier and is shown as \`governed_ceiling\` in that file and as \`zone <used>/<ceiling>\` on the status line.
 The file is optional because other worker runtimes do not expose this verified telemetry contract; never fabricate a reading when it is absent.
 EOF
 CONTEXT_SECTION=${CONTEXT_SECTION%$'\n'}
@@ -385,7 +386,7 @@ Do not invent a second delegation system.
 You do not generate your own work.
 Act only on tasks the main firstmate routes to you.
 Never start a survey, audit, or "find improvements" sweep on your own initiative; that is not your job and it is unwanted.
-In Claude Code, the bottom \`CTX\` row is host-computed context pressure; when it shows \`COMPACT NOW: /compact\` at 70 percent used or higher, run \`/compact\` before continuing instead of relying on a self-estimate.
+In Claude Code, the bottom \`CTX\` row is host-computed context pressure; when it shows \`COMPACT NOW: /compact\` - at 70 percent used, or on reaching a route's own smart-zone ceiling, which is usually earlier - run \`/compact\` before continuing instead of relying on a self-estimate.
 
 $VERIFICATION_DISCIPLINE
 

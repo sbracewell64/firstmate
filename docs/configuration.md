@@ -404,12 +404,14 @@ A config with no `pool` anywhere, or a home with no config at all, otherwise beh
 ```json
 {
   "_floors": {
-    "<floor name>": { "effort_floor": "<band|WAIVED - why>", "context_ceiling": 0,
+    "<floor name>": { "effort_floor": "<band|WAIVED - why>",
+                      "minimum_context": 0, "smart_zone_ceiling": 0,
                       "tool_loop": "<verified-agentic|required|not-required>",
                       "selectable_by_crew_rule": true }
   },
   "_models": {
-    "<provider>/<model-id>": { "smart_zone": 0, "effort_expressible": ["<band>"],
+    "<provider>/<model-id>": { "context_window": 0, "smart_zone": 0,
+                               "effort_expressible": ["<band>"],
                                "tool_loop": "<verified-agentic|required|not-required>" }
   },
   "rules": [
@@ -427,11 +429,37 @@ Pool entries and `_models` keys always use the fully qualified `provider/model-i
 Pool order is the failover order, and `promotion_target` names the route a promotion escalates to; neither is traversed automatically.
 
 `_floors` values may stay free-form strings, in which case there is nothing to check.
-An object value declares the three axes a check can mechanically test against `_models`: `effort_floor` as a minimum band that a higher band satisfies and a provider default never establishes, `context_ceiling` as the minimum `smart_zone` a candidate must carry, and `tool_loop` as the minimum recorded loop evidence.
+An object value declares the axes a check can mechanically test against `_models`: `effort_floor` as a minimum band that a higher band satisfies and a provider default never establishes, `minimum_context` as the genuine task minimum a candidate's capacity must meet, `smart_zone_ceiling` as the execution-governance limit the route runs a session at, and `tool_loop` as the minimum recorded loop evidence.
 An `effort_floor` string beginning `WAIVED` waives the effort axis outright, and `selectable_by_crew_rule: false` puts the floor out of reach of every rule.
+
+#### Context is four integers, and only one of them decides eligibility
+
+Context carries four different token numbers, and collapsing any two of them is how a route excludes a model it should have run.
+
+| Concept | Where it is recorded | What it decides |
+|---|---|---|
+| Route minimum required context | `_floors.<id>.minimum_context` | Eligibility, and nothing else asks about it |
+| Route smart-zone ceiling | `_floors.<id>.smart_zone_ceiling` | Execution governance; excludes nobody |
+| Model hard context limit | `_models.<m>.context_window` | The evidence a minimum is checked against |
+| Model smart-zone ceiling | `_models.<m>.smart_zone` | Governance evidence; never eligibility evidence |
+
+`minimum_context` is the only context axis that can refuse a candidate, and it refuses only capacity genuinely too small for the route's work, naming `context_below_minimum` against the model's hard `context_window`.
+It is absent by default, and **absent means no minimum**: a route that states none asks nothing about capacity, so a candidate recording no `context_window` is eligible there rather than unverifiable.
+Where a route does state one, the missing-input rule binds as it does on every other declared axis and unrecorded capacity refuses as `context_unverifiable`.
+
+`smart_zone_ceiling` never excludes anyone.
+It is where a running session compacts, rotates or decomposes, so a model exposing 200K or 1M is fully eligible on a 120K-ceiling route and simply runs governed at 120K.
+The governed answer is `effective_working_ceiling`, the minimum of the route ceiling, the model's own smart zone, and the model's hard limit; `fm-route.sh check` prints it on the success line, `fm-route.sh --json` carries it per candidate as `governed_context`, and `fm-spawn.sh` hands it to [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh) `--ceiling`, which is the one place it changes behavior.
+That governor recommends compaction as soon as resident tokens reach the ceiling, which is usually earlier than its own 70%-used trigger and never later; the two are independent and neither cancels the other.
+
+`context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read as one, because a ceiling is what its name always said.
+It never contributes a minimum, so a floor carrying only the retired field states no minimum at all.
+A floor carrying both spellings with different values is refused as `smart_zone_ceiling_contradicted` rather than resolved to either.
+[`docs/vocabulary-collisions.md`](vocabulary-collisions.md) owns its retirement condition.
 A candidate the config lists in a pool but records no evidence for is refused as unverifiable rather than admitted, because unmeasured is not the same as met - including when the config carries no `_models` block at all, which records no evidence for anything.
 A missing input is a refusal and never a skipped check: a dispatch that names no model is refused as unverifiable against the pool it claims, and a rule whose `floor` names an id `_floors` does not define is refused rather than enforcing nothing.
-An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `context_ceiling` and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
+An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `minimum_context` or `smart_zone_ceiling`, and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
+An unreadable ceiling refuses for that reason even though a readable one excludes nobody: a route whose governance number cannot be read cannot govern the session it dispatches.
 A model or provider the availability record currently holds is refused at the same point, naming the held state, the scope, the subject and its recorded expiry, so `check` and `eligible` can never give opposite answers about one model.
 
 Every production selection of Luna has one accepted invocation binding: profile `luna-max`, exact model `openai-codex/gpt-5.6-luna`, harness `pi` or `pi-signed`, and effective effort `max`.

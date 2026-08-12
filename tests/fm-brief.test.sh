@@ -799,8 +799,13 @@ test_context_pressure_contract_reaches_every_agent_kind() {
   assert_grep '/tmp/fm-context-ship-z1/context-pressure.json' "$ship" \
     "ship brief missing its task-scoped Claude context snapshot"
   # shellcheck disable=SC2016 # Literal Markdown backticks must remain unexpanded.
-  assert_grep 'When `compact_recommended` is `true` (70 percent used or higher), run `/compact` before continuing.' "$ship" \
+  assert_grep 'When `compact_recommended` is `true`, run `/compact` before continuing.' "$ship" \
     "ship brief missing the instrument-backed compaction trigger"
+  # Two independent triggers set that flag, and the route's smart-zone ceiling
+  # is usually the earlier one. A brief naming only the 70% trigger tells a
+  # worker its governed rotation point does not exist.
+  assert_grep "this route's own smart-zone ceiling being reached" "$ship" \
+    "ship brief does not name the governed smart-zone ceiling as a compaction trigger"
   assert_grep 'use it instead of a self-estimate' "$ship" \
     "ship brief still permits estimated context pressure when telemetry exists"
 
@@ -818,7 +823,7 @@ test_context_pressure_contract_reaches_every_agent_kind() {
   assert_grep 'the bottom `CTX` row is host-computed context pressure' "$charter" \
     "secondmate charter did not identify the real Claude context instrument"
   # shellcheck disable=SC2016 # Literal Markdown backticks must remain unexpanded.
-  assert_grep 'when it shows `COMPACT NOW: /compact` at 70 percent used or higher, run `/compact`' "$charter" \
+  assert_grep 'when it shows `COMPACT NOW: /compact` - at 70 percent used, or on reaching a route'"'"'s own smart-zone ceiling, which is usually earlier - run `/compact`' "$charter" \
     "secondmate charter missing the status-line compaction trigger"
   pass "fm-brief.sh: every agent kind receives the instrument-backed Claude compaction contract"
 }

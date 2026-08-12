@@ -242,6 +242,41 @@ fm_route_policy_digest() {  # [<config-dir>]
 # checked here - reading a passing floor check as evidence on them is the exact
 # mistake that block exists to prevent.
 #
+# CONTEXT IS FOUR DIFFERENT INTEGERS AND ONLY ONE OF THEM DECIDES ELIGIBILITY.
+# This axis previously ran one number against another under a name that meant
+# neither, so a route stating a smart-zone CEILING excluded every candidate
+# whose smart zone sat below it - a field named ceiling enforced as a minimum,
+# reported as `context_below_floor`. The four integers, all in tokens:
+#
+#   route minimum required context  `_floors.<id>.minimum_context`
+#       The genuine task minimum: how much a candidate must be able to hold for
+#       this route's work to be possible at all. ELIGIBILITY, and the only one.
+#       ABSENT MEANS NO MINIMUM, never a minimum inferred from another number.
+#   route smart-zone ceiling        `_floors.<id>.smart_zone_ceiling`
+#       Execution governance: how much context this route permits a running
+#       session to accumulate before it compacts, rotates or decomposes. It
+#       EXCLUDES NOTHING - a model exposing far more capacity than the ceiling
+#       is fully eligible and simply runs governed at it.
+#   model hard context limit        `_models.<m>.context_window`
+#       What the model can physically hold. The evidence the minimum is checked
+#       against, because a minimum asks about capacity, not about quality.
+#   model smart-zone ceiling        `_models.<m>.smart_zone`
+#       The model's own cognitive-quality target. Governance evidence, never
+#       eligibility evidence.
+#
+# The governed answer is `effective_working_ceiling`, the minimum of whichever
+# of the three ceilings are recorded, carried on the decision record for the
+# EXISTING context governor (`bin/fm-context-statusline.sh`) to apply. Nothing
+# here rotates a session; this library only says where the ceiling is.
+#
+# `context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read
+# as one - it is a ceiling, exactly as its name always said. It never
+# contributes a minimum, so a floor carrying only the retired field states no
+# minimum at all. Two names for one number is a drift risk, so the pair is
+# checked rather than merged: a floor carrying both with different values is
+# refused as contradicted rather than silently resolved to either.
+# docs/vocabulary-collisions.md owns the retirement condition.
+#
 # A MISSING INPUT IS A VIOLATION, never a skipped check. An unstated model, a
 # floor id `_floors` does not define, and a candidate with no recorded evidence
 # for an axis the floor declares all produce a named violation carrying the
@@ -249,12 +284,21 @@ fm_route_policy_digest() {  # [<config-dir>]
 # nothing when an input is absent is indistinguishable from no enforcement, and
 # the absent input is exactly the case nobody tests by hand.
 #
+# That rule is scoped to axes a floor actually DECLARES. A route stating no
+# minimum asks nothing about capacity, so a candidate recording no
+# `context_window` is not unverifiable against it - there is no question to
+# answer. Demanding capacity evidence for a minimum nobody stated would rebuild
+# the same false exclusion out of the evidence check instead of the comparison.
+#
 # AN UNINTERPRETABLE FLOOR IS THE SAME CLASS, and every axis treats it the same
-# way: a `tool_loop` or `context_ceiling` or `effort_floor` whose configured
-# value is outside its closed vocabulary is refused by name rather than skipped.
-# A misspelling - `verified_agentic` for `verified-agentic` - is the likeliest
-# way a floor ever reaches this code, and an axis that silently enforces nothing
-# for it is a floor an operator believes is armed.
+# way: a `tool_loop` or `minimum_context` or `smart_zone_ceiling` or
+# `effort_floor` whose configured value is outside its closed vocabulary is
+# refused by name rather than skipped. A misspelling - `verified_agentic` for
+# `verified-agentic` - is the likeliest way a floor ever reaches this code, and
+# an axis that silently enforces nothing for it is a floor an operator believes
+# is armed. An unreadable ceiling refuses for the same reason even though the
+# ceiling excludes nobody: a route whose governance number cannot be read
+# cannot govern the session it dispatches.
 # shellcheck disable=SC2016 # jq program, not shell expansion.
 FM_ROUTE_DECISION_JQ="$FM_ROUTE_ENTRIES_JQ"'
 def bands: ["low","medium","high","xhigh","max","ultra"];
@@ -335,9 +379,20 @@ def effective_route_profile($rule; $path; $model; $harness):
     # against the floor - a route whose floor states no effort_floor still has a
     # band to preserve the moment a dispatch names one.
     | $effort as $eeff
-    | ($floor.context_ceiling? // null) as $ctx_raw
-    | (if ($ctx_raw | type) == "number" then $ctx_raw else null end) as $ctx
-    | (($ctx_raw != null) and ($ctx == null)) as $ctx_malformed
+    | ($floor.minimum_context? // null) as $min_raw
+    | (if ($min_raw | type) == "number" then $min_raw else null end) as $min
+    | (($min_raw != null) and ($min == null)) as $min_malformed
+    # The ceiling under either spelling. The retired name is read as the
+    # ceiling it always named, and the pair is compared rather than merged so a
+    # half-migrated floor is refused instead of resolved to whichever key the
+    # reader happened to prefer.
+    | ($floor.smart_zone_ceiling? // null) as $szc_new
+    | ($floor.context_ceiling? // null) as $szc_old
+    | (if $szc_new != null then $szc_new else $szc_old end) as $szc_raw
+    | (if $szc_new != null then "/smart_zone_ceiling" else "/context_ceiling" end) as $szc_key
+    | (($szc_new != null) and ($szc_old != null) and ($szc_new != $szc_old)) as $szc_contradicted
+    | (if ($szc_raw | type) == "number" then $szc_raw else null end) as $szc
+    | (($szc_raw != null) and ($szc == null)) as $szc_malformed
     | ($floor.tool_loop? // null) as $tl_raw
     | (if (loop_rank($tl_raw) != null) then $tl_raw else null end) as $tl
     | (($tl_raw != null) and ($tl == null)) as $tl_malformed
@@ -420,19 +475,34 @@ def effective_route_profile($rule; $path; $model; $harness):
                      configured:($ee | join(", ")), observed:$e}
                else empty end
            else empty end),
-          (if ($ctx != null)
-           then ($models[$m].smart_zone? // null) as $sz
-             | if ($sz | type) != "number"
-               then {rule:"context_unverifiable", config_path:("/_models/" + $m + "/smart_zone"),
-                     configured:("at least " + ($ctx | tostring)), observed:"absent"}
-               elif $sz < $ctx
-               then {rule:"context_below_floor", config_path:($floor_path + "/context_ceiling"),
-                     configured:($ctx | tostring), observed:($sz | tostring)}
+          # ELIGIBILITY, and only against a minimum the route actually states.
+          # The evidence is the model`s HARD limit, because the question is
+          # whether the work can be held at all; the smart zone answers a
+          # different question and is read by the governor instead. A floor
+          # that states no minimum reaches none of this, so a candidate with no
+          # recorded capacity is not excluded by a requirement nobody made.
+          (if ($min != null)
+           then ($models[$m].context_window? // null) as $cw
+             | if ($cw | type) != "number"
+               then {rule:"context_unverifiable", config_path:("/_models/" + $m + "/context_window"),
+                     configured:("at least " + ($min | tostring)), observed:"absent"}
+               elif $cw < $min
+               then {rule:"context_below_minimum", config_path:($floor_path + "/minimum_context"),
+                     configured:($min | tostring), observed:($cw | tostring)}
                else empty end
            else empty end),
-          (if ($ctx_malformed)
-           then {rule:"context_ceiling_malformed", config_path:($floor_path + "/context_ceiling"),
-                 configured:($ctx_raw | tostring), observed:"unreadable"}
+          (if ($min_malformed)
+           then {rule:"minimum_context_malformed", config_path:($floor_path + "/minimum_context"),
+                 configured:($min_raw | tostring), observed:"unreadable"}
+           else empty end),
+          (if ($szc_contradicted)
+           then {rule:"smart_zone_ceiling_contradicted", config_path:($floor_path + "/smart_zone_ceiling"),
+                 configured:($szc_new | tostring),
+                 observed:("the retired context_ceiling on the same floor configures " + ($szc_old | tostring))}
+           else empty end),
+          (if ($szc_malformed)
+           then {rule:"smart_zone_ceiling_malformed", config_path:($floor_path + $szc_key),
+                 configured:($szc_raw | tostring), observed:"unreadable"}
            else empty end),
           (if ($tl_malformed)
            then {rule:"tool_loop_malformed", config_path:($floor_path + "/tool_loop"),
@@ -449,6 +519,25 @@ def effective_route_profile($rule; $path; $model; $harness):
                else empty end
            else empty end) ];
 
+    # What the EXISTING context governor is told, per candidate. Nothing here
+    # rejects: the ceilings that are recorded are reported, the effective one
+    # is their minimum, and `bound_by` names which of them the session is
+    # actually governed at so an operator can see whether the route or the
+    # model set the limit. All three absent means this route governs by the
+    # host default alone, which is `null` and never a zero.
+    def governed($m):
+        ($models[$m].smart_zone? // null) as $sz_raw
+        | ($models[$m].context_window? // null) as $cw_raw
+        | (if ($sz_raw | type) == "number" then $sz_raw else null end) as $sz
+        | (if ($cw_raw | type) == "number" then $cw_raw else null end) as $cw
+        | [ {k:"route_smart_zone_ceiling", v:$szc},
+            {k:"model_smart_zone_ceiling", v:$sz},
+            {k:"model_hard_context_limit", v:$cw} ] as $inputs
+        | ([ $inputs[] | select(.v != null) | .v ] | min) as $eff
+        | {route_smart_zone_ceiling:$szc, model_smart_zone_ceiling:$sz,
+           model_hard_context_limit:$cw, effective_working_ceiling:$eff,
+           bound_by:[ $inputs[] | select(.v != null and .v == $eff) | .k ]};
+
     def resolve($want):
         if ($want | length) == 0 then {resolved:null, resolution:"unstated"}
         elif (($pool | index($want)) != null) then {resolved:$want, resolution:"exact"}
@@ -459,10 +548,11 @@ def effective_route_profile($rule; $path; $model; $harness):
             else {resolved:$want, resolution:"bare"} end
         end;
 
-    {schema:"fm-route-decision.v1",
+    {schema:"fm-route-decision.v2",
      route:$route, route_known:true, route_path:$route_path,
      floor:$floor_id, floor_path:$floor_path, floor_defined:($floor_undefined | not),
-     floor_axes:{effort_floor:$ef, effort_waived:$ef_waived, context_ceiling:$ctx,
+     floor_axes:{effort_floor:$ef, effort_waived:$ef_waived,
+                 minimum_context:$min, smart_zone_ceiling:$szc,
                  tool_loop:$tl, selectable:($unselectable | not)},
      models_recorded:($models != null),
      pool:$pool, pool_path:$pool_path, pool_configured:(($pool | length) > 0),
@@ -472,6 +562,7 @@ def effective_route_profile($rule; $path; $model; $harness):
                | $r + {requested:$model, effort:$effort,
                        profile:(if $r.resolved == luna_max_model and $effort == luna_max_effort then luna_max_profile.name else null end),
                        held:(if $r.resolved != null then held($r.resolved) else null end),
+                       governed_context:(if $r.resolved != null then governed($r.resolved) else null end),
                        violations:(if $r.resolved != null then violations($r.resolved; $eeff; $route_profile)
                                    elif $r.resolution == "unstated"
                                    then [{rule:"model_unstated", config_path:$pool_path,
@@ -488,6 +579,7 @@ def effective_route_profile($rule; $path; $model; $harness):
                   | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
                      held:$h, violations:$v,
                      effort_expressible:($models[$c].effort_expressible? // null),
+                     governed_context:governed($c),
                      floor_met:(($v | length) == 0),
                      eligible:(($v | length) == 0 and $h == null)} ]}
   end

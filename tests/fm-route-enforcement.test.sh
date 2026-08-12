@@ -42,17 +42,23 @@ write_routed_config() {  # <home>
   cat > "$1/config/crew-dispatch.json" <<'JSON'
 {
   "_floors": {
-    "F-LOW":  { "effort_floor": "low",    "context_ceiling": 100000, "tool_loop": "verified-agentic" },
+    "F-LOW":  { "effort_floor": "low",    "smart_zone_ceiling": 100000, "tool_loop": "verified-agentic" },
     "F-MED":  { "effort_floor": "medium", "context_ceiling": 140000, "tool_loop": "verified-agentic" },
-    "F-WIDE": { "effort_floor": "WAIVED - bounded retrieval specialist", "context_ceiling": 400000, "tool_loop": "not-required" },
+    "F-WIDE": { "effort_floor": "WAIVED - bounded retrieval specialist", "smart_zone_ceiling": 400000, "tool_loop": "not-required" },
+    "F-ZONE": { "effort_floor": "medium", "smart_zone_ceiling": 120000, "tool_loop": "verified-agentic" },
+    "F-MINIMUM": { "effort_floor": "medium", "minimum_context": 150000, "tool_loop": "verified-agentic" },
     "F-COORD": { "selectable_by_crew_rule": false }
   },
   "_models": {
-    "vendor/small":  { "smart_zone": 140000, "effort_expressible": ["low","medium"], "tool_loop": "verified-agentic" },
-    "vendor/large":  { "smart_zone": 140000, "effort_expressible": ["low","medium","high"], "tool_loop": "verified-agentic" },
-    "other/small":   { "smart_zone": 140000, "effort_expressible": ["low","medium"], "tool_loop": "verified-agentic" },
-    "wide/reader":   { "smart_zone": 400000, "effort_expressible": [], "tool_loop": "not-required" },
-    "vendor/untooled": { "smart_zone": 140000, "effort_expressible": ["low","medium"], "tool_loop": "not-required" }
+    "vendor/small":  { "context_window": 200000, "smart_zone": 140000, "effort_expressible": ["low","medium"], "tool_loop": "verified-agentic" },
+    "vendor/large":  { "context_window": 200000, "smart_zone": 140000, "effort_expressible": ["low","medium","high"], "tool_loop": "verified-agentic" },
+    "other/small":   { "context_window": 200000, "smart_zone": 140000, "effort_expressible": ["low","medium"], "tool_loop": "verified-agentic" },
+    "wide/reader":   { "context_window": 1048576, "smart_zone": 400000, "effort_expressible": [], "tool_loop": "not-required" },
+    "vendor/untooled": { "context_window": 200000, "smart_zone": 140000, "effort_expressible": ["low","medium"], "tool_loop": "not-required" },
+    "narrow/zone":   { "context_window": 200000, "smart_zone": 120000, "effort_expressible": ["medium"], "tool_loop": "verified-agentic" },
+    "huge/window":   { "context_window": 1000000, "smart_zone": 400000, "effort_expressible": ["medium"], "tool_loop": "verified-agentic" },
+    "tiny/window":   { "context_window": 64000, "smart_zone": 60000, "effort_expressible": ["medium"], "tool_loop": "verified-agentic" },
+    "unmeasured/capacity": { "smart_zone": 140000, "effort_expressible": ["medium"], "tool_loop": "verified-agentic" }
   },
   "rules": [
     { "when": "trivial mechanical edits", "route": "R-LOW", "floor": "F-LOW",
@@ -63,7 +69,13 @@ write_routed_config() {  # <home>
       "pool": ["vendor/large", "other/small"], "promotion_target": "NONE - terminal rung" },
     { "when": "one very large read", "route": "R-WIDE", "floor": "F-WIDE",
       "use": { "harness": "codex", "model": "wide/reader" },
-      "pool": ["wide/reader"], "promotion_target": "R-MED" }
+      "pool": ["wide/reader"], "promotion_target": "R-MED" },
+    { "when": "work governed at a deliberately early rotation point", "route": "R-ZONE", "floor": "F-ZONE",
+      "use": { "harness": "codex", "model": "narrow/zone", "effort": "medium" },
+      "pool": ["narrow/zone", "huge/window", "unmeasured/capacity"], "promotion_target": "R-MED" },
+    { "when": "work that genuinely cannot be done under 150k resident", "route": "R-MINIMUM", "floor": "F-MINIMUM",
+      "use": { "harness": "codex", "model": "huge/window", "effort": "medium" },
+      "pool": ["tiny/window", "huge/window", "unmeasured/capacity"], "promotion_target": "NONE - terminal rung" }
   ],
   "default": { "harness": "codex", "model": "vendor/large", "effort": "medium", "route": "R-MED", "floor": "F-MED" }
 }
@@ -349,7 +361,7 @@ test_unknown_route_and_ambiguous_bare_name_are_refused() {
   out=$(run_route "$HOME_DIR" check --route R-NOPE --model vendor/large --effort medium); rc=$?
   expect_code 1 "$rc" "an undefined route must be refused"
   assert_contains "$out" "FM_SPAWN_ROUTE_UNKNOWN" "the stable refusal token is missing"
-  assert_contains "$out" "R-LOW, R-MED, R-WIDE" "the defined routes are not named"
+  assert_contains "$out" "R-LOW, R-MED, R-MINIMUM, R-WIDE, R-ZONE" "the defined routes are not named"
   # The mixed-key rule: a bare name that could be either sibling is refused,
   # never resolved to the closest-looking one. Two pool entries share the bare
   # half of their qualified names, which is exactly the near-miss case.
@@ -413,19 +425,39 @@ test_a_floor_axis_outside_its_vocabulary_refuses_rather_than_skipping() {
   expect_code 1 "$rc" "the spawn chokepoint must refuse an uninterpretable tool_loop floor"
   assert_contains "$out" "tool_loop_malformed" "the chokepoint does not name the violated rule"
   assert_absent "$home/state/vocabtask.meta" "a dispatch checked against an uninterpretable floor must record nothing"
-  # A non-numeric context_ceiling failed closed but blamed the candidate,
-  # reporting a smart_zone below a string it could never be compared against.
+  # An unreadable ceiling refuses even though a readable one excludes nobody: a
+  # route whose governance number cannot be read cannot govern the session it
+  # dispatches. It must blame the CEILING, never the candidate - the old rule
+  # reported a smart zone below a string it could never be compared against.
   jq '._floors["F-MED"].tool_loop = "verified-agentic"
       | ._floors["F-MED"].context_ceiling = "140k"' \
     "$home/config/crew-dispatch.json" > "$home/config/tmp.json"
   mv "$home/config/tmp.json" "$home/config/crew-dispatch.json"
   out=$(run_route "$home" check --route R-MED --model vendor/large --effort medium); rc=$?
-  expect_code 1 "$rc" "a non-numeric context_ceiling must refuse naming the ceiling"
-  assert_contains "$out" "context_ceiling_malformed" "the violated rule is not named"
+  expect_code 1 "$rc" "a non-numeric smart-zone ceiling must refuse naming the ceiling"
+  assert_contains "$out" "smart_zone_ceiling_malformed" "the violated rule is not named"
   assert_contains "$out" "/_floors/F-MED/context_ceiling" "the exact config path is not named"
   assert_contains "$out" "140k" "the value that could not be interpreted is not named"
-  assert_not_contains "$out" "context_below_floor" \
+  assert_not_contains "$out" "context_below" \
     "an uninterpretable ceiling must not be reported as a candidate falling below it"
+  # A non-numeric minimum is the same class on the axis that does decide
+  # eligibility, and it must not be silently treated as no minimum at all.
+  jq '._floors["F-MINIMUM"].minimum_context = "150k"' \
+    "$home/config/crew-dispatch.json" > "$home/config/tmp.json"
+  mv "$home/config/tmp.json" "$home/config/crew-dispatch.json"
+  out=$(run_route "$home" check --route R-MINIMUM --model huge/window --effort medium); rc=$?
+  expect_code 1 "$rc" "a non-numeric minimum_context must refuse rather than enforce nothing"
+  assert_contains "$out" "minimum_context_malformed" "the violated rule is not named"
+  assert_contains "$out" "/_floors/F-MINIMUM/minimum_context" "the exact config path is not named"
+  # Two spellings of one number is a drift risk, so a floor carrying both with
+  # different values is refused rather than resolved to whichever key wins.
+  jq '._floors["F-ZONE"].context_ceiling = 140000' \
+    "$home/config/crew-dispatch.json" > "$home/config/tmp.json"
+  mv "$home/config/tmp.json" "$home/config/crew-dispatch.json"
+  out=$(run_route "$home" check --route R-ZONE --model narrow/zone --effort medium); rc=$?
+  expect_code 1 "$rc" "a floor whose two ceiling spellings disagree must refuse"
+  assert_contains "$out" "smart_zone_ceiling_contradicted" "the violated rule is not named"
+  assert_contains "$out" "140000" "the contradicting retired value is not named"
   pass "a floor axis value outside its closed vocabulary refuses by name instead of skipping the axis"
 }
 
@@ -435,6 +467,146 @@ test_a_floor_axis_outside_its_vocabulary_refuses_rather_than_skipping() {
 # ran, found nothing it could measure, and reported compliance. Enforcement that
 # quietly does nothing when an input is absent is indistinguishable from no
 # enforcement, and an absent input is exactly the case nobody tries by hand.
+
+# --- context is four integers and only one of them decides eligibility -------
+#
+# A field named `context_ceiling` was enforced as a MINIMUM: the rule was
+# literally called `context_below_floor`, and it excluded every candidate whose
+# smart zone sat below a number chosen to make sessions rotate EARLIER. Nearly
+# the whole routing table carried that number, so nearly the whole table
+# demanded large context for a reason nobody ever stated. The cases below pin
+# both halves of the repair - the ceiling stops excluding anyone, and a genuine
+# minimum still does - because reversing the comparison, or re-enforcing the
+# ceiling at a lower number, would each preserve the defect.
+
+test_a_smart_zone_ceiling_excludes_nobody_under_either_spelling() {
+  local rec out rc home
+  rec=$(make_refusal_home ceiling-governs); read_home_record "$rec"
+  home=$HOME_DIR
+  # THE EXACT LIVE CASE: a 120k-smart-zone model on a route whose ceiling is
+  # 120k, and on one whose retired-spelling ceiling is 140k. Both were refused
+  # as `context_below_floor`; a ceiling is where an eligible session rotates,
+  # never who may run.
+  out=$(run_route "$home" check --route R-ZONE --model narrow/zone --effort medium); rc=$?
+  expect_code 0 "$rc" "a 120k model on a 120k smart-zone route must stay eligible"
+  assert_not_contains "$out" "context_below" "a smart-zone ceiling must not exclude a candidate"
+  # And the live shape that actually broke: a 120k smart zone STRICTLY BELOW its
+  # route's ceiling, under the retired spelling the whole routing table carries.
+  jq '.rules[1].pool += ["narrow/zone"]' "$home/config/crew-dispatch.json" > "$home/config/tmp.json"
+  mv "$home/config/tmp.json" "$home/config/crew-dispatch.json"
+  out=$(run_route "$home" check --route R-MED --model narrow/zone --effort medium); rc=$?
+  expect_code 0 "$rc" "a 120k model on a 140k-ceiling route must stay eligible"
+  assert_not_contains "$out" "context_below" \
+    "a candidate below the route's smart-zone ceiling is excluded by it"
+  out=$(run_route "$home" check --route R-MED --model other/small --effort medium); rc=$?
+  expect_code 0 "$rc" "the retired context_ceiling spelling must still exclude nobody"
+  # And capacity far ABOVE the ceiling is not the opposite mistake: reversing
+  # the comparison would refuse exactly these two.
+  out=$(run_route "$home" check --route R-ZONE --model huge/window --effort medium); rc=$?
+  expect_code 0 "$rc" "a 1m-window model must stay eligible on a 120k-ceiling route"
+  out=$(run_route "$home" eligible --route R-ZONE); rc=$?
+  expect_code 0 "$rc" "the ceiling route must have eligible candidates"
+  assert_contains "$out" "narrow/zone" "the 120k candidate is missing from the eligible list"
+  assert_contains "$out" "huge/window" "the 1m candidate is missing from the eligible list"
+  # A route stating no minimum asks nothing about capacity, so a candidate that
+  # records none is not unverifiable against it. Rebuilding the exclusion out of
+  # the evidence check would be the same defect wearing a different rule name.
+  assert_contains "$out" "unmeasured/capacity" \
+    "a candidate with no recorded capacity is excluded by a minimum no route stated"
+  pass "a smart-zone ceiling governs execution and excludes no candidate, under either spelling"
+}
+
+test_the_ceiling_is_reported_as_the_governed_working_ceiling() {
+  local rec out
+  rec=$(make_refusal_home ceiling-governed); read_home_record "$rec"
+  # The ceiling has to keep MEANING something after it stops excluding people,
+  # or the captain's rotation intent is silently dropped instead of moved. The
+  # decision record carries the effective working ceiling - the minimum of the
+  # route's, the model's own, and the model's hard limit - and names which one
+  # bound it, which is what bin/fm-context-statusline.sh governs the session at.
+  out=$(run_route "$HOME_DIR" eligible --route R-ZONE --json)
+  assert_contains "$out" '"effective_working_ceiling":120000' \
+    "the governed working ceiling is not carried on the decision record"
+  assert_contains "$out" '"route_smart_zone_ceiling"' "the route ceiling input is not reported"
+  assert_contains "$out" '"model_hard_context_limit"' "the model hard limit input is not reported"
+  # huge/window exposes 400k/1m and is governed down to the route's 120k; that
+  # is the whole point - execution is bounded, eligibility is not.
+  out=$(printf '%s' "$out" | jq -r '.candidates[] | select(.model == "huge/window")
+    | (.governed_context.effective_working_ceiling | tostring) + " " + (.governed_context.bound_by | join(","))')
+  assert_contains "$out" "120000 route_smart_zone_ceiling" \
+    "a model above the route ceiling is not governed down to it"
+  pass "the smart-zone ceiling survives as the governed working ceiling rather than as an exclusion"
+}
+
+test_a_genuine_minimum_still_refuses_capacity_below_it() {
+  local rec out rc
+  rec=$(make_refusal_home genuine-minimum); read_home_record "$rec"
+  # The other half: removing a false exclusion must not remove the true one.
+  # A 64k model cannot hold work that genuinely needs 150k resident, and the
+  # refusal names the MINIMUM rather than any ceiling.
+  out=$(run_route "$HOME_DIR" check --route R-MINIMUM --model tiny/window --effort medium); rc=$?
+  expect_code 1 "$rc" "capacity below an explicit genuine minimum must be refused"
+  assert_contains "$out" "context_below_minimum" "the violated rule is not named"
+  assert_contains "$out" "/_floors/F-MINIMUM/minimum_context" "the exact config path is not named"
+  assert_contains "$out" "configures 150000" "the configured minimum is not named"
+  assert_contains "$out" "observed 64000" "the observed hard capacity is not named"
+  # The minimum is measured against the model's HARD limit, not its smart zone:
+  # huge/window's 400k zone and 1m window both clear 150k.
+  out=$(run_route "$HOME_DIR" check --route R-MINIMUM --model huge/window --effort medium); rc=$?
+  expect_code 0 "$rc" "a model whose hard capacity meets the minimum must be eligible"
+  # Where a route states a minimum, unrecorded capacity is unverifiable rather
+  # than met - the missing-input rule still binds on the axis that is declared.
+  out=$(run_route "$HOME_DIR" check --route R-MINIMUM --model unmeasured/capacity --effort medium); rc=$?
+  expect_code 1 "$rc" "a stated minimum with no recorded capacity must refuse as unverifiable"
+  assert_contains "$out" "context_unverifiable" "the unverifiable capacity is not named"
+  assert_contains "$out" "/_models/unmeasured/capacity/context_window" \
+    "the config path the missing capacity evidence belongs at is not named"
+  pass "an explicit genuine minimum refuses capacity below it and unrecorded capacity alike"
+}
+
+test_a_route_stating_no_minimum_infers_none() {
+  local rec out
+  rec=$(make_refusal_home no-minimum); read_home_record "$rec"
+  # The ceiling must never be read back as a minimum by any path, including the
+  # decision record a future reader might copy from. A floor carrying only a
+  # ceiling states NO minimum; recording the ceiling's number here is how
+  # "do not translate a 140k minimum into a 120k minimum" gets undone.
+  out=$(run_route "$HOME_DIR" eligible --route R-ZONE --json)
+  assert_contains "$out" '"minimum_context":null' \
+    "a route stating no minimum records one anyway"
+  assert_contains "$out" '"smart_zone_ceiling":120000' "the route ceiling is not recorded as a ceiling"
+  out=$(run_route "$HOME_DIR" eligible --route R-MED --json)
+  assert_contains "$out" '"minimum_context":null' \
+    "the retired ceiling spelling is read back as a minimum"
+  assert_contains "$out" '"smart_zone_ceiling":140000' \
+    "the retired ceiling spelling is not read as the ceiling it names"
+  pass "a route that states no minimum infers none, under either ceiling spelling"
+}
+
+test_ceiling_as_minimum_cannot_be_reintroduced_without_this_going_red() {
+  local lib out
+  lib="$ROOT/bin/fm-route-lib.sh"
+  # The defect was one comparison and one rule name. A behavior test alone
+  # cannot stop it coming back under a different route or a different number,
+  # so the retired rule name and the ceiling-versus-smart-zone comparison are
+  # both pinned at the source. Negative control: this assertion is what went red
+  # against the pre-repair library, which emitted exactly this rule name.
+  # The retired rule name may still be NAMED in the header, which records what
+  # went wrong; what must never come back is a violation that EMITS it.
+  assert_no_grep 'rule:"context_below_floor"' "$lib" \
+    "the retired context_below_floor rule is emitted again: a ceiling is being enforced as a minimum"
+  # The eligibility comparison must never read a ceiling or a smart zone. Both
+  # names still appear in this file - the ceiling is resolved and reported - but
+  # never inside the branch that decides who may run. That branch runs the
+  # floor's minimum against the model's hard window and nothing else.
+  out=$(sed -n '/^          (if ($min != null)$/,/^           else empty end),$/p' "$lib")
+  assert_contains "$out" 'context_window' "the eligibility branch was not found at all, so this guard checks nothing"
+  assert_not_contains "$out" 'smart_zone' \
+    "the eligibility branch reads a smart zone; a minimum is answered by hard capacity alone"
+  assert_not_contains "$out" 'ceiling' \
+    "the eligibility branch reads a ceiling; a ceiling governs execution and excludes nobody"
+  pass "reintroducing the ceiling-as-minimum comparison or its rule name turns this test red"
+}
 
 test_unstated_model_is_refused_rather_than_recorded_as_checked() {
   local rec out
@@ -463,10 +635,18 @@ test_absent_models_block_refuses_as_unverifiable() {
   mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
   out=$(run_route "$HOME_DIR" check --route R-MED --model vendor/large --effort medium); rc=$?
   expect_code 1 "$rc" "a candidate with no recorded evidence must be refused as unverifiable"
-  assert_contains "$out" "context_unverifiable" "the context axis is silently skipped without a _models block"
-  assert_contains "$out" "/_models/vendor/large/smart_zone" "the config path the missing evidence belongs at is not named"
   assert_contains "$out" "effort_unverifiable" "the effort-expressibility axis is silently skipped"
   assert_contains "$out" "tool_loop_unverifiable" "the tool-loop axis is silently skipped"
+  # The context axis is scoped to the minimum a route DECLARES. R-MED declares
+  # only a ceiling, which asks nothing about capacity, so missing capacity
+  # evidence is not a violation there - while R-MINIMUM, which does declare a
+  # minimum, still refuses on the same empty evidence.
+  assert_not_contains "$out" "context_unverifiable" \
+    "a route stating no minimum demands capacity evidence for a requirement nobody made"
+  out=$(run_route "$HOME_DIR" check --route R-MINIMUM --model huge/window --effort medium); rc=$?
+  expect_code 1 "$rc" "a declared minimum with no _models block must refuse as unverifiable"
+  assert_contains "$out" "context_unverifiable" "the context axis is silently skipped without a _models block"
+  assert_contains "$out" "/_models/huge/window/context_window" "the config path the missing evidence belongs at is not named"
   pass "a floor axis with no recorded evidence refuses as unverifiable, including with no _models block at all"
 }
 
@@ -1145,7 +1325,7 @@ test_spawn_requires_the_route_claim_or_derives_it_from_an_explicit_floor() {
     --harness codex --model vendor/large --effort medium); rc=$?
   expect_code 1 "$rc" "a routed home must refuse a dispatch that claims no route"
   assert_contains "$out" "FM_SPAWN_ROUTE_REQUIRED" "the stable refusal token is missing"
-  assert_contains "$out" "R-LOW|R-MED|R-WIDE" "the refusal must name the configured routes"
+  assert_contains "$out" "R-LOW|R-MED|R-MINIMUM|R-WIDE|R-ZONE" "the refusal must name the configured routes"
   # An explicit floor that names exactly one route IS the claim; a violating
   # dispatch carrying it is still refused, on the derived route.
   out=$(run_spawn "$HOME_DIR" "$FAKEBIN" claimtask "$PROJ_DIR" \
@@ -1544,6 +1724,11 @@ test_unknown_route_and_ambiguous_bare_name_are_refused
 test_waived_effort_floor_and_unselectable_floor
 test_tool_loop_axis_is_enforced
 test_a_floor_axis_outside_its_vocabulary_refuses_rather_than_skipping
+test_a_smart_zone_ceiling_excludes_nobody_under_either_spelling
+test_the_ceiling_is_reported_as_the_governed_working_ceiling
+test_a_genuine_minimum_still_refuses_capacity_below_it
+test_a_route_stating_no_minimum_infers_none
+test_ceiling_as_minimum_cannot_be_reintroduced_without_this_going_red
 test_unstated_model_is_refused_rather_than_recorded_as_checked
 test_absent_models_block_refuses_as_unverifiable
 test_undefined_floor_id_refuses_and_records_no_capability_floor
