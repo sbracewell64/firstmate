@@ -405,7 +405,7 @@ A config with no `pool` anywhere, or a home with no config at all, otherwise beh
 {
   "_floors": {
     "<floor name>": { "effort_floor": "<band|WAIVED - why>",
-                      "smart_zone_ceiling": 120000,
+                      "smart_zone_ceiling": 140000,
                       "tool_loop": "<verified-agentic|required|not-required>",
                       "selectable_by_crew_rule": true }
   },
