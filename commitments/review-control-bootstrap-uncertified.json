@@ -4,7 +4,8 @@
   "recorded": "The executable review-control substrate - review-roles/, bin/fm-review-role.sh, the read-only launch bindings in bin/fm-launch-lib.sh, the prospective assignment check in bin/fm-independence-lib.sh, and the --review-role gate in bin/fm-spawn.sh - landed under a one-time captain bootstrap exception, as EXCEPTIONAL and INITIALLY UNCERTIFIED work, and must be independently re-reviewed under the very control it creates before it may be treated as certified.",
   "authority": "Captain ruling of 2026-08-11, section 0 of the recurrence-closure commission: proceed under one narrow, explicit bootstrap exception to implement the minimum executable review-control substrate. Its stated conditions include that the maker is not the independent checker, that the landing is recorded as exceptional and initially uncertified, that the new control is immediately used to re-review the bootstrap itself, and that the exception expires automatically once enforcement is operational and is not precedent.",
   "unmet_state": "BOOTSTRAP-UNCERTIFIED",
-  "satisfied_when": "Enforcement is operational AND this substrate has been independently reviewed under it by a reviewer that did not make it, with the findings repaired rather than recorded. The first half has a probe below. The second half does not, and is declared uncovered so this entry can never retire on the first alone.",
+  "exception_expires_when": "Enforcement is operational, as established by the probe below. Exception expiry grants no certification and no standing authority.",
+  "satisfied_when": "This substrate has been independently reviewed under the operational control by a reviewer that did not make it, with the findings repaired rather than recorded.",
   "assurance": "cited-control",
   "probe": {
     "kind": "test_passes",
@@ -16,5 +17,5 @@
     "The maker of this substrate wrote its tests, so the tests establish that the controls fire and cannot establish that the controls are the right ones.",
     "Whether the two frozen runtime candidates were lawfully reviewed is a separate later obligation and nothing here observes it."
   ],
-  "note": "This entry is the repository record that the landing was exceptional. It is deliberately unable to reach SATISFIED on its own probe: the probe answers only whether enforcement is operational, and a control certifying itself is the failure this whole substrate exists to refuse. The exception expires when the independent re-review lands, at which point this entry is removed by that work rather than by a probe. Until then, no reader may describe this substrate as certified, and the exception grants no standing authority to anything else - it is not precedent."
+  "note": "This entry is the repository record that the landing was exceptional. The probe answers whether enforcement is operational and therefore whether the exception has expired, but a control certifying itself is the failure this whole substrate exists to refuse. Independent re-review satisfies this uncertified commitment later. Until then, no reader may describe this substrate as certified, and the expired exception grants no standing authority to anything else - it is not precedent."
 }
