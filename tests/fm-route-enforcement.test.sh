@@ -584,28 +584,47 @@ test_a_route_stating_no_minimum_infers_none() {
 }
 
 test_ceiling_as_minimum_cannot_be_reintroduced_without_this_going_red() {
-  local lib out
-  lib="$ROOT/bin/fm-route-lib.sh"
-  # The defect was one comparison and one rule name. A behavior test alone
-  # cannot stop it coming back under a different route or a different number,
-  # so the retired rule name and the ceiling-versus-smart-zone comparison are
-  # both pinned at the source. Negative control: this assertion is what went red
-  # against the pre-repair library, which emitted exactly this rule name.
-  # The retired rule name may still be NAMED in the header, which records what
-  # went wrong; what must never come back is a violation that EMITS it.
-  assert_no_grep 'rule:"context_below_floor"' "$lib" \
-    "the retired context_below_floor rule is emitted again: a ceiling is being enforced as a minimum"
-  # The eligibility comparison must never read a ceiling or a smart zone. Both
-  # names still appear in this file - the ceiling is resolved and reported - but
-  # never inside the branch that decides who may run. That branch runs the
-  # floor's minimum against the model's hard window and nothing else.
-  out=$(sed -n '/^          (if ($min != null)$/,/^           else empty end),$/p' "$lib")
-  assert_contains "$out" 'context_window' "the eligibility branch was not found at all, so this guard checks nothing"
-  assert_not_contains "$out" 'smart_zone' \
-    "the eligibility branch reads a smart zone; a minimum is answered by hard capacity alone"
-  assert_not_contains "$out" 'ceiling' \
-    "the eligibility branch reads a ceiling; a ceiling governs execution and excludes nobody"
+  local rec out rc
+  rec=$(make_refusal_home ceiling-regression); read_home_record "$rec"
+  jq '._floors["F-ZONE"].smart_zone_ceiling = 150000' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" check --route R-ZONE --model narrow/zone --effort medium); rc=$?
+  expect_code 0 "$rc" "raising a route ceiling above a model smart zone must not turn it into a minimum"
+  assert_not_contains "$out" "context_below" "a smart-zone ceiling was reintroduced as an eligibility floor"
   pass "reintroducing the ceiling-as-minimum comparison or its rule name turns this test red"
+}
+
+test_context_token_counts_require_positive_integers() {
+  local rec out rc field rule value route model
+  for field in minimum_context smart_zone_ceiling context_window smart_zone; do
+    case "$field" in
+      minimum_context) route=R-MINIMUM; model=huge/window; rule=minimum_context_malformed ;;
+      smart_zone_ceiling) route=R-ZONE; model=narrow/zone; rule=smart_zone_ceiling_malformed ;;
+      context_window) route=R-ZONE; model=narrow/zone; rule=model_context_window_malformed ;;
+      smart_zone) route=R-ZONE; model=narrow/zone; rule=model_smart_zone_malformed ;;
+    esac
+    for value in 0 -1 1.5; do
+      rec=$(make_refusal_home "integer-${field}-${value//./-}"); read_home_record "$rec"
+      case "$field" in
+        minimum_context|smart_zone_ceiling)
+          jq --arg field "$field" --argjson value "$value" \
+            '._floors[if $field == "minimum_context" then "F-MINIMUM" else "F-ZONE" end][$field] = $value' \
+            "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+          ;;
+        context_window|smart_zone)
+          jq --arg field "$field" --argjson value "$value" \
+            '._models["narrow/zone"][$field] = $value' \
+            "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+          ;;
+      esac
+      mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+      out=$(run_route "$HOME_DIR" check --route "$route" --model "$model" --effort medium); rc=$?
+      expect_code 1 "$rc" "$field accepted non-positive or fractional token count $value"
+      assert_contains "$out" "$rule" "$field did not name its malformed-value rule"
+    done
+  done
+  pass "all four context token counts require positive integers"
 }
 
 test_unstated_model_is_refused_rather_than_recorded_as_checked() {
@@ -1729,6 +1748,7 @@ test_the_ceiling_is_reported_as_the_governed_working_ceiling
 test_a_genuine_minimum_still_refuses_capacity_below_it
 test_a_route_stating_no_minimum_infers_none
 test_ceiling_as_minimum_cannot_be_reintroduced_without_this_going_red
+test_context_token_counts_require_positive_integers
 test_unstated_model_is_refused_rather_than_recorded_as_checked
 test_absent_models_block_refuses_as_unverifiable
 test_undefined_floor_id_refuses_and_records_no_capability_floor

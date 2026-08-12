@@ -302,6 +302,7 @@ fm_route_policy_digest() {  # [<config-dir>]
 # shellcheck disable=SC2016 # jq program, not shell expansion.
 FM_ROUTE_DECISION_JQ="$FM_ROUTE_ENTRIES_JQ"'
 def bands: ["low","medium","high","xhigh","max","ultra"];
+def positive_integer: type == "number" and . > 0 and . == floor;
 def rank($b): (if ($b | type) == "string" then (bands | index($b)) else null end);
 def loop_rank($v): (if ($v | type) == "string"
                     then {"not-required":0,"required":1,"verified-agentic":2}[$v]
@@ -380,7 +381,7 @@ def effective_route_profile($rule; $path; $model; $harness):
     # band to preserve the moment a dispatch names one.
     | $effort as $eeff
     | ($floor.minimum_context? // null) as $min_raw
-    | (if ($min_raw | type) == "number" then $min_raw else null end) as $min
+    | (if ($min_raw | positive_integer) then $min_raw else null end) as $min
     | (($min_raw != null) and ($min == null)) as $min_malformed
     # The ceiling under either spelling. The retired name is read as the
     # ceiling it always named, and the pair is compared rather than merged so a
@@ -391,7 +392,7 @@ def effective_route_profile($rule; $path; $model; $harness):
     | (if $szc_new != null then $szc_new else $szc_old end) as $szc_raw
     | (if $szc_new != null then "/smart_zone_ceiling" else "/context_ceiling" end) as $szc_key
     | (($szc_new != null) and ($szc_old != null) and ($szc_new != $szc_old)) as $szc_contradicted
-    | (if ($szc_raw | type) == "number" then $szc_raw else null end) as $szc
+    | (if ($szc_raw | positive_integer) then $szc_raw else null end) as $szc
     | (($szc_raw != null) and ($szc == null)) as $szc_malformed
     | ($floor.tool_loop? // null) as $tl_raw
     | (if (loop_rank($tl_raw) != null) then $tl_raw else null end) as $tl
@@ -432,7 +433,11 @@ def effective_route_profile($rule; $path; $model; $harness):
           else null end;
 
     def violations($m; $e; $profile):
-        [ (if $m == luna_max_model then luna_profile_violations($profile)[] else empty end),
+        ($models[$m].context_window? // null) as $cw_raw
+        | ($models[$m].smart_zone? // null) as $sz_raw
+        | (if ($cw_raw | positive_integer) then $cw_raw else null end) as $cw
+        | (if ($sz_raw | positive_integer) then $sz_raw else null end) as $sz
+        | [ (if $m == luna_max_model then luna_profile_violations($profile)[] else empty end),
           (if ($m == luna_max_model) and ($e != luna_max_effort)
            then {rule:"luna_max_effective_effort", config_path:"/profile/luna-max/effort",
                  configured:luna_max_effort,
@@ -482,14 +487,21 @@ def effective_route_profile($rule; $path; $model; $harness):
           # that states no minimum reaches none of this, so a candidate with no
           # recorded capacity is not excluded by a requirement nobody made.
           (if ($min != null)
-           then ($models[$m].context_window? // null) as $cw
-             | if ($cw | type) != "number"
+           then if $cw_raw == null
                then {rule:"context_unverifiable", config_path:("/_models/" + $m + "/context_window"),
                      configured:("at least " + ($min | tostring)), observed:"absent"}
-               elif $cw < $min
+               elif $cw != null and $cw < $min
                then {rule:"context_below_minimum", config_path:($floor_path + "/minimum_context"),
                      configured:($min | tostring), observed:($cw | tostring)}
                else empty end
+           else empty end),
+          (if $cw_raw != null and $cw == null
+           then {rule:"model_context_window_malformed", config_path:("/_models/" + $m + "/context_window"),
+                 configured:($cw_raw | tostring), observed:"expected a positive integer token count"}
+           else empty end),
+          (if $sz_raw != null and $sz == null
+           then {rule:"model_smart_zone_malformed", config_path:("/_models/" + $m + "/smart_zone"),
+                 configured:($sz_raw | tostring), observed:"expected a positive integer token count"}
            else empty end),
           (if ($min_malformed)
            then {rule:"minimum_context_malformed", config_path:($floor_path + "/minimum_context"),
@@ -528,8 +540,8 @@ def effective_route_profile($rule; $path; $model; $harness):
     def governed($m):
         ($models[$m].smart_zone? // null) as $sz_raw
         | ($models[$m].context_window? // null) as $cw_raw
-        | (if ($sz_raw | type) == "number" then $sz_raw else null end) as $sz
-        | (if ($cw_raw | type) == "number" then $cw_raw else null end) as $cw
+        | (if ($sz_raw | positive_integer) then $sz_raw else null end) as $sz
+        | (if ($cw_raw | positive_integer) then $cw_raw else null end) as $cw
         | [ {k:"route_smart_zone_ceiling", v:$szc},
             {k:"model_smart_zone_ceiling", v:$sz},
             {k:"model_hard_context_limit", v:$cw} ] as $inputs

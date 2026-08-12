@@ -434,7 +434,7 @@ An `effort_floor` string beginning `WAIVED` waives the effort axis outright, and
 
 #### Context is four integers, and only one of them decides eligibility
 
-Context carries four different token numbers, and collapsing any two of them is how a route excludes a model it should have run.
+Context carries four different positive integer token counts, and collapsing any two of them is how a route excludes a model it should have run.
 
 | Concept | Where it is recorded | What it decides |
 |---|---|---|
