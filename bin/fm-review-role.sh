@@ -87,7 +87,8 @@ Usage:
   fm-review-role.sh check --role <id> --reviewer <provider/model> --harness <name>
                           --effort <level> [--maker <provider/model>]
                           [--maker-process <id>] [--reviewer-process <id>]
-                          [--reviewed-head <sha>] [--route <ROUTE>] [--json]
+                          [--reviewed-head <sha>] [--candidate-worktree <path>]
+                          [--route <ROUTE>] [--json]
 
 check answers one question: may this reviewer be assigned to this maker's
 artifact, on this harness? Every input it needs is an input, not an assumption -
@@ -113,7 +114,12 @@ command -v jq >/dev/null 2>&1 || die_unevaluable "jq is required to read review-
 SCHEMA=$ROLES/schema.json
 [ -f "$SCHEMA" ] || die_unevaluable "$SCHEMA is missing, so no role can be validated against its contract"
 
-role_path() { printf '%s/%s.json\n' "$ROLES" "$1"; }
+role_id_valid() { [[ $1 =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; }
+
+role_path() {
+  role_id_valid "$1" || return 1
+  printf '%s/%s.json\n' "$ROLES" "$1"
+}
 
 role_ids() {
   local f b
@@ -146,6 +152,11 @@ ROLE_VIOLATIONS_JQ='
        then {rule:"schema_version_mismatch", path:"/review_role_schema_version",
              configured:($schema.review_role_schema_version|tostring),
              observed:(($role.review_role_schema_version // "absent")|tostring)}
+       else empty end),
+      (if $role.id != $requested_role
+       then {rule:"role_id_mismatch", path:"/id",
+             configured:$requested_role,
+             observed:(($role.id // "absent")|tostring)}
        else empty end),
       (if (($role.activity? | type) != "string")
           or (($schema.activities | has($role.activity)) | not)
@@ -221,11 +232,20 @@ ROLE_VIOLATIONS_JQ='
                       configured:"empirical | policy",
                       observed:(($b.evidence_class // "absent")|tostring)}
                 else empty end))
-       end)
+       end),
+      (if $role.activity == "change" and $role.requires_pinned_head != true
+       then {rule:"pinned_head_requirement_missing", path:"/requires_pinned_head",
+             configured:"true for change review roles",
+             observed:(($role.requires_pinned_head // "absent")|tostring)}
+       elif ($role | has("requires_pinned_head")) and (($role.requires_pinned_head | type) != "boolean")
+       then {rule:"pinned_head_requirement_invalid", path:"/requires_pinned_head",
+             configured:"a boolean",
+             observed:($role.requires_pinned_head|tostring)}
+       else empty end)
     ]'
 
-role_violations() {  # <role-file> -> JSON array
-  jq -c -s "$ROLE_VIOLATIONS_JQ" "$SCHEMA" "$1" 2>/dev/null
+role_violations() {  # <role-file> <requested-role> -> JSON array
+  jq -c -s --arg requested_role "$2" "$ROLE_VIOLATIONS_JQ" "$SCHEMA" "$1" 2>/dev/null
 }
 
 render_violations() {  # <json-array> <prefix>
@@ -367,20 +387,21 @@ EOF
 
 cmd_check() {
   local role='' reviewer='' harness='' effort='' maker='' maker_proc='' reviewer_proc=''
-  local head='' route='' json=0 want=''
+  local head='' candidate_worktree='' route='' json=0 want=''
   local a
   for a in "$@"; do
     if [ -n "$want" ]; then
       case "$want" in
         role) role=$a ;; reviewer) reviewer=$a ;; harness) harness=$a ;;
         effort) effort=$a ;; maker) maker=$a ;; maker-process) maker_proc=$a ;;
-        reviewer-process) reviewer_proc=$a ;; reviewed-head) head=$a ;; route) route=$a ;;
+        reviewer-process) reviewer_proc=$a ;; reviewed-head) head=$a ;;
+        candidate-worktree) candidate_worktree=$a ;; route) route=$a ;;
       esac
       want=''
       continue
     fi
     case "$a" in
-      --role|--reviewer|--harness|--effort|--maker|--maker-process|--reviewer-process|--reviewed-head|--route)
+      --role|--reviewer|--harness|--effort|--maker|--maker-process|--reviewer-process|--reviewed-head|--candidate-worktree|--route)
         want=${a#--} ;;
       --role=*) role=${a#--role=} ;;
       --reviewer=*) reviewer=${a#--reviewer=} ;;
@@ -390,6 +411,7 @@ cmd_check() {
       --maker-process=*) maker_proc=${a#--maker-process=} ;;
       --reviewer-process=*) reviewer_proc=${a#--reviewer-process=} ;;
       --reviewed-head=*) head=${a#--reviewed-head=} ;;
+      --candidate-worktree=*) candidate_worktree=${a#--candidate-worktree=} ;;
       --route=*) route=${a#--route=} ;;
       --json) json=1 ;;
       *) die_unevaluable "unknown argument to check: $a" ;;
@@ -397,6 +419,7 @@ cmd_check() {
   done
   [ -z "$want" ] || die_unevaluable "--$want requires a value"
   [ -n "$role" ] || die_unevaluable "check requires --role"
+  role_id_valid "$role" || die_unevaluable "$FM_REVIEW_TOKEN_ROLE_UNKNOWN: role ids must be lowercase hyphen-separated slugs"
   [ -n "$reviewer" ] || die_unevaluable "check requires --reviewer"
   [ -n "$harness" ] || die_unevaluable "check requires --harness; the read-only binding is a property of the harness, so an unnamed one cannot be checked"
 
@@ -407,7 +430,7 @@ cmd_check() {
     exit 2
   fi
   local rv
-  rv=$(role_violations "$file") || die_unevaluable "$file could not be parsed against $SCHEMA"
+  rv=$(role_violations "$file" "$role") || die_unevaluable "$file could not be parsed against $SCHEMA"
   if [ "$(printf '%s' "$rv" | jq 'length')" != 0 ]; then
     echo "error: $FM_REVIEW_TOKEN_ROLE_INADMISSIBLE: review role '$role' does not satisfy $SCHEMA, so no assignment may be checked against it:" >&2
     render_violations "$rv" "$role" >&2
@@ -506,10 +529,27 @@ EOF
   # 5. THE REVIEWED ARTIFACT. A change review of another head or of stale bytes
   # does not satisfy the obligation, so the head is an input rather than
   # something recorded afterwards.
-  if [ "$requires_head" = true ] && [ -z "$head" ]; then
-    add_viol reviewed_head_unpinned \
-      "--reviewed-head, because role $role reviews the exact change before landing" \
-      "absent; a review not pinned to a head cannot be shown to have read these bytes"
+  if [ "$requires_head" = true ]; then
+    if [ -z "$head" ]; then
+      add_viol reviewed_head_unpinned \
+        "--reviewed-head, because role $role reviews the exact change before landing" \
+        "absent; a review not pinned to a head cannot be shown to have read these bytes"
+    elif [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
+      add_viol reviewed_head_invalid \
+        "a full 40-character commit id" "$head"
+    elif [ -z "$candidate_worktree" ]; then
+      add_viol candidate_worktree_unobserved \
+        "--candidate-worktree identifying the artifact whose head is reviewed" \
+        "absent; the reviewed commit cannot be bound to candidate bytes"
+    else
+      local candidate_head
+      candidate_head=$(git -C "$candidate_worktree" rev-parse --verify HEAD 2>/dev/null) \
+        || die_unevaluable "$candidate_worktree has no readable git HEAD, so the reviewed commit cannot be verified"
+      if [ "${head,,}" != "${candidate_head,,}" ]; then
+        add_viol reviewed_head_mismatch \
+          "candidate worktree HEAD $candidate_head" "$head"
+      fi
+    fi
   fi
 
   # 6. THE ROUTE, when this home enforces routed pools. Asked of the routing
@@ -539,7 +579,8 @@ EOF
   local contra='[]' cfg_file
   cfg_file=$(fm_route_config_path "$CONFIG")
   if [ -f "$cfg_file" ]; then
-    contra=$(jq -c "$RECONCILE_JQ" "$cfg_file" 2>/dev/null || printf '[]')
+    contra=$(jq -c "$RECONCILE_JQ" "$cfg_file" 2>/dev/null) \
+      || die_unevaluable "$cfg_file could not be parsed, so its policy contradictions could not be evaluated"
     if [ "$(printf '%s' "$contra" | jq --arg m "$reviewer" '[.[] | select(.model == $m)] | length')" != 0 ]; then
       add_viol "$FM_REVIEW_TOKEN_CONTRADICTION" \
         "one answer about which routes may contain $reviewer" \
@@ -587,9 +628,10 @@ case "${1:-}" in
   show)
     shift
     [ -n "${1:-}" ] || die_unevaluable "show requires a role id"
+    role_id_valid "$1" || die_unevaluable "$FM_REVIEW_TOKEN_ROLE_UNKNOWN: role ids must be lowercase hyphen-separated slugs"
     f=$(role_path "$1")
     [ -f "$f" ] || { echo "error: $FM_REVIEW_TOKEN_ROLE_UNKNOWN: no review role '$1'. Defined: $(role_ids | tr '\n' ' ')" >&2; exit 2; }
-    v=$(role_violations "$f")
+    v=$(role_violations "$f" "$1")
     if [ "$(printf '%s' "$v" | jq 'length')" != 0 ]; then
       echo "error: $FM_REVIEW_TOKEN_ROLE_INADMISSIBLE: '$1' does not satisfy $SCHEMA:" >&2
       render_violations "$v" "$1" >&2

@@ -401,6 +401,27 @@ a1=$("$RR" show runtime-design-review | jq -r '.activity')
 a2=$("$RR" show runtime-change-review | jq -r '.activity')
 [ "$a1" != "$a2" ] || fail "the design and change roles must not share one activity"
 
+CHANGE=$ROLES/runtime-change-review.json
+tmp=$(mktemp "$CHANGE.XXXXXX") || fail "mktemp failed"
+jq 'del(.requires_pinned_head)' "$CHANGE" > "$tmp" || fail "change role mutation failed"
+mv -f "$tmp" "$CHANGE"
+out=$("$RR" show runtime-change-review 2>&1); rc=$?
+expect_code 2 "$rc" "a change role missing its pinned-head requirement must be inadmissible"
+assert_contains "$out" "pinned_head_requirement_missing" "the missing pinned-head control must be named"
+cp "$ROOT/review-roles/runtime-change-review.json" "$CHANGE"
+
+tmp=$(mktemp "$DESIGN.XXXXXX") || fail "mktemp failed"
+jq '.id = "runtime-change-review"' "$DESIGN" > "$tmp" || fail "role id mutation failed"
+mv -f "$tmp" "$DESIGN"
+out=$("$RR" show runtime-design-review 2>&1); rc=$?
+expect_code 2 "$rc" "a role whose id does not match its file must be inadmissible"
+assert_contains "$out" "role_id_mismatch" "the mismatched role identity must be named"
+restore
+
+out=$("$RR" show ../runtime-design-review 2>&1); rc=$?
+expect_code 2 "$rc" "a role id containing path components must be unevaluable"
+assert_contains "$out" "role ids must be" "the invalid role id must explain the slug contract"
+
 # A change review must be pinned to the head it read.
 out=$("$RR" check --role runtime-change-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
@@ -408,12 +429,43 @@ out=$("$RR" check --role runtime-change-review \
 expect_code 1 "$rc" "a change review with no pinned head must be refused"
 assert_contains "$out" "reviewed_head_unpinned" "the refusal must name the unpinned head"
 
+HEAD_REPO="$TMP_ROOT/candidate"
+mkdir -p "$HEAD_REPO"
+git -C "$HEAD_REPO" init -q
+git -C "$HEAD_REPO" config user.name test
+git -C "$HEAD_REPO" config user.email test@example.invalid
+printf 'candidate\n' > "$HEAD_REPO/file"
+git -C "$HEAD_REPO" add file
+git -C "$HEAD_REPO" commit -qm candidate
+EXPECTED_HEAD=$(git -C "$HEAD_REPO" rev-parse HEAD)
+
 out=$("$RR" check --role runtime-change-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
   --maker claude/opus --maker-process task-maker --reviewer-process task-review \
-  --reviewed-head 6f6eb8a359b5a8258d8f1cbb899aba1e590535ca 2>&1); rc=$?
+  --reviewed-head "$EXPECTED_HEAD" --candidate-worktree "$HEAD_REPO" 2>&1); rc=$?
 expect_code 0 "$rc" "a change review pinned to a head must be eligible"
+
+out=$("$RR" check --role runtime-change-review \
+  --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head unknown --candidate-worktree "$HEAD_REPO" 2>&1); rc=$?
+expect_code 1 "$rc" "a non-commit reviewed head must be refused"
+assert_contains "$out" "reviewed_head_invalid" "the malformed head must be named"
+
+out=$("$RR" check --role runtime-change-review \
+  --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head 6f6eb8a359b5a8258d8f1cbb899aba1e590535ca \
+  --candidate-worktree "$HEAD_REPO" 2>&1); rc=$?
+expect_code 1 "$rc" "a reviewed head other than the candidate head must be refused"
+assert_contains "$out" "reviewed_head_mismatch" "the wrong head must be named"
 pass "design and change are separate contracts and the change role requires a pinned head"
+
+printf '{broken\n' > "$CONFIG/crew-dispatch.json"
+out=$(check_baseline); rc=$?
+expect_code 2 "$rc" "an unreadable routing policy must make assignment evaluation unevaluable"
+assert_contains "$out" "could not be parsed" "the unreadable policy must not become an empty contradiction set"
+rm -f "$CONFIG/crew-dispatch.json"
 
 # An unknown role and an unreadable registry are could-not-observe (exit 2),
 # never an absent obligation (exit 0). This is the distinction the whole control

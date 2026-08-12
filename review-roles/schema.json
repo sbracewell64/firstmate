@@ -28,6 +28,7 @@
     "obligation_point": "when this review must have happened: before-implementation or before-landing",
     "does_not_discharge": "the sibling obligation this role explicitly does NOT satisfy, so a later green gate can never erase an earlier mandatory gate that never happened",
     "source": "the artifact these predicates were transcribed from, with line references, so a drifted copy can be detected against its source rather than argued about",
+    "requires_pinned_head": "must be true for change roles; when true, the interpreter requires a full commit id equal to the candidate worktree's current HEAD",
     "predicates": "every name in required_predicates, each with a value from its vocabulary in predicate_vocabularies",
     "independence": "one object naming each dimension in independence_dimensions with a value from independence_requirement",
     "qualified_bindings": "the model bindings empirically qualified for THIS role, each with its own effort and evidence. Never a global effort floor: the source requires a binding-specific native setting empirically qualified for this reviewer contract, so one shared floor would assert evidence for bindings that have none."
