@@ -68,9 +68,6 @@ fail() {
 
 pass() {
   printf 'ok - %s\n' "$1"
-  if [ -n "${FM_RECURRENCE_TARGET_ASSERTION:-}" ] && [ "$1" = "$FM_RECURRENCE_TARGET_ASSERTION" ]; then
-    exit 0
-  fi
 }
 
 # --- self-cleaning temp root and background-process reaper -------------------

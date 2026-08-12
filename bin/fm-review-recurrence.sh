@@ -4,7 +4,7 @@ set -u
 ROOT=${FM_REVIEW_RECURRENCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
 SPEC=${FM_REVIEW_RECURRENCE_SPEC:-$ROOT/tests/review-control-mutations.json}
 OUT=${FM_REVIEW_RECURRENCE_OUT:-$ROOT/docs/verification/review-control-recurrence-evidence.json}
-TMP_PARENT=${FM_REVIEW_RECURRENCE_TMP:-$ROOT/.review-recurrence-tmp}
+TMP_PARENT=${FM_REVIEW_RECURRENCE_TMP:-${TMPDIR:-/tmp}/fm-review-recurrence}
 ONLY=
 
 if [ "${1:-}" = --case ]; then
@@ -27,14 +27,14 @@ common_dir=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>
 
 candidate=$(git -C "$ROOT" rev-parse HEAD) || could_not_observe "candidate commit is unreadable"
 count=$(jq 'length' "$SPEC") || could_not_observe "mutation specification is invalid"
-[ "$count" -eq 29 ] || could_not_observe "expected 29 mutation specifications, found $count"
+[ "$count" -eq 38 ] || could_not_observe "expected 38 mutation specifications, found $count"
 mkdir -p "$TMP_PARENT" || could_not_observe "temporary parent cannot be created"
 run_root=$(mktemp -d "$TMP_PARENT/run.XXXXXX") || could_not_observe "temporary directory cannot be created"
 workspace=$run_root/candidate
 results=$run_root/results.json
 cleanup() { rm -rf "$run_root"; }
 trap cleanup EXIT HUP INT TERM
-git clone --quiet --no-local "$ROOT" "$workspace" || could_not_observe "disposable local clone failed"
+git clone --quiet --no-hardlinks "$ROOT" "$workspace" || could_not_observe "disposable local clone failed"
 git -C "$workspace" checkout --quiet --detach "$candidate" || could_not_observe "candidate checkout failed"
 [ "$(git -C "$workspace" rev-parse HEAD)" = "$candidate" ] || could_not_observe "disposable clone does not match pinned candidate"
 [ "$(git -C "$workspace" rev-parse --git-common-dir)" = .git ] || could_not_observe "disposable workspace shares repository administration"
@@ -43,11 +43,9 @@ printf '[]\n' > "$results"
 while IFS= read -r row; do
   name=$(printf '%s' "$row" | jq -r '.case')
   [ -z "$ONLY" ] || [ "$name" = "$ONLY" ] || continue
-  pinned=$(printf '%s' "$row" | jq -r '.candidate_sha')
-  [ "$pinned" = "$candidate" ] || could_not_observe "$name is pinned to $pinned instead of $candidate"
   file=$(printf '%s' "$row" | jq -r '.file')
   location=$(printf '%s' "$row" | jq -r '.location')
-  suite=$(printf '%s' "$row" | jq -r '.suite')
+  assertion_command=$(printf '%s' "$row" | jq -r '.assertion_command | @sh')
   assertion=$(printf '%s' "$row" | jq -r '.target_assertion_id')
   expected=$(printf '%s' "$row" | jq -r '.expected_negative_failure')
   finding=$(printf '%s' "$row" | jq -r '.finding')
@@ -61,8 +59,10 @@ while IFS= read -r row; do
   git -C "$workspace" reset --quiet --hard "$candidate" || could_not_observe "$name could not reset to its pinned base"
   git -C "$workspace" clean -qfdx || could_not_observe "$name could not clean its disposable base"
   [ "$(git -C "$workspace" rev-parse HEAD)" = "$candidate" ] || could_not_observe "$name base identity changed"
-  baseline=$(FM_RECURRENCE_TARGET_ASSERTION="$assertion" bash "$workspace/$suite" 2>&1); baseline_rc=$?
+  baseline=$(cd "$workspace" && eval "set -- $assertion_command; \"\$@\"" 2>&1); baseline_rc=$?
   [ "$baseline_rc" -eq 0 ] || could_not_observe "$name baseline assertion did not pass"
+  printf '%s\n' "$baseline" | grep -Fqx "FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=PASS" \
+    || could_not_observe "$name baseline did not prove the targeted assertion executed"
 
   occurrences=$(SEARCH=$search perl -0ne '$n += () = /\Q$ENV{SEARCH}\E/g; END { print $n + 0 }' "$mutated")
   [ "$occurrences" -eq 1 ] || could_not_observe "$name mutation target matched $occurrences times"
@@ -75,17 +75,19 @@ while IFS= read -r row; do
   patch=$(git -C "$workspace" diff -- "$file")
   [ -n "$patch" ] || could_not_observe "$name produced no re-executable patch"
 
-  negative=$(FM_RECURRENCE_TARGET_ASSERTION="$assertion" bash "$workspace/$suite" 2>&1); negative_rc=$?
+  negative=$(cd "$workspace" && eval "set -- $assertion_command; \"\$@\"" 2>&1); negative_rc=$?
   [ "$negative_rc" -ne 0 ] || could_not_observe "$name target assertion stayed green"
-  printf '%s\n' "$negative" | grep -Fq "not ok - $assertion" || could_not_observe "$name did not fail its target assertion"
-  printf '%s\n' "$negative" | grep -Fq "$expected" || could_not_observe "$name target failed with an unexpected identity"
+  printf '%s\n' "$negative" | grep -Fqx "FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=FAIL failure=$expected" \
+    || could_not_observe "$name target failed with an unexpected identity or did not execute"
 
   git -C "$workspace" reset --quiet --hard "$candidate" || could_not_observe "$name restoration reset failed"
   git -C "$workspace" clean -qfdx || could_not_observe "$name restoration clean failed"
   [ -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)" ] || could_not_observe "$name restoration left dirty bytes"
   [ "$(git -C "$workspace" hash-object "$workspace/$file")" = "$before" ] || could_not_observe "$name restoration hash did not match"
-  confirm=$(FM_RECURRENCE_TARGET_ASSERTION="$assertion" bash "$workspace/$suite" 2>&1); confirm_rc=$?
+  confirm=$(cd "$workspace" && eval "set -- $assertion_command; \"\$@\"" 2>&1); confirm_rc=$?
   [ "$confirm_rc" -eq 0 ] || could_not_observe "$name did not return to baseline"
+  printf '%s\n' "$confirm" | grep -Fqx "FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=PASS" \
+    || could_not_observe "$name confirmation did not prove the targeted assertion executed"
 
   tmp=$results.tmp
   jq --arg case "$name" --arg protection "$file:$location" --arg assertion "$assertion" --arg mutation "$patch" \
@@ -96,7 +98,7 @@ while IFS= read -r row; do
   mv "$tmp" "$results" || exit 2
 done < <(jq -c '.[]' "$SPEC")
 
-wanted=29
+wanted=38
 [ -z "$ONLY" ] || wanted=1
 [ "$(jq 'length' "$results")" -eq "$wanted" ] || could_not_observe "not every requested case produced evidence"
 mkdir -p "$(dirname "$OUT")" || could_not_observe "evidence directory cannot be created"

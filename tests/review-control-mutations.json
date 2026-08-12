@@ -2,349 +2,632 @@
   {
     "case": "a failed run cannot deliver an approval",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a failed run cannot deliver an approval",
     "expected_negative_failure": "failed:approve",
     "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
-    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a failed run cannot deliver an approval",
+      "tests/fm-review-role.test.sh",
+      "failed:approve"
+    ]
   },
   {
     "case": "a failed run does not unsay an authored rejection",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a failed run does not unsay an authored rejection",
     "expected_negative_failure": "failed:reject",
     "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
-    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a failed run does not unsay an authored rejection",
+      "tests/fm-review-role.test.sh",
+      "failed:reject"
+    ]
   },
   {
     "case": "a failed setup is not a failed assertion",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
-    "suite": "tests/fm-commitment-register.test.sh",
     "target_assertion_id": "a failed setup is not a failed assertion",
     "expected_negative_failure": "failed setup",
     "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
-    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a failed setup is not a failed assertion",
+      "tests/fm-commitment-register.test.sh",
+      "failed setup"
+    ]
   },
   {
     "case": "a label-only case fails the suite",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a label-only case fails the suite",
     "expected_negative_failure": "malformed raw reviewer bytes",
     "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
-    "replacement": "and true"
+    "replacement": "and true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a label-only case fails the suite",
+      "tests/fm-review-role.test.sh",
+      "malformed raw reviewer bytes"
+    ]
   },
   {
     "case": "a malformed verdict is invalid review evidence",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a malformed verdict is invalid review evidence",
     "expected_negative_failure": "malformed raw reviewer bytes",
     "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
-    "replacement": "and true"
+    "replacement": "and true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a malformed verdict is invalid review evidence",
+      "tests/fm-review-role.test.sh",
+      "malformed raw reviewer bytes"
+    ]
   },
   {
     "case": "a mutation that does not alter the named protection is refused",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "raw acknowledgement assignment binding",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a mutation that does not alter the named protection is refused",
     "expected_negative_failure": "acknowledgement",
     "search": "[ -s \"$ack_raw\" ] && artifact=$(review_artifact_filter acknowledgement \"$binding\" \"$role\" \"$head\" \"$task\" < \"$ack_raw\" 2>/dev/null)",
-    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")"
+    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a mutation that does not alter the named protection is refused",
+      "tests/fm-review-role.test.sh",
+      "acknowledgement"
+    ]
   },
   {
     "case": "a paired case refuses to record an unflipped check",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a paired case refuses to record an unflipped check",
     "expected_negative_failure": "declared length",
     "search": "[ \"$(LC_ALL=C printf '%s' \"$payload\" | wc -c | tr -d ' ')\" -eq \"$frame_bytes\" ] || return 1",
-    "replacement": "true || return 1"
+    "replacement": "true || return 1",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a paired case refuses to record an unflipped check",
+      "tests/fm-review-role.test.sh",
+      "declared length"
+    ]
   },
   {
     "case": "a persisted acknowledgement is re-derived not re-observed",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a persisted acknowledgement is re-derived not re-observed",
     "expected_negative_failure": "UNENUMERATED",
     "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
-    "replacement": "*) result=PASS; reason=\"defaulted\" ;;"
+    "replacement": "*) result=PASS; reason=\"defaulted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a persisted acknowledgement is re-derived not re-observed",
+      "tests/fm-review-role.test.sh",
+      "UNENUMERATED"
+    ]
   },
   {
     "case": "a read-only reviewer passes by emitting acknowledgement and verdict",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a read-only reviewer passes by emitting acknowledgement and verdict",
     "expected_negative_failure": "failed:approve",
     "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
-    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a read-only reviewer passes by emitting acknowledgement and verdict",
+      "tests/fm-review-role.test.sh",
+      "failed:approve"
+    ]
   },
   {
     "case": "a review target must be a single token",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a review target must be a single token",
     "expected_negative_failure": "failed:reject",
     "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
-    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a review target must be a single token",
+      "tests/fm-review-role.test.sh",
+      "failed:reject"
+    ]
   },
   {
     "case": "a stale acknowledgement cannot establish the role",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
-    "suite": "tests/fm-commitment-register.test.sh",
     "target_assertion_id": "a stale acknowledgement cannot establish the role",
     "expected_negative_failure": "failed setup",
     "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
-    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a stale acknowledgement cannot establish the role",
+      "tests/fm-commitment-register.test.sh",
+      "failed setup"
+    ]
   },
   {
     "case": "a task terminal cannot satisfy review execution",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a task terminal cannot satisfy review execution",
     "expected_negative_failure": "malformed raw reviewer bytes",
     "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
-    "replacement": "and true"
+    "replacement": "and true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a task terminal cannot satisfy review execution",
+      "tests/fm-review-role.test.sh",
+      "malformed raw reviewer bytes"
+    ]
   },
   {
     "case": "a wrapped review artifact is reconstructed and verified",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "a wrapped review artifact is reconstructed and verified",
     "expected_negative_failure": "physically wrapped framed verdict",
     "search": "payload=$payload$line",
-    "replacement": "payload=$line"
+    "replacement": "payload=$line",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a wrapped review artifact is reconstructed and verified",
+      "tests/fm-review-role.test.sh",
+      "physically wrapped framed verdict"
+    ]
   },
   {
     "case": "an acknowledgement naming the wrong commit cannot begin a review",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "raw acknowledgement assignment binding",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "an acknowledgement naming the wrong commit cannot begin a review",
     "expected_negative_failure": "acknowledgement",
     "search": "[ -s \"$ack_raw\" ] && artifact=$(review_artifact_filter acknowledgement \"$binding\" \"$role\" \"$head\" \"$task\" < \"$ack_raw\" 2>/dev/null)",
-    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")"
+    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an acknowledgement naming the wrong commit cannot begin a review",
+      "tests/fm-review-role.test.sh",
+      "acknowledgement"
+    ]
   },
   {
     "case": "an acknowledgement naming the wrong role or assignment is refused",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "an acknowledgement naming the wrong role or assignment is refused",
     "expected_negative_failure": "declared length",
     "search": "[ \"$(LC_ALL=C printf '%s' \"$payload\" | wc -c | tr -d ' ')\" -eq \"$frame_bytes\" ] || return 1",
-    "replacement": "true || return 1"
+    "replacement": "true || return 1",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an acknowledgement naming the wrong role or assignment is refused",
+      "tests/fm-review-role.test.sh",
+      "declared length"
+    ]
   },
   {
     "case": "an unenumerated combination refuses rather than defaults",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "an unenumerated combination refuses rather than defaults",
     "expected_negative_failure": "UNENUMERATED",
     "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
-    "replacement": "*) result=PASS; reason=\"defaulted\" ;;"
+    "replacement": "*) result=PASS; reason=\"defaulted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an unenumerated combination refuses rather than defaults",
+      "tests/fm-review-role.test.sh",
+      "UNENUMERATED"
+    ]
   },
   {
     "case": "an unrelated failure signature is not recurrence proof",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "an unrelated failure signature is not recurrence proof",
     "expected_negative_failure": "failed:approve",
     "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
-    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an unrelated failure signature is not recurrence proof",
+      "tests/fm-review-role.test.sh",
+      "failed:approve"
+    ]
   },
   {
     "case": "an unverifiable capture is could-not-observe",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "an unverifiable capture is could-not-observe",
     "expected_negative_failure": "failed:reject",
     "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
-    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an unverifiable capture is could-not-observe",
+      "tests/fm-review-role.test.sh",
+      "failed:reject"
+    ]
   },
   {
     "case": "candidate mutation is refused while the output channel still works",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
-    "suite": "tests/fm-commitment-register.test.sh",
     "target_assertion_id": "candidate mutation is refused while the output channel still works",
     "expected_negative_failure": "failed setup",
     "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
-    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "candidate mutation is refused while the output channel still works",
+      "tests/fm-commitment-register.test.sh",
+      "failed setup"
+    ]
   },
   {
     "case": "completion without a verdict leaves the review unsatisfied",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "completion without a verdict leaves the review unsatisfied",
     "expected_negative_failure": "malformed raw reviewer bytes",
     "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
-    "replacement": "and true"
+    "replacement": "and true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "completion without a verdict leaves the review unsatisfied",
+      "tests/fm-review-role.test.sh",
+      "malformed raw reviewer bytes"
+    ]
   },
   {
     "case": "every execution and verdict combination is enumerated",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "every execution and verdict combination is enumerated",
     "expected_negative_failure": "failed:approve",
     "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
-    "replacement": "*) result=PASS; reason=defaulted ;;"
+    "replacement": "*) result=PASS; reason=defaulted ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "every execution and verdict combination is enumerated",
+      "tests/fm-review-role.test.sh",
+      "failed:approve"
+    ]
   },
   {
     "case": "frame length is measured in bytes",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "raw acknowledgement assignment binding",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "frame length is measured in bytes",
     "expected_negative_failure": "acknowledgement",
     "search": "[ -s \"$ack_raw\" ] && artifact=$(review_artifact_filter acknowledgement \"$binding\" \"$role\" \"$head\" \"$task\" < \"$ack_raw\" 2>/dev/null)",
-    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")"
+    "replacement": "[ -s \"$ack_path\" ] && artifact=$(cat \"$ack_path\")",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "frame length is measured in bytes",
+      "tests/fm-review-role.test.sh",
+      "acknowledgement"
+    ]
   },
   {
     "case": "no acknowledgement means the role is not established",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "no acknowledgement means the role is not established",
     "expected_negative_failure": "declared length",
     "search": "[ \"$(LC_ALL=C printf '%s' \"$payload\" | wc -c | tr -d ' ')\" -eq \"$frame_bytes\" ] || return 1",
-    "replacement": "true || return 1"
+    "replacement": "true || return 1",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "no acknowledgement means the role is not established",
+      "tests/fm-review-role.test.sh",
+      "declared length"
+    ]
   },
   {
     "case": "paired evidence is derived from execution not from arguments",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "paired evidence is derived from execution not from arguments",
     "expected_negative_failure": "UNENUMERATED",
     "search": "*) die_unevaluable \"FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED: execution=${execution:-absent} verdict=${verdict:-absent}\" ;;",
-    "replacement": "*) result=PASS; reason=\"defaulted\" ;;"
+    "replacement": "*) result=PASS; reason=\"defaulted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "paired evidence is derived from execution not from arguments",
+      "tests/fm-review-role.test.sh",
+      "UNENUMERATED"
+    ]
   },
   {
     "case": "restoration is proved and the check returns to baseline",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "restoration is proved and the check returns to baseline",
     "expected_negative_failure": "failed:approve",
     "search": "failed:approve) result=NO_VERIFIER_RAN; reason=\"failed review execution cannot support its captured approval\" ;;",
-    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;"
+    "replacement": "failed:approve) result=PASS; reason=\"approval accepted\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "restoration is proved and the check returns to baseline",
+      "tests/fm-review-role.test.sh",
+      "failed:approve"
+    ]
   },
   {
     "case": "the fixture computes its expected length independently",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "the fixture computes its expected length independently",
     "expected_negative_failure": "failed:reject",
     "search": "failed:reject) result=FAIL; reason=\"the failed review run recorded a validated negative verdict\" ;;",
-    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;"
+    "replacement": "failed:reject) result=NO_VERIFIER_RAN; reason=\"rejection discarded\" ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "the fixture computes its expected length independently",
+      "tests/fm-review-role.test.sh",
+      "failed:reject"
+    ]
   },
   {
     "case": "the green fixture fails when the assignment binding is removed",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
-    "suite": "tests/fm-commitment-register.test.sh",
     "target_assertion_id": "the green fixture fails when the assignment binding is removed",
     "expected_negative_failure": "failed setup",
     "search": "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc",
-    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc"
+    "replacement": "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key leaked unclassified exit $rc",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "the green fixture fails when the assignment binding is removed",
+      "tests/fm-commitment-register.test.sh",
+      "failed setup"
+    ]
   },
   {
     "case": "the launcher cannot fabricate or default a verdict",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "the launcher cannot fabricate or default a verdict",
     "expected_negative_failure": "malformed raw reviewer bytes",
     "search": "and (.verdict == \"approve\" or .verdict == \"reject\")",
-    "replacement": "and true"
+    "replacement": "and true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "the launcher cannot fabricate or default a verdict",
+      "tests/fm-review-role.test.sh",
+      "malformed raw reviewer bytes"
+    ]
   },
   {
     "case": "the read-only control cites measured harness evidence",
     "finding": "review-control-bootstrap recurrence requirement",
-    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-launch-lib.sh",
     "location": "read-only harness classifier",
-    "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "the read-only control cites measured harness evidence",
     "expected_negative_failure": "portable classifier",
     "search": "pi) printf 'allowlist\\t--tools read,grep,find,ls' ;;",
-    "replacement": "pi) return 1 ;;"
+    "replacement": "pi) return 1 ;;",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "the read-only control cites measured harness evidence",
+      "tests/fm-review-role.test.sh",
+      "portable classifier"
+    ]
+  },
+  {
+    "case": "an active assignment consumes the generation it was dispatched with",
+    "finding": "immutable instruction consumption",
+    "file": "bin/fm-spawn.sh",
+    "location": "review assignment acknowledgement binding",
+    "target_assertion_id": "an active assignment consumes the generation it was dispatched with",
+    "expected_negative_failure": "generation identity changed",
+    "search": "review_assignment_id:$a",
+    "replacement": "review_assignment_id:\"latest\"",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an active assignment consumes the generation it was dispatched with",
+      "tests/fm-review-role.test.sh",
+      "generation identity changed"
+    ]
+  },
+  {
+    "case": "a modified generation file is refused",
+    "finding": "immutable instruction identity",
+    "file": "bin/fm-review-role.sh",
+    "location": "raw artifact validation",
+    "target_assertion_id": "a modified generation file is refused",
+    "expected_negative_failure": "modified generation",
+    "search": "artifact=$(review_artifact_filter",
+    "replacement": "artifact=$(cat",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a modified generation file is refused",
+      "tests/fm-review-role.test.sh",
+      "modified generation"
+    ]
+  },
+  {
+    "case": "an instruction hash mismatch is invalid delivery",
+    "finding": "instruction hash binding",
+    "file": "bin/fm-review-role.sh",
+    "location": "artifact equality validation",
+    "target_assertion_id": "an instruction hash mismatch is invalid delivery",
+    "expected_negative_failure": "hash mismatch",
+    "search": "[ \"$artifact\" = \"$(cat \"$ack_path\" 2>/dev/null)\" ]",
+    "replacement": "true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "an instruction hash mismatch is invalid delivery",
+      "tests/fm-review-role.test.sh",
+      "hash mismatch"
+    ]
+  },
+  {
+    "case": "a transport that cannot establish identity returns unknown delivery",
+    "finding": "transport identity failure",
+    "file": "bin/fm-review-role.sh",
+    "location": "capture validation failure",
+    "target_assertion_id": "a transport that cannot establish identity returns unknown delivery",
+    "expected_negative_failure": "unknown delivery",
+    "search": "capture_review_artifact \"$task\" \"$kind\" \"$capture\" || return 2",
+    "replacement": "capture_review_artifact \"$task\" \"$kind\" \"$capture\" || return 0",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence-assertion.sh",
+      "a transport that cannot establish identity returns unknown delivery",
+      "tests/fm-review-role.test.sh",
+      "unknown delivery"
+    ]
+  },
+  {
+    "case": "the runner refuses to mutate the authoritative checkout",
+    "finding": "runner isolation",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "primary checkout refusal",
+    "target_assertion_id": "the runner refuses to mutate the authoritative checkout",
+    "expected_negative_failure": "authoritative checkout mutation",
+    "search": "[ \"$git_dir\" != \"$common_dir\" ]",
+    "replacement": "true",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "an interrupted run leaves the authoritative candidate byte-identical",
+    "finding": "runner interruption isolation",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "disposable clone",
+    "target_assertion_id": "an interrupted run leaves the authoritative candidate byte-identical",
+    "expected_negative_failure": "candidate changed",
+    "search": "--no-hardlinks",
+    "replacement": "--local",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "the targeted assertion is proved to have executed",
+    "finding": "assertion reachability",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "executed assertion marker",
+    "target_assertion_id": "the targeted assertion is proved to have executed",
+    "expected_negative_failure": "assertion not reached",
+    "search": "grep -Fqx \"FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=PASS\"",
+    "replacement": "grep -Fq PASS",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "a setup failure is not an expected assertion failure",
+    "finding": "failure classification",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "negative assertion execution marker",
+    "target_assertion_id": "a setup failure is not an expected assertion failure",
+    "expected_negative_failure": "setup failure accepted",
+    "search": "grep -Fqx \"FM_RECURRENCE_ASSERTION_EXECUTED id=$assertion result=FAIL failure=$expected\"",
+    "replacement": "grep -Fq \"$expected\"",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
+  },
+  {
+    "case": "supplied strings cannot fabricate observed evidence",
+    "finding": "observed evidence ownership",
+    "file": "bin/fm-review-recurrence.sh",
+    "location": "negative observation capture",
+    "target_assertion_id": "supplied strings cannot fabricate observed evidence",
+    "expected_negative_failure": "supplied evidence accepted",
+    "search": "--arg observed \"$negative\"",
+    "replacement": "--arg observed \"$expected\"",
+    "assertion_command": [
+      "bash",
+      "tests/fm-review-recurrence.test.sh"
+    ]
   }
 ]
