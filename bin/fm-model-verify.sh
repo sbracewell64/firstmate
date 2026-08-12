@@ -589,7 +589,13 @@ if [ -n "$RESULTS" ]; then
         # repairable work rather than as a fact about the model. The reason is
         # always present: this line existing with nothing after the dash is the
         # exact defect the record format was changed to make impossible.
-        echo "TOOLING_GAP: $key could not be observed by bin/fm-model-verify.sh ($shape, rc=${rc:--}, ${lat:--}s) - $detail. This is a broken reader, not a provider fact: the candidate is excluded from routing until the reader is repaired, and releasing a hold will not restore it. File the repair as backlog work and see fm-route.sh availability gaps."
+        # The repair item is named rather than requested. Filing it is the
+        # sweep's own job now, so this line reports which item to dispatch, or
+        # UNFILED with the reason when the backlog backend could not be used.
+        item=$(jq -r --arg k "$key" \
+          '.models[$k].tooling_gap | (.backlog_item // ("UNFILED (" + (.backlog_item_status // "reason unrecorded") + ")"))' \
+          "$(fm_availability_record_path "$STATE")" 2>/dev/null || true)
+        echo "TOOLING_GAP: $key could not be observed by bin/fm-model-verify.sh ($shape, rc=${rc:--}, ${lat:--}s) - $detail. This is a broken reader, not a provider fact: the candidate is excluded from routing until the reader is repaired, and releasing a hold will not restore it. Repair item=${item:-UNFILED}; see fm-route.sh availability gaps for the recorded evidence."
         NEEDS_ACTION=1
         ;;
     esac
