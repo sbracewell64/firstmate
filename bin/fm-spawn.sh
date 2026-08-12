@@ -1482,7 +1482,7 @@ if [ "$KIND" != secondmate ]; then
     # a substitute list has to carry are computed only when one is about to be
     # printed. The happy path stays a single route evaluation with no registry
     # probe per candidate.
-    if [ -n "$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.held // .subject.unobserved // empty' 2>/dev/null)" ]; then
+    if [ -n "$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.held // .subject.unobserved // .subject.unavailable // empty' 2>/dev/null)" ]; then
       ROUTE_DECISION=$(fm_route_decision_with_registry "$ROUTE_DECISION" \
         "$(spawn_route_registry_verdicts "$ROUTE_DECISION")")
     fi

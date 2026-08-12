@@ -124,6 +124,7 @@ FM_ROUTE_TOKEN_POOL=FM_SPAWN_ROUTE_POOL_VIOLATION
 FM_ROUTE_TOKEN_FLOOR=FM_SPAWN_ROUTE_FLOOR_VIOLATION
 FM_ROUTE_TOKEN_HELD=FM_SPAWN_ROUTE_MODEL_HELD
 FM_ROUTE_TOKEN_UNOBSERVED=$FM_AVAIL_TOKEN_UNOBSERVED
+FM_ROUTE_TOKEN_UNAVAILABLE_UNHELD=$FM_AVAIL_TOKEN_UNAVAILABLE
 FM_ROUTE_TOKEN_OBSERVATION_UNREADABLE=FM_ROUTE_OBSERVATION_UNREADABLE
 FM_ROUTE_TOKEN_HEALTH_FOREIGN=FM_ROUTE_HEALTH_FOREIGN_ENTRY
 FM_ROUTE_TOKEN_NO_CANDIDATE=FM_ROUTE_NO_CANDIDATE
@@ -370,6 +371,16 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
     # probed has no entry and is not excluded by this axis.
     def unobserved($m): ($unobserved.models[$m] // null);
 
+    # The third exclusion: a probe that RAN and positively established this
+    # candidate as unavailable. Ordinarily a hold records the same fact and is
+    # what the refusal names, because a hold carries an expiry and a release
+    # command. This axis exists because the two records are written by two
+    # calls, and an invariant that holds only when both writes succeed is not an
+    # invariant: without it, a lost hold write leaves a measured negative fact
+    # sitting in the observation record while routing calls the candidate
+    # eligible.
+    def unavailable($m): ($unavailable.models[$m] // null);
+
     def violations($m; $e):
         [ (if ($floor_undefined)
            then {rule:"floor_undefined", config_path:($route_path + "/floor"),
@@ -460,6 +471,7 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
                | $r + {requested:$model, effort:$effort,
                        held:(if $r.resolved != null then held($r.resolved) else null end),
                        unobserved:(if $r.resolved != null then unobserved($r.resolved) else null end),
+                       unavailable:(if $r.resolved != null then unavailable($r.resolved) else null end),
                        violations:(if $r.resolved != null then violations($r.resolved; $effort)
                                    elif $r.resolution == "unstated"
                                    then [{rule:"model_unstated", config_path:$pool_path,
@@ -471,10 +483,12 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
                   | .value as $c
                   | (held($c)) as $h
                   | (unobserved($c)) as $u
+                  | (unavailable($c)) as $n
                   | (violations($c; (if ($effort | length) > 0 then $effort else ($ef // "") end))) as $v
-                  | {model:$c, position:(.key + 1), held:$h, unobserved:$u, violations:$v,
+                  | {model:$c, position:(.key + 1), held:$h, unobserved:$u, unavailable:$n,
+                     violations:$v,
                      floor_met:(($v | length) == 0),
-                     eligible:(($v | length) == 0 and $h == null and $u == null)} ]}
+                     eligible:(($v | length) == 0 and $h == null and $u == null and $n == null)} ]}
   end
 '
 
@@ -494,15 +508,22 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
 # status exists for the same reason: the record that carries a broken reader's
 # exclusions fails independently of the one that carries holds.
 fm_route_decision() {
-  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} file holds unobserved now
+  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} file holds unobserved unavailable now
   file=$(fm_route_config_path "$cfg")
   [ -f "$file" ] || return 2
   command -v jq >/dev/null 2>&1 || return 2
   now=$(date -u +%s)
   holds=$(fm_route_health_active "$state" "$now") || return 3
+  # Both exclusions come from the same record and are read through their own
+  # named seams, so a mutation control that replaces either seam changes what
+  # the decision sees. Either read failing is status 4: the record that carries
+  # them could not be established, and which of the two was being asked for does
+  # not change the repair.
   unobserved=$(fm_availability_unobserved_active "$state") || return 4
+  unavailable=$(fm_availability_unavailable_active "$state") || return 4
   jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" \
      --argjson holds "$holds" --argjson unobserved "$unobserved" \
+     --argjson unavailable "$unavailable" \
      "$FM_ROUTE_DECISION_JQ" "$file" 2>/dev/null || return 2
 }
 
@@ -538,7 +559,8 @@ fm_route_decision_with_registry() {  # <decision-json> <verdict-lines>
               # this expression narrows what the decision decided and must never
               # be the place a new exclusion is forgotten.
               eligible:($c.floor_met and ($c.held == null)
-                        and ($c.unobserved == null) and ($rr == null))} ]' \
+                        and ($c.unobserved == null) and ($c.unavailable == null)
+                        and ($rr == null))} ]' \
     || { printf '%s' "$decision"; return 1; }
 }
 
@@ -620,9 +642,20 @@ fm_route_undetermined_refusal() {
 # The third unreadable input, named separately for the same reason the second
 # is: an operator sent to the availability record while the observation record
 # is the truncated one repairs a file that was never broken.
+#
+# "Could not be established" covers more than unparseable JSON, and the
+# difference is a whole defect class. A file that parses but does not satisfy
+# the record's schema - a wrong or absent schema string, an entry outside the
+# closed observation vocabulary, an UNOBSERVABLE entry with no tooling-gap block
+# - used to read as an EMPTY exclusion set, silently re-admitting every
+# candidate the record was excluding. It refuses here instead, and the reason it
+# refuses is printed so the record can be repaired rather than guessed at.
 fm_route_observation_unreadable_refusal() {  # [<state-dir>]
-  printf '%s: %s exists but could not be parsed, so which candidates a failed reader is currently excluding could not be determined and no dispatch can be checked against the route it claims. Repair or remove that record; neither the routing config nor the availability record is what failed here\n' \
-    "$FM_ROUTE_TOKEN_OBSERVATION_UNREADABLE" "$(fm_availability_record_path "${1:-}")"
+  local reason
+  reason=$(fm_availability_record_models "${1:-}" 2>&1 >/dev/null)
+  printf '%s: %s exists and could not be established as a valid observation record (%s), so which candidates a failed reader is currently excluding could not be determined and no dispatch can be checked against the route it claims. Repair or remove that record; neither the routing config nor the availability record is what failed here\n' \
+    "$FM_ROUTE_TOKEN_OBSERVATION_UNREADABLE" "$(fm_availability_record_path "${1:-}")" \
+    "${reason:-no reason reported}"
 }
 
 # fm_route_refusal_from_decision <config-dir> <route> <model> <decision-json>
@@ -634,7 +667,8 @@ fm_route_observation_unreadable_refusal() {  # [<state-dir>]
 # availability records, and then the refusal and the recorded floor no longer
 # describe the same decision.
 fm_route_refusal_from_decision() {
-  local cfg=$1 route=$2 model=${3:-} decision=$4 state=${5:-} known dup resolution count held unobserved substitutes checked
+  local cfg=$1 route=$2 model=${3:-} decision=$4 state=${5:-} known dup resolution count held substitutes checked
+  local resolved unobserved unavailable held_json excluded
   known=$(printf '%s' "$decision" | jq -r '.route_known')
   if [ "$known" != true ]; then
     printf '%s: route %s is not defined by %s/crew-dispatch.json. Defined: %s\n' \
@@ -662,27 +696,38 @@ fm_route_refusal_from_decision() {
     fm_route_violation_lines "$route" "$decision" '.subject.violations'
     return 1
   fi
+  # THE EXCLUSIONS ARE INDEPENDENT AND ARE ALL REPORTED. A candidate can be
+  # excluded by a hold, by a failed reader, and by a positively observed
+  # unavailability at the same time, and each has a different repair. The
+  # observability refusal used to be printed INSTEAD of the hold and to state
+  # unconditionally that no hold was excluding the candidate - which was simply
+  # false whenever one was, and sent the operator away from a genuine hold that
+  # would still be there after the reader was fixed. So each applicable
+  # exclusion is named, and the hold is passed into the observability refusal so
+  # its closing advice describes the actual situation.
+  resolved=$(printf '%s' "$decision" | jq -r '.subject.resolved')
+  unobserved=$(printf '%s' "$decision" | jq -c '.subject.unobserved // empty')
+  unavailable=$(printf '%s' "$decision" | jq -c '.subject.unavailable // empty')
+  held_json=$(printf '%s' "$decision" | jq -c '.subject.held // empty')
+  excluded=0
   # OBSERVABILITY, before availability. The routing policy admits this model and
   # the reader that would say whether the fleet can reach it FAILED, so there is
-  # no availability fact to apply. Refusing here keeps a could-not-observe from
-  # being reported as a hold: a hold sends an operator to release it, and
+  # no availability fact to apply. Naming it first keeps a could-not-observe
+  # from being read as a hold: a hold sends an operator to release it, and
   # releasing changes nothing while the reader is still broken.
-  unobserved=$(printf '%s' "$decision" | jq -c '.subject.unobserved // empty')
   if [ -n "$unobserved" ]; then
-    fm_availability_unobserved_refusal \
-      "$(printf '%s' "$decision" | jq -r '.subject.resolved')" "$unobserved" "$state"
-    # The substitutes are the same eligible list a hold offers, and it is
-    # printed for the same reason: a refusal an operator cannot act on is a
-    # refusal that stops the fleet twice.
-    substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")')
-    if [ -n "$substitutes" ]; then
-      printf '  Fail over to the next eligible model inside this route pool, in pool order (%s); never substitute outside this pool and never lower the floor.\n' \
-        "$substitutes"
-    else
-      printf '  No other candidate in route %s is eligible either, so there is nothing to fail over to. A single-candidate pool blocked by a broken reader is the correct immediate behaviour: repair observability rather than making uncertainty permissive. Run fm-route.sh eligible --route %s for the terminal report, then stop and escalate.\n' \
-        "$route" "$route"
-    fi
-    return 1
+    fm_availability_unobserved_refusal "$resolved" "$unobserved" "$state" "$held_json"
+    excluded=1
+  fi
+  # THE OBSERVATION ENFORCING ITSELF. A probe positively established this
+  # candidate as unavailable and no hold records that fact, so the pair that
+  # should have been written together came apart. The observation is the
+  # measured half, so it excludes on its own rather than waiting for a hold that
+  # is not there. With a hold present this is the ordinary case and the hold
+  # refusal below is the one that carries the repair.
+  if [ -n "$unavailable" ] && [ -z "$held_json" ]; then
+    fm_availability_unavailable_refusal "$resolved" "$unavailable" "$state"
+    excluded=1
   fi
   # AVAILABILITY. The routing policy admits this model; the record says the
   # fleet currently cannot reach it. Refusing here is what makes `check` and
@@ -715,6 +760,20 @@ fm_route_refusal_from_decision() {
     else
       printf '%s: route %s: %s in %s, and no other candidate in this route pool is eligible either, so there is nothing to fail over to. Run fm-route.sh eligible --route %s for the terminal report naming every candidate and why, then stop and escalate: do not substitute outside this pool and do not lower the floor\n' \
         "$FM_ROUTE_TOKEN_HELD" "$route" "$held" "$(fm_route_health_path "$state")" "$route"
+    fi
+    return 1
+  fi
+  if [ "$excluded" = 1 ]; then
+    # The substitutes are the same eligible list a hold offers, and printed for
+    # the same reason: a refusal an operator cannot act on is a refusal that
+    # stops the fleet twice.
+    substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")')
+    if [ -n "$substitutes" ]; then
+      printf '  Fail over to the next eligible model inside this route pool, in pool order (%s); never substitute outside this pool and never lower the floor.\n' \
+        "$substitutes"
+    else
+      printf '  No other candidate in route %s is eligible either, so there is nothing to fail over to. A single-candidate pool blocked by a broken reader is the correct immediate behaviour: repair observability rather than making uncertainty permissive. Run fm-route.sh eligible --route %s for the terminal report, then stop and escalate.\n' \
+        "$route" "$route"
     fi
     return 1
   fi

@@ -209,15 +209,29 @@ terminal_report() {  # <decision-json>
                + " could not observe it ("
                + (.unobserved.tooling_gap.failure_class // .unobserved.shape // "unclassified")
                + ": " + (.unobserved.tooling_gap.failure_evidence // .unobserved.detail // "no evidence recorded")
-               + "), so this is neither available nor unavailable and no hold is what excludes it; repair the reader ("
+               + "), so this is neither available nor unavailable; repair the reader ("
                + (.unobserved.tooling_gap.reason_code // "TOOLING_GAP")
                + (if (.unobserved.tooling_gap.backlog_item // null) != null
                   then ", tracked as " + .unobserved.tooling_gap.backlog_item
                   else ", not yet filed as backlog work" end) + ")"
+               # Both exclusions, whenever both are recorded. Saying "no hold is
+               # what excludes it" while a hold sits in the record is a false
+               # statement that sends an operator away from a real exclusion.
+               + (if .held != null
+                  then " - and it is ALSO held " + .held.state + " on the " + .held.scope
+                       + " " + .held.subject
+                       + ", a separate exclusion with a separate repair: fixing the reader will not clear the hold and releasing the hold will not restore the candidate"
+                  else " and no hold is what excludes it" end)
           elif .held != null
           then "held " + .held.state + " on the " + .held.scope + " "
                + .held.subject
                + (if .held.until != null then " until epoch " + (.held.until | tostring) else " until released" end)
+          elif .unavailable != null
+          then "UNAVAILABLE - " + (.unavailable.reader // "an unnamed reader")
+               + " positively established this at " + (.unavailable.at // "an unrecorded time")
+               + " (" + (.unavailable.shape // "unclassified") + ": "
+               + (.unavailable.detail // "no evidence recorded")
+               + "), and no hold records that fact, so the observation is what excludes it"
           elif .registry_refusal != null then .registry_refusal
           else "eligible" end )'
   printf '%s' "$d" | jq -r '
@@ -264,7 +278,7 @@ case "$CMD" in
     # what lets a refusal name substitutes an operator can actually dispatch.
     # Only a held subject prints such a list, so only a held subject pays for
     # the whole pool's verdicts.
-    if [ -n "$(printf '%s' "$DECISION" | jq -r '.subject.held // .subject.unobserved // empty')" ]; then
+    if [ -n "$(printf '%s' "$DECISION" | jq -r '.subject.held // .subject.unobserved // .subject.unavailable // empty')" ]; then
       DECISION=$(enrich "$DECISION")
     fi
     if refusal=$(fm_route_refusal_from_decision "$CONFIG" "$ROUTE" "$MODEL" "$DECISION" "$STATE"); then
@@ -405,6 +419,21 @@ case "$CMD" in
           SCOPE=${RESOLVED%% *}
           SUBJECT=${RESOLVED#* }
           printf 'released %s %s\n' "$SCOPE" "$SUBJECT"
+          # A release is an EXPLICIT operator override, and routing enforces a
+          # recorded UNAVAILABLE observation independently of its hold. Clearing
+          # only the hold would therefore leave the candidate excluded by a
+          # record nobody was told about, and the supported release command
+          # would quietly stop working. So the observation the operator is
+          # overriding is retired with it, and the retirement is printed.
+          #
+          # A could-not-observe is deliberately NOT retired: releasing repairs
+          # nothing about a broken reader, and letting it clear one would turn
+          # "repair observability" back into "work around uncertainty".
+          RETIRED=$(fm_availability_record_retire "$STATE" "$FM_AVAIL_UNAVAILABLE" "$SUBJECT") || exit 2
+          if [ -n "$RETIRED" ]; then
+            printf 'retired the %s observation recorded for: %s\n' \
+              "$FM_AVAIL_UNAVAILABLE" "$(printf '%s' "$RETIRED" | tr '\n' ' ' | sed 's/ $//')"
+          fi
         else
           [ -n "$HOLD_STATE" ] || die "availability hold needs --state <$(fm_route_health_states_oneline)>"
           EXPIRES=
