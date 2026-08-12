@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# Execute the review-control mutation experiments in a disposable linked worktree.
-# Usage: fm-review-recurrence.sh [--case <exact-case-name>]
 set -u
 
-ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-SPEC=$ROOT/tests/review-control-mutations.json
-OUT=$ROOT/docs/verification/review-control-recurrence-evidence.json
+ROOT=${FM_REVIEW_RECURRENCE_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}
+SPEC=${FM_REVIEW_RECURRENCE_SPEC:-$ROOT/tests/review-control-mutations.json}
+OUT=${FM_REVIEW_RECURRENCE_OUT:-$ROOT/docs/verification/review-control-recurrence-evidence.json}
+TMP_PARENT=${FM_REVIEW_RECURRENCE_TMP:-$ROOT/.review-recurrence-tmp}
 ONLY=
 
 if [ "${1:-}" = --case ]; then
@@ -16,99 +15,90 @@ elif [ "$#" -ne 0 ]; then
   exit 2
 fi
 
-command -v jq >/dev/null 2>&1 || { echo "COULD_NOT_OBSERVE: jq is unavailable" >&2; exit 2; }
-command -v git >/dev/null 2>&1 || { echo "COULD_NOT_OBSERVE: git is unavailable" >&2; exit 2; }
-[ -f "$SPEC" ] || { echo "COULD_NOT_OBSERVE: mutation specification is absent" >&2; exit 2; }
+could_not_observe() { echo "COULD_NOT_OBSERVE: $1" >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || could_not_observe "jq is unavailable"
+command -v git >/dev/null 2>&1 || could_not_observe "git is unavailable"
+[ -f "$SPEC" ] || could_not_observe "mutation specification is absent"
+[ "$(git -C "$ROOT" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] || could_not_observe "source is not a git checkout"
+git_dir=$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null) || could_not_observe "git directory is unreadable"
+common_dir=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) || could_not_observe "git common directory is unreadable"
+[ "$git_dir" != "$common_dir" ] || could_not_observe "recurrence execution refuses the primary checkout"
+[ -z "$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)" ] || could_not_observe "recurrence execution requires a clean candidate"
 
-git_dir=$(git -C "$ROOT" rev-parse --absolute-git-dir 2>/dev/null) \
-  || { echo "COULD_NOT_OBSERVE: not a git worktree" >&2; exit 2; }
-common_dir=$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
-  || { echo "COULD_NOT_OBSERVE: git common directory is unreadable" >&2; exit 2; }
-[ "$git_dir" != "$common_dir" ] \
-  || { echo "COULD_NOT_OBSERVE: recurrence mutations refuse the primary checkout" >&2; exit 2; }
-[ -z "$(git -C "$ROOT" status --porcelain=v1 --untracked-files=all)" ] \
-  || { echo "COULD_NOT_OBSERVE: recurrence mutations require a clean worktree" >&2; exit 2; }
-
-candidate=$(git -C "$ROOT" rev-parse HEAD) || exit 2
-results=$(mktemp "$ROOT/docs/verification/.review-control-recurrence.XXXXXX") || exit 2
-backup=
-mutated=
-original_hash=
-
-restore_current() {
-  [ -n "$mutated" ] || return 0
-  cp "$backup" "$mutated" || return 1
-  restored_hash=$(git hash-object "$mutated") || return 1
-  [ "$restored_hash" = "$original_hash" ] || return 1
-  rm -f "$backup"
-  backup=
-  mutated=
-  original_hash=
-}
-
-cleanup() {
-  if ! restore_current; then
-    echo "COULD_NOT_OBSERVE: interrupted mutation could not be restored by content hash" >&2
-  fi
-  rm -f "$results"
-}
-trap cleanup EXIT
-trap 'cleanup; trap - EXIT; exit 130' HUP INT TERM
+candidate=$(git -C "$ROOT" rev-parse HEAD) || could_not_observe "candidate commit is unreadable"
+count=$(jq 'length' "$SPEC") || could_not_observe "mutation specification is invalid"
+[ "$count" -eq 29 ] || could_not_observe "expected 29 mutation specifications, found $count"
+mkdir -p "$TMP_PARENT" || could_not_observe "temporary parent cannot be created"
+run_root=$(mktemp -d "$TMP_PARENT/run.XXXXXX") || could_not_observe "temporary directory cannot be created"
+workspace=$run_root/candidate
+results=$run_root/results.json
+cleanup() { rm -rf "$run_root"; }
+trap cleanup EXIT HUP INT TERM
+git clone --quiet --no-local "$ROOT" "$workspace" || could_not_observe "disposable local clone failed"
+git -C "$workspace" checkout --quiet --detach "$candidate" || could_not_observe "candidate checkout failed"
+[ "$(git -C "$workspace" rev-parse HEAD)" = "$candidate" ] || could_not_observe "disposable clone does not match pinned candidate"
+[ "$(git -C "$workspace" rev-parse --git-common-dir)" = .git ] || could_not_observe "disposable workspace shares repository administration"
 printf '[]\n' > "$results"
-
-count=$(jq 'length' "$SPEC") || exit 2
-[ "$count" -eq 29 ] || { echo "COULD_NOT_OBSERVE: expected 29 mutation specifications, found $count" >&2; exit 2; }
 
 while IFS= read -r row; do
   name=$(printf '%s' "$row" | jq -r '.case')
   [ -z "$ONLY" ] || [ "$name" = "$ONLY" ] || continue
+  pinned=$(printf '%s' "$row" | jq -r '.candidate_sha')
+  [ "$pinned" = "$candidate" ] || could_not_observe "$name is pinned to $pinned instead of $candidate"
   file=$(printf '%s' "$row" | jq -r '.file')
   location=$(printf '%s' "$row" | jq -r '.location')
   suite=$(printf '%s' "$row" | jq -r '.suite')
   assertion=$(printf '%s' "$row" | jq -r '.target_assertion_id')
   expected=$(printf '%s' "$row" | jq -r '.expected_negative_failure')
+  finding=$(printf '%s' "$row" | jq -r '.finding')
   search=$(printf '%s' "$row" | jq -r '.search')
   replacement=$(printf '%s' "$row" | jq -r '.replacement')
-  mutated=$ROOT/$file
-  case "$mutated" in "$ROOT"/*) ;; *) echo "COULD_NOT_OBSERVE: $name names a file outside the worktree" >&2; exit 2 ;; esac
-  [ -f "$mutated" ] || { echo "COULD_NOT_OBSERVE: $name protection file is absent" >&2; exit 2; }
+  [ -n "$finding" ] && [ -n "$assertion" ] && [ -n "$expected" ] || could_not_observe "$name has an incomplete causal specification"
+  case "$file" in /*|../*|*/../*|*/..) could_not_observe "$name names a protection outside the clone" ;; esac
+  mutated=$workspace/$file
+  [ -f "$mutated" ] || could_not_observe "$name protection file is absent"
 
-  baseline=$(bash "$ROOT/$suite" 2>&1); baseline_rc=$?
-  [ "$baseline_rc" -eq 0 ] || { echo "COULD_NOT_OBSERVE: $name baseline failed" >&2; exit 2; }
-  original_hash=$(git hash-object "$mutated") || exit 2
-  backup=$(mktemp "$mutated.recurrence.XXXXXX") || exit 2
-  cp "$mutated" "$backup" || exit 2
+  git -C "$workspace" reset --quiet --hard "$candidate" || could_not_observe "$name could not reset to its pinned base"
+  git -C "$workspace" clean -qfdx || could_not_observe "$name could not clean its disposable base"
+  [ "$(git -C "$workspace" rev-parse HEAD)" = "$candidate" ] || could_not_observe "$name base identity changed"
+  baseline=$(FM_RECURRENCE_TARGET_ASSERTION="$assertion" bash "$workspace/$suite" 2>&1); baseline_rc=$?
+  [ "$baseline_rc" -eq 0 ] || could_not_observe "$name baseline assertion did not pass"
+
   occurrences=$(SEARCH=$search perl -0ne '$n += () = /\Q$ENV{SEARCH}\E/g; END { print $n + 0 }' "$mutated")
-  [ "$occurrences" -eq 1 ] || { echo "COULD_NOT_OBSERVE: $name mutation target matched $occurrences times" >&2; exit 2; }
-  SEARCH=$search REPLACEMENT=$replacement perl -0pi -e 's/\Q$ENV{SEARCH}\E/$ENV{REPLACEMENT}/' "$mutated" || exit 2
-  mutated_hash=$(git hash-object "$mutated") || exit 2
-  [ "$mutated_hash" != "$original_hash" ] || { echo "COULD_NOT_OBSERVE: $name mutation did not alter its named protection" >&2; exit 2; }
-  patch=$(git -C "$ROOT" diff -- "$file")
-  [ -n "$patch" ] || { echo "COULD_NOT_OBSERVE: $name produced no re-executable patch" >&2; exit 2; }
+  [ "$occurrences" -eq 1 ] || could_not_observe "$name mutation target matched $occurrences times"
+  before=$(git -C "$workspace" hash-object "$mutated") || could_not_observe "$name protection hash is unreadable"
+  SEARCH=$search REPLACEMENT=$replacement perl -0pi -e 's/\Q$ENV{SEARCH}\E/$ENV{REPLACEMENT}/' "$mutated" || could_not_observe "$name mutation failed"
+  after=$(git -C "$workspace" hash-object "$mutated") || could_not_observe "$name mutated hash is unreadable"
+  [ "$before" != "$after" ] || could_not_observe "$name mutation did not alter its named protection"
+  changed=$(git -C "$workspace" diff --name-only)
+  [ "$changed" = "$file" ] || could_not_observe "$name mutation escaped its named protection file"
+  patch=$(git -C "$workspace" diff -- "$file")
+  [ -n "$patch" ] || could_not_observe "$name produced no re-executable patch"
 
-  negative=$(bash "$ROOT/$suite" 2>&1); negative_rc=$?
-  [ "$negative_rc" -ne 0 ] || { echo "COULD_NOT_OBSERVE: $name target assertion stayed green" >&2; exit 2; }
-  printf '%s\n' "$negative" | grep -Fq "$expected" \
-    || { echo "COULD_NOT_OBSERVE: $name failed for an unrelated reason; expected $expected" >&2; exit 2; }
-  restore_current || { echo "COULD_NOT_OBSERVE: $name restoration hash did not match" >&2; exit 2; }
-  confirm=$(bash "$ROOT/$suite" 2>&1); confirm_rc=$?
-  [ "$confirm_rc" -eq 0 ] || { echo "COULD_NOT_OBSERVE: $name did not return to baseline" >&2; exit 2; }
+  negative=$(FM_RECURRENCE_TARGET_ASSERTION="$assertion" bash "$workspace/$suite" 2>&1); negative_rc=$?
+  [ "$negative_rc" -ne 0 ] || could_not_observe "$name target assertion stayed green"
+  printf '%s\n' "$negative" | grep -Fq "not ok - $assertion" || could_not_observe "$name did not fail its target assertion"
+  printf '%s\n' "$negative" | grep -Fq "$expected" || could_not_observe "$name target failed with an unexpected identity"
 
-  tmp=$(mktemp "$results.XXXXXX") || exit 2
-  jq --arg case "$name" --arg protection "$file:$location" --arg assertion "$assertion" \
-    --arg mutation "$patch" --arg expected "$expected" --arg observed "$negative" \
-    --arg commit "$candidate" '. + [{case:$case,protection:$protection,target_assertion_id:$assertion,
-      mutation:$mutation,mutation_verified:true,baseline_pass:true,expected_negative_failure:$expected,
-      observed_negative_failure:$observed,failure_matches_expected:true,restored:true,confirm_pass:true,
-      candidate_commit:$commit}]' "$results" > "$tmp" || exit 2
+  git -C "$workspace" reset --quiet --hard "$candidate" || could_not_observe "$name restoration reset failed"
+  git -C "$workspace" clean -qfdx || could_not_observe "$name restoration clean failed"
+  [ -z "$(git -C "$workspace" status --porcelain=v1 --untracked-files=all)" ] || could_not_observe "$name restoration left dirty bytes"
+  [ "$(git -C "$workspace" hash-object "$workspace/$file")" = "$before" ] || could_not_observe "$name restoration hash did not match"
+  confirm=$(FM_RECURRENCE_TARGET_ASSERTION="$assertion" bash "$workspace/$suite" 2>&1); confirm_rc=$?
+  [ "$confirm_rc" -eq 0 ] || could_not_observe "$name did not return to baseline"
+
+  tmp=$results.tmp
+  jq --arg case "$name" --arg protection "$file:$location" --arg assertion "$assertion" --arg mutation "$patch" \
+    --arg expected "$expected" --arg observed "$negative" --arg commit "$candidate" '. + [{case:$case,
+      protection:$protection,target_assertion_id:$assertion,mutation:$mutation,mutation_verified:true,
+      baseline_pass:true,expected_negative_failure:$expected,observed_negative_failure:$observed,
+      failure_matches_expected:true,restored:true,confirm_pass:true,candidate_commit:$commit}]' "$results" > "$tmp" || exit 2
   mv "$tmp" "$results" || exit 2
 done < <(jq -c '.[]' "$SPEC")
 
-[ -z "$ONLY" ] || [ "$(jq --arg c "$ONLY" '[.[] | select(.case == $c)] | length' "$results")" -eq 1 ] \
-  || { echo "COULD_NOT_OBSERVE: unknown case $ONLY" >&2; exit 2; }
-[ -n "$ONLY" ] || [ "$(jq 'length' "$results")" -eq 29 ] \
-  || { echo "COULD_NOT_OBSERVE: not every required case produced evidence" >&2; exit 2; }
-mv "$results" "$OUT" || exit 2
-results=
-trap - EXIT HUP INT TERM
+wanted=29
+[ -z "$ONLY" ] || wanted=1
+[ "$(jq 'length' "$results")" -eq "$wanted" ] || could_not_observe "not every requested case produced evidence"
+mkdir -p "$(dirname "$OUT")" || could_not_observe "evidence directory cannot be created"
+cp "$results" "$OUT" || could_not_observe "evidence artifact cannot be written"
 printf 'wrote %s\n' "$OUT"

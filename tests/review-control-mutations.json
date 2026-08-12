@@ -1,6 +1,8 @@
 [
   {
     "case": "a failed run cannot deliver an approval",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -11,6 +13,8 @@
   },
   {
     "case": "a failed run does not unsay an authored rejection",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -21,6 +25,8 @@
   },
   {
     "case": "a failed setup is not a failed assertion",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
     "suite": "tests/fm-commitment-register.test.sh",
@@ -31,6 +37,8 @@
   },
   {
     "case": "a label-only case fails the suite",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
     "suite": "tests/fm-review-role.test.sh",
@@ -41,6 +49,8 @@
   },
   {
     "case": "a malformed verdict is invalid review evidence",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
     "suite": "tests/fm-review-role.test.sh",
@@ -51,6 +61,8 @@
   },
   {
     "case": "a mutation that does not alter the named protection is refused",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "raw acknowledgement assignment binding",
     "suite": "tests/fm-review-role.test.sh",
@@ -61,6 +73,8 @@
   },
   {
     "case": "a paired case refuses to record an unflipped check",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
     "suite": "tests/fm-review-role.test.sh",
@@ -71,6 +85,8 @@
   },
   {
     "case": "a persisted acknowledgement is re-derived not re-observed",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
     "suite": "tests/fm-review-role.test.sh",
@@ -81,6 +97,8 @@
   },
   {
     "case": "a read-only reviewer passes by emitting acknowledgement and verdict",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -91,6 +109,8 @@
   },
   {
     "case": "a review target must be a single token",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -101,6 +121,8 @@
   },
   {
     "case": "a stale acknowledgement cannot establish the role",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
     "suite": "tests/fm-commitment-register.test.sh",
@@ -111,6 +133,8 @@
   },
   {
     "case": "a task terminal cannot satisfy review execution",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
     "suite": "tests/fm-review-role.test.sh",
@@ -121,6 +145,8 @@
   },
   {
     "case": "a wrapped review artifact is reconstructed and verified",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
     "suite": "tests/fm-review-role.test.sh",
@@ -131,6 +157,8 @@
   },
   {
     "case": "an acknowledgement naming the wrong commit cannot begin a review",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "raw acknowledgement assignment binding",
     "suite": "tests/fm-review-role.test.sh",
@@ -141,6 +169,8 @@
   },
   {
     "case": "an acknowledgement naming the wrong role or assignment is refused",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
     "suite": "tests/fm-review-role.test.sh",
@@ -151,6 +181,8 @@
   },
   {
     "case": "an unenumerated combination refuses rather than defaults",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
     "suite": "tests/fm-review-role.test.sh",
@@ -161,6 +193,8 @@
   },
   {
     "case": "an unrelated failure signature is not recurrence proof",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -171,6 +205,8 @@
   },
   {
     "case": "an unverifiable capture is could-not-observe",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -181,6 +217,8 @@
   },
   {
     "case": "candidate mutation is refused while the output channel still works",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
     "suite": "tests/fm-commitment-register.test.sh",
@@ -191,6 +229,8 @@
   },
   {
     "case": "completion without a verdict leaves the review unsatisfied",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
     "suite": "tests/fm-review-role.test.sh",
@@ -201,6 +241,8 @@
   },
   {
     "case": "every execution and verdict combination is enumerated",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
     "suite": "tests/fm-review-role.test.sh",
@@ -211,6 +253,8 @@
   },
   {
     "case": "frame length is measured in bytes",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "raw acknowledgement assignment binding",
     "suite": "tests/fm-review-role.test.sh",
@@ -221,6 +265,8 @@
   },
   {
     "case": "no acknowledgement means the role is not established",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "framed artifact byte validation",
     "suite": "tests/fm-review-role.test.sh",
@@ -231,6 +277,8 @@
   },
   {
     "case": "paired evidence is derived from execution not from arguments",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "unmatched execution/verdict refusal",
     "suite": "tests/fm-review-role.test.sh",
@@ -241,6 +289,8 @@
   },
   {
     "case": "restoration is proved and the check returns to baseline",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -251,6 +301,8 @@
   },
   {
     "case": "the fixture computes its expected length independently",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-review-role.sh",
     "location": "review execution/verdict table",
     "suite": "tests/fm-review-role.test.sh",
@@ -261,6 +313,8 @@
   },
   {
     "case": "the green fixture fails when the assignment binding is removed",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
     "file": "bin/fm-commitment-register.sh",
     "location": "probe execution result classification",
     "suite": "tests/fm-commitment-register.test.sh",
@@ -271,7 +325,9 @@
   },
   {
     "case": "the launcher cannot fabricate or default a verdict",
-    "file": "bin/fm-launch-lib.sh",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
+    "file": "bin/fm-review-role.sh",
     "location": "verdict schema filter",
     "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "the launcher cannot fabricate or default a verdict",
@@ -281,7 +337,9 @@
   },
   {
     "case": "the read-only control cites measured harness evidence",
-    "file": "bin/fm-review-role.sh",
+    "finding": "review-control-bootstrap recurrence requirement",
+    "candidate_sha": "9649c0d891d6165eaed66f49ea508f2089fa07ea",
+    "file": "bin/fm-launch-lib.sh",
     "location": "read-only harness classifier",
     "suite": "tests/fm-review-role.test.sh",
     "target_assertion_id": "the read-only control cites measured harness evidence",
