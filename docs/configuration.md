@@ -489,6 +489,15 @@ Availability may remove a candidate from the currently schedulable set.
 It never lowers the required capability floor.
 The candidates it filters are the claimed route's pool as the floor already filtered it, so when the filtering empties that set the lawful outcomes are to wait or to escalate - never a weaker model.
 
+A capacity substitution must also preserve the RUNNING EFFORT BAND.
+Anything offered in place of a spent model has to express the band the dispatch is actually running at - the effort it named, or the one its floor states - and a candidate whose `_models.<model>.effort_expressible` evidence does not cover that band, or is absent, is not offered at all.
+This is a substitution invariant rather than a floor axis, so it holds even where a route floor states no `effort_floor` or waives it: a floor that requires no particular band still leaves a running band that substitution must not silently change.
+Unverifiable expressibility withholds the candidate rather than admitting it, because declining to substitute leaves the work waiting, which is lawful, while substituting on unverified band evidence is the degradation this gate exists to prevent.
+Because the rule lives in candidate eligibility itself, the spawn chokepoint, `bin/fm-route.sh eligible`, `bin/fm-route.sh next` and the deferred-retry driver all read one answer, and a withheld sibling is named in the refusal rather than silently missing from a shorter list.
+
+The gate is asked in the declared intake order `ROUTE -> ADMIT -> ELIGIBLE`.
+Capacity is therefore evaluated after fleet admission and before anything is allocated: a deferral is durable, resumable state, so recording one before admission has decided the fleet accepts this work at all would let eligibility create an obligation admission never authorized.
+
 Every ship and scout dispatch in a home with routed pools records `capacity_observed=` and `capacity_evidence=` in `state/<id>.meta`, including when the verdict was `could_not_observe`.
 An absent pair means the home enforces no routed pool, which is a different fact from an unobserved one and is never written as one.
 
@@ -506,14 +515,20 @@ Because it is a file and keys on the task id rather than a pid, a deferral survi
 
 `retry_after` is the earliest recovery time any provider published for the blocked candidates.
 A deferral is re-checked no earlier than that; with no published reset it is re-checked on a doubling backoff from `FM_CAPACITY_RECHECK_BASE` (900 seconds) toward `FM_CAPACITY_RECHECK_CAP` (10800 seconds).
-The check itself is `bin/fm-capacity-retry.sh tick`, which the watcher runs each cycle and session start runs once, and which offers the route's eligible pool in pool order back to `bin/fm-spawn.sh` with the recorded fields so ROUTE, capacity, admission, the model registry and the attempt budget are all evaluated again.
-A substitute for already-deferred work must carry explicit `_models.<model>.effort_expressible` evidence for the deferral's recorded effort band even when the route floor waives effort, and missing evidence keeps the task waiting without changing fresh-dispatch enforcement.
+The check itself is `bin/fm-capacity-retry.sh tick`, which the watcher runs each cycle and session start runs once, and which re-offers the recorded dispatch to `bin/fm-spawn.sh` so ROUTE, capacity, admission, the model registry and the attempt budget are all evaluated again.
+When the recorded model is spent but the pool is not, the substitute is named by the route owner through `bin/fm-route.sh next --after <recorded model>`, which returns the eligible candidates FOLLOWING it in pool order.
+The driver applies no candidate rule of its own: ordering and every eligibility term, band expressibility included, come from the one owner the spawn chokepoint also consults, so a resume can never select a candidate the fresh dispatch would have refused, nor one sitting ahead of the model that failed.
+If no candidate qualifies, the work keeps waiting rather than degrading.
 No model turn is spent asking whether capacity has returned, and the resume records the selected candidate, route and confirmed effort band on the task status log.
 
 Every deferral is counted by `bin/fm-attempt.sh defer`, which owns both bounds and spends no retry attempt, because a task the fleet had no capacity for did not fail.
 `deferral_budget` (default 24) bounds the total so a wait can never become an infinite poll, and `defer_stagnant` against `FM_ATTEMPT_DEFER_STAGNATION_DEFAULT` (default 8) stops a wait whose observed capacity picture has not moved for that many consecutive checks.
 Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature so repeated blindness can still stagnate.
 Either bound reaching its limit is the unified terminal state `budget_exhausted`, declared as one `failed:` line on the task's status log, and session start reports the stopped waits as a `CAPACITY_DEFERRED:` diagnostic.
+
+A wait the canonical attempt owner cannot durably count is stopped visibly rather than retained.
+`bin/fm-attempt.sh stop-defer` is asked for the terminal stop it owns - no second counter, selector or stop authority exists - and the deferral record is then either marked terminal atomically or REMOVED, because a record with no terminal marker reads as an active wait and every later tick would resume it.
+A record that can be neither marked nor removed is reported as needing to be cleared by hand, never left behind quietly.
 If `bin/fm-attempt.sh defer` cannot record the count, the deferral fails closed, marks the capacity record terminal and declares the failed command and attempt-record path on the task status log.
 If every offered substitute is refused by another dispatch gate, the wait remains active and gains one durable deferral count, while the first distinct refusal is recorded once as a `blocked:` status line.
 Every due retry must durably resume, advance its bound or stop, and a failure to refresh the deferral record after counting stops through the attempt owner's unified terminal state with the failed record path declared.

@@ -70,12 +70,6 @@ The binding is the property that matters.
 An attestation cannot be copied from another pull request, cannot survive a rebase, an amend or a force-push, and cannot be produced before the commit it names exists.
 Every new head needs its own.
 
-## Repairing a missing final-head attestation
-
-A successful pipeline can create review or documentation commits after the contributor's original commit, so the commit that needs evidence is the pipeline's final pushed head rather than the commit that entered the run.
-After the run reaches `checks-passed` or `passed`, run `bin/fm-attest.sh write`, then run `bin/fm-attest.sh verify --head "$(git rev-parse HEAD)"` before asking GitHub to re-evaluate the pull request.
-Do not reuse an earlier note or write a note by hand, because either action bypasses the run-record check that binds the completed gates to the exact final head.
-
 ## What it does not attest
 
 **Who ran the pipeline.**

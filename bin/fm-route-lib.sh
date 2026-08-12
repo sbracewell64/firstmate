@@ -328,6 +328,12 @@ def effective_route_profile($rule; $path; $model; $harness):
     | (if ($ef_raw | type) == "string" and (rank($ef_raw) != null) then $ef_raw else null end) as $ef
     | (($ef_raw | type) == "string" and ($ef_raw | startswith("WAIVED"))) as $ef_waived
     | (($ef_raw != null) and ($ef == null) and ($ef_waived | not)) as $ef_malformed
+    # The band this dispatch is ACTUALLY running at: the effort it named, else
+    # the one the floor states. Carried on the record because band preservation
+    # across a capacity substitution is judged against the RUNNING band, not
+    # against the floor - a route whose floor states no effort_floor still has a
+    # band to preserve the moment a dispatch names one.
+    | (if ($effort | length) > 0 then $effort else ($ef // "") end) as $eeff
     | ($floor.context_ceiling? // null) as $ctx_raw
     | (if ($ctx_raw | type) == "number" then $ctx_raw else null end) as $ctx
     | (($ctx_raw != null) and ($ctx == null)) as $ctx_malformed
@@ -472,13 +478,15 @@ def effective_route_profile($rule; $path; $model; $harness):
                                                       else "an ordered pool" end),
                                           observed:"no model named on this dispatch, so pool membership and every floor axis are unverifiable"}]
                                    else [] end)} ),
+     effort_effective:$eeff,
      candidates:[ $pool | to_entries[]
                   | .value as $c
                   | (effective_route_profile($rule; $route_path; $c; "")) as $candidate_profile
                   | (held($c)) as $h
-                  | (violations($c; (if ($effort | length) > 0 then $effort else ($ef // "") end); $candidate_profile)) as $v
+                  | (violations($c; $eeff; $candidate_profile)) as $v
                   | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
                      held:$h, violations:$v,
+                     effort_expressible:($models[$c].effort_expressible? // null),
                      floor_met:(($v | length) == 0),
                      eligible:(($v | length) == 0 and $h == null)} ]}
   end
@@ -573,14 +581,33 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
   # succeeded - a failure indistinguishable from an honest disclosure, which is
   # exactly why it is spelled out here.
   printf '%s' "$decision" | jq -c --argjson cap "$merged" '
-    def with_cap($row):
-      (first($cap[] | select(.model == $row.model)) // null) as $c
-      | $row + {capacity: $c, capacity_checked: ($c != null)}
-      | . + {eligible: (.floor_met
-                        and (.held == null)
-                        and ((.registry_refusal // null) == null)
-                        and (($c.verdict // "could_not_observe") != "exhausted"))};
-    (.subject.resolved // "") as $subject
+    (.effort_effective // "") as $band
+    | def band_expressible($row):
+        # Band preservation is a SUBSTITUTION invariant, not a floor axis, which
+        # is why it lives here and not in violations(). The subject is already
+        # running at $band; anything offered in its place must be able to express
+        # the SAME band, or availability has silently changed reasoning depth -
+        # the exact degradation this gate exists to prevent, arriving by the one
+        # door the floor check does not watch. A floor that states no
+        # effort_floor still leaves a running band to preserve.
+        #
+        # Unverifiable expressibility is NOT eligible. Declining to substitute
+        # leaves the task waiting, which the governing ruling names as lawful;
+        # substituting on unverified band evidence is the failure itself. This
+        # can only ever SUBTRACT from the offered set.
+        if ($band | length) == 0 then true
+        elif (($row.effort_expressible | type) != "array") then false
+        else (($row.effort_expressible | index($band)) != null) end;
+      def with_cap($row):
+        (first($cap[] | select(.model == $row.model)) // null) as $c
+        | $row + {capacity: $c, capacity_checked: ($c != null),
+                  band_expressible: band_expressible($row)}
+        | . + {eligible: (.floor_met
+                          and (.held == null)
+                          and ((.registry_refusal // null) == null)
+                          and .band_expressible
+                          and (($c.verdict // "could_not_observe") != "exhausted"))};
+      (.subject.resolved // "") as $subject
     | .candidates = [ .candidates[]? | with_cap(.) ]
     | .subject = (.subject
         + {capacity: (first($cap[] | select(.model == $subject)) // null)})
@@ -602,20 +629,33 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
 # the floor, which is why both name the pool they stayed inside.
 fm_route_capacity_refusal() {  # <route> <model> <decision-json>
   local route=$1 model=$2 decision=$3 verdict evidence substitutes until_epoch
+  local band band_excluded band_note=''
   verdict=$(printf '%s' "$decision" | jq -r '.subject.capacity.verdict // "could_not_observe"' 2>/dev/null)
   [ "$verdict" = exhausted ] || return 0
   evidence=$(printf '%s' "$decision" | jq -r '.subject.capacity.evidence // "no evidence recorded"' 2>/dev/null)
   substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")' 2>/dev/null)
+  # A sibling withheld to preserve the reasoning band is the one exclusion an
+  # operator cannot infer from the pool, and an unexplained short list reads as a
+  # smaller pool rather than as a deliberate refusal to change reasoning depth.
+  band=$(printf '%s' "$decision" | jq -r '.effort_effective // ""' 2>/dev/null)
+  # Compared against false explicitly. `.band_expressible // true` would be the
+  # obvious spelling and is wrong: jq treats false as absent, so the alternative
+  # fires for exactly the candidates this is meant to name and the disclosure
+  # silently empties while the exclusion still happens.
+  band_excluded=$(printf '%s' "$decision" | jq -r \
+    '[ .candidates[]? | select(.band_expressible == false) | .model ] | join(", ")' 2>/dev/null)
+  [ -z "$band_excluded" ] || band_note=$(printf ' Held back from substitution because they cannot be shown to express the %s band this work is running at: %s; substituting one would change reasoning depth, so the work waits instead.' "$band" "$band_excluded")
   until_epoch=$(printf '%s' "$decision" | jq -r '
     [ .candidates[]? | .capacity.until // empty ] | if length > 0 then min else empty end' 2>/dev/null)
   if [ -n "$substitutes" ]; then
-    printf '%s: route %s: %s is out of capacity - %s - so it is not an eligible candidate right now. Fail over to the next eligible model inside this route pool, in pool order (%s); every one of those meets the same floor %s requires. Never substitute outside this pool and never lower the floor\n' \
-      "$FM_CAPACITY_TOKEN_EXHAUSTED" "$route" "$model" "$evidence" "$substitutes" "$route"
+    printf '%s: route %s: %s is out of capacity - %s - so it is not an eligible candidate right now. Fail over to the next eligible model inside this route pool, in pool order (%s); every one of those meets the same floor %s requires and expresses the same band.%s Never substitute outside this pool and never lower the floor\n' \
+      "$FM_CAPACITY_TOKEN_EXHAUSTED" "$route" "$model" "$evidence" "$substitutes" "$route" "$band_note"
     return 1
   fi
-  printf '%s: route %s: %s is out of capacity - %s - and no other candidate in this route pool is eligible either, so there is nothing to fail over to and this work is deferred until capacity returns%s. Do not substitute outside this pool and do not lower the floor: a floor that is required and currently unavailable is a wait, not a weaker model\n' \
+  printf '%s: route %s: %s is out of capacity - %s - and no other candidate in this route pool is eligible either, so there is nothing to fail over to and this work is deferred until capacity returns%s.%s Do not substitute outside this pool and do not lower the floor: a floor that is required and currently unavailable is a wait, not a weaker model\n' \
     "$FM_CAPACITY_TOKEN_DEFERRED" "$route" "$model" "$evidence" \
-    "$( [ -n "$until_epoch" ] && printf ' (earliest known recovery: epoch %s)' "$until_epoch" || printf ', with no recovery time published by any provider' )"
+    "$( [ -n "$until_epoch" ] && printf ' (earliest known recovery: epoch %s)' "$until_epoch" || printf ', with no recovery time published by any provider' )" \
+    "$band_note"
   return 1
 }
 
@@ -647,16 +687,13 @@ fm_route_for_floor() {  # <config-dir> <floor>
   printf '%s\n' "$matches"
 }
 
-fm_route_model_expresses_effort() {  # <config-dir> <model> <band>
-  local file=$1 model=$2 band=$3
-  file=$(fm_route_config_path "$file")
-  [ -f "$file" ] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
-  jq -e --arg model "$model" --arg band "$band" \
-    '._models[$model].effort_expressible as $bands
-     | ($bands | type) == "array" and ($bands | index($band) != null)' \
-    "$file" >/dev/null 2>&1
-}
+# Band expressibility is deliberately NOT a standalone predicate. It is part of
+# candidate eligibility in fm_route_decision_with_capacity, so every consumer -
+# the spawn chokepoint, `fm-route.sh eligible`, `fm-route.sh next` and the
+# capacity retry driver - reads one answer. A helper any caller could apply on
+# its own was a second band authority free to drift from the one enforced at
+# dispatch, which is precisely how a resume could change reasoning depth while
+# every individual check still looked correct.
 
 # ---------------------------------------------------------------------------
 # Refusal rendering

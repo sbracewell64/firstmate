@@ -369,8 +369,33 @@ fm_capacity_observe() {
         --argjson now "$now" \
         "$FM_CAPACITY_OBSERVE_JQ" \
         "$( [ -f "$file" ] && printf '%s' "$file" || printf '/dev/null' )" 2>/dev/null \
-    || printf '{"schema":"%s","observed_at":%s,"source":{"status":"unreadable","detail":"the dispatch policy could not be read while observing capacity","repair":"repair config/crew-dispatch.json"},"models":{},"exhausted":[],"unobserved":[],"earliest_recovery":null}\n' \
-         "$FM_CAPACITY_SCHEMA" "$now"
+    || fm_capacity_all_unobserved "$models_json" "$now" \
+         "the dispatch policy could not be read while observing capacity" \
+         "repair config/crew-dispatch.json"
+}
+
+# EVERY requested model, reported as could-not-observe. A failed read is the one
+# case where the third value matters most, and the earlier fallback emitted an
+# empty models map with an empty unobserved list - which does not say "we could
+# not tell", it says "there are no candidates". Downstream that reads as a pool
+# with nothing in it: `fm-route.sh capacity` finds no non-exhausted model, and a
+# deferral signature records `unknown` for a model whose row merely went
+# missing. Collapsing could-not-observe into either definite value is precisely
+# what the three-valued contract forbids, so the degraded record names every
+# candidate and states plainly that none of them was measured.
+fm_capacity_all_unobserved() {  # <models-json> <now> <detail> <repair>
+  local models_json=$1 now=$2 detail=$3 repair=$4
+  jq -c -n --argjson models "$models_json" --argjson now "$now" \
+     --arg schema "$FM_CAPACITY_SCHEMA" --arg detail "$detail" --arg repair "$repair" '
+    {schema: $schema, observed_at: $now,
+     source: {status: "unreadable", detail: $detail, repair: $repair},
+     models: ( $models
+               | map({key: ., value: {model: ., verdict: "could_not_observe",
+                                      until: null, evidence: $detail, repair: $repair}})
+               | from_entries ),
+     exhausted: [],
+     unobserved: $models,
+     earliest_recovery: null}'
 }
 
 # fm_capacity_lines <observation-json>

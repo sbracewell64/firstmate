@@ -46,29 +46,96 @@ test_uncounted_deferral_fails_closed() {
   pass "a deferral whose attempt count cannot be recorded stops and names the reason"
 }
 
-test_inexpressive_and_unverified_substitutes_keep_waiting() {
-  local variant rec out
-  for variant in inexpressive unverified; do
-    rec=$(make_refusal_home "band-$variant"); read_home_record "$rec"
-    jq '._floors["F-MED"].effort_floor = "WAIVED - retry predicate owns the recorded band"' \
-      "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/crew-dispatch.json.tmp"
-    mv "$HOME_DIR/config/crew-dispatch.json.tmp" "$HOME_DIR/config/crew-dispatch.json"
-    if [ "$variant" = unverified ]; then
-      jq 'del(._models["weak/tiny"].effort_expressible)' "$HOME_DIR/config/crew-dispatch.json" \
-        > "$HOME_DIR/config/crew-dispatch.json.tmp"
-      mv "$HOME_DIR/config/crew-dispatch.json.tmp" "$HOME_DIR/config/crew-dispatch.json"
-    fi
+# NEGATIVE CONTROL: same-band substitution.
+#
+# The three variants share ONE DISPATCH-CAPABLE fixture deliberately. The
+# earlier version of this control used the refusal fixture, whose backend always
+# exits 1, so "no task metadata" was produced by the backend refusing rather
+# than by the band check - the case stayed green with the band rule deleted and
+# therefore proved nothing at all.
+#
+# `expressive` is the guard against exactly that failure: it proves this fixture
+# CAN resume onto a substitute, so the two negative variants mean what they
+# claim. Remove band expressibility from eligibility and `expressive` still
+# passes while both negatives go red, which is what makes this control able to
+# fail.
+test_same_band_substitution_is_required() {
+  local variant out meta cfg
+  for variant in expressive inexpressive unverified; do
+    make_dispatch_home "band-$variant"
+    cfg="$HOME_DIR/config/crew-dispatch.json"
+    # The floor's own effort_floor is waived so this exercises BAND PRESERVATION
+    # rather than floor conformance. With a stated effort_floor the weaker model
+    # is already refused for failing the floor, which is a different check
+    # passing for a different reason.
+    jq '._floors["F-MED"].effort_floor = "WAIVED - substitution must preserve the running band"' \
+      "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
+    case "$variant" in
+      expressive)
+        jq '._models["weak/tiny"].effort_expressible = ["low","medium"]' "$cfg" > "$cfg.tmp" \
+          && mv "$cfg.tmp" "$cfg" ;;
+      unverified)
+        jq 'del(._models["weak/tiny"].effort_expressible)' "$cfg" > "$cfg.tmp" \
+          && mv "$cfg.tmp" "$cfg" ;;
+    esac
     write_brief "$HOME_DIR" "bandtask-$variant" no-mistakes
-    out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 weakq=0)" \
-      "bandtask-$variant" "$PROJ_DIR" --mode no-mistakes --yolo off \
+    out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0 weakq=0)" \
+      "bandtask-$variant" "$OK_REPO" --mode no-mistakes --yolo off \
       --reason-code NL_RULE_CLASSIFICATION --harness codex \
       --route R-WEAK --model vendor/large --effort medium)
     assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
-    out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 weakq=95)" tick --id "bandtask-$variant" --force)
-    assert_absent "$HOME_DIR/state/bandtask-$variant.meta" "a substitute without band evidence was dispatched"
-    assert_present "$HOME_DIR/state/bandtask-$variant.capacity" "the refused substitution did not keep waiting"
+    out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
+      FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
+      run_retry "$HOME_DIR" "$(quota_record vendorq=0 weakq=95)" tick --id "bandtask-$variant" --force)
+    meta="$HOME_DIR/state/bandtask-$variant.meta"
+    if [ "$variant" = expressive ]; then
+      assert_present "$meta" "a substitute that CAN express the running band was not resumed onto, so the negative variants below prove nothing"
+      assert_grep "model=weak/tiny" "$meta" "the resume did not name the expressible substitute"
+    else
+      assert_absent "$meta" "a substitute that cannot be shown to express the running band was dispatched, silently changing reasoning depth"
+      assert_present "$HOME_DIR/state/bandtask-$variant.capacity" "the refused substitution did not keep waiting"
+    fi
   done
-  pass "a substitute that cannot express the route effort band is refused and the task keeps waiting"
+  pass "substitution requires the same running effort band, proven against a fixture that can dispatch"
+}
+
+# NEGATIVE CONTROL: unrecordable bound.
+#
+# The record is made UNWRITABLE before the stop is attempted, which is the only
+# condition under which the two implementations differ. A stop that can only
+# APPEND loses its terminal mark silently on such a record and leaves something
+# that still reads as an active wait, so every later tick resumes it - forever,
+# because nothing ever becomes recordable. A stop that replaces the record
+# atomically, or removes it when even that fails, leaves nothing an active tick
+# can pick up.
+#
+# Revert the durable stop to the plain `>> ... || true` append and this goes
+# red: the record survives with no terminal marker at all.
+test_unrecordable_bound_leaves_no_active_wait() {
+  local rec out rc stub capacity
+  rec=$(make_refusal_home unrecordable); read_home_record "$rec"
+  write_brief "$HOME_DIR" boundtask no-mistakes
+  # A real wait first, so the record under test is one the driver actually made.
+  run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer boundtask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null 2>&1
+  capacity="$HOME_DIR/state/boundtask.capacity"
+  assert_present "$capacity" "the fixture did not create a deferral record to stop"
+  chmod 444 "$capacity"
+  stub="$TMP_ROOT/unrecordable/fail-attempt"
+  printf '#!/bin/sh\ncase "$1" in show) exit 1 ;; esac\nprintf "simulated count write failure\\n" >&2\nexit 1\n' > "$stub"
+  chmod +x "$stub"
+  rc=0
+  out=$(FM_ATTEMPT_BIN="$stub" run_retry "$HOME_DIR" "$(quota_record vendorq=0)" \
+    tick --id boundtask --force 2>&1) || rc=$?
+  # Terminal, or gone. Never still readable as an active wait.
+  if [ -f "$capacity" ]; then
+    assert_grep "terminal=" "$capacity" "an unrecordable bound left a record that still reads as an active capacity wait, so every later tick will retry it"
+  fi
+  assert_contains "$out" "attempt count could not be recorded" "the stop did not name the unrecordable count"
+  chmod 644 "$capacity" 2>/dev/null || true
+  pass "an unrecordable bound leaves no record that still reads as an active wait"
 }
 
 test_non_capacity_refusal_keeps_a_counted_wait() {
@@ -191,7 +258,8 @@ test_linked_capacity_record_is_refused_untouched() {
 
 test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
-test_inexpressive_and_unverified_substitutes_keep_waiting
+test_same_band_substitution_is_required
+test_unrecordable_bound_leaves_no_active_wait
 test_non_capacity_refusal_keeps_a_counted_wait
 test_moved_capacity_picture_resets_stagnation
 test_record_refresh_failure_stops_durably

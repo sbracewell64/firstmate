@@ -1621,14 +1621,31 @@ if [ "$KIND" != secondmate ]; then
       CAPABILITY_FLOOR=$ROUTE_FLOOR
     fi
     ROUTE_POLICY_DIGEST=$(fm_route_policy_digest "$CONFIG")
+  fi
 
+  # ADMIT. Asked after the route and before anything is allocated, because it is
+  # a property of the FLEET and not of this task. bin/fm-admission.sh is
+  # read-only by contract and returns the band as its exit status; applying the
+  # outcome is this caller's job. A home with no admission policy exits 0 and
+  # nothing changes.
+  spawn_admission_gate || exit 1
+
+  if [ "$ROUTE_ENFORCING" -eq 1 ]; then
     # ELIGIBLE, capacity half. The routing policy admits this model and the
     # availability record does not hold it; the remaining question is whether the
-    # provider currently has anything left to spend. Asked HERE, before ADMIT and
+    # provider currently has anything left to spend. Asked HERE, after ADMIT and
     # before anything is allocated, because the platform's measured failure was
     # discovering an exhausted pool AFTER dispatching into it: every stall then
     # cost a wake, a diagnosis and a restart, and the fix was one config change
     # nobody could make until a human noticed.
+    #
+    # ADMIT comes FIRST because a deferral is durable state. A capacity wait
+    # recorded before the fleet has decided it accepts this work at all would let
+    # ELIGIBLE create a resumable obligation that ADMIT never authorized, and the
+    # tick would later re-enter the scheduler on the strength of it. The declared
+    # intake order in `_interfaces.order_at_intake` is ROUTE, ADMIT, ELIGIBLE,
+    # and the earlier arrangement here contradicted the very contract this block
+    # opens by quoting.
     #
     # THE FLOOR IS NEVER LOWERED HERE, and there is no code path that could. The
     # candidates considered are exactly this route's pool as the decision above
@@ -1665,13 +1682,6 @@ if [ "$KIND" != secondmate ]; then
       exit 1
     fi
   fi
-
-  # ADMIT. Asked after the route and before anything is allocated, because it is
-  # a property of the FLEET and not of this task. bin/fm-admission.sh is
-  # read-only by contract and returns the band as its exit status; applying the
-  # outcome is this caller's job. A home with no admission policy exits 0 and
-  # nothing changes.
-  spawn_admission_gate || exit 1
 fi
 
 # The shared census a batch parent hands down is THIS process's input and nothing

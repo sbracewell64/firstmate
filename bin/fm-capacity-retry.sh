@@ -299,12 +299,7 @@ cmd_defer() {
     return 3
   fi
   if [ "$rc" -ne 0 ]; then
-    mark_terminal "$id" "attempt count could not be recorded"
-    printf 'failed: waiting for capacity ended because the attempt count could not be recorded by %s defer %s against %s: %s\n' \
-      "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$(clean "$defer_out")" \
-      >> "$STATE/$id.status" 2>/dev/null || true
-    printf 'error: capacity deferral for %s ended because the attempt count could not be recorded; command %s defer %s could not write %s: %s\n' \
-      "$id" "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$defer_out" >&2
+    stop_wait_unrecordable_bound "$id" "$defer_out"
     return 1
   fi
   printf 'deferred %s route=%s retry_after=%s %s\n' "$id" "$route" "$retry_after" "$defer_out"
@@ -320,10 +315,33 @@ mark_terminal() {  # <id> <why>
   mark_record_terminal "$rec" "$why"
 }
 
-mark_record_terminal() {  # <record-file> <why>
-  local rec=$1 why=$2
+# A stop that cannot be RECORDED is not a stop. tick_one reads the ABSENCE of
+# `terminal=` as an active wait, so an append that failed silently left the
+# record looking exactly like work still waiting for capacity, and every later
+# tick retried it - forever, because nothing ever became recordable.
+#
+# This therefore ends in one of two states and there is no third: the record is
+# durably terminal, or the record is GONE. Removal is the safe direction because
+# a missing record is a wait nothing can resume, while a record that still reads
+# as active is the failure itself. A record that can be neither marked nor
+# removed is declared loudly and reported, never left behind quietly.
+mark_record_terminal() {  # <record-file> <why> -> 0 safe, 1 still reads as active
+  local rec=$1 why=$2 tmp
   [ -f "$rec" ] || return 0
-  printf 'terminal=%s\n' "$(clean "$why")" >> "$rec" 2>/dev/null || true
+  tmp="$rec.tmp.$$"
+  if { cat -- "$rec" && printf 'terminal=%s\n' "$(clean "$why")"; } > "$tmp" 2>/dev/null \
+     && "$RECORD_COMMIT_BIN" -f -- "$tmp" "$rec" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "$tmp" 2>/dev/null || true
+  if rm -f -- "$rec" 2>/dev/null && [ ! -e "$rec" ]; then
+    printf 'error: the capacity wait recorded at %s could not be marked terminal (%s), so the record was REMOVED rather than left reading as an active wait; the work is stopped and will not resume on its own\n' \
+      "$rec" "$why" >&2
+    return 0
+  fi
+  printf 'error: the capacity wait recorded at %s could neither be marked terminal (%s) nor removed, so it may still read as an active wait and be retried; clear it by hand\n' \
+    "$rec" "$why" >&2
+  return 1
 }
 
 current_capacity_signature() {  # <record-file>
@@ -348,6 +366,32 @@ current_capacity_signature() {  # <record-file>
     [ .models[]? | .model + "=" + (.verdict // "could_not_observe")
         + "@" + ((.until // "none") | tostring) ] | sort | join(" ")' 2>/dev/null \
     || printf 'capacity=could_not_observe@none\n'
+}
+
+# The canonical attempt owner could not record the count. The governing ruling
+# is that this stops the wait VISIBLY and never retains an apparently active
+# one, so the owner is asked for the terminal stop IT owns - this file adds no
+# second counter and no second stop authority - and the deferral record is then
+# made terminal or removed so no later tick can resume it.
+#
+# The two halves are reported separately on purpose. An attempt owner that
+# refused the stop is a different repair from a record that could not be
+# written, and collapsing them into one message costs the whole diagnosis.
+stop_wait_unrecordable_bound() {  # <id> <defer-output> -> 1 always
+  local id=$1 defer_out=$2 reason out rc=0 mark_rc=0
+  reason="the attempt count could not be recorded at $STATE/$id.attempt: $(clean "$defer_out")"
+  out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" stop-defer "$id" --reason "$reason" 2>&1) || rc=$?
+  mark_terminal "$id" "attempt count could not be recorded" || mark_rc=$?
+  printf 'failed: waiting for capacity ended because the attempt count could not be recorded by %s defer %s against %s: %s\n' \
+    "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$(clean "$defer_out")" \
+    >> "$STATE/$id.status" 2>/dev/null || true
+  printf 'error: capacity deferral for %s ended because the attempt count could not be recorded; command %s defer %s could not write %s: %s\n' \
+    "$id" "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$defer_out" >&2
+  [ "$rc" -eq 0 ] \
+    || printf 'error: the attempt owner also refused the terminal stop for %s, so the count and the stop are both unrecorded: %s\n' "$id" "$out" >&2
+  [ "$mark_rc" -eq 0 ] \
+    || printf 'error: the capacity wait for %s may still read as ACTIVE despite being stopped, and must be cleared by hand before it is ticked again\n' "$id" >&2
+  return 1
 }
 
 stop_wait_for_record_failure() {  # <id> <record-file> <detail>
@@ -384,12 +428,7 @@ keep_waiting() {  # <record-file> <refusal>
     return 3
   fi
   if [ "$rc" -ne 0 ]; then
-    mark_terminal "$id" "attempt count could not be recorded"
-    printf 'failed: waiting for capacity ended because the attempt count could not be recorded by %s defer %s against %s: %s\n' \
-      "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$(clean "$defer_out")" \
-      >> "$STATE/$id.status" 2>/dev/null || true
-    printf 'error: capacity deferral for %s ended because the attempt count could not be recorded; command %s defer %s could not write %s: %s\n' \
-      "$id" "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$defer_out" >&2
+    stop_wait_unrecordable_bound "$id" "$defer_out"
     return 1
   fi
   now=$(date -u +%s)
@@ -503,7 +542,7 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
 # advance, a terminal record is already stopped, and an already-dispatched task
 # retires the obsolete wait rather than creating a second worker.
 tick_one() {  # <record-file> <force>
-  local rec=$1 force=$2 id now due out rc route effort candidate eligible
+  local rec=$1 force=$2 id now due out rc route effort candidate eligible model
   id=$(field "$rec" task)
   if [ -z "$id" ]; then
     mark_record_terminal "$rec" "the deferral record has no task id"
@@ -572,11 +611,27 @@ tick_one() {  # <record-file> <force>
       return 0
       ;;
     *FM_SPAWN_CAPACITY_EXHAUSTED*)
+      # The ROUTE OWNER names the substitute. `next --after` returns the eligible
+      # candidates that FOLLOW the recorded model in pool order, already checked
+      # for floor, hold, registry, capacity and the running effort band, so there
+      # is no predicate to re-apply and no ordering to re-derive here.
+      #
+      # Asking for the whole eligible list and walking it with a private band
+      # predicate - which is what this did - is a SECOND FAILOVER SELECTOR. It
+      # could hand back a candidate sitting BEFORE the recorded model in the
+      # pool, so a resume was not necessarily the prescribed next candidate, and
+      # its band rule was free to drift from the one the dispatch chokepoint
+      # enforces. Band expressibility is now part of eligibility itself, so the
+      # answer this reads is the same answer fm-spawn would compute.
+      model=$(field "$rec" model)
       effort=$(field "$rec" effort)
-      eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" eligible --route "$route" --effort "$effort" 2>/dev/null) || eligible=
+      eligible=
+      if [ -n "$model" ]; then
+        eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" next \
+          --route "$route" --after "$model" --effort "$effort" 2>/dev/null) || eligible=
+      fi
       while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
-        fm_route_model_expresses_effort "$CONFIG" "$candidate" "$effort" || continue
         build_spawn_args "$rec" "$candidate" || continue
         rc=0
         out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-spawn.sh" "${SPAWN_ARGS[@]}" 2>&1) || rc=$?
