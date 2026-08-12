@@ -85,7 +85,7 @@ Usage:
   fm-review-role.sh harness-readonly [<harness>] [--json]
   fm-review-role.sh reconcile [--json]
   fm-review-role.sh check --role <id> --reviewer <provider/model> --harness <name>
-                          [--effort <level>] [--maker <provider/model>]
+                          --effort <level> [--maker <provider/model>]
                           [--maker-process <id>] [--reviewer-process <id>]
                           [--reviewed-head <sha>] [--route <ROUTE>] [--json]
 
@@ -457,7 +457,11 @@ cmd_check() {
     add_viol "$FM_REVIEW_TOKEN_NOT_QUALIFIED" \
       "$(jq -r '[.qualified_bindings[].binding] | join(", ")' "$file")" \
       "$reviewer is not a qualified binding for role $role"
-  elif [ -n "$effort" ]; then
+  elif [ -z "$effort" ]; then
+    add_viol effort_not_qualified_for_binding \
+      "$(printf '%s' "$qb" | jq -r '.effort') (the explicit setting qualified for $reviewer on this role)" \
+      "absent; reviewer effort is binding-specific and cannot be inherited from a harness default"
+  else
     local qeffort
     qeffort=$(printf '%s' "$qb" | jq -r '.effort')
     [ "$effort" = "$qeffort" ] || add_viol effort_not_qualified_for_binding \

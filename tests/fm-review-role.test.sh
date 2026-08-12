@@ -144,6 +144,7 @@ assert_contains "$out" "FM_REVIEW_NO_READONLY_BINDING" \
 # nobody measured reports unknown rather than silently passing.
 out=$("$RR" harness-readonly 2>&1)
 assert_contains "$out" "pi enforced allowlist" "pi has a measured allowlist binding"
+assert_contains "$out" "pi-signed unknown" "pi-signed stays unknown until its exact executable is measured"
 assert_contains "$out" "codex enforced sandbox" "codex has a measured sandbox binding"
 assert_contains "$out" "claude enforced denylist" "claude has a measured denylist binding"
 assert_contains "$out" "grok unknown" "an unmeasured harness must report unknown, never enforced"
@@ -196,6 +197,33 @@ green_then_red "a binding removed from the role is no longer qualified" \
 green_then_red "an effort other than the one qualified for this binding goes red" \
   '(.qualified_bindings[] | select(.binding == "openai-codex/gpt-5.6-luna") | .effort) = "high"' \
   'effort_not_qualified_for_binding'
+
+restore
+out=$("$RR" check --role runtime-design-review \
+  --reviewer openai-codex/gpt-5.6-luna --harness pi \
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+expect_code 1 "$rc" "omitting a binding-specific reviewer effort must go red"
+assert_contains "$out" "effort_not_qualified_for_binding" \
+  "the missing-effort refusal must name the binding-specific capability rule"
+pass "omitting reviewer effort fails closed"
+
+codex_reviewer_template=$(
+  # shellcheck source=bin/fm-launch-lib.sh
+  . "$ROOT/bin/fm-launch-lib.sh"
+  launch_template codex reviewer
+)
+codex_reviewer_model_flags='--model test-reviewer --sandbox read-only --skip-git-repo-check '
+codex_reviewer_effort_flags='-c model_reasoning_effort=\"max\" '
+codex_reviewer_command=${codex_reviewer_template//__MODELFLAG__/$codex_reviewer_model_flags}
+codex_reviewer_command=${codex_reviewer_command//__EFFORTFLAG__/$codex_reviewer_effort_flags}
+assert_contains "$codex_reviewer_command" '--sandbox read-only' \
+  "the exact composed Codex reviewer command must carry the read-only sandbox"
+case "$codex_reviewer_command" in
+  *--dangerously-bypass-approvals-and-sandbox*)
+    fail "the exact composed Codex reviewer command retained the sandbox bypass"
+    ;;
+esac
+pass "the exact composed Codex reviewer command is read-only without a bypass"
 
 # --- 6. a required reviewer predicate removed ------------------------------
 #

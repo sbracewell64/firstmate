@@ -275,7 +275,7 @@ launch_readonly_recorded() {  # <harness> -> "<mechanism>\t<flags>", or non-zero
     # a reviewer with no shell cannot run git, so the diff and evidence must be
     # materialised as files it can read, which is exactly how the qualifying
     # fixture supplied them.
-    pi|pi-signed) printf 'allowlist\t--tools read,grep,find,ls' ;;
+    pi) printf 'allowlist\t--tools read,grep,find,ls' ;;
     # An OS-level sandbox policy, so it holds for shell writes too, not only for
     # the edit tool. --skip-git-repo-check rides with it because codex refuses to
     # start outside a trusted directory and a reviewer is routinely pointed at a
@@ -425,7 +425,9 @@ launch_template() {
     # the defense-in-depth backstop for any pane this flag cannot reach.
     claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
     codex)
-      if [ "$kind" = secondmate ]; then
+      if [ "$kind" = reviewer ]; then
+        printf '%s' 'codex __MODELFLAG____EFFORTFLAG__-c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+      elif [ "$kind" = secondmate ]; then
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
       else
         printf '%s' 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'

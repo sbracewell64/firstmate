@@ -1586,7 +1586,7 @@ fi
 if [ -n "$REVIEW_ROLE" ]; then
   REVIEW_ARGS=(check --role "$REVIEW_ROLE" --reviewer "$MODEL" --harness "$HARNESS"
                --reviewer-process "$ID")
-  [ -z "$EFFORT" ] || REVIEW_ARGS+=(--effort "$EFFORT")
+  REVIEW_ARGS+=(--effort "$EFFORT")
   [ -z "$REVIEW_MAKER" ] || REVIEW_ARGS+=(--maker "$REVIEW_MAKER")
   [ -z "$REVIEW_MAKER_PROCESS" ] || REVIEW_ARGS+=(--maker-process "$REVIEW_MAKER_PROCESS")
   [ -z "$REVIEWED_HEAD" ] || REVIEW_ARGS+=(--reviewed-head "$REVIEWED_HEAD")
@@ -1612,6 +1612,10 @@ if [ -n "$REVIEW_ROLE" ]; then
     echo "error: review role $REVIEW_ROLE resolved no read-only launch binding for harness $HARNESS, so the session could not be launched unable to mutate the candidate; refusing rather than launching it unbound" >&2
     exit 1
   fi
+  LAUNCH=$(launch_template "$HARNESS" reviewer) || {
+    echo "error: harness $HARNESS has no canonical read-only reviewer launch template" >&2
+    exit 1
+  }
 fi
 
 secondmate_registry_value() {

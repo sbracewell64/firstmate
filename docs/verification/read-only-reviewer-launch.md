@@ -28,7 +28,7 @@ Verified 2026-08-11 on Linux 6.18 (WSL2).
 
 | Harness | Version | Mechanism | Recorded binding | Result |
 |---|---|---|---|---|
-| pi, pi-signed | 0.81.1 | allowlist | `--tools read,grep,find,ls` | enforced |
+| pi | 0.81.1 | allowlist | `--tools read,grep,find,ls` | enforced |
 | codex | 0.146.0 | sandbox | `--sandbox read-only --skip-git-repo-check` | enforced |
 | claude | 2.1.228 | denylist | `--disallowedTools Write,Edit,NotebookEdit,Bash,Task,WebFetch` | enforced |
 
@@ -46,7 +46,7 @@ That is how the qualifying reviewer fixture supplied them.
 ### codex 0.146.0 - sandbox
 
 Negative control, `--dangerously-bypass-approvals-and-sandbox`: `PROOF.txt` written.
-Under `--sandbox read-only`: no file, and the run reported `Unable to create PROOF.txt: the workspace is read-only`.
+Under the exact reviewer composition without `--dangerously-bypass-approvals-and-sandbox` and with `--sandbox read-only`: no file, and the run reported `Unable to create PROOF.txt: the workspace is read-only`.
 Being an OS-level policy, it also covers writes attempted through a shell.
 
 `--skip-git-repo-check` is part of the recorded binding rather than an extra: codex refuses to start outside a trusted directory, and a reviewer is routinely pointed at a materialised evidence directory that is not a repository.
