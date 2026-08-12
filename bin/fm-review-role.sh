@@ -553,15 +553,16 @@ $(fm_independence_each_dimension "$indep")
 EOF
   fi
 
-  # 5. THE REVIEWED ARTIFACT. A change review of another head or of stale bytes
+  # 5. THE REVIEWED ARTIFACT. Every review names the artifact it reads. A
+  # change review of another head or of stale bytes
   # does not satisfy the obligation, so the head is an input rather than
   # something recorded afterwards.
-  if [ "$requires_head" = true ]; then
-    if [ -z "$head" ]; then
-      add_viol reviewed_head_unpinned \
-        "--reviewed-head, because role $role reviews the exact change before landing" \
-        "absent; a review not pinned to a head cannot be shown to have read these bytes"
-    elif [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
+  if [ -z "$head" ]; then
+    add_viol review_target_unidentified \
+      "--reviewed-head naming the review target" \
+      "absent; no review can be shown to have read an assigned artifact"
+  elif [ "$requires_head" = true ]; then
+    if [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
       add_viol reviewed_head_invalid \
         "a full 40-character commit id" "$head"
     elif [ -z "$candidate_worktree" ]; then
@@ -718,25 +719,27 @@ launch_outcome_result() {  # <name> -> PASS|FAIL|NO_VERIFIER_RAN
   esac
 }
 
-# The task's own durable verdict. done and failed are the two members of
-# bin/fm-classify-lib.sh's captain-terminal verbs that mean the work ENDED, as
-# opposed to needs-decision and blocked, which mean it stopped and is owed
-# something. The legacy prose form is still read while the fleet migrates.
-task_review_verdict() {  # <status-path>
-  local line v verdict=''
+# Read the reviewer-authored opening and verdict events. Lifecycle verbs never
+# carry a review verdict; the existing PASS/FAIL observation values do.
+task_review_evidence() {  # <status-path> <role> <target>
+  local line key phase evidence opened=0 verdict=''
   [ -f "$1" ] || return 1
   while IFS= read -r line; do
-    v=$(fm_status_event_field "$line" verb 2>/dev/null) || v=''
-    if [ -z "$v" ]; then
-      case "$line" in
-        done:*) v='done' ;;
-        failed:*) v='failed' ;;
-      esac
+    fm_status_event_is_typed "$line" || continue
+    key=$(fm_status_event_field "$line" key 2>/dev/null) || continue
+    phase=$(fm_status_event_field "$line" phase 2>/dev/null) || continue
+    evidence=$(fm_status_event_field "$line" evidence 2>/dev/null) || continue
+    if [ "$key" = review-opening ] && [ "$phase" = "$2" ] \
+      && printf '%s\n' "$evidence" | grep -Fxq -- "$3"; then
+      opened=1
+      continue
     fi
-    case "$v" in done|failed) verdict=$v ;; esac
+    if [ "$opened" -eq 1 ] && [ "$key" = review-verdict ] \
+      && printf '%s\n' "$evidence" | grep -Fxq -- "$3"; then
+      case "$phase" in PASS|FAIL) verdict=$phase ;; esac
+    fi
   done <"$1"
-  [ -n "$verdict" ] || return 1
-  printf '%s' "$verdict"
+  printf '%s\t%s\n' "$opened" "$verdict"
 }
 
 cmd_assignment() {
@@ -762,14 +765,13 @@ cmd_assignment() {
   [ -f "$meta" ] && [ ! -L "$meta" ] \
     || die_unevaluable "$FM_REVIEW_TOKEN_ASSIGNMENT_UNPROVED: $meta is not a readable durable record, so nothing establishes that a review happened"
 
-  local binding role mech flags launch head verdict
+  local binding role mech flags launch head verdict opened=0 review_evidence
   binding=$(meta_field "$meta" model)
   role=$(meta_field "$meta" review_role)
   mech=$(meta_field "$meta" review_readonly_mechanism)
   flags=$(meta_field "$meta" review_readonly_flags)
   launch=$(meta_field "$meta" review_launch)
   head=$(meta_field "$meta" reviewed_head)
-  verdict=$(task_review_verdict "$STATE/$task.status") || verdict=''
 
   [ -n "$role" ] \
     || die_unevaluable "$FM_REVIEW_TOKEN_ASSIGNMENT_UNPROVED: $meta records no review_role=, so this task claims no review obligation and none may be read into it"
@@ -792,17 +794,22 @@ cmd_assignment() {
     fi
   fi
 
+  review_evidence=$(task_review_evidence "$STATE/$task.status" "$role" "$head") || review_evidence=$'0\t'
+  opened=${review_evidence%%$'\t'*}
+  verdict=${review_evidence#*$'\t'}
+
   [ -n "$binding" ] || add_missing intended_binding "the record names no model= so the reviewing binding is unknown"
   { [ -n "$mech" ] && [ -n "$flags" ]; } \
     || add_missing readonly_authority_active "the record carries no enforced read-only launch binding; an instruction not to write is not this fact"
-  if [ "$requires_head" = true ]; then
-    if [ -z "$head" ]; then
-      add_missing review_target_commit "this role reviews the exact change before landing and the record pins no reviewed_head="
-    elif [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
+  if [ -z "$head" ]; then
+    add_missing review_target_commit "the record names no reviewed_head= target identifier"
+  elif [ "$requires_head" = true ]; then
+    if [[ ! $head =~ ^[0-9a-fA-F]{40}$ ]]; then
       add_missing review_target_commit "reviewed_head=$head is not a full commit id"
     fi
   fi
-  [ -n "$verdict" ] || add_missing review_result "no terminal event in $STATE/$task.status so nothing establishes that the review reached a verdict"
+  [ "$opened" = 1 ] || add_missing role_established "no reviewer-authored opening event agrees with role=$role and target=$head"
+  [ -n "$verdict" ] || add_missing review_result "no reviewer-authored PASS or FAIL verdict follows the matching opening event"
 
   # THE LAUNCH OUTCOME, consumed rather than inferred. An absent one is the
   # defect this task exists to close: it means the caller concluded a review
@@ -839,6 +846,12 @@ cmd_assignment() {
     # a pass cannot smuggle it through as an established review.
     result=NO_VERIFIER_RAN
     reason="outcome $outcome is recorded as a pass but $FM_REVIEW_LAUNCH_OK is the only outcome that establishes the role"
+  elif [ "$opened" != 1 ]; then
+    result=NO_VERIFIER_RAN
+    reason="the reviewer role was not established from reviewer-authored evidence"
+  elif [ "$verdict" = FAIL ]; then
+    result=FAIL
+    reason="the reviewer recorded a negative verdict"
   elif [ "$n" != 0 ]; then
     result=NO_VERIFIER_RAN
     reason="the launch established the role but the assignment is not proved: $(printf '%s' "$missing" | jq -r '[.[].fact] | join(" ")') not established"

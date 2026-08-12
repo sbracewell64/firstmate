@@ -108,7 +108,7 @@
         "name": "launch_succeeded_as_requested",
         "result": "PASS",
         "maps_to": "goal_met",
-        "observed_as": ["alive"],
+        "observed_as": ["alive without a matching reviewer-authored opening event"],
         "meaning": "A verified harness agent is running at the recorded endpoint, so the requested role was established."
       },
       {
@@ -134,7 +134,7 @@
         "maps_to": "verification_failed",
         "observed_as": ["alive"],
         "meaning": "An agent is alive at the endpoint but never took the role: the instructions were not delivered, so nothing is reviewing.",
-        "distinction": "Shares verification_failed with launch_failed and is separated from it by having a live agent. It is NOT observable from the endpoint state alone, which is why it is never concluded from a live agent by itself - it is reached only when the assignment evidence below finds no review result behind a live launch.",
+        "distinction": "Shares verification_failed with launch_failed and is separated from it by having a live agent without the matching reviewer-authored opening event.",
         "why_verification_failed": "Same reason as launch_failed: no verifier ran, and an unavailable verifier can never become a pass."
       },
       {
@@ -152,13 +152,13 @@
     "facts": {
       "intended_binding": "state/<id>.meta model= - the binding the fleet meant to run.",
       "intended_role": "state/<id>.meta review_role= - the role it meant to discharge, resolvable in this registry.",
-      "role_established": "state/<id>.meta review_launch= equal to launch_succeeded_as_requested, AND review_result below. A live agent alone does not establish the role, because an agent that came up and never took its instructions is alive and reviewing nothing; the review result is what separates them, which is why that fact is load-bearing rather than a formality.",
+      "role_established": "A reviewer-authored fm-status-event.v1 event with key=review-opening, phase equal to the assigned role, and evidence equal to the assigned target, composed with an attributed alive endpoint. Liveness alone never establishes the role.",
       "readonly_authority_active": "state/<id>.meta review_readonly_mechanism= and review_readonly_flags=, the binding measured in docs/verification/read-only-reviewer-launch.md and composed onto the launch command by bin/fm-spawn.sh. An instruction not to write is not this fact.",
-      "review_target_commit": "state/<id>.meta reviewed_head= - the exact commit reviewed. Required for a change role by requires_pinned_head; a design role reviews an artifact that has no head, and its absence there is declared rather than silently tolerated.",
-      "launch_result": "state/<id>.meta review_launch= - one launch_outcomes name, recorded from the observed endpoint rather than inferred from the spawn having been attempted.",
-      "review_result": "the task's own durable status record: a terminal event for the task. No terminal event means nothing established that the review reached a verdict."
+      "review_target_commit": "state/<id>.meta reviewed_head= - the target identifier required for every role. requires_pinned_head additionally constrains it to the candidate worktree's full 40-character HEAD.",
+      "launch_result": "state/<id>.meta review_launch= - one launch_outcomes name, recorded from the endpoint observation composed with the matching reviewer-authored opening event.",
+      "review_result": "A reviewer-authored fm-status-event.v1 event with key=review-verdict, phase equal to PASS or FAIL, and evidence equal to the assigned target, following the matching opening event. Terminal lifecycle verbs carry no verdict."
     },
-    "one_field_two_facts": "role_established and launch_result both read review_launch=. That is one observation answering two of the brief's questions rather than two fields invented to match a list, and role_established additionally requires review_result so it is strictly stronger than launch_result alone."
+    "one_field_two_facts": "The one reviewer-authored opening event proves role understanding and target identification, while review_launch composes that evidence with endpoint attribution."
   },
   "refused_keys": [
     "independent",

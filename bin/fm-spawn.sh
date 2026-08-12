@@ -315,6 +315,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-route-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-status-event-lib.sh
+. "$SCRIPT_DIR/fm-status-event-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1865,6 +1867,22 @@ else
 fi
 [ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
 
+if [ -n "$REVIEW_ROLE" ]; then
+  REVIEW_BRIEF="$DATA/$ID/reviewer-brief.md"
+  {
+    sed -n '1,$p' "$BRIEF"
+    printf '\n# Review evidence protocol\n'
+    printf 'Before reviewing, append exactly this opening event to `%s`:\n\n' "$STATE/$ID.status"
+    printf '`fm-status-event.v1 verb=working key=review-opening phase=%s evidence=%s summary=review role and target established`\n\n' "$REVIEW_ROLE" "$REVIEWED_HEAD"
+    printf 'After reviewing, append a `key=review-verdict` event with `phase=PASS` for an observed-good change or `phase=FAIL` for an observed-bad change, and the same `evidence=%s`.\n' "$REVIEWED_HEAD"
+    printf 'The event verb reports lifecycle state only and does not carry the verdict.\n'
+  } > "$REVIEW_BRIEF" || {
+    echo "error: could not create the reviewer evidence envelope for $ID" >&2
+    exit 1
+  }
+  BRIEF=$REVIEW_BRIEF
+fi
+
 delivery_rigor_rank() {  # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
   case "$1" in
     no-mistakes) echo 3 ;;
@@ -2500,6 +2518,20 @@ review_record_launch() {  # <outcome>
     return 1
   }
   return 0
+}
+
+review_opening_observed() {  # <status-path> <role> <target>
+  local line key phase evidence
+  [ -f "$1" ] || return 1
+  while IFS= read -r line; do
+    fm_status_event_is_typed "$line" || continue
+    key=$(fm_status_event_field "$line" key 2>/dev/null) || continue
+    phase=$(fm_status_event_field "$line" phase 2>/dev/null) || continue
+    evidence=$(fm_status_event_field "$line" evidence 2>/dev/null) || continue
+    [ "$key" = review-opening ] && [ "$phase" = "$2" ] \
+      && printf '%s\n' "$evidence" | grep -Fxq -- "$3" && return 0
+  done <"$1"
+  return 1
 }
 
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
@@ -3180,10 +3212,8 @@ fi
 # sees one. A reviewer that never started and a reviewer that started and
 # lawfully refused to write are almost identical from the outside.
 #
-# fm_backend_agent_state is the fleet's existing recovery-grade endpoint
-# contract and attributes a running agent PROCESS rather than reading a vendor
-# banner, so this rests on a kernel fact. Its six values map onto the outcomes
-# review-roles/schema.json declares; nothing new classifies anything here.
+# Endpoint attribution and the reviewer-authored opening event are composed:
+# neither one establishes the requested launch by itself.
 if [ -n "$REVIEW_ROLE" ]; then
   REVIEW_LAUNCH_POLLS=${FM_REVIEW_LAUNCH_POLLS:-40}
   REVIEW_LAUNCH_INTERVAL=${FM_REVIEW_LAUNCH_INTERVAL:-0.5}
@@ -3192,12 +3222,21 @@ if [ -n "$REVIEW_ROLE" ]; then
   while [ "$REVIEW_POLL_I" -lt "$REVIEW_LAUNCH_POLLS" ]; do
     REVIEW_AGENT_STATE=$(fm_backend_agent_state "$BACKEND" "$T" 2>/dev/null) \
       || REVIEW_AGENT_STATE=unreadable
-    [ "$REVIEW_AGENT_STATE" != alive ] || break
+    if [ "$REVIEW_AGENT_STATE" = alive ] \
+      && review_opening_observed "$STATE/$ID.status" "$REVIEW_ROLE" "$REVIEWED_HEAD"; then
+      break
+    fi
     REVIEW_POLL_I=$((REVIEW_POLL_I + 1))
     [ "$REVIEW_POLL_I" -ge "$REVIEW_LAUNCH_POLLS" ] || sleep "$REVIEW_LAUNCH_INTERVAL"
   done
   case "$REVIEW_AGENT_STATE" in
-    alive) REVIEW_LAUNCH_OUTCOME=launch_succeeded_as_requested ;;
+    alive)
+      if review_opening_observed "$STATE/$ID.status" "$REVIEW_ROLE" "$REVIEWED_HEAD"; then
+        REVIEW_LAUNCH_OUTCOME=launch_succeeded_as_requested
+      else
+        REVIEW_LAUNCH_OUTCOME=role_not_established
+      fi
+      ;;
     dead|missing) REVIEW_LAUNCH_OUTCOME=launch_failed ;;
     # ambiguous, unreadable, unverified: the third value, never a pass.
     *) REVIEW_LAUNCH_OUTCOME=could_not_observe ;;

@@ -74,7 +74,8 @@ DESIGN=$ROLES/runtime-design-review.json
 check_baseline() {
   "$RR" check --role runtime-design-review \
     --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
-    --maker claude/opus --maker-process task-maker --reviewer-process task-review "$@" 2>&1
+    --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+    --reviewed-head design-spec-v1 "$@" 2>&1
 }
 
 # mutate <jq-program>: rewrite the design role in place.
@@ -135,7 +136,8 @@ pass "an eligible read-only assignment carries the measured launch binding"
 restore
 out=$("$RR" check --role runtime-design-review \
   --reviewer openai-codex/gpt-5.6-luna --harness grok --effort max \
-  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head design-spec-v1 2>&1); rc=$?
 expect_code 1 "$rc" "a harness with no measured read-only binding must be refused"
 assert_contains "$out" "FM_REVIEW_NO_READONLY_BINDING" \
   "the refusal must name the missing read-only binding"
@@ -155,7 +157,8 @@ pass "read-only enforcement is per-harness and unmeasured harnesses report unkno
 restore
 out=$("$RR" check --role runtime-design-review \
   --reviewer claude/opus --harness pi --effort xhigh \
-  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head design-spec-v1 2>&1); rc=$?
 expect_code 1 "$rc" "assigning the author as its own reviewer must be refused"
 assert_contains "$out" "FM_REVIEW_SELF_REVIEW_REFUSED" "the refusal must name self-review"
 
@@ -164,7 +167,8 @@ assert_contains "$out" "FM_REVIEW_SELF_REVIEW_REFUSED" "the refusal must name se
 # that refused it would be enforcing a model property instead.
 out=$("$RR" check --role runtime-design-review \
   --reviewer claude/opus --harness pi --effort xhigh \
-  --maker openai-codex/gpt-5.6-luna --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+  --maker openai-codex/gpt-5.6-luna --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head design-spec-v1 2>&1); rc=$?
 expect_code 0 "$rc" "independence is assignment-relative: the same binding must be eligible against a different maker"
 pass "self-review refused while the same binding stays eligible elsewhere"
 
@@ -172,7 +176,7 @@ pass "self-review refused while the same binding stays eligible elsewhere"
 
 out=$("$RR" check --role runtime-design-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
-  --reviewer-process task-review 2>&1); rc=$?
+  --reviewer-process task-review --reviewed-head design-spec-v1 2>&1); rc=$?
 [ "$rc" != 0 ] || fail "an assignment with no author identity must not be eligible"
 assert_contains "$out" "FM_REVIEW_MAKER_IDENTITY_MISSING" \
   "the refusal must name the missing author identity"
@@ -201,7 +205,8 @@ green_then_red "an effort other than the one qualified for this binding goes red
 restore
 out=$("$RR" check --role runtime-design-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi \
-  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head design-spec-v1 2>&1); rc=$?
 expect_code 1 "$rc" "omitting a binding-specific reviewer effort must go red"
 assert_contains "$out" "effort_not_qualified_for_binding" \
   "the missing-effort refusal must name the binding-specific capability rule"
@@ -335,12 +340,14 @@ restore
 mutate '.independence.model = "reported"'
 out=$("$RR" check --role runtime-design-review \
   --reviewer claude/opus --harness pi --effort xhigh \
-  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head design-spec-v1 2>&1); rc=$?
 expect_code 0 "$rc" "with model independence downgraded to reported, self-review is admitted - which is what makes the required setting load-bearing"
 restore
 out=$("$RR" check --role runtime-design-review \
   --reviewer claude/opus --harness pi --effort xhigh \
-  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review \
+  --reviewed-head design-spec-v1 2>&1); rc=$?
 expect_code 1 "$rc" "restored to required, the same self-review must be refused"
 pass "the independence requirement changes the verdict, so it is enforcement rather than prose"
 
@@ -423,11 +430,17 @@ expect_code 2 "$rc" "a role id containing path components must be unevaluable"
 assert_contains "$out" "role ids must be" "the invalid role id must explain the slug contract"
 
 # A change review must be pinned to the head it read.
+out=$("$RR" check --role runtime-design-review \
+  --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
+  --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
+expect_code 1 "$rc" "a design review with no target identifier must be refused"
+assert_contains "$out" "review_target_unidentified" "the design refusal must name the missing target"
+
 out=$("$RR" check --role runtime-change-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
   --maker claude/opus --maker-process task-maker --reviewer-process task-review 2>&1); rc=$?
 expect_code 1 "$rc" "a change review with no pinned head must be refused"
-assert_contains "$out" "reviewed_head_unpinned" "the refusal must name the unpinned head"
+assert_contains "$out" "review_target_unidentified" "the refusal must name the missing target"
 
 HEAD_REPO="$TMP_ROOT/candidate"
 mkdir -p "$HEAD_REPO"
@@ -539,7 +552,7 @@ run_spawn() {  # <args...>
 write_spawn_brief review-self
 out=$(run_spawn review-self "$SPAWN_HOME/projects/proj" --scout --reason-code SEMANTIC_REVIEW \
   --harness pi --model claude/opus --effort xhigh \
-  --review-role runtime-design-review --maker claude/opus --maker-process task-maker); rc=$?
+  --review-role runtime-design-review --maker claude/opus --maker-process task-maker --reviewed-head design-spec-v1); rc=$?
 [ "$rc" != 0 ] || fail "the spawn chokepoint admitted a self-review"
 assert_contains "$out" "FM_REVIEW_SELF_REVIEW_REFUSED" "the spawn refusal must name self-review"
 assert_absent "$SPAWN_HOME/state/review-self.meta" "a refused review spawn must leave no metadata behind"
@@ -547,7 +560,7 @@ assert_absent "$SPAWN_HOME/state/review-self.meta" "a refused review spawn must 
 write_spawn_brief review-nomaker
 out=$(run_spawn review-nomaker "$SPAWN_HOME/projects/proj" --scout --reason-code SEMANTIC_REVIEW \
   --harness pi --model openai-codex/gpt-5.6-luna --effort max \
-  --review-role runtime-design-review); rc=$?
+  --review-role runtime-design-review --reviewed-head design-spec-v1); rc=$?
 [ "$rc" != 0 ] || fail "the spawn chokepoint admitted a review with no author identity"
 assert_contains "$out" "FM_REVIEW_MAKER_IDENTITY_MISSING" "the spawn refusal must name the missing author"
 assert_absent "$SPAWN_HOME/state/review-nomaker.meta" "a refused review spawn must leave no metadata behind"
@@ -555,7 +568,7 @@ assert_absent "$SPAWN_HOME/state/review-nomaker.meta" "a refused review spawn mu
 write_spawn_brief review-badharness
 out=$(run_spawn review-badharness "$SPAWN_HOME/projects/proj" --scout --reason-code SEMANTIC_REVIEW \
   --harness grok --model openai-codex/gpt-5.6-luna --effort max \
-  --review-role runtime-design-review --maker claude/opus --maker-process task-maker); rc=$?
+  --review-role runtime-design-review --maker claude/opus --maker-process task-maker --reviewed-head design-spec-v1); rc=$?
 [ "$rc" != 0 ] || fail "the spawn chokepoint admitted a review on a harness with no measured read-only binding"
 assert_contains "$out" "FM_REVIEW_NO_READONLY_BINDING" "the spawn refusal must name the missing read-only binding"
 
@@ -619,10 +632,11 @@ write_assignment_record() {  # <id>
     echo "review_maker=claude/opus"
     echo "review_readonly_mechanism=allowlist"
     echo "review_readonly_flags=--tools read,grep,find,ls"
+    echo "reviewed_head=design-spec-v1"
     echo "review_launch=launch_succeeded_as_requested"
   } > "$STATE/$1.meta"
-  printf 'fm-status-event.v1 verb=done phase=review evidence=data/%s/report.md summary=the review reached a verdict\n' \
-    "$1" > "$STATE/$1.status"
+  printf 'fm-status-event.v1 verb=working key=review-opening phase=runtime-design-review evidence=design-spec-v1 summary=review role and target established\n' > "$STATE/$1.status"
+  printf 'fm-status-event.v1 verb=done key=review-verdict phase=PASS evidence=design-spec-v1 summary=review passed\n' >> "$STATE/$1.status"
 }
 
 assignment_out() { "$RR" assignment --task rev-proof 2>&1; }
@@ -672,7 +686,10 @@ mut_role_not_established() { set_launch role_not_established; }
 mut_no_binding() { strip_meta model; }
 mut_no_mechanism() { strip_meta review_readonly_mechanism; }
 mut_no_flags() { strip_meta review_readonly_flags; }
-mut_no_verdict() { rm -f "$STATE/rev-proof.status"; }
+mut_no_verdict() { sed -i '/key=review-verdict/d' "$STATE/rev-proof.status"; }
+mut_done_without_verdict() { sed -i 's/key=review-verdict phase=PASS/key=review-finished phase=review/' "$STATE/rev-proof.status"; }
+mut_negative_verdict() { sed -i 's/key=review-verdict phase=PASS/key=review-verdict phase=FAIL/' "$STATE/rev-proof.status"; }
+mut_wrong_opening_target() { sed -i 's/key=review-opening phase=runtime-design-review evidence=design-spec-v1/key=review-opening phase=runtime-design-review evidence=other-spec/' "$STATE/rev-proof.status"; }
 mut_change_role() { sed -i "s/^review_role=.*/review_role=runtime-change-review/" "$STATE/rev-proof.meta"; }
 mut_invert_success() {
   jq '(.launch_outcomes.outcomes[] | select(.name == "launch_succeeded_as_requested") | .result) = "FAIL"' \
@@ -708,6 +725,12 @@ proof_collapses "recording a mechanism without the flags that carried it cannot 
   mut_no_flags 'readonly_authority_active' 2
 proof_collapses "a review that never reached a verdict is not a completed review" \
   mut_no_verdict 'review_result' 2
+proof_collapses "a done lifecycle event without a reviewer verdict proves no result" \
+  mut_done_without_verdict 'review_result' 2
+proof_collapses "a reviewer-authored negative verdict is observed bad" \
+  mut_negative_verdict 'negative verdict' 1
+proof_collapses "an opening event for another target does not establish the role" \
+  mut_wrong_opening_target 'role_established' 2
 
 # A change role additionally requires the exact reviewed commit.
 proof_collapses "a change review with no pinned head cannot prove which bytes were read" \
