@@ -504,7 +504,7 @@ FM_AVAIL_RECORD_VALID_JQ='
     if ($e | type) != "object" then "model \($k) is not an object"
     elif (($e.observation // null) | IN(obs_values[]) | not)
       then "model \($k) records observation \($e.observation // "nothing"), which is not one of \(obs_values | join(", "))"
-    elif ([$e.shape, $e.reader, $e.detail, $e.at] | map(clean_string) | all | not)
+    elif ([$e.shape, $e.reader, $e.detail, $e.at] | map(nonempty_clean_string) | all | not)
       then "model \($k) is missing a shape, reader, detail or at field, or one carries control characters"
     elif (($e.latency_s // null) != null and ($e.latency_s | type) != "number")
       then "model \($k) records a non-numeric latency"
@@ -527,6 +527,9 @@ FM_AVAIL_RECORD_VALID_JQ='
     elif ($e.observation == $unobservable and (($e.tooling_gap.backlog_item // null) != null
             and ($e.tooling_gap.backlog_item | nonempty_clean_string | not)))
       then "model \($k) records a backlog item that is not a plain string"
+    elif ($e.observation == $unobservable and (($e.tooling_gap.backlog_item // null) != null
+            and $e.tooling_gap.backlog_item_status != "filed"))
+      then "model \($k) records a backlog item without filed status"
     elif ($e.observation == $unobservable and (($e.tooling_gap.backlog_item // null) == null
             and ($e.tooling_gap.backlog_item_status | nonempty_clean_string | not)))
       then "model \($k) has no backlog item and does not say why repair work is unfiled"

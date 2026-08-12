@@ -22,7 +22,7 @@ Verified 2026-08-12.
 
 | Harness | Version | Command shape | Model probed | Observation | Latency |
 |---|---|---|---|---|---|
-| `claude` | 2.1.228 (Claude Code) | `claude -p --model <id> --setting-sources '' --strict-mcp-config --mcp-config '{"mcpServers":{}}' --disallowed-tools <list> --no-session-persistence --agents '{}' --system-prompt <prompt> <prompt>`, run in an empty directory | `claude/opus` | `AVAILABLE` | 3s |
+| `claude` | 2.1.228 (Claude Code) | `claude -p --model <id> --setting-sources '' --strict-mcp-config --mcp-config '{"mcpServers":{}}' --tools '' --disallowed-tools <list> --no-session-persistence --agents '{}' --system-prompt <prompt> <prompt>`, run in an empty directory | `claude/opus` | `AVAILABLE` | 3s |
 | `pi` | 0.81.1 | `pi -p --provider <p> --model <id> --no-tools --no-session --thinking off <prompt>`, run in an empty directory | `openai-codex/gpt-5.6-sol` | `AVAILABLE` | 7s |
 
 A harness with no arm in `probe_one` records `unprobeable`, which is `UNOBSERVABLE`.
@@ -36,7 +36,7 @@ Verified 2026-08-11 by replacing `--strict-mcp-config` with an unknown flag: the
 A probe answers "does this provider serve this model to this account", and every ambient input is either a way to get a wrong answer or a way for a probe to have a side effect.
 Each probe therefore runs in a freshly created empty directory that is removed afterwards, so no project instructions, project settings, hooks, or repository contents are in scope, and the session-identity environment variables of the calling agent are unset.
 `--setting-sources ''` is the flag that matters most, because user, project and local settings are where hooks live; `claude --setting-sources bogus --version` rejects an unknown source while the empty value is accepted, which is what establishes that an empty list means no sources rather than a silently ignored flag.
-`--strict-mcp-config` with an empty `--mcp-config` loads no MCP servers, `--disallowed-tools` denies the built-in tools by name on top of the empty directory, `--no-session-persistence` leaves no session behind, and `--agents '{}'` loads no subagents.
+`--strict-mcp-config` with an empty `--mcp-config` loads no MCP servers, `--tools ''` disables every built-in tool, `--disallowed-tools` denies known tools by name as a second layer, `--no-session-persistence` leaves no session behind, and `--agents '{}'` loads no subagents.
 
 The boundary is observed rather than assumed, and observing it costs no live request: `tests/fm-availability-observation.test.sh` launches a fake harness that records its working directory, argument vector and environment, from a project directory carrying a `CLAUDE.md`, a settings hook and a secret, and asserts that none of them was in scope.
 A flag this CLI stops accepting turns the probe into a client error, which is `UNOBSERVABLE` and a tooling gap - loud, and never a false positive about the model.
@@ -46,7 +46,7 @@ A flag this CLI stops accepting turns the probe into a client error, which is `U
 Parseability is not validity, and the difference is a fail-open defect class rather than a detail.
 The reader originally recovered from unparseable JSON only, so a file that was valid JSON with a wrong or absent schema succeeded as an EMPTY exclusion set: every recorded could-not-observe disappeared and every candidate it was excluding became eligible again, in the function whose whole purpose is to fail closed.
 
-`bin/fm-availability-lib.sh` now verifies the schema string, that `models` is an object, that every entry is an object whose `observation` is inside the closed vocabulary, that the string fields are present and free of control characters, that an `UNOBSERVABLE` entry carries a complete `tooling_gap` block under the owning reason code, and that no other entry carries one.
+`bin/fm-availability-lib.sh` now verifies the schema string, that `models` is an object, that every entry is an object whose `observation` is inside the closed vocabulary, that the evidence strings are non-empty and free of control characters, that an `UNOBSERVABLE` entry carries a complete `tooling_gap` block with a status matching its backlog item under the owning reason code, and that no other entry carries one.
 Anything short of that is a could-not-observe about the record itself, reported with the reason so it can be repaired rather than guessed at, and it refuses under `FM_ROUTE_OBSERVATION_UNREADABLE` rather than re-admitting anything.
 An absent file remains an empty exclusion set, because absence means no attempted observation has failed - which is never a claim that anything is healthy.
 
