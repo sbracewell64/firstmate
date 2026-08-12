@@ -209,7 +209,7 @@ They do not establish containment of an agent that finds another path, and they 
 
 ## Current regression verification
 
-Executed 2026-08-12 from the repository root:
+Re-executed 2026-08-12T04:47:03Z from the repository root:
 
 ```sh
 tests/fm-review-role.test.sh
@@ -241,5 +241,6 @@ ok: fm-review-role
 ```
 
 Exit status `0`.
+Standard error was empty.
 
 Refresh this record after any upgrade to a listed harness, by re-running both halves of the probe for that harness and re-recording the raw output and exit status.
