@@ -9,7 +9,7 @@ This record contains reusable version-scoped evidence for the read-only launch b
 ## Why this is measured rather than read off a flag name
 
 A launch flag that looks restrictive is not evidence that it refuses.
-The claim under test is that a reviewer launched through the recorded binding cannot mutate the candidate it is reviewing, and only an attempted write can establish that.
+The claim under test is that the recorded launch binding removes the measured mutation surface and refuses the probe's attempted write, and only an attempted write can establish that.
 
 Three separate readings would each have recorded a false pass here, and all three were observed during this measurement:
 

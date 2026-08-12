@@ -249,6 +249,9 @@ Which route a task belongs to stays firstmate's judgment; what the scripts then 
 `bin/fm-route-lib.sh` owns those rules, `bin/fm-route.sh` reads them, and `state/model-health.json` is the narrow availability record failover writes ([configuration.md](configuration.md#routed-pools-optional)).
 Enforcement is per dispatch, so activating it never re-checks work already under way.
 
+Review eligibility is a separate assignment-relative decision: `review-roles/schema.json` owns the contract shape, each role file owns its qualified bindings and predicates, `bin/fm-review-role.sh` composes those facts with maker identity and independence evidence, and `fm-spawn.sh` refuses a claimed obligation before launch unless that decision also yields a measured read-only harness binding.
+[`verification/read-only-reviewer-launch.md`](verification/read-only-reviewer-launch.md) owns the version-scoped evidence for those harness bindings and their stated containment limit.
+
 ## Optional fleet admission control
 
 The same `config/crew-dispatch.json` can carry an optional `_scheduling.admission_control` policy, and firstmate ships with it inert.
