@@ -1092,15 +1092,15 @@ run_decision_probe() {  # <task> <key>
       "PROBE_EXECUTION_FAILED: the probe for $key could not execute (exit $rc): $(printf '%s' "$out" | tail -1)"
   elif [ "$rc" -eq 1 ]; then
     probe_answer FAIL verifier_reported_failure \
-      "PROBE_ASSERTION_FAILED: the criterion is not met: the probe for $key exited $rc: $(printf '%s' "$out" | tail -1)"
+      "PROBE_ASSERTION_FAILED: setup=passed assertion=failed: the criterion is not met: the probe for $key exited $rc: $(printf '%s' "$out" | tail -1)"
   elif [ "$rc" -ne 0 ]; then
     probe_answer NO_VERIFIER_RAN verification_unreachable \
-      "PROBE_EXECUTION_FAILED: the probe for $key failed before its assertion reached a verdict (exit $rc): $(printf '%s' "$out" | tail -1)"
+      "PROBE_INVALID: setup=failed assertion=not-run: the probe for $key leaked unclassified exit $rc: $(printf '%s' "$out" | tail -1)"
   elif [ "$DP_TIER" = cited-control ]; then
     probe_answer PASS verified \
-      "PROBE_PASSED: the probe for $key passes now, with $(control_citation "$DP_CONTROL") cited as the control watched to fail first"
+      "PROBE_PASSED: setup=passed assertion=passed: the probe for $key passes now, with $(control_citation "$DP_CONTROL") cited as the control watched to fail first"
   else
-    probe_answer PASS verified "PROBE_PASSED: the probe for $key exits 0, so the criterion is met"
+    probe_answer PASS verified "PROBE_PASSED: setup=passed assertion=passed: the probe for $key exits 0, so the criterion is met"
   fi
   [ -z "$now" ] || probe_cache_write "$task" "$key" "$fingerprint" "$now" "$iso"
   return 0

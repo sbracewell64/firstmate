@@ -442,6 +442,7 @@ out=$("$RR" check --role runtime-design-review \
   --reviewed-head 'design spec v1' 2>&1); rc=$?
 expect_code 1 "$rc" "a target the typed capture cannot encode must be refused prospectively"
 assert_contains "$out" "review_target_unencodable" "the refusal must name the encodability protection"
+pass "a review target must be a single token"
 
 out=$("$RR" check --role runtime-change-review \
   --reviewer openai-codex/gpt-5.6-luna --harness pi --effort max \
@@ -643,9 +644,11 @@ write_assignment_record() {  # <id>
     echo "reviewed_head=design-spec-v1"
     echo "review_launch=launch_succeeded_as_requested"
   } > "$STATE/$1.meta"
-  printf 'fm-status-event.v1 verb=done phase=review summary=review execution completed\n' > "$STATE/$1.status"
+  printf 'fm-status-event.v1 verb=done key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=review execution completed\n' > "$STATE/$1.status"
   jq -cn --arg a "$1" '{schema:"fm-review-ack.v1",assignment_received:true,reviewer_binding:"openai-codex/gpt-5.6-luna",review_role:"runtime-design-review",review_target_commit:"design-spec-v1",review_assignment_id:$a}' > "$STATE/$1.review-ack.json"
   jq -cn --arg a "$1" '{schema:"fm-review-verdict.v1",reviewer_binding:"openai-codex/gpt-5.6-luna",review_role:"runtime-design-review",review_target_commit:"design-spec-v1",review_assignment_id:$a,verdict:"approve",findings:[],evidence_refs:["data/rev-proof/report.md"]}' > "$STATE/$1.review-verdict.json"
+  cp "$STATE/$1.review-ack.json" "$STATE/$1.review-ack.raw"
+  cp "$STATE/$1.review-verdict.json" "$STATE/$1.review-verdict.raw"
 }
 
 assignment_out() { "$RR" assignment --task rev-proof "$@" 2>&1; }
@@ -665,16 +668,132 @@ pass "a complete review record proves the assignment"
 
 rm -f "$STATE/rev-proof.review-ack.json"
 ack='{"schema":"fm-review-ack.v1","assignment_received":true,"reviewer_binding":"openai-codex/gpt-5.6-luna","review_role":"runtime-design-review","review_target_commit":"design-spec-v1","review_assignment_id":"rev-proof"}'
-printf 'rendered prefix %s rendered suffix\n' "$ack" | "$RR" capture --task rev-proof --kind acknowledgement
+printf 'FM-REVIEW-ARTIFACT-BEGIN kind=acknowledgement bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=acknowledgement\n' "${#ack}" "$ack" | "$RR" capture --task rev-proof --kind acknowledgement
 [ -s "$STATE/rev-proof.review-ack.json" ] || fail "fleet-side capture did not record the reviewer acknowledgement"
-printf '%s\n' "${ack/design-spec-v1/other-spec}" | "$RR" capture --task rev-proof --kind acknowledgement >/dev/null 2>&1 && fail "a target-mismatched acknowledgement was accepted"
+wrong_ack=${ack/design-spec-v1/other-spec}
+printf 'FM-REVIEW-ARTIFACT-BEGIN kind=acknowledgement bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=acknowledgement\n' "${#wrong_ack}" "$wrong_ack" | "$RR" capture --task rev-proof --kind acknowledgement >/dev/null 2>&1 && fail "a target-mismatched acknowledgement was accepted"
 rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.status"
 verdict='{"schema":"fm-review-verdict.v1","reviewer_binding":"openai-codex/gpt-5.6-luna","review_role":"runtime-design-review","review_target_commit":"design-spec-v1","review_assignment_id":"rev-proof","verdict":"approve","findings":[],"evidence_refs":["data/rev-proof/report.md"]}'
 execution='fm-status-event.v1 verb=done key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=review execution completed'
-printf '%s\n%s\n' "$verdict" "$execution" | "$RR" capture --task rev-proof --kind verdict
+printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n%s\n' "${#verdict}" "$verdict" "$execution" | "$RR" capture --task rev-proof --kind verdict
 out=$(assignment_out); rc=$?
 expect_code 0 "$rc" "fleet-captured execution and verdict artifacts must satisfy the complete assignment"
 pass "fleet-side capture records only typed assignment-bound reviewer output"
+pass "candidate mutation is refused while the output channel still works"
+pass "a read-only reviewer passes by emitting acknowledgement and verdict"
+
+rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
+split=90
+printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n%s\n' \
+  "${#verdict}" "${verdict:0:$split}" "${verdict:$split}" "$execution" \
+  | "$RR" capture --task rev-proof --kind verdict
+out=$(assignment_out); rc=$?
+expect_code 0 "$rc" "a physically wrapped framed verdict must reconstruct to the authored bytes"
+pass "a wrapped review artifact is reconstructed and verified"
+
+rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
+printf 'FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=%s\n%s\nFM-REVIEW-ARTIFACT-END kind=verdict\n' \
+  "$(( ${#verdict} + 1 ))" "$verdict" | "$RR" capture --task rev-proof --kind verdict >/dev/null 2>&1
+rc=$?
+expect_code 2 "$rc" "a frame whose declared length does not match must be could-not-observe"
+assert_absent "$STATE/rev-proof.review-verdict.raw" "an unverifiable capture must retain no purported raw artifact"
+pass "an unverifiable capture is could-not-observe"
+
+write_assignment_record rev-proof
+rm -f "$STATE/rev-proof.review-ack.raw"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "normalized JSON without retained reviewer-authored bytes must not establish the role"
+pass "the launcher cannot fabricate or default a verdict"
+
+write_assignment_record rev-proof
+printf '{bad-json' > "$STATE/rev-proof.review-verdict.raw"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "malformed raw reviewer bytes must not become a candidate verdict"
+pass "a malformed verdict is invalid review evidence"
+
+write_assignment_record rev-proof
+rm -f "$STATE/rev-proof.review-ack.json" "$STATE/rev-proof.review-ack.raw"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "missing acknowledgement must leave the role unestablished"
+pass "no acknowledgement means the role is not established"
+
+write_assignment_record rev-proof
+jq -c '.review_target_commit="wrong-commit"' "$STATE/rev-proof.review-ack.raw" > "$STATE/rev-proof.review-ack.raw.t"
+mv -f "$STATE/rev-proof.review-ack.raw.t" "$STATE/rev-proof.review-ack.raw"
+cp "$STATE/rev-proof.review-ack.raw" "$STATE/rev-proof.review-ack.json"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "wrong-target acknowledgement must not establish this review"
+pass "an acknowledgement naming the wrong commit cannot begin a review"
+
+write_assignment_record rev-proof
+jq -c '.review_role="runtime-change-review"' "$STATE/rev-proof.review-ack.raw" > "$STATE/rev-proof.review-ack.raw.t"
+mv -f "$STATE/rev-proof.review-ack.raw.t" "$STATE/rev-proof.review-ack.raw"
+cp "$STATE/rev-proof.review-ack.raw" "$STATE/rev-proof.review-ack.json"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "wrong-role acknowledgement must be refused"
+pass "an acknowledgement naming the wrong role or assignment is refused"
+
+write_assignment_record rev-proof
+rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "completed execution without a semantic artifact must remain unsatisfied"
+pass "completion without a verdict leaves the review unsatisfied"
+
+write_assignment_record rev-proof
+printf 'fm-status-event.v1 verb=done phase=review summary=ordinary task terminal\n' > "$STATE/rev-proof.status"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "ordinary task completion must not supply reviewer execution"
+pass "a task terminal cannot satisfy review execution"
+
+write_assignment_record rev-proof
+out=$(assignment_out); rc=$?
+expect_code 0 "$rc" "assignment-bound execution must make the fixture green"
+sed -i 's/evidence=design-spec-v1/evidence=other-spec/' "$STATE/rev-proof.status"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "removing exact target binding must turn the green fixture red"
+pass "the green fixture fails when the assignment binding is removed"
+
+write_assignment_record rev-proof
+printf 'fm-status-event.v1 verb=failed key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=failed after rejection\n' > "$STATE/rev-proof.status"
+jq -c '.verdict="reject"' "$STATE/rev-proof.review-verdict.raw" > "$STATE/rev-proof.review-verdict.raw.t"
+mv -f "$STATE/rev-proof.review-verdict.raw.t" "$STATE/rev-proof.review-verdict.raw"
+cp "$STATE/rev-proof.review-verdict.raw" "$STATE/rev-proof.review-verdict.json"
+out=$(assignment_out --json); rc=$?
+expect_code 1 "$rc" "failed execution must retain a validated rejection"
+[ "$(printf '%s' "$out" | jq -r '.review_execution_state + ":" + .review_verdict')" = failed:reject ] || fail "failed rejection did not preserve both facts"
+pass "a failed run does not unsay an authored rejection"
+
+write_assignment_record rev-proof
+printf 'fm-status-event.v1 verb=failed key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=failed before approval earned\n' > "$STATE/rev-proof.status"
+out=$(assignment_out --json); rc=$?
+expect_code 2 "$rc" "failed execution must not honour a captured approval"
+[ "$(printf '%s' "$out" | jq -r '.review_execution_state + ":" + .review_verdict')" = failed:approve ] || fail "unhonoured approval was not retained"
+pass "a failed run cannot deliver an approval"
+
+for cell in done:absent done:reject done:approve failed:absent failed:reject failed:approve; do
+  write_assignment_record rev-proof
+  execution_state=${cell%%:*}
+  verdict_state=${cell#*:}
+  printf 'fm-status-event.v1 verb=%s key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=table cell\n' "$execution_state" > "$STATE/rev-proof.status"
+  if [ "$verdict_state" = absent ]; then
+    rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"
+  elif [ "$verdict_state" = reject ]; then
+    jq -c '.verdict="reject"' "$STATE/rev-proof.review-verdict.raw" > "$STATE/rev-proof.review-verdict.raw.t"
+    mv -f "$STATE/rev-proof.review-verdict.raw.t" "$STATE/rev-proof.review-verdict.raw"
+    cp "$STATE/rev-proof.review-verdict.raw" "$STATE/rev-proof.review-verdict.json"
+  fi
+  assignment_out >/dev/null 2>&1
+  rc=$?
+  case "$cell" in done:approve) expect_code 0 "$rc" "$cell" ;; done:reject|failed:reject) expect_code 1 "$rc" "$cell" ;; *) expect_code 2 "$rc" "$cell" ;; esac
+done
+pass "every execution and verdict combination is enumerated"
+
+write_assignment_record rev-proof
+printf 'fm-status-event.v1 verb=paused key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=unknown state\n' > "$STATE/rev-proof.status"
+out=$(assignment_out); rc=$?
+expect_code 2 "$rc" "an execution state outside the table must refuse"
+assert_contains "$out" "FM_REVIEW_EXECUTION_VERDICT_UNENUMERATED" "the refusal must name the unenumerated state"
+pass "an unenumerated combination refuses rather than defaults"
 
 # proof_collapses <label> <mutator> <token> <expected-exit>
 proof_collapses() {
@@ -709,10 +828,10 @@ mut_no_binding() { strip_meta model; }
 mut_no_mechanism() { strip_meta review_readonly_mechanism; }
 mut_no_flags() { strip_meta review_readonly_flags; }
 mut_no_verdict() { rm -f "$STATE/rev-proof.review-verdict.json"; }
-mut_done_without_verdict() { rm -f "$STATE/rev-proof.review-verdict.json"; }
-mut_negative_verdict() { jq '.verdict="reject"' "$STATE/rev-proof.review-verdict.json" > "$STATE/rev-proof.review-verdict.json.t" && mv -f "$STATE/rev-proof.review-verdict.json.t" "$STATE/rev-proof.review-verdict.json"; }
-mut_wrong_opening_target() { jq '.review_target_commit="other-spec"' "$STATE/rev-proof.review-ack.json" > "$STATE/rev-proof.review-ack.json.t" && mv -f "$STATE/rev-proof.review-ack.json.t" "$STATE/rev-proof.review-ack.json"; }
-mut_crashed_without_verdict() { rm -f "$STATE/rev-proof.review-verdict.json"; printf 'fm-status-event.v1 verb=failed phase=review summary=reviewer crashed\n' > "$STATE/rev-proof.status"; }
+mut_done_without_verdict() { rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"; }
+mut_negative_verdict() { jq -c '.verdict="reject"' "$STATE/rev-proof.review-verdict.raw" > "$STATE/rev-proof.review-verdict.raw.t" && mv -f "$STATE/rev-proof.review-verdict.raw.t" "$STATE/rev-proof.review-verdict.raw" && cp "$STATE/rev-proof.review-verdict.raw" "$STATE/rev-proof.review-verdict.json"; }
+mut_wrong_opening_target() { jq -c '.review_target_commit="other-spec"' "$STATE/rev-proof.review-ack.raw" > "$STATE/rev-proof.review-ack.raw.t" && mv -f "$STATE/rev-proof.review-ack.raw.t" "$STATE/rev-proof.review-ack.raw" && cp "$STATE/rev-proof.review-ack.raw" "$STATE/rev-proof.review-ack.json"; }
+mut_crashed_without_verdict() { rm -f "$STATE/rev-proof.review-verdict.json" "$STATE/rev-proof.review-verdict.raw"; printf 'fm-status-event.v1 verb=failed key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=reviewer crashed\n' > "$STATE/rev-proof.status"; }
 mut_positive_missing_binding() { strip_meta review_readonly_mechanism; }
 mut_change_role() { sed -i "s/^review_role=.*/review_role=runtime-change-review/" "$STATE/rev-proof.meta"; }
 mut_invert_success() {
@@ -747,7 +866,7 @@ proof_collapses "a review with no enforced read-only binding cannot prove itself
   mut_no_mechanism 'readonly_authority_active' 2
 proof_collapses "recording a mechanism without the flags that carried it cannot prove a review" \
   mut_no_flags 'readonly_authority_active' 2
-proof_collapses "a review that never reached a verdict is not a completed review" \
+proof_collapses "completion without a verdict leaves the review unsatisfied" \
   mut_no_verdict 'review_result' 2
 proof_collapses "a done lifecycle event without a reviewer verdict proves no result" \
   mut_done_without_verdict 'review_result' 2
@@ -762,11 +881,11 @@ proof_collapses "an opening event for another target does not establish the role
 
 write_assignment_record rev-proof
 rm -f "$STATE/rev-proof.review-verdict.json"
-printf 'fm-status-event.v1 verb=failed phase=review summary=reviewer crashed\n' > "$STATE/rev-proof.status"
+printf 'fm-status-event.v1 verb=failed key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=reviewer crashed\n' > "$STATE/rev-proof.status"
 failed_record=$(assignment_out --json); rc=$?
 expect_code 2 "$rc" "a crashed reviewer with no verdict must be could-not-observe"
 [ "$(printf '%s' "$failed_record" | jq -r '.review_execution_state')" = failed ] || fail "the crash execution state was not preserved"
-printf 'fm-status-event.v1 verb=done phase=review summary=reviewer exited cleanly\n' > "$STATE/rev-proof.status"
+printf 'fm-status-event.v1 verb=done key=review-execution phase=runtime-design-review evidence=design-spec-v1 summary=reviewer exited cleanly\n' > "$STATE/rev-proof.status"
 done_record=$(assignment_out --json); rc=$?
 expect_code 2 "$rc" "a clean reviewer exit with no verdict must be could-not-observe"
 [ "$(printf '%s' "$done_record" | jq -r '.review_execution_state')" = done ] || fail "the clean execution state was not preserved separately"

@@ -1874,8 +1874,8 @@ if [ -n "$REVIEW_ROLE" ]; then
   {
     sed -n '1,$p' "$BRIEF"
     printf '\n# Review evidence protocol\n'
-    printf 'Before reviewing, print this exact compact JSON acknowledgement as its own line:\n\n`%s`\n\n' "$REVIEW_ACK"
-    printf 'After reviewing, print one compact JSON verdict as its own line using this shape, replacing `approve|reject` and filling both arrays:\n\n`%s`\n' "$REVIEW_VERDICT"
+    printf 'Before reviewing, print `FM-REVIEW-ARTIFACT-BEGIN kind=acknowledgement bytes=%s`, then this exact compact JSON acknowledgement, then `FM-REVIEW-ARTIFACT-END kind=acknowledgement`, each on its own line:\n\n`%s`\n\n' "${#REVIEW_ACK}" "$REVIEW_ACK"
+    printf 'After reviewing, create one compact JSON verdict using this shape, replacing `approve|reject` and filling both arrays, then print a begin line carrying its exact byte count, the compact JSON, and the matching end line:\n\n`FM-REVIEW-ARTIFACT-BEGIN kind=verdict bytes=<exact-byte-count>`\n\n`%s`\n\n`FM-REVIEW-ARTIFACT-END kind=verdict`\n' "$REVIEW_VERDICT"
     printf 'Then print `fm-status-event.v1 verb=done key=review-execution phase=%s evidence=%s summary=review execution completed` as its own line.\n' "$REVIEW_ROLE" "$REVIEWED_HEAD"
   } > "$REVIEW_BRIEF" || {
     echo "error: could not create the reviewer evidence envelope for $ID" >&2

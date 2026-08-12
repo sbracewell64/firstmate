@@ -739,10 +739,11 @@ decision_probe_execution_failure_is_not_assertion_failure() {
   write_decision "$home" review-findings-5 recurrence 'tier: executable
 run: jq . file-that-does-not-exist.json'
   out=$(run_reg "$dir" "$home" --closes review-findings-5 recurrence); rc=$?
-  expect_code 4 "$rc" "jq exit 2 must be could-not-observe, not a product verdict"
-  assert_contains "$out" "PROBE_EXECUTION_FAILED" "the live defect fixture must classify the execution failure"
+  expect_code 4 "$rc" "jq exit 2 must be invalid instrumentation, not a product verdict"
+  assert_contains "$out" "PROBE_INVALID" "the live defect fixture must classify the leaked status"
+  assert_contains "$out" "setup=failed assertion=not-run" "setup and assertion outcomes must remain separate"
   assert_not_contains "$out" "the criterion is not met" "an assertion never reached must not claim the product criterion failed"
-  pass "decision probe execution failure stays distinct from assertion failure"
+  pass "a failed setup is not a failed assertion"
 }
 
 # A PATH carrying the tools the register actually uses and no jq.
