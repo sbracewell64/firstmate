@@ -140,38 +140,59 @@ test_unrecordable_bound_leaves_no_active_wait() {
   pass "an unrecordable bound leaves no record that still reads as an active wait"
 }
 
-test_non_capacity_refusal_keeps_a_counted_wait() {
-  local rec out
-  rec=$(make_refusal_home secondary-refusal); read_home_record "$rec"
+test_non_capacity_refusal_consults_route_owner_for_substitute() {
+  local out
+  make_dispatch_home secondary-refusal
+  cat > "$OK_BIN/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+  *vendor/large*) exit 1 ;;
+esac
+exit 0
+SH
+  chmod +x "$OK_BIN/tmux"
   write_brief "$HOME_DIR" blockedtask no-mistakes
-  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
-    blockedtask "$PROJ_DIR" --mode no-mistakes --yolo off \
+  out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0 altq=0)" \
+    blockedtask "$OK_REPO" --mode no-mistakes --yolo off \
     --reason-code NL_RULE_CLASSIFICATION --harness codex \
     --route R-PAIR --model vendor/large --effort medium)
   assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
-  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id blockedtask --force)
-  assert_present "$HOME_DIR/state/blockedtask.capacity" "a secondary refusal ended the capacity wait"
-  assert_no_grep "terminal=" "$HOME_DIR/state/blockedtask.capacity" "a secondary refusal marked the capacity wait terminal"
-  assert_grep "deferrals=2" "$HOME_DIR/state/blockedtask.attempt" "the secondary refusal did not advance the durable bound"
-  assert_grep "blocked: waiting for capacity remains active" "$HOME_DIR/state/blockedtask.status" "the secondary refusal was not disclosed"
-  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id blockedtask --force)
-  [ "$(grep -c '^blocked: waiting for capacity remains active' "$HOME_DIR/state/blockedtask.status")" -eq 1 ] \
-    || fail "the unchanged secondary refusal was declared more than once"
-  pass "a non-capacity substitute refusal leaves the capacity wait active and counted"
+  out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
+    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=95 altq=95)" tick --id blockedtask --force)
+  assert_present "$HOME_DIR/state/blockedtask.meta" "a lawful substitute was skipped after a non-capacity refusal"
+  assert_grep "model=alt/large" "$HOME_DIR/state/blockedtask.meta" "the route owner's substitute was not used"
+  assert_contains "$out" "alt/large in route R-PAIR" "the automatic substitute resume was not disclosed"
+  assert_absent "$HOME_DIR/state/blockedtask.capacity" "the resumed wait record was not retired"
+  pass "a non-capacity refusal consults the route owner and resumes on its substitute"
+}
+
+test_non_capacity_refusal_without_substitute_keeps_waiting() {
+  local rec out
+  rec=$(make_refusal_home secondary-refusal-wait); read_home_record "$rec"
+  write_brief "$HOME_DIR" blockedwaittask no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
+    blockedwaittask "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --harness codex \
+    --route R-PAIR --model vendor/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=0)" tick --id blockedwaittask --force)
+  assert_present "$HOME_DIR/state/blockedwaittask.capacity" "a refusal with no lawful substitute ended the capacity wait"
+  assert_no_grep "terminal=" "$HOME_DIR/state/blockedwaittask.capacity" "a secondary refusal marked the capacity wait terminal"
+  pass "a non-capacity refusal with no lawful substitute keeps waiting"
 }
 
 test_moved_capacity_picture_resets_stagnation() {
   local rec out
   rec=$(make_refusal_home moved-picture); read_home_record "$rec"
   write_brief "$HOME_DIR" movingtask no-mistakes
-  out=$(FM_ATTEMPT_DEFER_STAGNATION_DEFAULT=2 \
-    run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" "$(quota_record vendorq=0 altq=0)" \
       movingtask "$PROJ_DIR" --mode no-mistakes --yolo off \
       --reason-code NL_RULE_CLASSIFICATION --harness codex \
       --route R-PAIR --model vendor/large --effort medium)
   assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not enter a capacity wait"
-  out=$(FM_ATTEMPT_DEFER_STAGNATION_DEFAULT=2 \
-    run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id movingtask --force)
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id movingtask --force)
   assert_no_grep "terminal=" "$HOME_DIR/state/movingtask.attempt" "a changed capacity picture was counted as stagnant"
   assert_grep "defer_stagnant=1" "$HOME_DIR/state/movingtask.attempt" "a changed capacity picture did not reset stagnation"
   assert_grep "alt/large=available" "$HOME_DIR/state/movingtask.capacity" "the current capacity signature was not persisted"
@@ -262,7 +283,8 @@ test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
 test_same_band_substitution_is_required
 test_unrecordable_bound_leaves_no_active_wait
-test_non_capacity_refusal_keeps_a_counted_wait
+test_non_capacity_refusal_consults_route_owner_for_substitute
+test_non_capacity_refusal_without_substitute_keeps_waiting
 test_moved_capacity_picture_resets_stagnation
 test_record_refresh_failure_stops_durably
 test_unsafe_recorded_id_stops_without_escaping_state

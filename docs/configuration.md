@@ -521,17 +521,18 @@ The driver applies no candidate rule of its own: ordering and every eligibility 
 If no candidate qualifies, the work keeps waiting rather than degrading.
 No model turn is spent asking whether capacity has returned, and the resume records the selected candidate, route and confirmed effort band on the task status log.
 
-Every deferral is counted by `bin/fm-attempt.sh defer`, which owns both bounds and spends no retry attempt, because a task the fleet had no capacity for did not fail.
-`deferral_budget` (default 24) bounds the total so a wait can never become an infinite poll, and `defer_stagnant` against `FM_ATTEMPT_DEFER_STAGNATION_DEFAULT` (default 8) stops a wait whose observed capacity picture has not moved for that many consecutive checks.
-Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature so repeated blindness can still stagnate.
-Either bound reaching its limit is the unified terminal state `budget_exhausted`, declared as one `failed:` line on the task's status log, and session start reports the stopped waits as a `CAPACITY_DEFERRED:` diagnostic.
+Every deferral is counted by `bin/fm-attempt.sh defer` without spending a retry attempt, because a task the fleet had no capacity for did not fail.
+The count drives bounded retry backoff and never stops the wait, because provider capacity may lawfully remain exhausted for an arbitrary duration.
+Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature.
+An unchanged observation advances `defer_stagnant` for disclosure but never becomes a stop authority.
 
 A wait the canonical attempt owner cannot durably count is stopped visibly rather than retained.
 `bin/fm-attempt.sh stop-defer` is asked for the terminal stop it owns - no second counter, selector or stop authority exists - and the deferral record is then either marked terminal atomically or REMOVED, because a record with no terminal marker reads as an active wait and every later tick would resume it.
 A record that can be neither marked nor removed is reported as needing to be cleared by hand, never left behind quietly.
 If `bin/fm-attempt.sh defer` cannot record the count, the deferral fails closed, marks the capacity record terminal and declares the failed command and attempt-record path on the task status log.
+After any original-model refusal that leaves work undispatched, the retry driver asks the route owner for the next eligible candidate at the recorded floor and effort band.
 If every offered substitute is refused by another dispatch gate, the wait remains active and gains one durable deferral count, while the first distinct refusal is recorded once as a `blocked:` status line.
-Every due retry must durably resume, advance its bound or stop, and a failure to refresh the deferral record after counting stops through the attempt owner's unified terminal state with the failed record path declared.
+Every due retry must durably resume, retain a later check or stop for an invalid durable record, and a failure to refresh the deferral record after counting stops through the attempt owner's unified terminal state with the failed record path declared.
 The work was never dispatched into a pool that could not run it and is not lost; raising a bound is deliberate, explicit and recorded.
 
 ### Model availability record (state/model-health.json)

@@ -48,12 +48,10 @@
 # restart every pid-based record is invalid at once, so recovery is keyed on the
 # task id and on the record's own timestamps.
 #
-# BOUNDS. Every deferral is counted by bin/fm-attempt.sh, which owns both the
-# total deferral budget and the stagnation rule that stops a wait whose observed
-# capacity picture has not moved. Reaching either bound is the unified terminal
-# state budget_exhausted, declared as a `failed:` status line by that owner. This
-# file never invents a second counter. If that owner cannot record the count,
-# the wait fails closed because no enforceable bound remains.
+# OBSERVATIONS. Every deferral is counted by bin/fm-attempt.sh so this owner can
+# back off repeated checks and disclose an unchanged capacity picture. Those
+# observations never stop a lawful wait because provider capacity may remain
+# exhausted for an arbitrary duration.
 #
 # Usage:
 #   fm-capacity-retry.sh defer <id> --route <R> --floor <F> --pool <a,b,...>
@@ -66,8 +64,8 @@
 #                                   [--attempt-budget <n>] [--slot-base <ref>]
 #                                   [--contribution-target <ref>]
 #       Record or refresh one capacity deferral and count it. Exit 0 when the
-#       wait is still within bounds, 3 when a bound is spent. Called by
-#       bin/fm-spawn.sh at the moment it refuses a dispatch for capacity.
+#       wait was recorded. Called by bin/fm-spawn.sh at the moment it refuses a
+#       dispatch for capacity.
 #   fm-capacity-retry.sh tick [--id <id>] [--force]
 #       Resume every deferral whose retry condition is met, by re-entering
 #       bin/fm-spawn.sh. --force ignores the retry condition for one named id.
@@ -84,7 +82,6 @@
 #      because nothing was due, which is the ordinary quiet case
 #   1  the action could not be completed and the reason is on stderr
 #   2  usage error
-#   3  a deferral bound is spent, so this work has stopped waiting
 #
 # Environment:
 #   FM_HOME                       the firstmate home whose state/ is read
@@ -288,16 +285,8 @@ cmd_defer() {
   } > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; echo "error: could not write the capacity deferral for $id" >&2; return 1; }
   mv -f -- "$tmp" "$rec" 2>/dev/null || { rm -f -- "$tmp"; echo "error: could not commit the capacity deferral for $id" >&2; return 1; }
 
-  # The bound is bin/fm-attempt.sh's, not this file's. A spent bound leaves the
-  # record in place and marked terminal, so the wait is inspectable rather than
-  # silently gone, and so nothing ticks it again.
   rc=0
   defer_out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" defer "$id" --signature "$signature" 2>&1) || rc=$?
-  if [ "$rc" -eq 3 ]; then
-    printf '%s\n' "$defer_out" >&2
-    mark_terminal "$id" "deferral bound spent"
-    return 3
-  fi
   if [ "$rc" -ne 0 ]; then
     stop_wait_unrecordable_bound "$id" "$defer_out"
     return 1
@@ -305,7 +294,7 @@ cmd_defer() {
   printf 'deferred %s route=%s retry_after=%s %s\n' "$id" "$route" "$retry_after" "$defer_out"
 }
 
-# A deferral whose bound is spent stays on disk, marked, so an operator can see
+# A deferral that cannot remain durable stays on disk, marked, so an operator can see
 # what was waiting and why it stopped. Marking is separate from writing the
 # record so the two never race to define the same field.
 mark_terminal() {  # <id> <why>
@@ -422,11 +411,6 @@ keep_waiting() {  # <record-file> <refusal>
       || printf '%s\n' "$line" >> "$STATE/$id.status" 2>/dev/null || true
   fi
   defer_out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" defer "$id" --signature "$signature" 2>&1) || rc=$?
-  if [ "$rc" -eq 3 ]; then
-    printf '%s\n' "$defer_out" >&2
-    mark_terminal "$id" "deferral bound spent"
-    return 3
-  fi
   if [ "$rc" -ne 0 ]; then
     stop_wait_unrecordable_bound "$id" "$defer_out"
     return 1
@@ -537,7 +521,7 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
 }
 
 # One deferral has exactly three durable outcomes after a due check: RESUMED,
-# ADVANCED through the attempt-owned bound, or STOPPED with a declaration.
+# KEPT with a later check, or STOPPED because its durable record is invalid.
 # A not-due record retains the durable future check established by its prior
 # advance, a terminal record is already stopped, and an already-dispatched task
 # retires the obsolete wait rather than creating a second worker.
@@ -606,11 +590,11 @@ tick_one() {  # <record-file> <force>
   case "$out" in
     *FM_SPAWN_CAPACITY_DEFERRED*)
       # Still blocked. bin/fm-spawn.sh has already refreshed this record and
-      # counted the deferral through bin/fm-attempt.sh, including stopping the
-      # wait when a bound is spent, so there is nothing to do but stay quiet.
+      # counted the deferral through bin/fm-attempt.sh, so there is nothing to
+      # do but stay quiet.
       return 0
       ;;
-    *FM_SPAWN_CAPACITY_EXHAUSTED*)
+    *)
       # The ROUTE OWNER names the substitute. `next --after` returns the eligible
       # candidates that FOLLOW the recorded model in pool order, already checked
       # for floor, hold, registry, capacity and the running effort band, so there
@@ -652,8 +636,6 @@ tick_one() {  # <record-file> <force>
       done <<EOF
 $eligible
 EOF
-      keep_waiting "$rec" "$out"
-      return $?
       ;;
   esac
   keep_waiting "$rec" "$out"
