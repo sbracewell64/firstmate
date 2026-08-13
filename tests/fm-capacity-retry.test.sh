@@ -293,7 +293,46 @@ test_provider_reset_precedes_blind_backoff() {
   due=$(FM_CAPACITY_RECHECK_BASE=3600 run_retry "$HOME_DIR" "$(quota_record vendorq=0)" list \
     | sed -n 's/.*next_check=\([0-9]*\).*/\1/p')
   [ "$due" = "$reset" ] || fail "a future provider reset lost to blind backoff: got $due, want $reset"
+  reset=$((now - 120))
+  sed -i.bak "s/^retry_after=.*/retry_after=$reset/" "$HOME_DIR/state/resettask.capacity"
+  rm -f "$HOME_DIR/state/resettask.capacity.bak"
+  due=$(FM_CAPACITY_RECHECK_BASE=3600 run_retry "$HOME_DIR" "$(quota_record vendorq=0)" list \
+    | sed -n 's/.*next_check=\([0-9]*\).*/\1/p')
+  [ "$due" = "$reset" ] || fail "a passed provider reset lost to blind backoff: got $due, want $reset"
   pass "a valid future provider reset wins over blind backoff"
+}
+
+test_release_serializes_with_active_retry() {
+  local rec stub entered gate tick_out release_out tick_pid release_pid
+  rec=$(make_refusal_home release-race); read_home_record "$rec"
+  write_brief "$HOME_DIR" releasetask no-mistakes
+  run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer releasetask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null
+  stub="$TMP_ROOT/release-race/attempt"
+  entered="$TMP_ROOT/release-race/entered"
+  gate="$TMP_ROOT/release-race/gate"
+  printf '#!/usr/bin/env bash\nif [ "$1" = show ]; then : > "$FM_TEST_ENTERED"; while [ ! -e "$FM_TEST_GATE" ]; do sleep 0.01; done; fi\nexec "$FM_TEST_REAL_ATTEMPT" "$@"\n' > "$stub"
+  chmod +x "$stub"
+  tick_out="$TMP_ROOT/release-race/tick.out"
+  release_out="$TMP_ROOT/release-race/release.out"
+  FM_ATTEMPT_BIN="$stub" FM_TEST_ENTERED="$entered" FM_TEST_GATE="$gate" \
+    FM_TEST_REAL_ATTEMPT="$ATTEMPT" run_retry "$HOME_DIR" "$(quota_record vendorq=0)" \
+    tick --id releasetask --force >"$tick_out" 2>&1 &
+  tick_pid=$!
+  fm_test_reap "$tick_pid"
+  while [ ! -e "$entered" ]; do sleep 0.01; done
+  run_retry "$HOME_DIR" "$(quota_record vendorq=0)" release releasetask >"$release_out" 2>&1 &
+  release_pid=$!
+  fm_test_reap "$release_pid"
+  sleep 0.1
+  kill -0 "$release_pid" 2>/dev/null || fail "release returned while retry still owned the task"
+  : > "$gate"
+  wait "$tick_pid" || fail "the active retry failed: $(cat "$tick_out")"
+  wait "$release_pid" || fail "the serialized release failed: $(cat "$release_out")"
+  assert_absent "$HOME_DIR/state/releasetask.capacity" "release did not retire the wait after retry reconciliation"
+  pass "release serializes with active automatic retry ownership"
 }
 
 test_concurrent_ticks_claim_one_retry_owner() {
@@ -338,3 +377,4 @@ test_unsafe_recorded_id_stops_without_escaping_state
 test_linked_capacity_record_is_refused_untouched
 test_provider_reset_precedes_blind_backoff
 test_concurrent_ticks_claim_one_retry_owner
+test_release_serializes_with_active_retry

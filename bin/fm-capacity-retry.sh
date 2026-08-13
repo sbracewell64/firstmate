@@ -444,10 +444,9 @@ keep_waiting() {  # <record-file> <refusal>
 # wastes the capacity. With no published reset, a doubling backoff from the last
 # check keeps a blind wait cheap without letting it stall.
 next_check_epoch() {  # <record-file>
-  local rec=$1 retry_after last deferrals backoff i now
+  local rec=$1 retry_after last deferrals backoff i
   retry_after=$(field "$rec" retry_after); is_count "$retry_after" || retry_after=0
-  now=$(date -u +%s)
-  if [ "$retry_after" -gt "$now" ]; then
+  if [ "$retry_after" -gt 0 ]; then
     printf '%s\n' "$retry_after"
     return 0
   fi
@@ -645,7 +644,7 @@ EOF
 }
 
 tick_one() {  # <record-file> <force>
-  local rec=$1 force=$2 id lock rc
+  local rec=$1 force=$2 id lock rc access_rc=0
   id=$(field "$rec" task)
   if [ -z "$id" ] || ! fm_task_id_path_safe "$id"; then
     tick_one_claimed "$rec" "$force"
@@ -653,6 +652,16 @@ tick_one() {  # <record-file> <force>
   fi
   lock="$STATE/.$id.capacity-retry.lock"
   fm_lock_try_acquire "$lock" || return 0
+  capacity_record_access "$id" id 0 || access_rc=$?
+  if [ "$access_rc" -eq 3 ]; then
+    fm_lock_release "$lock"
+    return 0
+  fi
+  if [ "$access_rc" -ne 0 ]; then
+    fm_lock_release "$lock"
+    return 1
+  fi
+  rec=$CAPACITY_RECORD
   tick_one_claimed "$rec" "$force"
   rc=$?
   fm_lock_release "$lock"
@@ -745,14 +754,20 @@ cmd_list() {
 }
 
 cmd_release() {
-  local id=${1-} rec access_rc=0
+  local id=${1-} rec lock access_rc=0 rc=0
   [ -n "$id" ] || die "release needs a task id"
   fm_task_id_path_safe "$id" || die "invalid task id: $id"
+  lock="$STATE/.$id.capacity-retry.lock"
+  fm_lock_acquire_wait "$lock"
   capacity_record_access "$id" id 0 || access_rc=$?
-  [ "$access_rc" -ne 3 ] || return 0
-  [ "$access_rc" -eq 0 ] || return 1
-  rec=$CAPACITY_RECORD
-  rm -f -- "$rec"
+  if [ "$access_rc" -eq 0 ]; then
+    rec=$CAPACITY_RECORD
+    rm -f -- "$rec" || rc=1
+  elif [ "$access_rc" -ne 3 ]; then
+    rc=1
+  fi
+  fm_lock_release "$lock"
+  return "$rc"
 }
 
 [ "$#" -ge 1 ] || { usage; exit 2; }
