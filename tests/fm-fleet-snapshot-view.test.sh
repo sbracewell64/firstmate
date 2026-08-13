@@ -986,25 +986,35 @@ SH
 # The identity contract is red-capable: removing only an expected invocation
 # fails, while the same fixture passes after a legitimate test is added.
 test_test_identity_contract() {
-  local fixture missing out rc
-  fixture=$TMP_ROOT/test-identity-contract.sh
+  local baseline fixture missing out rc
+  baseline=$TMP_ROOT/test-identity-contract-baseline.sh
+  fixture=$TMP_ROOT/test-identity-contract-added.sh
   missing=$TMP_ROOT/test-identity-contract-missing.sh
-  cat > "$fixture" <<'SH'
+  cat > "$baseline" <<'SH'
 #!/usr/bin/env bash
 set -u
 . "$ROOT/tests/lib.sh"
 export FM_TEST_IDENTITY_CONTRACT=1
 
 test_existing() { pass "existing test"; }
-test_added() { pass "legitimate added test"; }
 
 test_existing
-test_added
 fm_test_contract identity-contract
 SH
+  cp "$baseline" "$fixture"
+  sed -i.bak \
+    -e '/^test_existing()/a\
+test_added() { pass "legitimate added test"; }' \
+    -e '/^fm_test_contract/i\
+test_added' \
+    "$fixture"
+  rm "$fixture.bak"
   chmod +x "$fixture"
   sed '/^test_added$/d' "$fixture" > "$missing"
   chmod +x "$missing"
+  out=$(ROOT="$ROOT" bash "$baseline" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "the baseline identity contract must start green"
   out=$(ROOT="$ROOT" bash "$missing" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "removing an expected test invocation must turn the contract red: $out"
