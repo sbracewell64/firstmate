@@ -754,11 +754,13 @@ cmd_list() {
 }
 
 cmd_release() {
-  local id=${1-} rec lock access_rc=0 rc=0
+  local id=${1-} rec lock spawn_lock access_rc=0 rc=0
   [ -n "$id" ] || die "release needs a task id"
   fm_task_id_path_safe "$id" || die "invalid task id: $id"
   lock="$STATE/.$id.capacity-retry.lock"
   fm_lock_acquire_wait "$lock"
+  spawn_lock="$STATE/.spawn-$id.lock"
+  fm_lock_acquire_wait "$spawn_lock"
   capacity_record_access "$id" id 0 || access_rc=$?
   if [ "$access_rc" -eq 0 ]; then
     rec=$CAPACITY_RECORD
@@ -766,6 +768,7 @@ cmd_release() {
   elif [ "$access_rc" -ne 3 ]; then
     rc=1
   fi
+  fm_lock_release "$spawn_lock"
   fm_lock_release "$lock"
   return "$rc"
 }

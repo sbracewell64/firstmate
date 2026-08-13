@@ -336,6 +336,40 @@ test_release_serializes_with_active_retry() {
   pass "release serializes with active automatic retry ownership"
 }
 
+test_release_serializes_with_spawn_deferral() {
+  local rec entered gate holder_out release_out holder_pid release_pid
+  rec=$(make_refusal_home release-spawn-race); read_home_record "$rec"
+  write_brief "$HOME_DIR" spawnreleasetask no-mistakes
+  entered="$TMP_ROOT/release-spawn-race/entered"
+  gate="$TMP_ROOT/release-spawn-race/gate"
+  holder_out="$TMP_ROOT/release-spawn-race/holder.out"
+  release_out="$TMP_ROOT/release-spawn-race/release.out"
+  (
+    FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" . "$ROOT/bin/fm-wake-lib.sh"
+    fm_lock_acquire_wait "$HOME_DIR/state/.spawn-spawnreleasetask.lock"
+    : > "$entered"
+    while [ ! -e "$gate" ]; do sleep 0.01; done
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spawnreleasetask \
+      --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+      --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+      --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium
+    fm_lock_release "$HOME_DIR/state/.spawn-spawnreleasetask.lock"
+  ) >"$holder_out" 2>&1 &
+  holder_pid=$!
+  fm_test_reap "$holder_pid"
+  while [ ! -e "$entered" ]; do sleep 0.01; done
+  run_retry "$HOME_DIR" "$(quota_record vendorq=0)" release spawnreleasetask >"$release_out" 2>&1 &
+  release_pid=$!
+  fm_test_reap "$release_pid"
+  sleep 0.1
+  kill -0 "$release_pid" 2>/dev/null || fail "release returned while spawn still owned the task"
+  : > "$gate"
+  wait "$holder_pid" || fail "the spawn deferral fixture failed: $(cat "$holder_out")"
+  wait "$release_pid" || fail "release failed after the spawn deferral: $(cat "$release_out")"
+  assert_absent "$HOME_DIR/state/spawnreleasetask.capacity" "spawn recreated the capacity wait after release returned"
+  pass "release serializes with an active spawn deferral"
+}
+
 test_concurrent_ticks_claim_one_retry_owner() {
   local rec stub log out1 out2 pid1 pid2
   rec=$(make_refusal_home concurrent-tick); read_home_record "$rec"
@@ -379,3 +413,4 @@ test_linked_capacity_record_is_refused_untouched
 test_provider_reset_precedes_blind_backoff
 test_concurrent_ticks_claim_one_retry_owner
 test_release_serializes_with_active_retry
+test_release_serializes_with_spawn_deferral
