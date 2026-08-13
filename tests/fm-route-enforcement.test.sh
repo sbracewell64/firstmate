@@ -572,6 +572,11 @@ make_health_jq() {  # <fakebin>
 for arg in "\$@"; do
   case "\$arg" in
     */model-health.json)
+      if [ "\${FM_HEALTH_REQUIRE_LOCK:-0}" = 1 ] &&
+         [ ! -d "\$FM_HEALTH_RACE_DIR/../model-health.json.lock" ] &&
+         [ ! -L "\$FM_HEALTH_RACE_DIR/../model-health.json.lock" ]; then
+        exit 96
+      fi
       if [ "\${FM_HEALTH_RACE_BARRIER:-0}" = 1 ] &&
          [ "\${1:-}" = -c ] && [ "\${2:-}" = . ]; then
         args=("\$@")
@@ -643,6 +648,20 @@ test_availability_health_writes_merge_concurrent_independent_bindings() {
   [ "$keys" != 'vendor/one,vendor/two' ] \
     || fail "bypassing serialization unexpectedly preserved both bindings"
   pass "concurrent independent availability mutations merge, and the unserialized recurrence control turns red"
+}
+
+test_availability_health_writer_locks_before_the_canonical_read() {
+  local fixture state fakebin
+  fixture="$TMP_ROOT/health-lock-before-read"
+  state="$fixture/state"
+  fakebin="$fixture/fakebin"
+  mkdir -p "$state/race"
+  printf '%s\n' '{"schema":"fm-model-health.v1","models":{},"providers":{}}' > "$state/model-health.json"
+  make_health_jq "$fakebin"
+  FM_HEALTH_REQUIRE_LOCK=1 health_write_process \
+    "$state" "$fakebin" one 0 0 model vendor/one rate_limited first >/dev/null 2>&1 \
+    || fail "the canonical availability reader ran before write exclusion was held"
+  pass "availability mutations hold write exclusion before the canonical read"
 }
 
 test_availability_health_writes_serialize_overlapping_hold_and_release() {
@@ -1290,6 +1309,7 @@ test_default_only_route_is_listed_and_enforced
 test_failover_stays_inside_the_pool_in_order
 test_an_ambiguous_failover_anchor_is_refused_rather_than_resolved
 test_availability_health_writes_merge_concurrent_independent_bindings
+test_availability_health_writer_locks_before_the_canonical_read
 test_availability_health_writes_serialize_overlapping_hold_and_release
 test_availability_health_writer_keeps_same_binding_conflicts_atomic
 test_availability_health_writer_preserves_identity_and_freshness_fields
