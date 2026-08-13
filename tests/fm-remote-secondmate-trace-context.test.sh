@@ -19,7 +19,7 @@ set -u
 . "$ROOT/bin/fm-trace-context-lib.sh"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-trace-context.XXXXXX")
+TMP_ROOT=$(fm_test_tmproot fm-remote-trace-context)
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 PARENT="$TMP_ROOT/parent"
@@ -37,6 +37,7 @@ cleanup() {
   local attempt=0
   FM_HOME="$PARENT" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" \
     "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
+  : > "$FM_TEST_CLEANUP_REGISTRY"
   fm_test_cleanup
   while [ -e "$TMP_ROOT" ] && [ "$attempt" -lt 20 ]; do
     rm -rf -- "$TMP_ROOT" 2>/dev/null || true
@@ -45,6 +46,9 @@ cleanup() {
   done
 }
 trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 129' HUP
+trap 'cleanup; trap - EXIT; exit 130' INT
+trap 'cleanup; trap - EXIT; exit 143' TERM
 
 register_remote_worker() {
   local worker_pid_file="$TMP_ROOT/remote-jobs/worker.pid"
