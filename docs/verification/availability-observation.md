@@ -98,7 +98,7 @@ Verified 2026-08-11 by a further controlled mutation of the shipped files, resto
 
 That row is the measured defect itself: tab is an IFS whitespace character, so `read` folds a run of consecutive tabs into one delimiter and the reason arrives in the wrong field.
 
-Verified 2026-08-12 with `bash tests/fm-availability-observation.test.sh`.
+Verified 2026-08-13 with `bash tests/fm-availability-observation.test.sh`.
 The command passed every deterministic mapping, fail-closed routing, repairable `TOOLING_GAP`, non-empty reason, record-integrity, paired-record, isolation, evidence-hygiene, and red-capable recurrence case.
 
 ## A probe that never returned
