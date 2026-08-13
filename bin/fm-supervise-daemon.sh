@@ -644,7 +644,6 @@ mark_status_seen() {  # <state> <task> <last-line>
 # daemon only decides whether this exact typed event is eligible to enter that
 # canonical path.
 FM_PR_READY_URL=
-FM_PR_READY_PHASES='ready pr-ready'
 
 # Print the one canonical PR/MR URL in a valid typed PR-ready event. A ready event
 # with zero or multiple canonical URLs is not guessed at: it falls back to the
@@ -655,10 +654,7 @@ pr_ready_event_url() {  # <status-line>
   fm_status_event_parse "$line" || parse_rc=$?
   [ "$parse_rc" -eq 0 ] || return 1
   [ "$FM_STATUS_EVENT_VERB" = 'done' ] || return 1
-  case " $FM_PR_READY_PHASES " in
-    *" $FM_STATUS_EVENT_PHASE "*) ;;
-    *) return 1 ;;
-  esac
+  [ "$FM_STATUS_EVENT_PHASE" = 'ready' ] || return 1
   while IFS= read -r reference || [ -n "$reference" ]; do
     [ -n "$reference" ] || continue
     if fm_pr_url_parse "$reference"; then

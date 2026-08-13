@@ -252,6 +252,18 @@ SH
   [ "$rc" -eq 2 ] || fail "local-only task was eligible for automatic PR registration"
   [ ! -e "$state/task-local.check.sh" ] || fail "local-only task mutation armed a PR poll"
 
+  fm_write_meta "$state/task-other-phase.meta" \
+    "window=firstmate:fm-task-other-phase" "endpoint_task_id=task-other-phase" \
+    "worktree=$dir/wt" "project=$dir/project" "kind=ship" "mode=no-mistakes"
+  printf '%s\n' "fm-status-event.v1 verb=done phase=pr-ready evidence=$url summary=checks green" > "$state/task-other-phase.status"
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" pr_ready_status_transition "$state/task-other-phase.status" "$state"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] || fail "a non-ready phase was eligible for automatic PR registration"
+  [ ! -e "$state/task-other-phase.check.sh" ] || fail "a non-ready phase armed a PR poll"
+
   fm_write_meta "$state/task-mismatch.meta" \
     "window=firstmate:fm-task-mismatch" "endpoint_task_id=task-mismatch" \
     "worktree=$dir/wt" "project=$dir/project" "kind=ship" "mode=no-mistakes" \
