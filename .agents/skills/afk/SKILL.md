@@ -155,7 +155,7 @@ While `state/.afk` exists the daemon owns the watcher, so the watcher reverts to
 
 Classify each wake this way:
 
-- `signal` with a terminal captain verb (`done:`, `needs-decision:`, `blocked:`, or `failed:`) -> escalate.
+- `signal` with a terminal captain verb (`done:`, `needs-decision:`, `blocked:`, or `failed:`) -> escalate, except for the self-handled away-delivery transition owned by `docs/architecture.md` "Event-driven supervision."
   Relevance is read from the verb alone - the `verb=` field of a typed `fm-status-event.v1` event, or a prose line's leading word - so a nonterminal progress verb never escalates whatever its prose says, a bare verbless legacy line such as `PR ready` or `merged` no longer escalates, and a refused typed event escalates as malformed rather than being absorbed.
   Other signals with no captain-relevant status -> self-handle.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
@@ -180,7 +180,7 @@ Classify each wake this way:
   `docs/architecture.md` "Event-driven supervision" owns the rest: why the marker is refreshed rather than dropped, what the age in that escalation line measures, and the read budget's capacity arithmetic and tuning.
 - `heartbeat` -> self-handle. The daemon runs its own cheap bash fleet scan
   every `FM_HEARTBEAT_SCAN_SECS` (default 300s) as the catch-all for a
-  captain-relevant status line the per-wake classifier might miss.
+  captain-relevant status line or away-delivery transition the per-wake path might miss.
 - Unknown reason, or any uncertainty -> escalate fail-safe.
 
 Escalations are buffered up to `FM_ESCALATE_BATCH_SECS` (default 90s; 0 =
@@ -223,7 +223,7 @@ the operational prefix lets firstmate distinguish it from a real captain message
   text firstmate sees is clean.
 - **Portable singleton lock** - the daemon uses the repo's portable lock helper
   (`fm-wake-lib.sh`) instead of `flock`, which is absent on macOS.
-- **Dedupe across signal/stale/scan** - `classify_signal` and terminal `classify_stale` paths check the seen-status marker before escalating, so a captain-relevant status escalated by one path is not re-escalated by another in the same digest.
+- **Dedupe across signal/stale/scan** - after the away-delivery transition owned by `docs/architecture.md` "Event-driven supervision," `classify_signal` and terminal `classify_stale` paths check the seen-status marker before escalating, so a captain-relevant status escalated by one path is not re-escalated by another in the same digest.
   The marker does not clear or suppress possible-wedge aging for a nonterminal progress line.
 - **Auto-discovered supervisor pane** - the daemon resolves its own BACKEND
   (tmux vs herdr) and TARGET independently, mirroring

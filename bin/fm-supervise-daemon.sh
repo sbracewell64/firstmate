@@ -16,6 +16,11 @@
 # the /afk skill sets that flag and starts this daemon; any real (unmarked)
 # user message clears it and firstmate resumes full responsiveness.
 # When afk is off, normal fm-watch.sh always-on triage is the active mechanism.
+# A valid typed `done phase=ready evidence=<PR/MR URL>` event is the one
+# delivery transition the daemon completes before ordinary away-mode dedupe: it
+# delegates validation, identity recording, and static-poll publication to
+# fm-pr-check.sh, so a later merged result can still notify the captain and drive
+# the normal refresh and cleanup path.
 # Any buffered daemon escalations that remain while afk is off survive in
 # state/.subsuper-escalations and are flushed on the next "while you were out"
 # catch-up or when afk is re-entered.
@@ -209,6 +214,15 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # classification predicates have exactly one definition.
 # shellcheck source=bin/fm-classify-lib.sh
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
+# Canonical PR identity and poll validation. Away mode may complete the same
+# registration firstmate performs in a present session, but it must still call
+# the canonical owner rather than reproducing its validation or publication.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$FM_DAEMON_DIR/fm-pr-lib.sh"
+# Task axes keep a PR-ready event scoped to a ship task; scouts and persistent
+# secondmates do not acquire a project-delivery poll from an evidence URL.
+# shellcheck source=bin/fm-task-axis-lib.sh
+. "$FM_DAEMON_DIR/fm-task-axis-lib.sh"
 
 # Supervisor-pane discovery (FM_SUPERVISOR_TARGET_DEFAULT,
 # FM_SUPERVISOR_BACKEND_DEFAULT, discover_supervisor_target,
@@ -622,6 +636,119 @@ sync_pause_markers_from_signal() {  # <state> <signal files>
 mark_status_seen() {  # <state> <task> <last-line>
   local state=$1 task=$2 line=$3
   printf '%s' "$line" > "$state/.subsuper-seen-status-$(_stale_key "$task")"
+}
+
+# The typed ready event is the one status event whose evidence can complete a
+# durable delivery transition while firstmate is away. Its URL is still parsed
+# by fm-pr-lib.sh and its registration is still performed by fm-pr-check.sh; the
+# daemon only decides whether this exact typed event is eligible to enter that
+# canonical path.
+FM_PR_READY_URL=
+
+# Print the one canonical PR/MR URL in a valid typed PR-ready event. A ready event
+# with zero or multiple canonical URLs is not guessed at: it falls back to the
+# ordinary captain-relevant escalation path.
+pr_ready_event_url() {  # <status-line>
+  local line=${1-} parse_rc=0 reference candidate='' count=0
+  FM_PR_READY_URL=
+  fm_status_event_parse "$line" || parse_rc=$?
+  [ "$parse_rc" -eq 0 ] || return 1
+  [ "$FM_STATUS_EVENT_VERB" = 'done' ] || return 1
+  [ "$FM_STATUS_EVENT_PHASE" = 'ready' ] || return 1
+  while IFS= read -r reference || [ -n "$reference" ]; do
+    [ -n "$reference" ] || continue
+    if fm_pr_url_parse "$reference"; then
+      count=$((count + 1))
+      candidate=$FM_PR_URL
+    fi
+  done <<EOF
+$FM_STATUS_EVENT_EVIDENCE
+EOF
+  if [ "$count" -eq 1 ]; then
+    FM_PR_READY_URL=$candidate
+    return 0
+  fi
+  return 1
+}
+
+# 0 when the task already has this exact PR identity and a fully authenticated
+# static poll. A missing or damaged poll is deliberately not treated as current:
+# the canonical registration command gets one chance to repair it.
+pr_ready_record_is_current() {  # <state> <task> <url>
+  local state=$1 task=$2 url=$3 record
+  record=$(fm_pr_identity_record_path "$state" "$task" 2>/dev/null) || return 1
+  [ -f "$record" ] && [ ! -L "$record" ] || return 1
+  fm_pr_metadata_identity_parse "$record" || return 1
+  [ "$FM_PR_META_URL" = "$url" ] || return 1
+  fm_pr_poll_artifacts_valid "$state" "$task" "$FM_DAEMON_DIR/fm-pr-poll.sh"
+}
+
+# Handle one status file's typed PR-ready transition while away mode owns
+# supervision. Return values are intentionally three-way:
+#   0 - registration is already current or was completed and authenticated;
+#   1 - a valid ship transition was found but canonical registration failed;
+#   2 - this status is not an eligible away-mode PR-ready transition.
+# A failure returns to the ordinary escalation path, so a forge or filesystem
+# refusal can never turn into a silent away-mode absorb.
+pr_ready_status_transition() {  # <status-file> <state>
+  local status_file=$1 state=$2 line task url meta record
+  afk_active "$state" || return 2
+  [ -f "$status_file" ] && [ ! -L "$status_file" ] || return 2
+  line=$(last_status_line "$status_file")
+  [ -n "$line" ] || return 2
+  pr_ready_event_url "$line" || return 2
+  url=$FM_PR_READY_URL
+  task=$(basename "$status_file"); task=${task%.status}
+  fm_pr_task_id_valid "$task" || return 2
+  meta="$state/$task.meta"
+  if [ -f "$meta" ] && [ ! -L "$meta" ]; then
+    if fm_task_axes_conflict "$meta"; then
+      log "PR-ready transition refused for $task: conflicted task axes ($FM_TASK_AXES_CONFLICT)"
+      return 2
+    fi
+    [ "$(fm_task_role "$meta")" = crew ] || return 2
+    [ "$(fm_task_deliverable "$meta")" = ship ] || return 2
+    case "$(fm_meta_get "$meta" mode)" in
+      local-only|secondmate) return 2 ;;
+    esac
+  elif [ -f "$state/$task.landing" ] && [ ! -L "$state/$task.landing" ]; then
+    :
+  else
+    # Do not let an arbitrary status file make the released-task reconstruction
+    # path choose a forge record. A live meta or an existing landing record is
+    # the durable task authority for this automatic transition.
+    return 2
+  fi
+
+  # An automatic away-mode transition may repair a missing or damaged poll, but
+  # it must not silently replace a different already-recorded PR identity. A
+  # changed PR remains an ordinary actionable event for present firstmate to
+  # review through the existing canonical command.
+  if record=$(fm_pr_identity_record_path "$state" "$task" 2>/dev/null); then
+    if grep -q '^pr=' "$record" 2>/dev/null; then
+      if ! fm_pr_metadata_identity_parse "$record"; then
+        log "PR-ready transition refused malformed identity record for $task"
+        return 2
+      fi
+      [ "$FM_PR_META_URL" = "$url" ] || return 2
+    fi
+  fi
+  if pr_ready_record_is_current "$state" "$task" "$url"; then
+    mark_status_seen "$state" "$task" "$line"
+    return 0
+  fi
+  if ! FM_HOME="$FM_HOME" FM_ROOT_OVERRIDE="${FM_ROOT_OVERRIDE:-$FM_ROOT}" \
+    FM_STATE_OVERRIDE="$state" "$FM_DAEMON_DIR/fm-pr-check.sh" "$task" "$url" \
+    >/dev/null 2>&1; then
+    log "PR-ready transition could not register $task at $url through fm-pr-check.sh"
+    return 1
+  fi
+  if ! pr_ready_record_is_current "$state" "$task" "$url"; then
+    log "PR-ready transition registration for $task did not leave an authenticated poll"
+    return 1
+  fi
+  mark_status_seen "$state" "$task" "$line"
+  return 0
 }
 
 # Mark every captain-relevant status line a per-wake classification escalated as
@@ -1133,7 +1260,7 @@ stale_gate_read_budget() {  # sets STALE_GATE_READ_BUDGET; call directly, never 
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs pr_rc
   local working_reads=0 working_reads_max absorb wedge_reason
   stale_gate_read_budget
   working_reads_max=$STALE_GATE_READ_BUDGET
@@ -1341,6 +1468,18 @@ housekeeping() {  # <state>
     local seen
     while IFS="$(printf '\t')" read -r f task last; do
       [ -n "$f" ] || continue
+      # The catch-all scan is another entry point for a ready event. Register it
+      # before its existing seen marker can turn the line into a self-handled
+      # duplicate; a valid transition owns its poll and needs no digest.
+      pr_ready_status_transition "$f" "$state"; pr_rc=$?
+      case "$pr_rc" in
+        0) continue ;;
+        1)
+          escalate_add "$state" "$(basename "$f"): $last (PR-ready registration failed)"
+          mark_status_seen "$state" "$task" "$last"
+          continue
+          ;;
+      esac
       seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
       escalate_add "$state" "$(basename "$f"): $last (catch-all scan)"
@@ -1476,14 +1615,32 @@ is_wake_reason() {  # <reason>
 # Side effects: logging, marker records, escalation buffer appends.
 handle_wake() {  # <reason> <state>
   local reason=$1 state=$2 decision action distilled task last stale_detail
-  local kind="" arg=""
+  local kind="" arg="" f pr_rc pr_failure_detail=""
   if should_force_self "$reason"; then
     log "wake force-self (FM_INJECT_SKIP): $reason"
     return
   fi
   case "$reason" in
     signal:*) kind=signal; arg="${reason#signal: }"
-              decision=$(classify_signal "$arg" "$state") ;;
+              # Complete an eligible typed delivery transition before the
+              # ordinary away classifier is allowed to dedupe it as already
+              # seen by the catch-all scan. A failed transition is intentionally
+              # left for that classifier, which escalates the event instead.
+              for f in $arg; do
+                [ -e "$f" ] || continue
+                pr_ready_status_transition "$f" "$state"; pr_rc=$?
+                if [ "$pr_rc" -eq 1 ]; then
+                  pr_failure_detail="$(basename "$f"): $(last_status_line "$f") (PR-ready registration failed)"
+                  continue
+                fi
+                [ "$pr_rc" -eq 0 ] || continue
+                log "PR-ready transition registered from $(basename "$f")"
+              done
+              if [ -n "$pr_failure_detail" ]; then
+                decision="escalate|$pr_failure_detail"
+              else
+                decision=$(classify_signal "$arg" "$state")
+              fi ;;
     stale:*)  kind=stale; arg="${reason#stale: }"; stale_detail="${arg#"$arg"}"
               case "$arg" in *" ("*) stale_detail="${arg#*" ("}"; arg="${arg%% \(*}" ;; esac
               stale_detail="${stale_detail%)}"
