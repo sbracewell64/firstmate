@@ -503,7 +503,7 @@ It is `bin/fm-verify-lib.sh`'s `PASS` / `FAIL` / `NO_VERIFIER_RAN` under the nam
 }
 ```
 
-Routing reads this record for exclusions only, and only for an observation that was ATTEMPTED and FAILED.
+Routing reads this record for exclusions only: either a probe positively established `UNAVAILABLE`, or an attempted observation failed and recorded `UNOBSERVABLE`.
 An `UNOBSERVABLE` candidate is refused with the reader named, because it is neither available nor unavailable and treating it as either would be an assertion nobody measured; a single-candidate pool blocked this way is the correct immediate behaviour, and the fix is to repair observability rather than to make uncertainty permissive.
 A model nobody has probed has no entry and is not excluded: "not yet observed" and "observation attempted and failed" are themselves two facts, and collapsing them would make an unprobed fleet unroutable.
 An `AVAILABLE` observation only fails to exclude a candidate; it never admits one and never releases a hold, so a stale positive can never override a fresh negative.
@@ -635,7 +635,7 @@ A bare model name with no provider prefix is a harness-native selector and is al
 
 Routability is a separate axis from cost, and the two are enforced independently.
 A model recorded as `rejected` or `blocked` is refused at spawn even when it carries no cost risk at all, because a model on a flat subscription can still be one the account is not entitled to use.
-Availability is a third axis again: a rate-limited or cooling-down model is unavailable rather than rejected, lives in `state/model-health.json`, and never changes the routing status recorded here.
+Availability is a third axis again: a rate-limited or cooling-down model is unavailable rather than rejected, its holds and probe observations live in the two state records documented above, and neither changes the routing status recorded here.
 
 A live probe is itself a billable act on a metered provider, so `bin/fm-model-verify.sh` consults the same zero-budget decision before issuing any request, on the interval-gated sweep and on an explicit `--model` alike - a typed model name is not authorization to spend money.
 A refused model is reported as `MODEL_VERIFY: refusing to probe <model> - <reason>`, no request is issued, and its prior records in `state/model-health.json` and `state/model-observation.json` are both left untouched.
