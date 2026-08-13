@@ -159,9 +159,11 @@ Classify each wake this way:
   Relevance is read from the verb alone - the `verb=` field of a typed `fm-status-event.v1` event, or a prose line's leading word - so a nonterminal progress verb never escalates whatever its prose says, a bare verbless legacy line such as `PR ready` or `merged` no longer escalates, and a refused typed event escalates as malformed rather than being absorbed.
   Other signals with no captain-relevant status -> self-handle.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
-  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
-  The recheck exists to re-ask a wait that can change without the captain, so it is skipped for a wait the backlog records as captain-gated (`hold_kind: captain`): that one clears only when the captain acts, and the captain acting is already the away-mode exit, which runs the full return catch-up.
-  Suppression is a cadence decision only - the wait is still tracked, still reset each window, and still as visible as before in the backlog digest, the fleet view, and the return catch-up - and any kind that cannot be established is rechecked normally rather than dropped.
+  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping inspects it and resets the pause window.
+  A generic external wait sends its scheduled recheck because no other observer is guaranteed.
+  A capacity wait carrying a typed `capacity:` evidence reference or active capacity record has a separate deterministic observer, so only its first or changed durable pause event sends a recheck and the same event on a later window is absorbed as no delta.
+  The check exists for a wait that can change without the captain, so it is skipped for a wait the backlog records as captain-gated (`hold_kind: captain`): that one clears only when the captain acts, and the captain acting is already the away-mode exit, which runs the full return catch-up.
+  Suppression is a notification decision only - the wait is still tracked, still reset each window, and still as visible as before in the backlog digest, the fleet view, and the return catch-up - and any kind that cannot be established is checked normally rather than dropped.
 - `check` -> always escalate. Check scripts print only when firstmate should wake.
 - `stale` with a captain-relevant status -> escalate.
   Nonterminal progress remains transient even when its seen-status marker already matches, so record a marker and self-handle.
@@ -224,7 +226,8 @@ the operational prefix lets firstmate distinguish it from a real captain message
 - **Portable singleton lock** - the daemon uses the repo's portable lock helper
   (`fm-wake-lib.sh`) instead of `flock`, which is absent on macOS.
 - **Dedupe across signal/stale/scan** - after the away-delivery transition owned by `docs/architecture.md` "Event-driven supervision," `classify_signal` and terminal `classify_stale` paths check the seen-status marker before escalating, so a captain-relevant status escalated by one path is not re-escalated by another in the same digest.
-  The marker does not clear or suppress possible-wedge aging for a nonterminal progress line.
+  Declared capacity pauses use a separate task-keyed marker shared with normal supervision, so an unchanged durable event advances its cadence without another notification and a changed event still surfaces.
+  Neither marker clears or suppresses possible-wedge aging for a nonterminal progress line.
 - **Auto-discovered supervisor pane** - the daemon resolves its own BACKEND
   (tmux vs herdr) and TARGET independently, mirroring
   `bin/fm-backend.sh`'s own runtime auto-detection. Backend: `FM_SUPERVISOR_BACKEND`
@@ -254,7 +257,7 @@ These properties must hold:
 - Nothing is lost. The durable queue plus `fm-wake-drain.sh` recover any missed
   or crashed injection.
 - Wedge detection is bounded-latency, not lossy.
-- Declared external waits are rechecked on a separate, bounded cadence rather than being mislabeled as wedges.
+- Declared external waits are inspected on a separate, bounded cadence rather than being mislabeled as wedges, and unchanged capacity observations do not repeatedly notify the captain.
 - The catch-all scan backs up the keyword classifier.
 - The daemon preserves a single-instance portable lock, crash-loop backoff,
   a pane-gone guard, and a signal-trapped shutdown that flushes buffered

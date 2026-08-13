@@ -382,6 +382,61 @@ pause_is_captain_gated() {  # <task-id> [home]
   [ "$(task_hold_kind "$@")" = "${FM_CLASSIFY_CAPTAIN_HOLD_KIND:-$FM_CLASSIFY_CAPTAIN_HOLD_KIND_DEFAULT}" ]
 }
 
+# One shared no-delta boundary for capacity pauses in normal and away supervision.
+#
+# A generic external wait still needs its bounded human recheck because nothing
+# else is guaranteed to observe it.
+# A capacity wait has a separate deterministic owner: a typed paused event points
+# at that owner's evidence with a capacity: reference (legacy quota: references
+# remain recognized during migration), or the active lane has a .capacity record.
+# Replaying that exact event once every pause window invited the same observation
+# and the same captain notification, so these helpers record only the event already
+# surfaced, never the truth of the provider dependency itself.
+# A changed event remains actionable, while an unchanged one stays visible in the
+# durable fleet state and its capacity owner keeps the observation cadence.
+# Both supervision modes use the same task-keyed marker so changing mode cannot
+# replay an observation that was already surfaced.
+status_is_capacity_pause() {  # <status-line>
+  local line=$1 refs ref
+  status_is_paused "$line" || return 1
+  fm_status_event_is_typed "$line" || return 1
+  refs=$(fm_status_event_field "$line" evidence) || return 1
+  while IFS= read -r ref; do
+    case "$ref" in capacity:*|quota:*) return 0 ;; esac
+  done <<EOF
+$refs
+EOF
+  return 1
+}
+
+capacity_pause_uses_no_delta() {  # <state-dir> <task-id> <last-status-line>
+  status_is_capacity_pause "$3" || [ -f "$1/$2.capacity" ]
+}
+
+_fm_pause_notification_key() {  # <task-id>
+  printf '%s' "$1" | tr ':/.' '___'
+}
+
+pause_notification_marker() {  # <state-dir> <task-id>
+  printf '%s/.pause-notified-%s' "$1" "$(_fm_pause_notification_key "$2")"
+}
+
+pause_notification_pending() {  # <state-dir> <task-id> <last-status-line>
+  local marker
+  marker=$(pause_notification_marker "$1" "$2")
+  [ "$(cat "$marker" 2>/dev/null || true)" != "$3" ]
+}
+
+pause_notification_record() {  # <state-dir> <task-id> <last-status-line>
+  local marker
+  marker=$(pause_notification_marker "$1" "$2")
+  printf '%s' "$3" > "$marker"
+}
+
+pause_notification_clear() {  # <state-dir> <task-id>
+  rm -f "$(pause_notification_marker "$1" "$2")"
+}
+
 # Does a crew's current verdict CLEAR a keyed open decision, or does the decision
 # keep surfacing? Owned here, next to the vocabulary it must cover, because the
 # rule is a statement about the verdict set rather than about any one consumer.
