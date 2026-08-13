@@ -9,6 +9,7 @@ set -u
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+export FM_TEST_IDENTITY_CONTRACT=1
 
 BEARINGS="$ROOT/bin/fm-bearings-snapshot.sh"
 TMP_ROOT=$(fm_test_tmproot fm-bearings)
@@ -1952,3 +1953,4 @@ test_section_caps_and_expansion_flags
 test_pr_repository_cap_and_expansion
 test_per_repository_pr_cap_is_disclosed
 test_projection_and_toon_fail_closed
+fm_test_contract "${BASH_SOURCE[0]}"

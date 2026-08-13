@@ -1873,7 +1873,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
 # must surface once, while the unchanged hash must not append the same wake on
 # every watcher re-arm.
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
-  local dir state fakebin out capture_file statusf window key pane_hash sig pid back round wakes bare
+  local dir state fakebin out capture_file statusf window key pane_hash sig pid back round wakes bare throttle
   dir=$(make_case exited-declared-pause); state="$dir/state"; fakebin="$dir/fakebin"
   out="$dir/watch.out"; capture_file="$dir/pane.txt"; statusf="$state/held.status"
   window="test:fm-held"
@@ -1897,6 +1897,14 @@ test_exited_declared_pause_is_bounded_but_live_gate_surfaces() {
       FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" >> "$out" &
     pid=$!
     if wait_live "$pid" 15; then reap "$pid"; else wait "$pid" || fail "dead-agent watcher round $round failed"; fi
+    if [ "$round" -eq 1 ]; then
+      throttle="$state/.paused-resurfaced-$key"
+      [ -e "$throttle" ] || fail "dead-agent declared pause did not record its re-surface throttle"
+      # Pin the throttle beyond every plausible test duration. The contract under
+      # test is six unchanged restarts inside one cadence, not whether a loaded CI
+      # runner can consume the real 240-second cadence between those restarts.
+      set_mtime "$(( $(date +%s) + 3600 ))" "$throttle"
+    fi
     round=$((round + 1))
   done
   wakes=$(awk -F '\t' -v w="$window" '$3 == "stale" && $4 == w { n++ } END { print n + 0 }' "$state/.wake-queue")

@@ -25,6 +25,7 @@ if [ -n "${FM_TEST_LIB_SOURCED:-}" ]; then
   return 0
 fi
 FM_TEST_LIB_SOURCED=1
+FM_TEST_PASSED_TESTS=
 
 # Exempt firstmate's own test suite from the gate-lifecycle refusal
 # (bin/fm-gate-refuse-lib.sh). The no-mistakes gate runs this suite FROM a gate
@@ -66,8 +67,32 @@ fail() {
   exit 1
 }
 
+# The snapshot and Bearings suites opt into this identity ledger so their
+# final contract can derive expected tests from the test declarations rather
+# than maintaining a second list or a count.
 pass() {
+  local caller
+  caller=${FUNCNAME[1]:-}
+  if [ "${FM_TEST_IDENTITY_CONTRACT:-0}" = 1 ]; then
+    FM_TEST_PASSED_TESTS="${FM_TEST_PASSED_TESTS:-}${caller}"$'\n'
+  fi
   printf 'ok - %s\n' "$1"
+}
+
+# Compare the generated test-function identities with the identities that
+# reported success.  An omitted invocation fails, while a new declared and
+# invoked test is admitted without changing a maintained number.
+fm_test_contract() {  # <suite-name>
+  local suite=${1##*/} expected actual
+  expected=$(compgen -A function | awk '/^test_/ { print }' | LC_ALL=C sort)
+  actual=$(printf '%s' "${FM_TEST_PASSED_TESTS:-}" | awk 'NF' | LC_ALL=C sort)
+  if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then
+    printf 'not ok - %s: test identity contract mismatch\n' "$suite" >&2
+    printf 'expected test identities:\n%s\nexecuted test identities:\n%s\n' \
+      "$expected" "$actual" >&2
+    return 1
+  fi
+  printf 'FM_TEST_CONTRACT suite=%s status=pass\n' "$suite"
 }
 
 # --- self-cleaning temp root and background-process reaper -------------------

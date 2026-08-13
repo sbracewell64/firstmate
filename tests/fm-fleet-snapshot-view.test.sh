@@ -5,6 +5,7 @@ set -u
 # shellcheck source=tests/lib.sh
 # shellcheck disable=SC1091
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+export FM_TEST_IDENTITY_CONTRACT=1
 
 SNAPSHOT="$ROOT/bin/fm-fleet-snapshot.sh"
 VIEW="$ROOT/bin/fm-fleet-view.sh"
@@ -982,6 +983,51 @@ SH
   pass "the fleet view refuses to report success for a failed or empty snapshot"
 }
 
+# The identity contract is red-capable: removing only an expected invocation
+# fails, while the same fixture passes after a legitimate test is added.
+test_test_identity_contract() {
+  local baseline fixture missing out rc
+  baseline=$TMP_ROOT/test-identity-contract-baseline.sh
+  fixture=$TMP_ROOT/test-identity-contract-added.sh
+  missing=$TMP_ROOT/test-identity-contract-missing.sh
+  cat > "$baseline" <<'SH'
+#!/usr/bin/env bash
+set -u
+. "$ROOT/tests/lib.sh"
+export FM_TEST_IDENTITY_CONTRACT=1
+
+test_existing() { pass "existing test"; }
+
+test_existing
+fm_test_contract identity-contract
+SH
+  cp "$baseline" "$fixture"
+  sed -i.bak \
+    -e '/^test_existing()/a\
+test_added() { pass "legitimate added test"; }' \
+    -e '/^fm_test_contract/i\
+test_added' \
+    "$fixture"
+  rm "$fixture.bak"
+  chmod +x "$fixture"
+  sed '/^test_added$/d' "$fixture" > "$missing"
+  chmod +x "$missing"
+  out=$(ROOT="$ROOT" bash "$baseline" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "the baseline identity contract must start green"
+  out=$(ROOT="$ROOT" bash "$missing" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "removing an expected test invocation must turn the contract red: $out"
+  assert_contains "$out" "test identity contract mismatch" \
+    "the red control must identify the missing test identity"
+  out=$(ROOT="$ROOT" bash "$fixture" 2>&1)
+  rc=$?
+  expect_code 0 "$rc" "a legitimate added test must keep the identity contract green"
+  assert_contains "$out" "FM_TEST_CONTRACT suite=identity-contract status=pass" \
+    "the added-test control must emit a passing contract"
+  pass "test identity contract detects omitted tests and admits additions"
+}
+
 test_empty_fleet_json
 test_fixture_snapshot_json
 test_main_inventory_orphan_and_unstructured_disclosure
@@ -1003,3 +1049,5 @@ test_oversized_task_row_is_never_silently_dropped
 test_empty_fleet_is_success_not_failure
 test_unreadable_home_data_fails_loudly
 test_view_never_reports_success_for_a_failed_snapshot
+test_test_identity_contract
+fm_test_contract "${BASH_SOURCE[0]}"
