@@ -56,6 +56,7 @@ case "${FAKE_PI_MODE:-ok}" in
   client)   echo "Unknown provider vendr"; exit 1 ;;
   weird)    echo "the reader died in a way nobody classified"; exit 1 ;;
   silent)   exit 1 ;;
+  whitespace) printf '   '; exit 1 ;;
   hang)     sleep 10; echo ok; exit 0 ;;
 esac
 SH
@@ -471,6 +472,15 @@ test_a_failure_that_cannot_say_why_is_itself_refused() {
     *) fail "the recorded gap evidence does not describe the silent reader: $detail" ;;
   esac
 
+  rec=$(make_home whitespace); read_home "$rec"
+  out=$(run_sweep "$HOME_DIR" "$BIN_DIR" whitespace)
+  assert_contains "$out" "the reader reported no evidence" \
+    "whitespace-only reader output must be replaced with substantive detail"
+  detail=$(jq -r '.models["vendor/only"].tooling_gap.failure_evidence' \
+    "$HOME_DIR/state/model-observation.json")
+  assert_contains "$detail" "the reader reported no evidence" \
+    "whitespace-only output must not survive as stored repair evidence"
+
   # And the arity, which is where the collapse actually fired: a result whose
   # numeric fields are BOTH absent used to be written as three consecutive tabs,
   # and `read` folded them into one delimiter, so the reason arrived in the rc
@@ -521,11 +531,13 @@ test_a_parseable_but_invalid_record_refuses_instead_of_reading_as_empty() {
     '{"schema":"fm-model-observation.v1","models":[]}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"MAYBE","shape":"x","reader":"r","detail":"d","at":"t"}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNAVAILABLE","shape":"entitlement-refused","reader":"claude","detail":"","at":"t"}}}' \
+    '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNAVAILABLE","shape":"entitlement-refused","reader":"claude","detail":"   ","at":"t"}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"AVAILABLE","shape":"","reader":"claude","detail":"ok","at":"t"}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t"}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"","candidate":"vendor/only","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":"repair-1","backlog_item_status":"filed"}}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"r","candidate":"vendor/other","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":"repair-1","backlog_item_status":"filed"}}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"r","candidate":"vendor/only","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":"repair-1","backlog_item_status":""}}}}' \
+    '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"r","candidate":"vendor/only","requested_observation":"availability","failure_class":"client-error","failure_evidence":"   ","at":"t","affected_routes":["R-ONE"],"backlog_item":"repair-1","backlog_item_status":"filed"}}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":{"observation":"UNOBSERVABLE","shape":"x","reader":"r","detail":"d","at":"t","tooling_gap":{"reason_code":"TOOLING_GAP","reader":"r","candidate":"vendor/only","requested_observation":"availability","failure_class":"client-error","failure_evidence":"failed","at":"t","affected_routes":["R-ONE"],"backlog_item":null}}}}' \
     '{"schema":"fm-model-observation.v1","models":{"vendor/only":"not-an-object"}}' \
   ; do
@@ -536,6 +548,14 @@ test_a_parseable_but_invalid_record_refuses_instead_of_reading_as_empty() {
       "the refusal must carry the stable token for this input: $case_json"
     ! model_eligible "$HOME_DIR" vendor/only \
       || fail "an invalid record re-admitted the candidate it was excluding: $case_json"
+  done
+
+  write_observation_record "$HOME_DIR" '{"schema":"wrong","models":{}}'
+  for command in observations gaps; do
+    out=$(run_route "$HOME_DIR" availability "$command"); rc=$?
+    expect_code 2 "$rc" "availability $command must reject the same malformed record as routing"
+    assert_contains "$out" "observation record is malformed" \
+      "availability $command must report canonical record validation failure"
   done
 
   # The control that makes the eight above mean something: a record that

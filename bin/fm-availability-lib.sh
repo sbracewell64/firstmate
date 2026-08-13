@@ -184,6 +184,10 @@ fm_availability_sanitize() {  # <text>
   printf '%s\n' "$text"
 }
 
+fm_availability_has_substance() {  # <text>
+  printf '%s' "${1:-}" | LC_ALL=C grep -q '[^[:space:]]'
+}
+
 # ---------------------------------------------------------------------------
 # The total map from a probe shape to an observation
 # ---------------------------------------------------------------------------
@@ -345,6 +349,7 @@ fm_availability_record_write() {
   shape=$(fm_availability_sanitize "$shape")
   reader=$(fm_availability_sanitize "$reader")
   at=$(fm_availability_sanitize "$at")
+  fm_availability_has_substance "$detail" || detail="no detail recorded"
   latency_json=null
   case "$latency" in
     ''|*[!0-9]*) ;;
@@ -411,6 +416,8 @@ fm_availability_gap_block() {
   evidence=$(fm_availability_sanitize "$evidence")
   class=$(fm_availability_sanitize "$class")
   reader=$(fm_availability_sanitize "$reader")
+  fm_availability_has_substance "$evidence" \
+    || evidence="the reader reported no evidence, which is itself the defect to repair"
   if [ -n "$item" ]; then
     status=filed
   else
@@ -498,7 +505,7 @@ fm_availability_record_retire() {  # <state-dir> <observation> <subject>
 FM_AVAIL_RECORD_VALID_JQ='
   def bad($why): {ok:false, reason:$why};
   def clean_string: type == "string" and (test("[[:cntrl:]]") | not);
-  def nonempty_clean_string: clean_string and length > 0;
+  def nonempty_clean_string: clean_string and test("[^[:space:]]");
   def obs_values: [$available, $unavailable, $unobservable];
   def entry_bad($k; $e):
     if ($e | type) != "object" then "model \($k) is not an object"

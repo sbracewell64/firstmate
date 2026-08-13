@@ -377,19 +377,18 @@ case "$CMD" in
         # bin/fm-model-verify.sh is its only writer, because the only thing that
         # may record what a probe observed is the thing that ran the probe.
         OBS=$(fm_availability_record_path "$STATE")
-        if [ ! -f "$OBS" ]; then
-          [ "$JSON" -eq 1 ] && printf '{"models":{}}\n'
-          exit 0
-        fi
+        MODELS=$(fm_availability_record_models "$STATE") \
+          || die "the observation record is malformed: $OBS"
         if [ "$SUB" = gaps ]; then
-          FILTER=".models | with_entries(select(.value.observation == \"$FM_AVAIL_UNOBSERVABLE\"))"
+          FILTER="with_entries(select(.value.observation == \"$FM_AVAIL_UNOBSERVABLE\"))"
         else
-          FILTER='.models'
+          FILTER='.'
         fi
         if [ "$JSON" -eq 1 ]; then
-          jq -c "{models: ($FILTER)}" "$OBS" || die "the observation record is malformed: $OBS"
+          printf '%s' "$MODELS" | jq -c "{models: ($FILTER)}" \
+            || die "the observation record is malformed: $OBS"
         else
-          jq -r "($FILTER) | to_entries[]
+          printf '%s' "$MODELS" | jq -r "($FILTER) | to_entries[]
             | .key + \"  \" + .value.observation + \"  shape=\" + (.value.shape // \"-\")
               + \"  reader=\" + (.value.reader // \"-\") + \"  at=\" + (.value.at // \"-\")
               + (if .value.tooling_gap then \"  \" + .value.tooling_gap.reason_code
@@ -397,7 +396,7 @@ case "$CMD" in
                    + \" routes=\" + (.value.tooling_gap.affected_routes | join(\",\"))
                    + \" item=\" + (.value.tooling_gap.backlog_item // \"UNFILED\")
                    + \" evidence=\" + .value.tooling_gap.failure_evidence
-                 else \"\" end)" "$OBS" \
+                 else \"\" end)" \
             || die "the observation record is malformed: $OBS"
         fi
         ;;

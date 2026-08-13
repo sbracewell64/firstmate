@@ -272,7 +272,10 @@ probe_record() {  # <key> <shape> <rc-or-empty> <latency-or-empty> <detail>
   [ -n "$rc" ] || rc='-'
   [ -n "$lat" ] || lat='-'
   [ -n "$detail" ] || detail="the reader exited without producing any output to report"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$shape" "$rc" "$lat" "$(fm_availability_sanitize "$detail")"
+  detail=$(fm_availability_sanitize "$detail")
+  fm_availability_has_substance "$detail" \
+    || detail="the reader reported no evidence, which is itself the defect to repair"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$key" "$shape" "$rc" "$lat" "$detail"
 }
 
 # One probe. stdin closed (</dev/null) AND bounded by `timeout` - two independent
