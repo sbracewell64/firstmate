@@ -1048,7 +1048,7 @@ fm_availability_case() {
   fi
   [ "$(observation_of "$HOME_DIR" vendor/only)" = AVAILABLE ] \
     || fail "the controlled collapse did not take effect, so this control proved nothing"
-  pass "the recurrence probe turns red when any of the five permitting mechanisms is reintroduced"
+  pass "the recurrence probe turns red when any of the six permitting mechanisms is reintroduced"
 }
 
 test_every_probe_shape_maps_to_exactly_one_of_three_observations

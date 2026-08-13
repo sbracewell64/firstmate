@@ -76,8 +76,8 @@ The mapping enforces the same separation independently of duration: `client-erro
 The recurrence probe tests the mechanism rather than the symptom, and is proven red-capable rather than assumed to be.
 `tests/fm-availability-observation.test.sh` reintroduces each half of the permitting mechanism in a controlled copy of `bin/` and requires the probe to fail against it; a mutation that failed to change behaviour fails the case loudly instead of reporting a probe that can never go red.
 
-Five permitting mechanisms are reintroduced in controlled copies and each must turn a probe red.
-The first three are the original collapse; the last two are fail-open defects found in this change itself by an independent design review, which is why they are controlled the same way rather than merely fixed.
+Six permitting mechanisms are reintroduced in controlled copies and each must turn a probe red.
+The first three are the original collapse; the last three are fail-open defects found in this change itself by an independent design review, which is why they are controlled the same way rather than merely fixed.
 
 | Reintroduced mechanism | Result |
 |---|---|
