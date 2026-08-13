@@ -154,13 +154,14 @@ Authentication failure, model unavailability, provider unavailability, rate limi
 
 Discriminate a model outage from a provider outage with two probes: a sibling that succeeds means a model outage, so substitute within the tier; a sibling that also fails means a provider outage, so promote a tier.
 
-**On free-tier exhaustion:** do not cross into paid usage; use only a same-route candidate on the allowlist that meets the same floor and running effort band, otherwise let the bounded capacity deferral wait and resume through the spawn chokepoint.
+**On free-tier exhaustion:** do not cross into paid usage; use only a same-route candidate on the allowlist that meets the same floor and running effort band, otherwise let the capacity deferral wait with bounded backoff and resume through the spawn chokepoint.
 
 In a home with routed pools, `bin/fm-route.sh` is how that is done rather than by hand: `availability hold` and `availability release` are the only writers of `state/model-health.json` and refuse a subject no configured pool can match, and `next` names the substitute inside the failed model's own pool, exiting `3` with the terminal report above when there is none.
 
 **The terminal state:**
 
-> **When no candidate in a route's pool meets that route's floor and running effort band and has capacity, firstmate queues a bounded automatic wait; only a wait that spends its bound stops and surfaces for a captain decision.**
+> **When no candidate in a route's pool meets that route's floor and running effort band and has capacity, firstmate queues an automatic wait whose rechecks use bounded backoff; capacity remaining exhausted never stops that wait.**
+> **The wait stops and surfaces for a captain decision only when the attempt owner stops it, its recorded dispatch no longer validates, or its durable retry state cannot be maintained safely.**
 > **It does not degrade, does not substitute below the floor, and does not cross into paid usage to keep working.**
 
 Throughput reaching zero on a route is an acceptable outcome; silent degradation is not.

@@ -30,7 +30,7 @@ ok - a tick while capacity is still spent keeps waiting instead of dispatching
 ```
 
 Both commands exited 0.
-Together they covered the floor-preserving schedulable-set filter, the three-valued quota result, automatic restart-safe resumption, and the attempt-owned deferral bound.
+Together they covered the floor-preserving schedulable-set filter, the three-valued quota result, automatic restart-safe resumption, and attempt-owned deferral accounting.
 
 ## The vocabularies do not join by name, and the seam says so rather than guessing
 

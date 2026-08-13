@@ -533,7 +533,7 @@ If `bin/fm-attempt.sh defer` cannot record the count, the deferral fails closed,
 After any original-model refusal that leaves work undispatched, the retry driver asks the route owner for the next eligible candidate at the recorded floor and effort band.
 If every offered substitute is refused by another dispatch gate, the wait remains active and gains one durable deferral count, while the first distinct refusal is recorded once as a `blocked:` status line.
 Every due retry must durably resume, retain a later check or stop for an invalid durable record, and a failure to refresh the deferral record after counting stops through the attempt owner's unified terminal state with the failed record path declared.
-The work was never dispatched into a pool that could not run it and is not lost; raising a bound is deliberate, explicit and recorded.
+The work was never dispatched into a pool that could not run it and is not lost; a terminal capacity record requires explicit repair or release rather than silently resuming from unsafe state.
 
 ### Model availability record (state/model-health.json)
 

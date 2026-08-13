@@ -118,7 +118,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-route.sh`            | Read a route's floor, pool, eligible candidates and same-pool failover substitute, and record model or provider availability holds |
 | `fm-route-lib.sh`        | Own the routed-pool, capability-floor and availability rules every route decision applies |
 | `fm-capacity-lib.sh`     | Map current `quota-axi` evidence to three-valued routed-model capacity without changing the capability floor |
-| `fm-capacity-retry.sh`   | Persist, bound, inspect and automatically resume dispatches deferred for provider capacity |
+| `fm-capacity-retry.sh`   | Persist, back off, inspect and automatically resume dispatches deferred for provider capacity |
 | `fm-check-register.sh`   | Bind an intentional custom watcher check to its current bytes                       |
 | `fm-check-lib.sh`        | Validate custom-check registrations and prepare private execution snapshots          |
 | `fm-pr-lib.sh`           | Own canonical task and PR validation plus private atomic PR-poll publication and identity-bound retirement |

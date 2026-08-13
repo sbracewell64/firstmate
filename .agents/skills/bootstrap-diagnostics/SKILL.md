@@ -58,12 +58,12 @@ When any diagnostic needs captain attention, report the plain consequence and re
   The backfill sweep refuses those records instead of converging them, because either side could be the stale one and choosing silently would pick a task's identity by luck.
   Read the named record and settle it from evidence outside the file - what the task was dispatched to produce, and whether it was reflagged - then correct the disagreeing field; `bin/fm-task-axis-lib.sh` owns the axes and the derivation, and `docs/vocabulary-collisions.md` owns the alias's retirement condition.
   A record that appears here after a spawn or a reflag is a writer bug to escalate, not old damage: every current writer writes both sides together.
-- `CAPACITY_DEFERRED: <n> task(s) stopped waiting for model capacity and were never dispatched - <ids>` - each named task was held because every model meeting its capability floor was out of provider capacity, waited through its bound, and stopped.
-  Nothing is broken and nothing was lost: the work never entered a pool that could not run it, it is still held in the backlog, and `bin/fm-capacity-retry.sh list` shows what each was waiting on.
+- `CAPACITY_DEFERRED: <n> task(s) stopped waiting for model capacity and were never dispatched - <ids>` - each named task was held because every model meeting its capability floor was out of provider capacity, then stopped because a fresh dispatch could not be reconstructed safely or its durable retry state could not be maintained.
+  The work never entered a pool that could not run it and is still held in the backlog, but its automatic wait is no longer active; `bin/fm-capacity-retry.sh list` shows what it was waiting on and why it stopped.
   The line appears only for a wait that STOPPED; a wait still in progress and a wait that resumed by itself are both silent, because neither needs a decision.
   Read the recorded reason and route with `bin/fm-capacity-retry.sh list`, then inspect the current picture with `bin/fm-route.sh capacity --route <route>`.
-  Decide whether the work is worth doing at a deliberately changed capability floor or is no longer wanted, in which case `bin/fm-capacity-retry.sh release <id>` drops the wait.
-  A stopped wait has no supported rearm command; raising its attempt-record bound alone does not reactivate the terminal capacity record, so escalate that tooling gap rather than claiming the work will resume.
+  Repair the named durable-record failure before attempting another dispatch, or decide the work is no longer wanted, in which case `bin/fm-capacity-retry.sh release <id>` drops the stopped record.
+  A stopped wait has no supported rearm command, so escalate that tooling gap rather than claiming the work will resume.
   Never resolve one of these by dispatching the same task on a model below its route's floor.
   A required floor that is currently unavailable is a wait, and quietly running the work on something weaker is the exact failure the deferral exists to prevent.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
