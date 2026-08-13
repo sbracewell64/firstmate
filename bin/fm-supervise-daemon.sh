@@ -1260,7 +1260,7 @@ stale_gate_read_budget() {  # sets STALE_GATE_READ_BUDGET; call directly, never 
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
-  local state=$1 now due f key task win marker age last max_defer oldest pause_secs
+  local state=$1 now due f key task win marker age last max_defer oldest pause_secs pr_rc
   local working_reads=0 working_reads_max absorb wedge_reason
   stale_gate_read_budget
   working_reads_max=$STALE_GATE_READ_BUDGET
@@ -1471,9 +1471,14 @@ housekeeping() {  # <state>
       # The catch-all scan is another entry point for a ready event. Register it
       # before its existing seen marker can turn the line into a self-handled
       # duplicate; a valid transition owns its poll and needs no digest.
-      pr_ready_status_transition "$f" "$state"
-      case "$?" in
+      pr_ready_status_transition "$f" "$state"; pr_rc=$?
+      case "$pr_rc" in
         0) continue ;;
+        1)
+          escalate_add "$state" "$(basename "$f"): $last (PR-ready registration failed)"
+          mark_status_seen "$state" "$task" "$last"
+          continue
+          ;;
       esac
       seen="$state/.subsuper-seen-status-$(_stale_key "$task")"
       [ "$(cat "$seen" 2>/dev/null || true)" = "$last" ] && continue
@@ -1610,7 +1615,7 @@ is_wake_reason() {  # <reason>
 # Side effects: logging, marker records, escalation buffer appends.
 handle_wake() {  # <reason> <state>
   local reason=$1 state=$2 decision action distilled task last stale_detail
-  local kind="" arg="" f pr_rc
+  local kind="" arg="" f pr_rc pr_failure_detail=""
   if should_force_self "$reason"; then
     log "wake force-self (FM_INJECT_SKIP): $reason"
     return
@@ -1624,10 +1629,18 @@ handle_wake() {  # <reason> <state>
               for f in $arg; do
                 [ -e "$f" ] || continue
                 pr_ready_status_transition "$f" "$state"; pr_rc=$?
+                if [ "$pr_rc" -eq 1 ]; then
+                  pr_failure_detail="$(basename "$f"): $(last_status_line "$f") (PR-ready registration failed)"
+                  continue
+                fi
                 [ "$pr_rc" -eq 0 ] || continue
                 log "PR-ready transition registered from $(basename "$f")"
               done
-              decision=$(classify_signal "$arg" "$state") ;;
+              if [ -n "$pr_failure_detail" ]; then
+                decision="escalate|$pr_failure_detail"
+              else
+                decision=$(classify_signal "$arg" "$state")
+              fi ;;
     stale:*)  kind=stale; arg="${reason#stale: }"; stale_detail="${arg#"$arg"}"
               case "$arg" in *" ("*) stale_detail="${arg#*" ("}"; arg="${arg%% \(*}" ;; esac
               stale_detail="${stale_detail%)}"

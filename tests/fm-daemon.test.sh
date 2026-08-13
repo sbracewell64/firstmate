@@ -156,15 +156,16 @@ test_classify_terminal_signal_escalates() {
 }
 
 test_away_typed_pr_ready_registers_before_seen_dedupe() {
-  local dir state home fakebin status_file url gh_log out rc
+  local dir state home fakebin status_file url fail_url gh_log out rc
   dir=$(make_supercase away-pr-ready-registration)
   state="$dir/state"
   home="$dir/home"
   fakebin="$dir/fakebin"
   url=https://github.com/o/r/pull/77
+  fail_url=https://github.com/o/r/pull/79
   gh_log="$dir/gh.log"
   mkdir -p "$home/config" "$home/data" "$dir/wt"
-  cat > "$fakebin/gh" <<'SH'
+cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FM_TEST_GH_LOG:?}"
 case " $* " in
@@ -277,6 +278,28 @@ SH
   [ "$rc" -eq 2 ] || fail "automatic PR registration replaced a different recorded PR"
   [ "$(wc -l < "$gh_log" | tr -d ' ')" -eq 1 ] \
     || fail "mismatched automatic PR registration queried the forge"
+
+  fm_write_meta "$state/task-fail2.meta" \
+    "window=firstmate:fm-task-fail2" "endpoint_task_id=task-fail2" \
+    "worktree=$dir/wt" "project=$dir/project" "kind=ship" "mode=no-mistakes"
+  printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$fail_url summary=checks green" > "$state/task-fail2.status"
+  cp "$state/task-fail2.status" "$state/.subsuper-seen-status-task-fail2"
+  mkdir "$state/task-fail2.check.sh"
+  rm -f "$state/.subsuper-escalations"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_TEST_GH_LOG="$gh_log" \
+    PATH="$fakebin:$PATH" bash -c \
+    '. "$1"; LOG="$4"; FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $2" "$3"' \
+    _ "$DAEMON" "$state/task-fail2.status" "$state" "$dir/daemon.log" 2>&1)
+  grep -F "task-fail2.status:" "$state/.subsuper-escalations" >/dev/null \
+    || fail "failed signal registration was absorbed by the seen-status dedupe"
+
+  rm -f "$state/.subsuper-escalations"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_TEST_GH_LOG="$gh_log" \
+    PATH="$fakebin:$PATH" bash -c \
+    '. "$1"; FM_HEARTBEAT_SCAN_SECS=0 housekeeping "$2"' \
+    _ "$DAEMON" "$state"
+  grep -F "task-fail2.status:" "$state/.subsuper-escalations" >/dev/null \
+    || fail "failed catch-all registration was absorbed by the seen-status dedupe"
   pass "away mode registers a typed PR-ready event before seen dedupe, while present mode preserves handoff and replay stays idempotent"
 }
 
