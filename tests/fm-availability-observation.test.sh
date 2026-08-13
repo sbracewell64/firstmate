@@ -641,7 +641,7 @@ test_the_supported_release_retires_the_observation_it_overrides() {
 }
 
 test_overlapping_observation_mutations_preserve_every_result() {
-  local rec pids= pid i count
+  local rec pids='' pid i count
   rec=$(make_home concurrent-writes); read_home "$rec"
   for i in $(seq 1 20); do
     (
