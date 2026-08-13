@@ -439,7 +439,8 @@ Enforcement applies to the next dispatch only; work already under way keeps the 
 ### Model availability record (state/model-health.json)
 
 A private, gitignored, mode-0600 record of which models and providers the fleet currently cannot reach.
-`bin/fm-route-lib.sh` is its only writer, through `bin/fm-route.sh availability hold|release`, and it writes availability alone: a model that keeps failing is recorded unavailable, never demoted, because demotion is a policy change that belongs in the routing config under review.
+`bin/fm-route-lib.sh` is its only writer: `bin/fm-route.sh availability hold|release` exposes the supported operator commands, and `bin/fm-model-verify.sh` uses the same writer for a probe that establishes `UNAVAILABLE`.
+The record carries availability alone: a model that keeps failing is recorded unavailable, never demoted, because demotion is a policy change that belongs in the routing config under review.
 Concurrent holds and releases are serialized as whole-record transactions, so each mutation starts from the latest valid record, changes only its named model or provider binding, and atomically replaces the private record without erasing an independent mutation.
 
 A hold names a model by default and is resolved against the configured pools exactly as a dispatch's `--model` is: a fully qualified name must be a pool entry, and a bare name must match exactly one.
@@ -469,7 +470,8 @@ An entry whose state is outside the closed vocabulary can only have come from a 
 ### Model observation record (state/model-observation.json)
 
 A private, gitignored, mode-0600 record of what each model's last probe OBSERVED, which is a different question from whether the fleet holds it unavailable.
-`bin/fm-availability-lib.sh` owns the type and the schema, and `bin/fm-model-verify.sh` is its only writer.
+`bin/fm-availability-lib.sh` owns the type, schema, and all writes.
+`bin/fm-model-verify.sh` records probe results, while `bin/fm-route.sh availability release` retires an `UNAVAILABLE` entry when an operator explicitly overrides its hold; nothing else writes the record.
 
 An availability observation is three-valued, and the three are materially different facts that used to collapse into one:
 
