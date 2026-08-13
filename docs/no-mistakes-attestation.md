@@ -126,6 +126,7 @@ The note can only exist after the push it attests, and that push is what started
 Publishing the note does not by itself repair that verdict.
 `refs/notes/no-mistakes` is not a pull request head, so pushing it fires no `pull_request` event and nothing re-reads the head.
 Close and reopen the pull request, or edit its title or body: `reopened` and `edited` are both subscribed for exactly this, and because the verdict is bound to the head commit, re-running against an unchanged head simply re-derives it from the evidence now present.
+Do not create a replacement commit only to retrigger this check, because that commit is a new unattested head and repeats the same failure.
 
 This is why `edited` is subscribed even though the verdict no longer depends on any pull request text.
 It is also the only event GitHub fires when a pull request's base branch changes, so without it a pull request retargeted onto `main` would never run this check at all.
