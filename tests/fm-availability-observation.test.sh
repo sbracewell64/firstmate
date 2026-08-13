@@ -640,6 +640,61 @@ test_the_supported_release_retires_the_observation_it_overrides() {
   pass "the supported release retires the observation it overrides, and can never clear a broken reader"
 }
 
+test_overlapping_observation_mutations_preserve_every_result() {
+  local rec pids= pid i count
+  rec=$(make_home concurrent-writes); read_home "$rec"
+  for i in $(seq 1 20); do
+    (
+      . "$ROOT/bin/fm-availability-lib.sh"
+      fm_availability_record_write "$HOME_DIR/state" "vendor/concurrent-$i" \
+        "$FM_AVAIL_AVAILABLE" ok pi ok 0 2026-08-12T00:00:00Z
+    ) &
+    pid=$!
+    fm_test_reap "$pid"
+    pids="$pids $pid"
+  done
+  for pid in $pids; do
+    wait "$pid" || fail "an overlapping observation write failed"
+  done
+  count=$(jq '.models | length' "$HOME_DIR/state/model-observation.json")
+  [ "$count" = 20 ] || fail "overlapping writes retained $count of 20 observations"
+
+  rec=$(make_home concurrent-retire); read_home "$rec"
+  (
+    . "$ROOT/bin/fm-availability-lib.sh"
+    fm_availability_record_write "$HOME_DIR/state" vendor/retired \
+      "$FM_AVAIL_UNAVAILABLE" entitlement-refused pi refused 1 2026-08-12T00:00:00Z
+  ) || fail "the retirement fixture could not be written"
+  for i in $(seq 1 20); do
+    (
+      . "$ROOT/bin/fm-availability-lib.sh"
+      fm_availability_record_write "$HOME_DIR/state" "vendor/kept-$i" \
+        "$FM_AVAIL_UNOBSERVABLE" client-error pi failed 0 2026-08-12T00:00:00Z \
+        "$(fm_availability_gap_block pi "vendor/kept-$i" availability client-error failed \
+          2026-08-12T00:00:00Z R-ONE '' unfiled-test)"
+    ) &
+    pid=$!
+    fm_test_reap "$pid"
+    pids="$pid"
+    (
+      . "$ROOT/bin/fm-availability-lib.sh"
+      fm_availability_record_retire "$HOME_DIR/state" "$FM_AVAIL_UNAVAILABLE" vendor/retired >/dev/null
+    ) &
+    pid=$!
+    fm_test_reap "$pid"
+    pids="$pids $pid"
+    for pid in $pids; do
+      wait "$pid" || fail "an overlapping write or retirement failed"
+    done
+  done
+  [ "$(jq -r '.models["vendor/retired"] // "ABSENT"' "$HOME_DIR/state/model-observation.json")" = ABSENT ] \
+    || fail "the retired observation survived overlapping mutation"
+  count=$(jq '[.models | keys[] | select(startswith("vendor/kept-"))] | length' \
+    "$HOME_DIR/state/model-observation.json")
+  [ "$count" = 20 ] || fail "retire-versus-write retained $count of 20 exclusions"
+  pass "overlapping observation writes and retirements preserve every independent result"
+}
+
 test_the_probe_runs_isolated_from_this_machine() {
   local rec hostile evidence argv cwd entries
   rec=$(make_home isolation '' claude); read_home "$rec"
@@ -983,6 +1038,7 @@ test_a_failure_that_cannot_say_why_is_itself_refused
 test_a_parseable_but_invalid_record_refuses_instead_of_reading_as_empty
 test_an_established_unavailability_excludes_without_its_hold
 test_the_supported_release_retires_the_observation_it_overrides
+test_overlapping_observation_mutations_preserve_every_result
 test_the_probe_runs_isolated_from_this_machine
 test_a_tooling_gap_files_the_repair_work_it_names
 test_a_refusal_names_every_exclusion_that_applies

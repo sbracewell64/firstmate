@@ -104,6 +104,10 @@ if [ -z "${FM_REASON_CODE_TOOLING_GAP:-}" ]; then
   # shellcheck source=bin/fm-reasoning-lib.sh
   . "$(dirname "${BASH_SOURCE[0]}")/fm-reasoning-lib.sh"
 fi
+if ! declare -F fm_lock_acquire_wait >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-wake-lib.sh
+  . "$(dirname "${BASH_SOURCE[0]}")/fm-wake-lib.sh"
+fi
 
 # shellcheck disable=SC2034 # Contract constants are consumed by sourcing callers.
 {
@@ -312,6 +316,10 @@ fm_availability_record_path() {  # [<state-dir>]
   printf '%s\n' "$st/model-observation.json"
 }
 
+fm_availability_record_lock_path() {  # [<state-dir>]
+  printf '%s.lock\n' "$(fm_availability_record_path "${1:-}")"
+}
+
 # fm_availability_record_write <state-dir> <model> <observation> <shape>
 #                              <reader> <detail> <latency-or-empty> <at-iso>
 #                              [<gap-json>]
@@ -323,7 +331,7 @@ fm_availability_record_path() {  # [<state-dir>]
 # This is the only writer. It never touches state/model-health.json: holds are
 # bin/fm-route-lib.sh's, and one record with two writers is how the schemas
 # crossed in the first place.
-fm_availability_record_write() {
+fm_availability_record_write_locked() {
   local state=$1 model=$2 observation=$3 shape=$4 reader=$5 detail=$6 latency=$7 at=$8 gap=${9:-}
   local file tmp latency_json models
   file=$(fm_availability_record_path "$state")
@@ -391,6 +399,17 @@ fm_availability_record_write() {
   return 0
 }
 
+fm_availability_record_write() {
+  local state=$1 lock rc
+  lock=$(fm_availability_record_lock_path "$state")
+  mkdir -p "$(dirname "$lock")" || return 1
+  fm_lock_acquire_wait "$lock" || return 1
+  fm_availability_record_write_locked "$@"
+  rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
+}
+
 # fm_availability_gap_block <reader> <model> <requested> <failure-class>
 #                           <evidence> <at-iso> <affected-routes-csv>
 #                           [<backlog-item>] [<backlog-item-status>]
@@ -451,7 +470,7 @@ fm_availability_gap_block() {
 # is not repaired by releasing anything, the refusal says so in those words, and
 # letting a release clear it would turn "repair observability" back into "work
 # around uncertainty" - the exact substitution this whole path exists to refuse.
-fm_availability_record_retire() {  # <state-dir> <observation> <subject>
+fm_availability_record_retire_locked() {  # <state-dir> <observation> <subject>
   local state=$1 observation=$2 subject=$3 file tmp removed models
   file=$(fm_availability_record_path "$state")
   [ -f "$file" ] || return 0
@@ -483,6 +502,18 @@ fm_availability_record_retire() {  # <state-dir> <observation> <subject>
   mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
   chmod 600 "$file" 2>/dev/null || true
   printf '%s\n' "$removed"
+}
+
+fm_availability_record_retire() {  # <state-dir> <observation> <subject>
+  local state=$1 lock rc out
+  lock=$(fm_availability_record_lock_path "$state")
+  mkdir -p "$(dirname "$lock")" || return 1
+  fm_lock_acquire_wait "$lock" || return 1
+  out=$(fm_availability_record_retire_locked "$@")
+  rc=$?
+  fm_lock_release "$lock"
+  [ -z "$out" ] || printf '%s\n' "$out"
+  return "$rc"
 }
 
 # The record's shape, checked on every read, as a jq program returning either
