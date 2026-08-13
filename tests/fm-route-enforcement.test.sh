@@ -575,6 +575,7 @@ for arg in "\$@"; do
       if [ "\${FM_HEALTH_REQUIRE_LOCK:-0}" = 1 ] &&
          [ ! -d "\$FM_HEALTH_RACE_DIR/../model-health.json.lock" ] &&
          [ ! -L "\$FM_HEALTH_RACE_DIR/../model-health.json.lock" ]; then
+        : > "\$FM_HEALTH_RACE_DIR/unlocked-read"
         exit 96
       fi
       if [ "\${FM_HEALTH_RACE_BARRIER:-0}" = 1 ] &&
@@ -661,6 +662,22 @@ test_availability_health_writer_locks_before_the_canonical_read() {
   FM_HEALTH_REQUIRE_LOCK=1 health_write_process \
     "$state" "$fakebin" one 0 0 model vendor/one rate_limited first >/dev/null 2>&1 \
     || fail "the canonical availability reader ran before write exclusion was held"
+  [ ! -e "$state/race/unlocked-read" ] \
+    || fail "the direct writer read canonical availability before taking its lock"
+
+  fixture="$TMP_ROOT/health-command-lock-before-read"
+  local rec out
+  rec=$(make_refusal_home health-command-lock-before-read); read_home_record "$rec"
+  state="$HOME_DIR/state"
+  fakebin="$FAKEBIN"
+  mkdir -p "$state/race"
+  printf '%s\n' '{"schema":"fm-model-health.v1","models":{"vendor/large":{"state":"rate_limited","until":null,"recorded_at":1,"evidence":"old"}},"providers":{}}' > "$state/model-health.json"
+  make_health_jq "$fakebin"
+  out=$(FM_HEALTH_REQUIRE_LOCK=1 FM_HEALTH_RACE_DIR="$state/race" FM_HEALTH_RACE_ID=command \
+    PATH="$fakebin:$PATH" run_route "$HOME_DIR" availability release vendor/large); rc=$?
+  expect_code 0 "$rc" "the release command must resolve and mutate under one write exclusion"
+  [ ! -e "$state/race/unlocked-read" ] \
+    || fail "the release command read canonical availability before taking its lock: $out"
   pass "availability mutations hold write exclusion before the canonical read"
 }
 

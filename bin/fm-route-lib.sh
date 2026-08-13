@@ -737,14 +737,19 @@ fm_route_health_active() {  # [<state-dir>] [<now-epoch>]
 # touches rules, floors, or pools, because a model that keeps failing is
 # unavailable rather than demoted.
 fm_route_health_write() {
-  local state=$1 scope=$2 subject=$3 hold=$4 expires=${5:-} evidence=${6:-}
-  local file lock tmp now current updated expires_json target_exists rc=0
+  local state=$1 scope=$2 subject=$3 hold=$4 expires=${5:-} evidence=${6:-} release_config=${7:-}
+  local file lock tmp now current updated expires_json target_exists recorded_scope resolved rc=0
   file=$(fm_route_health_path "$state")
   command -v jq >/dev/null 2>&1 || { echo "jq is required to record model availability" >&2; return 1; }
   mkdir -p "$(dirname "$file")" || return 1
   expires_json=null
   [ -z "$expires" ] || expires_json=$expires
-  case "$scope" in model|provider) ;; *) echo "unknown availability scope: $scope" >&2; return 1 ;; esac
+  case "$scope" in
+    model|provider) ;;
+    '') [ -z "$hold" ] && [ -n "$release_config" ] \
+          || { echo "unknown availability scope: $scope" >&2; return 1; } ;;
+    *) echo "unknown availability scope: $scope" >&2; return 1 ;;
+  esac
   if [ -n "$hold" ] && ! fm_route_health_state_known "$hold"; then
     echo "$FM_ROUTE_TOKEN_HEALTH_STATE: '$hold' is not an availability state; the vocabulary is closed to the states the policy's failover conditions set. One of: $(fm_route_health_states_oneline)" >&2
     return 1
@@ -783,6 +788,30 @@ fm_route_health_write() {
   updated=
   if [ "$rc" -eq 0 ]; then
     if [ -z "$hold" ]; then
+      if [ -n "$release_config" ]; then
+        recorded_scope=$(printf '%s' "$current" | jq -r --arg subject "$subject" '
+          if ((.models // {}) | has($subject)) then "model"
+          elif ((.providers // {}) | has($subject)) then "provider"
+          else empty end' 2>/dev/null) || {
+          echo "could not observe the availability record binding" >&2
+          rc=1
+        }
+        if [ "$rc" -eq 0 ] && [ -n "$recorded_scope" ]; then
+          [ -z "$scope" ] || [ "$scope" = "$recorded_scope" ] || {
+            echo "$subject is recorded as a $recorded_scope hold, not a $scope one" >&2
+            rc=1
+          }
+          scope=$recorded_scope
+        elif [ "$rc" -eq 0 ]; then
+          resolved=$(fm_route_hold_subject "$release_config" "$scope" "$subject") || rc=1
+          if [ "$rc" -eq 0 ]; then
+            scope=${resolved%% *}
+            subject=${resolved#* }
+          fi
+        fi
+      fi
+    fi
+    if [ "$rc" -eq 0 ] && [ -z "$hold" ]; then
       if ! target_exists=$(printf '%s' "$current" | jq -r --arg scope "${scope}s" --arg subject "$subject" \
         '((.[$scope] // {}) | has($subject))' 2>/dev/null); then
         echo "could not observe the availability record binding" >&2
@@ -837,6 +866,9 @@ fm_route_health_write() {
 
   if ! fm_lock_release "$lock"; then
     rc=1
+  fi
+  if [ "$rc" -eq 0 ] && [ -z "$hold" ] && [ -n "$release_config" ]; then
+    printf '%s %s\n' "$scope" "$subject"
   fi
   return "$rc"
 }
