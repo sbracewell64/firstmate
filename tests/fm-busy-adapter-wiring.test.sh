@@ -86,7 +86,7 @@ classify() {  # <harness> <id> <state-dir>
 # Node host and fire one lifecycle handler. Modes: agent-start, settle-idle,
 # settle-continuing, turn-end.
 drive_pi_ext() {
-  local ext=$1 mode=$2 js
+  local ext=$1 mode=$2 js rc
   js="$ext.mjs"
   sed -e 's/: string//g' -e 's/<void>//g' -e 's/: any//g' "$ext" > "$js"
   EXT_PATH="$js" MODE="$mode" node --input-type=module 2>&1 <<'EOF'
@@ -110,6 +110,9 @@ if (process.env.MODE === "turn-end") {
   await new Promise((resolve) => setTimeout(resolve, 200));
 }
 EOF
+  rc=$?
+  rm -f -- "$js"
+  return "$rc"
 }
 
 test_pi_extension_semantic_lifecycle() {
