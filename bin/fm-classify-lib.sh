@@ -424,7 +424,10 @@ pause_notification_marker() {  # <state-dir> <task-id>
 pause_notification_value() {  # <state-dir> <task-id> <last-status-line>
   local capacity="$1/$2.capacity"
   printf '%s\ncapacity-record:%s\n' "$3" "$capacity"
-  [ ! -f "$capacity" ] || cat "$capacity"
+  [ ! -f "$capacity" ] || sed \
+    -e 's/observed_at=[^[:space:]]*//g' \
+    -e 's/refreshed_at=[^[:space:]]*//g' \
+    "$capacity"
 }
 
 pause_notification_pending() {  # <state-dir> <task-id> <last-status-line>

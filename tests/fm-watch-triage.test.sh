@@ -1815,6 +1815,7 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   # A DECLARED pause (not captain-relevant), .seen-* primed so the signal scan does
   # not pre-empt the stale path.
   printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture summary=holding for provider capacity\n' > "$statusf"
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:00:00Z\n' > "$state/held.capacity"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle, holding for upstream")
@@ -1878,6 +1879,22 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
     reap "$pid"; fail "an unchanged pause event produced another wake: $(cat "$out")"
   fi
   [ ! -s "$out" ] || { reap "$pid"; fail "an unchanged pause event printed another wake: $(cat "$out")"; }
+  reap "$pid"
+
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:05:00Z\n' > "$state/held.capacity"
+  : > "$state/.paused-resurfaced-$key"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.paused-resurfaced-$key"
+  else touch -m -d "@$back" "$state/.paused-resurfaced-$key"; fi
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "a refresh-only capacity observation produced another wake: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; fail "a refresh-only capacity observation printed another wake: $(cat "$out")"; }
   reap "$pid"
 
   printf 'provider=codex remaining=95 observed_at=2030-01-01T00:05:00Z\n' > "$state/held.capacity"

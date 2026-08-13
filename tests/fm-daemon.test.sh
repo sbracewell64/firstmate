@@ -1328,6 +1328,13 @@ test_housekeeping_paused_resurfaces_only_on_delta() {
   age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
   [ "$age" -lt 60 ] || fail "an absorbed no-delta check did not reset the cadence (age ${age}s)"
 
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:05:00Z\n' > "$state/held-w11.capacity"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a refresh-only capacity observation produced another notification: $(cat "$state/.subsuper-escalations")"
+
   printf 'provider=codex remaining=95 observed_at=2030-01-01T00:05:00Z\n' > "$state/held-w11.capacity"
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
