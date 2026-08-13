@@ -439,7 +439,8 @@ Enforcement applies to the next dispatch only; work already under way keeps the 
 ### Model availability record (state/model-health.json)
 
 A private, gitignored, mode-0600 record of which models and providers the fleet currently cannot reach.
-`bin/fm-route-lib.sh` is its only writer, through `bin/fm-route.sh availability hold|release`, and it writes availability alone: a model that keeps failing is recorded unavailable, never demoted, because demotion is a policy change that belongs in the routing config under review.
+`bin/fm-route-lib.sh` is its only writer: `bin/fm-route.sh availability hold|release` exposes the supported operator commands, and `bin/fm-model-verify.sh` uses the same writer for a probe that establishes `UNAVAILABLE`.
+The record carries availability alone: a model that keeps failing is recorded unavailable, never demoted, because demotion is a policy change that belongs in the routing config under review.
 Concurrent holds and releases are serialized as whole-record transactions, so each mutation starts from the latest valid record, changes only its named model or provider binding, and atomically replaces the private record without erasing an independent mutation.
 
 A hold names a model by default and is resolved against the configured pools exactly as a dispatch's `--model` is: a fully qualified name must be a pool entry, and a bare name must match exactly one.
@@ -459,8 +460,66 @@ Releasing a binding that is already absent is an idempotent no-op and does not c
 The state vocabulary is closed to the states the routing config's own failover conditions set: `degraded`, `rate_limited`, `model_unavailable`, `provider_unavailable`, `auth_failure`, `subscription_quota_exhausted`, `daily_quota_exhausted`, and `admin_disabled`.
 A hold with a numeric `until` stops binding on read once that epoch passes, so nothing has to run to forget it; a `null` `until` holds until released explicitly, which is what an authentication failure needs.
 An absent file means no remembered cooldown and never that a model is healthy, while a file that exists and cannot be parsed refuses rather than reading as an empty one.
-That refusal names this record and not `crew-dispatch.json`: the two inputs fail independently and are repaired differently, so a refusal that points at the file which parses perfectly costs the whole diagnosis.
+That refusal names this record and not `crew-dispatch.json` or the observation record below: the three inputs fail independently and are repaired differently, so a refusal that points at a file which parses perfectly costs the whole diagnosis.
 Eligibility reads this record and never probes: a route's ordered pool costs nothing to resolve on the happy path, and probing belongs to failure handling.
+
+The vocabulary is deliberately negative-only, and there is no `available` state.
+A hold removes a candidate and availability is restored by *release*, so nothing can express "this model is fine" here and no absent entry can be read as an assertion that one is.
+An entry whose state is outside the closed vocabulary can only have come from a writer that is not the supported one; it keeps excluding its candidate, and `bin/fm-model-verify.sh` reports it with the `bin/fm-route.sh availability release` command that repairs it rather than reinterpreting it.
+
+### Model observation record (state/model-observation.json)
+
+A private, gitignored, mode-0600 record of what each model's last probe OBSERVED, which is a different question from whether the fleet holds it unavailable.
+`bin/fm-availability-lib.sh` owns the type, schema, and all writes.
+`bin/fm-model-verify.sh` records probe results, while `bin/fm-route.sh availability release` retires an `UNAVAILABLE` entry when an operator explicitly overrides its hold; nothing else writes the record.
+
+An availability observation is three-valued, and the three are materially different facts that used to collapse into one:
+
+| Observation | Meaning | Where it lands |
+|---|---|---|
+| `AVAILABLE` | the probe ran and positively established the required fact | this record only; never a hold, and never a release |
+| `UNAVAILABLE` | the probe ran successfully and positively established the candidate is unavailable or ineligible | this record, plus a hold in the availability record above through its supported writer |
+| `UNOBSERVABLE` | the probe could not establish the state at all: the reader could not execute, failed structurally, lacked a dependency, timed out, or produced a result nobody mapped | this record, carrying a `tooling_gap` evidence block; never a hold |
+
+This is not a second observation type.
+It is `bin/fm-verify-lib.sh`'s `PASS` / `FAIL` / `NO_VERIFIER_RAN` under the names the availability domain uses, bound to it by a total bijection and consumed through that library's own exhaustiveness rule.
+
+```json
+{
+  "schema": "fm-model-observation.v1",
+  "models": {
+    "<provider>/<model-id>": {
+      "observation": "UNOBSERVABLE", "shape": "unprobeable", "reader": "<what was asked>",
+      "detail": "<what it said>", "latency_s": null, "at": "<iso8601>",
+      "tooling_gap": {
+        "reason_code": "TOOLING_GAP", "reader": "<what failed>", "candidate": "<provider>/<model-id>",
+        "requested_observation": "entitlement-and-liveness", "failure_class": "<probe shape>",
+        "failure_evidence": "<why>", "at": "<iso8601>",
+        "affected_routes": ["<route id>"],
+        "backlog_item": "<repair item id>", "backlog_item_status": "filed"
+      }
+    }
+  }
+}
+```
+
+Routing reads this record for exclusions only: either a probe positively established `UNAVAILABLE`, or an attempted observation failed and recorded `UNOBSERVABLE`.
+An `UNOBSERVABLE` candidate is refused with the reader named, because it is neither available nor unavailable and treating it as either would be an assertion nobody measured; a single-candidate pool blocked this way is the correct immediate behaviour, and the fix is to repair observability rather than to make uncertainty permissive.
+A model nobody has probed has no entry and is not excluded: "not yet observed" and "observation attempted and failed" are themselves two facts, and collapsing them would make an unprobed fleet unroutable.
+An `AVAILABLE` observation only fails to exclude a candidate; it never admits one and never releases a hold, so a stale positive can never override a fresh negative.
+The `tooling_gap` block is evidence, not an issue store: the repair itself is an ordinary backlog item, which `bin/fm-reasoning-lib.sh` already requires a `TOOLING_GAP` dispatch to name and find open.
+`bin/fm-model-verify.sh` files that item through this home's own backlog backend under an id derived from the candidate, so repeated sweeps converge on one item rather than duplicating it, and confirms it through the same open-item reader the dispatch is certified against.
+`backlog_item` is `null` only when one could not be filed, and it then always travels with a `backlog_item_status` saying why, so an unfiled repair is explicitly incomplete rather than silent.
+Read it with `bin/fm-route.sh availability observations`, or `availability gaps` for only the candidates a failed reader is excluding.
+
+This record is validated on every read, not merely parsed.
+A file that is valid JSON but does not satisfy the schema - a wrong or absent schema string, `models` that is not an object, an entry outside the closed observation vocabulary, an `UNOBSERVABLE` entry with no `tooling_gap` block, or a string field carrying control characters - refuses with the reason rather than reading as an empty exclusion set, because recovering a corrupt safety record into "nothing is excluded" re-admits every candidate it was carrying.
+
+An `UNAVAILABLE` observation excludes on its own as well as through its hold.
+The two records are written by two calls, the fail-closed hold is written first, and routing refuses a candidate whose observation says unavailable while no hold records that fact, so a lost or raced hold write cannot leave a measured negative fact unenforced.
+Because that exclusion is independent, `bin/fm-route.sh availability release` also retires the `UNAVAILABLE` observation it overrides and reports which entries it retired; it never retires an `UNOBSERVABLE` one, since releasing a hold repairs nothing about a broken reader.
+
+Evidence stored here is sanitized before it is written: control characters are removed, credential-shaped strings are replaced by `[redacted]`, and the text is bounded, so a provider's error output cannot rewrite an operator's terminal, leak a key through a diagnostic, or fill the record.
 
 ## Model registry (config/models.json)
 
@@ -576,10 +635,11 @@ A bare model name with no provider prefix is a harness-native selector and is al
 
 Routability is a separate axis from cost, and the two are enforced independently.
 A model recorded as `rejected` or `blocked` is refused at spawn even when it carries no cost risk at all, because a model on a flat subscription can still be one the account is not entitled to use.
-Availability is a third axis again: a rate-limited or cooling-down model is unavailable rather than rejected, lives in `state/model-health.json`, and never changes the routing status recorded here.
+Availability is a third axis again: a rate-limited or cooling-down model is unavailable rather than rejected, its holds and probe observations live in the two state records documented above, and neither changes the routing status recorded here.
 
 A live probe is itself a billable act on a metered provider, so `bin/fm-model-verify.sh` consults the same zero-budget decision before issuing any request, on the interval-gated sweep and on an explicit `--model` alike - a typed model name is not authorization to spend money.
-A refused model is reported as `MODEL_VERIFY: refusing to probe <model> - <reason>`, no request is issued, and its prior record in `state/model-health.json` is left untouched.
+A refused model is reported as `MODEL_VERIFY: refusing to probe <model> - <reason>`, no request is issued, and its prior records in `state/model-health.json` and `state/model-observation.json` are both left untouched.
+A model the cost decision refuses is not probed at all, so it records no observation: never probed and probed-unsuccessfully are different facts, and only the second one excludes a candidate.
 `--force-probe` is the only override, and a forced probe announces itself on stdout so an authorized billable probe is never invisible.
 Bootstrap reports registry problems as `MODEL_REGISTRY: invalid config/models.json - <reason>` for schema failures, `MODEL_REGISTRY: <model> ...` for integrity failures, `MODEL_PRICE: <model> ...` for drift, and `MODEL_VERIFY: <model> ...` for probe results.
 Valid, current registries stay silent.

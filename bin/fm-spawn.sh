@@ -1472,17 +1472,17 @@ if [ "$KIND" != secondmate ]; then
     ROUTE_DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE") || ROUTE_DECISION_RC=$?
     if [ "$ROUTE_DECISION_RC" -ne 0 ]; then
       # The refusal names the file that is ACTUALLY unreadable. The routing
-      # config and the availability record fail independently and are repaired
-      # differently, so sending an operator to the one that parses perfectly
-      # costs them the whole diagnosis.
+      # config, the availability record and the observation record fail
+      # independently and are repaired differently, so sending an operator to
+      # one that parses perfectly costs them the whole diagnosis.
       echo "error: $(fm_route_undetermined_refusal "$ROUTE_DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 1
     fi
-    # Only the held-model refusal names substitutes, so the registry verdicts a
-    # substitute list has to carry are computed only when one is about to be
+    # Only the two exclusion refusals name substitutes, so the registry verdicts
+    # a substitute list has to carry are computed only when one is about to be
     # printed. The happy path stays a single route evaluation with no registry
     # probe per candidate.
-    if [ -n "$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.held // empty' 2>/dev/null)" ]; then
+    if [ -n "$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.held // .subject.unobserved // .subject.unavailable // empty' 2>/dev/null)" ]; then
       ROUTE_DECISION=$(fm_route_decision_with_registry "$ROUTE_DECISION" \
         "$(spawn_route_registry_verdicts "$ROUTE_DECISION")")
     fi

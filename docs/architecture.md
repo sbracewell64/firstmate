@@ -246,7 +246,7 @@ That keeps spawn launch compatible across claude, codex, grok, pi, opencode, and
 
 A home may go further and give a rule a route id with an ordered pool, which is the one part of that file the scripts read as policy.
 Which route a task belongs to stays firstmate's judgment; what the scripts then enforce is the claim, at the spawn chokepoint: the model must be inside that route's pool and must meet the route's floor on the axes the config records evidence for, a substitute after a failure comes only from the same pool in pool order, and a route whose candidates are all ineligible stops and reports rather than degrading below its floor.
-`bin/fm-route-lib.sh` owns those rules, `bin/fm-route.sh` reads them, and `state/model-health.json` is the narrow availability record failover writes ([configuration.md](configuration.md#routed-pools-optional)).
+`bin/fm-route-lib.sh` owns those rules, `bin/fm-route.sh` reads them, and the availability hold and probe-observation records are documented in [configuration.md](configuration.md#model-availability-record-statemodel-healthjson).
 Enforcement is per dispatch, so activating it never re-checks work already under way.
 
 ## Optional fleet admission control

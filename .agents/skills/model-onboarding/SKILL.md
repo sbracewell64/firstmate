@@ -80,17 +80,19 @@ Run `bin/fm-model-verify.sh --model <provider>/<id>`.
 The command itself re-checks G2 first: a model the zero-budget decision refuses is not probed, and only `--force-probe` overrides that refusal.
 Where the provider offers real entitlement data, read it first and probe second - an empty entitlement set is a refusal that costs nothing to detect.
 
-Four distinguishable response shapes:
+Four distinguishable response shapes, each mapping to exactly one of the three availability observations that `bin/fm-availability-lib.sh` owns:
 
-| Shape | rc | Meaning | Handler |
-|---|---|---|---|
-| `ok` | 0 | entitled and live | admit to the next gate |
-| `entitlement-refused` | 1 | server-side refusal naming the account type | reject; never route |
-| `unknown-model` | 1 | unknown id, still sent upstream | reject; identity error at G0 |
-| `client-error` | 1 | request never left the machine | configuration error, not a provider fact |
+| Shape | rc | Meaning | Observation | Handler |
+|---|---|---|---|---|
+| `ok` | 0 | entitled and live | `AVAILABLE` | admit to the next gate |
+| `entitlement-refused` | 1 | server-side refusal naming the account type | `UNAVAILABLE` | reject; never route |
+| `unknown-model` | 1 | unknown id, still sent upstream | `UNAVAILABLE` | reject; identity error at G0 |
+| `client-error` | 1 | request never left the machine | `UNOBSERVABLE` | configuration error, not a provider fact |
 
 A client-side failure returns in well under a second; a server-side refusal takes seconds.
 That separation matters: a local typo must never be recorded as a provider outage.
+A timeout, a harness with no probe path, an uninstalled reader, and any shape nobody mapped are `UNOBSERVABLE` for the same reason - they establish nothing about the model, so they file a `TOOLING_GAP` naming the reader to repair rather than a fact about the provider.
+`AVAILABLE` and `UNAVAILABLE` are answers about the candidate; `UNOBSERVABLE` is an answer about the instrument, and reading it as either of the other two is the collapse this mapping exists to prevent.
 Every probe closes stdin - `pi -p` can hang unbounded otherwise, and a wedged probe presents to supervision as a stale worker, making the monitor the fault.
 
 **G4 Harness expressibility.** Can the harness express what the route requires *on this model*?
@@ -155,7 +157,7 @@ Discriminate a model outage from a provider outage with two probes: a sibling th
 
 **On free-tier exhaustion:** mark unavailable, do not cross into paid usage, do not repeatedly retry, fall back only to a same-route candidate on the allowlist that meets the floor, otherwise stop and escalate.
 
-In a home with routed pools, `bin/fm-route.sh` is how that is done rather than by hand: `availability hold` and `availability release` are the only writers of `state/model-health.json` and refuse a subject no configured pool can match, and `next` names the substitute inside the failed model's own pool, exiting `3` with the terminal report above when there is none.
+In a home with routed pools, `bin/fm-route.sh` is how an operator does that rather than by hand: `availability hold` and `availability release` are the supported operator commands and refuse a subject no configured pool can match, `bin/fm-model-verify.sh` uses the same record writer when a probe establishes `UNAVAILABLE`, and `next` names the substitute inside the failed model's own pool, exiting `3` with the terminal report above when there is none.
 
 **The terminal state:**
 
@@ -197,7 +199,7 @@ On demotion the model returns to its previous tier, promotion evidence **resets 
 > **Demotion is a routing change, not an availability change.**
 > A rate-limited, quota-exhausted or cooling-down model is **not demoted** - it is unavailable, which the failure policy handles on an independent axis.
 > Conflating them would make every outage permanently degrade the routing table.
-> The separation is structural: availability lives in `state/model-health.json`, routing status in `config/models.json`, written by different code.
+> The separation is structural: availability holds and probe observations live in the two state records documented in `docs/configuration.md`, while routing status lives in `config/models.json` and is written by different code.
 
 ## Observation levels and the floor that never reaches zero
 

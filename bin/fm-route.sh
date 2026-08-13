@@ -24,7 +24,18 @@
 #   fm-route.sh availability hold <model> [--scope provider] --state <state>
 #                                [--for-seconds <n>] [--evidence <text>]
 #   fm-route.sh availability release <model> [--scope provider]
+#   fm-route.sh availability observations    the last recorded probe observation
+#                                            per model, three-valued
+#   fm-route.sh availability gaps            only the candidates a FAILED reader
+#                                            is excluding, with the TOOLING_GAP
+#                                            evidence needed to repair each one
 #   fm-route.sh --help
+#
+# A HOLD AND A FAILED OBSERVATION ARE DIFFERENT ANSWERS and are listed
+# separately. A hold says the fleet cannot reach a model and is repaired by
+# waiting or by releasing it; a failed observation says the reader that would
+# answer for it broke, which no release ever fixes. Both exclude the candidate,
+# and `gaps` is the list whose repair is code rather than patience.
 #
 # A hold names a MODEL by default, resolved against the configured pools exactly
 # as a dispatch's --model is: a fully qualified entry must be in a pool, and a
@@ -193,10 +204,34 @@ terminal_report() {  # <decision-json>
       + ( if (.violations | length) > 0
           then ([.violations[] | .rule + " (" + .config_path + " configures "
                  + (.configured | tostring) + ", observed " + (.observed | tostring) + ")"] | join("; "))
+          elif .unobserved != null
+          then "UNOBSERVABLE - the reader " + (.unobserved.reader // "unnamed")
+               + " could not observe it ("
+               + (.unobserved.tooling_gap.failure_class // .unobserved.shape // "unclassified")
+               + ": " + (.unobserved.tooling_gap.failure_evidence // .unobserved.detail // "no evidence recorded")
+               + "), so this is neither available nor unavailable; repair the reader ("
+               + (.unobserved.tooling_gap.reason_code // "TOOLING_GAP")
+               + (if (.unobserved.tooling_gap.backlog_item // null) != null
+                  then ", tracked as " + .unobserved.tooling_gap.backlog_item
+                  else ", not yet filed as backlog work" end) + ")"
+               # Both exclusions, whenever both are recorded. Saying "no hold is
+               # what excludes it" while a hold sits in the record is a false
+               # statement that sends an operator away from a real exclusion.
+               + (if .held != null
+                  then " - and it is ALSO held " + .held.state + " on the " + .held.scope
+                       + " " + .held.subject
+                       + ", a separate exclusion with a separate repair: fixing the reader will not clear the hold and releasing the hold will not restore the candidate"
+                  else " and no hold is what excludes it" end)
           elif .held != null
           then "held " + .held.state + " on the " + .held.scope + " "
                + .held.subject
                + (if .held.until != null then " until epoch " + (.held.until | tostring) else " until released" end)
+          elif .unavailable != null
+          then "UNAVAILABLE - " + (.unavailable.reader // "an unnamed reader")
+               + " positively established this at " + (.unavailable.at // "an unrecorded time")
+               + " (" + (.unavailable.shape // "unclassified") + ": "
+               + (.unavailable.detail // "no evidence recorded")
+               + "), and no hold records that fact, so the observation is what excludes it"
           elif .registry_refusal != null then .registry_refusal
           else "eligible" end )'
   printf '%s' "$d" | jq -r '
@@ -243,7 +278,7 @@ case "$CMD" in
     # what lets a refusal name substitutes an operator can actually dispatch.
     # Only a held subject prints such a list, so only a held subject pays for
     # the whole pool's verdicts.
-    if [ -n "$(printf '%s' "$DECISION" | jq -r '.subject.held // empty')" ]; then
+    if [ -n "$(printf '%s' "$DECISION" | jq -r '.subject.held // .subject.unobserved // .subject.unavailable // empty')" ]; then
       DECISION=$(enrich "$DECISION")
     fi
     if refusal=$(fm_route_refusal_from_decision "$CONFIG" "$ROUTE" "$MODEL" "$DECISION" "$STATE"); then
@@ -337,6 +372,34 @@ case "$CMD" in
             || die "the availability record is malformed: $(fm_route_health_path "$STATE")"
         fi
         ;;
+      observations|gaps)
+        # The observation record, not the hold record. Read-only here:
+        # bin/fm-model-verify.sh is its only writer, because the only thing that
+        # may record what a probe observed is the thing that ran the probe.
+        OBS=$(fm_availability_record_path "$STATE")
+        MODELS=$(fm_availability_record_models "$STATE") \
+          || die "the observation record is malformed: $OBS"
+        if [ "$SUB" = gaps ]; then
+          FILTER="with_entries(select(.value.observation == \"$FM_AVAIL_UNOBSERVABLE\"))"
+        else
+          FILTER='.'
+        fi
+        if [ "$JSON" -eq 1 ]; then
+          printf '%s' "$MODELS" | jq -c "{models: ($FILTER)}" \
+            || die "the observation record is malformed: $OBS"
+        else
+          printf '%s' "$MODELS" | jq -r "($FILTER) | to_entries[]
+            | .key + \"  \" + .value.observation + \"  shape=\" + (.value.shape // \"-\")
+              + \"  reader=\" + (.value.reader // \"-\") + \"  at=\" + (.value.at // \"-\")
+              + (if .value.tooling_gap then \"  \" + .value.tooling_gap.reason_code
+                   + \" class=\" + .value.tooling_gap.failure_class
+                   + \" routes=\" + (.value.tooling_gap.affected_routes | join(\",\"))
+                   + \" item=\" + (.value.tooling_gap.backlog_item // \"UNFILED\")
+                   + \" evidence=\" + .value.tooling_gap.failure_evidence
+                 else \"\" end)" \
+            || die "the observation record is malformed: $OBS"
+        fi
+        ;;
       hold|release)
         SUBJECT=${POS[1]:-}
         [ -n "$SUBJECT" ] || die "availability $SUB needs a model or provider"
@@ -351,10 +414,31 @@ case "$CMD" in
           SUBJECT=${RESOLVED#* }
         fi
         if [ "$SUB" = release ]; then
-          RESOLVED=$(fm_route_health_write "$STATE" "$HOLD_SCOPE" "$SUBJECT" '' '' '' "$CONFIG") || exit 2
+          fm_availability_transition_begin "$STATE" || exit 2
+          fm_availability_record_models "$STATE" >/dev/null \
+            || { fm_availability_transition_end "$STATE"; die "the observation record is malformed: $(fm_availability_record_path "$STATE")"; }
+          RESOLVED=$(fm_route_health_write "$STATE" "$HOLD_SCOPE" "$SUBJECT" '' '' '' "$CONFIG") \
+            || { fm_availability_transition_end "$STATE"; exit 2; }
           SCOPE=${RESOLVED%% *}
           SUBJECT=${RESOLVED#* }
           printf 'released %s %s\n' "$SCOPE" "$SUBJECT"
+          # A release is an EXPLICIT operator override, and routing enforces a
+          # recorded UNAVAILABLE observation independently of its hold. Clearing
+          # only the hold would therefore leave the candidate excluded by a
+          # record nobody was told about, and the supported release command
+          # would quietly stop working. So the observation the operator is
+          # overriding is retired with it, and the retirement is printed.
+          #
+          # A could-not-observe is deliberately NOT retired: releasing repairs
+          # nothing about a broken reader, and letting it clear one would turn
+          # "repair observability" back into "work around uncertainty".
+          RETIRED=$(fm_availability_record_retire_locked "$STATE" "$FM_AVAIL_UNAVAILABLE" "$SUBJECT") \
+            || { fm_availability_transition_end "$STATE"; exit 2; }
+          fm_availability_transition_end "$STATE"
+          if [ -n "$RETIRED" ]; then
+            printf 'retired the %s observation recorded for: %s\n' \
+              "$FM_AVAIL_UNAVAILABLE" "$(printf '%s' "$RETIRED" | tr '\n' ' ' | sed 's/ $//')"
+          fi
         else
           [ -n "$HOLD_STATE" ] || die "availability hold needs --state <$(fm_route_health_states_oneline)>"
           EXPIRES=
