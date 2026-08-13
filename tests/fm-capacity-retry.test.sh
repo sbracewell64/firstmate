@@ -314,6 +314,8 @@ test_release_serializes_with_active_retry() {
   stub="$TMP_ROOT/release-race/attempt"
   entered="$TMP_ROOT/release-race/entered"
   gate="$TMP_ROOT/release-race/gate"
+  # Preserve the generated stub's variables for its own runtime.
+  # shellcheck disable=SC2016
   printf '#!/usr/bin/env bash\nif [ "$1" = show ]; then : > "$FM_TEST_ENTERED"; while [ ! -e "$FM_TEST_GATE" ]; do sleep 0.01; done; fi\nexec "$FM_TEST_REAL_ATTEMPT" "$@"\n' > "$stub"
   chmod +x "$stub"
   tick_out="$TMP_ROOT/release-race/tick.out"
@@ -380,6 +382,8 @@ test_concurrent_ticks_claim_one_retry_owner() {
     --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null
   stub="$TMP_ROOT/concurrent-tick/attempt"
   log="$TMP_ROOT/concurrent-tick/show.log"
+  # Preserve the generated stub's variables for its own runtime.
+  # shellcheck disable=SC2016
   printf '#!/usr/bin/env bash\nif [ "$1" = show ]; then printf "show\\n" >> "$FM_TEST_SHOW_LOG"; sleep 1; fi\nexec "$FM_TEST_REAL_ATTEMPT" "$@"\n' > "$stub"
   chmod +x "$stub"
   out1="$TMP_ROOT/concurrent-tick/tick-one.out"
