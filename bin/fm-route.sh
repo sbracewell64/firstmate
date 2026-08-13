@@ -414,6 +414,8 @@ case "$CMD" in
           SUBJECT=${RESOLVED#* }
         fi
         if [ "$SUB" = release ]; then
+          fm_availability_record_models "$STATE" >/dev/null \
+            || die "the observation record is malformed: $(fm_availability_record_path "$STATE")"
           RESOLVED=$(fm_route_health_write "$STATE" "$HOLD_SCOPE" "$SUBJECT" '' '' '' "$CONFIG") || exit 2
           SCOPE=${RESOLVED%% *}
           SUBJECT=${RESOLVED#* }

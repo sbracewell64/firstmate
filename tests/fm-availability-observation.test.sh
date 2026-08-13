@@ -558,6 +558,17 @@ test_a_parseable_but_invalid_record_refuses_instead_of_reading_as_empty() {
       "availability $command must report canonical record validation failure"
   done
 
+  out=$(run_sweep "$HOME_DIR" "$BIN_DIR" ok); rc=$?
+  assert_contains "$out" "existing observation record is malformed" \
+    "the writer must report canonical validation failure for a wrong-schema record"
+  [ "$(jq -r '.schema' "$HOME_DIR/state/model-observation.json")" = wrong ] \
+    || fail "the writer mutated the wrong-schema record it was required to refuse"
+
+  out=$(run_route "$HOME_DIR" availability release vendor/only); rc=$?
+  expect_code 2 "$rc" "release must reject a wrong-schema record before mutating it"
+  [ "$(jq -r '.schema' "$HOME_DIR/state/model-observation.json")" = wrong ] \
+    || fail "retirement mutated the wrong-schema record it was required to refuse"
+
   # The control that makes the eight above mean something: a record that
   # SATISFIES the contract is still read, so this is validation and not a
   # blanket refusal.

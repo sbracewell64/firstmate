@@ -325,7 +325,7 @@ fm_availability_record_path() {  # [<state-dir>]
 # crossed in the first place.
 fm_availability_record_write() {
   local state=$1 model=$2 observation=$3 shape=$4 reader=$5 detail=$6 latency=$7 at=$8 gap=${9:-}
-  local file tmp latency_json
+  local file tmp latency_json models
   file=$(fm_availability_record_path "$state")
   command -v jq >/dev/null 2>&1 || { echo "jq is required to record a model observation" >&2; return 1; }
   if ! fm_availability_to_verify_result "$observation" >/dev/null; then
@@ -358,10 +358,12 @@ fm_availability_record_write() {
   mkdir -p "$(dirname "$file")" || return 1
   local current
   if [ -f "$file" ]; then
-    current=$(jq -c . "$file" 2>/dev/null) || {
+    models=$(fm_availability_record_models "$state") || {
       echo "existing observation record is malformed: $file" >&2
       return 1
     }
+    current=$(jq -cn --arg schema "$FM_AVAIL_OBSERVATION_SCHEMA" \
+      --argjson models "$models" '{schema:$schema, models:$models}') || return 1
   else
     current="{\"schema\":\"$FM_AVAIL_OBSERVATION_SCHEMA\",\"models\":{}}"
   fi
@@ -450,7 +452,7 @@ fm_availability_gap_block() {
 # letting a release clear it would turn "repair observability" back into "work
 # around uncertainty" - the exact substitution this whole path exists to refuse.
 fm_availability_record_retire() {  # <state-dir> <observation> <subject>
-  local state=$1 observation=$2 subject=$3 file tmp removed
+  local state=$1 observation=$2 subject=$3 file tmp removed models
   file=$(fm_availability_record_path "$state")
   [ -f "$file" ] || return 0
   command -v jq >/dev/null 2>&1 || { echo "jq is required to retire an observation" >&2; return 1; }
@@ -460,18 +462,20 @@ fm_availability_record_retire() {  # <state-dir> <observation> <subject>
   fi
   # A model key matches exactly; a provider matches every key in its namespace,
   # which is what a provider-scoped release is asking for.
-  removed=$(jq -r --arg s "$subject" --arg o "$observation" '
-    (.models // {}) | to_entries
+  models=$(fm_availability_record_models "$state") || return 1
+  removed=$(printf '%s' "$models" | jq -r --arg s "$subject" --arg o "$observation" '
+    to_entries
     | map(select(.value.observation == $o and (.key == $s or (.key | startswith($s + "/")))))
-    | .[].key' "$file" 2>/dev/null) || return 1
+    | .[].key' 2>/dev/null) || return 1
   [ -n "$removed" ] || return 0
   tmp=$(mktemp "$file.XXXXXX") || return 1
   chmod 600 "$tmp" 2>/dev/null || true
-  if ! jq --arg s "$subject" --arg o "$observation" '
-      .models = ((.models // {})
-        | with_entries(select((.value.observation == $o
-              and (.key == $s or (.key | startswith($s + "/")))) | not)))
-    ' "$file" > "$tmp" 2>/dev/null; then
+  if ! printf '%s' "$models" | jq --arg schema "$FM_AVAIL_OBSERVATION_SCHEMA" \
+      --arg s "$subject" --arg o "$observation" '
+      {schema:$schema,
+       models:(with_entries(select((.value.observation == $o
+          and (.key == $s or (.key | startswith($s + "/")))) | not)))}
+    ' > "$tmp" 2>/dev/null; then
     rm -f "$tmp"
     echo "could not retire the observation record entry" >&2
     return 1
