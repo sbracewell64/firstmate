@@ -80,6 +80,14 @@ if [ -n "${FM_ROUTE_LIB_SOURCED:-}" ]; then
 fi
 FM_ROUTE_LIB_SOURCED=1
 
+# Reuse the fleet's portable lock owner rather than introducing a second lock
+# implementation or a platform-specific flock dependency. fm-spawn.sh already
+# sources this library, so only the standalone route command needs this import.
+if ! declare -F fm_lock_acquire_wait >/dev/null 2>&1; then
+  # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
+  . "$(dirname "${BASH_SOURCE[0]}")/fm-wake-lib.sh"
+fi
+
 # The availability record's only schema, and the closed state vocabulary it
 # accepts. Every state is one a `_failover.conditions.*.sets` value names, so a
 # recorded hold always traces back to a condition the policy defines. An
@@ -146,6 +154,12 @@ fm_route_health_path() {  # [<state-dir>]
   local st=${1:-}
   [ -n "$st" ] || st="${STATE:-${FM_STATE_OVERRIDE:-${FM_HOME:-.}/state}}"
   printf '%s\n' "$st/model-health.json"
+}
+
+# The writer lock is beside the record, so every process that names this
+# canonical record resolves the same portable lock regardless of its caller.
+fm_route_health_lock_path() {  # [<state-dir>]
+  printf '%s.lock\n' "$(fm_route_health_path "${1:-}")"
 }
 
 # True when this home's dispatch config carries at least one route that names an
@@ -723,41 +737,138 @@ fm_route_health_active() {  # [<state-dir>] [<now-epoch>]
 # touches rules, floors, or pools, because a model that keeps failing is
 # unavailable rather than demoted.
 fm_route_health_write() {
-  local state=$1 scope=$2 subject=$3 hold=$4 expires=${5:-} evidence=${6:-} file tmp now current expires_json
+  local state=$1 scope=$2 subject=$3 hold=$4 expires=${5:-} evidence=${6:-} release_config=${7:-}
+  local file lock tmp now current updated expires_json target_exists recorded_scope resolved rc=0
   file=$(fm_route_health_path "$state")
   command -v jq >/dev/null 2>&1 || { echo "jq is required to record model availability" >&2; return 1; }
   mkdir -p "$(dirname "$file")" || return 1
-  now=$(date -u +%s)
   expires_json=null
   [ -z "$expires" ] || expires_json=$expires
-  case "$scope" in model|provider) ;; *) echo "unknown availability scope: $scope" >&2; return 1 ;; esac
+  case "$scope" in
+    model|provider) ;;
+    '') [ -z "$hold" ] && [ -n "$release_config" ] \
+          || { echo "unknown availability scope: $scope" >&2; return 1; } ;;
+    *) echo "unknown availability scope: $scope" >&2; return 1 ;;
+  esac
   if [ -n "$hold" ] && ! fm_route_health_state_known "$hold"; then
     echo "$FM_ROUTE_TOKEN_HEALTH_STATE: '$hold' is not an availability state; the vocabulary is closed to the states the policy's failover conditions set. One of: $(fm_route_health_states_oneline)" >&2
     return 1
   fi
-  if [ -f "$file" ]; then
-    current=$(jq -c . "$file" 2>/dev/null) || { echo "existing availability record is malformed: $file" >&2; return 1; }
-  else
-    current="{\"schema\":\"$FM_ROUTE_HEALTH_SCHEMA\",\"models\":{},\"providers\":{}}"
-  fi
-  tmp=$(mktemp "$file.XXXXXX") || return 1
-  chmod 600 "$tmp" 2>/dev/null || true
-  if ! printf '%s' "$current" | jq \
-      --arg schema "$FM_ROUTE_HEALTH_SCHEMA" --arg scope "${scope}s" --arg subject "$subject" \
-      --arg hold "$hold" --arg evidence "$evidence" \
-      --argjson now "$now" --argjson expires "$expires_json" '
-      .schema = $schema
-      | .models = (.models // {}) | .providers = (.providers // {})
-      | if ($hold | length) == 0
-        then .[$scope] |= del(.[$subject])
-        else .[$scope][$subject] = {state:$hold, until:$expires, recorded_at:$now, evidence:$evidence}
-        end
-    ' > "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    echo "could not update the availability record" >&2
+
+  # The exclusion covers the entire read/validate/modify/write transaction.
+  # Reading before this point is the lost-update defect: two writers can both
+  # derive a new document from one stale snapshot and the later atomic rename
+  # erases the first writer's independent binding.
+  lock=$(fm_route_health_lock_path "$state")
+  if ! fm_lock_acquire_wait "$lock"; then
+    echo "could not acquire the availability record lock: $lock" >&2
     return 1
   fi
-  mv -f "$tmp" "$file" || { rm -f "$tmp"; return 1; }
-  chmod 600 "$file" 2>/dev/null || true
-  return 0
+
+  # Every path below releases the lock before returning. A stale lock left by an
+  # interrupted process is reclaimed by the portable lock owner on its next
+  # acquisition; the record itself remains either the old document or the
+  # completed atomic replacement.
+  now=$(date -u +%s) || { rc=1; now=0; }
+  if [ "$rc" -eq 0 ] && ! fm_route_health_active "$state" "$now" >/dev/null 2>&1; then
+    echo "existing availability record could not be validated: $file" >&2
+    rc=1
+  fi
+  if [ "$rc" -eq 0 ]; then
+    if [ -f "$file" ]; then
+      current=$(jq -c . "$file" 2>/dev/null) || {
+        echo "existing availability record is malformed: $file" >&2
+        rc=1
+      }
+    else
+      current="{\"schema\":\"$FM_ROUTE_HEALTH_SCHEMA\",\"models\":{},\"providers\":{}}"
+    fi
+  fi
+
+  updated=
+  if [ "$rc" -eq 0 ]; then
+    if [ -z "$hold" ]; then
+      if [ -n "$release_config" ]; then
+        recorded_scope=$(printf '%s' "$current" | jq -r --arg subject "$subject" '
+          if ((.models // {}) | has($subject)) then "model"
+          elif ((.providers // {}) | has($subject)) then "provider"
+          else empty end' 2>/dev/null) || {
+          echo "could not observe the availability record binding" >&2
+          rc=1
+        }
+        if [ "$rc" -eq 0 ] && [ -n "$recorded_scope" ]; then
+          [ -z "$scope" ] || [ "$scope" = "$recorded_scope" ] || {
+            echo "$subject is recorded as a $recorded_scope hold, not a $scope one" >&2
+            rc=1
+          }
+          scope=$recorded_scope
+        elif [ "$rc" -eq 0 ]; then
+          resolved=$(fm_route_hold_subject "$release_config" "$scope" "$subject") || rc=1
+          if [ "$rc" -eq 0 ]; then
+            scope=${resolved%% *}
+            subject=${resolved#* }
+          fi
+        fi
+      fi
+    fi
+    if [ "$rc" -eq 0 ] && [ -z "$hold" ]; then
+      if ! target_exists=$(printf '%s' "$current" | jq -r --arg scope "${scope}s" --arg subject "$subject" \
+        '((.[$scope] // {}) | has($subject))' 2>/dev/null); then
+        echo "could not observe the availability record binding" >&2
+        rc=1
+      elif [ "$target_exists" = true ]; then
+        updated=$(printf '%s' "$current" | jq -c \
+          --arg scope "${scope}s" --arg subject "$subject" \
+          '.[$scope] |= del(.[$subject])' 2>/dev/null) || {
+          echo "could not update the availability record" >&2
+          rc=1
+        }
+      fi
+      # Releasing an absent binding is an idempotent no-op. In particular, it
+      # does not create an empty record merely to report that nothing changed.
+    else
+      updated=$(printf '%s' "$current" | jq -c \
+        --arg schema "$FM_ROUTE_HEALTH_SCHEMA" --arg scope "${scope}s" --arg subject "$subject" \
+        --arg hold "$hold" --arg evidence "$evidence" \
+        --argjson now "$now" --argjson expires "$expires_json" '
+        .schema = $schema
+        | .models = (.models // {}) | .providers = (.providers // {})
+        | .[$scope][$subject] = ((.[$scope][$subject] // {})
+            + {state:$hold, until:$expires, recorded_at:$now, evidence:$evidence})
+      ' 2>/dev/null) || {
+        echo "could not update the availability record" >&2
+        rc=1
+      }
+    fi
+  fi
+
+  if [ "$rc" -eq 0 ] && [ -n "$updated" ]; then
+    tmp=$(mktemp "$file.XXXXXX") || rc=1
+    if [ "$rc" -eq 0 ]; then
+      chmod 600 "$tmp" 2>/dev/null || true
+      if ! printf '%s\n' "$updated" > "$tmp"; then
+        rm -f -- "$tmp"
+        tmp=
+        rc=1
+      fi
+    fi
+    if [ "$rc" -eq 0 ]; then
+      chmod 600 "$tmp" 2>/dev/null || rc=1
+    fi
+    if [ "$rc" -eq 0 ] && ! mv -f -- "$tmp" "$file"; then
+      rm -f -- "$tmp"
+      tmp=
+      rc=1
+    fi
+    [ -z "$tmp" ] || rm -f -- "$tmp"
+    [ "$rc" -eq 0 ] && chmod 600 "$file" 2>/dev/null || true
+  fi
+
+  if ! fm_lock_release "$lock"; then
+    rc=1
+  fi
+  if [ "$rc" -eq 0 ] && [ -z "$hold" ] && [ -n "$release_config" ]; then
+    printf '%s %s\n' "$scope" "$subject"
+  fi
+  return "$rc"
 }

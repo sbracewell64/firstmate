@@ -344,23 +344,16 @@ case "$CMD" in
           ''|model|provider) ;;
           *) die "--scope takes model or provider, not '$HOLD_SCOPE'" ;;
         esac
-        # A release resolves against what is actually recorded first, so a hold
-        # can always be cleared even after a config edit dropped its subject
-        # from every pool. A record that can be written and never cleared is a
-        # trap; clearing availability is always safe.
         SCOPE=
-        if [ "$SUB" = release ]; then
-          SCOPE=$(fm_route_hold_recorded_scope "$STATE" "$SUBJECT" || true)
-          [ -z "$SCOPE" ] || [ -z "$HOLD_SCOPE" ] || [ "$SCOPE" = "$HOLD_SCOPE" ] \
-            || die "$SUBJECT is recorded as a $SCOPE hold, not a $HOLD_SCOPE one"
-        fi
-        if [ -z "$SCOPE" ]; then
+        if [ "$SUB" = hold ]; then
           RESOLVED=$(fm_route_hold_subject "$CONFIG" "$HOLD_SCOPE" "$SUBJECT") || exit 2
           SCOPE=${RESOLVED%% *}
           SUBJECT=${RESOLVED#* }
         fi
         if [ "$SUB" = release ]; then
-          fm_route_health_write "$STATE" "$SCOPE" "$SUBJECT" '' '' '' || exit 2
+          RESOLVED=$(fm_route_health_write "$STATE" "$HOLD_SCOPE" "$SUBJECT" '' '' '' "$CONFIG") || exit 2
+          SCOPE=${RESOLVED%% *}
+          SUBJECT=${RESOLVED#* }
           printf 'released %s %s\n' "$SCOPE" "$SUBJECT"
         else
           [ -n "$HOLD_STATE" ] || die "availability hold needs --state <$(fm_route_health_states_oneline)>"
