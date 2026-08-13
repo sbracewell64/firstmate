@@ -440,11 +440,13 @@ Enforcement applies to the next dispatch only; work already under way keeps the 
 
 A private, gitignored, mode-0600 record of which models and providers the fleet currently cannot reach.
 `bin/fm-route-lib.sh` is its only writer, through `bin/fm-route.sh availability hold|release`, and it writes availability alone: a model that keeps failing is recorded unavailable, never demoted, because demotion is a policy change that belongs in the routing config under review.
+Concurrent holds and releases are serialized as whole-record transactions, so each mutation starts from the latest valid record, changes only its named model or provider binding, and atomically replaces the private record without erasing an independent mutation.
 
 A hold names a model by default and is resolved against the configured pools exactly as a dispatch's `--model` is: a fully qualified name must be a pool entry, and a bare name must match exactly one.
 Holding a whole provider is asked for with `--scope provider`, and the provider must be one a pool entry names.
 Scope is never inferred from the presence of a slash, and a subject that could not remove any candidate is refused rather than recorded, so the command never reports a hold that silently does nothing.
 A release resolves against what is actually recorded first, so a hold can still be cleared after a config edit dropped its subject from every pool.
+Releasing a binding that is already absent is an idempotent no-op and does not create an empty availability record.
 
 ```json
 {

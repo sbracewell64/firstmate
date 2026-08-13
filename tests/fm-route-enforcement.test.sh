@@ -574,6 +574,11 @@ for arg in "\$@"; do
     */model-health.json)
       if [ "\${FM_HEALTH_RACE_BARRIER:-0}" = 1 ] &&
          [ "\${1:-}" = -c ] && [ "\${2:-}" = . ]; then
+        args=("\$@")
+        last=\$((\${#args[@]} - 1))
+        snapshot="\$FM_HEALTH_RACE_DIR/snapshot.\$FM_HEALTH_RACE_ID"
+        cp -- "\${args[\$last]}" "\$snapshot"
+        args[\$last]="\$snapshot"
         : > "\$FM_HEALTH_RACE_DIR/raw.\$FM_HEALTH_RACE_ID"
         deadline=\$((SECONDS + 10))
         while [ ! -e "\$FM_HEALTH_RACE_DIR/raw.one" ] ||
@@ -581,6 +586,7 @@ for arg in "\$@"; do
           [ "\$SECONDS" -lt "\$deadline" ] || exit 98
           sleep 0.01
         done
+        exec "$real_jq" "\${args[@]}"
       else
         sleep 0.2
       fi
