@@ -124,6 +124,8 @@ test_unrecordable_bound_leaves_no_active_wait() {
   assert_present "$capacity" "the fixture did not create a deferral record to stop"
   chmod 444 "$capacity"
   stub="$TMP_ROOT/unrecordable/fail-attempt"
+  # Preserve the generated stub's positional parameter for its own runtime.
+  # shellcheck disable=SC2016
   printf '#!/bin/sh\ncase "$1" in show) exit 1 ;; esac\nprintf "simulated count write failure\\n" >&2\nexit 1\n' > "$stub"
   chmod +x "$stub"
   rc=0
