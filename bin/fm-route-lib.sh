@@ -508,19 +508,16 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
 # status exists for the same reason: the record that carries a broken reader's
 # exclusions fails independently of the one that carries holds.
 fm_route_decision() {
-  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} file holds unobserved unavailable now
+  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-}
+  local file holds exclusions unobserved unavailable now
   file=$(fm_route_config_path "$cfg")
   [ -f "$file" ] || return 2
   command -v jq >/dev/null 2>&1 || return 2
   now=$(date -u +%s)
   holds=$(fm_route_health_active "$state" "$now") || return 3
-  # Both exclusions come from the same record and are read through their own
-  # named seams, so a mutation control that replaces either seam changes what
-  # the decision sees. Either read failing is status 4: the record that carries
-  # them could not be established, and which of the two was being asked for does
-  # not change the repair.
-  unobserved=$(fm_availability_unobserved_active "$state") || return 4
-  unavailable=$(fm_availability_unavailable_active "$state") || return 4
+  exclusions=$(fm_availability_active_exclusions "$state") || return 4
+  unobserved=$(printf '%s' "$exclusions" | jq -c '.unobserved') || return 4
+  unavailable=$(printf '%s' "$exclusions" | jq -c '.unavailable') || return 4
   jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" \
      --argjson holds "$holds" --argjson unobserved "$unobserved" \
      --argjson unavailable "$unavailable" \

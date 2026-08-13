@@ -979,7 +979,9 @@ fm_availability_hold_state() { printf "model_unavailable\n"; }')
 
   # Collapse B, the CONSUMER: routing stops excluding on a failed observation,
   # which is the "make uncertainty permissive" fix the commission forbids.
-  real=$(make_collapsed_bin consumer 'fm_availability_unobserved_active() { printf "%s\n" "{\"models\":{}}"; }')
+  real=$(make_collapsed_bin consumer 'fm_availability_active_exclusions() {
+  printf "%s\n" "{\"unobserved\":{\"models\":{}},\"unavailable\":{\"models\":{}}}"
+}')
   rec=$(make_home recurrence-consumer); read_home "$rec"
   recurrence_probe_producer "$ROOT/bin" "$HOME_DIR" \
     || fail "the fixture must record a failed observation before the consumer collapse is meaningful"
@@ -1017,13 +1019,53 @@ fm_availability_hold_state() { printf "model_unavailable\n"; }')
     || fail "the fixture must record an established unavailability"
   recurrence_probe_unavailable_enforced "$ROOT/bin" "$HOME_DIR" \
     || fail "the paired-records probe must pass against the shipped router"
-  mutant=$(make_collapsed_bin unheld 'fm_availability_unavailable_active() { printf "%s\n" "{\"models\":{}}"; }')
+  mutant=$(make_collapsed_bin unheld 'fm_availability_active_exclusions() {
+  local models
+  models=$(fm_availability_record_models "${1:-}") || return 1
+  printf "%s" "$models" | jq -c --arg u "$FM_AVAIL_UNOBSERVABLE" \
+    "{unobserved:{models:with_entries(select(.value.observation == \$u))},unavailable:{models:{}}}"
+}')
   rec=$(make_home recurrence-unheld-mutant); read_home "$rec"
   env -u FM_ROOT_OVERRIDE PATH="$BIN_DIR:/usr/bin:/bin:/usr/local/bin" FM_HOME="$HOME_DIR" \
       FAKE_PI_MODE=refused "$ROOT/bin/fm-model-verify.sh" --model vendor/only >/dev/null 2>&1
   if recurrence_probe_unavailable_enforced "$mutant" "$HOME_DIR"; then
     fail "the paired-records probe stayed green while an observed-unavailable candidate with no hold was eligible, so it is not red-capable"
   fi
+
+  real=$(make_collapsed_bin snapshot-real 'fm_availability_record_models() {
+  local count_file="${1:-}/read-count" count
+  count=$(cat "$count_file")
+  count=$((count + 1))
+  printf "%s\n" "$count" > "$count_file"
+  printf "{}\n"
+}')
+  rec=$(make_home recurrence-snapshot-real); read_home "$rec"
+  printf '0\n' > "$HOME_DIR/state/read-count"
+  recurrence_probe_consumer "$real" "$HOME_DIR" >/dev/null 2>&1 || true
+  [ "$(cat "$HOME_DIR/state/read-count")" = 1 ] \
+    || fail "one routing decision did not read exactly one observation snapshot"
+
+  mutant=$(make_collapsed_bin torn-read 'fm_availability_active_exclusions() {
+  local unobserved unavailable
+  unobserved=$(fm_availability_unobserved_active "${1:-}") || return 1
+  unavailable=$(fm_availability_unavailable_active "${1:-}") || return 1
+  jq -cn --argjson unobserved "$unobserved" --argjson unavailable "$unavailable" \
+    "{unobserved:\$unobserved,unavailable:\$unavailable}"
+}')
+  rec=$(make_home recurrence-torn-read); read_home "$rec"
+  printf '0\n' > "$HOME_DIR/state/read-count"
+  printf '%s\n' '{"schema":"fm-model-observation.v1","models":{}}' \
+    > "$HOME_DIR/state/model-observation.json"
+  printf '\n%s\n' 'fm_availability_record_models() {
+  local count_file="${1:-}/read-count" count
+  count=$(cat "$count_file")
+  count=$((count + 1))
+  printf "%s\n" "$count" > "$count_file"
+  printf "{}\n"
+}' >> "$mutant/fm-availability-lib.sh"
+  recurrence_probe_consumer "$mutant" "$HOME_DIR" >/dev/null 2>&1 || true
+  [ "$(cat "$HOME_DIR/state/read-count")" = 2 ] \
+    || fail "the torn-read mutation did not perform two observation reads, so this control proved nothing"
 
   # Collapse E, EXHAUSTIVE CONSUMER. The fault is injected on BOTH sides - the
   # map returns a value the type does not define - and only the consumer
@@ -1048,7 +1090,7 @@ fm_availability_case() {
   fi
   [ "$(observation_of "$HOME_DIR" vendor/only)" = AVAILABLE ] \
     || fail "the controlled collapse did not take effect, so this control proved nothing"
-  pass "the recurrence probe turns red when any of the six permitting mechanisms is reintroduced"
+  pass "the recurrence probe turns red when any of the seven permitting mechanisms is reintroduced"
 }
 
 test_every_probe_shape_maps_to_exactly_one_of_three_observations

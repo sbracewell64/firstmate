@@ -640,13 +640,21 @@ fm_availability_observed() {  # <observation> [<state-dir>]
     '{models: with_entries(select(.value.observation == $w))}' 2>/dev/null || return 1
 }
 
+fm_availability_active_exclusions() {  # [<state-dir>]
+  local models
+  models=$(fm_availability_record_models "${1:-}") || return 1
+  printf '%s' "$models" | jq -c \
+    --arg unobserved "$FM_AVAIL_UNOBSERVABLE" \
+    --arg unavailable "$FM_AVAIL_UNAVAILABLE" '
+      {unobserved: {models: with_entries(select(.value.observation == $unobserved))},
+       unavailable: {models: with_entries(select(.value.observation == $unavailable))}}
+    ' 2>/dev/null || return 1
+}
+
 # fm_availability_unobserved_active [<state-dir>]
 # Every model whose LAST attempted observation could not observe, for the
 # routing decision to exclude on.
 #
-# This function is one of the two seams routing reads exclusions through.
-# Nothing else in the decision path consults the observation record, so a change
-# to what excludes is a change here or in its sibling below.
 fm_availability_unobserved_active() {  # [<state-dir>]
   fm_availability_observed "$FM_AVAIL_UNOBSERVABLE" "${1:-}"
 }
