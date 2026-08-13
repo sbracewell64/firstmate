@@ -40,11 +40,16 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `MODEL_PRICE: <model> ... no longer zero` - an allowlisted model is no longer free at its provider, which is the exposure a name-only allowlist cannot see.
   Suspend that route immediately, then re-verify its cost class before it is routed to again.
 - `MODEL_PRICE: <model> price drifted ...` or `... catalogue source is unreadable` - re-verify the cost class and update the recorded price, or repair the declared catalogue path so the check stops being blind.
-- `MODEL_VERIFY: <model> ...` - a live probe ran and answered negatively. Load `model-onboarding` and read the shape before reacting: a provider refusal means this account can never use that model and it must leave routing. The probe has already recorded the hold through the supported writer, so the decision left to firstmate is a routing one, not a bookkeeping one.
-- `MODEL_VERIFY: the availability record holds <scope> <subject> under '<state>' ...` - an entry written by something other than the supported writer is excluding a candidate under a state no policy defines. It keeps failing closed until released, and the line carries the exact `bin/fm-route.sh availability release` command that repairs it. Run that command rather than editing the record.
+- `MODEL_VERIFY: <model> ...` - a live probe ran and answered negatively.
+  Load `model-onboarding` and read the shape before reacting: a provider refusal means this account can never use that model and it must leave routing.
+  The probe has already recorded the hold through the supported writer, so the decision left to firstmate is a routing one, not a bookkeeping one.
+- `MODEL_VERIFY: the availability record holds <scope> <subject> under '<state>' ...` - an entry written by something other than the supported writer is excluding a candidate under a state no policy defines.
+  It keeps failing closed until released, and the line carries the exact `bin/fm-route.sh availability release` command that repairs it.
+  Run that command rather than editing the record.
 - `TOOLING_GAP: <model> could not be observed by <reader> ...` - the reader that answers whether a model is reachable is BROKEN, so that candidate is excluded from routing and no release will restore it.
   This is not a fact about the model and must never be reported to the captain as one: the model may be perfectly healthy, and a single-candidate route blocked this way is correct behaviour rather than a routing bug to work around.
-  The repair item is already filed: the sweep files one per candidate through this home's backlog backend and the line's `item=` names it, so dispatch that id with `--reason-code TOOLING_GAP --tooling-gap-item <id>` rather than filing a second one. An `item=UNFILED` means the backlog backend could not be used, and the recorded status says which - file it by hand in that case only.
+  The repair item is already filed: the sweep files one per candidate through this home's backlog backend and the line's `item=` names it, so dispatch that id with `--reason-code TOOLING_GAP --tooling-gap-item <id>` rather than filing a second one.
+  An `item=UNFILED` means the backlog backend could not be used, and the recorded status says which - file it by hand in that case only.
   Read `bin/fm-route.sh availability gaps` for the recorded evidence - the reader, the failure class, the evidence, and the routes it is blocking - rather than rediscovering the diagnosis.
   Never make the exclusion permissive to unblock a dispatch; repairing observability is the only fix, and `model-onboarding` owns whether the model itself should still be routed.
 - `ADMISSION_CONTROL: invalid config/crew-dispatch.json _scheduling.admission_control - <reason>` - the optional fleet-admission policy exists but failed schema validation, so the fleet's admission layer cannot resolve a band.
