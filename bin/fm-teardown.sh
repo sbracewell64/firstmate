@@ -706,6 +706,7 @@ retire_attempt_record() {
 # the attempt count there is nothing to preserve for a later retry, because the
 # deferral describes a dispatch that never happened.
 retire_capacity_deferral() {
+  [ "$ROLE" != secondmate ] || return 0
   [ -x "$FM_ROOT/bin/fm-capacity-retry.sh" ] || return 0
   "$FM_ROOT/bin/fm-capacity-retry.sh" release "$ID" \
     || echo "warning: could not retire the capacity deferral for $ID" >&2
