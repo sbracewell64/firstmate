@@ -19,7 +19,7 @@ set -u
 . "$ROOT/bin/fm-trace-context-lib.sh"
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
-TMP_ROOT=$(fm_test_tmproot fm-remote-trace-context)
+TMP_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/fm-remote-trace-context.XXXXXX")
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
 PARENT="$TMP_ROOT/parent"
@@ -33,7 +33,24 @@ TMUX_LOG="$TMP_ROOT/remote-tmux.log"
 TMUX_STATE="$TMP_ROOT/remote-tmux.state"
 CLAIMS="$TMP_ROOT/claims"
 mkdir -p "$PARENT/data" "$PARENT/state" "$PARENT/config" "$PARENT/projects" "$REMOTE_ROOT" "$CLAIMS"
-trap 'FM_HOME="$PARENT" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true; if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then kill "$(cat "$TMP_ROOT/remote-jobs/worker.pid")" 2>/dev/null || true; fi; rm -rf -- "$TMP_ROOT"' EXIT
+cleanup() {
+  local attempt=0
+  FM_HOME="$PARENT" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" \
+    "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
+  fm_test_cleanup
+  while [ -e "$TMP_ROOT" ] && [ "$attempt" -lt 20 ]; do
+    rm -rf -- "$TMP_ROOT" 2>/dev/null || true
+    [ ! -e "$TMP_ROOT" ] || sleep 0.05
+    attempt=$((attempt + 1))
+  done
+}
+trap cleanup EXIT
+
+register_remote_worker() {
+  local worker_pid_file="$TMP_ROOT/remote-jobs/worker.pid"
+  [ -f "$worker_pid_file" ] || return 0
+  fm_test_reap "$(cat "$worker_pid_file")"
+}
 
 # The remote host's tracked code root is this branch, as a real git repository:
 # fm-on and the remote entrypoint both require the dispatched command to be
@@ -160,8 +177,10 @@ meta_traceparent() { sed -n 's/^traceparent=//p' "$1"; }
 # Provision and register the remote route from the captain-facing primary.
 FM_SECONDMATE_CHARTER='Own iOS delivery on the build Mac.' \
   FM_SECONDMATE_SCOPE='iOS implementation and Xcode validation' \
-  remote_env "$ROOT/bin/fm-remote-home-seed.sh" ios remote-mac "$REMOTE_ROOT" "$REMOTE_HOME" --no-projects >/dev/null \
-  || fail "remote seed did not provision the traced route"
+  remote_env "$ROOT/bin/fm-remote-home-seed.sh" ios remote-mac "$REMOTE_ROOT" "$REMOTE_HOME" --no-projects >/dev/null
+seed_rc=$?
+register_remote_worker
+[ "$seed_rc" -eq 0 ] || fail "remote seed did not provision the traced route"
 
 # --- disabled: the remote route must stay byte-identically untraced ----------
 freeze_parent_session
