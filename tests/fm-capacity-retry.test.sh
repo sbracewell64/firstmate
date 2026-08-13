@@ -26,7 +26,7 @@ test_resumes_onto_an_expressive_recovered_pool_member() {
   pass "resumes onto a recovered pool member that can express the route effort band"
 }
 
-test_route_inherited_effort_survives_policy_edit() {
+test_recorded_effort_survives_policy_edit() {
   local out cfg meta
   make_dispatch_home inherited-effort
   cfg="$HOME_DIR/config/crew-dispatch.json"
@@ -34,17 +34,17 @@ test_route_inherited_effort_survives_policy_edit() {
   out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0)" \
     inheritedtask "$OK_REPO" --mode no-mistakes --yolo off \
     --reason-code NL_RULE_CLASSIFICATION --harness codex \
-    --route R-SOLO --model vendor/large)
-  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not defer the route-inherited effort dispatch"
-  assert_grep "effort=medium" "$HOME_DIR/state/inheritedtask.capacity" "the resolved route effort was not persisted"
+    --route R-SOLO --model vendor/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the fixture did not defer the explicitly banded dispatch"
+  assert_grep "effort=medium" "$HOME_DIR/state/inheritedtask.capacity" "the stated route effort was not persisted"
   jq '._floors["F-MED"].effort_floor = "low"' "$cfg" > "$cfg.tmp" && mv "$cfg.tmp" "$cfg"
   out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
     run_retry "$HOME_DIR" "$(quota_record vendorq=95)" tick --id inheritedtask --force)
   meta="$HOME_DIR/state/inheritedtask.meta"
-  assert_present "$meta" "the inherited-effort dispatch did not resume after capacity returned"
-  assert_grep "effort=medium" "$meta" "the resumed dispatch changed its inherited effort after the policy edit"
-  pass "route-inherited effort survives a policy edit across deferral and resume"
+  assert_present "$meta" "the explicitly banded dispatch did not resume after capacity returned"
+  assert_grep "effort=medium" "$meta" "the resumed dispatch changed its recorded effort after the policy edit"
+  pass "recorded effort survives a policy edit across deferral and resume"
 }
 
 test_uncounted_deferral_fails_closed() {
@@ -426,7 +426,7 @@ test_concurrent_ticks_claim_one_retry_owner() {
 }
 
 test_resumes_onto_an_expressive_recovered_pool_member
-test_route_inherited_effort_survives_policy_edit
+test_recorded_effort_survives_policy_edit
 test_uncounted_deferral_fails_closed
 test_same_band_substitution_is_required
 test_unrecordable_bound_leaves_no_active_wait
