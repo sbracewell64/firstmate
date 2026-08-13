@@ -550,6 +550,238 @@ test_an_ambiguous_failover_anchor_is_refused_rather_than_resolved() {
   pass "an ambiguous failover anchor is refused naming every entry it matched, never resolved to the first"
 }
 
+health_write_process() {  # <state> <fakebin> <id> <disable-lock> <barrier> <scope> <subject> <hold> <evidence>
+  local state=$1 fakebin=$2 id=$3 disable=$4 barrier=$5 scope=$6 subject=$7 hold=$8 evidence=$9
+  FM_HEALTH_RACE_DIR="$state/race" FM_HEALTH_RACE_ID="$id" \
+    FM_HEALTH_RACE_BARRIER="$barrier" PATH="$fakebin:$PATH" \
+    bash -c '
+      . "$1/bin/fm-route-lib.sh"
+      if [ "$3" = 1 ]; then
+        fm_lock_acquire_wait() { :; }
+      fi
+      fm_route_health_write "$2" "$4" "$5" "$6" "" "$7"
+    ' _ "$ROOT" "$state" "$disable" "$scope" "$subject" "$hold" "$evidence"
+}
+
+make_health_jq() {  # <fakebin>
+  local fakebin=$1 real_jq
+  real_jq=$(command -v jq) || fail "jq is required for the availability mutation fixture"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/jq" <<SH
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  case "\$arg" in
+    */model-health.json)
+      if [ "\${FM_HEALTH_RACE_BARRIER:-0}" = 1 ] &&
+         [ "\${1:-}" = -c ] && [ "\${2:-}" = . ]; then
+        : > "\$FM_HEALTH_RACE_DIR/raw.\$FM_HEALTH_RACE_ID"
+        deadline=\$((SECONDS + 10))
+        while [ ! -e "\$FM_HEALTH_RACE_DIR/raw.one" ] ||
+              [ ! -e "\$FM_HEALTH_RACE_DIR/raw.two" ]; do
+          [ "\$SECONDS" -lt "\$deadline" ] || exit 98
+          sleep 0.01
+        done
+      else
+        sleep 0.2
+      fi
+      break
+      ;;
+  esac
+done
+exec "$real_jq" "\$@"
+SH
+  chmod 700 "$fakebin/jq"
+}
+
+wait_health_pair() {  # <pid> <pid> <label>
+  local first=$1 second=$2 label=$3
+  fm_test_reap "$first" "$second"
+  wait "$first" || fail "$label: first mutation failed"
+  wait "$second" || fail "$label: second mutation failed"
+}
+
+test_availability_health_writes_merge_concurrent_independent_bindings() {
+  local fixture state fakebin p1 p2 keys
+  fixture="$TMP_ROOT/health-merge"
+  state="$fixture/state"
+  fakebin="$fixture/fakebin"
+  mkdir -p "$state/race"
+  printf '%s\n' '{"schema":"fm-model-health.v1","models":{},"providers":{}}' > "$state/model-health.json"
+  make_health_jq "$fakebin"
+  health_write_process "$state" "$fakebin" one 0 0 model vendor/one rate_limited first >"$fixture/one.out" 2>&1 & p1=$!
+  health_write_process "$state" "$fakebin" two 0 0 model vendor/two auth_failure second >"$fixture/two.out" 2>&1 & p2=$!
+  wait_health_pair "$p1" "$p2" "serialized independent holds"
+  keys=$(jq -r '[.models | keys[]] | join(",")' "$state/model-health.json")
+  [ "$keys" = 'vendor/one,vendor/two' ] \
+    || fail "serialized concurrent holds lost an independent binding: $keys"
+  [ "$(jq -r '.models["vendor/one"].evidence' "$state/model-health.json")" = first ] \
+    || fail "the first binding's evidence was not preserved"
+  [ "$(jq -r '.models["vendor/two"].evidence' "$state/model-health.json")" = second ] \
+    || fail "the second binding's evidence was not preserved"
+
+  # The recurrence control removes only the serialization seam. Its raw reads
+  # rendezvous before either snapshot is released, so a green result would prove
+  # the fixture cannot observe the lost-update mechanism it claims to test.
+  fixture="$TMP_ROOT/health-merge-mutant"
+  state="$fixture/state"
+  fakebin="$fixture/fakebin"
+  mkdir -p "$state/race"
+  printf '%s\n' '{"schema":"fm-model-health.v1","models":{},"providers":{}}' > "$state/model-health.json"
+  make_health_jq "$fakebin"
+  health_write_process "$state" "$fakebin" one 1 1 model vendor/one rate_limited first >"$fixture/one.out" 2>&1 & p1=$!
+  health_write_process "$state" "$fakebin" two 1 1 model vendor/two auth_failure second >"$fixture/two.out" 2>&1 & p2=$!
+  fm_test_reap "$p1" "$p2"
+  wait "$p1" || fail "the serialization mutation control's first writer failed"
+  wait "$p2" || fail "the serialization mutation control's second writer failed"
+  keys=$(jq -r '[.models | keys[]] | join(",")' "$state/model-health.json")
+  [ "$keys" != 'vendor/one,vendor/two' ] \
+    || fail "bypassing serialization unexpectedly preserved both bindings"
+  pass "concurrent independent availability mutations merge, and the unserialized recurrence control turns red"
+}
+
+test_availability_health_writes_serialize_overlapping_hold_and_release() {
+  local fixture state fakebin p1 p2
+  fixture="$TMP_ROOT/health-hold-release"
+  state="$fixture/state"
+  fakebin="$fixture/fakebin"
+  mkdir -p "$state/race"
+  cat > "$state/model-health.json" <<'JSON'
+{"schema":"fm-model-health.v1","models":{
+  "vendor/remove":{"state":"auth_failure","until":null,"recorded_at":1,"evidence":"old"},
+  "vendor/keep":{"state":"rate_limited","until":99,"recorded_at":2,"evidence":"keep"}
+},"providers":{}}
+JSON
+  make_health_jq "$fakebin"
+  health_write_process "$state" "$fakebin" one 0 0 model vendor/add rate_limited add >"$fixture/one.out" 2>&1 & p1=$!
+  health_write_process "$state" "$fakebin" two 0 0 model vendor/remove '' '' >"$fixture/two.out" 2>&1 & p2=$!
+  wait_health_pair "$p1" "$p2" "serialized hold and release"
+  jq -e '.models["vendor/add"].state == "rate_limited" and
+         (.models["vendor/remove"] | not) and
+         .models["vendor/keep"].evidence == "keep"' "$state/model-health.json" >/dev/null \
+    || fail "overlapping hold and release did not preserve both lawful mutations"
+  pass "overlapping hold and release operations serialize without erasing another binding"
+}
+
+test_availability_health_writer_keeps_same_binding_conflicts_atomic() {
+  local fixture state fakebin p1 p2 state_value evidence
+  fixture="$TMP_ROOT/health-same-binding"
+  state="$fixture/state"
+  fakebin="$fixture/fakebin"
+  mkdir -p "$state/race"
+  printf '%s\n' '{"schema":"fm-model-health.v1","models":{},"providers":{}}' > "$state/model-health.json"
+  make_health_jq "$fakebin"
+  health_write_process "$state" "$fakebin" one 0 0 model vendor/same rate_limited first >"$fixture/one.out" 2>&1 & p1=$!
+  health_write_process "$state" "$fakebin" two 0 0 model vendor/same auth_failure second >"$fixture/two.out" 2>&1 & p2=$!
+  wait_health_pair "$p1" "$p2" "serialized same-binding conflict"
+  state_value=$(jq -r '.models["vendor/same"].state' "$state/model-health.json")
+  evidence=$(jq -r '.models["vendor/same"].evidence' "$state/model-health.json")
+  { [ "$state_value" = rate_limited ] && [ "$evidence" = first ]; } ||
+    { [ "$state_value" = auth_failure ] && [ "$evidence" = second ]; } ||
+    fail "same-binding conflict produced a mixed or incomplete entry: state=$state_value evidence=$evidence"
+  pass "concurrent same-binding holds resolve to one complete serialized update"
+}
+
+test_availability_health_writer_preserves_identity_and_freshness_fields() {
+  local fixture state before after
+  fixture="$TMP_ROOT/health-fields"
+  state="$fixture/state"
+  mkdir -p "$state"
+  cat > "$state/model-health.json" <<'JSON'
+{"schema":"fm-model-health.v1","models":{
+  "vendor/existing":{"state":"rate_limited","until":99,"recorded_at":11,"evidence":"source-a","provider":"vendor","pool":"pool-a","route":"R-MED","binding":"vendor/existing","evidence_source":"provider-probe","observed_at":"2026-08-13T00:00:00Z","freshness_seconds":600},
+  "vendor/untouched":{"state":"auth_failure","until":null,"recorded_at":12,"evidence":"source-b","provider":"vendor","pool":"pool-b","route":"R-LOW"}
+},"providers":{
+  "vendor":{"state":"provider_unavailable","until":null,"recorded_at":13,"evidence":"provider-source","provider":"vendor","pool":"pool-a","route":"R-MED","evidence_source":"provider-probe","observed_at":"2026-08-13T00:00:00Z","freshness_seconds":900}
+}}
+JSON
+  before=$(jq -c '.models["vendor/untouched"]' "$state/model-health.json")
+  health_write_process "$state" "$fixture/empty-fakebin" one 0 0 model vendor/new rate_limited new >/dev/null 2>&1 \
+    || fail "adding a binding failed"
+  after=$(jq -c '.models["vendor/untouched"]' "$state/model-health.json")
+  [ "$before" = "$after" ] || fail "an independent mutation changed an untouched binding"
+  health_write_process "$state" "$fixture/empty-fakebin" one 0 0 model vendor/existing auth_failure replacement >/dev/null 2>&1 \
+    || fail "updating an existing binding failed"
+  jq -e '.models["vendor/existing"] |
+         .state == "auth_failure" and .evidence == "replacement" and
+         .provider == "vendor" and .pool == "pool-a" and .route == "R-MED" and
+         .binding == "vendor/existing" and .evidence_source == "provider-probe" and
+         .observed_at == "2026-08-13T00:00:00Z" and .freshness_seconds == 600' \
+    "$state/model-health.json" >/dev/null \
+    || fail "updating a binding discarded its identity, evidence source, or freshness fields"
+  health_write_process "$state" "$fixture/empty-fakebin" one 0 0 provider vendor provider_unavailable provider-replacement >/dev/null 2>&1 \
+    || fail "updating a provider binding failed"
+  jq -e '.providers.vendor |
+         .state == "provider_unavailable" and .evidence == "provider-replacement" and
+         .provider == "vendor" and .pool == "pool-a" and .route == "R-MED" and
+         .evidence_source == "provider-probe" and .freshness_seconds == 900' \
+    "$state/model-health.json" >/dev/null \
+    || fail "updating a provider binding discarded its identity or freshness fields"
+  pass "availability mutations preserve binding identity, evidence source, observation time, and freshness"
+}
+
+test_availability_health_writer_refuses_malformed_and_interrupted_updates() {
+  local fixture state fakebin real_mv before out rc
+  fixture="$TMP_ROOT/health-failures"
+  state="$fixture/state"
+  fakebin="$fixture/fakebin"
+  mkdir -p "$state" "$fakebin"
+  printf 'not json at all\n' > "$state/model-health.json"
+  before=$(cat "$state/model-health.json")
+  rc=0
+  out=$(health_write_process "$state" "$fakebin" one 0 0 model vendor/bad rate_limited bad 2>&1) || rc=$?
+  rc=${rc:-0}
+  expect_code 1 "$rc" "a malformed availability record must refuse mutation"
+  [ "$(cat "$state/model-health.json")" = "$before" ] \
+    || fail "a malformed availability record was overwritten"
+  [ ! -e "$state/model-health.json.lock" ] \
+    || fail "the availability lock was left behind after malformed-state refusal"
+
+  cat > "$state/model-health.json" <<'JSON'
+{"schema":"fm-model-health.v1","models":{"vendor/old":{"state":"auth_failure","until":null,"recorded_at":1,"evidence":"old"}},"providers":{}}
+JSON
+  before=$(cat "$state/model-health.json")
+  real_mv=$(command -v mv) || fail "mv is required for the interrupted-write control"
+  cat > "$fakebin/mv" <<SH
+#!/usr/bin/env bash
+last="\${@: -1}"
+case "\$last" in
+  */model-health.json) exit 97 ;;
+esac
+exec "$real_mv" "\$@"
+SH
+  chmod 700 "$fakebin/mv"
+  rc=0
+  out=$(health_write_process "$state" "$fakebin" one 0 0 model vendor/new rate_limited new 2>&1) || rc=$?
+  rc=${rc:-0}
+  expect_code 1 "$rc" "an interrupted atomic replacement must report failure"
+  [ "$(cat "$state/model-health.json")" = "$before" ] \
+    || fail "an interrupted atomic replacement changed the prior record"
+  [ -z "$(find "$state" -maxdepth 1 -name 'model-health.json.*' -print -quit)" ] \
+    || fail "an interrupted atomic replacement left a temporary record"
+  pass "malformed and interrupted availability mutations preserve the prior canonical record"
+}
+
+test_availability_health_writer_noop_release_is_idempotent() {
+  local fixture state first second
+  fixture="$TMP_ROOT/health-noop"
+  state="$fixture/state"
+  mkdir -p "$state"
+  health_write_process "$state" "$fixture/fakebin" one 0 0 model vendor/absent '' '' >/dev/null 2>&1 \
+    || fail "releasing an absent binding should be a safe no-op"
+  [ ! -e "$state/model-health.json" ] \
+    || fail "a no-op release created an empty availability record"
+  health_write_process "$state" "$fixture/fakebin" one 0 0 model vendor/item rate_limited item >/dev/null 2>&1 \
+    || fail "creating an availability hold failed"
+  health_write_process "$state" "$fixture/fakebin" one 0 0 model vendor/item '' '' >/dev/null 2>&1 \
+    || fail "releasing an availability hold failed"
+  first=$(cat "$state/model-health.json")
+  health_write_process "$state" "$fixture/fakebin" one 0 0 model vendor/item '' '' >/dev/null 2>&1 \
+    || fail "releasing an already released availability hold failed"
+  second=$(cat "$state/model-health.json")
+  [ "$first" = "$second" ] || fail "an idempotent release rewrote the canonical record"
+  pass "absent and repeated releases are safe no-ops"
+}
+
 test_availability_hold_removes_a_candidate_and_release_restores_it() {
   local rec out
   rec=$(make_refusal_home availability); read_home_record "$rec"
@@ -1040,6 +1272,12 @@ test_check_asks_the_registry_only_about_the_model_it_answers_for
 test_default_only_route_is_listed_and_enforced
 test_failover_stays_inside_the_pool_in_order
 test_an_ambiguous_failover_anchor_is_refused_rather_than_resolved
+test_availability_health_writes_merge_concurrent_independent_bindings
+test_availability_health_writes_serialize_overlapping_hold_and_release
+test_availability_health_writer_keeps_same_binding_conflicts_atomic
+test_availability_health_writer_preserves_identity_and_freshness_fields
+test_availability_health_writer_refuses_malformed_and_interrupted_updates
+test_availability_health_writer_noop_release_is_idempotent
 test_availability_hold_removes_a_candidate_and_release_restores_it
 test_a_hold_that_cannot_match_a_candidate_is_refused_rather_than_recorded
 test_unknown_availability_state_is_refused
