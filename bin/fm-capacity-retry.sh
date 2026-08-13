@@ -446,12 +446,12 @@ keep_waiting() {  # <record-file> <refusal>
 next_check_epoch() {  # <record-file>
   local rec=$1 retry_after last deferrals backoff i
   retry_after=$(field "$rec" retry_after); is_count "$retry_after" || retry_after=0
-  if [ "$retry_after" -gt 0 ]; then
+  last=$(field "$rec" last_checked); is_count "$last" || last=$(field "$rec" deferred_at)
+  is_count "$last" || last=0
+  if [ "$retry_after" -gt "$last" ]; then
     printf '%s\n' "$retry_after"
     return 0
   fi
-  last=$(field "$rec" last_checked); is_count "$last" || last=$(field "$rec" deferred_at)
-  is_count "$last" || last=0
   deferrals=$("$ATTEMPT_BIN" show "$(field "$rec" task)" 2>/dev/null \
     | LC_ALL=C sed -n 's/.*deferrals=\([0-9]*\).*/\1/p')
   is_count "$deferrals" || deferrals=0

@@ -280,7 +280,7 @@ test_linked_capacity_record_is_refused_untouched() {
 }
 
 test_provider_reset_precedes_blind_backoff() {
-  local rec now reset due
+  local rec now reset due checked
   rec=$(make_refusal_home provider-reset); read_home_record "$rec"
   write_brief "$HOME_DIR" resettask no-mistakes
   now=$(date -u +%s)
@@ -293,13 +293,14 @@ test_provider_reset_precedes_blind_backoff() {
   due=$(FM_CAPACITY_RECHECK_BASE=3600 run_retry "$HOME_DIR" "$(quota_record vendorq=0)" list \
     | sed -n 's/.*next_check=\([0-9]*\).*/\1/p')
   [ "$due" = "$reset" ] || fail "a future provider reset lost to blind backoff: got $due, want $reset"
-  reset=$((now - 120))
-  sed -i.bak "s/^retry_after=.*/retry_after=$reset/" "$HOME_DIR/state/resettask.capacity"
+  checked=$((reset + 1))
+  sed -i.bak "s/^last_checked=.*/last_checked=$checked/" "$HOME_DIR/state/resettask.capacity"
   rm -f "$HOME_DIR/state/resettask.capacity.bak"
   due=$(FM_CAPACITY_RECHECK_BASE=3600 run_retry "$HOME_DIR" "$(quota_record vendorq=0)" list \
     | sed -n 's/.*next_check=\([0-9]*\).*/\1/p')
-  [ "$due" = "$reset" ] || fail "a passed provider reset lost to blind backoff: got $due, want $reset"
-  pass "a valid future provider reset wins over blind backoff"
+  [ "$due" -gt "$checked" ] || fail "a consumed provider reset did not enter blind backoff: got $due after $checked"
+  [ "$due" != "$reset" ] || fail "a consumed provider reset remained permanently due"
+  pass "an unconsumed provider reset wins once and then yields to blind backoff"
 }
 
 test_release_serializes_with_active_retry() {
