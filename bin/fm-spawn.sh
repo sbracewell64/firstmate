@@ -1448,13 +1448,13 @@ spawn_admission_gate() {
 # the SAME dispatch and not a new decision: bin/fm-capacity-retry.sh re-enters
 # this script with them and every gate above runs again. Nothing is stored that
 # a shell could expand, and the raw flag values are recorded rather than the
-# resolved ones, so a resume reproduces the call firstmate actually made.
+# resolved ones, with the effective effort band pinned for the resumed dispatch.
 #
 # A deferral that cannot be recorded is said out loud. The spawn stops either
 # way, and the difference between held work and lost work is exactly this
 # record, so failing to write it must never look like a quiet refusal.
 spawn_capacity_defer() {
-  local retry_after signature reason pool defer_args=() out rc
+  local retry_after signature reason pool effort_effective defer_args=() out rc
   retry_after=$(printf '%s' "$ROUTE_DECISION" | jq -r '
     [ .candidates[]? | .capacity.until // empty ] | if length > 0 then (min | tostring) else "0" end' 2>/dev/null)
   # The signature is what the stagnation rule compares, so it names WHICH
@@ -1464,6 +1464,7 @@ spawn_capacity_defer() {
     [ .candidates[]? | .model + "=" + ((.capacity.verdict // "unknown"))
         + "@" + ((.capacity.until // "none") | tostring) ] | sort | join(" ")' 2>/dev/null)
   pool=$(printf '%s' "$ROUTE_DECISION" | jq -r '(.pool // []) | join(",")' 2>/dev/null)
+  effort_effective=$(printf '%s' "$ROUTE_DECISION" | jq -r '.effort_effective // empty' 2>/dev/null)
   if [ -n "$pool" ]; then
     reason="every model in route $ROUTE's pool ($pool) meeting floor ${CAPABILITY_FLOOR:-unconfigured} is currently out of capacity"
   else
@@ -1482,7 +1483,7 @@ spawn_capacity_defer() {
   fi
   [ -z "$HARNESS_ARG" ] || defer_args+=(--harness "$HARNESS_ARG")
   [ -z "$MODEL" ] || defer_args+=(--model "$MODEL")
-  [ -z "$EFFORT" ] || defer_args+=(--effort "$EFFORT")
+  [ -z "$effort_effective" ] || defer_args+=(--effort "$effort_effective")
   [ -z "$BACKEND_ARG" ] || defer_args+=(--backend "$BACKEND_ARG")
   [ -z "$TOOLING_GAP_ITEM" ] || defer_args+=(--tooling-gap-item "$TOOLING_GAP_ITEM")
   [ "$ATTEMPT_BUDGET_SET" -eq 0 ] || defer_args+=(--attempt-budget "$ATTEMPT_BUDGET_ARG")
@@ -1606,6 +1607,9 @@ if [ "$KIND" != secondmate ]; then
     if ! ROUTE_REFUSAL=$(fm_route_refusal_from_decision "$CONFIG" "$ROUTE" "$MODEL" "$ROUTE_DECISION" "$STATE"); then
       echo "error: $ROUTE_REFUSAL" >&2
       exit 1
+    fi
+    if [ -z "$EFFORT" ]; then
+      EFFORT=$(printf '%s' "$ROUTE_DECISION" | jq -r '.effort_effective // empty' 2>/dev/null || true)
     fi
     # The floor is the route's own, so the recorded capability band and the
     # enforced route can never describe two different rungs of the ladder. The

@@ -471,7 +471,7 @@ def effective_route_profile($rule; $path; $model; $harness):
                | $r + {requested:$model, effort:$effort,
                        profile:(if $r.resolved == luna_max_model and $effort == luna_max_effort then luna_max_profile.name else null end),
                        held:(if $r.resolved != null then held($r.resolved) else null end),
-                       violations:(if $r.resolved != null then violations($r.resolved; $effort; $route_profile)
+                       violations:(if $r.resolved != null then violations($r.resolved; $eeff; $route_profile)
                                    elif $r.resolution == "unstated"
                                    then [{rule:"model_unstated", config_path:$pool_path,
                                           configured:(if ($pool | length) > 0 then ($pool | join(", "))
