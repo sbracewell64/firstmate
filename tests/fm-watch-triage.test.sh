@@ -1949,6 +1949,11 @@ test_capacity_pause_notification_identity_and_json_normalization() {
   printf '%s\n' '{"schemaVersion":3,"generated_at":"2030-01-01T00:10:00Z","providers":[{"provider":"codex","state":{"observedAt":"2030-01-01T00:10:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"all_models","effectivePercentRemaining":95}]}}]}' > "$state/maker.review.capacity"
   pause_notification_pending "$state" maker.review "$status" \
     || fail "a genuine JSON capacity delta was suppressed"
+
+  pause_notification_record "$state" maker.review "$status"
+  printf '%s\n' '{"schemaVersion":3,"generatedAt":"2030-01-01T00:15:00Z","providers":[{"provider":"claude","entitlement":"max","credentialSurface":"reviewer","quotaPool":"luna","route":"review","role":"reviewer","state":{"observedAt":"2030-01-01T00:15:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"claude-opus","effectivePercentRemaining":95}]}}]}' > "$state/maker.review.capacity"
+  pause_notification_pending "$state" maker.review "$status" \
+    || fail "changed provider-bound quota identity was suppressed as a refresh-only update"
   pass "capacity notification markers are injective and JSON refresh timestamps are non-semantic"
 }
 
