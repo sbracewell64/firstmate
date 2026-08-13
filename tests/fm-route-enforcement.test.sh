@@ -736,6 +736,17 @@ test_availability_health_writer_refuses_malformed_and_interrupted_updates() {
   [ ! -e "$state/model-health.json.lock" ] \
     || fail "the availability lock was left behind after malformed-state refusal"
 
+  printf '{"schema":"fm-model-health.v1","models":[],"providers":{}}\n' > "$state/model-health.json"
+  before=$(cat "$state/model-health.json")
+  rc=0
+  out=$(health_write_process "$state" "$fakebin" one 0 0 model vendor/absent '' '' 2>&1) || rc=$?
+  rc=${rc:-0}
+  expect_code 1 "$rc" "a release must refuse a semantically malformed availability record"
+  [ "$(cat "$state/model-health.json")" = "$before" ] \
+    || fail "a release overwrote a semantically malformed availability record"
+  [ ! -e "$state/model-health.json.lock" ] \
+    || fail "the availability lock was left behind after malformed release refusal"
+
   cat > "$state/model-health.json" <<'JSON'
 {"schema":"fm-model-health.v1","models":{"vendor/old":{"state":"auth_failure","until":null,"recorded_at":1,"evidence":"old"}},"providers":{}}
 JSON

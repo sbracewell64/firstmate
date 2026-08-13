@@ -783,9 +783,11 @@ fm_route_health_write() {
   updated=
   if [ "$rc" -eq 0 ]; then
     if [ -z "$hold" ]; then
-      target_exists=$(printf '%s' "$current" | jq -r --arg scope "${scope}s" --arg subject "$subject" \
-        '((.[$scope] // {}) | has($subject))' 2>/dev/null) || target_exists=false
-      if [ "$target_exists" = true ]; then
+      if ! target_exists=$(printf '%s' "$current" | jq -r --arg scope "${scope}s" --arg subject "$subject" \
+        '((.[$scope] // {}) | has($subject))' 2>/dev/null); then
+        echo "could not observe the availability record binding" >&2
+        rc=1
+      elif [ "$target_exists" = true ]; then
         updated=$(printf '%s' "$current" | jq -c \
           --arg scope "${scope}s" --arg subject "$subject" \
           '.[$scope] |= del(.[$subject])' 2>/dev/null) || {
