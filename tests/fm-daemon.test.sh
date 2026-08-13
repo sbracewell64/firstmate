@@ -155,6 +155,119 @@ test_classify_terminal_signal_escalates() {
   pass "captain-relevant status verbs escalate; retired free-text prose does not"
 }
 
+test_away_typed_pr_ready_registers_before_seen_dedupe() {
+  local dir state home fakebin status_file url gh_log out rc
+  dir=$(make_supercase away-pr-ready-registration)
+  state="$dir/state"
+  home="$dir/home"
+  fakebin="$dir/fakebin"
+  url=https://github.com/o/r/pull/77
+  gh_log="$dir/gh.log"
+  mkdir -p "$home/config" "$home/data" "$dir/wt"
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_TEST_GH_LOG:?}"
+case " $* " in
+  *' --json headRefOid '*) printf '0123456789abcdef0123456789abcdef01234567\n' ;;
+  *' --json state,headRefOid '*) printf 'OPEN\t0123456789abcdef0123456789abcdef01234567\n' ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/gh"
+  : > "$gh_log"
+  fm_write_meta "$state/task-pr1.meta" \
+    "window=firstmate:fm-task-pr1" \
+    "endpoint_task_id=task-pr1" \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  status_file="$state/task-pr1.status"
+  printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" > "$status_file"
+
+  # Present mode keeps the established handoff: the event is surfaced and no PR
+  # record or poll is mutated by the away daemon's transition helper.
+  rm -f "$state/.afk"
+  if out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_TEST_GH_LOG="$gh_log" \
+    PATH="$fakebin:$PATH" bash -c \
+    '. "$1"; LOG="$4"; FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $2" "$3"' \
+    _ "$DAEMON" "$status_file" "$state" "$dir/daemon.log" 2>&1); then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ ! -e "$state/task-pr1.check.sh" ] || fail "present mode armed a PR poll before firstmate registration"
+  [ ! -s "$gh_log" ] || fail "present mode queried the forge before firstmate registration"
+  [ -s "$state/.subsuper-escalations" ] || fail "present mode did not surface the typed PR-ready event"
+
+  # Away mode now completes the canonical registration before the existing seen
+  # marker can absorb the same event as a catch-all duplicate. This calls the
+  # daemon's heartbeat path directly, which is the gap where the old code could
+  # mark the event seen without ever arming the merge poll.
+  rm -f "$state/.subsuper-escalations"
+  printf '%s\n' 1 > "$state/.afk"
+  if out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_TEST_GH_LOG="$gh_log" \
+    PATH="$fakebin:$PATH" FM_HEARTBEAT_SCAN_SECS=0 \
+    bash -c '. "$1"; FM_HEARTBEAT_SCAN_SECS=0 housekeeping "$2"' \
+    _ "$DAEMON" "$state" 2>&1); then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 0 ] || fail "away-mode typed PR-ready registration failed: $out"
+  grep -qxF "pr=$url" "$state/task-pr1.meta" \
+    || fail "away mode did not record the canonical PR URL"
+  fm_pr_poll_artifacts_valid "$state" task-pr1 "$ROOT/bin/fm-pr-poll.sh" \
+    || fail "away mode did not leave an authenticated merge poll"
+  [ "$(wc -l < "$gh_log" | tr -d ' ')" -eq 1 ] \
+    || fail "away mode queried the forge more than once for one ready event"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a successfully registered ready event was still re-escalated"
+
+  # Replaying the same durable signal is idempotent: an authenticated poll is
+  # accepted as current and the forge is not queried again.
+  if out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_TEST_GH_LOG="$gh_log" \
+    PATH="$fakebin:$PATH" bash -c \
+    '. "$1"; LOG="$4"; FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $2" "$3"' \
+    _ "$DAEMON" "$status_file" "$state" "$dir/daemon.log" 2>&1); then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 0 ] || fail "replayed away-mode PR-ready signal failed: $out"
+  [ "$(wc -l < "$gh_log" | tr -d ' ')" -eq 1 ] \
+    || fail "replayed ready signal re-ran canonical PR registration"
+
+  # Automatic registration is limited to a PR-capable ship identity and never
+  # replaces a different already-recorded request.
+  fm_write_meta "$state/task-local.meta" \
+    "window=firstmate:fm-task-local" "endpoint_task_id=task-local" \
+    "worktree=$dir/wt" "project=$dir/project" "kind=ship" "mode=local-only"
+  printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" > "$state/task-local.status"
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" pr_ready_status_transition "$state/task-local.status" "$state"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] || fail "local-only task was eligible for automatic PR registration"
+  [ ! -e "$state/task-local.check.sh" ] || fail "local-only task mutation armed a PR poll"
+
+  fm_write_meta "$state/task-mismatch.meta" \
+    "window=firstmate:fm-task-mismatch" "endpoint_task_id=task-mismatch" \
+    "worktree=$dir/wt" "project=$dir/project" "kind=ship" "mode=no-mistakes" \
+    "pr=https://github.com/o/r/pull/78"
+  printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" > "$state/task-mismatch.status"
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" pr_ready_status_transition "$state/task-mismatch.status" "$state"; then
+    rc=0
+  else
+    rc=$?
+  fi
+  [ "$rc" -eq 2 ] || fail "automatic PR registration replaced a different recorded PR"
+  [ "$(wc -l < "$gh_log" | tr -d ' ')" -eq 1 ] \
+    || fail "mismatched automatic PR registration queried the forge"
+  pass "away mode registers a typed PR-ready event before seen dedupe, while present mode preserves handoff and replay stays idempotent"
+}
+
 test_classify_check_and_unknown_escalate() {
   local out
   out=$(classify_check "check: /s/c.check.sh: merged: https://x")
@@ -2913,6 +3026,7 @@ test_afk_start_reclaims_stale_daemon_lock_reused_pid
 test_daemon_state_root_uses_fm_home
 test_classify_routine_signal_self
 test_classify_terminal_signal_escalates
+test_away_typed_pr_ready_registers_before_seen_dedupe
 test_classify_check_and_unknown_escalate
 test_stale_transient_self_records_marker
 test_stale_diagnostic_wedge_survives_busy_housekeeping

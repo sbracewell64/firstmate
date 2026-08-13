@@ -52,6 +52,15 @@ run_watcher_once() {
   wait_for_exit "$!" 50
 }
 
+run_watcher_present_once() {
+  local state=$1 fakebin=$2 out=$3
+  mkdir -p "$state"
+  rm -f "$state/.afk"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  wait_for_exit "$!" 50
+}
+
 # --- Phase 1: routine self-handled, queued; terminal caught after restart ---
 test_routine_then_terminal_after_restart() {
   local dir state fakebin out drain_out status_file
@@ -107,6 +116,89 @@ test_routine_then_terminal_after_restart() {
   [ "$(grep -c '\[ENTER\]' "$sent")" -eq 1 ] || fail "buffered digest was not submitted exactly once"
   [ ! -s "$state/.subsuper-escalations" ] || fail "buffer not cleared after a successful flush"
   pass "lifecycle: routine self-handles, terminal survives a watcher restart, buffers once, no dup, injects once"
+}
+
+# --- Phase 1b: typed PR-ready delivery transition ----------------------------
+# The present-mode control proves the ordinary watcher surfaces the event for
+# firstmate. The away-mode leg then replays the same typed event after a prior
+# seen marker exists, exercises the canonical registration mutation, and lets a
+# real watcher poll carry the result through to the merged wake and retirement.
+test_typed_pr_ready_away_transition_reaches_merge_poll() {
+  local dir state home fakebin status_file url out
+  dir=$(make_supercase wd-pr-ready)
+  state="$dir/state"
+  home="$dir/home"
+  fakebin="$dir/fakebin"
+  status_file="$state/task-pr-e2e.status"
+  url=https://github.com/o/r/pull/901
+  mkdir -p "$home/config" "$home/data" "$dir/wt"
+  cat > "$fakebin/gh" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *' --json headRefOid '*) printf '0123456789abcdef0123456789abcdef01234567\n' ;;
+  *' --json state,headRefOid '*) printf '%s\t0123456789abcdef0123456789abcdef01234567\n' "${FM_TEST_GH_STATE:-OPEN}" ;;
+  *' state,mergeable,headRefOid '*) printf '%s\tMERGEABLE\t0123456789abcdef0123456789abcdef01234567\n' "${FM_TEST_GH_STATE:-OPEN}" ;;
+  *) exit 1 ;;
+esac
+SH
+  chmod +x "$fakebin/gh"
+  fm_write_meta "$state/task-pr-e2e.meta" \
+    "window=firstmate:fm-task-pr-e2e" \
+    "endpoint_task_id=task-pr-e2e" \
+    "worktree=$dir/wt" \
+    "project=$dir/project" \
+    "kind=ship" \
+    "mode=no-mistakes"
+  printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" > "$status_file"
+
+  run_watcher_present_once "$state" "$fakebin" "$dir/present.out" \
+    || fail "present-mode watcher did not surface the typed PR-ready event"
+  grep -F "signal: $status_file" "$dir/present.out" >/dev/null \
+    || fail "present-mode watcher did not report the typed PR-ready event"
+  [ ! -e "$state/task-pr-e2e.check.sh" ] \
+    || fail "present-mode watcher registered a PR without firstmate's handoff"
+
+  # Simulate firstmate seeing the present-mode wake, then preserve its seen
+  # marker while the away daemon takes ownership of the next signal.
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" PATH="$fakebin:$PATH" bash -c \
+    '. "$1"; LOG="$4"; FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $2" "$3"' \
+    _ "$DAEMON" "$status_file" "$state" "$dir/daemon.log" >/dev/null 2>&1; then
+    :
+  fi
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "present-mode handoff did not produce an actionable digest"
+  rm -f "$state/.subsuper-escalations"
+
+  printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" >> "$status_file"
+  run_watcher_once "$state" "$fakebin" "$dir/away.out" \
+    || fail "away-mode watcher did not surface the replayed typed PR-ready event"
+  grep -F "signal: $status_file" "$dir/away.out" >/dev/null \
+    || fail "away-mode watcher did not report the replayed typed PR-ready event"
+
+  if FM_HOME="$home" FM_STATE_OVERRIDE="$state" PATH="$fakebin:$PATH" bash -c \
+    '. "$1"; LOG="$4"; FM_ESCALATE_BATCH_SECS=999999 handle_wake "signal: $2" "$3"' \
+    _ "$DAEMON" "$status_file" "$state" "$dir/daemon.log" >/dev/null 2>&1; then
+    :
+  fi
+  grep -qxF "pr=$url" "$state/task-pr-e2e.meta" \
+    || fail "away-mode replay did not record the canonical PR"
+  fm_pr_poll_artifacts_valid "$state" task-pr-e2e "$ROOT/bin/fm-pr-poll.sh" \
+    || fail "away-mode replay did not publish an authenticated merge poll"
+
+  rm -f "$state/.last-check"
+  export FM_TEST_GH_STATE=MERGED
+  run_watcher_once "$state" "$fakebin" "$dir/merged.out" \
+    || fail "merge poll did not complete in away mode"
+  unset FM_TEST_GH_STATE
+  case "$(cat "$dir/merged.out")" in
+    check:*task-pr-e2e.check.sh:*merged*) ;;
+    *) fail "away-mode merge poll did not publish a terminal notification: $(cat "$dir/merged.out")" ;;
+  esac
+  [ ! -e "$state/task-pr-e2e.check.sh" ] \
+    || fail "merged away-mode poll was not retired"
+  grep -F $'\tcheck\t' "$state/.wake-queue" | grep -F 'task-pr-e2e.check.sh: merged' >/dev/null \
+    || fail "merged away-mode poll did not leave its durable notification"
+  pass "lifecycle: present mode surfaces typed PR-ready work, away mode registers it before dedupe, and the merged poll notifies and retires"
 }
 
 # --- Phase 2: stale working-pane transient -> persistent -> resumed ----------
@@ -171,4 +263,5 @@ test_stale_pane_transient_persistent_resume() {
 }
 
 test_routine_then_terminal_after_restart
+test_typed_pr_ready_away_transition_reaches_merge_poll
 test_stale_pane_transient_persistent_resume
