@@ -1608,9 +1608,6 @@ if [ "$KIND" != secondmate ]; then
       echo "error: $ROUTE_REFUSAL" >&2
       exit 1
     fi
-    if [ -z "$EFFORT" ]; then
-      EFFORT=$(printf '%s' "$ROUTE_DECISION" | jq -r '.effort_effective // empty' 2>/dev/null || true)
-    fi
     # The floor is the route's own, so the recorded capability band and the
     # enforced route can never describe two different rungs of the ladder. The
     # check above already refused a floor id `_floors` does not define, so a

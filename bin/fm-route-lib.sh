@@ -328,12 +328,13 @@ def effective_route_profile($rule; $path; $model; $harness):
     | (if ($ef_raw | type) == "string" and (rank($ef_raw) != null) then $ef_raw else null end) as $ef
     | (($ef_raw | type) == "string" and ($ef_raw | startswith("WAIVED"))) as $ef_waived
     | (($ef_raw != null) and ($ef == null) and ($ef_waived | not)) as $ef_malformed
-    # The band this dispatch is ACTUALLY running at: the effort it named, else
-    # the one the floor states. Carried on the record because band preservation
+    # The band this dispatch is ACTUALLY running at: the effort it named.
+    # A floor constrains a dispatch but does not supply an unstated provider
+    # default. Carried on the record because band preservation
     # across a capacity substitution is judged against the RUNNING band, not
     # against the floor - a route whose floor states no effort_floor still has a
     # band to preserve the moment a dispatch names one.
-    | (if ($effort | length) > 0 then $effort else ($ef // "") end) as $eeff
+    | $effort as $eeff
     | ($floor.context_ceiling? // null) as $ctx_raw
     | (if ($ctx_raw | type) == "number" then $ctx_raw else null end) as $ctx
     | (($ctx_raw != null) and ($ctx == null)) as $ctx_malformed
@@ -483,7 +484,7 @@ def effective_route_profile($rule; $path; $model; $harness):
                   | .value as $c
                   | (effective_route_profile($rule; $route_path; $c; "")) as $candidate_profile
                   | (held($c)) as $h
-                  | (violations($c; $eeff; $candidate_profile)) as $v
+                  | (violations($c; (if ($eeff | length) > 0 then $eeff else ($ef // "") end); $candidate_profile)) as $v
                   | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
                      held:$h, violations:$v,
                      effort_expressible:($models[$c].effort_expressible? // null),
