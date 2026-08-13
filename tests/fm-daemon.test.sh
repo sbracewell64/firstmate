@@ -1307,6 +1307,7 @@ test_housekeeping_paused_resurfaces_only_on_delta() {
   state="$dir/state"; fakebin="$dir/fakebin"
   win="sess:fm-held-w11"; pane="$dir/pane.txt"
   printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture summary=holding for provider capacity\n' > "$state/held-w11.status"
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:00:00Z\n' > "$state/held-w11.capacity"
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "held-w11" | tr ':/.' '___')
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
@@ -1327,6 +1328,14 @@ test_housekeeping_paused_resurfaces_only_on_delta() {
   age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
   [ "$age" -lt 60 ] || fail "an absorbed no-delta check did not reset the cadence (age ${age}s)"
 
+  printf 'provider=codex remaining=95 observed_at=2030-01-01T00:05:00Z\n' > "$state/held-w11.capacity"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "changed active capacity evidence was suppressed with the prior observation"
+
+  : > "$state/.subsuper-escalations"
   printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture-v2 summary=provider capacity changed but still blocks\n' >> "$state/held-w11.status"
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \

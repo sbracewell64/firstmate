@@ -1880,6 +1880,19 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   [ ! -s "$out" ] || { reap "$pid"; fail "an unchanged pause event printed another wake: $(cat "$out")"; }
   reap "$pid"
 
+  printf 'provider=codex remaining=95 observed_at=2030-01-01T00:05:00Z\n' > "$state/held.capacity"
+  : > "$state/.paused-resurfaced-$key"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.paused-resurfaced-$key"
+  else touch -m -d "@$back" "$state/.paused-resurfaced-$key"; fi
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "changed active capacity evidence did not surface"
+  grep -F "awaiting external" "$out" >/dev/null || fail "changed active capacity evidence omitted its external-wait reason"
+
   # Phase D: changing the event is a real delta and must surface even though the
   # task and pane are otherwise identical.
   printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture-v2 summary=provider capacity changed but still blocks\n' >> "$statusf"

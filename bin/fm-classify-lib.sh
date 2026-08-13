@@ -421,16 +421,22 @@ pause_notification_marker() {  # <state-dir> <task-id>
   printf '%s/.pause-notified-%s' "$1" "$(_fm_pause_notification_key "$2")"
 }
 
+pause_notification_value() {  # <state-dir> <task-id> <last-status-line>
+  local capacity="$1/$2.capacity"
+  printf '%s\ncapacity-record:%s\n' "$3" "$capacity"
+  [ ! -f "$capacity" ] || cat "$capacity"
+}
+
 pause_notification_pending() {  # <state-dir> <task-id> <last-status-line>
   local marker
   marker=$(pause_notification_marker "$1" "$2")
-  [ "$(cat "$marker" 2>/dev/null || true)" != "$3" ]
+  ! pause_notification_value "$1" "$2" "$3" | cmp -s - "$marker" 2>/dev/null
 }
 
 pause_notification_record() {  # <state-dir> <task-id> <last-status-line>
   local marker
   marker=$(pause_notification_marker "$1" "$2")
-  printf '%s' "$3" > "$marker"
+  pause_notification_value "$1" "$2" "$3" > "$marker"
 }
 
 pause_notification_clear() {  # <state-dir> <task-id>

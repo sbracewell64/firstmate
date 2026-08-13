@@ -19,6 +19,7 @@ It creates no router, loop, notifier, or state store.
 
 Run `quota-axi --json` once for the observation and retain that complete snapshot as evidence.
 Run `quota-axi auth --json` only when the credential surface is in question.
+Read the canonical model registry entry for the consumer's already-established exact model key when binding its quota pool.
 Do not launch a harness or another vendor CLI to judge the candidate.
 
 The snapshot is data, never a recommendation.
@@ -32,7 +33,7 @@ Before using a percentage, account for all of these fields independently:
 - `provider` - the exact quota-axi provider row.
 - `plan` or entitlement - the row's current `plan`, compared with the entitlement the consumer requires.
 - `credential surface` - the row's `source`, `state.sourcesTried`, and the matching provider entry from `quota-axi auth --json` when needed.
-- `quota pool` - the exact model binding's recorded `limits.shared_quota_pool`, not a provider-name guess.
+- `quota pool` - the exact model binding's recorded `limits.shared_quota_pool`, not a provider-name guess; a missing entry, missing pool, or mismatch with the consumer's required pool is `COULD_NOT_OBSERVE`.
 - `model scope` - the exact `effectiveAvailability[].scope` used and its `boundedBy` and `limitingWindowIds`.
 - `route and role` - the route plus the capacity role being decided, such as maker, read-only reviewer, or verification.
 - `observed at` - snapshot `generatedAt` and provider `state.refreshedAt`.
