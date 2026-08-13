@@ -187,6 +187,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/quota-evidence-binding/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/research-approved-work/SKILL.md",
       "audience": "agent-runtime"
     },

@@ -65,3 +65,8 @@ If a fresh exact tuple still blocks, keep one durable typed pause/update whose `
 An unchanged re-observation is not a new status event and not a captain update.
 Refresh the current owner's evidence if that owner supports it, but append a new event only when the bound semantic result changes.
 The shared supervision classifier deduplicates identical pause events; changed events, decisions, failures, credentials, and review-ready outcomes remain actionable.
+
+## Verification
+
+`tests/fm-quota-evidence-binding-live-e2e.test.sh` verifies exact provider, entitlement, credential, pool, scope, route, role, time, and freshness binding through the public skill-loading interface.
+`tests/fm-watch-triage.test.sh` and `tests/fm-daemon.test.sh` verify the shared normal and away supervision boundary for unchanged capacity pauses, changed capacity events, and generic external waits.
