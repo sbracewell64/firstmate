@@ -106,6 +106,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-route-lib.sh"
 # shellcheck source=bin/fm-capacity-lib.sh
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 RECHECK_BASE=${FM_CAPACITY_RECHECK_BASE:-900}
 RECHECK_CAP=${FM_CAPACITY_RECHECK_CAP:-10800}
@@ -442,8 +444,13 @@ keep_waiting() {  # <record-file> <refusal>
 # wastes the capacity. With no published reset, a doubling backoff from the last
 # check keeps a blind wait cheap without letting it stall.
 next_check_epoch() {  # <record-file>
-  local rec=$1 retry_after last deferrals backoff i
+  local rec=$1 retry_after last deferrals backoff i now
   retry_after=$(field "$rec" retry_after); is_count "$retry_after" || retry_after=0
+  now=$(date -u +%s)
+  if [ "$retry_after" -gt "$now" ]; then
+    printf '%s\n' "$retry_after"
+    return 0
+  fi
   last=$(field "$rec" last_checked); is_count "$last" || last=$(field "$rec" deferred_at)
   is_count "$last" || last=0
   deferrals=$("$ATTEMPT_BIN" show "$(field "$rec" task)" 2>/dev/null \
@@ -457,11 +464,7 @@ next_check_epoch() {  # <record-file>
   done
   [ "$backoff" -le "$RECHECK_CAP" ] || backoff=$RECHECK_CAP
   backoff=$((last + backoff))
-  if [ "$retry_after" -gt "$backoff" ]; then
-    printf '%s\n' "$retry_after"
-  else
-    printf '%s\n' "$backoff"
-  fi
+  printf '%s\n' "$backoff"
 }
 
 # Rebuild the dispatch argv from typed fields, refusing any value that does not
@@ -525,7 +528,7 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
 # A not-due record retains the durable future check established by its prior
 # advance, a terminal record is already stopped, and an already-dispatched task
 # retires the obsolete wait rather than creating a second worker.
-tick_one() {  # <record-file> <force>
+tick_one_claimed() {  # <record-file> <force>
   local rec=$1 force=$2 id now due out rc route effort candidate eligible model
   id=$(field "$rec" task)
   if [ -z "$id" ]; then
@@ -639,6 +642,21 @@ EOF
       ;;
   esac
   keep_waiting "$rec" "$out"
+}
+
+tick_one() {  # <record-file> <force>
+  local rec=$1 force=$2 id lock rc
+  id=$(field "$rec" task)
+  if [ -z "$id" ] || ! fm_task_id_path_safe "$id"; then
+    tick_one_claimed "$rec" "$force"
+    return $?
+  fi
+  lock="$STATE/.$id.capacity-retry.lock"
+  fm_lock_try_acquire "$lock" || return 0
+  tick_one_claimed "$rec" "$force"
+  rc=$?
+  fm_lock_release "$lock"
+  return "$rc"
 }
 
 cmd_tick() {

@@ -279,6 +279,53 @@ test_linked_capacity_record_is_refused_untouched() {
   pass "a symlinked capacity record is refused without touching its target"
 }
 
+test_provider_reset_precedes_blind_backoff() {
+  local rec now reset due
+  rec=$(make_refusal_home provider-reset); read_home_record "$rec"
+  write_brief "$HOME_DIR" resettask no-mistakes
+  now=$(date -u +%s)
+  reset=$((now + 120))
+  FM_CAPACITY_RECHECK_BASE=3600 run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer resettask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --retry-after "$reset" --signature vendor=spent --project "$PROJ_DIR" \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --model vendor/large --effort medium >/dev/null
+  due=$(FM_CAPACITY_RECHECK_BASE=3600 run_retry "$HOME_DIR" "$(quota_record vendorq=0)" list \
+    | sed -n 's/.*next_check=\([0-9]*\).*/\1/p')
+  [ "$due" = "$reset" ] || fail "a future provider reset lost to blind backoff: got $due, want $reset"
+  pass "a valid future provider reset wins over blind backoff"
+}
+
+test_concurrent_ticks_claim_one_retry_owner() {
+  local rec stub log out1 out2 pid1 pid2
+  rec=$(make_refusal_home concurrent-tick); read_home_record "$rec"
+  write_brief "$HOME_DIR" claimtask no-mistakes
+  run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer claimtask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null
+  stub="$TMP_ROOT/concurrent-tick/attempt"
+  log="$TMP_ROOT/concurrent-tick/show.log"
+  printf '#!/usr/bin/env bash\nif [ "$1" = show ]; then printf "show\\n" >> "$FM_TEST_SHOW_LOG"; sleep 1; fi\nexec "$FM_TEST_REAL_ATTEMPT" "$@"\n' > "$stub"
+  chmod +x "$stub"
+  out1="$TMP_ROOT/concurrent-tick/tick-one.out"
+  out2="$TMP_ROOT/concurrent-tick/tick-two.out"
+  FM_ATTEMPT_BIN="$stub" FM_TEST_SHOW_LOG="$log" FM_TEST_REAL_ATTEMPT="$ATTEMPT" \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" tick --id claimtask --force >"$out1" 2>&1 &
+  pid1=$!
+  fm_test_reap "$pid1"
+  while [ ! -f "$log" ]; do sleep 0.01; done
+  FM_ATTEMPT_BIN="$stub" FM_TEST_SHOW_LOG="$log" FM_TEST_REAL_ATTEMPT="$ATTEMPT" \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" tick --id claimtask --force >"$out2" 2>&1 &
+  pid2=$!
+  fm_test_reap "$pid2"
+  wait "$pid1" || fail "the claimed retry owner failed: $(cat "$out1")"
+  wait "$pid2" || fail "the concurrent retry tick failed: $(cat "$out2")"
+  [ "$(wc -l < "$log" | tr -d ' ')" = 1 ] \
+    || fail "concurrent ticks both entered the claimed retry reconciliation"
+  pass "concurrent ticks give one process exclusive retry ownership"
+}
+
 test_resumes_onto_an_expressive_recovered_pool_member
 test_uncounted_deferral_fails_closed
 test_same_band_substitution_is_required
@@ -289,3 +336,5 @@ test_moved_capacity_picture_resets_stagnation
 test_record_refresh_failure_stops_durably
 test_unsafe_recorded_id_stops_without_escaping_state
 test_linked_capacity_record_is_refused_untouched
+test_provider_reset_precedes_blind_backoff
+test_concurrent_ticks_claim_one_retry_owner
