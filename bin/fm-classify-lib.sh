@@ -414,7 +414,7 @@ capacity_pause_uses_no_delta() {  # <state-dir> <task-id> <last-status-line>
 }
 
 _fm_pause_notification_key() {  # <task-id>
-  printf '%s' "$1" | tr ':/.' '___'
+  printf '%s' "$1" | LC_ALL=C od -An -tx1 | tr -d ' \n'
 }
 
 pause_notification_marker() {  # <state-dir> <task-id>
@@ -424,10 +424,30 @@ pause_notification_marker() {  # <state-dir> <task-id>
 pause_notification_value() {  # <state-dir> <task-id> <last-status-line>
   local capacity="$1/$2.capacity"
   printf '%s\ncapacity-record:%s\n' "$3" "$capacity"
-  [ ! -f "$capacity" ] || sed \
-    -e 's/observed_at=[^[:space:]]*//g' \
-    -e 's/refreshed_at=[^[:space:]]*//g' \
-    "$capacity"
+  [ -f "$capacity" ] || return 0
+  if jq -e . "$capacity" >/dev/null 2>&1; then
+    jq -S -c '
+      walk(
+        if type == "object" then
+          with_entries(
+            select(
+              (.key | ascii_downcase | gsub("_"; "")) as $key
+              | ($key == "generatedat" or $key == "observedat" or $key == "refreshedat") | not
+            )
+          )
+        else . end
+      )
+    ' "$capacity"
+  else
+    sed \
+      -e 's/observed_at=[^[:space:]]*//g' \
+      -e 's/refreshed_at=[^[:space:]]*//g' \
+      -e 's/generated_at=[^[:space:]]*//g' \
+      -e 's/observedAt=[^[:space:]]*//g' \
+      -e 's/refreshedAt=[^[:space:]]*//g' \
+      -e 's/generatedAt=[^[:space:]]*//g' \
+      "$capacity"
+  fi
 }
 
 pause_notification_pending() {  # <state-dir> <task-id> <last-status-line>

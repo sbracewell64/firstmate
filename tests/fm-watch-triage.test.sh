@@ -1931,6 +1931,27 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   pass "a declared capacity pause keeps its bounded cadence but only a new durable observation re-notifies"
 }
 
+test_capacity_pause_notification_identity_and_json_normalization() {
+  local dir state status dotted underscored
+  dir=$(make_case capacity-pause-notification-value)
+  state="$dir/state"
+  status='fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture summary=holding for provider capacity'
+  dotted=$(pause_notification_marker "$state" maker.review)
+  underscored=$(pause_notification_marker "$state" maker_review)
+  [ "$dotted" != "$underscored" ] || fail "distinct task IDs shared a capacity notification marker"
+
+  printf '%s\n' '{"schemaVersion":3,"generatedAt":"2030-01-01T00:00:00Z","providers":[{"provider":"codex","state":{"refreshedAt":"2030-01-01T00:00:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"all_models","effectivePercentRemaining":0}]}}]}' > "$state/maker.review.capacity"
+  pause_notification_record "$state" maker.review "$status"
+  printf '%s\n' '{"providers":[{"quotaSemantics":{"effectiveAvailability":[{"effectivePercentRemaining":0,"scope":"all_models"}]},"state":{"refreshed_at":"2030-01-01T00:05:00Z"},"provider":"codex"}],"observed_at":"2030-01-01T00:05:00Z","schemaVersion":3}' > "$state/maker.review.capacity"
+  pause_notification_pending "$state" maker.review "$status" \
+    && fail "refresh-only JSON capacity evidence produced another notification"
+
+  printf '%s\n' '{"schemaVersion":3,"generated_at":"2030-01-01T00:10:00Z","providers":[{"provider":"codex","state":{"observedAt":"2030-01-01T00:10:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"all_models","effectivePercentRemaining":95}]}}]}' > "$state/maker.review.capacity"
+  pause_notification_pending "$state" maker.review "$status" \
+    || fail "a genuine JSON capacity delta was suppressed"
+  pass "capacity notification markers are injective and JSON refresh timestamps are non-semantic"
+}
+
 # A captain-held crew can leave a stable backend endpoint after its agent exits.
 # fm-crew-state then authoritatively reports stopped rather than paused, but the
 # confirmed-dead agent plus the declared wait or captain-held transfer must retain
@@ -3107,6 +3128,7 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection
 test_busy_pane_default_turn_age_bound_is_3600s
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
+test_capacity_pause_notification_identity_and_json_normalization
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
