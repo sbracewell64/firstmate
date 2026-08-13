@@ -320,6 +320,17 @@ fm_availability_record_lock_path() {  # [<state-dir>]
   printf '%s.lock\n' "$(fm_availability_record_path "${1:-}")"
 }
 
+fm_availability_transition_begin() {  # [<state-dir>]
+  local lock
+  lock=$(fm_availability_record_lock_path "${1:-}")
+  mkdir -p "$(dirname "$lock")" || return 1
+  fm_lock_acquire_wait "$lock"
+}
+
+fm_availability_transition_end() {  # [<state-dir>]
+  fm_lock_release "$(fm_availability_record_lock_path "${1:-}")"
+}
+
 # fm_availability_record_write <state-dir> <model> <observation> <shape>
 #                              <reader> <detail> <latency-or-empty> <at-iso>
 #                              [<gap-json>]
@@ -400,13 +411,11 @@ fm_availability_record_write_locked() {
 }
 
 fm_availability_record_write() {
-  local state=$1 lock rc
-  lock=$(fm_availability_record_lock_path "$state")
-  mkdir -p "$(dirname "$lock")" || return 1
-  fm_lock_acquire_wait "$lock" || return 1
+  local state=$1 rc
+  fm_availability_transition_begin "$state" || return 1
   fm_availability_record_write_locked "$@"
   rc=$?
-  fm_lock_release "$lock"
+  fm_availability_transition_end "$state"
   return "$rc"
 }
 
@@ -505,13 +514,11 @@ fm_availability_record_retire_locked() {  # <state-dir> <observation> <subject>
 }
 
 fm_availability_record_retire() {  # <state-dir> <observation> <subject>
-  local state=$1 lock rc out
-  lock=$(fm_availability_record_lock_path "$state")
-  mkdir -p "$(dirname "$lock")" || return 1
-  fm_lock_acquire_wait "$lock" || return 1
+  local state=$1 rc out
+  fm_availability_transition_begin "$state" || return 1
   out=$(fm_availability_record_retire_locked "$@")
   rc=$?
-  fm_lock_release "$lock"
+  fm_availability_transition_end "$state"
   [ -z "$out" ] || printf '%s\n' "$out"
   return "$rc"
 }

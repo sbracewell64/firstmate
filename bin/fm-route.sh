@@ -414,9 +414,11 @@ case "$CMD" in
           SUBJECT=${RESOLVED#* }
         fi
         if [ "$SUB" = release ]; then
+          fm_availability_transition_begin "$STATE" || exit 2
           fm_availability_record_models "$STATE" >/dev/null \
-            || die "the observation record is malformed: $(fm_availability_record_path "$STATE")"
-          RESOLVED=$(fm_route_health_write "$STATE" "$HOLD_SCOPE" "$SUBJECT" '' '' '' "$CONFIG") || exit 2
+            || { fm_availability_transition_end "$STATE"; die "the observation record is malformed: $(fm_availability_record_path "$STATE")"; }
+          RESOLVED=$(fm_route_health_write "$STATE" "$HOLD_SCOPE" "$SUBJECT" '' '' '' "$CONFIG") \
+            || { fm_availability_transition_end "$STATE"; exit 2; }
           SCOPE=${RESOLVED%% *}
           SUBJECT=${RESOLVED#* }
           printf 'released %s %s\n' "$SCOPE" "$SUBJECT"
@@ -430,7 +432,9 @@ case "$CMD" in
           # A could-not-observe is deliberately NOT retired: releasing repairs
           # nothing about a broken reader, and letting it clear one would turn
           # "repair observability" back into "work around uncertainty".
-          RETIRED=$(fm_availability_record_retire "$STATE" "$FM_AVAIL_UNAVAILABLE" "$SUBJECT") || exit 2
+          RETIRED=$(fm_availability_record_retire_locked "$STATE" "$FM_AVAIL_UNAVAILABLE" "$SUBJECT") \
+            || { fm_availability_transition_end "$STATE"; exit 2; }
+          fm_availability_transition_end "$STATE"
           if [ -n "$RETIRED" ]; then
             printf 'retired the %s observation recorded for: %s\n' \
               "$FM_AVAIL_UNAVAILABLE" "$(printf '%s' "$RETIRED" | tr '\n' ' ' | sed 's/ $//')"

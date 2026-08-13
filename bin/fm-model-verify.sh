@@ -507,7 +507,7 @@ record_available() {
 
 # shellcheck disable=SC2329 # Invoked by name through fm_availability_case.
 record_unavailable() {
-  local hold_state
+  local hold_state rc
   # THE HOLD IS WRITTEN FIRST, and this order is the safety property. Routing
   # reads both records, but the hold is the one that carries an expiry and a
   # release command, so it is the one an operator acts on. Writing the
@@ -515,6 +515,7 @@ record_unavailable() {
   # observed-unavailable result behind with no exclusion attached to it. Now the
   # fail-closed record lands first, and if the second write fails the candidate
   # is still excluded rather than still eligible.
+  fm_availability_transition_begin "$STATE" || return 1
   if hold_state=$(fm_availability_hold_state "$shape"); then
     if ! fm_route_health_write "$STATE" model "$key" "$hold_state" '' \
            "probe $shape at $NOW_ISO: $detail"; then
@@ -526,8 +527,11 @@ record_unavailable() {
       echo "MODEL_VERIFY: $key was established UNAVAILABLE and its availability hold could not be written; the observation record is what is excluding it" >&2
     fi
   fi
-  fm_availability_record_write "$STATE" "$key" "$FM_AVAIL_UNAVAILABLE" "$shape" \
+  fm_availability_record_write_locked "$STATE" "$key" "$FM_AVAIL_UNAVAILABLE" "$shape" \
     "bin/fm-model-verify.sh" "$detail" "$lat" "$NOW_ISO"
+  rc=$?
+  fm_availability_transition_end "$STATE"
+  return "$rc"
 }
 
 # shellcheck disable=SC2329 # Invoked by name through fm_availability_case.

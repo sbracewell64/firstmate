@@ -695,6 +695,34 @@ test_overlapping_observation_mutations_preserve_every_result() {
   pass "overlapping observation writes and retirements preserve every independent result"
 }
 
+test_an_older_release_cannot_erase_a_newer_negative_probe() {
+  local rec pid rc
+  rec=$(make_home release-probe-order); read_home "$rec"
+  (
+    FM_HOME="$HOME_DIR"
+    CONFIG="$HOME_DIR/config"
+    STATE="$HOME_DIR/state"
+    . "$ROOT/bin/fm-route-lib.sh"
+    fm_availability_transition_begin "$STATE" || exit 1
+    env -u FM_ROOT_OVERRIDE PATH="$BIN_DIR:/usr/bin:/bin:/usr/local/bin" \
+      FM_HOME="$HOME_DIR" FAKE_PI_MODE=refused "$VERIFY" --model vendor/only >/dev/null 2>&1 &
+    pid=$!
+    fm_test_reap "$pid"
+    fm_route_health_write "$STATE" model vendor/only '' '' '' || exit 1
+    fm_availability_record_retire_locked "$STATE" "$FM_AVAIL_UNAVAILABLE" vendor/only >/dev/null || exit 1
+    fm_availability_transition_end "$STATE"
+    wait "$pid" || rc=$?
+    [ "${rc:-0}" = 2 ] || [ "${rc:-0}" = 0 ]
+  ) || fail "the ordered release and negative probe did not complete"
+  [ "$(observation_of "$HOME_DIR" vendor/only)" = UNAVAILABLE ] \
+    || fail "an older release erased the newer unavailable observation"
+  assert_present "$HOME_DIR/state/model-health.json" \
+    "an older release erased the newer unavailable hold"
+  ! model_eligible "$HOME_DIR" vendor/only \
+    || fail "an older release made a freshly unavailable candidate eligible"
+  pass "an older release cannot erase a newer unavailable probe"
+}
+
 test_the_probe_runs_isolated_from_this_machine() {
   local rec hostile evidence argv cwd entries
   rec=$(make_home isolation '' claude); read_home "$rec"
@@ -1039,6 +1067,7 @@ test_a_parseable_but_invalid_record_refuses_instead_of_reading_as_empty
 test_an_established_unavailability_excludes_without_its_hold
 test_the_supported_release_retires_the_observation_it_overrides
 test_overlapping_observation_mutations_preserve_every_result
+test_an_older_release_cannot_erase_a_newer_negative_probe
 test_the_probe_runs_isolated_from_this_machine
 test_a_tooling_gap_files_the_repair_work_it_names
 test_a_refusal_names_every_exclusion_that_applies
