@@ -13,11 +13,20 @@ Only the shape of the vendor's output is a fact about a program this repo does n
 
 Verified on 2026-08-11 on Linux 6.18.33.2-microsoft-standard-WSL2 with `quota-axi` 0.1.16 (`schemaVersion` 3) and jq 1.8.1.
 
-The portable routing and restart-survival regressions were refreshed on 2026-08-12 with:
+The portable routing and restart-survival regressions were refreshed on 2026-08-13 with:
 
 ```sh
 $ bash tests/fm-capacity-routing.test.sh
+ok - an exhausted floor pool defers with the pool and the retry condition recorded, and dispatches nothing
+ok - capacity available dispatches unchanged and records the verdict and evidence it was admitted against
+ok - an available model that does not meet the floor is never a substitute: the answer stays a deferral
+ok - an exhausted primary with a floor-meeting sibling names the substitute and records no wait
+ok - a registry-ineligible sibling cannot suppress durable capacity deferral
+ok - unobservable quota is could-not-observe: the candidate stays eligible and the reason is recorded durably
+ok - an unreadable quota source is could-not-observe, becoming neither available nor unavailable
 $ bash tests/fm-capacity-retry.test.sh
+ok - a deferral survives a restart and resumes by itself when capacity returns, on the same route and floor
+ok - a tick while capacity is still spent keeps waiting instead of dispatching
 ```
 
 Both commands exited 0.
