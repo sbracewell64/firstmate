@@ -89,13 +89,14 @@ last_field_of() {  # <file> <record> <field>
 
 
 test_record_format_for_all_three_kinds() {
-  local home file now
+  local home file before after queued latency
   home=$(make_home format)
   file=$(ledger_file "$home")
-  now=$(date +%s)
+  before=$(date +%s)
 
-  printf '%s\t7\tsignal\talpha.status\tsignal: alpha\n' "$((now - 12))" \
+  printf '%s\t7\tsignal\talpha.status\tsignal: alpha\n' "$((before - 12))" \
     | ledger "$home" drain-record || fail "format: drain-record failed"
+  after=$(date +%s)
   ledger "$home" outcome steered 7 || fail "format: outcome failed"
   ledger "$home" task alpha --outcome landed --harness pi --model sol --effort medium \
     || fail "format: task failed"
@@ -107,12 +108,16 @@ test_record_format_for_all_three_kinds() {
   [ "$(field_of "$file" wake seq)" = 7 ] || fail "format: wake seq not recorded"
   [ "$(field_of "$file" wake kind)" = signal ] || fail "format: wake kind not recorded"
   [ "$(field_of "$file" wake task)" = alpha ] || fail "format: wake task not attributed"
-  [ "$(field_of "$file" wake latency)" = 12 ] || fail "format: wake latency not computed"
-  [ "$(field_of "$file" wake queued)" = "$((now - 12))" ] || fail "format: queued epoch not recorded"
+  queued=$(field_of "$file" wake queued)
+  latency=$(field_of "$file" wake latency)
+  [ "$queued" = "$((before - 12))" ] || fail "format: queued epoch not recorded"
+  [ "$latency" -ge "$((before - queued))" ] \
+    && [ "$latency" -le "$((after - queued))" ] \
+    || fail "format: wake latency not computed from the recording time"
 
   [ "$(field_of "$file" outcome outcome)" = steered ] || fail "format: outcome token not recorded"
   [ "$(field_of "$file" outcome task)" = alpha ] || fail "format: outcome task not resolved from its wake"
-  [ "$(field_of "$file" outcome queued)" = "$((now - 12))" ] \
+  [ "$(field_of "$file" outcome queued)" = "$queued" ] \
     || fail "format: outcome queued not copied from its wake record"
 
   [ "$(field_of "$file" task harness)" = pi ] || fail "format: task harness not recorded"
