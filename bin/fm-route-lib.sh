@@ -326,9 +326,8 @@ def effective_route_profile($rule; $path; $model; $harness):
     | (($tl_raw != null) and ($tl == null)) as $tl_malformed
     | (($floor.selectable_by_crew_rule? // true) == false) as $unselectable
     | ($models[luna_max_model]? // {}) as $luna_record
-    | (if (($pool | index(luna_max_model)) != null)
-          or (($route_profile.profile.model? // null) == luna_max_model)
-       then [
+    | def luna_profile_violations($profile):
+       [
          (if (($luna_record.effort_lock? // null) != luna_max_effort)
           then {rule:"luna_max_effort_lock", config_path:("/_models/" + luna_max_model + "/effort_lock"),
                 configured:luna_max_effort, observed:($luna_record.effort_lock? // "absent")}
@@ -341,18 +340,18 @@ def effective_route_profile($rule; $path; $model; $harness):
           then {rule:"luna_max_floor_effort", config_path:(if $floor_path != null then ($floor_path + "/effort_floor") else ($route_path + "/floor") end),
                 configured:luna_max_effort, observed:($ef_raw // "absent")}
           else empty end),
-         (if (($route_profile.profile.effort? // null) != luna_max_effort)
-          then {rule:"luna_max_profile_effort", config_path:($route_profile.path + "/effort"),
+         (if (($profile.profile.effort? // null) != luna_max_effort)
+          then {rule:"luna_max_profile_effort", config_path:($profile.path + "/effort"),
                 configured:luna_max_effort,
-                observed:(if ($route_profile.profile.effort? // null) == null then "provider default" else $route_profile.profile.effort end)}
+                observed:(if ($profile.profile.effort? // null) == null then "provider default" else $profile.profile.effort end)}
           else empty end),
-         (if (luna_max_harness_ok($route_profile.profile.harness? // "") | not)
-          then {rule:"luna_max_harness_unverified", config_path:($route_profile.path + "/harness"),
-                configured:"pi or pi-signed", observed:($route_profile.profile.harness? // "absent")}
+         (if (luna_max_harness_ok($profile.profile.harness? // "") | not)
+          then {rule:"luna_max_harness_unverified", config_path:($profile.path + "/harness"),
+                configured:"pi or pi-signed", observed:($profile.profile.harness? // "absent")}
           else empty end)
-       ] else [] end) as $luna_profile_violations
+       ];
 
-    | def held($m):
+    def held($m):
         ($holds.models[$m] // null) as $mh
         | (provider_of($m)) as $p
         | (if $p != null then ($holds.providers[$p] // null) else null end) as $ph
@@ -360,8 +359,8 @@ def effective_route_profile($rule; $path; $model; $harness):
           elif $ph != null then ($ph + {scope:"provider", subject:$p})
           else null end;
 
-    def violations($m; $e):
-        [ (if $m == luna_max_model then $luna_profile_violations[] else empty end),
+    def violations($m; $e; $profile):
+        [ (if $m == luna_max_model then luna_profile_violations($profile)[] else empty end),
           (if ($m == luna_max_model) and ($e != luna_max_effort)
            then {rule:"luna_max_effective_effort", config_path:"/profile/luna-max/effort",
                  configured:luna_max_effort,
@@ -456,7 +455,7 @@ def effective_route_profile($rule; $path; $model; $harness):
                | $r + {requested:$model, effort:$effort,
                        profile:(if $r.resolved == luna_max_model and $effort == luna_max_effort then luna_max_profile.name else null end),
                        held:(if $r.resolved != null then held($r.resolved) else null end),
-                       violations:(if $r.resolved != null then violations($r.resolved; $effort)
+                       violations:(if $r.resolved != null then violations($r.resolved; $effort; $route_profile)
                                    elif $r.resolution == "unstated"
                                    then [{rule:"model_unstated", config_path:$pool_path,
                                           configured:(if ($pool | length) > 0 then ($pool | join(", "))
@@ -465,8 +464,9 @@ def effective_route_profile($rule; $path; $model; $harness):
                                    else [] end)} ),
      candidates:[ $pool | to_entries[]
                   | .value as $c
+                  | (effective_route_profile($rule; $route_path; $c; "")) as $candidate_profile
                   | (held($c)) as $h
-                  | (violations($c; (if ($effort | length) > 0 then $effort else ($ef // "") end))) as $v
+                  | (violations($c; (if ($effort | length) > 0 then $effort else ($ef // "") end); $candidate_profile)) as $v
                   | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
                      held:$h, violations:$v,
                      floor_met:(($v | length) == 0),

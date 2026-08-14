@@ -329,7 +329,18 @@ test_luna_max_array_uses_the_effective_profile() {
     --model openai-codex/gpt-5.6-luna --effort max); rc=$?
   expect_code 0 "$rc" "Luna must validate against its matching array profile"
   assert_contains "$out" "ok:" "the matching Luna array entry was not selected"
-  pass "Luna route arrays validate the profile matching the effective model"
+  jq '(.rules[] | select(.route == "R-EVALUATOR").pool) = [
+        "openai-codex/gpt-5.6-terra", "openai-codex/gpt-5.6-luna"
+      ]' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" eligible --route R-EVALUATOR); rc=$?
+  expect_code 0 "$rc" "eligibility must validate Luna against its own array profile"
+  assert_contains "$out" "openai-codex/gpt-5.6-luna" "eligible dropped the later Luna profile"
+  out=$(run_route "$HOME_DIR" next --route R-EVALUATOR \
+    --after openai-codex/gpt-5.6-terra); rc=$?
+  expect_code 0 "$rc" "fallback must validate Luna against its own array profile"
+  assert_contains "$out" "openai-codex/gpt-5.6-luna" "fallback dropped the later Luna profile"
+  pass "Luna checks, eligibility and fallback use the matching array profile"
 }
 
 test_unknown_route_and_ambiguous_bare_name_are_refused() {
