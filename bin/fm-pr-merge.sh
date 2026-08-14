@@ -59,8 +59,15 @@
 # recognised only before the optional -- separator; after it, it is forwarded to
 # gh-axi, which rejects it.
 #
-# The accepted residual-risk boundary for the final verification and forge merge
-# is owned by docs/architecture.md's "Delivery modes are explicit per task".
+# The final verification is not atomically bound to the merge. It narrows the
+# remaining race window to the verification metadata write, but a head can still
+# change before the merge. Closing that race requires a server-side head
+# precondition under decision
+# pipeline-reports-green-on-absent-ci-decision-merge-atomic-binding. The real
+# `gh pr merge` supports `--match-head-commit SHA`, but gh-axi constructs its gh
+# arguments from a fixed allowlist of the method, --auto, --delete-branch, --body,
+# and --subject and silently drops other flags. Adopting the precondition later
+# therefore requires changing the single gh-axi invocation at the end.
 #
 # A task released before its pull request lands keeps a durable landing record
 # instead of a meta, and this path lands it through that record. A task released
