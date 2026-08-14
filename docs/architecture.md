@@ -95,6 +95,7 @@ The target vocabulary distinguishes available, warning, exhausted, and unknown b
 ### Cross-layer participation
 
 Cross-layer participation never transfers canonical ownership.
+Authority and Economics participate across all seven operational layers through their existing enforcement and evidence seams.
 No-mistakes evaluates in Layer 7 and may run a fix-and-review loop in Layer 5.
 A context governor senses in Layer 3 and may enforce only through Layer 5.
 A gate ledger observes in Layer 7 and authorizes only through Layer 8.
