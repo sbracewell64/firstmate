@@ -559,7 +559,8 @@ The state vocabulary is closed to the states the routing config's own failover c
 A hold with a numeric `until` stops binding on read once that epoch passes, so nothing has to run to forget it; a `null` `until` holds until released explicitly, which is what an authentication failure needs.
 An absent file means no remembered cooldown and never that a model is healthy, while a file that exists and cannot be parsed refuses rather than reading as an empty one.
 That refusal names this record and not `crew-dispatch.json`: the two inputs fail independently and are repaired differently, so a refusal that points at the file which parses perfectly costs the whole diagnosis.
-Eligibility reads this record and never probes: a route's ordered pool costs nothing to resolve on the happy path, and probing belongs to failure handling.
+Reading this record never probes: the failure-based availability term is a local lookup, independent of the bounded `quota-axi` read that the quota-aware eligibility term performs before dispatch.
+Route `check` and `routes` remain local reads, while `eligible`, `next`, and `capacity` request a current quota observation as described in "Quota-aware routing" above.
 
 ## Model registry (config/models.json)
 
