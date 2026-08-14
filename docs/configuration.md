@@ -441,7 +441,8 @@ Route `check`, `eligible`, and `next` all apply those same requirements to the e
 This binding validates how an already-selected Luna dispatch launches; it does not qualify a task for Luna or replace firstmate's separate natural-language rule and role-selection judgment.
 
 `bin/fm-route-lib.sh` owns these rules, `bin/fm-route.sh` reads them, and `fm-spawn.sh` enforces them at the chokepoint: a ship or scout dispatch in a home with routed pools must name the route it claims with `--route` - or an explicit `--capability-floor` naming exactly one route - and a dispatch outside that route's pool or below its floor is refused naming the route, the exact JSON config path, the configured value and the observed one.
-The route and a digest of the enforced policy surface land in `state/<id>.meta` as `route=` and `route_policy_digest=`, the resolved Luna binding additionally lands as `profile=luna-max`, and the recorded `capability_floor=` becomes the route's own.
+A resolved Luna binding lands in `state/<id>.meta` as `profile=luna-max`, including for an unrouted or secondmate launch.
+For a routed dispatch, the route and a digest of the enforced policy surface additionally land as `route=` and `route_policy_digest=`, and the recorded `capability_floor=` becomes the route's own.
 Enforcement applies to the next dispatch only; work already under way keeps the record it was dispatched under.
 
 ### Model availability record (state/model-health.json)
