@@ -58,9 +58,14 @@ The platform's `axi_router.py` remains **Project-internal** and is not a second 
 
 ### Layer 5: Control loop
 
-The canonical contract owner is the platform's `scripts/runtime_execution_node.py` contract for observe, plan, act, verify, update, and bounded continuation, while the canonical operator owner is Firstmate's fleet loop.
-The scope split is deliberate: the platform owns loop semantics, and [`bin/fm-watch.sh`](../bin/fm-watch.sh), [`bin/fm-supervise-daemon.sh`](../bin/fm-supervise-daemon.sh), [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh), [`bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh), and [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) own operator execution.
-The operator loop and its refusal to discard unlanded work are **Current**.
+The canonical contract owner for the platform node loop is `scripts/runtime_execution_node.py` for observe, plan, act, verify, update, and bounded continuation, while the canonical operator owner for fleet execution is Firstmate's fleet loop.
+The Engineering Intelligence plane is a distinct execution participant at this layer alongside the node loop and the fleet loop, not a new layer.
+ADR-0033 owns its `ExecutionUnit`, `EngineeringExecutionPlan`, and `EngineeringSession` model, while ADR-0038 owns the runtime-adapter and reconciliation split exercised through the project's `platform reconcile` surface.
+Each set of accepted owner semantics is a **Reference contract**, while its implementation and `platform reconcile` remain **Project-internal** and do not become a second Firstmate operator surface.
+The **Project-internal** released-baseline evidence records 48 completed Engineering Intelligence sessions and the `v1.5.0` release, establishing a populated project implementation rather than a dormant target placeholder.
+That supporting evidence is neither a committed runtime owner nor a maintained verification surface, and the absent Firstmate discovery, invocation, observation, and recovery path for `platform reconcile` is a **Target gap** rather than an active operator capability.
+The scope split is deliberate: the platform owners retain their distinct execution semantics, and [`bin/fm-watch.sh`](../bin/fm-watch.sh), [`bin/fm-supervise-daemon.sh`](../bin/fm-supervise-daemon.sh), [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh), [`bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh), and [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) own fleet operator execution.
+The fleet operator loop and its refusal to discard unlanded work are **Current**.
 Explicit deadline wakes, bounded fix rounds, wind-down reserve, and distinct exhausted, complete, and failed outcomes remain **Target gaps** unless their executable owners establish them.
 Fractal terminology is a **Reference contract**, not a component or a new owner.
 
@@ -101,6 +106,7 @@ Cross-layer participation never transfers canonical ownership.
 Authority and Economics participate across all seven operational layers through their existing enforcement and evidence seams.
 The skills system supplies authored conditional instructions to Layer 3 and institutional memory to Layer 6 while remaining owned by `.agents/skills/`.
 No-mistakes evaluates in Layer 7 and may run a fix-and-review loop in Layer 5.
+The Engineering Intelligence plane executes at Layer 5; its project-owned plans, session state, durable artifacts, and gate evidence may participate in Layers 1, 3, 6, and 7 without becoming canonical owners there.
 A context governor senses in Layer 3 and may enforce only through Layer 5.
 A gate ledger observes in Layer 7 and authorizes only through Layer 8.
 [`bin/fm-session-start.sh`](../bin/fm-session-start.sh) projects Layers 1, 5, 6, 7, and 8 for recovery while owning only that projection.
