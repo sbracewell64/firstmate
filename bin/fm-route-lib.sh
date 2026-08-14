@@ -70,6 +70,13 @@
 # the configured value, and the observed value. A refusal a reader cannot trace
 # back to a line of policy is a refusal nobody can fix.
 #
+# LUNA MAX PROFILE. The 2026-08-14 Luna ruling binds the exact production profile
+# openai-codex/gpt-5.6-luna on Pi with effective max effort. This library owns
+# the executable invariant because the same decision feeds check, eligible,
+# failover and the spawn chokepoint. A routed Luna pool or primary profile must
+# keep the max lock, max-expressible evidence, max floor, max route profile
+# effort, and a verified Pi-family harness, or the route refuses before launch.
+#
 # docs/configuration.md "Crew dispatch profiles" owns the config schema and
 # "Model availability record" owns state/model-health.json. This header owns the
 # mechanics.
@@ -114,6 +121,7 @@ FM_ROUTE_TOKEN_AMBIGUOUS=FM_SPAWN_ROUTE_AMBIGUOUS
 FM_ROUTE_TOKEN_FLOOR_MISMATCH=FM_SPAWN_ROUTE_FLOOR_MISMATCH
 FM_ROUTE_TOKEN_POOL=FM_SPAWN_ROUTE_POOL_VIOLATION
 FM_ROUTE_TOKEN_FLOOR=FM_SPAWN_ROUTE_FLOOR_VIOLATION
+FM_ROUTE_TOKEN_PROFILE=FM_SPAWN_ROUTE_PROFILE_VIOLATION
 FM_ROUTE_TOKEN_HELD=FM_SPAWN_ROUTE_MODEL_HELD
 FM_ROUTE_TOKEN_NO_CANDIDATE=FM_ROUTE_NO_CANDIDATE
 FM_ROUTE_TOKEN_HEALTH_STATE=FM_ROUTE_HEALTH_STATE_UNKNOWN
@@ -251,6 +259,23 @@ def loop_rank($v): (if ($v | type) == "string"
                     then {"not-required":0,"required":1,"verified-agentic":2}[$v]
                     else null end);
 def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else null end);
+def luna_max_profile:
+  {name:"luna-max", model:"openai-codex/gpt-5.6-luna", effort:"max",
+   harnesses:["pi", "pi-signed"]};
+def luna_max_model: luna_max_profile.model;
+def luna_max_effort: luna_max_profile.effort;
+def luna_max_harness_ok($h): (luna_max_profile.harnesses | index($h)) != null;
+def route_profiles($rule; $path):
+  if (($rule.use? | type) == "array") then
+    [ $rule.use | to_entries[]
+      | {profile:.value, path:($path + "/use/" + (.key | tostring))} ]
+  elif (($rule.use? | type) == "object") then
+    [{profile:$rule.use, path:($path + "/use")}]
+  elif ($rule | type) == "object" then
+    [{profile:$rule, path:$path}]
+  else [] end;
+def first_route_profile($rule; $path):
+  (route_profiles($rule; $path)[0]? // {profile:{}, path:$path});
 
 # A route is DEFINED by a rule. The top-level `default` names which route is the
 # default and carries its profile, so a default pointing at an existing rule is
@@ -281,6 +306,7 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
     | (if ($floor_id != null) then ("/_floors/" + $floor_id) else null end) as $floor_path
     | (if (($rule.pool? | type) == "array") then $rule.pool else [] end) as $pool
     | ($route_path + "/pool") as $pool_path
+    | (first_route_profile($rule; $route_path)) as $route_profile
     | ($floor.effort_floor? // null) as $ef_raw
     | (if ($ef_raw | type) == "string" and (rank($ef_raw) != null) then $ef_raw else null end) as $ef
     | (($ef_raw | type) == "string" and ($ef_raw | startswith("WAIVED"))) as $ef_waived
@@ -292,6 +318,32 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
     | (if (loop_rank($tl_raw) != null) then $tl_raw else null end) as $tl
     | (($tl_raw != null) and ($tl == null)) as $tl_malformed
     | (($floor.selectable_by_crew_rule? // true) == false) as $unselectable
+    | ($models[luna_max_model]? // {}) as $luna_record
+    | (if (($pool | index(luna_max_model)) != null)
+          or (($route_profile.profile.model? // null) == luna_max_model)
+       then [
+         (if (($luna_record.effort_lock? // null) != luna_max_effort)
+          then {rule:"luna_max_effort_lock", config_path:("/_models/" + luna_max_model + "/effort_lock"),
+                configured:luna_max_effort, observed:($luna_record.effort_lock? // "absent")}
+          else empty end),
+         (if (($luna_record.effort_expressible? // []) | index(luna_max_effort)) == null
+          then {rule:"luna_max_effort_unexpressible", config_path:("/_models/" + luna_max_model + "/effort_expressible"),
+                configured:"array containing max", observed:($luna_record.effort_expressible? // "absent")}
+          else empty end),
+         (if ($ef_raw != luna_max_effort)
+          then {rule:"luna_max_floor_effort", config_path:(if $floor_path != null then ($floor_path + "/effort_floor") else ($route_path + "/floor") end),
+                configured:luna_max_effort, observed:($ef_raw // "absent")}
+          else empty end),
+         (if (($route_profile.profile.effort? // null) != luna_max_effort)
+          then {rule:"luna_max_profile_effort", config_path:($route_profile.path + "/effort"),
+                configured:luna_max_effort,
+                observed:(if ($route_profile.profile.effort? // null) == null then "provider default" else $route_profile.profile.effort end)}
+          else empty end),
+         (if (luna_max_harness_ok($route_profile.profile.harness? // "") | not)
+          then {rule:"luna_max_harness_unverified", config_path:($route_profile.path + "/harness"),
+                configured:"pi or pi-signed", observed:($route_profile.profile.harness? // "absent")}
+          else empty end)
+       ] else [] end) as $luna_profile_violations
 
     | def held($m):
         ($holds.models[$m] // null) as $mh
@@ -302,7 +354,13 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
           else null end;
 
     def violations($m; $e):
-        [ (if ($floor_undefined)
+        [ (if $m == luna_max_model then $luna_profile_violations[] else empty end),
+          (if ($m == luna_max_model) and ($e != luna_max_effort)
+           then {rule:"luna_max_effective_effort", config_path:"/profile/luna-max/effort",
+                 configured:luna_max_effort,
+                 observed:(if (($e | length) == 0) then "provider default" else $e end)}
+           else empty end),
+          (if ($floor_undefined)
            then {rule:"floor_undefined", config_path:($route_path + "/floor"),
                  configured:$floor_id,
                  observed:("absent: " + $floor_path + " is not defined, so no axis of the claimed floor can be checked")}
@@ -389,6 +447,7 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
      promotion_target:($rule.promotion_target? // null),
      subject:( (resolve($model)) as $r
                | $r + {requested:$model, effort:$effort,
+                       profile:(if $r.resolved == luna_max_model and $effort == luna_max_effort then luna_max_profile.name else null end),
                        held:(if $r.resolved != null then held($r.resolved) else null end),
                        violations:(if $r.resolved != null then violations($r.resolved; $effort)
                                    elif $r.resolution == "unstated"
@@ -401,7 +460,8 @@ def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else nul
                   | .value as $c
                   | (held($c)) as $h
                   | (violations($c; (if ($effort | length) > 0 then $effort else ($ef // "") end))) as $v
-                  | {model:$c, position:(.key + 1), held:$h, violations:$v,
+                  | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
+                     held:$h, violations:$v,
                      floor_met:(($v | length) == 0),
                      eligible:(($v | length) == 0 and $h == null)} ]}
   end

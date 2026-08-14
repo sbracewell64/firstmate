@@ -61,10 +61,10 @@
 #   home whose config/crew-dispatch.json carries routed pools, unless an explicit
 #   --capability-floor already names exactly one route; refused on --secondmate.
 #   A home with no routed pool - which is every home using the documented profile
-#   schema, and every home with no dispatch config - is unaffected. The route and
-#   a digest of the policy surface that checked it land in state/<id>.meta, and
-#   the recorded capability floor becomes the route's own so the two can never
-#   describe different rungs. bin/fm-route-lib.sh owns the rules; run
+#   schema, and every home with no dispatch config - is unaffected. The route,
+#   any resolved named profile, and a digest of the policy surface that checked
+#   it land in state/<id>.meta, and the recorded capability floor becomes the
+#   route's own so the two can never describe different rungs. bin/fm-route-lib.sh owns the rules; run
 #   bin/fm-route.sh to read them, list a route's eligible candidates in pool
 #   order, or resolve a failover substitute inside the same pool.
 #   Ship and scout spawns also consult bin/fm-admission.sh before allocating
@@ -335,6 +335,7 @@ REASON_CODE=
 CAPABILITY_FLOOR=
 TOOLING_GAP_ITEM=
 ROUTE=
+RESOLVED_PROFILE=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
@@ -1495,6 +1496,7 @@ if [ "$KIND" != secondmate ]; then
     # check above already refused a floor id `_floors` does not define, so a
     # floor recorded here is always one that was measured against a definition.
     ROUTE_FLOOR=$(printf '%s' "$ROUTE_DECISION" | jq -r '.floor // empty' 2>/dev/null || true)
+    RESOLVED_PROFILE=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.profile // empty' 2>/dev/null || true)
     if [ -n "$ROUTE_FLOOR" ]; then
       if [ "$CAPABILITY_FLOOR_SET" -eq 1 ] && [ "$CAPABILITY_FLOOR" != "$ROUTE_FLOOR" ]; then
         echo "error: $FM_ROUTE_TOKEN_FLOOR_MISMATCH: route $ROUTE resolves against floor $ROUTE_FLOOR, but this dispatch recorded --capability-floor $CAPABILITY_FLOOR; a record that disagrees with the route it was checked against is worse than no record" >&2
@@ -2860,6 +2862,7 @@ fi
   # layer may write a scheduling, admission, or failover outcome back onto the
   # tier the work IS. An absent pair means this home enforces no routed pool.
   [ -z "$ROUTE" ] || echo "route=$ROUTE"
+  [ -z "$RESOLVED_PROFILE" ] || echo "profile=$RESOLVED_PROFILE"
   [ -z "${ROUTE_POLICY_DIGEST:-}" ] || echo "route_policy_digest=$ROUTE_POLICY_DIGEST"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
