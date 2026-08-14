@@ -6,6 +6,100 @@ The [README](../README.md) carries the high-level diagram and a short synopsis.
 This document expands every part of it.
 firstmate's always-loaded operating contract and routing index for conditional procedures is [`AGENTS.md`](../AGENTS.md); this is the human-facing companion.
 
+## Canonical nine-layer target architecture
+
+This section is the constitutional owner of Firstmate's target architecture.
+The target has seven operational layers plus two cross-cutting concerns, Authority and Economics, which are numbered as layers 8 and 9 so every concern has a stable address.
+A mechanism may participate in more than one layer, but each named concern has one canonical owner and each scope split below is explicit rather than competing ownership.
+The target describes intended boundaries and does not by itself establish that an implementation exists or is active.
+
+The evidence-status labels used below are normative.
+
+- **Current** means the named contract or executable owner exists in the operator path, although optional behavior still requires its documented activation condition.
+- **Target gap** means the architecture reserves the responsibility and owner, but the executable owner or complete behavior is not implemented and must not be represented as operational.
+- **Reference contract** means Firstmate adopts the semantics while the referenced implementation remains outside the operator path.
+- **Project-internal** means the component may remain inside the platform project but is not a second Firstmate operator surface.
+- **Retired or not adopted** means the artifact is not a capability of the target architecture.
+
+### Layer 1: Interface
+
+The canonical owner is the Firstmate interface contract in [`AGENTS.md`](../AGENTS.md), with [`bin/fm-brief.sh`](../bin/fm-brief.sh) owning worker instructions, [`bin/fm-session-start.sh`](../bin/fm-session-start.sh) owning recovery projection, and [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) owning backlog-adapter mechanics.
+This layer owns the work contract, one durable identity spanning the work record and queue entry, recovery from canonical state, and bounded projections such as pull-request context.
+The task record, queue, and recovery path are **Current**.
+A complete, single work-object projection and a general retrieved-context section remain **Target gaps** unless their executable owners expose them.
+Platform planning artifacts such as `scripts/runtime_planning_design.py` may remain **Project-internal**, while a separate platform operator-intake surface is **Retired** and platform doctrine that does not reach sessions is only a **Reference contract**.
+
+### Layer 2: Router
+
+The canonical policy owner is `config/crew-dispatch.json`, while [`bin/fm-harness.sh`](../bin/fm-harness.sh), [`bin/fm-route.sh`](../bin/fm-route.sh), [`bin/fm-route-lib.sh`](../bin/fm-route-lib.sh), and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) own executable resolution and enforcement.
+This layer separates route selection, admission, eligibility, scheduling, and failover so one concern cannot silently answer for another.
+Routing and route recording are **Current**, while model, price, capacity, and admission controls are current only when their documented configuration activates them.
+Provider and coordinator registries in the platform remain **Project-internal** rather than a second operator router.
+
+### Layer 3: Context engine
+
+The canonical owner is Firstmate's assembly of stable instructions, retrieved task context, task state, and validation evidence, not a new context subsystem.
+[`AGENTS.md`](../AGENTS.md) and `.agents/skills/` own stable and conditionally loaded instruction context, while the Layer 1 work object and no-mistakes run record supply task state and evidence.
+The coherent context engine is a **Target gap**, so the existence of those inputs must not be presented as an implemented governor.
+The state vocabulary of the platform's `scripts/runtime_context_governor.py` is a **Reference contract**, and that implementation remains **Project-internal**.
+Repowise is **Not adopted** unless separate evidence later authorizes it through this architecture owner.
+
+### Layer 4: Tool layer
+
+The canonical owner is the narrow executable tool surface under `bin/fm-*.sh`, the `*-axi` command family, and [`bin/fm-backend.sh`](../bin/fm-backend.sh) with its runtime adapters.
+This layer owns session access, isolation tooling, forge operations, and typed tool results, while authority to perform sensitive actions belongs to Layer 8.
+Runtime backends, worktree isolation, and guarded forge helpers such as [`bin/fm-pr-check.sh`](../bin/fm-pr-check.sh), [`bin/fm-pr-merge.sh`](../bin/fm-pr-merge.sh), and [`bin/fm-merge-local.sh`](../bin/fm-merge-local.sh) are **Current**.
+A uniform cross-tool failure taxonomy and strict typed AXI conformance remain **Target gaps** wherever executable owners do not yet expose them.
+The platform's `axi_router.py` remains **Project-internal** and is not a second owner of Firstmate's operator tool surface.
+
+### Layer 5: Control loop
+
+The canonical contract owner is the platform's `scripts/runtime_execution_node.py` contract for observe, plan, act, verify, update, and bounded continuation, while the canonical operator owner is Firstmate's fleet loop.
+The scope split is deliberate: the platform owns loop semantics, and [`bin/fm-watch.sh`](../bin/fm-watch.sh), [`bin/fm-supervise-daemon.sh`](../bin/fm-supervise-daemon.sh), [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh), [`bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh), and [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) own operator execution.
+The operator loop and its refusal to discard unlanded work are **Current**.
+Explicit deadline wakes, bounded fix rounds, wind-down reserve, and distinct exhausted, complete, and failed outcomes remain **Target gaps** unless their executable owners establish them.
+Fractal terminology is a **Reference contract**, not a component or a new owner.
+
+### Layer 6: Memory
+
+The canonical owner is the fleet's durable memory surface, partitioned by purpose rather than gathered into a second store.
+The Layer 1 work object owns working memory, [`AGENTS.md`](../AGENTS.md), `.agents/skills/`, and routed durable records own institutional memory, and [`bin/fm-wake-ledger.sh`](../bin/fm-wake-ledger.sh) owns outcome memory.
+Those surfaces are **Current**.
+A receiver-verified continuation envelope and bi-temporal validity with declared supersession remain **Target gaps**.
+Engraphis is unbuilt and therefore a **Target gap**, while legacy wiki, singleton graph, and parallel watch-register plans are **Retired** rather than latent capabilities.
+
+### Layer 7: Evaluation and observability
+
+The canonical ownership split is by scope.
+For fleet work, no-mistakes owns independent validation, [`bin/fm-fleet-snapshot.sh`](../bin/fm-fleet-snapshot.sh) owns the structured fleet projection, and [`bin/fm-status-event-lib.sh`](../bin/fm-status-event-lib.sh) owns typed task-event evidence.
+For the platform project, `scripts/platform-certification.py`, `scripts/runtime_lineage.py`, `scripts/runtime_gate_ledger.py`, and `scripts/runtime_review_cognition.py` remain **Project-internal** and do not become duplicate fleet evaluators.
+The fleet evaluation surface is **Current**, while any read-only economics projection is a **Target gap** owned by Layer 9.
+An unpopulated Event Ledger is **Retired as a capability claim**, even if its schema remains, and an unevaluated DeepSWE pilot is **Not adopted** rather than an available evaluator.
+
+### Layer 8: Authority and permissions
+
+This is a cross-cutting mapping, not a new authority level or runtime subsystem.
+The canonical fleet owner is the authority contract in [`AGENTS.md`](../AGENTS.md), enforced at existing seams by tools such as [`bin/fm-worktree-guard.sh`](../bin/fm-worktree-guard.sh), [`bin/fm-lock.sh`](../bin/fm-lock.sh), guarded merge helpers, and the [`ask-user-authority`](../.agents/skills/ask-user-authority/SKILL.md) procedure.
+The platform's `scripts/runtime_authorization.py` remains **Project-internal** and owns only platform identities, dispositions, and warrants.
+The fleet authority surface is **Current**, and external authority vocabularies are **Reference contracts** unless this owner explicitly adopts them.
+
+### Layer 9: Economics and budgets
+
+This is a cross-cutting read model over existing evidence, not a new ledger, daemon, or authority.
+The evidence sources are no-mistakes invocation records, the wake-outcome ledger, provider quota and token records, and forge outcomes, each still owned by its existing producer.
+The reserved canonical projection owner is `bin/fm-economics.sh`, which must remain read-only and must not own source data or enforcement.
+That projection does not exist, so Layer 9 is a **Target gap** and no cost or budget verdict may be represented as operational from this architecture alone.
+The target vocabulary distinguishes available, warning, exhausted, and unknown budgets, with enforcement delegated to existing routing, admission, and task-control seams rather than a new economics control plane.
+
+### Cross-layer participation
+
+Cross-layer participation never transfers canonical ownership.
+No-mistakes evaluates in Layer 7 and may run a fix-and-review loop in Layer 5.
+A context governor senses in Layer 3 and may enforce only through Layer 5.
+A gate ledger observes in Layer 7 and authorizes only through Layer 8.
+[`bin/fm-session-start.sh`](../bin/fm-session-start.sh) projects Layers 1, 5, 6, 7, and 8 for recovery while owning only that projection.
+Secondmate homes recursively instantiate this architecture and do not create another layer or another architecture owner.
+
 ## Event-driven supervision
 
 A zero-token bash watcher (`bin/fm-watch.sh`) sleeps on the fleet, classifies detected wakes in bash, and wakes the first mate only when something is actionable.
