@@ -70,8 +70,8 @@
 # the configured value, and the observed value. A refusal a reader cannot trace
 # back to a line of policy is a refusal nobody can fix.
 #
-# LUNA MAX PROFILE. The 2026-08-14 Luna ruling binds the exact production profile
-# openai-codex/gpt-5.6-luna on Pi with effective max effort. This library owns
+# LUNA MAX PROFILE. The production binding is the exact profile
+# openai-codex/gpt-5.6-luna on a supported Pi-family harness with effective max effort. This library owns
 # the executable invariant because the same decision feeds check, eligible,
 # failover and the spawn chokepoint. A routed Luna pool or primary profile must
 # keep the max lock, max-expressible evidence, max floor, max route profile
