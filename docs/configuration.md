@@ -387,6 +387,7 @@ The optional `floor` field names the capability floor a route resolves against, 
 A dispatch that names no floor inherits the default route's floor, which for an array-form `default` is the first floor its profiles define.
 A home whose config defines no floor at all records `capability_floor=unconfigured`, and a config that exists but cannot be read fails closed as unverifiable so that a recorded floor is never checked against nothing.
 If a selected profile carries an effort value the chosen harness does not accept, `fm-spawn.sh` records the requested `effort=` in task meta for traceability but omits the launch flag, and bootstrap reports the invalid harness/effort pair as a `CREW_DISPATCH` diagnostic when it is visible in the file.
+The Luna Max production binding below is the fail-closed exception to that generic compatibility behavior.
 See [`docs/examples/crew-dispatch.json`](examples/crew-dispatch.json) for a starting point to copy into local `config/crew-dispatch.json`.
 When the file exists, bootstrap validates it with `jq`.
 Valid files stay silent by default; with `FM_BOOTSTRAP_VERBOSE_FACTS=1`, bootstrap emits `BOOTSTRAP_INFO: crew dispatch active config/crew-dispatch.json`, one `BOOTSTRAP_INFO:` fact per rule, and one fact for the optional default profile set.
@@ -397,7 +398,8 @@ Secondmate homes inherit this file from the primary, so a secondmate's own crewm
 ### Routed pools (optional)
 
 A rule may additionally carry a `route` id and an ordered `pool`, which turns that rule into a route the shell scripts enforce.
-This is the one part of this file the scripts read as policy rather than as prose, so it is opt-in per home: a config with no `pool` anywhere behaves exactly as the section above describes, and so does a home with no config at all.
+This is the one part of this file the scripts read as route policy rather than as prose, so it is opt-in per home except for the global Luna Max production binding described below.
+A config with no `pool` anywhere, or a home with no config at all, otherwise behaves exactly as the section above describes.
 
 ```json
 {
@@ -432,8 +434,15 @@ A missing input is a refusal and never a skipped check: a dispatch that names no
 An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `context_ceiling` and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
 A model or provider the availability record currently holds is refused at the same point, naming the held state, the scope, the subject and its recorded expiry, so `check` and `eligible` can never give opposite answers about one model.
 
+Every production selection of Luna has one accepted invocation binding: profile `luna-max`, exact model `openai-codex/gpt-5.6-luna`, harness `pi` or `pi-signed`, and effective effort `max`.
+`fm-spawn.sh` applies that binding even when routed pools are not configured and refuses a provider-default, `high`, unknown, noncanonical-model, or unsupported-harness Luna invocation before launch; OpenCode is not a supported Luna Max harness.
+In a routed config, the Luna model record must also carry `effort_lock: "max"` and include `max` in `effort_expressible`, while the selected route must resolve to an object floor with `effort_floor: "max"` and a matching `use` profile whose effort is `max` and whose harness is `pi` or `pi-signed`.
+Route `check`, `eligible`, and `next` all apply those same requirements to the effective matching profile, including a matching entry later in a `use` array, so removal or downgrade makes Luna ineligible rather than silently changing its invocation.
+This binding validates how an already-selected Luna dispatch launches; it does not qualify a task for Luna or replace firstmate's separate natural-language rule and role-selection judgment.
+
 `bin/fm-route-lib.sh` owns these rules, `bin/fm-route.sh` reads them, and `fm-spawn.sh` enforces them at the chokepoint: a ship or scout dispatch in a home with routed pools must name the route it claims with `--route` - or an explicit `--capability-floor` naming exactly one route - and a dispatch outside that route's pool or below its floor is refused naming the route, the exact JSON config path, the configured value and the observed one.
-The route and a digest of the enforced policy surface land in `state/<id>.meta` as `route=` and `route_policy_digest=`, and the recorded `capability_floor=` becomes the route's own.
+A resolved Luna binding lands in `state/<id>.meta` as `profile=luna-max`, including for an unrouted or secondmate launch.
+For a routed dispatch, the route and a digest of the enforced policy surface additionally land as `route=` and `route_policy_digest=`, and the recorded `capability_floor=` becomes the route's own.
 Enforcement applies to the next dispatch only; work already under way keeps the record it was dispatched under.
 
 ### Model availability record (state/model-health.json)

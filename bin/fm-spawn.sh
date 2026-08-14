@@ -61,10 +61,11 @@
 #   home whose config/crew-dispatch.json carries routed pools, unless an explicit
 #   --capability-floor already names exactly one route; refused on --secondmate.
 #   A home with no routed pool - which is every home using the documented profile
-#   schema, and every home with no dispatch config - is unaffected. The route and
-#   a digest of the policy surface that checked it land in state/<id>.meta, and
-#   the recorded capability floor becomes the route's own so the two can never
-#   describe different rungs. bin/fm-route-lib.sh owns the rules; run
+#   schema, and every home with no dispatch config - is unaffected except for the
+#   global Luna Max binding. The route,
+#   any resolved named profile, and a digest of the policy surface that checked
+#   it land in state/<id>.meta, and the recorded capability floor becomes the
+#   route's own so the two can never describe different rungs. bin/fm-route-lib.sh owns the rules; run
 #   bin/fm-route.sh to read them, list a route's eligible candidates in pool
 #   order, or resolve a failover substitute inside the same pool.
 #   Ship and scout spawns also consult bin/fm-admission.sh before allocating
@@ -335,6 +336,7 @@ REASON_CODE=
 CAPABILITY_FLOOR=
 TOOLING_GAP_ITEM=
 ROUTE=
+RESOLVED_PROFILE=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
@@ -586,6 +588,30 @@ else
   fi
 fi
 
+luna_effective_binding_check() {  # <harness> <model> <effort>
+  local harness=$1 model=$2 effort=$3
+  case "$model" in
+    openai-codex/gpt-5.6-luna)
+      if [ "$effort" != max ]; then
+        echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require effective max effort; observed ${effort:--}" >&2
+        return 1
+      fi
+      case "$harness" in
+        pi|pi-signed) ;;
+        *)
+          echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require a supported Pi-family harness; observed ${harness:--}" >&2
+          return 1
+          ;;
+      esac
+      RESOLVED_PROFILE=luna-max
+      ;;
+    gpt-5.6-luna|*/gpt-5.6-luna)
+      echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require the exact model openai-codex/gpt-5.6-luna; observed $model" >&2
+      return 1
+      ;;
+  esac
+}
+
 spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
   local remote_backend remote_target remote_harness remote_herdr_session registry_lock remote_lock remote_generation
@@ -671,6 +697,11 @@ spawn_remote_secondmate() {
       return 1
       ;;
   esac
+  luna_effective_binding_check "$harness" "$model" "$effort" || {
+    fm_lock_release "$registry_lock" || true
+    fm_lock_release "$SPAWN_TASK_LOCK" || true
+    return 1
+  }
   meta="$STATE/$id.meta"
   if [ -e "$meta" ] || [ -L "$meta" ]; then
     if [ ! -f "$meta" ] || [ -L "$meta" ] \
@@ -810,6 +841,7 @@ spawn_remote_secondmate() {
     echo "tasktmp="
     echo "model=${model#-}"
     echo "effort=${effort#-}"
+    [ -z "$RESOLVED_PROFILE" ] || echo "profile=$RESOLVED_PROFILE"
     echo "home=$home"
     echo "projects=$(secondmate_registry_field "$DATA/secondmates.md" "$id" projects)"
     echo "remote_host=$host"
@@ -1317,6 +1349,8 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
   fi
 fi
 
+luna_effective_binding_check "$HARNESS" "$MODEL" "$EFFORT" || exit 1
+
 # ADMIT. bin/fm-admission.sh is read-only by contract and returns the fleet band
 # as its exit status; this is the caller that applies the outcome. A home with no
 # admission policy exits 0 and nothing here changes.
@@ -1429,8 +1463,8 @@ EOF
 # and every refusal names the route, the exact config path, the configured value
 # and the observed one. Enforcement turns on only for a home whose
 # config/crew-dispatch.json actually carries routed pools; the documented
-# profile schema has none, so every other home is unaffected and a home with no
-# dispatch config at all keeps the judgment-guided behavior it has today.
+# profile schema has none, so every other model in those homes is unaffected and
+# a home with no dispatch config keeps judgment-guided routing outside Luna.
 #
 # The claim is the DISPATCH's, not this script's: nothing here matches a rule to
 # a task, because natural-language rule matching is firstmate's judgment and a
@@ -1469,7 +1503,7 @@ if [ "$KIND" != secondmate ]; then
     # different availability state, and a record that disagrees with the check
     # that produced it is exactly what this enforcement exists to prevent.
     ROUTE_DECISION_RC=0
-    ROUTE_DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE") || ROUTE_DECISION_RC=$?
+    ROUTE_DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE" "$HARNESS") || ROUTE_DECISION_RC=$?
     if [ "$ROUTE_DECISION_RC" -ne 0 ]; then
       # The refusal names the file that is ACTUALLY unreadable. The routing
       # config and the availability record fail independently and are repaired
@@ -1495,6 +1529,7 @@ if [ "$KIND" != secondmate ]; then
     # check above already refused a floor id `_floors` does not define, so a
     # floor recorded here is always one that was measured against a definition.
     ROUTE_FLOOR=$(printf '%s' "$ROUTE_DECISION" | jq -r '.floor // empty' 2>/dev/null || true)
+    RESOLVED_PROFILE=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.profile // empty' 2>/dev/null || true)
     if [ -n "$ROUTE_FLOOR" ]; then
       if [ "$CAPABILITY_FLOOR_SET" -eq 1 ] && [ "$CAPABILITY_FLOOR" != "$ROUTE_FLOOR" ]; then
         echo "error: $FM_ROUTE_TOKEN_FLOOR_MISMATCH: route $ROUTE resolves against floor $ROUTE_FLOOR, but this dispatch recorded --capability-floor $CAPABILITY_FLOOR; a record that disagrees with the route it was checked against is worse than no record" >&2
@@ -2860,6 +2895,7 @@ fi
   # layer may write a scheduling, admission, or failover outcome back onto the
   # tier the work IS. An absent pair means this home enforces no routed pool.
   [ -z "$ROUTE" ] || echo "route=$ROUTE"
+  [ -z "$RESOLVED_PROFILE" ] || echo "profile=$RESOLVED_PROFILE"
   [ -z "${ROUTE_POLICY_DIGEST:-}" ] || echo "route_policy_digest=$ROUTE_POLICY_DIGEST"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"

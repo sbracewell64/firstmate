@@ -70,6 +70,47 @@ write_routed_config() {  # <home>
 JSON
 }
 
+write_luna_max_config() {  # <home>
+  cat > "$1/config/crew-dispatch.json" <<'JSON'
+{
+  "_floors": {
+    "F-LUNA-MAX": { "effort_floor": "max", "context_ceiling": 140000, "tool_loop": "verified-agentic" }
+  },
+  "_models": {
+    "openai-codex/gpt-5.6-luna": {
+      "smart_zone": 140000,
+      "effort_expressible": ["low", "medium", "high", "xhigh", "max"],
+      "tool_loop": "verified-agentic",
+      "effort_lock": "max"
+    },
+    "openai-codex/gpt-5.6-terra": {
+      "smart_zone": 140000,
+      "effort_expressible": ["low", "medium", "high", "xhigh", "max"],
+      "tool_loop": "verified-agentic"
+    }
+  },
+  "rules": [
+    { "when": "evaluator evidence", "route": "R-EVALUATOR", "floor": "F-LUNA-MAX",
+      "use": { "harness": "pi", "model": "openai-codex/gpt-5.6-luna", "effort": "max" },
+      "pool": ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra"] },
+    { "when": "runtime reviewer", "route": "R-REVIEWER", "floor": "F-LUNA-MAX",
+      "use": { "harness": "pi", "model": "openai-codex/gpt-5.6-luna", "effort": "max" },
+      "pool": ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra"] },
+    { "when": "qualification fixture", "route": "R-QUALIFICATION", "floor": "F-LUNA-MAX",
+      "use": { "harness": "pi", "model": "openai-codex/gpt-5.6-luna", "effort": "max" },
+      "pool": ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra"] },
+    { "when": "retry resume", "route": "R-RESUME", "floor": "F-LUNA-MAX",
+      "use": { "harness": "pi", "model": "openai-codex/gpt-5.6-luna", "effort": "max" },
+      "pool": ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra"] },
+    { "when": "fallback", "route": "R-FALLBACK", "floor": "F-LUNA-MAX",
+      "use": { "harness": "pi", "model": "openai-codex/gpt-5.6-luna", "effort": "max" },
+      "pool": ["openai-codex/gpt-5.6-luna", "openai-codex/gpt-5.6-terra"] }
+  ],
+  "default": { "harness": "pi", "model": "openai-codex/gpt-5.6-luna", "effort": "max", "route": "R-FALLBACK", "floor": "F-LUNA-MAX" }
+}
+JSON
+}
+
 # The schema every other home uses: profiles only, no pool, so there is nothing
 # to enforce and this activation must not reach it.
 write_unrouted_config() {  # <home>
@@ -205,6 +246,101 @@ test_compliant_dispatch_is_unaffected() {
   out=$(run_route "$HOME_DIR" check --route R-MED --model vendor/large --effort high); rc=$?
   expect_code 0 "$rc" "an effort ABOVE the floor must satisfy it rather than breach it"
   pass "a compliant dispatch passes, and exceeding a floor satisfies it"
+}
+
+test_luna_max_profile_accepts_every_authorized_path_and_fallback() {
+  local rec out route
+  rec=$(make_refusal_home luna-max-paths); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  for route in R-EVALUATOR R-REVIEWER R-QUALIFICATION R-RESUME R-FALLBACK; do
+    out=$(run_route "$HOME_DIR" check --route "$route" \
+      --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+    expect_code 0 "$rc" "Luna Max must pass on $route"
+    assert_contains "$out" "ok:" "the $route Luna Max check did not pass"
+    out=$(run_route "$HOME_DIR" check --json --route "$route" \
+      --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+    expect_code 0 "$rc" "Luna Max JSON check must pass on $route"
+    assert_contains "$out" '"profile":"luna-max"' "the $route decision must expose the resolved profile"
+  done
+  run_route "$HOME_DIR" availability hold openai-codex/gpt-5.6-luna \
+    --state rate_limited --for-seconds 300 >/dev/null
+  out=$(run_route "$HOME_DIR" next --route R-FALLBACK --after openai-codex/gpt-5.6-luna); rc=$?
+  expect_code 0 "$rc" "fallback must choose the next eligible model inside the same Luna Max route"
+  assert_contains "$out" "openai-codex/gpt-5.6-terra" "fallback did not stay inside the configured pool"
+  pass "Luna Max passes evaluator, reviewer, qualification, resume and fallback routes, and fallback stays in-pool"
+}
+
+test_luna_max_profile_refuses_default_high_unknown_and_config_downgrade() {
+  local rec out
+  rec=$(make_refusal_home luna-max-refusals); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  out=$(run_route "$HOME_DIR" check --route R-EVALUATOR --model openai-codex/gpt-5.6-luna); rc=$?
+  expect_code 1 "$rc" "provider-default Luna must be refused"
+  assert_contains "$out" "luna_max_effective_effort" "default Luna was not refused by the Luna Max invariant"
+  out=$(run_route "$HOME_DIR" check --route R-EVALUATOR --model openai-codex/gpt-5.6-luna --effort high); rc=$?
+  expect_code 1 "$rc" "high Luna must be refused"
+  assert_contains "$out" "luna_max_effective_effort" "high Luna was not refused by the Luna Max invariant"
+  out=$(run_route "$HOME_DIR" check --route R-EVALUATOR --model openai-codex/gpt-5.6-luna --effort unknown); rc=$?
+  expect_code 1 "$rc" "unknown-effort Luna must be refused"
+  assert_contains "$out" "luna_max_effective_effort" "unknown Luna was not refused by the Luna Max invariant"
+
+  jq '(.rules[] | select(.route == "R-EVALUATOR").use.effort) = "high"' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" check --route R-EVALUATOR --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "a route profile that downgrades Luna must be refused even when the caller asks for max"
+  assert_contains "$out" "luna_max_profile_effort" "the downgraded route profile was not named"
+  pass "default, high, unknown and downgraded Luna routes are refused before launch"
+}
+
+test_luna_max_profile_refuses_removed_lock_and_unsupported_harness() {
+  local rec out
+  rec=$(make_refusal_home luna-max-lock); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  jq 'del(._models["openai-codex/gpt-5.6-luna"].effort_lock)' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" check --route R-QUALIFICATION --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "removing Luna's max lock must make the invariant red"
+  assert_contains "$out" "luna_max_effort_lock" "the missing effort lock was not named"
+
+  rec=$(make_refusal_home luna-max-harness); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  jq '(.rules[] | select(.route == "R-REVIEWER").use.harness) = "opencode"' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" check --route R-REVIEWER --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "an unverified Luna Max harness must be refused"
+  assert_contains "$out" "luna_max_harness_unverified" "the unsupported harness was not named"
+  assert_contains "$out" "opencode" "the unsupported harness value was not reported"
+  pass "missing Luna Max lock and unsupported harnesses are refused by public route behavior"
+}
+
+test_luna_max_array_uses_the_effective_profile() {
+  local rec out
+  rec=$(make_refusal_home luna-max-array); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  jq '(.rules[] | select(.route == "R-EVALUATOR").use) = [
+        {"harness":"codex","model":"openai-codex/gpt-5.6-luna","effort":"high"},
+        {"harness":"pi","model":"openai-codex/gpt-5.6-luna","effort":"max"}
+      ]' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" check --route R-EVALUATOR \
+    --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 0 "$rc" "Luna must validate against its matching array profile"
+  assert_contains "$out" "ok:" "the matching Luna array entry was not selected"
+  jq '(.rules[] | select(.route == "R-EVALUATOR").pool) = [
+        "openai-codex/gpt-5.6-terra", "openai-codex/gpt-5.6-luna"
+      ]' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" eligible --route R-EVALUATOR); rc=$?
+  expect_code 0 "$rc" "eligibility must validate Luna against its own array profile"
+  assert_contains "$out" "openai-codex/gpt-5.6-luna" "eligible dropped the later Luna profile"
+  out=$(run_route "$HOME_DIR" next --route R-EVALUATOR \
+    --after openai-codex/gpt-5.6-terra); rc=$?
+  expect_code 0 "$rc" "fallback must validate Luna against its own array profile"
+  assert_contains "$out" "openai-codex/gpt-5.6-luna" "fallback dropped the later Luna profile"
+  pass "Luna checks, eligibility and fallback use the matching array profile"
 }
 
 test_unknown_route_and_ambiguous_bare_name_are_refused() {
@@ -1041,6 +1177,18 @@ test_spawn_refuses_route_on_a_secondmate_spawn() {
   pass "a secondmate spawn refuses a route claim"
 }
 
+test_spawn_enforces_luna_binding_after_secondmate_resolution() {
+  local rec out
+  rec=$(make_refusal_home spawn-secondmate-luna); read_home_record "$rec"
+  printf '%s\n' 'codex openai-codex/gpt-5.6-luna max' > "$HOME_DIR/config/secondmate-harness"
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" smluna --secondmate); rc=$?
+  expect_code 1 "$rc" "configured secondmate Luna through Codex must be refused"
+  assert_contains "$out" "FM_SPAWN_ROUTE_PROFILE_VIOLATION" "the secondmate Luna refusal token is missing"
+  assert_contains "$out" "supported Pi-family harness" "the resolved secondmate harness is not named"
+  assert_absent "$HOME_DIR/state/smluna.meta" "an invalid secondmate Luna spawn must create no metadata"
+  pass "secondmate Luna binding is enforced after configured model and effort resolution"
+}
+
 test_unrouted_home_is_untouched_by_activation() {
   local rec out
   rec=$(make_refusal_home spawn-unrouted unrouted); read_home_record "$rec"
@@ -1138,6 +1286,82 @@ SH
   assert_grep 'inherited_admission_snapshot=[unset]' "$launchlog" \
     "the shared admission census reached the process that creates the worker"
   pass "a compliant dispatch records the route, its floor, and the policy surface that checked it"
+}
+
+test_spawn_records_luna_max_profile_and_effective_invocation() {
+  local rec out meta fakebin launchlog
+  rec=$(make_refusal_home spawn-luna-profile); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  fakebin="$TMP_ROOT/spawn-luna-profile/okbin"
+  launchlog="$TMP_ROOT/spawn-luna-profile/launch.log"
+  mkdir -p "$fakebin"
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-windows) exit 0 ;;
+  send-keys)
+    if [ -n "${FM_FAKE_LAUNCH_LOG:-}" ]; then
+      prev=
+      for a in "$@"; do
+        [ "$prev" != -l ] || printf '%s\n' "$a" >> "$FM_FAKE_LAUNCH_LOG"
+        prev=$a
+      done
+    fi
+    exit 0
+    ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_treehouse "$fakebin"
+  fm_git_worktree "$TMP_ROOT/spawn-luna-profile/repo" "$TMP_ROOT/spawn-luna-profile/wt" wt-luna
+  write_brief "$HOME_DIR" lunatask no-mistakes
+  touch "$HOME_DIR/state/.last-watcher-beat"
+  : > "$launchlog"
+  out=$(FM_FAKE_PANE_PATH="$TMP_ROOT/spawn-luna-profile/wt" TMUX="fake,1,0" \
+    FM_FAKE_LAUNCH_LOG="$launchlog" \
+    run_spawn "$HOME_DIR" "$fakebin" lunatask "$TMP_ROOT/spawn-luna-profile/repo" \
+      --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+      --harness pi --route R-RESUME --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  meta="$HOME_DIR/state/lunatask.meta"
+  [ -f "$meta" ] || fail "a compliant Luna Max dispatch must reach task metadata"$'\n'"--- output ---"$'\n'"$out"
+  assert_grep "route=R-RESUME" "$meta" "meta must record the Luna route"
+  assert_grep "profile=luna-max" "$meta" "meta must record the resolved Luna profile"
+  assert_grep "model=openai-codex/gpt-5.6-luna" "$meta" "meta must record the effective Luna model"
+  assert_grep "effort=max" "$meta" "meta must record the effective Luna effort"
+  assert_grep "route_policy_digest=sha256:" "$meta" "meta must record the policy surface that checked Luna"
+  assert_grep "pi --model 'openai-codex/gpt-5.6-luna' --thinking 'max'" "$launchlog" \
+    "the effective Luna launch command must carry model and max thinking flags"
+  pass "a Luna resume dispatch records the resolved profile and launches Pi at Luna Max"
+}
+
+test_spawn_enforces_effective_luna_binding_without_routed_pools() {
+  local rec out
+  rec=$(make_refusal_home spawn-luna-unrouted); read_home_record "$rec"
+  write_unrouted_config "$HOME_DIR"
+  write_brief "$HOME_DIR" lunabad no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" lunabad "$PROJ_DIR" \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --harness codex --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "unrouted Luna through Codex must be refused"
+  assert_contains "$out" "FM_SPAWN_ROUTE_PROFILE_VIOLATION" "the Luna harness refusal token is missing"
+  assert_contains "$out" "supported Pi-family harness" "the effective unsupported harness is not named"
+  assert_absent "$HOME_DIR/state/lunabad.meta" "an invalid unrouted Luna spawn must create no metadata"
+
+  rec=$(make_refusal_home spawn-luna-bare); read_home_record "$rec"
+  write_unrouted_config "$HOME_DIR"
+  write_brief "$HOME_DIR" lunabare no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" lunabare "$PROJ_DIR" \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --harness pi --model gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "a noncanonical Luna model must be refused"
+  assert_contains "$out" "exact model openai-codex/gpt-5.6-luna" "the canonical Luna identity is not named"
+  assert_absent "$HOME_DIR/state/lunabare.meta" "a bare Luna spawn must create no metadata"
+  pass "the spawn chokepoint refuses unsupported and noncanonical Luna in unrouted homes"
 }
 
 test_admission_hard_band_refuses_the_spawn_naming_the_condition() {
@@ -1312,6 +1536,10 @@ test_activation_does_not_recheck_work_already_dispatched() {
 test_effort_below_floor_is_refused_naming_the_rule
 test_model_outside_the_pool_is_refused_naming_the_pool
 test_compliant_dispatch_is_unaffected
+test_luna_max_profile_accepts_every_authorized_path_and_fallback
+test_luna_max_profile_refuses_default_high_unknown_and_config_downgrade
+test_luna_max_profile_refuses_removed_lock_and_unsupported_harness
+test_luna_max_array_uses_the_effective_profile
 test_unknown_route_and_ambiguous_bare_name_are_refused
 test_waived_effort_floor_and_unselectable_floor
 test_tool_loop_axis_is_enforced
@@ -1344,9 +1572,12 @@ test_spawn_refuses_a_floor_violation_and_creates_nothing
 test_spawn_requires_the_route_claim_or_derives_it_from_an_explicit_floor
 test_spawn_refuses_a_route_and_floor_that_contradict_each_other
 test_spawn_refuses_route_on_a_secondmate_spawn
+test_spawn_enforces_luna_binding_after_secondmate_resolution
 test_unrouted_home_is_untouched_by_activation
 test_route_claim_is_refused_where_nothing_can_check_it
 test_spawn_records_the_route_and_the_policy_that_checked_it
+test_spawn_records_luna_max_profile_and_effective_invocation
+test_spawn_enforces_effective_luna_binding_without_routed_pools
 test_admission_hard_band_refuses_the_spawn_naming_the_condition
 test_soft_admission_band_defers_distinguishably_from_a_refusal
 test_a_queued_hold_promises_reconsideration_only_when_the_band_records_it
