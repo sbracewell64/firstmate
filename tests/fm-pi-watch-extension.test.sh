@@ -7,7 +7,12 @@ set -u
 
 TMP_ROOT=$(fm_test_tmproot fm-pi-watch-extension)
 EXT="$ROOT/.pi/extensions/fm-primary-pi-watch.ts"
-PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
+PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-}
+if [ -z "$PI_PACKAGE_DIR" ]; then
+  PI_BIN=$(command -v pi) || fail "pi is not installed"
+  PI_ENTRY=$(node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "$PI_BIN") || fail "cannot resolve installed Pi executable at $PI_BIN"
+  PI_PACKAGE_DIR=$(dirname "$(dirname "$PI_ENTRY")")
+fi
 JITI_REGISTER="$PI_PACKAGE_DIR/node_modules/jiti/lib/jiti-register.mjs"
 [ -f "$JITI_REGISTER" ] || fail "installed Pi does not provide its TypeScript loader at $JITI_REGISTER"
 # Node 24 warns when these test-only dynamic imports load tracked ESM plugins
