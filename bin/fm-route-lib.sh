@@ -274,8 +274,15 @@ def route_profiles($rule; $path):
   elif ($rule | type) == "object" then
     [{profile:$rule, path:$path}]
   else [] end;
-def first_route_profile($rule; $path):
-  (route_profiles($rule; $path)[0]? // {profile:{}, path:$path});
+def effective_route_profile($rule; $path; $model; $harness):
+  (route_profiles($rule; $path)) as $profiles
+  | (if ($harness | length) > 0
+     then first($profiles[] | select((.profile.model? // "") == $model
+                                     and (.profile.harness? // "") == $harness))
+     else null end)
+    // first($profiles[] | select((.profile.model? // "") == $model))
+    // $profiles[0]?
+    // {profile:{}, path:$path};
 
 # A route is DEFINED by a rule. The top-level `default` names which route is the
 # default and carries its profile, so a default pointing at an existing rule is
@@ -306,7 +313,7 @@ def first_route_profile($rule; $path):
     | (if ($floor_id != null) then ("/_floors/" + $floor_id) else null end) as $floor_path
     | (if (($rule.pool? | type) == "array") then $rule.pool else [] end) as $pool
     | ($route_path + "/pool") as $pool_path
-    | (first_route_profile($rule; $route_path)) as $route_profile
+    | (effective_route_profile($rule; $route_path; $model; $harness)) as $route_profile
     | ($floor.effort_floor? // null) as $ef_raw
     | (if ($ef_raw | type) == "string" and (rank($ef_raw) != null) then $ef_raw else null end) as $ef
     | (($ef_raw | type) == "string" and ($ef_raw | startswith("WAIVED"))) as $ef_waived
@@ -467,7 +474,7 @@ def first_route_profile($rule; $path):
   end
 '
 
-# fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>]
+# fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>] [<harness>]
 # Print the decision record for one route. Return non-zero when the decision
 # could not be made at all, so a caller can tell "no policy" from "policy says
 # no" - and WHICH input it could not read, because the two live in different
@@ -480,13 +487,13 @@ def first_route_profile($rule; $path):
 # parses perfectly while the truncated model-health.json goes unmentioned, which
 # is the same misdirection class as naming a substitute nothing checked.
 fm_route_decision() {
-  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} file holds now
+  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} harness=${6:-} file holds now
   file=$(fm_route_config_path "$cfg")
   [ -f "$file" ] || return 2
   command -v jq >/dev/null 2>&1 || return 2
   now=$(date -u +%s)
   holds=$(fm_route_health_active "$state" "$now") || return 3
-  jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" \
+  jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" --arg harness "$harness" \
      --argjson holds "$holds" \
      "$FM_ROUTE_DECISION_JQ" "$file" 2>/dev/null || return 2
 }

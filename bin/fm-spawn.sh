@@ -61,7 +61,8 @@
 #   home whose config/crew-dispatch.json carries routed pools, unless an explicit
 #   --capability-floor already names exactly one route; refused on --secondmate.
 #   A home with no routed pool - which is every home using the documented profile
-#   schema, and every home with no dispatch config - is unaffected. The route,
+#   schema, and every home with no dispatch config - is unaffected except for the
+#   global Luna Max binding. The route,
 #   any resolved named profile, and a digest of the policy surface that checked
 #   it land in state/<id>.meta, and the recorded capability floor becomes the
 #   route's own so the two can never describe different rungs. bin/fm-route-lib.sh owns the rules; run
@@ -1430,8 +1431,8 @@ EOF
 # and every refusal names the route, the exact config path, the configured value
 # and the observed one. Enforcement turns on only for a home whose
 # config/crew-dispatch.json actually carries routed pools; the documented
-# profile schema has none, so every other home is unaffected and a home with no
-# dispatch config at all keeps the judgment-guided behavior it has today.
+# profile schema has none, so every other model in those homes is unaffected and
+# a home with no dispatch config keeps judgment-guided routing outside Luna.
 #
 # The claim is the DISPATCH's, not this script's: nothing here matches a rule to
 # a task, because natural-language rule matching is firstmate's judgment and a
@@ -1439,6 +1440,26 @@ EOF
 # A dispatch that supplies an explicit --capability-floor naming exactly one
 # route needs no second flag; anything else states --route outright.
 if [ "$KIND" != secondmate ]; then
+  case "$MODEL" in
+    openai-codex/gpt-5.6-luna)
+      if [ "$EFFORT" != max ]; then
+        echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require effective max effort; observed ${EFFORT:-provider default}" >&2
+        exit 1
+      fi
+      case "$HARNESS" in
+        pi|pi-signed) ;;
+        *)
+          echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require a supported Pi-family harness; observed ${HARNESS:-unknown}" >&2
+          exit 1
+          ;;
+      esac
+      RESOLVED_PROFILE=luna-max
+      ;;
+    gpt-5.6-luna|*/gpt-5.6-luna)
+      echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require the exact model openai-codex/gpt-5.6-luna; observed $MODEL" >&2
+      exit 1
+      ;;
+  esac
   ROUTE_ENFORCING=0
   fm_route_pools_configured "$CONFIG" && ROUTE_CFG_RC=0 || ROUTE_CFG_RC=$?
   case "$ROUTE_CFG_RC" in
@@ -1470,7 +1491,7 @@ if [ "$KIND" != secondmate ]; then
     # different availability state, and a record that disagrees with the check
     # that produced it is exactly what this enforcement exists to prevent.
     ROUTE_DECISION_RC=0
-    ROUTE_DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE") || ROUTE_DECISION_RC=$?
+    ROUTE_DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE" "$HARNESS") || ROUTE_DECISION_RC=$?
     if [ "$ROUTE_DECISION_RC" -ne 0 ]; then
       # The refusal names the file that is ACTUALLY unreadable. The routing
       # config and the availability record fail independently and are repaired

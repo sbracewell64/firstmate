@@ -316,6 +316,22 @@ test_luna_max_profile_refuses_removed_lock_and_unsupported_harness() {
   pass "missing Luna Max lock and unsupported harnesses are refused by public route behavior"
 }
 
+test_luna_max_array_uses_the_effective_profile() {
+  local rec out
+  rec=$(make_refusal_home luna-max-array); read_home_record "$rec"
+  write_luna_max_config "$HOME_DIR"
+  jq '(.rules[] | select(.route == "R-EVALUATOR").use) = [
+        {"harness":"codex","model":"openai-codex/gpt-5.6-terra","effort":"high"},
+        {"harness":"pi","model":"openai-codex/gpt-5.6-luna","effort":"max"}
+      ]' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
+  mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_route "$HOME_DIR" check --route R-EVALUATOR \
+    --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 0 "$rc" "Luna must validate against its matching array profile"
+  assert_contains "$out" "ok:" "the matching Luna array entry was not selected"
+  pass "Luna route arrays validate the profile matching the effective model"
+}
+
 test_unknown_route_and_ambiguous_bare_name_are_refused() {
   local rec out
   rec=$(make_refusal_home unknown-route); read_home_record "$rec"
@@ -1300,6 +1316,31 @@ SH
   pass "a Luna resume dispatch records the resolved profile and launches Pi at Luna Max"
 }
 
+test_spawn_enforces_effective_luna_binding_without_routed_pools() {
+  local rec out
+  rec=$(make_refusal_home spawn-luna-unrouted); read_home_record "$rec"
+  write_unrouted_config "$HOME_DIR"
+  write_brief "$HOME_DIR" lunabad no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" lunabad "$PROJ_DIR" \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --harness codex --model openai-codex/gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "unrouted Luna through Codex must be refused"
+  assert_contains "$out" "FM_SPAWN_ROUTE_PROFILE_VIOLATION" "the Luna harness refusal token is missing"
+  assert_contains "$out" "supported Pi-family harness" "the effective unsupported harness is not named"
+  assert_absent "$HOME_DIR/state/lunabad.meta" "an invalid unrouted Luna spawn must create no metadata"
+
+  rec=$(make_refusal_home spawn-luna-bare); read_home_record "$rec"
+  write_unrouted_config "$HOME_DIR"
+  write_brief "$HOME_DIR" lunabare no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" lunabare "$PROJ_DIR" \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --harness pi --model gpt-5.6-luna --effort max); rc=$?
+  expect_code 1 "$rc" "a noncanonical Luna model must be refused"
+  assert_contains "$out" "exact model openai-codex/gpt-5.6-luna" "the canonical Luna identity is not named"
+  assert_absent "$HOME_DIR/state/lunabare.meta" "a bare Luna spawn must create no metadata"
+  pass "the spawn chokepoint refuses unsupported and noncanonical Luna in unrouted homes"
+}
+
 test_admission_hard_band_refuses_the_spawn_naming_the_condition() {
   local rec out
   rec=$(make_refusal_home spawn-admission); read_home_record "$rec"
@@ -1475,6 +1516,7 @@ test_compliant_dispatch_is_unaffected
 test_luna_max_profile_accepts_every_authorized_path_and_fallback
 test_luna_max_profile_refuses_default_high_unknown_and_config_downgrade
 test_luna_max_profile_refuses_removed_lock_and_unsupported_harness
+test_luna_max_array_uses_the_effective_profile
 test_unknown_route_and_ambiguous_bare_name_are_refused
 test_waived_effort_floor_and_unselectable_floor
 test_tool_loop_axis_is_enforced
@@ -1511,6 +1553,7 @@ test_unrouted_home_is_untouched_by_activation
 test_route_claim_is_refused_where_nothing_can_check_it
 test_spawn_records_the_route_and_the_policy_that_checked_it
 test_spawn_records_luna_max_profile_and_effective_invocation
+test_spawn_enforces_effective_luna_binding_without_routed_pools
 test_admission_hard_band_refuses_the_spawn_naming_the_condition
 test_soft_admission_band_defers_distinguishably_from_a_refusal
 test_a_queued_hold_promises_reconsideration_only_when_the_band_records_it
