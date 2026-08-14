@@ -280,6 +280,12 @@ def effective_route_profile($rule; $path; $model; $harness):
      then first($profiles[] | select((.profile.model? // "") == $model
                                      and (.profile.harness? // "") == $harness))
      else null end)
+    // (if ($harness | length) == 0 and $model == luna_max_model
+        then first($profiles[]
+                   | select((.profile.model? // "") == $model
+                            and luna_max_harness_ok(.profile.harness? // "")
+                            and (.profile.effort? // "") == luna_max_effort))
+        else null end)
     // first($profiles[] | select((.profile.model? // "") == $model))
     // $profiles[0]?
     // {profile:{}, path:$path};

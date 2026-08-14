@@ -321,7 +321,7 @@ test_luna_max_array_uses_the_effective_profile() {
   rec=$(make_refusal_home luna-max-array); read_home_record "$rec"
   write_luna_max_config "$HOME_DIR"
   jq '(.rules[] | select(.route == "R-EVALUATOR").use) = [
-        {"harness":"codex","model":"openai-codex/gpt-5.6-terra","effort":"high"},
+        {"harness":"codex","model":"openai-codex/gpt-5.6-luna","effort":"high"},
         {"harness":"pi","model":"openai-codex/gpt-5.6-luna","effort":"max"}
       ]' "$HOME_DIR/config/crew-dispatch.json" > "$HOME_DIR/config/tmp.json"
   mv "$HOME_DIR/config/tmp.json" "$HOME_DIR/config/crew-dispatch.json"
@@ -1177,6 +1177,18 @@ test_spawn_refuses_route_on_a_secondmate_spawn() {
   pass "a secondmate spawn refuses a route claim"
 }
 
+test_spawn_enforces_luna_binding_after_secondmate_resolution() {
+  local rec out
+  rec=$(make_refusal_home spawn-secondmate-luna); read_home_record "$rec"
+  printf '%s\n' 'codex openai-codex/gpt-5.6-luna max' > "$HOME_DIR/config/secondmate-harness"
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" smluna --secondmate); rc=$?
+  expect_code 1 "$rc" "configured secondmate Luna through Codex must be refused"
+  assert_contains "$out" "FM_SPAWN_ROUTE_PROFILE_VIOLATION" "the secondmate Luna refusal token is missing"
+  assert_contains "$out" "supported Pi-family harness" "the resolved secondmate harness is not named"
+  assert_absent "$HOME_DIR/state/smluna.meta" "an invalid secondmate Luna spawn must create no metadata"
+  pass "secondmate Luna binding is enforced after configured model and effort resolution"
+}
+
 test_unrouted_home_is_untouched_by_activation() {
   local rec out
   rec=$(make_refusal_home spawn-unrouted unrouted); read_home_record "$rec"
@@ -1560,6 +1572,7 @@ test_spawn_refuses_a_floor_violation_and_creates_nothing
 test_spawn_requires_the_route_claim_or_derives_it_from_an_explicit_floor
 test_spawn_refuses_a_route_and_floor_that_contradict_each_other
 test_spawn_refuses_route_on_a_secondmate_spawn
+test_spawn_enforces_luna_binding_after_secondmate_resolution
 test_unrouted_home_is_untouched_by_activation
 test_route_claim_is_refused_where_nothing_can_check_it
 test_spawn_records_the_route_and_the_policy_that_checked_it

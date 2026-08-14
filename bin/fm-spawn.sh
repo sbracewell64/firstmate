@@ -588,6 +588,30 @@ else
   fi
 fi
 
+luna_effective_binding_check() {  # <harness> <model> <effort>
+  local harness=$1 model=$2 effort=$3
+  case "$model" in
+    openai-codex/gpt-5.6-luna)
+      if [ "$effort" != max ]; then
+        echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require effective max effort; observed ${effort:--}" >&2
+        return 1
+      fi
+      case "$harness" in
+        pi|pi-signed) ;;
+        *)
+          echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require a supported Pi-family harness; observed ${harness:--}" >&2
+          return 1
+          ;;
+      esac
+      RESOLVED_PROFILE=luna-max
+      ;;
+    gpt-5.6-luna|*/gpt-5.6-luna)
+      echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require the exact model openai-codex/gpt-5.6-luna; observed $model" >&2
+      return 1
+      ;;
+  esac
+}
+
 spawn_remote_secondmate() {
   local id=$1 remote host root home harness positional model effort backend out rc meta tmp
   local remote_backend remote_target remote_harness remote_herdr_session registry_lock remote_lock remote_generation
@@ -673,6 +697,11 @@ spawn_remote_secondmate() {
       return 1
       ;;
   esac
+  luna_effective_binding_check "$harness" "$model" "$effort" || {
+    fm_lock_release "$registry_lock" || true
+    fm_lock_release "$SPAWN_TASK_LOCK" || true
+    return 1
+  }
   meta="$STATE/$id.meta"
   if [ -e "$meta" ] || [ -L "$meta" ]; then
     if [ ! -f "$meta" ] || [ -L "$meta" ] \
@@ -812,6 +841,7 @@ spawn_remote_secondmate() {
     echo "tasktmp="
     echo "model=${model#-}"
     echo "effort=${effort#-}"
+    [ -z "$RESOLVED_PROFILE" ] || echo "profile=$RESOLVED_PROFILE"
     echo "home=$home"
     echo "projects=$(secondmate_registry_field "$DATA/secondmates.md" "$id" projects)"
     echo "remote_host=$host"
@@ -1319,6 +1349,8 @@ if [ "$KIND" = secondmate ] && [ -z "$ARG3" ]; then
   fi
 fi
 
+luna_effective_binding_check "$HARNESS" "$MODEL" "$EFFORT" || exit 1
+
 # ADMIT. bin/fm-admission.sh is read-only by contract and returns the fleet band
 # as its exit status; this is the caller that applies the outcome. A home with no
 # admission policy exits 0 and nothing here changes.
@@ -1440,26 +1472,6 @@ EOF
 # A dispatch that supplies an explicit --capability-floor naming exactly one
 # route needs no second flag; anything else states --route outright.
 if [ "$KIND" != secondmate ]; then
-  case "$MODEL" in
-    openai-codex/gpt-5.6-luna)
-      if [ "$EFFORT" != max ]; then
-        echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require effective max effort; observed ${EFFORT:-provider default}" >&2
-        exit 1
-      fi
-      case "$HARNESS" in
-        pi|pi-signed) ;;
-        *)
-          echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require a supported Pi-family harness; observed ${HARNESS:-unknown}" >&2
-          exit 1
-          ;;
-      esac
-      RESOLVED_PROFILE=luna-max
-      ;;
-    gpt-5.6-luna|*/gpt-5.6-luna)
-      echo "error: $FM_ROUTE_TOKEN_PROFILE: Luna production dispatches require the exact model openai-codex/gpt-5.6-luna; observed $MODEL" >&2
-      exit 1
-      ;;
-  esac
   ROUTE_ENFORCING=0
   fm_route_pools_configured "$CONFIG" && ROUTE_CFG_RC=0 || ROUTE_CFG_RC=$?
   case "$ROUTE_CFG_RC" in
