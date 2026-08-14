@@ -98,6 +98,8 @@ SH
     || fail "installer did not recover from a transient download failure"$'\n'"$out"
   [ "$(cat "$tmp/curl-count")" -eq 4 ] || fail "installer did not survive three transient download failures"
   assert_contains "$out" "download attempt 1 failed; retrying" "installer did not disclose its retry"
+  assert_contains "$out" "download attempt 2 failed; retrying" "installer did not disclose its second retry"
+  assert_contains "$out" "download attempt 3 failed; retrying" "installer did not disclose its third retry"
   [ -x "$destination/shellcheck" ] || fail "installer did not install ShellCheck after retrying"
   pass "ShellCheck installer retries a transient download failure"
 }
