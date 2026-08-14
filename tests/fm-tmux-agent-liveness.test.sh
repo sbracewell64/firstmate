@@ -47,13 +47,19 @@ chmod +x "$LAB/shim/tmux"
 PATH="$LAB/shim:$PATH"
 export PATH
 
-# Stand-in "harness" binaries. These are SYMLINKS to a real long-running system
-# binary, never copies: a copied platform binary fails code-signing validation
-# and is killed on macOS arm64. The symlink name is what the kernel records as
-# the executable identity, which is exactly the signal under test.
-ln -s "$SLEEP_BIN" "$LAB/bin/claude-link"
-ln -s "$SLEEP_BIN" "$LAB/bin/pi"
-ln -s "$SLEEP_BIN" "$LAB/bin/notaharness"
+# Stand-in "harness" binaries. Keep a named parent shell alive around the real
+# system sleep: copied binaries fail code-signing on macOS arm64, while a
+# symlink into a multicall coreutils binary can dispatch by the symlink name
+# instead of running sleep. The persistent script name is the tmux signal under
+# test and the real child keeps the process-group signal honest.
+for name in claude-link pi notaharness; do
+  cat > "$LAB/bin/$name" <<SH
+#!/bin/sh
+"$SLEEP_BIN" "\$@" &
+wait
+SH
+  chmod +x "$LAB/bin/$name"
+done
 
 # A launcher whose own process identity is a bare shell, running the harness as
 # a child in the same foreground process group - the shape the real Pi Launcher
