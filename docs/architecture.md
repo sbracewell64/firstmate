@@ -72,7 +72,7 @@ Engraphis is unbuilt and therefore a **Target gap**, while legacy wiki, singleto
 ### Layer 7: Evaluation and observability
 
 The canonical ownership split is by scope.
-For fleet work, no-mistakes owns independent validation, [`bin/fm-fleet-snapshot.sh`](../bin/fm-fleet-snapshot.sh) owns the structured fleet projection, and [`bin/fm-status-event-lib.sh`](../bin/fm-status-event-lib.sh) owns typed task-event evidence.
+For fleet work, the no-mistakes pipeline configured by [`.no-mistakes.yaml`](../.no-mistakes.yaml) owns independent validation, [`bin/fm-attest.sh`](../bin/fm-attest.sh) owns its head-bound evidence, [`bin/fm-fleet-snapshot.sh`](../bin/fm-fleet-snapshot.sh) owns the structured fleet projection, and [`bin/fm-status-event-lib.sh`](../bin/fm-status-event-lib.sh) owns typed task-event evidence.
 For the platform project, `scripts/platform-certification.py`, `scripts/runtime_lineage.py`, `scripts/runtime_gate_ledger.py`, and `scripts/runtime_review_cognition.py` remain **Project-internal** and do not become duplicate fleet evaluators.
 The fleet evaluation surface is **Current**, while any read-only economics projection is a **Target gap** owned by Layer 9.
 An unpopulated Event Ledger is **Retired** as a capability claim, even if its schema remains, and an unevaluated DeepSWE pilot is **Not adopted** rather than an available evaluator.
