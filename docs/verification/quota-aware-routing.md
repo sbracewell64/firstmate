@@ -13,7 +13,7 @@ Only the shape of the vendor's output is a fact about a program this repo does n
 
 Verified on 2026-08-11 on Linux 6.18.33.2-microsoft-standard-WSL2 with `quota-axi` 0.1.16 (`schemaVersion` 3) and jq 1.8.1.
 
-The portable routing and restart-survival regressions were refreshed on 2026-08-13 with:
+The portable routing and restart-survival regressions were refreshed on 2026-08-14 with:
 
 ```sh
 $ bash tests/fm-capacity-routing.test.sh
