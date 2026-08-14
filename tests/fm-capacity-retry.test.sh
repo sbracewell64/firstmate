@@ -26,6 +26,26 @@ test_resumes_onto_an_expressive_recovered_pool_member() {
   pass "resumes onto a recovered pool member that can express the route effort band"
 }
 
+test_resumes_onto_an_earlier_recovered_pool_member() {
+  local out meta
+  make_dispatch_home earlier-resume
+  write_brief "$HOME_DIR" earliertask no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0 altq=0)" \
+    earliertask "$OK_REPO" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --harness codex \
+    --route R-PAIR --model alt/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "both spent candidates must first create a wait"
+  out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
+    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=95 altq=0)" tick --id earliertask --force)
+  meta="$HOME_DIR/state/earliertask.meta"
+  assert_present "$meta" "the earlier recovered pool member did not resume the task"
+  assert_grep "model=vendor/large" "$meta" "the resumed metadata did not name the earlier recovered member"
+  assert_contains "$out" "vendor/large in route R-PAIR" "the resume output did not name the earlier recovered member"
+  assert_absent "$HOME_DIR/state/earliertask.capacity" "the resumed wait record was not retired"
+  pass "resumes onto an earlier pool member when it recovers first"
+}
+
 test_recorded_effort_survives_policy_edit() {
   local out cfg meta
   make_dispatch_home inherited-effort
@@ -426,6 +446,7 @@ test_concurrent_ticks_claim_one_retry_owner() {
 }
 
 test_resumes_onto_an_expressive_recovered_pool_member
+test_resumes_onto_an_earlier_recovered_pool_member
 test_recorded_effort_survives_policy_edit
 test_uncounted_deferral_fails_closed
 test_same_band_substitution_is_required

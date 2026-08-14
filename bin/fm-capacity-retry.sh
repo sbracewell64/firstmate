@@ -528,7 +528,7 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
 # advance, a terminal record is already stopped, and an already-dispatched task
 # retires the obsolete wait rather than creating a second worker.
 tick_one_claimed() {  # <record-file> <force>
-  local rec=$1 force=$2 id now due out rc route effort candidate eligible model
+  local rec=$1 force=$2 id now due out rc route effort candidate eligible
   id=$(field "$rec" task)
   if [ -z "$id" ]; then
     mark_record_terminal "$rec" "the deferral record has no task id"
@@ -597,25 +597,10 @@ tick_one_claimed() {  # <record-file> <force>
       return 0
       ;;
     *)
-      # The ROUTE OWNER names the substitute. `next --after` returns the eligible
-      # candidates that FOLLOW the recorded model in pool order, already checked
-      # for floor, hold, registry, capacity and the running effort band, so there
-      # is no predicate to re-apply and no ordering to re-derive here.
-      #
-      # Asking for the whole eligible list and walking it with a private band
-      # predicate - which is what this did - is a SECOND FAILOVER SELECTOR. It
-      # could hand back a candidate sitting BEFORE the recorded model in the
-      # pool, so a resume was not necessarily the prescribed next candidate, and
-      # its band rule was free to drift from the one the dispatch chokepoint
-      # enforces. Band expressibility is now part of eligibility itself, so the
-      # answer this reads is the same answer fm-spawn would compute.
-      model=$(field "$rec" model)
       effort=$(field "$rec" effort)
       eligible=
-      if [ -n "$model" ]; then
-        eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" next \
-          --route "$route" --after "$model" --effort "$effort" 2>/dev/null) || eligible=
-      fi
+      eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" eligible \
+        --route "$route" --effort "$effort" 2>/dev/null) || eligible=
       while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
         build_spawn_args "$rec" "$candidate" || continue
