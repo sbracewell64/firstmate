@@ -22,6 +22,8 @@ The evidence-status labels used below are normative.
 - **Retired** means an earlier artifact or claim is no longer a capability of the target architecture.
 - **Not adopted** means a proposed or evaluated artifact has not become a capability of the target architecture.
 
+A **Current** label establishes only that the owner and behavior exist; it does not establish that any particular change completed validation or carries its required evidence.
+
 ### Layer 1: Interface
 
 The canonical owner is the Firstmate interface contract in [`AGENTS.md`](../AGENTS.md), with [`bin/fm-brief.sh`](../bin/fm-brief.sh) owning worker instructions, [`bin/fm-session-start.sh`](../bin/fm-session-start.sh) owning recovery projection, and [`bin/fm-tasks-axi-lib.sh`](../bin/fm-tasks-axi-lib.sh) owning backlog-adapter mechanics.
