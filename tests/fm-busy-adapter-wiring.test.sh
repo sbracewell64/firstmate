@@ -130,6 +130,7 @@ test_pi_extension_semantic_lifecycle() {
 
   rm -f "$state/$id.turn-ended"
   out=$(drive_pi_ext "$ext" turn-end) || fail "turn_end drive failed: $out"
+  assert_absent "$ext.mjs" "the portable Pi driver left its converted module behind"
   [ -f "$state/$id.turn-ended" ] || fail "turn_end no longer touches the notification marker"
   out=$(classify pi "$id" "$state")
   [ "$out" = "busy fm-spawn" ] || fail "turn_end must stay a notification, not a state edge, got '$out'"
