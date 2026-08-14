@@ -82,7 +82,7 @@ An unpopulated Event Ledger is **Retired** as a capability claim, even if its sc
 This is a cross-cutting mapping, not a new authority level or runtime subsystem.
 The canonical fleet owner is the authority contract in [`AGENTS.md`](../AGENTS.md), enforced at existing seams by tools such as [`bin/fm-worktree-guard.sh`](../bin/fm-worktree-guard.sh), [`bin/fm-lock.sh`](../bin/fm-lock.sh), guarded merge helpers, and the [`ask-user-authority`](../.agents/skills/ask-user-authority/SKILL.md) procedure.
 The platform's `scripts/runtime_authorization.py` remains **Project-internal** and owns only platform identities, dispositions, and warrants.
-The fleet authority surface is **Current**, and external authority vocabularies are **Reference contracts** unless this owner explicitly adopts them.
+The fleet authority surface is **Current**, and external authority vocabularies are **Not adopted** unless this owner explicitly adopts their semantics as **Reference contracts**.
 
 ### Layer 9: Economics and budgets
 
