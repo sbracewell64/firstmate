@@ -34,7 +34,8 @@ Platform planning artifacts such as `scripts/runtime_planning_design.py` may rem
 
 The canonical policy owner is `config/crew-dispatch.json`, while [`bin/fm-harness.sh`](../bin/fm-harness.sh), [`bin/fm-route.sh`](../bin/fm-route.sh), [`bin/fm-route-lib.sh`](../bin/fm-route-lib.sh), and [`bin/fm-quota-axi-lib.sh`](../bin/fm-quota-axi-lib.sh) own executable resolution and enforcement.
 This layer separates route selection, admission, eligibility, scheduling, and failover so one concern cannot silently answer for another.
-Routing and route recording are **Current**, while model, price, capacity, and admission controls are current only when their documented configuration activates them.
+Routing and route recording are **Current**.
+Model, price, capacity, and admission controls are **Current** only when their documented configuration activates them; otherwise, this architecture makes no claim that those controls are active.
 Provider and coordinator registries in the platform remain **Project-internal** rather than a second operator router.
 
 ### Layer 3: Context engine
