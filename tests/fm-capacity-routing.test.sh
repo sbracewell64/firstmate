@@ -376,21 +376,26 @@ test_an_unreadable_quota_source_is_could_not_observe_rather_than_either_answer()
 # --- 6. it survives a restart and resumes with no operator message -----------
 
 test_a_deferral_survives_a_restart_and_resumes_when_capacity_returns() {
-  local out meta
+  local out meta project_parent project_name restart_dir
   make_dispatch_home restart-resume
   write_brief "$HOME_DIR" resumetask no-mistakes
-  out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0)" \
-    resumetask "$OK_REPO" --mode no-mistakes --yolo off \
+  project_parent=$(dirname "$OK_REPO")
+  project_name=$(basename "$OK_REPO")
+  restart_dir="$TMP_ROOT/restart-resume/after-restart"
+  mkdir -p "$restart_dir"
+  out=$(cd "$project_parent" && run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0)" \
+    resumetask "$project_name" --mode no-mistakes --yolo off \
     --reason-code NL_RULE_CLASSIFICATION --harness codex \
     --route R-SOLO --model vendor/large --effort medium)
   assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "the work must be deferred before it can be resumed"
   assert_present "$HOME_DIR/state/resumetask.capacity" "the deferral must be durable"
+  assert_grep "project=$OK_REPO" "$HOME_DIR/state/resumetask.capacity" "the deferral must persist a restart-safe project path"
   assert_absent "$HOME_DIR/state/resumetask.meta" "the deferred work must not have been dispatched"
 
   # THE RESTART. Nothing in memory carries over: this is a fresh process reading
   # only the file the deferral left behind, which is what a firstmate restart,
   # a closed terminal, a rebooted host and a replaced session all look like.
-  out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
+  out=$(cd "$restart_dir" && FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
     run_retry "$HOME_DIR" "$(quota_record vendorq=92)" tick --id resumetask --force)
   meta="$HOME_DIR/state/resumetask.meta"

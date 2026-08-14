@@ -1440,6 +1440,14 @@ spawn_admission_gate() {
   return 1
 }
 
+resolve_project_dir_arg() {
+  local path=$1
+  case "$path" in
+    projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
+    *) printf '%s\n' "$path" ;;
+  esac
+}
+
 # Record the durable capacity deferral for a dispatch whose whole floor-meeting
 # pool is out of capacity, so the work resumes by itself when capacity returns
 # instead of waiting for someone to say continue.
@@ -1447,14 +1455,14 @@ spawn_admission_gate() {
 # The typed dispatch fields are handed across unchanged, because the resume is
 # the SAME dispatch and not a new decision: bin/fm-capacity-retry.sh re-enters
 # this script with them and every gate above runs again. Nothing is stored that
-# a shell could expand, and the raw flag values are recorded rather than the
-# resolved ones, with the effective effort band pinned for the resumed dispatch.
+# a shell could expand, and the effective effort band and canonical project path
+# are pinned for the resumed dispatch.
 #
 # A deferral that cannot be recorded is said out loud. The spawn stops either
 # way, and the difference between held work and lost work is exactly this
 # record, so failing to write it must never look like a quiet refusal.
 spawn_capacity_defer() {
-  local retry_after signature reason pool effort_effective defer_args=() out rc
+  local retry_after signature reason pool effort_effective project_abs defer_args=() out rc
   retry_after=$(printf '%s' "$ROUTE_DECISION" | jq -r '
     [ .candidates[]? | .capacity.until // empty ] | if length > 0 then (min | tostring) else "0" end' 2>/dev/null)
   # The signature is what the stagnation rule compares, so it names WHICH
@@ -1465,6 +1473,10 @@ spawn_capacity_defer() {
         + "@" + ((.capacity.until // "none") | tostring) ] | sort | join(" ")' 2>/dev/null)
   pool=$(printf '%s' "$ROUTE_DECISION" | jq -r '(.pool // []) | join(",")' 2>/dev/null)
   effort_effective=$(printf '%s' "$ROUTE_DECISION" | jq -r '.effort_effective // empty' 2>/dev/null)
+  project_abs=$(cd "$(resolve_project_dir_arg "$PROJ")" 2>/dev/null && pwd -P) || {
+    echo "warning: could not record the capacity deferral for $ID because its project directory could not be resolved: $PROJ" >&2
+    return 1
+  }
   if [ -n "$pool" ]; then
     reason="every model in route $ROUTE's pool ($pool) meeting floor ${CAPABILITY_FLOOR:-unconfigured} is currently out of capacity"
   else
@@ -1475,7 +1487,7 @@ spawn_capacity_defer() {
   fi
   defer_args=("$ID" --route "$ROUTE" --floor "$CAPABILITY_FLOOR" --pool "$pool"
               --reason "$reason" --retry-after "$retry_after" --signature "$signature"
-              --project "$PROJ" --reason-code "$REASON_CODE")
+              --project "$project_abs" --reason-code "$REASON_CODE")
   if [ "$KIND" = scout ]; then
     defer_args+=(--scout)
   else
@@ -1771,14 +1783,6 @@ resolved_existing_dir() {
   local path=$1
   [ -d "$path" ] || { echo "error: firstmate home does not exist or is not a directory: $path" >&2; return 1; }
   cd "$path" && pwd -P
-}
-
-resolve_project_dir_arg() {
-  local path=$1
-  case "$path" in
-    projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
-    *) printf '%s\n' "$path" ;;
-  esac
 }
 
 path_is_ancestor_of() {
