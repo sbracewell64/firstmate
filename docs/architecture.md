@@ -19,7 +19,8 @@ The evidence-status labels used below are normative.
 - **Target gap** means the architecture reserves the responsibility and owner, but the executable owner or complete behavior is not implemented and must not be represented as operational.
 - **Reference contract** means Firstmate adopts the semantics while the referenced implementation remains outside the operator path.
 - **Project-internal** means the component may remain inside the platform project but is not a second Firstmate operator surface.
-- **Retired or not adopted** means the artifact is not a capability of the target architecture.
+- **Retired** means an earlier artifact or claim is no longer a capability of the target architecture.
+- **Not adopted** means a proposed or evaluated artifact has not become a capability of the target architecture.
 
 ### Layer 1: Interface
 
@@ -74,7 +75,7 @@ The canonical ownership split is by scope.
 For fleet work, no-mistakes owns independent validation, [`bin/fm-fleet-snapshot.sh`](../bin/fm-fleet-snapshot.sh) owns the structured fleet projection, and [`bin/fm-status-event-lib.sh`](../bin/fm-status-event-lib.sh) owns typed task-event evidence.
 For the platform project, `scripts/platform-certification.py`, `scripts/runtime_lineage.py`, `scripts/runtime_gate_ledger.py`, and `scripts/runtime_review_cognition.py` remain **Project-internal** and do not become duplicate fleet evaluators.
 The fleet evaluation surface is **Current**, while any read-only economics projection is a **Target gap** owned by Layer 9.
-An unpopulated Event Ledger is **Retired as a capability claim**, even if its schema remains, and an unevaluated DeepSWE pilot is **Not adopted** rather than an available evaluator.
+An unpopulated Event Ledger is **Retired** as a capability claim, even if its schema remains, and an unevaluated DeepSWE pilot is **Not adopted** rather than an available evaluator.
 
 ### Layer 8: Authority and permissions
 
