@@ -97,7 +97,8 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   projects.md        thin fleet navigation registry recording each project's standing delivery posture; firstmate-private, parsed for mechanical sync and seeding by fm-project-mode.sh (section 6)
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   wake-ledger.tsv    append-only wake-outcome and terminal-task evidence; bin/fm-wake-ledger.sh owns its format, vocabulary, and append semantics
-  outbound-artifacts/  durable correlation records joining an outbound request to its ruling, the item it resumed, and its disposition; written only by bin/fm-outbound-artifact.sh, which owns their format, identity rule and crash-safe checkpointing. ONE record serves both directions, so a ruling stays attributable to the request that asked for it
+  outbound-artifacts/  durable correlation records joining an outbound request to its ruling, the item it resumed, and its disposition; written only by bin/fm-outbound-artifact.sh, which owns their format, identity rule and crash-safe checkpointing.
+                     ONE record serves both directions, so a ruling stays attributable to the request that asked for it.
   <id>/outbound-gate.json  OPTIONAL typed declaration that this item is waiting on an outbound artifact, naming its gate and exact head; the canonical alternative to firstmate recognising the wait from hold prose
   commitments/       OPTIONAL home-private commitment entries, same schema as the tracked commitments/ registry; LOCAL, gitignored; for captain-private commitments that must not reach a shared template repo. Absent is silent, unlike the tracked registry, whose absence is could-not-observe
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when role=secondmate
