@@ -2,7 +2,7 @@
 
 Maintainer-verification record for [`bin/fm-review-exec.sh`](../../bin/fm-review-exec.sh), the substrate that launches and captures a reviewer and owns that review's execution evidence.
 The guarantee it records is narrow and exact: no proxy can establish that a review executed.
-The measured table below records observed watched-red evidence, while every listed gap remains could-not-observe.
+The measured table below records observed watched-red evidence.
 
 The script's own header owns the law, the seventeen bound dimensions, and the mechanics.
 This file records only what was measured, and when.
@@ -14,8 +14,7 @@ It ran an entire suite, grepped the output for a textual `ok - <case>` line, and
 Its review half then established "a review happened" by reading a status event the reviewer itself had emitted, laundered through a status file, which is a claim citing itself.
 
 A control that has only ever been seen green is indistinguishable from that defect.
-The controls represented in the measured table were run against single-defect builds of the substrate and observed failing for their intended reasons, then run against the real build and observed passing.
-Controls in the disclosed-gap list have not been observed red and remain could-not-observe.
+The controls represented in the measured table were run against single-defect builds of the substrate and observed failing for their intended reasons, while the full unmodified suite was observed passing against the real build.
 The defect builds are scratch copies; no tracked source was mutated to produce them.
 
 ## Environment
@@ -41,7 +40,7 @@ FM_REVIEW_EXEC_BIN=<variant> bash tests/fm-review-exec.test.sh
 ## Observed red and green, per control
 
 Eighteen controls pass against the shipped script.
-Twenty-five single-defect builds produced the twenty-six measured control failures below because one label-reading defect reddened two controls.
+Twenty-six single-defect builds produced the twenty-eight measured control failures below because the label-reading defect and the argv[0]-rewriting defect each reddened two controls.
 
 Each row is one control, the defect that reddened it, and the exact first failing line that defect produced.
 Every defect is a real edit to a real code path: the smallest is one line, and each build was confirmed to differ from the tracked script and to parse before it was run.
@@ -61,6 +60,7 @@ That confirmation matters because a probe that reads a field which does not exis
 | a primary checkout as source | the primary-checkout refusal is dropped | `not ok - a primary checkout as source is could-not-observe: expected exit 2, got 0` |
 | checkout isolated from the source | `--no-local` is lost, and with it the object-storage guard | `not ok - the reviewer checkout must not share object storage with the source` |
 | a checkout moved off the candidate | the same missing re-proof on read | `not ok - a checkout moved off the pinned candidate must not still pass (got PASS)` |
+| checkout identity divergent from candidate identity | the candidate/checkout identity equality check is dropped | `not ok - checkout identity divergent from candidate identity must not pass` |
 | a record is written once | the occupied-directory refusal is dropped | `not ok - the refusal must name the immutability rule (missing: 'a record is written once')` |
 | one unobserved dimension | the unobserved-dimension scan is dropped | `not ok - an unobserved dimension is could-not-observe: expected exit 2, got 0` |
 | the artifact digest binding | the digest comparison is dropped | `not ok - a record must not outlive the bytes it attests to (got PASS)` |
@@ -73,15 +73,17 @@ That confirmation matters because a probe that reads a field which does not exis
 | shared object storage on reread | the read-time link-count check is dropped | `not ok - shared reviewer object storage must not still pass on reread` |
 | checkout-relative executable | executable resolution occurs in the caller cwd | `not ok - a relative candidate executable must resolve` |
 | reviewer argv[0] fidelity | argv[0] is rewritten to the resolved path | `not ok - the relative reviewer must receive recorded argv[0] (observed <resolved-abs-path>, recorded ./bin/candidate-reviewer)` |
+| PATH-resolved reviewer argv[0] fidelity | argv[0] is rewritten to the resolved path | `not ok - the path reviewer must receive recorded argv[0] (observed <tmp>/bad-executable/path/checkout/bin/candidate-reviewer, recorded candidate-reviewer)` |
 | deliberate exit 143 | shell 128+n conflation is reintroduced | `not ok - a deliberate exit 143 must be recorded as exited` |
 | reviewer killed by SIGTERM | WIFSIGNALED is reported as an exit | `not ok - a reviewer killed by SIGTERM must be recorded as signalled` |
 
 Two controls are shadowed in a full-suite run because an earlier control reddens first and the suite stops there.
 Both were additionally run in isolation against their defect build and against the tracked script, and the rows above are those isolated observations.
 
-## Could-not-observe watched-red gaps
-
-The internally consistent checkout identity divergent from candidate identity control and the PATH-resolved executable argv-preservation control are could-not-observe watched-red gaps because no corresponding defect build has yet been measured.
+The internally consistent divergent-identity construction replaced an earlier zeroing construction that still passed with the equality check deleted, so this control was previously vacuous and is now load-bearing.
+The PATH iteration's red was measured in isolation by restricting the invocation loop to that case in a scratch copy of the suite.
+Its green is covered by the full unmodified suite passing all eighteen controls, which exercises both the relative and PATH iterations; it was not separately measured in isolation.
+No control is currently shipping unmeasured.
 
 ## The `--no-local` measurement
 
