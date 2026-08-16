@@ -353,7 +353,7 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
   [ -n "$sha" ] || return 2
   probe_budget || return 2
   out=$(obs gh api "repos/$venue/commits/$sha/pulls" \
-    --jq '.[] | select(.state == "open") | .number') || return 2
+    --jq ".[] | select(.state == \"open\" and .head.sha == \"$sha\") | .number") || return 2
   if [ -n "$out" ]; then printf '%s\n' "$out" | head -1; return 0; fi
   return 1
 }
@@ -601,18 +601,26 @@ sweep_exit() {
 # the durable record and the item stays red until an artifact is observed.
 
 supersede_other_heads() {  # <item> <current-request-id> <current-head>
-  local item=$1 rid=$2 head=$3 f other rec
+  local item=$1 rid=$2 head=$3 f other rec read_rc
   [ -d "$RECORD_DIR" ] || return 0
   for f in "$RECORD_DIR"/*.json; do
     [ -f "$f" ] || continue
-    rec=$(cat "$f" 2>/dev/null) || continue
+    other=${f##*/}
+    other=${other%.json}
+    rec=$(record_read "$other"); read_rc=$?
+    if [ "$read_rc" -ne 0 ]; then
+      case $read_rc in
+        1|2) return 2 ;;
+        5) return 5 ;;
+        *) return 2 ;;
+      esac
+    fi
     printf '%s' "$rec" | jq -e --arg i "$item" --arg h "$head" \
       '.identity.item == $i and .identity.head != $h and .state != "closed" and .state != "superseded"' \
       >/dev/null 2>&1 || continue
-    other=$(printf '%s' "$rec" | jq -r '.request_id')
     rec=$(printf '%s' "$rec" | jq --arg s "$rid" --arg n "$(now_iso)" \
       '.state = "superseded" | .superseded_by = $s | .updated = $n')
-    record_write "$other" "$rec" || true
+    record_write "$other" "$rec" || return 2
     printf 'superseded: %s (bound to a head that moved)\n' "$other"
   done
 }
@@ -620,7 +628,7 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head>
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
   local rec gate channel project pr_url pr_ref head venue missing rid record
-  local attempt delay body found existing dedupe_rc retry_rc
+  local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc
 
   read_snapshot || die "fleet backlog could not be read" 4
   rec=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
@@ -683,20 +691,33 @@ cmd_emit() {
   fi
   EMIT_LOCK="$RECORD_DIR/.$rid.lock"
 
-  supersede_other_heads "$item" "$rid" "$head"
+  supersede_other_heads "$item" "$rid" "$head"; supersede_rc=$?
+  if [ "$supersede_rc" -ne 0 ]; then
+    case $supersede_rc in
+      5) die "$FM_OUTBOUND_TOKEN_IDENTITY: a keyed correlation record belongs to another request" 3 ;;
+      *) die "$FM_OUTBOUND_TOKEN_UNREADABLE: could not validate every keyed correlation record" 4 ;;
+    esac
+  fi
 
   # Dedupe against the forge FIRST. This is both ordinary duplicate suppression
   # and the crash-recovery path, because they are the same question: does an
   # artifact carrying this id already exist?
   found=$(sol_artifact_present "$rid"); dedupe_rc=$?
   if [ "$dedupe_rc" -eq 0 ]; then
-    if existing=$(record_read "$rid"); then
+    existing=$(record_read "$rid"); record_rc=$?
+    if [ "$record_rc" -eq 0 ]; then
       record=$(printf '%s' "$existing" | jq --arg c "$found" --arg n "$(now_iso)" \
         '.comment_id = $c | .state = (if .state == "emitting" then "emitted" else .state end) | .updated = $n')
     else
-      record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-        "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
-      record=$(printf '%s' "$record" | jq --arg c "$found" '.comment_id = $c | .state = "emitted"')
+      case $record_rc in
+        1)
+          record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
+            "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+          record=$(printf '%s' "$record" | jq --arg c "$found" '.comment_id = $c | .state = "emitted"')
+          ;;
+        5) die "$FM_OUTBOUND_TOKEN_IDENTITY: correlation record $rid belongs to another request" 3 ;;
+        *) die "$FM_OUTBOUND_TOKEN_UNREADABLE: correlation record $rid could not be validated" 4 ;;
+      esac
     fi
     record_write "$rid" "$record" || die "could not write the correlation record" 4
     printf 'already requested: %s (comment %s)\n' "$rid" "$found"
@@ -708,9 +729,16 @@ cmd_emit() {
     exit 4
   fi
 
-  if ! record=$(record_read "$rid"); then
-    record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-      "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+  record=$(record_read "$rid"); record_rc=$?
+  if [ "$record_rc" -ne 0 ]; then
+    case $record_rc in
+      1)
+        record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
+          "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+        ;;
+      5) die "$FM_OUTBOUND_TOKEN_IDENTITY: correlation record $rid belongs to another request" 3 ;;
+      *) die "$FM_OUTBOUND_TOKEN_UNREADABLE: correlation record $rid could not be validated" 4 ;;
+    esac
   fi
   # CHECKPOINT BEFORE TRANSPORT. If this process dies after the post and before
   # the success write, the record already names the id the recovery path needs.
