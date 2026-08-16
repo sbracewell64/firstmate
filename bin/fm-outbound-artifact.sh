@@ -33,6 +33,8 @@
 #       channel. Idempotent on the request identity.
 #   fm-outbound-artifact.sh ruling --request <id> --comment <n> [--issue <n>]
 #       Join an inbound ruling to the request that asked for it.
+#   fm-outbound-artifact.sh poll
+#       Poll the configured control issue and join every attributable ruling.
 #   fm-outbound-artifact.sh resume --request <id>
 #       Record that the waiting item resumed on that ruling.
 #   fm-outbound-artifact.sh close --request <id> --disposition <text>
