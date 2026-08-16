@@ -39,6 +39,11 @@
 #   merge-clean <base-ref> <head-ref> [repo-dir]
 #       Runs git merge-tree --write-tree in <repo-dir> (default: the current
 #       directory).
+#   review-exec <record-dir>
+#       Reads one bin/fm-review-exec.sh execution record and reports whether
+#       that reviewer actually ran. It transports that script's result rather
+#       than forming its own, because only the component that performed the
+#       launch observed it.
 #
 # Output is exactly one record on stdout, in every case:
 #
@@ -94,7 +99,7 @@ usage() {
   ' "$0"
 }
 
-VERIFIERS=(browser pr-checks merge-clean)
+VERIFIERS=(browser pr-checks merge-clean review-exec)
 
 RESULT=
 REASON=
@@ -343,12 +348,41 @@ verify_merge_clean() {
   fi
 }
 
+# --- review-exec ------------------------------------------------------------
+
+# bin/fm-review-exec.sh already answers in this script's three values, and it is
+# the only thing that may answer for a review's execution: it is the component
+# that launched the reviewer, so it is the only one that observed the launch.
+# This adapter therefore transports a result rather than forming one. It reads
+# the record directory, never the review's captured output, because that output
+# is the reviewer's own testimony and is exactly the proxy the substrate exists
+# to refuse.
+verify_review_exec() {
+  local dir
+  [ "$#" -eq 1 ] || refuse usage_error
+  dir=$1
+  [ -x "$SCRIPT_DIR/fm-review-exec.sh" ] || {
+    set_result NO_VERIFIER_RAN verifier_unavailable
+    return 0
+  }
+  run_verifier "$SCRIPT_DIR/fm-review-exec.sh" result "$dir" || {
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  }
+  if ! fm_verify_parse "$VERIFIER_OUT"; then
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  fi
+  set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
+}
+
 # --- dispatch ---------------------------------------------------------------
 
 case "$VERIFIER" in
   browser) verify_browser "$@" ;;
   pr-checks) verify_pr_checks "$@" ;;
   merge-clean) verify_merge_clean "$@" ;;
+  review-exec) verify_review_exec "$@" ;;
   *) refuse verifier_undeclared ;;
 esac
 
