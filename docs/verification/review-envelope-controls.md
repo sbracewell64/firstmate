@@ -1,7 +1,7 @@
 # Review envelope controls
 
 Maintainer-verification record for [`bin/fm-review-envelope.sh`](../../bin/fm-review-envelope.sh) and [`bin/fm-review-envelope-lib.sh`](../../bin/fm-review-envelope-lib.sh), the `review-envelope/v1` contract, its compiler and its classifier.
-The guarantee it records is that each refusal and each could-not-observe in that contract was observed happening, for its own reason, against a build where exactly one guard was removed.
+It records watched-red evidence for the original fifty controls and current green coverage for all fifty-three controls.
 
 The library header owns the contract itself, and [`docs/contracts/review-envelope.md`](../contracts/review-envelope.md) is generated from its field catalog.
 This file records only what was measured, and when.
@@ -42,8 +42,9 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## Observed red and green, per control
 
-Fifty controls pass against the shipped scripts.
-Fifty-one single-defect builds produced the fifty-one measured control failures below, because the dropped-obligation control was measured twice: once with its refusal removed, and once with the predecessor's obligation set read as empty, which is the shape the original incident took.
+Fifty-three controls pass against the shipped scripts.
+Fifty-one single-defect builds produced the fifty-one measured control failures below for the original fifty controls, because the dropped-obligation control was measured twice: once with its refusal removed, and once with the predecessor's obligation set read as empty, which is the shape the original incident took.
+The later evidence-symlink, duplicate-disposition and request-identity hardening controls have current green results but do not yet have watched-red measurements recorded here.
 
 Each row is one control, the defect that reddened it, and the exact first failing line that defect produced.
 Every defect is a real edit to a real code path, and each build was confirmed to differ from the tracked script and to run before the suite was pointed at it.
@@ -102,4 +103,3 @@ That confirmation matters because a variant that never parsed would report a red
 | validate rechecks evidence bytes | the evidence recheck arm never runs | `not ok - evidence replaced after compilation refuses at validation: expected exit 1, got 0` |
 | the generated contract page matches the catalog | the generated contract page's section heading changes | `not ok - docs/contracts/review-envelope.md is stale; regenerate it with bin/fm-review-envelope.sh docs` |
 | a crashed compiler cannot reach a verdict | an unreadable compiler result is read as a pass | `not ok - a compiler that produced no result is could-not-observe: expected exit 2, got 0` |
-
