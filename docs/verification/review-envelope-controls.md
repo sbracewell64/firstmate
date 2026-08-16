@@ -192,6 +192,17 @@ This campaign also establishes that it was the ONLY control of that shape here, 
 Any accepting-only control would leave its guard's deletion undetected and would therefore surface as a green mutation.
 69 mutations produced exactly three greens, and all three are accounted for: two are the redundancy above, re-measured until red, and the third was this control.
 
+## One commit's content was deliberately not carried forward
+
+The validation gate repository held a commit, `6fb084c6` "record tracked suite result", on a lineage this branch no longer has.
+It added a recorded suite result - a passing control line and a suite-contract line - for a head that has since been superseded.
+
+Its content was NOT carried into this record, and the omission is deliberate rather than an oversight.
+A recorded suite result for a lineage that no longer exists is exactly the stale claim this file exists to close: a record that no longer describes the head it is published with.
+Carrying it forward would have reintroduced that defect at the moment the fabricated campaign claim was removed.
+
+The commit itself is preserved and reachable in the gate repository at `refs/fm-recovery/review-envelope-gate-pre-force`, so nothing is lost by leaving its content out.
+
 ## A prior commit relabelled measurements it did not take
 
 This is recorded because it is a measured failure of the process that produces this file, and because the commits that caused it are preserved in history rather than rewritten out of it.
