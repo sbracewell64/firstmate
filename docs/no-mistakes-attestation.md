@@ -69,6 +69,7 @@ That some pipeline run completed review, test, lint and push against **this exac
 The binding is the property that matters.
 An attestation cannot be copied from another pull request, cannot survive a rebase, an amend or a force-push, and cannot be produced before the commit it names exists.
 Every new head needs its own.
+A commit added after validation is a new head the completed run did not cover, so run the pipeline again before writing its attestation rather than trying to reuse the prior run record.
 
 ## What it does not attest
 
