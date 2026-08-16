@@ -55,10 +55,10 @@
 # restart every pid-based record is invalid at once, so recovery is keyed on the
 # task id and on the record's own timestamps.
 #
-# OBSERVATIONS. Every deferral is counted by bin/fm-attempt.sh so this owner can
-# back off repeated checks and disclose an unchanged capacity picture. Those
-# observations never stop a lawful wait because provider capacity may remain
-# exhausted for an arbitrary duration.
+# OBSERVATIONS. Every deferral is counted by bin/fm-attempt.sh, whose total and
+# unchanged-picture bounds prevent endless polling while leaving ordinary
+# provider resets enough time to complete. This owner supplies the current
+# capacity signature but does not own or reinterpret either bound.
 #
 # Usage:
 #   fm-capacity-retry.sh defer <id> --route <R> --floor <F> --pool <a,b,...>

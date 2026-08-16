@@ -160,7 +160,7 @@ In a home with routed pools, `bin/fm-route.sh` is how that is done rather than b
 
 **The exhausted-capacity state:**
 
-> **When no candidate in a route's pool meets that route's floor and running effort band and has capacity, firstmate queues an automatic wait whose rechecks use bounded backoff; capacity remaining exhausted never stops that wait.**
+> **When no candidate in a route's pool meets that route's floor and running effort band and has capacity, firstmate queues an automatic wait whose rechecks use bounded backoff and whose attempt-owned total and stagnation bounds prevent endless polling.**
 > **The wait stops and surfaces for a captain decision only when the attempt owner stops it, its recorded dispatch no longer validates, or its durable retry state cannot be maintained safely.**
 > **It does not degrade, does not substitute below the floor, and does not cross into paid usage to keep working.**
 
