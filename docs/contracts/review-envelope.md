@@ -19,6 +19,8 @@ A complete worked inputs document is the baseline fixture in [`tests/fm-review-e
 The stored document is pretty-printed with sorted keys, and its `envelope` body is what the digest covers.
 Those are not the same bytes: the digest is taken over the body serialized as UTF-8 with keys sorted recursively, no insignificant whitespace and no trailing newline, so recompute it that way rather than over the file.
 Nothing time-varying sits inside the body, so unmoved facts always produce the same digest and repeated compilation resolves to one review request rather than a new one each time.
+The body and outer integrity digests detect partial edits and drift, and provide content-addressed provenance aids.
+They do not establish signer identity and do not resist a whole-artifact rewrite with recomputed digests.
 
 ## Where each fact comes from
 
@@ -44,7 +46,8 @@ Who is asking for what, under which policy.
 | `policy.max_base_behind_main` | `declared` | yes | How far the base may trail the trunk before the envelope refuses. |
 | `requested_decision` | `declared` | yes | The decision this envelope asks for, as an uppercase token. |
 | `outer request_identity` | `computed` | yes | A derived identity beside the body digest, binding repository, work or forge request, exact head, envelope digest and policy version. |
-| `outer declared_request_identity` | `declared` | no | The optional request identity claimed by the inputs, preserved beside the computed identity so every validation can recheck it. |
+| `outer declared_request_identity` | `declared` | yes | The request identity claimed by the inputs, or explicit null when none was claimed, preserved so every validation can distinguish absence and recheck a value. |
+| `outer outer_digest` | `computed` | yes | An integrity digest over compile time, compiler, body digest value, computed request identity and declared request identity. |
 
 ## candidate
 
@@ -199,6 +202,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `obligation_duplicate_id` | One obligation id is missing or appears twice. |
 | `predecessor_contradiction` | A predecessor envelope was supplied against inputs that declare none. |
 | `envelope_digest_mismatch` | The stored body does not match its stored digest. |
+| `outer_integrity_digest_mismatch` | The stored outer facts do not match their integrity digest. |
 
 ## Could-not-observe
 
@@ -224,3 +228,5 @@ None of them is a pass, and none of them is skippable.
 | `predecessor_undeclared` | The inputs carry no predecessor block, so obligation continuity cannot be judged. |
 | `predecessor_unreadable` | The declared predecessor envelope could not be read, or does not match its own digest. |
 | `evidence_recheck_declined` | Validation was told not to re-read the evidence bytes, and did not. |
+| `outer_integrity_digest_unobserved` | The outer integrity digest is absent, so outer facts cannot be checked. |
+| `request_identity_claim_unobserved` | The declared request identity state is absent rather than an explicit value or null. |
