@@ -104,25 +104,111 @@ search_roots() {
   done
 }
 
+shell_code() {  # <file>
+  awk '
+  function blank(s,    n) { n = length(s); return sprintf("%" n "s", "") }
+  {
+    raw = $0
+    if (heredoc != "") {
+      end = raw
+      if (strip_tabs) sub(/^\t+/, "", end)
+      print NR ":" blank(raw)
+      if (end == heredoc) { heredoc = ""; strip_tabs = 0 }
+      next
+    }
+    out = ""
+    for (i = 1; i <= length(raw); i++) {
+      c = substr(raw, i, 1)
+      if (quote == "\047") {
+        out = out " "
+        if (c == "\047") quote = ""
+        continue
+      }
+      if (quote == "\"") {
+        if (c == "$" && substr(raw, i + 1, 1) == "(") {
+          out = out "$("
+          i++
+          substitution++
+          resume_quote[substitution] = "\""
+          quote = ""
+          continue
+        }
+        out = out " "
+        if (c == "\\") { if (i < length(raw)) { out = out " "; i++ }; continue }
+        if (c == "\"") quote = ""
+        continue
+      }
+      if (c == "\047" || c == "\"") { quote = c; out = out " "; continue }
+      if (c == "\\") { out = out " "; if (i < length(raw)) { out = out " "; i++ }; continue }
+      if (c == "$" && substr(raw, i + 1, 1) == "(") {
+        out = out "$("
+        i++
+        substitution++
+        resume_quote[substitution] = ""
+        continue
+      }
+      if (c == "#" && (i == 1 || substr(raw, i - 1, 1) ~ /[[:space:];|&(){}]/)) {
+        out = out blank(substr(raw, i))
+        break
+      }
+      out = out c
+      if (substitution > 0 && c == "(") {
+        substitution++
+        resume_quote[substitution] = ""
+      }
+      if (substitution > 0 && c == ")") {
+        quote = resume_quote[substitution]
+        delete resume_quote[substitution]
+        substitution--
+      }
+    }
+    print NR ":" out
+    probe = out
+    if (match(probe, /<<-?[[:space:]]*/)) {
+      token = substr(raw, RSTART, length(raw) - RSTART + 1)
+      strip_tabs = token ~ /^<<-/
+      sub(/^<<-?[[:space:]]*/, "", token)
+      if (substr(token, 1, 1) == "\047" || substr(token, 1, 1) == "\"") {
+        delimiter_quote = substr(token, 1, 1)
+        token = substr(token, 2)
+        heredoc = substr(token, 1, index(token, delimiter_quote) - 1)
+      } else {
+        match(token, /^[A-Za-z_][A-Za-z0-9_]*/)
+        heredoc = substr(token, RSTART, RLENGTH)
+      }
+    }
+  }
+  ' "$1"
+}
+
+function_definitions() {  # <file>
+  shell_code "$1" | sed -nE \
+    -e 's/^([0-9]+):[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*(\{|$).*/\1:\2/p' \
+    -e 's/^([0-9]+):[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)([[:space:]]*\(\))?[[:space:]]*(\{|$).*/\1:\2/p'
+}
+
 function_has_call_site() {  # <function>
   local fn=$1 d source
   while IFS= read -r d; do
     while IFS= read -r source; do
-      if awk -v fn="$fn" '
+      if shell_code "$source" | awk -v fn="$fn" '
       {
         line = $0
-        sub(/[[:space:]]*#.*/, "", line)
-        if (line ~ ("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{")) {
-          sub("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{[[:space:]]*", "", line)
-        } else if (line ~ ("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*$")) next
+        sub(/^[0-9]+:/, "", line)
+        if (line ~ ("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*(\\{|$)")) {
+          sub("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{?[[:space:]]*", "", line)
+        } else if (line ~ ("^[[:space:]]*function[[:space:]]+" fn "([[:space:]]*\\(\\))?[[:space:]]*(\\{|$)")) {
+          sub("^[[:space:]]*function[[:space:]]+" fn "([[:space:]]*\\(\\))?[[:space:]]*\\{?[[:space:]]*", "", line)
+        }
         if (line ~ ("(^|[;|&(){}])[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)")) found = 1
         if (line ~ ("(^|[;|&(){}])[[:space:]]*trap[[:space:]]+[\047\"]?" fn "([^A-Za-z0-9_]|$)")) found = 1
-        if ($0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) found = 1
       }
       END { exit(found ? 0 : 1) }
-      ' "$source"; then
+      '; then
         return 0
       fi
+      grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$source" \
+        && return 0
     done < <(find "$d" -type f -print 2>/dev/null)
   done < <(search_roots)
   return 1
@@ -158,7 +244,7 @@ for f in "${FILES[@]}"; do
   grep -qxF "$ENROL_MARKER" "$f" 2>/dev/null || die "target is not enrolled: $f" 4
   while IFS= read -r line; do
     lineno=${line%%:*}
-    fn=$(printf '%s' "${line#*:}" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)().*/\1/p')
+    fn=${line#*:}
     [ -n "$fn" ] || continue
     function_has_call_site "$fn" && continue
     prev=$((lineno - 1))
@@ -172,7 +258,7 @@ for f in "${FILES[@]}"; do
     dead_json=$(printf '%s' "$dead_json" | jq --arg f "$f" --arg fn "$fn" --argjson l "$lineno" \
       '. + [{file:$f,function:$fn,line:$l}]')
     DEAD=$((DEAD + 1))
-  done < <(grep -nE '^[A-Za-z_][A-Za-z0-9_]*\(\)' "$f")
+  done < <(function_definitions "$f")
 done
 
 if [ "$JSON" -eq 1 ]; then

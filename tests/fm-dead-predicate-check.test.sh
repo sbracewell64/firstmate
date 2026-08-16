@@ -65,6 +65,33 @@ printf "%s\\n" "dead_one"')
   pass "comments and quoted fixture text are not call sites"
 }
 
+test_quoted_command_shape_is_not_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-shape 'dead_one() { return 0; }' "printf '%s\\n' '; dead_one'")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "quoted command-shaped text counted as a call site, exit $rc: $out"
+  pass "quoted command-shaped text is not a call site"
+}
+
+test_heredoc_payload_is_not_a_call_site() {
+  local dir out rc
+  dir=$(fixture heredoc 'dead_one() { return 0; }' 'cat <<EOF
+; dead_one
+EOF')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "heredoc payload counted as a call site, exit $rc: $out"
+  pass "heredoc payload is not a call site"
+}
+
+test_function_keyword_definition_is_scanned() {
+  local dir out rc
+  dir=$(fixture function-keyword 'function dead_one { return 0; }')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a function-keyword definition was omitted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'dead_one' || fail "the alternate definition was not named: $out"
+  pass "function-keyword definitions are scanned"
+}
+
 test_explicit_indirect_call_counts() {
   local dir out rc
   dir=$(fixture indirect 'live_one() { return 0; }' 'callback=live_one
@@ -73,6 +100,14 @@ test_explicit_indirect_call_counts() {
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "an explicitly identified indirect call was refused, exit $rc: $out"
   pass "an explicit indirect call site counts as consulted"
+}
+
+test_call_in_quoted_substitution_counts() {
+  local dir out rc
+  dir=$(fixture quoted-substitution 'live_one() { return 0; }' 'value="$(live_one)"')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a call inside a quoted command substitution was refused, exit $rc: $out"
+  pass "calls inside quoted command substitutions count"
 }
 
 test_call_site_inside_its_own_file_counts() {
@@ -159,7 +194,11 @@ test_repository_is_clean_under_the_control() {
 test_dead_function_is_refused
 test_consulted_function_passes
 test_mentions_are_not_call_sites
+test_quoted_command_shape_is_not_a_call_site
+test_heredoc_payload_is_not_a_call_site
+test_function_keyword_definition_is_scanned
 test_explicit_indirect_call_counts
+test_call_in_quoted_substitution_counts
 test_call_site_inside_its_own_file_counts
 test_blanket_exemption_cannot_silence
 test_adjacent_mark_keeps_one_and_still_reports_it
