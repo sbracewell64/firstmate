@@ -6,6 +6,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 `bin/fm-outbound-artifact-lib.sh`'s header owns the invariant statement and the identity rule, `bin/fm-outbound-artifact.sh`'s header owns the command contract, [`../configuration.md`](../configuration.md) "Browser Sol control venue" owns the configuration, and `.agents/skills/bootstrap-diagnostics/SKILL.md` owns the handling procedure for a printed `OUTBOUND:` line.
 
 Verified on 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
+The controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
 
 ## Why this record exists
 
