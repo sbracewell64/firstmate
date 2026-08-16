@@ -26,7 +26,7 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against the same head, `98b1d34f`, so the record describes one experiment rather than several.
+Every measurement below was taken against the same head, `98b1d34fdb00d6da0cceb82af6ffd98904c2111b`, so the record describes one experiment rather than several.
 
 ## Commands
 
@@ -48,7 +48,7 @@ Both files are copied because the entrypoint sources its library from its own di
 ## What was measured
 
 59 controls pass against the shipped scripts.
-Those 59 suite controls exercise the 56 properties measured in the mutation campaign at head `98b1d34f`; coverage is counted per property rather than per test function.
+Those 59 suite controls exercise the 56 properties measured in the mutation campaign at head `98b1d34fdb00d6da0cceb82af6ffd98904c2111b`; coverage is counted per property rather than per test function.
 Sixty-two mutations were built; sixty-one turned the suite red and one deliberately did not.
 That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
 
