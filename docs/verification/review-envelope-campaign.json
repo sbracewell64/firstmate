@@ -1,0 +1,12 @@
+{
+  "environment": "Linux 6.18.33.2-microsoft-standard-WSL2",
+  "head": "0000000",
+  "mutations": [],
+  "note": "The binding is the subjects map: these measurements describe exactly these bytes. The head is recorded so the record's stated head can be checked against it, but the digests are what cannot be satisfied by relabelling.",
+  "schema": "review-envelope-campaign/v1",
+  "subjects": {
+    "bin/fm-review-envelope-lib.sh": "sha256:f0b5d12b8b375ab20e09929194e41c53ac8b8cda7b6cf42ed0fc9df25b97c9ea",
+    "bin/fm-review-envelope.sh": "sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a",
+    "tests/fm-review-envelope.test.sh": "sha256:a6e6d5206ef3a1ca4c6e9cab0207cf920b87e917d2c24378882d3d7555efbef0"
+  }
+}
