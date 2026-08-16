@@ -253,6 +253,8 @@ CATALOG = {
                  "description": "How far the base may trail the trunk before the envelope refuses."},
                 {"name": "requested_decision", "source": "declared", "required": True,
                  "description": "The decision this envelope asks for, as an uppercase token."},
+                {"name": "outer request_identity", "source": "computed", "required": True,
+                 "description": "A derived identity beside the body digest, binding repository, work or forge request, exact head, envelope digest and policy version."},
             ],
         },
         {
@@ -427,12 +429,14 @@ CATALOG = {
         {"code": "capability_candidate_malformed", "meaning": "A capability candidate is neither a bare name nor an absolute path."},
         {"code": "adverse_finding_blocking", "meaning": "A known adverse finding is marked blocking."},
         {"code": "ruling_applicability_mismatch", "meaning": "A ruling this envelope relies on does not apply to this candidate."},
+        {"code": "request_identity_mismatch", "meaning": "A declared or stored request identity does not match the identity recomputed from the bound facts."},
         {"code": "obligation_dropped", "meaning": "A predecessor obligation is unaccounted for."},
         {"code": "obligation_preserved_but_absent", "meaning": "An obligation was called preserved and is not in the active set."},
         {"code": "obligation_satisfied_without_evidence", "meaning": "A satisfied obligation names no evidence that resolves and digests."},
         {"code": "obligation_resolved_without_authority", "meaning": "A resolved obligation names no authority and reason."},
         {"code": "obligation_superseded_without_replacement", "meaning": "A superseded obligation names no active replacement."},
         {"code": "obligation_disposition_unknown", "meaning": "A disposition names an obligation the predecessor never held."},
+        {"code": "obligation_disposition_duplicate", "meaning": "More than one disposition names the same predecessor obligation."},
         {"code": "obligation_disposition_contradicts_active_set", "meaning": "An obligation is both discharged and still active."},
         {"code": "obligation_duplicate_id", "meaning": "One obligation id is missing or appears twice."},
         {"code": "predecessor_contradiction", "meaning": "A predecessor envelope was supplied against inputs that declare none."},
@@ -761,9 +765,38 @@ def resolve_evidence(root, locator):
     if root is None:
         return None, "no evidence root was supplied"
     candidate = os.path.join(root, locator)
+    real_root = os.path.realpath(root)
+    real_candidate = os.path.realpath(candidate)
+    try:
+        contained = os.path.commonpath((real_root, real_candidate)) == real_root
+    except ValueError:
+        contained = False
+    if not contained:
+        return None, "locator escapes its root"
     if not os.path.isfile(candidate):
         return None, "locator names no readable file"
     return candidate, None
+
+
+def request_identity(envelope, envelope_digest):
+    project = envelope["identity"]["project"]
+    work = envelope["identity"]["work"]
+    forge_request = work.get("request")
+    work_identity = {"id": work["id"]}
+    if isinstance(forge_request, dict) and forge_request.get("id") is not None:
+        work_identity["forge_request_id"] = forge_request["id"]
+    return digest_of(
+        {
+            "project": {
+                "id": project["id"],
+                "root_commits": project["root_commits"],
+            },
+            "work": work_identity,
+            "candidate_head_commit": envelope["candidate"]["head_commit"],
+            "envelope_digest": envelope_digest,
+            "policy_version": envelope["identity"]["policy"]["version"],
+        }
+    )
 
 
 def bind_evidence(block, evidence_root):
@@ -1466,6 +1499,13 @@ def classify_obligations(problems, envelope, ruling_index, evidence_root, rechec
                 "obligation_disposition_unknown", target, "the predecessor never held this obligation"
             )
             continue
+        if target in dispositions:
+            problems.refuse(
+                "obligation_disposition_duplicate",
+                target,
+                "one predecessor obligation has more than one disposition",
+            )
+            continue
         dispositions[target] = disposition
 
     for obligation_id in sorted(prior):
@@ -1695,14 +1735,17 @@ def command_prepare(args):
         )
     inputs = read_json(args.inputs, "inputs_malformed", "inputs are unreadable")
     envelope = compile_envelope(args.repo, inputs, args.predecessor, args.evidence_root)
+    envelope_digest = digest_of(envelope)
+    computed_request_identity = request_identity(envelope, envelope_digest)
     document = {
         "schema": SCHEMA,
         "compiled_at": now_utc(),
         "compiler": "fm-review-envelope-lib.sh",
+        "request_identity": computed_request_identity,
         "digest": {
             "algorithm": "sha256",
             "canonicalization": CANONICALIZATION,
-            "value": digest_of(envelope),
+            "value": envelope_digest,
         },
         "envelope": envelope,
     }
@@ -1710,7 +1753,20 @@ def command_prepare(args):
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    return emit(classify(envelope, args.repo, args.evidence_root, True), args)
+    classification = classify(envelope, args.repo, args.evidence_root, True)
+    request_input = as_dict(inputs, "request")
+    if "identity" in request_input and request_input["identity"] != computed_request_identity:
+        classification["refusals"].append(
+            {
+                "code": "request_identity_mismatch",
+                "subject": str(request_input["identity"]),
+                "detail": "declared identity does not match " + computed_request_identity,
+            }
+        )
+        classification["readiness"] = "REFUSED"
+        classification["result"] = "FAIL"
+        classification["reason"] = "verifier_reported_failure"
+    return emit(classification, args)
 
 
 def command_validate(args):
@@ -1725,13 +1781,22 @@ def command_validate(args):
         raise Unobservable(
             "usage_error", "--evidence-root and --no-evidence-recheck contradict each other"
         )
-    _, body, stored, path = read_envelope(args.envelope, "envelope_unreadable")
+    document, body, stored, path = read_envelope(args.envelope, "envelope_unreadable")
     recomputed = digest_of(body)
     if recomputed != stored:
         return refused(
             "envelope_digest_mismatch",
             str(path),
             "stored " + stored + ", recomputed " + recomputed,
+            recomputed,
+            args,
+        )
+    recomputed_request_identity = request_identity(body, recomputed)
+    if document.get("request_identity") != recomputed_request_identity:
+        return refused(
+            "request_identity_mismatch",
+            str(path),
+            "stored " + str(document.get("request_identity")) + ", recomputed " + recomputed_request_identity,
             recomputed,
             args,
         )
