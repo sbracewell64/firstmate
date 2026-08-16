@@ -45,9 +45,10 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Do not dispatch new work in this home until the named field is corrected; an unknown field is refused rather than ignored precisely so a typo cannot silently disable a safety condition.
   `docs/configuration.md` "Fleet admission control" owns the schema, and `fleet-admission` owns what firstmate does with a resolved band.
 - `WAKE_LEDGER: <n> outcome record(s) join no wake record` - that many recorded supervision costs point at a wake this home never drained, so every figure drawn from the ledger overcounts by up to that number.
-  Treat it as a measurement defect, never as supervision work: report the count rather than any rate or total computed from the file, until the captain decides what to purge.
-  The records are append-only evidence, so never rewrite or migrate the file to clear the count; `bin/fm-wake-ledger.sh reconcile` restates it on demand and that script owns the join.
-  A count that grows during a session means something is still recording against unresolvable sequences, which is a bug to escalate rather than a backlog of old damage.
+  Treat it as a measurement defect, never as supervision work: report the count rather than any rate or total computed from the file, until those records are retired.
+  The records are append-only evidence, so never rewrite, migrate or purge the file to clear the count; retire them in place with `bin/fm-wake-ledger.sh reconcile --list` to review the candidates and `invalidate --target outcome --reason <class>` to record the ruling, which excludes them from every count while leaving the raw records readable.
+  Invalidation is terminal and needs the captain's decision on what the records actually are, because nothing un-retires one and the candidate list proves only that a record joins nothing - true of a fabricated sequence and of a legacy record from a genuinely wiped home alike.
+  A count that GROWS is a bug to escalate rather than old damage: no supported path appends another unjoined outcome record, because an explicit unjoinable sequence is refused and the genuine wiped-home case records under its own `recovered-outcome` kind.
 - `WAKE_LEDGER: the wake ledger could not be read ...` - the file exists but could not be opened, so the count above is unavailable rather than zero.
   Repair its permissions or path before quoting any supervision-cost figure; an unreadable ledger is reported precisely so it cannot pass as a clean one.
 - `WAKE_LEDGER: <n> task(s) declared failure with no terminal record ...` - only a lock-holding session records those, so a read-only session names them and leaves the recording to the session that holds the lock.

@@ -27,6 +27,16 @@
 # indistinguishable from a task that never failed, so covering only the
 # torn-down path would miss the actual defect.
 #
+# It covers preserve-and-invalidate too: a tombstone retires a record from
+# every count without touching it, recovery evidence records under its own kind
+# so it can never enter a wake metric, and the retired records stay a reported
+# number rather than leaving the totals silently.
+#
+# The exclusion cases are written so a no-op exclusion CANNOT pass them. Each
+# names the figure before and the figure after, and the two differ, because an
+# assertion satisfied by a number that never moved is could-not-observe wearing
+# a green tick rather than proof the exclusion did anything.
+#
 # Teardown's own terminal-record write is covered where teardown's fixture
 # lives, in tests/fm-teardown.test.sh.
 set -u
@@ -73,6 +83,17 @@ field_of() {  # <file> <record> <field>
   ' "$1"
 }
 
+# Stage one outcome record in the damaged 2026-08-04 shape: a sequence that
+# joins no wake record, stored with queued=unknown. NO SUPPORTED PATH WRITES
+# ONE ANY MORE - an explicit unjoinable sequence is refused and the override
+# writes recovery evidence under its own kind - so the historical shape has to
+# be staged directly for the cases that measure it.
+seed_legacy_unjoined_outcome() {  # <home> <seq> [<token>]
+  local home=$1 seq=$2 token=${3:-false-positive}
+  printf 'v1\toutcome\t%s\tseq=%s\tqueued=unknown\toutcome=%s\ttask=-\tafter=unknown\n' \
+    "$(date +%s)" "$seq" "$token" >> "$(ledger_file "$home")"
+}
+
 # The value of <field> on the last line matching <record> kind, or empty. The
 # outcome cases below assert on the record just written, which is the last one.
 last_field_of() {  # <file> <record> <field>
@@ -88,7 +109,7 @@ last_field_of() {  # <file> <record> <field>
 }
 
 
-test_record_format_for_all_three_kinds() {
+test_record_format_for_the_wake_outcome_and_task_kinds() {
   local home file before after queued latency
   home=$(make_home format)
   file=$(ledger_file "$home")
@@ -349,7 +370,9 @@ test_concurrent_appends_stay_whole_lines() {
     wait "$pid" || fail "concurrent: an append failed"
   done
   [ "$(wc -l < "$file" | tr -d ' ')" -eq 30 ] || fail "concurrent: expected 30 records"
-  LC_ALL=C awk -F '\t' '$1 != "v1" || $2 != "outcome" || NF != 9 { bad = 1 } END { exit bad + 0 }' "$file" \
+  # The override records recovery evidence, so that is the kind these lines
+  # carry; the case is about whether an append stayed one whole line.
+  LC_ALL=C awk -F '\t' '$1 != "v1" || $2 != "recovered-outcome" || NF != 9 { bad = 1 } END { exit bad + 0 }' "$file" \
     || fail "concurrent: appends interleaved into a malformed record"
   pass "concurrent appends from many writers stay whole, well-formed lines"
 }
@@ -404,9 +427,10 @@ test_seq_reuse_across_a_state_reset_never_collapses_records() {
   file=$(ledger_file "$home")
 
   # An outcome whose wake record is unresolvable must say so explicitly. That
-  # is the genuine wiped-state/ case, so it needs the explicit override.
+  # is the genuine wiped-state/ case, so it needs the explicit override, and
+  # the override records it as recovery evidence rather than as an outcome.
   ledger "$home" outcome absorbed 9 --allow-unjoined || fail "seq reset: unmatched outcome failed"
-  [ "$(field_of "$file" outcome queued)" = unknown ] \
+  [ "$(field_of "$file" recovered-outcome queued)" = unknown ] \
     || fail "seq reset: an unmatched outcome must record queued=unknown"
   : > "$file"
 
@@ -881,8 +905,16 @@ test_an_unjoinable_sequence_is_refused_without_the_override() {
     || fail "unjoinable: the explicit override was refused"
   [ "$(wc -l < "$file" | tr -d ' ')" -eq "$((before + 1))" ] \
     || fail "unjoinable: the override did not append exactly one record"
-  [ "$(last_field_of "$file" outcome queued)" = unknown ] \
+  [ "$(last_field_of "$file" recovered-outcome queued)" = unknown ] \
     || fail "unjoinable: an overridden outcome must still record queued=unknown"
+  # The override declares that the wake records are gone. A sequence that does
+  # join one contradicts that declaration, so it is refused in that direction
+  # too: recovery evidence must be genuine, or it is the same unreadable shape
+  # the fabricated records hid inside.
+  ledger "$home" outcome absorbed 4 --allow-unjoined 2>/dev/null \
+    && fail "unjoinable: the override was accepted for a sequence that joins a wake record"
+  [ "$(wc -l < "$file" | tr -d ' ')" -eq "$((before + 1))" ] \
+    || fail "unjoinable: a refused override still appended a record"
   pass "an unjoinable wake sequence is refused unless the override is explicit"
 }
 
@@ -1087,10 +1119,20 @@ test_reconcile_counts_outcomes_that_join_no_wake_record() {
   [ "$(ledger "$home" reconcile --count)" = 0 ] \
     || fail "reconcile: a joined outcome was counted as unreconciled"
 
-  ledger "$home" outcome absorbed 999999 --allow-unjoined || fail "reconcile: override failed"
-  ledger "$home" outcome absorbed 999998 --allow-unjoined || fail "reconcile: override failed"
+  # The records this counts are HISTORICAL: no supported path appends another
+  # one, because an explicit sequence that joins nothing is refused and the
+  # override now writes recovery evidence under its own record kind. The
+  # damaged shape is staged directly, exactly as the 2026-08-04 records read.
+  seed_legacy_unjoined_outcome "$home" 999999
+  seed_legacy_unjoined_outcome "$home" 999998
   [ "$(ledger "$home" reconcile --count)" = 2 ] \
     || fail "reconcile: expected 2 unreconciled outcome records, got $(ledger "$home" reconcile --count)"
+
+  # Recovery evidence is a different record kind, so it can never re-enter this
+  # count - the number the fleet reports can only shrink from here.
+  ledger "$home" outcome absorbed 999000 --allow-unjoined || fail "reconcile: override failed"
+  [ "$(ledger "$home" reconcile --count)" = 2 ] \
+    || fail "reconcile: recovery evidence was counted as an unjoined outcome record"
 
   out=$(ledger "$home" reconcile) || fail "reconcile: summary failed"
   printf '%s\n' "$out" | grep -q '2' \
@@ -1110,7 +1152,230 @@ test_reconcile_counts_outcomes_that_join_no_wake_record() {
   pass "reconcile counts exactly the outcome records that join no wake record"
 }
 
-test_record_format_for_all_three_kinds
+# The "<seq>:<queued>" identity of the wake record for <seq>, which is what a
+# tombstone names for that wake and for the outcome joined to it.
+wake_identity() {  # <home> <seq>
+  LC_ALL=C awk -F '\t' -v s="seq=$2" '
+    $1 == "v1" && $2 == "wake" {
+      hit = 0
+      q = ""
+      for (i = 4; i <= NF; i++) {
+        if ($i == s) hit = 1
+        else if (substr($i, 1, 7) == "queued=") q = substr($i, 8)
+      }
+      if (hit) { print substr(s, 5) ":" (q == "" ? "unknown" : q); exit }
+    }
+  ' "$(ledger_file "$1")"
+}
+
+# THE CONTROL FOR "INVALIDATED EVIDENCE ENTERS NO METRIC".
+#
+# Every assertion here names the figure BEFORE and the figure AFTER, and the
+# two differ. That is deliberate: an assertion satisfied by a figure that never
+# moved would pass just as well against an exclusion that does nothing, which
+# is could-not-observe wearing a green tick. Both halves must hold, so a
+# no-op exclusion fails on the after-value and a rule that excludes too much
+# fails on the before-value.
+#
+# The figures are picked to cover each shape a count can take: a numerator and
+# a denominator (coverage), a plain total (outcomes), a ranking (busiest
+# tasks), a per-profile aggregate, and a last-record-wins lookup (task-record).
+test_an_invalidated_record_enters_no_metric() {
+  local home file out now id_a1 id_a2 raw_before raw_after
+  home=$(make_home invalidate-metrics)
+  file=$(ledger_file "$home")
+  now=$(date +%s)
+
+  printf '%s\t1\tsignal\talpha.status\ts\n%s\t2\tsignal\talpha.status\ts\n%s\t3\tsignal\talpha.status\ts\n%s\t4\tsignal\tbeta.status\ts\n' \
+    "$((now - 40))" "$((now - 30))" "$((now - 20))" "$((now - 10))" \
+    | ledger "$home" drain-record || fail "metrics: drain-record failed"
+  ledger "$home" outcome steered 1 || fail "metrics: outcome 1 failed"
+  ledger "$home" outcome steered 2 || fail "metrics: outcome 2 failed"
+  ledger "$home" outcome steered 3 || fail "metrics: outcome 3 failed"
+  ledger "$home" outcome absorbed 4 || fail "metrics: outcome 4 failed"
+  ledger "$home" task alpha --outcome landed --source declared \
+    --harness pi --model sol --effort medium || fail "metrics: alpha terminal failed"
+  ledger "$home" task beta --outcome landed --source declared \
+    --harness claude --model opus --effort low || fail "metrics: beta terminal failed"
+
+  out=$(ledger "$home" report) || fail "metrics: report failed"
+  printf '%s\n' "$out" | grep -q "wakes: 4 total, 4 with a recorded outcome, 0 unrecorded (100% coverage)" \
+    || fail "metrics: unexpected coverage before invalidation:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "outcomes: 4 recorded" \
+    || fail "metrics: unexpected outcome total before invalidation:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "^  alpha +3$" \
+    || fail "metrics: alpha should lead the ranking with 3 wakes before invalidation:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "pi/sol/medium +tasks 1 +wakes/task 3\.0" \
+    || fail "metrics: unexpected per-profile aggregate before invalidation:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "tasks: 2 terminal (landed 2)" \
+    || fail "metrics: unexpected terminal count before invalidation:"$'\n'"$out"
+  [ "$(ledger "$home" reconcile --invalid-count)" = 0 ] \
+    || fail "metrics: nothing is invalidated yet"
+
+  id_a1=$(wake_identity "$home" 1)
+  id_a2=$(wake_identity "$home" 2)
+  [ -n "$id_a1" ] && [ -n "$id_a2" ] || fail "metrics: could not resolve the wake identities to invalidate"
+  raw_before=$(LC_ALL=C sort "$file" | cksum)
+
+  ledger "$home" invalidate --target wake --reason fabricated-join-key "$id_a1" "$id_a2" >/dev/null \
+    || fail "metrics: invalidating the wake records failed"
+  ledger "$home" invalidate --target outcome --reason fabricated-join-key "$id_a1" "$id_a2" >/dev/null \
+    || fail "metrics: invalidating the outcome records failed"
+
+  out=$(ledger "$home" report) || fail "metrics: report after invalidation failed"
+  printf '%s\n' "$out" | grep -q "wakes: 2 total, 2 with a recorded outcome, 0 unrecorded (100% coverage)" \
+    || fail "metrics: invalidated wakes still counted in the denominator:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "outcomes: 2 recorded" \
+    || fail "metrics: invalidated outcomes still counted:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "^  alpha +1$" \
+    || fail "metrics: the ranking still counts invalidated wakes:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -qE "pi/sol/medium +tasks 1 +wakes/task 1\.0" \
+    || fail "metrics: the per-profile aggregate still counts invalidated wakes:"$'\n'"$out"
+
+  # A terminal record is a metric too, and the LAST LIVE one must win: retiring
+  # a terminal line restores the previous one rather than erasing the task.
+  # The wait is load-bearing: a task record is identified by its own epoch, so
+  # two lines for one task written in the same second are one identity.
+  sleep 1
+  ledger "$home" task beta --outcome abandoned --source discarded \
+    --harness claude --model opus --effort low || fail "metrics: beta supersede failed"
+  ledger "$home" task-record beta | grep -qx "outcome=abandoned" \
+    || fail "metrics: the newest terminal record should win before invalidation"
+  ledger "$home" invalidate --target task --reason recorded-in-error \
+    "beta:$(LC_ALL=C awk -F '\t' '$2 == "task" { e = $3 } END { print e }' "$file")" >/dev/null \
+    || fail "metrics: invalidating the terminal record failed"
+  ledger "$home" task-record beta | grep -qx "outcome=landed" \
+    || fail "metrics: an invalidated terminal record still decided the task outcome"
+
+  # PRESERVE-AND-INVALIDATE. Every raw record that was in the file before is
+  # still in it, byte for byte; only appends were made.
+  raw_after=$(LC_ALL=C sort "$file" | cksum)
+  [ "$raw_before" != "$raw_after" ] || fail "metrics: the invalidation appended nothing"
+  while IFS= read -r line; do
+    grep -qxF -- "$line" "$file" || fail "metrics: a raw record was rewritten or removed: $line"
+  done < <(LC_ALL=C grep -v '	invalidation	' "$file" | head -20)
+  pass "an invalidated record leaves every numerator, denominator, ranking and lookup"
+}
+
+test_a_tombstone_must_name_a_record_the_ledger_holds() {
+  local home file before
+  home=$(make_home invalidate-refusals)
+  file=$(ledger_file "$home")
+  printf '%s\t5\tsignal\talpha.status\ts\n' "$(($(date +%s) - 10))" \
+    | ledger "$home" drain-record || fail "tombstone: drain-record failed"
+  before=$(wc -l < "$file" | tr -d ' ')
+
+  # The same defect the outcome guard refuses, one layer up: an identifier
+  # supplied by hand with nothing checking it. A tombstone for a record the
+  # file does not hold would be exactly that.
+  ledger "$home" invalidate --target outcome --reason guessed 999999:unknown >/dev/null 2>&1 \
+    && fail "tombstone: an identity the ledger does not hold was accepted"
+  ledger "$home" invalidate --target outcome --reason guessed 1:2 >/dev/null 2>&1 \
+    && fail "tombstone: a wrong queued epoch was accepted"
+  ledger "$home" invalidate --target nonsense --reason guessed 1:2 >/dev/null 2>&1 \
+    && fail "tombstone: an unknown target kind was accepted"
+  ledger "$home" invalidate --target outcome 5:1 >/dev/null 2>&1 \
+    && fail "tombstone: a tombstone with no reason was accepted"
+  ledger "$home" invalidate --target outcome --reason "a reason" 5:1 >/dev/null 2>&1 \
+    && fail "tombstone: a free-text reason was accepted where a class is required"
+  ledger "$home" invalidate --target outcome --reason guessed notanidentity >/dev/null 2>&1 \
+    && fail "tombstone: a malformed identity was accepted"
+  # A tombstone is terminal on purpose: a record that un-retired evidence would
+  # be a way to launder it back into a count by appending a line.
+  ledger "$home" invalidate --target invalidation --reason revoke 1:2 >/dev/null 2>&1 \
+    && fail "tombstone: an invalidation record was accepted as a target"
+  [ "$(wc -l < "$file" | tr -d ' ')" -eq "$before" ] \
+    || fail "tombstone: a refused invalidation still wrote a record"
+
+  # A partially valid batch writes nothing at all, so a rejected identity can
+  # never leave half a retirement behind.
+  ledger "$home" invalidate --target wake --reason mixed "$(wake_identity "$home" 5)" 42:42 \
+    >/dev/null 2>&1 && fail "tombstone: a batch holding an unknown identity was accepted"
+  [ "$(wc -l < "$file" | tr -d ' ')" -eq "$before" ] \
+    || fail "tombstone: a refused batch still retired its valid half"
+  pass "a tombstone must name a record this ledger holds, and a refused one writes nothing"
+}
+
+test_recovery_evidence_is_its_own_kind_and_never_a_wake_metric() {
+  local home file out
+  home=$(make_home recovery-kind)
+  file=$(ledger_file "$home")
+  printf '%s\t6\tsignal\talpha.status\ts\n' "$(($(date +%s) - 10))" \
+    | ledger "$home" drain-record || fail "recovery: drain-record failed"
+  ledger "$home" outcome steered 6 || fail "recovery: joined outcome failed"
+
+  # The genuine wiped-home case stays reachable, and this is the ONLY path to
+  # it. It is recorded under its own kind so it can never be read as an
+  # ordinary outcome whose join happens to be unknown - the shape 200
+  # fabricated records hid inside.
+  ledger "$home" outcome absorbed 4242 --allow-unjoined || fail "recovery: the override was refused"
+  [ "$(last_field_of "$file" recovered-outcome seq)" = 4242 ] \
+    || fail "recovery: the override did not write a recovered-outcome record"
+  grep -q "	outcome	.*seq=4242" "$file" \
+    && fail "recovery: the override wrote an ordinary outcome record"
+
+  out=$(ledger "$home" report) || fail "recovery: report failed"
+  printf '%s\n' "$out" | grep -q "wakes: 1 total, 1 with a recorded outcome, 0 unrecorded (100% coverage)" \
+    || fail "recovery: recovery evidence moved a wake metric:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "outcomes: 1 recorded" \
+    || fail "recovery: recovery evidence was counted as an outcome:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "recovery evidence: 1 recovered-outcome record(s)" \
+    || fail "recovery: recovery evidence was not counted anywhere:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "recovery evidence:.*EXCLUDED" \
+    || fail "recovery: the report did not say the evidence is excluded:"$'\n'"$out"
+
+  # It is not fabrication, so it is not an unjoined outcome record either.
+  [ "$(ledger "$home" reconcile --count)" = 0 ] \
+    || fail "recovery: recovery evidence was reported as a bad join"
+  pass "recovery evidence is a separate record kind that no wake metric can reach"
+}
+
+test_invalid_evidence_is_counted_separately_and_visibly() {
+  local home out
+  home=$(make_home invalid-visible)
+  printf '%s\t7\tsignal\talpha.status\ts\n' "$(($(date +%s) - 10))" \
+    | ledger "$home" drain-record || fail "visible: drain-record failed"
+  ledger "$home" outcome steered 7 || fail "visible: outcome failed"
+  seed_legacy_unjoined_outcome "$home" 999999
+  seed_legacy_unjoined_outcome "$home" 999998
+
+  # The candidate set is what a reviewer reads; it says only that a record
+  # joins nothing, which is why it is piped through a human decision and a
+  # named reason rather than applied by this script on its own.
+  [ "$(ledger "$home" reconcile --list | wc -l | tr -d ' ')" -eq 2 ] \
+    || fail "visible: the candidate list did not name both unjoined records"
+  ledger "$home" reconcile --list \
+    | ledger "$home" invalidate --target outcome --reason fabricated-join-key \
+        --ruling I2 --evidence data/incident.md --stdin >/dev/null \
+    || fail "visible: invalidating the listed candidates failed"
+
+  [ "$(ledger "$home" reconcile --count)" = 0 ] \
+    || fail "visible: an invalidated record still counted as a bad join"
+  [ "$(ledger "$home" reconcile --invalid-count)" = 2 ] \
+    || fail "visible: the invalidated records were not counted separately"
+  out=$(ledger "$home" reconcile) || fail "visible: reconcile summary failed"
+  printf '%s\n' "$out" | grep -q "2 further record(s) are invalidated" \
+    || fail "visible: the summary hid the invalidated count:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "preserved" \
+    || fail "visible: the summary did not say the raw records survive:"$'\n'"$out"
+
+  out=$(ledger "$home" report) || fail "visible: report failed"
+  printf '%s\n' "$out" | grep -q "invalidated evidence: 2 record(s) EXCLUDED from every count above" \
+    || fail "visible: the report did not count the excluded evidence:"$'\n'"$out"
+  printf '%s\n' "$out" | grep -q "by reason:  fabricated-join-key 2" \
+    || fail "visible: the report did not break the exclusion down by reason:"$'\n'"$out"
+
+  # A rerun retires nothing twice, so the count is a fact about the records
+  # rather than about how many times the sweep was run.
+  ledger "$home" reconcile --list \
+    | ledger "$home" invalidate --target outcome --reason fabricated-join-key --stdin >/dev/null \
+    || fail "visible: a rerun over an empty candidate list should not fail"
+  [ "$(ledger "$home" reconcile --invalid-count)" = 2 ] \
+    || fail "visible: a rerun changed the invalidated count"
+  pass "invalid historical evidence is excluded from the counts and reported as its own number"
+}
+
+test_record_format_for_the_wake_outcome_and_task_kinds
 test_outcome_vocabulary_is_closed
 test_terminal_outcome_and_escalation_are_validated
 test_sanitization_keeps_one_record_per_line
@@ -1139,3 +1404,7 @@ test_critic_fields_record_unknown_for_what_is_unresolvable
 test_unresolvable_critic_records_unknown_and_never_inherits
 test_independence_cannot_be_asserted_by_any_caller
 test_report_surfaces_critic_independence
+test_an_invalidated_record_enters_no_metric
+test_a_tombstone_must_name_a_record_the_ledger_holds
+test_recovery_evidence_is_its_own_kind_and_never_a_wake_metric
+test_invalid_evidence_is_counted_separately_and_visibly

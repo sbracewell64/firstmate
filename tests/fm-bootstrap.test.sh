@@ -1093,11 +1093,33 @@ test_wake_ledger_unjoined_outcomes_are_reported_at_session_start() {
     *WAKE_LEDGER*) fail "wake ledger: a fully joined ledger must stay silent, got: $out" ;;
   esac
 
-  ledger_call outcome absorbed 999999 --allow-unjoined \
+  # The genuine wiped-home case records under its own kind now, so it is not a
+  # bad join and must not be reported as one.
+  ledger_call outcome absorbed 999000 --allow-unjoined \
     || fail "wake ledger: the override was refused"
+  out=$(bootstrap_out)
+  case "$out" in
+    *"join no wake record"*) fail "wake ledger: recovery evidence was reported as a bad join, got: $out" ;;
+  esac
+
+  # The damaged 2026-08-04 shape, staged directly: no supported path writes one
+  # any more, which is why the count this reports can only shrink.
+  printf 'v1\toutcome\t%s\tseq=999999\tqueued=unknown\toutcome=absorbed\ttask=-\tafter=unknown\n' \
+    "$now" >> "$home/data/wake-ledger.tsv"
   out=$(bootstrap_out)
   assert_contains "$out" "WAKE_LEDGER: 1 outcome record(s) join no wake record" \
     "an outcome joining no wake record must be reported at session start"
+
+  # Retiring it must not make it disappear: the count moves out of the defect
+  # line and into a stated number of invalidated records.
+  ledger_call invalidate --target outcome --reason fabricated-join-key 999999:unknown >/dev/null \
+    || fail "wake ledger: invalidating the unjoined record failed"
+  out=$(bootstrap_out)
+  case "$out" in
+    *"join no wake record"*) fail "wake ledger: an invalidated record was still reported as a bad join, got: $out" ;;
+  esac
+  assert_contains "$out" "1 wake-ledger record(s) are invalidated" \
+    "invalidated evidence must stay a reported number, not vanish from session start"
   pass "session start reports outcome records that join no wake record, and stays silent otherwise"
 }
 

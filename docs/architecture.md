@@ -186,8 +186,12 @@ The script header owns the exact JSON schema.
 
 `data/wake-ledger.tsv` is the durable record of what supervision actually costs, so coordinator attention is measured rather than estimated.
 `bin/fm-wake-ledger.sh` is its single owner: record format, the closed outcome vocabulary, and append semantics all live in that script's header and `--help`.
-It carries three record kinds - one `wake` record per drained wake, one `outcome` record per handled wake joined to it on the (seq, queued) pair, and terminal `task` records naming how each task ended.
+It carries five record kinds - one `wake` record per drained wake, one `outcome` record per handled wake joined to it on the (seq, queued) pair, terminal `task` records naming how each task ended, `recovered-outcome` records for a home whose wake records are genuinely gone, and `invalidation` tombstones.
 It lives under `data/` rather than `state/` because teardown clears `state/<id>.*` and this evidence must outlive the tasks it describes.
+
+Discredited evidence is retired, never purged: an `invalidation` record names one earlier record, and every count the owner produces skips it while the raw record stays readable.
+The mechanism is inside the owner rather than beside it, because a sidecar exclusion list would leave a reader that consulted only the ledger still counting the retired record.
+Recovery evidence is a separate record kind for the same reason: an outcome record whose join happened to be unknown was indistinguishable from a fabricated one, and 200 invented records once hid inside exactly that shape.
 
 A terminal outcome is derived from what the task itself declared, and every terminal record names the evidence behind it, so an outcome nothing corroborated cannot pass as an observed one.
 Teardown is not the only producer, because a task that fails and is never released would otherwise leave the ledger silent, and silence there is indistinguishable from a task that never failed.
