@@ -43,20 +43,9 @@ Both files are copied because the entrypoint sources its library from its own di
 ## Observed red and green, per control
 
 Fifty-three controls pass against the shipped scripts.
-Fifty-one single-defect builds produced the fifty-one measured control failures below for the original fifty controls, because the dropped-obligation control was measured twice: once with its refusal removed, and once with the predecessor's obligation set read as empty, which is the shape the original incident took.
-
-## Outstanding watched-red measurements
-
-The following three controls have been observed passing and have NOT been observed failing:
-
-- Evidence-symlink containment.
-- Duplicate obligation dispositions.
-- Request identity and its integrity binding.
-
-A control that has only ever been seen green is indistinguishable from a control that measures nothing.
-Their per-property watched-red measurements are outstanding, not unnecessary, so this record declares them COULD-NOT-OBSERVE.
-This declaration is a HOLD ON LANDING, not a substitute for measurement.
-The pull request is not ready while this gap remains, and this declaration must be replaced by real per-property measurements before the work is called done.
+Fifty-five single-defect builds produced the fifty-five measured control failures below for all fifty-three controls.
+The dropped-obligation control was measured twice: once with its refusal removed, and once with the predecessor's obligation set read as empty, which is the shape the original incident took.
+The request-identity control was also measured twice: once with its outer integrity binding removed, and once with validation-time identity recomputation disabled.
 
 ## Measured watched-red controls
 
@@ -82,6 +71,7 @@ That confirmation matters because a variant that never parsed would report a red
 | a could-not-observe verifier cannot become review-ready | a non-PASS verifier result falls through to the passing path | `not ok - a could-not-observe verifier is not a pass: expected exit 2, got 0` |
 | a broken evidence digest refuses | the evidence check returns before it checks anything | `not ok - evidence that no longer matches its digest refuses: expected exit 1, got 0` |
 | an evidence locator that escapes its root refuses | the parent-traversal guard on evidence locators is removed | `not ok - a locator escaping its evidence root refuses: expected exit 1, got 0` |
+| an evidence symlink that escapes its root refuses before reading | symlink resolution is replaced by lexical path normalization | `not ok - a symlink outside the evidence root refuses: expected exit 1, got 0` |
 | a result that does not identify its verifier refuses | a result carrying no verifier identity is accepted | `not ok - a result that does not identify what produced it refuses: expected exit 1, got 0` |
 | wrong head ci refuses | every attempt is treated as if it ran at the candidate head | `not ok - a required platform covered only by another head's run refuses: expected exit 1, got 0` |
 | a skipped required check refuses | a skipped current check stops refusing | `not ok - a skipped required check refuses: expected exit 1, got 0` |
@@ -102,6 +92,9 @@ That confirmation matters because a variant that never parsed would report a red
 | a resolution without an authority refuses | resolution stops requiring an authority and a reason | `not ok - a resolution with no authority refuses: expected exit 1, got 0` |
 | a successor that declares no predecessor is could-not-observe | an absent predecessor block is assumed to mean a fresh chain | `not ok - an undeclared predecessor is could-not-observe: expected exit 2, got 0` |
 | a disposition for an obligation the predecessor never held refuses | a disposition for an unheld obligation is accepted | `not ok - a disposition for an obligation nobody held refuses: expected exit 1, got 0` |
+| duplicate obligation dispositions refuse independently of array order | the duplicate-disposition refusal is disabled | `not ok - the duplicate refusal must not depend on disposition order (missing: 'refusal obligation_disposition_duplicate')` |
+| request identity claims and stored identities are checked against recomputation | the declared request identity is removed from the outer integrity digest | `not ok - deleting a declared claim breaks outer integrity: expected exit 1, got 2` |
+| request identity claims and stored identities are checked against recomputation | validation-time comparisons with the recomputed request identity are disabled | `not ok - validation preserves the compile-time request identity refusal: expected exit 1, got 0` |
 | a predecessor that is not the declared one is could-not-observe | the supplied predecessor's digest is no longer compared | `not ok - a predecessor that is not the declared one is could-not-observe: expected exit 2, got 1` |
 | a ruling that does not apply cannot authorize a resolution | a ruling's head applicability is no longer compared | `not ok - a ruling issued against another head cannot authorize anything here: expected exit 1, got 0` |
 | a blocking adverse finding refuses | a blocking adverse finding stops refusing | `not ok - a blocking adverse finding refuses: expected exit 1, got 0` |
