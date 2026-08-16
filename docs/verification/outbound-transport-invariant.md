@@ -6,7 +6,8 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 `bin/fm-outbound-artifact-lib.sh`'s header owns the invariant statement and the identity rule, `bin/fm-outbound-artifact.sh`'s header owns the command contract, [`../configuration.md`](../configuration.md) "Browser Sol control venue" owns the configuration, and `.agents/skills/bootstrap-diagnostics/SKILL.md` owns the handling procedure for a printed `OUTBOUND:` line.
 
 Verified on 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
-The controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
+The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
+The current green suites were re-run at implementation head `f878d0b8dbe44587358457910226ae1e4fe7890a` after typed outbound gates were made authoritative over conflicting prose.
 
 ## Why this record exists
 
@@ -28,7 +29,7 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 35 outbound-artifact cases, 18 dead-predicate cases, and the bootstrap integration case pass.
+The 37 outbound-artifact cases, 18 dead-predicate cases, and the bootstrap integration case pass.
 What follows is why that sentence is worth anything.
 
 The same suites and the repository lint gate were re-run together on 2026-08-16 with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh && bin/fm-lint.sh`; the command exited 0.
