@@ -390,11 +390,15 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
   printf 'dirty\n' > "$case_dir/rec/checkout/subject.txt"
   [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
     || fail "a dirty reviewer checkout must not still pass"
+  [ "$(record_reason "$case_dir/rec")" = verification_unreachable ] \
+    || fail "a dirty checkout must fail through the read-time isolation re-proof"
   git -C "$case_dir/rec/checkout" reset -q --hard
 
   git -C "$case_dir/rec/checkout" switch -q -c attached-review
   [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
     || fail "an attached reviewer checkout must not still pass"
+  [ "$(record_reason "$case_dir/rec")" = verification_unreachable ] \
+    || fail "an attached checkout must fail through the read-time isolation re-proof"
   git -C "$case_dir/rec/checkout" checkout -q --detach
 
   jq '.dimensions.reviewer_checkout_commit.value = "0000000000000000000000000000000000000000"' \
@@ -402,6 +406,8 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
   mv "$case_dir/rec/record.tmp" "$case_dir/rec/record.json"
   [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
     || fail "checkout identity divergent from candidate identity must not pass"
+  [ "$(record_reason "$case_dir/rec")" = verification_unreachable ] \
+    || fail "divergent checkout identity must fail through the read-time isolation re-proof"
   jq --arg head "$(git -C "$case_dir/rec/checkout" rev-parse HEAD)" \
     '.dimensions.reviewer_checkout_commit.value = $head' \
     "$case_dir/rec/record.json" > "$case_dir/rec/record.tmp"
@@ -411,6 +417,8 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
   ln "$object" "$object.shared"
   [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
     || fail "shared reviewer object storage must not still pass on reread"
+  [ "$(record_reason "$case_dir/rec")" = verification_unreachable ] \
+    || fail "shared object storage must fail through the read-time isolation re-proof"
   rm "$object.shared"
   pass "a reviewer checkout moved off the pinned candidate is could-not-observe"
 }
@@ -472,23 +480,49 @@ test_a_tampered_artifact_breaks_the_digest_binding() {
   pass "a tampered raw artifact breaks the record's digest binding"
 }
 
-test_an_ambiguous_shell_status_is_could_not_observe() {
-  local case_dir out
-  case_dir=$(make_case signalled)
+test_exit_143_is_recorded_as_an_exit() {
+  local case_dir result
+  case_dir=$(make_case exit-143)
   cat > "$case_dir/reviewer.sh" <<'EOF'
 #!/usr/bin/env bash
 exit 143
 EOF
   chmod +x "$case_dir/reviewer.sh"
   set +e
-  out=$(run_launch "$case_dir" rec "$case_dir/reviewer.sh" 2>&1)
+  run_launch "$case_dir" rec "$case_dir/reviewer.sh" >/dev/null 2>&1
   local code=$?
   set -e
-  expect_code 2 "$code" "a shell status that cannot distinguish signal from exit is could-not-observe"
-  assert_contains "$out" 'terminal state is ambiguous' \
-    "the refusal must name the ambiguous terminal observation"
-  [ ! -f "$case_dir/rec/record.json" ] || fail "an ambiguous terminal state must write no record"
-  pass "an ambiguous shell terminal status is could-not-observe"
+  expect_code 1 "$code" "a deliberate exit 143 is an observed-bad execution"
+  result=$(record_result "$case_dir/rec")
+  [ "$result" = FAIL ] || fail "a deliberate exit 143 must classify FAIL (got $result)"
+  [ "$(jq -r '.dimensions.terminal_state.value' "$case_dir/rec/record.json")" = exited ] \
+    || fail "a deliberate exit 143 must be recorded as exited"
+  [ "$(jq -r '.dimensions.exit_status.value' "$case_dir/rec/record.json")" = 143 ] \
+    || fail "a deliberate exit 143 must retain exit status 143"
+  pass "a deliberate exit 143 is recorded unambiguously"
+}
+
+test_a_signalled_reviewer_is_recorded_as_signalled() {
+  local case_dir result
+  case_dir=$(make_case signalled)
+  cat > "$case_dir/reviewer.sh" <<'EOF'
+#!/usr/bin/env bash
+kill -TERM $$
+sleep 5
+EOF
+  chmod +x "$case_dir/reviewer.sh"
+  set +e
+  run_launch "$case_dir" rec "$case_dir/reviewer.sh" >/dev/null 2>&1
+  local code=$?
+  set -e
+  expect_code 1 "$code" "a reviewer killed by SIGTERM is an observed-bad execution"
+  result=$(record_result "$case_dir/rec")
+  [ "$result" = FAIL ] || fail "a signalled reviewer must classify FAIL (got $result)"
+  [ "$(jq -r '.dimensions.terminal_state.value' "$case_dir/rec/record.json")" = signalled ] \
+    || fail "a reviewer killed by SIGTERM must be recorded as signalled"
+  [ "$(jq -r '.dimensions.exit_status.value' "$case_dir/rec/record.json")" = 15 ] \
+    || fail "a reviewer killed by SIGTERM must retain signal 15"
+  pass "a signalled reviewer is recorded unambiguously"
 }
 
 test_an_unresolvable_candidate_is_could_not_observe() {
@@ -518,6 +552,8 @@ test_an_unresolvable_reviewer_executable_is_could_not_observe() {
   recorded=$(jq -r '.dimensions.launch_executable.value' "$case_dir/relative/record.json")
   [ "$recorded" = "$case_dir/relative/checkout/bin/candidate-reviewer" ] \
     || fail "a relative executable must resolve inside the reviewer checkout (got $recorded)"
+  [ "$(record_reason "$case_dir/relative")" = verified ] \
+    || fail "a checkout-relative executable must reach the verified result path"
   set +e
   out=$(run_launch "$case_dir" rec "$case_dir/no-such-reviewer" 2>&1)
   local code=$?
@@ -543,6 +579,7 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe
 test_refuses_to_overwrite_an_existing_record
 test_a_missing_dimension_outranks_a_clean_exit
 test_a_tampered_artifact_breaks_the_digest_binding
-test_an_ambiguous_shell_status_is_could_not_observe
+test_exit_143_is_recorded_as_an_exit
+test_a_signalled_reviewer_is_recorded_as_signalled
 test_an_unresolvable_candidate_is_could_not_observe
 test_an_unresolvable_reviewer_executable_is_could_not_observe

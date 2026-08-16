@@ -62,7 +62,6 @@ That confirmation matters because a probe that reads a field which does not exis
 | a record is written once | the occupied-directory refusal is dropped | `not ok - the refusal must name the immutability rule (missing: 'a record is written once')` |
 | one unobserved dimension | the unobserved-dimension scan is dropped | `not ok - an unobserved dimension is could-not-observe: expected exit 2, got 0` |
 | the artifact digest binding | the digest comparison is dropped | `not ok - a record must not outlive the bytes it attests to (got PASS)` |
-| an ambiguous shell terminal status | a status in the ambiguous 129-191 range is treated as an observed exit | `not ok - a shell status that cannot distinguish signal from exit is could-not-observe: expected exit 2, got 1` |
 | an unresolvable candidate | the candidate silently falls back to `HEAD` | `not ok - a candidate that does not resolve is could-not-observe: expected exit 2, got 0` |
 | an unresolvable reviewer executable | the unresolved executable is launched anyway | `not ok - a reviewer that does not resolve is could-not-observe: expected exit 2, got 1` |
 | the argv is recorded exactly | the argv is encoded by joining on newlines | `not ok - launch_argv must record an argument containing a newline` |
@@ -70,6 +69,8 @@ That confirmation matters because a probe that reads a field which does not exis
 
 Two controls are shadowed in a full-suite run because an earlier control reddens first and the suite stops there.
 Both were additionally run in isolation against their defect build and against the tracked script, and the rows above are those isolated observations.
+
+The controls for a deliberate exit 143, a genuine SIGTERM, dirty and attached reviewer checkouts, divergent checkout and candidate identities, shared object storage on reread, and checkout-relative executable resolution are could-not-observe watched-red gaps because no corresponding defect build has yet been measured.
 
 ## The `--no-local` measurement
 

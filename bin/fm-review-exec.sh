@@ -51,8 +51,8 @@
 #   launch_cwd                 the exact working directory it ran in
 #   started_at                 when the launch happened
 #   ended_at                   when the terminal state was observed
-#   terminal_state             exited, running, or not_started
-#   exit_status                the exit code
+#   terminal_state             exited, signalled, running, or not_started
+#   exit_status                the exit code or signal number
 #   artifact_sha256            the digest of the raw captured review artifact
 #
 # The raw artifact's LOCATION is the record's own directory, which is why it is
@@ -65,10 +65,9 @@
 #   PASS             every dimension observed, and the reviewer reached a normal
 #                    terminal state
 #   FAIL             every dimension observed, and the reviewer reached a bad
-#                    terminal state (a non-zero unambiguous exit)
+#                    terminal state (non-zero exit, or a signal)
 #   NO_VERIFIER_RAN  any dimension unobserved, or no terminal state observed at
-#                    all. This includes the shell's ambiguous 128+n status
-#                    range. A reviewer still running has NOT executed for this
+#                    all. A reviewer still running has NOT executed for this
 #                    purpose: liveness is the proxy, not the observation.
 #
 # A missing dimension outranks a good terminal state. Sixteen observed and one
@@ -156,6 +155,41 @@ digest_file() {  # <path> -> sha256 hex, or non-zero
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
+observe_reviewer() {  # <checkout> <executable> <observation> [args...]
+  local checkout=$1 executable=$2 observation=$3
+  shift 3
+  python3 -c '
+import os
+import sys
+
+checkout, executable, *arguments = sys.argv[1:]
+read_fd, write_fd = os.pipe()
+pid = os.fork()
+if pid == 0:
+    os.close(read_fd)
+    os.close(3)
+    try:
+        os.chdir(checkout)
+        os.execvp(executable, [executable, *arguments])
+    except BaseException as error:
+        os.write(write_fd, str(getattr(error, "errno", "exec")).encode())
+        os._exit(127)
+os.close(write_fd)
+_, wait_status = os.waitpid(pid, 0)
+exec_error = os.read(read_fd, 4096)
+os.close(read_fd)
+if exec_error:
+    sys.exit(125)
+if os.WIFEXITED(wait_status):
+    observation = f"exited {os.WEXITSTATUS(wait_status)}\n"
+elif os.WIFSIGNALED(wait_status):
+    observation = f"signalled {os.WTERMSIG(wait_status)}\n"
+else:
+    sys.exit(126)
+os.write(3, observation.encode())
+' "$checkout" "$executable" "$@" 3>"$observation"
+}
+
 # --- launch -----------------------------------------------------------------
 
 cmd_launch() {
@@ -219,6 +253,7 @@ cmd_launch() {
 
   command -v git >/dev/null 2>&1 || cno "git is unavailable, so no candidate could be materialized"
   command -v jq >/dev/null 2>&1 || cno "jq is unavailable, so no record could be written"
+  command -v python3 >/dev/null 2>&1 || cno "python3 is unavailable, so no terminal state could be observed"
   digest_file /dev/null >/dev/null 2>&1 || cno "no sha256 tool is available, so no artifact could be digested"
   command -v base64 >/dev/null 2>&1 || cno "base64 is unavailable, so the reviewer argv could not be recorded exactly"
 
@@ -301,27 +336,24 @@ cmd_launch() {
   esac
   [ -x "$executable" ] || cno "reviewer executable is not executable: $executable"
 
-  local started_at ended_at status terminal_state
+  local started_at ended_at status terminal_state helper_status extra
+  local terminal_observation=$out/terminal.tmp
   started_at=$(now_utc)
 
   # The raw artifact is captured by THIS process, into a file descriptor it
   # opened itself, so its bytes are an observation rather than a report.
-  ( cd "$checkout" && exec "$executable" "${argv[@]:1}" ) >"$raw" 2>&1
-  status=$?
+  observe_reviewer "$checkout" "$executable" "$terminal_observation" \
+    "${argv[@]:1}" >"$raw" 2>&1
+  helper_status=$?
   ended_at=$(now_utc)
-
-  # A shell reports both a signalled child and a deliberate exit as 128+n.
-  #
-  # There is deliberately no deadline option here. Wrapping the launch in
-  # timeout(1) would make exit 124 mean either "the deadline killed it" or "the
-  # reviewer exited 124 by itself", and one status covering both a kill and a
-  # verdict is the exact type error this substrate exists to refuse. A reviewer
-  # that never terminates is already covered: with no terminal state observed,
-  # the result is could-not-observe.
-  if [ "$status" -gt 128 ] && [ "$status" -lt 192 ]; then
-    cno "reviewer terminal state is ambiguous at shell status $status"
-  fi
-  terminal_state=exited
+  [ "$helper_status" -eq 0 ] \
+    || cno "reviewer terminal state could not be observed"
+  read -r terminal_state status extra < "$terminal_observation" \
+    || cno "reviewer terminal state could not be read"
+  rm -f "$terminal_observation"
+  [ -z "$extra" ] || cno "reviewer terminal observation is malformed"
+  case "$terminal_state" in exited|signalled) ;; *) cno "reviewer terminal state is invalid" ;; esac
+  case "$status" in ''|*[!0-9]*) cno "reviewer exit status is invalid" ;; esac
 
   [ -f "$raw" ] || cno "raw review artifact was not captured"
   local artifact_sha256
