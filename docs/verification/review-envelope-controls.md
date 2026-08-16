@@ -3,11 +3,6 @@
 Maintainer-verification record for [`bin/fm-review-envelope.sh`](../../bin/fm-review-envelope.sh) and [`bin/fm-review-envelope-lib.sh`](../../bin/fm-review-envelope-lib.sh), the `review-envelope/v1` contract, its compiler and its classifier.
 The mutation evidence below covers 56 properties with targeted mutations of the kinds actually recorded: single-guard removals; inverted mutations that turn red when an accepting path breaks; and one redundantly enforced property that no single-guard mutation can falsify, measured with both independent guards removed.
 
-Seven current controls are green and have NOT yet been watched red: `test_a_ruling_envelope_digest_binds_the_current_envelope`, `test_a_ruling_without_a_stable_id_refuses`, `test_a_structurally_malformed_envelope_is_could_not_observe`, `test_a_verifier_result_without_a_tree_refuses`, `test_duplicate_ruling_ids_are_ambiguous_in_both_orders`, `test_order_insensitive_facts_produce_an_identical_identity`, and `test_the_verification_record_matches_the_executed_control_count`.
-Their watched-red status is could-not-observe: not an omission, and not evidence that measurement is unnecessary.
-A control that has only ever been seen green is indistinguishable from a control that measures nothing, so all seven measurements remain outstanding.
-This declaration is a HOLD ON LANDING, not a substitute for measurement: the pull request is not ready while it stands, and real per-property measurements against the final head must replace it before the work is called done.
-
 The library header owns the contract itself, and [`docs/contracts/review-envelope.md`](../contracts/review-envelope.md) is generated from its field catalog.
 This file records only what was measured, and when.
 
@@ -31,15 +26,15 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below belongs to head `1be1caef`, NOT the current head, so the table describes that one earlier experiment and is not current for the code shipped here.
+Every measurement below was taken against head `39d4ad4e`, the commit whose subject bytes the campaign artifact records, so the table describes one experiment and is current for the code shipped here.
 
 ## Campaign artifact
 
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `0000000`.
-Mutations built: 0.
+Campaign head: `39d4ad4e2bb661a8b04577c901f43592eed6c12f`.
+Mutations built: 69.
 
 ## Commands
 
@@ -64,9 +59,10 @@ Both files are copied because the entrypoint sources its library from its own di
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
-Mutation-measurement claim: the campaign measured 56 properties at head `1be1caef`, and coverage is counted per property rather than per test function.
-The seven controls named at the top of this file are not among them, and the compiler has changed since that campaign, so those measurements are not current for this head.
-Sixty-two mutations were built; sixty-one turned the suite red and one deliberately did not.
+Mutation-measurement claim: 69 mutations were built against the subjects recorded in the campaign artifact, and 68 turned the suite red.
+Coverage is counted per property rather than per test function, because a named property whose mutation leaves the suite green is uncovered however many controls exist.
+
+One mutation deliberately did not turn the suite red.
 That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
 
 Each row is one property, the mutation aimed at it, and the exact first failing line that mutation produced, or an explicit non-red where that is what was measured.
@@ -114,7 +110,7 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a successor that declares no predecessor is could-not-observe | an absent predecessor block is assumed to mean a fresh chain | `not ok - an undeclared predecessor is could-not-observe: expected exit 2, got 0` |
 | a disposition for an obligation the predecessor never held refuses | a disposition for an unheld obligation is accepted | `not ok - a disposition for an obligation nobody held refuses: expected exit 1, got 0` |
 | a predecessor that is not the declared one is could-not-observe | the supplied predecessor's digest is no longer compared | `not ok - a predecessor that is not the declared one is could-not-observe: expected exit 2, got 1` |
-| a ruling that does not apply cannot authorize a resolution | a ruling's head applicability is no longer compared | `not ok - a ruling issued against another head cannot authorize anything here: expected exit 1, got 0` |
+| a ruling that does not apply cannot authorize a resolution | ruling head applicability is no longer compared at the classify site | `not ok - a ruling issued against another head cannot authorize anything here: expected exit 1, got 0` |
 | a blocking adverse finding refuses | a blocking adverse finding stops refusing | `not ok - a blocking adverse finding refuses: expected exit 1, got 0` |
 | a required unproven dimension is could-not-observe | a required unproven dimension stops being could-not-observe | `not ok - a required unproven dimension is could-not-observe: expected exit 2, got 0` |
 | a fully excluded scope refuses | a scope that excludes everything stops refusing | `not ok - excluding everything refuses: expected exit 1, got 0` |
@@ -129,16 +125,23 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | the generated contract page matches the catalog | the generated contract page's section heading changes | `not ok - docs/contracts/review-envelope.md is stale; regenerate it with bin/fm-review-envelope.sh docs` |
 | a crashed compiler cannot reach a verdict | an unreadable compiler result is read as a pass | `not ok - a compiler that produced no result is could-not-observe: expected exit 2, got 0` |
 | symlink out of root refused before any byte is read or digested | real-path containment is removed, leaving only lexical checks | `not ok - a symlink outside the evidence root refuses: expected exit 1, got 0` |
-| duplicate disposition refused, order A (later duplicate wins) | duplicate dispositions resolve by last-one-wins | `not ok - the duplicate refusal must not depend on disposition order (missing: 'refusal obligation_disposition_duplicate')` |
-| duplicate disposition refused, order B (earlier duplicate wins) | duplicate dispositions resolve by first-one-wins | `not ok - duplicate dispositions refuse in preserved-first order: expected exit 1, got 0` |
+| duplicate disposition refused, order A (later duplicate wins) | duplicate dispositions resolve by last-one-wins | `not ok - duplicate dispositions refuse in preserved-first order: expected exit 1, got 0` |
+| duplicate disposition refused, order B (earlier duplicate wins) | duplicate dispositions resolve by first-one-wins | `not ok - the duplicate refusal must not depend on disposition order (missing: 'refusal obligation_disposition_duplicate')` |
 | claimed identity mismatching a recomputation refuses | a mismatched declared identity stops refusing at compile time | `not ok - a mismatched claimed request identity refuses: expected exit 1, got 0` |
 | a matching recomputation is accepted (non-vacuity, inverted) | INVERTED: a correctly matching claim is made to refuse | `not ok - a correctly recomputed request identity is accepted: expected exit 0, got 1` |
 | deleting the claim refuses | the outer integrity digest is no longer recomputed on read | `not ok - deleting a declared claim breaks outer integrity: expected exit 1, got 2` |
 | replacing the claim with the computed value refuses | the declared claim is dropped from the outer integrity payload | `not ok - deleting a declared claim breaks outer integrity: expected exit 1, got 2` |
 | absent claim field is could-not-observe | an absent claim state is read as an explicit null | `not ok - an absent claim state is could-not-observe: expected exit 2, got 0` |
-| explicit null claim is distinguishable from a missing field | an explicit null claim is collapsed into absent | `not ok - the envelope must validate before the candidate moves: expected exit 0, got 2` |
-| a correct claim with intact digests validates (non-vacuity, inverted) | INVERTED: an intact outer digest is made to refuse | `not ok - the envelope must validate before the candidate moves: expected exit 0, got 1` |
+| explicit null claim is distinguishable from a missing field | an explicit null claim is collapsed into absent | `not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')` |
+| a correct claim with intact digests validates (non-vacuity, inverted) | INVERTED: an intact outer digest is made to refuse | `not ok - a structurally malformed body is could-not-observe: expected exit 2, got 1` |
 | an evidence locator that escapes its root refuses | both evidence-root containment guards are removed | `not ok - a locator escaping its evidence root refuses: expected exit 1, got 0` |
+| a ruling without a stable id refuses | a ruling with no stable id is accepted | `not ok - a missing ruling id refuses: expected exit 1, got 0` |
+| duplicate ruling ids are ambiguous, order A | duplicate ruling ids stop being ambiguous | `not ok - duplicate ruling ids refuse in applicable-first order: expected exit 1, got 0` |
+| duplicate ruling ids are ambiguous, order B | duplicate ruling ids are detected only when the pair does not start the list | `not ok - duplicate ruling ids refuse in applicable-first order: expected exit 1, got 0` |
+| a ruling's envelope digest binds the current envelope | both ruling envelope-digest applicability sites are removed | `not ok - a relied-upon ruling bound to another envelope must refuse: expected exit 1, got 0` |
+| a verifier result without a tree refuses | a verifier result's tree is no longer compared | `not ok - a result without a tree refuses: expected exit 1, got 0` |
+| order-insensitive facts produce an identical identity | order-insensitive facts stop being canonicalised before digesting | `not ok - order-insensitive facts must have one envelope digest` |
+| a structurally malformed envelope is could-not-observe | the malformed-body handler catches a narrower exception class | `not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')` |
 
 ## The one mutation that stayed green, and why it is not a gap
 
@@ -161,6 +164,33 @@ For those, the suite's first red belongs to the earlier assertion, so the proper
 | a correct claim with intact digests validates | INVERTED: an intact outer digest is made to refuse | `matching-claim-intact-digests-validates exit=1 (expected 0)` |
 
 Against the tracked build the same three measurements read `exit=1`, `exit=0` and `exit=0` respectively, so each is a real change of behaviour and not a constant.
+
+## Two controls measured outside the mutation table
+
+Two controls check this record against the suite rather than checking the compiler, so no mutation of the compiler can falsify them.
+They were measured on scratch copies of the tree, by making the change each one exists to catch.
+
+| Control | Change made | Observed |
+| --- | --- | --- |
+| the verification record matches the executed control count | a control added, the record left untouched | `not ok - the verification record states 63 controls, but the suite executed 64` |
+| the measurement record is backed by the campaign artifact | the record's stated campaign head relabelled, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
+| the measurement record is backed by the campaign artifact | one byte changed in a measured subject, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
+
+Each was green on the untouched copy first, so none of those reds comes from a copy that never worked.
+The second reading for the artifact control is the more valuable one: it catches drift nobody tried to hide, which is more common than deliberate relabelling.
+
+## Only one control in this suite asserted acceptance alone
+
+`a ruling's envelope digest binds the current envelope` once asserted only that a ruling bound to the current envelope applies.
+That is the path which still works with the guard deleted, so the control measured nothing about the guard: removing both applicability sites left the whole suite green.
+It now asserts the refusal, and that assertion goes red for its own reason when both sites are removed.
+
+The general rule, because it generalises past this one control: for any guard, THE REFUSING ASSERTION IS THE CONTROL AND THE ACCEPTING ASSERTION IS THE NON-VACUITY ANCHOR.
+They are not two halves of equal weight - one is the measurement, and the other only shows the measurement is not trivially red.
+
+This campaign also establishes that it was the ONLY control of that shape here, with evidence rather than by assertion.
+Any accepting-only control would leave its guard's deletion undetected and would therefore surface as a green mutation.
+69 mutations produced exactly three greens, and all three are accounted for: two are the redundancy above, re-measured until red, and the third was this control.
 
 ## A prior commit relabelled measurements it did not take
 
