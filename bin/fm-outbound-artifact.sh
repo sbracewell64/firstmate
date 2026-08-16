@@ -74,6 +74,7 @@
 #   FM_OUTBOUND_MAX_PROBES      cap on forge probes per sweep (default 40).
 #                               Reaching it is REPORTED, never silently applied.
 #   FM_OUTBOUND_TIMEOUT         seconds per forge or git observation (default 15)
+# fail-closed-predicates: enforced
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -153,33 +154,56 @@ record_write() {  # <request-id> <json>
 
 # Three-valued on purpose: absent and unreadable are different answers, and only
 # the caller knows which of them is safe in its context.
-record_valid_for_id() {
+# Prints one of the three identity verdicts. It recomputes the identity from the
+# record's own fields rather than merely comparing the stored string, so a record
+# whose id was rewritten to match its filename is still caught by its content.
+#
+# The verdict is PRINTED rather than returned as an exit status because the two
+# refusals must stay distinguishable: a status can carry "not valid", but the
+# caller then cannot tell a foreign record from an unreadable one, and those need
+# different repairs.
+record_identity_verdict() {  # <record-json> <expected-id>
   local raw=$1 expected=$2 state stored gate project repo item pr head computed
+  cno() { printf '%s\n' "$FM_OUTBOUND_IDENTITY_CNO"; }
   printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
-    '.schema == $s' >/dev/null 2>&1 || return 1
-  state=$(printf '%s' "$raw" | jq -er '.state // empty') || return 1
-  fm_outbound_record_state_valid "$state" || return 1
-  stored=$(printf '%s' "$raw" | jq -er '.request_id // empty') || return 1
-  gate=$(printf '%s' "$raw" | jq -er '.identity.gate // empty') || return 1
-  project=$(printf '%s' "$raw" | jq -er '.identity.project // empty') || return 1
-  repo=$(printf '%s' "$raw" | jq -er '.identity.repo // empty') || return 1
-  item=$(printf '%s' "$raw" | jq -er '.identity.item // empty') || return 1
-  pr=$(printf '%s' "$raw" | jq -r '.identity.pr // "-"') || return 1
-  head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || return 1
-  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" \
-    >/dev/null 2>&1 || return 1
+    '.schema == $s' >/dev/null 2>&1 || { cno; return 0; }
+  state=$(printf '%s' "$raw" | jq -er '.state // empty') || { cno; return 0; }
+  fm_outbound_record_state_valid "$state" || { cno; return 0; }
+  stored=$(printf '%s' "$raw" | jq -er '.request_id // empty') || { cno; return 0; }
+  gate=$(printf '%s' "$raw" | jq -er '.identity.gate // empty') || { cno; return 0; }
+  project=$(printf '%s' "$raw" | jq -er '.identity.project // empty') || { cno; return 0; }
+  repo=$(printf '%s' "$raw" | jq -er '.identity.repo // empty') || { cno; return 0; }
+  item=$(printf '%s' "$raw" | jq -er '.identity.item // empty') || { cno; return 0; }
+  pr=$(printf '%s' "$raw" | jq -r '.identity.pr // "-"') || { cno; return 0; }
+  head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || { cno; return 0; }
+  # An identity that cannot be bound cannot be compared: that is an absent
+  # identity, not one naming something else.
+  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" \
+    >/dev/null 2>&1 || { cno; return 0; }
   computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head") \
-    || return 1
-  [ "$stored" = "$expected" ] && [ "$computed" = "$expected" ]
+    || { cno; return 0; }
+  if [ "$stored" = "$expected" ] && [ "$computed" = "$expected" ]; then
+    printf '%s\n' "$FM_OUTBOUND_IDENTITY_VALID"
+  else
+    printf '%s\n' "$FM_OUTBOUND_IDENTITY_MISMATCH"
+  fi
 }
 
-record_read() {  # <request-id> -> json on stdout; 1 absent, 2 unreadable
+record_valid_for_id() {  # <record-json> <expected-id> - kept for callers wanting a boolean
+  [ "$(record_identity_verdict "$1" "$2")" = "$FM_OUTBOUND_IDENTITY_VALID" ]
+}
+
+record_read() {  # <request-id> -> json on stdout
+  # 0 valid · 1 absent · 2 could-not-observe · 5 identity mismatch
   local path raw
   path=$(record_path "$1")
   [ -f "$path" ] || return 1
   raw=$(cat "$path" 2>/dev/null) || return 2
-  record_valid_for_id "$raw" "$1" || return 2
-  printf '%s\n' "$raw"
+  case "$(record_identity_verdict "$raw" "$1")" in
+    "$FM_OUTBOUND_IDENTITY_VALID") printf '%s\n' "$raw"; return 0 ;;
+    "$FM_OUTBOUND_IDENTITY_MISMATCH") return 5 ;;
+    *) return 2 ;;
+  esac
 }
 
 # Every record as one JSON array. An unreadable record is carried as an explicit
@@ -283,16 +307,22 @@ branch_head() {  # <clone-dir> <item> -> sha or empty
 # through to the next step and finally to unobservable, rather than handing a
 # non-identity to the binding check and letting it surface as evidence.
 observe_head() {  # <item> <pr-url> <project> -> sha or empty
-  local item=$1 pr_url=$2 project=$3 head
+  local item=$1 pr_url=$2 project=$3 head width dir=
+  [ -z "$project" ] || dir="$PROJECTS/$project"
+  # The width comes from the target repository, so it is resolved ONCE here and
+  # every step of the cascade is judged against it. With no readable repository
+  # the width is undeterminable, and an undeterminable width refuses every
+  # candidate rather than falling back to a guessed default.
+  width=$(fm_outbound_object_width "$dir")
   head=$(declared_field "$item" head)
-  fm_outbound_is_sha "$head" && { printf '%s\n' "$head"; return 0; }
+  fm_outbound_is_sha "$head" "$width" && { printf '%s\n' "$head"; return 0; }
   if [ -n "$pr_url" ]; then
     head=$(pr_head "$pr_url")
-    fm_outbound_is_sha "$head" && { printf '%s\n' "$head"; return 0; }
+    fm_outbound_is_sha "$head" "$width" && { printf '%s\n' "$head"; return 0; }
   fi
-  if [ -n "$project" ] && [ -d "$PROJECTS/$project/.git" ]; then
-    head=$(branch_head "$PROJECTS/$project" "$item")
-    fm_outbound_is_sha "$head" && { printf '%s\n' "$head"; return 0; }
+  if [ -n "$dir" ] && [ -d "$dir/.git" ]; then
+    head=$(branch_head "$dir" "$item")
+    fm_outbound_is_sha "$head" "$width" && { printf '%s\n' "$head"; return 0; }
   fi
   printf ''
 }
@@ -422,7 +452,7 @@ sweep() {
     # Fail closed on an incomplete binding BEFORE anything else. An item whose
     # binding cannot be constructed cannot have an exact-head-bound artifact, so
     # it is a defect regardless of what happens to be on the forge.
-    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" || true)
+    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" || true)
     if [ -n "$missing" ]; then
       if [ -z "$head" ]; then token=$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED
       else token=$FM_OUTBOUND_TOKEN_INCOMPLETE; fi
@@ -626,7 +656,7 @@ cmd_emit() {
   fi
   venue=$SOL_REPO
 
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" "$PROJECTS/$project" || true)
   if [ -n "$missing" ]; then
     printf '%s: cannot construct an exact-head-bound request for %s - missing %s\n' \
       "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" \
@@ -751,6 +781,12 @@ require_record() {  # <request-id>; sets RECORD or exits
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$1" >&2
     exit 3
   fi
+  if [ "$rc" -eq 5 ]; then
+    printf '%s: the record filed under %s identifies a different request\n' \
+      "$FM_OUTBOUND_TOKEN_IDENTITY" "$1" >&2
+    printf 'Its path located it; its own contents refuse it, so the wait stays unsatisfied.\n' >&2
+    exit 3
+  fi
   if [ "$rc" -ne 0 ]; then
     printf '%s: the record for %s could not be read\n' \
       "$FM_OUTBOUND_TOKEN_UNREADABLE" "$1" >&2
@@ -782,7 +818,7 @@ require_record_applicable_now() {  # <request-id> <record-json>
     repo=$SOL_REPO
     current_venue="$SOL_REPO#$SOL_ISSUE"
   fi
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" || true)
   [ -z "$missing" ] || die "the current identity for $item is incomplete: $(printf '%s' "$missing" | tr '\n' ',')" 4
   stored_identity=$(printf '%s' "$rec" | jq -r \
     '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head] | @tsv')

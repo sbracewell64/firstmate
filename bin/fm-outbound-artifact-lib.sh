@@ -171,6 +171,7 @@ FM_OUTBOUND_TOKEN_MISMATCH=FM_OUTBOUND_RULING_IDENTITY_MISMATCH
 FM_OUTBOUND_TOKEN_DETECT_ONLY=FM_OUTBOUND_CHANNEL_DETECT_ONLY
 FM_OUTBOUND_TOKEN_IN_FLIGHT=FM_OUTBOUND_EMIT_IN_FLIGHT
 FM_OUTBOUND_TOKEN_SATISFIED=FM_OUTBOUND_SATISFIED
+FM_OUTBOUND_TOKEN_IDENTITY=FM_OUTBOUND_IDENTITY_REFUSED
 }
 
 # --- digest ------------------------------------------------------------------
@@ -246,11 +247,58 @@ fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
 # prints its error JSON to stdout, so an unvalidated read captures a 404 body and
 # carries it forward as an identity. Observed doing exactly that against a live
 # backlog, where it surfaced as `head {"message":"Not Found",...}`.
-fm_outbound_is_sha() {  # <candidate>
-  printf '%s' "$1" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$'
+# WIDTH IS NOT A CONSTANT. An object id's width comes from the TARGET
+# REPOSITORY's object format - 40 for sha1, 64 for sha256 - and accepting either
+# universally is not a stricter rule, it is a different hole. This fleet writes
+# 64-character sha256 CONTENT digests routinely (manifest digests, patch digests,
+# check-trust hashes), so a universal 64 lets a content digest be read as a head
+# in a sha1 repository: the same substitution as an abbreviation, arriving from
+# the other side. Verified 2026-08-16: all five clones this fleet holds report
+# sha1 via `git rev-parse --show-object-format`.
+#
+# Shape is only the cheap PRE-FILTER. Where the value can be resolved against the
+# repository, resolvability is the stronger evidence and is preferred, because a
+# well-formed hex string of exactly the right width is still not proof that the
+# object exists.
+#
+# An UNDETERMINABLE object format is could-not-observe and refuses. It is never
+# resolved by falling back to a default width, because guessing the width is
+# guessing the identity rule.
+fm_outbound_object_width() {  # <clone-dir> -> 40|64, or empty when undeterminable
+  local dir=$1 fmt
+  [ -n "$dir" ] && [ -d "$dir" ] || return 0
+  fmt=$(git --no-optional-locks -C "$dir" rev-parse --show-object-format 2>/dev/null) || return 0
+  case $fmt in
+    sha1) printf '40\n' ;;
+    sha256) printf '64\n' ;;
+    *) printf '' ;;
+  esac
 }
 
-fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head>
+# <candidate> [<width>]. With no width the shape cannot be judged at all, so the
+# answer is no rather than a guessed default.
+fm_outbound_is_sha() {  # <candidate> [<width>]
+  local candidate=$1 width=${2:-}
+  case $width in
+    40|64) ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$candidate" | grep -Eq "^[0-9a-f]{$width}\$"
+}
+
+# The full predicate: exact width for this repository, and resolvable there when
+# the repository is present.
+fm_outbound_head_valid() {  # <candidate> <clone-dir>
+  local candidate=$1 dir=$2 width
+  width=$(fm_outbound_object_width "$dir")
+  [ -n "$width" ] || return 1
+  fm_outbound_is_sha "$candidate" "$width" || return 1
+  # Resolvability beats shape wherever it can be observed.
+  git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$candidate^{object}" \
+    >/dev/null 2>&1
+}
+
+fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head> [<clone-dir>]
   local gate=$1 project=$2 repo=$3 item=$4 head=$5 missing=0
   if [ -z "$gate" ] || ! fm_outbound_gate_valid "$gate"; then
     printf 'gate\n'; missing=1
@@ -258,8 +306,38 @@ fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head>
   [ -n "$project" ] || { printf 'project\n'; missing=1; }
   [ -n "$repo" ] || { printf 'repo\n'; missing=1; }
   [ -n "$item" ] || { printf 'item\n'; missing=1; }
-  fm_outbound_is_sha "$head" || { printf 'head\n'; missing=1; }
+  # <clone-dir> is optional so existing callers keep working; without it the
+  # width is undeterminable and the head is refused rather than assumed.
+  fm_outbound_head_valid "$head" "${6:-}" || { printf 'head\n'; missing=1; }
   [ "$missing" -eq 0 ]
+}
+
+# --- identity verdict vocabulary ---------------------------------------------
+#
+# Captain ruling 2026-08-16: retrieval by identity is THREE-valued, and the two
+# refusals are not interchangeable.
+#
+#   VALID_MATCH        the content proves it is the requested object -> consume
+#   IDENTITY_MISMATCH  the content names something else -> refuse
+#   COULD_NOT_OBSERVE  identity missing, unreadable, malformed, unsupported
+#                      schema -> refuse
+#
+# Both refuse, so a two-valued check is not UNSAFE - it is UNREPORTABLE, which is
+# how this collapse survives review. A caller told only "could not read it" will
+# go looking for a corrupt file or a permissions problem; the actual condition
+# may be a record that is perfectly readable and belongs to a different request,
+# which is a correlation defect and a completely different repair. Keeping the
+# two apart is the difference between an operator fixing the right thing and an
+# operator fixing nothing.
+#
+# A missing identity is COULD_NOT_OBSERVE and never an implicit match, because
+# adopting the filename when the content is silent is precisely the substitution
+# the ruling forbids.
+# shellcheck disable=SC2034  # contract constants consumed by sourcing callers
+{
+FM_OUTBOUND_IDENTITY_VALID='VALID_MATCH'
+FM_OUTBOUND_IDENTITY_MISMATCH='IDENTITY_MISMATCH'
+FM_OUTBOUND_IDENTITY_CNO='COULD_NOT_OBSERVE'
 }
 
 # --- the prose recognizer ----------------------------------------------------
@@ -449,3 +527,5 @@ fm_outbound_request_body() {  # <record-json> [<rationale-file>]
     printf '\n'
   fi
 }
+
+# fail-closed-predicates: enforced

@@ -36,8 +36,31 @@ OB="$ROOT/bin/fm-outbound-artifact.sh"
 
 # --- fixtures ---------------------------------------------------------------
 
-HEAD_A=1111111111111111111111111111111111111111
-HEAD_B=2222222222222222222222222222222222222222
+# Real commit ids from a real repository, not invented hex.
+#
+# An exact head's WIDTH comes from the target repository's object format and the
+# value must resolve there, so a fixture with no clone has an undeterminable
+# width and every head is refused. Inventing 1111... and pointing at no
+# repository tested a rule that no longer exists. These are seeded once from an
+# actual sha1 repository and reused by every case.
+HEAD_REPO="$TMP_ROOT/head-source"
+seed_head_repo() {
+  mkdir -p "$HEAD_REPO"
+  git -C "$HEAD_REPO" init -q
+  git -C "$HEAD_REPO" config user.email fixture@example.com
+  git -C "$HEAD_REPO" config user.name Fixture
+  printf 'a\n' > "$HEAD_REPO/f"
+  git -C "$HEAD_REPO" add f
+  git -C "$HEAD_REPO" -c commit.gpgsign=false commit -qm a
+  HEAD_A=$(git -C "$HEAD_REPO" rev-parse HEAD)
+  printf 'b\n' > "$HEAD_REPO/f"
+  git -C "$HEAD_REPO" add f
+  git -C "$HEAD_REPO" -c commit.gpgsign=false commit -qm b
+  HEAD_B=$(git -C "$HEAD_REPO" rev-parse HEAD)
+}
+seed_head_repo
+[ -n "${HEAD_A:-}" ] && [ -n "${HEAD_B:-}" ] && [ "$HEAD_A" != "$HEAD_B" ] \
+  || { printf 'not ok - fixture repository produced no distinct heads\n' >&2; exit 1; }
 
 make_home() {  # <name> -> prints home path
   local home="$TMP_ROOT/$1"
@@ -206,6 +229,9 @@ new_case() {  # <name> -> prints case dir
   mkdir -p "$dir"
   make_gh "$dir"
   make_home "$1/home" >/dev/null
+  # The project clone the heads resolve against. Cloned rather than re-created so
+  # every case sees the same object ids.
+  git clone -q --no-hardlinks "$HEAD_REPO" "$dir/home/projects/demo" 2>/dev/null
   configure_venue "$dir/home"
   write_snapshot "$dir/snap.json"
   printf '%s\n' "$dir"
@@ -658,11 +684,21 @@ test_request_requires_readable_correlation() {
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: repair failed"
   jq '.identity.item = "another-item"' "$record" > "$record.tmp"
   mv "$record.tmp" "$record"
+  # A MISMATCH is not could-not-observe. This record is perfectly readable and
+  # says plainly that it belongs to another request, which is a correlation
+  # defect (exit 3) and not a failure to observe (exit 4). The distinction is not
+  # cosmetic: told only "could not read it", an operator goes looking for a
+  # corrupt file or a permissions problem and finds neither, while the actual
+  # repair is elsewhere entirely. This assertion previously expected 4 - it
+  # passed because the two verdicts were collapsed, which is the defect the
+  # captain ruling of 2026-08-16 names, not a behaviour to preserve.
   out=$(run_ob "$dir" ruling --request "$rid" --comment 46 --issue 2 2>&1); rc=$?
-  [ "$rc" -eq 4 ] || fail "correlation: mismatched identity accepted a ruling: $out"
+  [ "$rc" -eq 3 ] || fail "correlation: mismatched identity did not refuse as a mismatch: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_IDENTITY_REFUSED' \
+    || fail "correlation: mismatched identity was not reported as a mismatch: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
-    || fail "correlation: mismatched identity was not unreadable: $out"
-  pass "correlation: missing, invalid, or mismatched records cannot satisfy a wait"
+    && fail "correlation: a readable foreign record was reported as unreadable: $out"
+  pass "correlation: missing, invalid, and mismatched records each refuse, and are told apart"
 }
 
 test_close_requires_resumed_work() {
@@ -905,18 +941,39 @@ test_binding_refuses_a_vague_head() {
   # shellcheck source=bin/fm-outbound-artifact-lib.sh disable=SC1091
   . "$ROOT/bin/fm-outbound-artifact-lib.sh"
   local bad
+  [ "$(git -C "$HEAD_REPO" rev-parse --show-object-format)" = sha1 ] \
+    || fail "binding: the fixture repository is not sha1, so this case proves nothing"
   for bad in "" "main" "the current head" "HEAD" "latest" \
     "${HEAD_A%?????????????????????????????????}" \
     "${HEAD_A%?}"; do
-    fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$bad" >/dev/null 2>&1 \
+    fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$bad" "$HEAD_REPO" >/dev/null 2>&1 \
       && fail "binding: '$bad' was accepted as an exact head"
   done
-  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$HEAD_A" >/dev/null 2>&1 \
-    || fail "binding: a real sha was rejected"
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$HEAD_A" "$HEAD_REPO" >/dev/null 2>&1 \
+    || fail "binding: this repository's own full object id was rejected"
+
+  # THE DISTINGUISHING CASE. A 64-character value is a valid object id in a
+  # sha256 repository and is NOT one here. This assertion previously required
+  # such a value to be ACCEPTED, which is the bare 40-or-64 predicate: it would
+  # let a content digest - and this fleet writes those routinely - be read as an
+  # exact head. Width comes from the target repository, so the same string is
+  # correct in one repository and wrong in another.
   fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i \
-    "${HEAD_A}${HEAD_A%????????????????}" >/dev/null 2>&1 \
-    || fail "binding: a full sha256 object id was rejected"
-  pass "binding: only full canonical object ids are accepted as exact heads"
+    "${HEAD_A}${HEAD_A%????????????????}" "$HEAD_REPO" >/dev/null 2>&1 \
+    && fail "binding: a 64-character value was accepted by a sha1 repository"
+
+  # A well-formed id of the right width that names no object here is not this
+  # repository's head either: shape is the cheap pre-filter, resolvability is the
+  # evidence.
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i \
+    "$(printf '%040d' 0 | tr 0 b)" "$HEAD_REPO" >/dev/null 2>&1 \
+    && fail "binding: an unresolvable but well-shaped id was accepted"
+
+  # And with no repository the width is undeterminable, which refuses rather
+  # than falling back to a guessed default.
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$HEAD_A" "" >/dev/null 2>&1 \
+    && fail "binding: an undeterminable object format was treated as a default width"
+  pass "binding: head width comes from the target repository, and resolvability beats shape"
 }
 
 # --- run ---------------------------------------------------------------------

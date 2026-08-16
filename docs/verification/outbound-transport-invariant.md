@@ -92,6 +92,63 @@ The truncation is the backlog parser's own contract and was not changed; the rec
 The invariant still held - the binding check refused it, because a JSON blob is not a sha - so the item stayed red, but for a misreported reason.
 The head cascade now validates the shape at the point of observation, and an error payload is no observation at all rather than a bad one.
 
+## Historical reconciliation for this module
+
+The ruling requires classifying still-operationally-relevant records as `MATCH`, `MISMATCH`, or `COULD_NOT_OBSERVE`, without presuming corruption occurred.
+
+The population is **empty**: no correlation record exists anywhere in the fleet, because the mechanism ships here and has never emitted. That is a statement about the population and not a clean bill of health - there were no records to classify, so no `MATCH` was observed either, and nothing is repaired because nothing exists to repair.
+
+The bounded audit of other keyed-retrieval seams, and reconciliation of records this module does not own, are filed as their own increment `keyed-retrieval-identity-audit` and are deliberately not done here.
+
+## Identity-bound retrieval, and the three-valued verdict
+
+Captain ruling 2026-08-16: filesystem location is a locator, not proof of semantic identity. Anything retrieved by identity X must prove from its own validated content that it is X before it participates in a join, a wait satisfaction, a routing decision, or a ruling application.
+
+Retrieval now recomputes the identity from the record's own fields rather than comparing the stored string, so a record whose id was rewritten to match its filename is still caught by its content. The consumer that owns `WAITING_FOR_RULING -> RULING_AVAILABLE` fetches the ruling comment and requires its body to carry every identity field exactly, so a comment id - which only says where to look - cannot satisfy a wait on its own.
+
+The verdict is three-valued, and the two refusals are not interchangeable:
+
+| Verdict | Meaning | Response |
+| --- | --- | --- |
+| `VALID_MATCH` | the content proves it is the requested object | consume |
+| `IDENTITY_MISMATCH` | the content names something else | refuse, exit 3 |
+| `COULD_NOT_OBSERVE` | identity missing, unreadable, malformed, unsupported schema | refuse, exit 4 |
+
+A two-valued check here is not unsafe so much as **unreportable**, which is how the collapse survives review: both values refuse, so nothing breaks in testing. The cost appears later. Told only "could not read it", an operator looks for a corrupt file or a permissions problem and finds neither, while the real condition is a perfectly readable record belonging to another request - a correlation defect with a completely different repair. A transient-looking verdict also invites a retry, and retrying a wrong-record-under-the-right-key just fails again.
+
+An assertion in this suite previously required a mismatched record to report as unreadable. It passed because the two verdicts were collapsed. That expectation was corrected rather than preserved.
+
+## Head identity: width comes from the repository
+
+An exact head is an object id, and an object id's width is a property of the **target repository**, not a constant. Accepting either 40 or 64 universally is not a stricter rule but a different hole: this fleet writes 64-character sha256 content digests routinely - manifest digests, patch digests, check-trust hashes - so a universal 64 lets a content digest be read as an exact head in a sha1 repository. That is the same substitution as an abbreviation, arriving from the other side.
+
+Width is therefore read from `git rev-parse --show-object-format`, shape is only the cheap pre-filter, and resolvability against the repository is preferred where it can be observed. An undeterminable object format refuses as could-not-observe rather than falling back to a guessed default.
+
+Verified 2026-08-16: all five clones this fleet holds report `sha1`.
+
+## Control coverage
+
+Each row states what the control actually establishes and what it does not. A known limitation stays visible until a separate control closes it.
+
+| Control | Property actually tested | Negative mutation that triggers red | Known non-coverage |
+| --- | --- | --- | --- |
+| `no-request-is-red` | An item at a gate with no artifact on the forge is a defect | `sweep_exit` never returns 3 - observed red | Does not prove the artifact would have been *usable*, only that none exists |
+| `exact-head-applicability` | A moved head makes the previous request inapplicable | Identity canonical form drops `head` - observed red | Generation here IS the head; proves nothing about a scheme with a separate version counter |
+| `duplicate-suppression` | Six cycles at one identity post exactly one request | Forge dedupe check disabled - observed red | Sequential cycles, not simultaneous ones; the per-id lock is a separate mechanism not proven here |
+| `retry-without-loss` | Two transient failures retry through to one request, and exhaustion keeps the checkpoint | Retry budget forced to 1 - observed red | Does not cover a forge that accepts a post and then loses it silently |
+| `ruling-wakes-its-item` | A ruling correlates onto the request that asked | Ruling write drops the correlation field - observed red | - |
+| `unrelated-ruling-refused` | An unknown id, a foreign issue, or a body missing any identity field cannot wake the item | Unknown id accepted - observed red | - |
+| `disposition-completes-chain` | Closure requires ruling and resumption first | Closure accepts an `emitted` request - observed red | - |
+| `identity-mismatch-distinct` | A readable record naming another request refuses as a mismatch, NOT as unreadable | Collapse the two verdicts into one return - this is the defect that shipped | Does not cover a record whose non-identity fields are wrong |
+| `head-object-id-width` | A 64-character value is refused for a sha1 repository; an abbreviation is refused; an unresolvable well-shaped id is refused; undeterminable format refuses | Accept any 7-40 hex, or a bare 40-or-64 - observed red | **No sha256 repository was available.** Acceptance of a 64-character head in a sha256 repository is UNPROVEN |
+| `dead-predicate` | A function in an enrolled file with zero call sites repo-wide is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review |
+
+### Two costs this record should carry
+
+**The head-bound attestation must be republished on every base advance.** It is bound to a head, and `refs/notes` is not a pull-request head, so publishing it fires no event and the previous verdict stands until something re-evaluates the head. Editing the pull request is the documented re-trigger, and the workflow subscribes to `edited` for exactly this. During this increment the base advanced once and the trap recurred on the second head. That is a recurring cost, not a one-off.
+
+**A ruling that differs from the reviewer's proposed remedy does not land by itself.** `--action fix --findings X` says *fix this finding*; it cannot say *fix it this way*. The ruling's substance lives in the decision record and the steer, both outside the pipeline, so wherever a ruling differs from the remedy the reviewer proposed - which is exactly when the ruling was worth writing - the difference silently fails to reach the code unless a person carries it there. It happened here: a ruling explicitly rejecting a bare 40-or-64 predicate was answered with a bare 40-or-64 predicate. The defence is a control that names the distinguishing case, because the control is the only part of a ruling the machinery can enforce. This is the transport law applied to decisions: correct content authored is not correct content delivered.
+
 ## Refreshing this record
 
 ```sh
