@@ -1,7 +1,7 @@
 # Review envelope controls
 
 Maintainer-verification record for [`bin/fm-review-envelope.sh`](../../bin/fm-review-envelope.sh) and [`bin/fm-review-envelope-lib.sh`](../../bin/fm-review-envelope-lib.sh), the `review-envelope/v1` contract, its compiler and its classifier.
-The guarantee it records is that each refusal and each could-not-observe in that contract was observed happening, for its own reason, against a build where exactly one guard was removed.
+The guarantee it records is that each property was measured with one targeted mutation: single-guard removals; inverted mutations that turn red when an accepting path breaks; and one redundantly enforced property that no single-guard mutation can falsify, measured with both independent guards removed.
 
 The library header owns the contract itself, and [`docs/contracts/review-envelope.md`](../contracts/review-envelope.md) is generated from its field catalog.
 This file records only what was measured, and when.
