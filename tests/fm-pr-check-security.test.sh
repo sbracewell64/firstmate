@@ -75,7 +75,7 @@ case " $* " in
     # with its one check result belonging to the head it is verifying;
     # tests/fm-pr-merge.test.sh owns the refusal matrix for that guard.
     verify_head=${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}
-    printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=1\nreported=1\nchecks=1\nunsuccessful=0\nfailing=0\nunrun=0\n' \
+    printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=1\nreported=1\nchecks=1\nunsuccessful=0\nfailing=0\nunrun=0\nundecidable=0\n' \
       "$verify_head" "$verify_head"
     ;;
   *" state,mergeable,headRefOid "*)
