@@ -659,7 +659,14 @@ test_review_envelope_transports_all_three_values() {
   "requested_decision": "SEMANTIC_REVIEW",
   "candidate": {"base_ref": "main", "head_ref": "candidate"},
   "applicability": {"main_ref": "main"},
-  "verification": {"applicability_rules": [], "contracts": [], "results": []},
+  "verification": {
+    "applicability_rules": {
+      "none": true,
+      "reason": "the adapter fixture exercises transport, not a project verifier"
+    },
+    "contracts": [],
+    "results": []
+  },
   "ci": {"required_platforms": [], "attempts": []},
   "findings": {"adverse": [], "unproven": []},
   "obligations": {"predecessor": {"none": true, "reason": "fixture"}, "active": [], "dispositions": []}
