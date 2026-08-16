@@ -417,7 +417,15 @@ test_request_requires_readable_correlation() {
   [ "$rc" -eq 4 ] || fail "correlation: invalid state returned $rc: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
     || fail "correlation: invalid lifecycle state satisfied the wait: $out"
-  pass "correlation: missing or invalid records cannot satisfy a wait"
+
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: repair failed"
+  jq '.identity.item = "another-item"' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 46 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "correlation: mismatched identity accepted a ruling: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
+    || fail "correlation: mismatched identity was not unreadable: $out"
+  pass "correlation: missing, invalid, or mismatched records cannot satisfy a wait"
 }
 
 test_close_requires_resumed_work() {
