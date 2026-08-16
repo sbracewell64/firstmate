@@ -148,15 +148,32 @@ record_write() {  # <request-id> <json>
 
 # Three-valued on purpose: absent and unreadable are different answers, and only
 # the caller knows which of them is safe in its context.
+record_valid_for_id() {
+  local raw=$1 expected=$2 state stored gate project repo item pr head computed
+  printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
+    '.schema == $s' >/dev/null 2>&1 || return 1
+  state=$(printf '%s' "$raw" | jq -er '.state // empty') || return 1
+  fm_outbound_record_state_valid "$state" || return 1
+  stored=$(printf '%s' "$raw" | jq -er '.request_id // empty') || return 1
+  gate=$(printf '%s' "$raw" | jq -er '.identity.gate // empty') || return 1
+  project=$(printf '%s' "$raw" | jq -er '.identity.project // empty') || return 1
+  repo=$(printf '%s' "$raw" | jq -er '.identity.repo // empty') || return 1
+  item=$(printf '%s' "$raw" | jq -er '.identity.item // empty') || return 1
+  pr=$(printf '%s' "$raw" | jq -r '.identity.pr // "-"') || return 1
+  head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || return 1
+  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" \
+    >/dev/null 2>&1 || return 1
+  computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head") \
+    || return 1
+  [ "$stored" = "$expected" ] && [ "$computed" = "$expected" ]
+}
+
 record_read() {  # <request-id> -> json on stdout; 1 absent, 2 unreadable
-  local path raw state
+  local path raw
   path=$(record_path "$1")
   [ -f "$path" ] || return 1
   raw=$(cat "$path" 2>/dev/null) || return 2
-  printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
-    '.schema == $s' >/dev/null 2>&1 || return 2
-  state=$(printf '%s' "$raw" | jq -r '.state // ""') || return 2
-  fm_outbound_record_state_valid "$state" || return 2
+  record_valid_for_id "$raw" "$1" || return 2
   printf '%s\n' "$raw"
 }
 
@@ -164,14 +181,15 @@ record_read() {  # <request-id> -> json on stdout; 1 absent, 2 unreadable
 # marker rather than dropped - a record this cannot parse is a correlation that
 # cannot be checked, which is a finding rather than an absence.
 records_all() {
-  local f raw
+  local f raw rid
   if [ ! -d "$RECORD_DIR" ]; then printf '[]\n'; return 0; fi
   {
     for f in "$RECORD_DIR"/*.json; do
       [ -f "$f" ] || continue
       raw=$(cat "$f" 2>/dev/null) || raw=
-      if printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
-        '.schema == $s' >/dev/null 2>&1; then
+      rid=${f##*/}
+      rid=${rid%.json}
+      if record_valid_for_id "$raw" "$rid"; then
         printf '%s\n' "$raw"
       else
         jq -n --arg p "$f" '{schema:"unreadable",path:$p}'
