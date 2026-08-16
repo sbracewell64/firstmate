@@ -653,13 +653,18 @@ test_binding_refuses_a_vague_head() {
   # shellcheck source=bin/fm-outbound-artifact-lib.sh disable=SC1091
   . "$ROOT/bin/fm-outbound-artifact-lib.sh"
   local bad
-  for bad in "" "main" "the current head" "HEAD" "latest"; do
+  for bad in "" "main" "the current head" "HEAD" "latest" \
+    "${HEAD_A%?????????????????????????????????}" \
+    "${HEAD_A%?}"; do
     fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$bad" >/dev/null 2>&1 \
       && fail "binding: '$bad' was accepted as an exact head"
   done
   fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i "$HEAD_A" >/dev/null 2>&1 \
     || fail "binding: a real sha was rejected"
-  pass "binding: a branch name or a phrase is refused as an exact head"
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i \
+    "${HEAD_A}${HEAD_A%????????????????}" >/dev/null 2>&1 \
+    || fail "binding: a full sha256 object id was rejected"
+  pass "binding: only full canonical object ids are accepted as exact heads"
 }
 
 # --- run ---------------------------------------------------------------------
