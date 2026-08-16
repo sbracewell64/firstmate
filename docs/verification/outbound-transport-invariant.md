@@ -31,6 +31,8 @@ ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 The 35 outbound-artifact cases, 18 dead-predicate cases, and the bootstrap integration case pass.
 What follows is why that sentence is worth anything.
 
+The same suites and the repository lint gate were re-run together on 2026-08-16 with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh && bin/fm-lint.sh`; the command exited 0.
+
 ## Watched-red evidence, one mutation per control
 
 Each mutation is a single semantically valid edit to the shipped implementation; each was syntax-checked with `bash -n` before the suite ran, so no row here is a control firing on a broken file.
