@@ -2998,6 +2998,24 @@ test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
   pass "fm-attest.sh: the check sends a contributor to publish, not to edit the request"
 }
 
+test_show_refuses_a_missing_head_attestation_as_a_verdict() {
+  local repo head out rc
+  repo="$TMP_ROOT/show-no-note"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  out=$(cd "$repo" && "$ATTEST" show --commit "$head" 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "show did not refuse a missing head attestation as a verdict (exit $rc): $out"
+  assert_contains "$out" "no-attestation-for-head" \
+    "show did not report a missing head attestation distinctly"
+  # The matched control differs only by recording an attestation for this head.
+  add_note "$repo" "$head" "$(good_note "$head")"
+  out=$(cd "$repo" && "$ATTEST" show --commit "$head" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "show refused the head after its attestation was recorded: $out"
+  pass "fm-attest.sh: show refuses a missing head attestation with verdict exit 1"
+}
+
 test_cases='
 test_absent_notes_ref_refuses_as_absent
 test_ref_without_note_for_head_refuses_distinctly
@@ -3046,6 +3064,7 @@ test_write_reports_an_unfetchable_push_target_as_such
 test_write_reports_an_unreconcilable_local_ref_as_such
 test_write_reports_an_unrecordable_note_as_such
 test_show_reports_an_unknown_commit_as_such
+test_show_refuses_a_missing_head_attestation_as_a_verdict
 test_recheck_reruns_the_run_that_judged_a_published_head
 test_recheck_requests_one_re_evaluation_per_attempt
 test_recheck_pre_request_record_consumes_the_attempt
