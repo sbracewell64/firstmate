@@ -838,18 +838,17 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
       exit 3
     }
   body=$(printf '%s' "$artifact" | jq -r '.body')
-  printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_RULING_MARKER $rid" \
-    && printf '%s\n' "$body" | grep -Fqx "gate: $(printf '%s' "$rec" | jq -r '.identity.gate')" \
-    && printf '%s\n' "$body" | grep -Fqx "project: $(printf '%s' "$rec" | jq -r '.identity.project')" \
-    && printf '%s\n' "$body" | grep -Fqx "repo: $(printf '%s' "$rec" | jq -r '.identity.repo')" \
-    && printf '%s\n' "$body" | grep -Fqx "item: $(printf '%s' "$rec" | jq -r '.identity.item')" \
-    && printf '%s\n' "$body" | grep -Fqx "pull-request: $(printf '%s' "$rec" | jq -r '.identity.pr // "-"')" \
-    && printf '%s\n' "$body" | grep -Fqx "exact-head: $(printf '%s' "$rec" | jq -r '.identity.head')" \
-    || {
+  if ! printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_RULING_MARKER $rid" \
+    || ! printf '%s\n' "$body" | grep -Fqx "gate: $(printf '%s' "$rec" | jq -r '.identity.gate')" \
+    || ! printf '%s\n' "$body" | grep -Fqx "project: $(printf '%s' "$rec" | jq -r '.identity.project')" \
+    || ! printf '%s\n' "$body" | grep -Fqx "repo: $(printf '%s' "$rec" | jq -r '.identity.repo')" \
+    || ! printf '%s\n' "$body" | grep -Fqx "item: $(printf '%s' "$rec" | jq -r '.identity.item')" \
+    || ! printf '%s\n' "$body" | grep -Fqx "pull-request: $(printf '%s' "$rec" | jq -r '.identity.pr // "-"')" \
+    || ! printf '%s\n' "$body" | grep -Fqx "exact-head: $(printf '%s' "$rec" | jq -r '.identity.head')"; then
       printf '%s: comment %s does not carry the exact request identity\n' \
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
       exit 3
-    }
+  fi
   verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p' | head -1)
   [ -n "$verdict" ] || {
     printf '%s: comment %s has no ruling verdict\n' "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2

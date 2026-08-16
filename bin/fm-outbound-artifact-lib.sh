@@ -115,7 +115,7 @@ FM_OUTBOUND_LIB_SOURCED=1
 # The sol-control channel's wire protocol name, as the control issues already use
 # it. It is the protocol, not this record's schema: the two version separately.
 FM_OUTBOUND_PROTOCOL='fm-sol-control/v1'
-FM_OUTBOUND_RULING_MARKER='FM-SOL-RULING'
+export FM_OUTBOUND_RULING_MARKER='FM-SOL-RULING'
 
 # The correlation record's own schema. ONE record serves both directions: the
 # outbound emitter creates it and the inbound ruling path joins onto it. That is
