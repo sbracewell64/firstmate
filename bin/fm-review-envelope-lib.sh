@@ -216,6 +216,10 @@ CATALOG = {
         "what it is, what is in and out of scope, what has been proven about "
         "it, and what remains owed."
     ),
+    "digest_scope": [
+        "The body and outer integrity digests detect partial edits and drift, and provide content-addressed provenance aids.",
+        "They do not establish signer identity and do not resist a whole-artifact rewrite with recomputed digests.",
+    ],
     "sources": [
         {
             "name": "derived",
@@ -255,8 +259,10 @@ CATALOG = {
                  "description": "The decision this envelope asks for, as an uppercase token."},
                 {"name": "outer request_identity", "source": "computed", "required": True,
                  "description": "A derived identity beside the body digest, binding repository, work or forge request, exact head, envelope digest and policy version."},
-                {"name": "outer declared_request_identity", "source": "declared", "required": False,
-                 "description": "The optional request identity claimed by the inputs, preserved beside the computed identity so every validation can recheck it."},
+                {"name": "outer declared_request_identity", "source": "declared", "required": True,
+                 "description": "The request identity claimed by the inputs, or explicit null when none was claimed, preserved so every validation can distinguish absence and recheck a value."},
+                {"name": "outer outer_digest", "source": "computed", "required": True,
+                 "description": "An integrity digest over compile time, compiler, body digest value, computed request identity and declared request identity."},
             ],
         },
         {
@@ -443,6 +449,7 @@ CATALOG = {
         {"code": "obligation_duplicate_id", "meaning": "One obligation id is missing or appears twice."},
         {"code": "predecessor_contradiction", "meaning": "A predecessor envelope was supplied against inputs that declare none."},
         {"code": "envelope_digest_mismatch", "meaning": "The stored body does not match its stored digest."},
+        {"code": "outer_integrity_digest_mismatch", "meaning": "The stored outer facts do not match their integrity digest."},
     ],
     "unobserved": [
         {"code": "usage_error", "meaning": "The call itself was malformed, so nothing was compiled or classified."},
@@ -461,6 +468,8 @@ CATALOG = {
         {"code": "predecessor_undeclared", "meaning": "The inputs carry no predecessor block, so obligation continuity cannot be judged."},
         {"code": "predecessor_unreadable", "meaning": "The declared predecessor envelope could not be read, or does not match its own digest."},
         {"code": "evidence_recheck_declined", "meaning": "Validation was told not to re-read the evidence bytes, and did not."},
+        {"code": "outer_integrity_digest_unobserved", "meaning": "The outer integrity digest is absent, so outer facts cannot be checked."},
+        {"code": "request_identity_claim_unobserved", "meaning": "The declared request identity state is absent rather than an explicit value or null."},
     ],
 }
 
@@ -799,6 +808,16 @@ def request_identity(envelope, envelope_digest):
             "policy_version": envelope["identity"]["policy"]["version"],
         }
     )
+
+
+def outer_integrity_payload(document):
+    return {
+        "compiled_at": document.get("compiled_at"),
+        "compiler": document.get("compiler"),
+        "body_digest": (document.get("digest") or {}).get("value"),
+        "request_identity": document.get("request_identity"),
+        "declared_request_identity": document.get("declared_request_identity"),
+    }
 
 
 def bind_evidence(block, evidence_root):
@@ -1612,6 +1631,8 @@ def render_docs():
     add("The stored document is pretty-printed with sorted keys, and its `envelope` body is what the digest covers.")
     add("Those are not the same bytes: the digest is taken over the body serialized as UTF-8 with keys sorted recursively, no insignificant whitespace and no trailing newline, so recompute it that way rather than over the file.")
     add("Nothing time-varying sits inside the body, so unmoved facts always produce the same digest and repeated compilation resolves to one review request rather than a new one each time.")
+    for statement in CATALOG["digest_scope"]:
+        add(statement)
     add("")
     add("## Where each fact comes from")
     add("")
@@ -1745,6 +1766,7 @@ def command_prepare(args):
         "compiled_at": now_utc(),
         "compiler": "fm-review-envelope-lib.sh",
         "request_identity": computed_request_identity,
+        "declared_request_identity": request_input.get("identity"),
         "digest": {
             "algorithm": "sha256",
             "canonicalization": CANONICALIZATION,
@@ -1752,8 +1774,11 @@ def command_prepare(args):
         },
         "envelope": envelope,
     }
-    if "identity" in request_input:
-        document["declared_request_identity"] = request_input["identity"]
+    document["outer_digest"] = {
+        "algorithm": "sha256",
+        "canonicalization": CANONICALIZATION,
+        "value": digest_of(outer_integrity_payload(document)),
+    }
     os.makedirs(args.out, exist_ok=True)
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2, sort_keys=True)
@@ -1795,6 +1820,28 @@ def command_validate(args):
             recomputed,
             args,
         )
+    outer_digest = document.get("outer_digest")
+    if not isinstance(outer_digest, dict) or not outer_digest.get("value"):
+        raise Unobservable(
+            "outer_integrity_digest_unobserved",
+            "the outer integrity digest is absent",
+            str(path),
+        )
+    recomputed_outer_digest = digest_of(outer_integrity_payload(document))
+    if outer_digest["value"] != recomputed_outer_digest:
+        return refused(
+            "outer_integrity_digest_mismatch",
+            str(path),
+            "stored " + str(outer_digest["value"]) + ", recomputed " + recomputed_outer_digest,
+            recomputed,
+            args,
+        )
+    if "declared_request_identity" not in document:
+        raise Unobservable(
+            "request_identity_claim_unobserved",
+            "the declared request identity state is absent",
+            str(path),
+        )
     recomputed_request_identity = request_identity(body, recomputed)
     if document.get("request_identity") != recomputed_request_identity:
         return refused(
@@ -1805,7 +1852,7 @@ def command_validate(args):
             args,
         )
     if (
-        "declared_request_identity" in document
+        document["declared_request_identity"] is not None
         and document["declared_request_identity"] != recomputed_request_identity
     ):
         return refused(

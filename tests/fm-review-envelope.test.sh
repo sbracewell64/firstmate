@@ -1020,6 +1020,11 @@ test_request_identity_is_recomputed_and_checked() {
   case_dir=$(make_case request-identity)
   write_inputs "$case_dir"
   run_prepare "$case_dir" first >/dev/null 2>&1
+  assert_grep '"declared_request_identity": null' "$case_dir/first/envelope.json" \
+    "no declared claim must be recorded explicitly as null"
+  capture run_validate "$case_dir" first
+  expect_code 0 "$CAPTURED_CODE" "an explicit null claim is accepted"
+
   identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' \
     "$case_dir/first/envelope.json")
   write_inputs "$case_dir" '{"request": {"identity": "'"$identity"'"}}'
@@ -1028,6 +1033,8 @@ test_request_identity_is_recomputed_and_checked() {
   assert_grep "\"declared_request_identity\": \"$identity\"" \
     "$case_dir/matching/envelope.json" \
     "the matching declared identity must remain visible in the outer document"
+  capture run_validate "$case_dir" matching
+  expect_code 0 "$CAPTURED_CODE" "a correct claim with intact digests validates"
 
   write_inputs "$case_dir" '{"request": {"identity": "sha256:'"$(printf 'f%.0s' $(seq 64))"'"}}'
   capture run_prepare "$case_dir" mismatching
@@ -1039,11 +1046,81 @@ test_request_identity_is_recomputed_and_checked() {
   assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
     "validation must reproduce the refusal from the preserved declared claim"
 
-  python3 - "$case_dir/matching/envelope.json" <<'PY'
+  capture run_prepare "$case_dir" claim-deleted
+  python3 - "$case_dir/claim-deleted/envelope.json" <<'PY'
 import json, sys
 path = sys.argv[1]
 document = json.load(open(path))
+del document["declared_request_identity"]
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" claim-deleted
+  expect_code 1 "$CAPTURED_CODE" "deleting a declared claim breaks outer integrity"
+  assert_contains "$CAPTURED" 'refusal outer_integrity_digest_mismatch' \
+    "deleting the claim must refuse as a partial outer edit"
+
+  capture run_prepare "$case_dir" claim-replaced
+  python3 - "$case_dir/claim-replaced/envelope.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["declared_request_identity"] = document["request_identity"]
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" claim-replaced
+  expect_code 1 "$CAPTURED_CODE" "replacing a declared claim breaks outer integrity"
+  assert_contains "$CAPTURED" 'refusal outer_integrity_digest_mismatch' \
+    "replacing the claim must refuse as a partial outer edit"
+
+  capture run_prepare "$case_dir" claim-absent
+  python3 - "$case_dir/claim-absent/envelope.json" <<'PY'
+import hashlib, json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+del document["declared_request_identity"]
+payload = {
+    "compiled_at": document.get("compiled_at"),
+    "compiler": document.get("compiler"),
+    "body_digest": document["digest"]["value"],
+    "request_identity": document.get("request_identity"),
+    "declared_request_identity": document.get("declared_request_identity"),
+}
+canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+document["outer_digest"]["value"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" claim-absent
+  expect_code 2 "$CAPTURED_CODE" "an absent claim state is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved request_identity_claim_unobserved' \
+    "missing and explicit null claim states must remain distinct"
+
+  capture run_prepare "$case_dir" outer-digest-absent
+  python3 - "$case_dir/outer-digest-absent/envelope.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+del document["outer_digest"]
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" outer-digest-absent
+  expect_code 2 "$CAPTURED_CODE" "an absent outer integrity digest is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved outer_integrity_digest_unobserved' \
+    "missing outer integrity cannot validate cleanly"
+
+  python3 - "$case_dir/matching/envelope.json" <<'PY'
+import hashlib, json, sys
+path = sys.argv[1]
+document = json.load(open(path))
 document["request_identity"] = "sha256:" + "0" * 64
+payload = {
+    "compiled_at": document.get("compiled_at"),
+    "compiler": document.get("compiler"),
+    "body_digest": document["digest"]["value"],
+    "request_identity": document.get("request_identity"),
+    "declared_request_identity": document.get("declared_request_identity"),
+}
+canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+document["outer_digest"]["value"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
 json.dump(document, open(path, "w"), indent=2, sort_keys=True)
 PY
   capture run_validate "$case_dir" matching
