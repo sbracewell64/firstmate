@@ -83,6 +83,29 @@ EOF')
   pass "heredoc payload is not a call site"
 }
 
+test_punctuated_heredoc_does_not_hide_later_functions() {
+  local dir out rc
+  dir=$(fixture punctuated-heredoc 'live_one() { return 0; }
+cat <<END-MARK
+payload
+END-MARK
+dead_one() { return 0; }' 'live_one')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a punctuated heredoc hid a later function, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'dead_one' || fail "the post-heredoc function was not named: $out"
+  pass "punctuated heredocs preserve later function scanning"
+}
+
+test_escaped_heredoc_payload_is_not_code() {
+  local dir out rc
+  dir=$(fixture escaped-heredoc 'dead_one() { return 0; }' 'cat <<\EOF
+; dead_one
+EOF')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "an escaped heredoc payload counted as code, exit $rc: $out"
+  pass "escaped heredoc delimiters receive shell quote removal"
+}
+
 test_function_keyword_definition_is_scanned() {
   local dir out rc
   dir=$(fixture function-keyword 'function dead_one { return 0; }')
@@ -196,6 +219,8 @@ test_consulted_function_passes
 test_mentions_are_not_call_sites
 test_quoted_command_shape_is_not_a_call_site
 test_heredoc_payload_is_not_a_call_site
+test_punctuated_heredoc_does_not_hide_later_functions
+test_escaped_heredoc_payload_is_not_code
 test_function_keyword_definition_is_scanned
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
