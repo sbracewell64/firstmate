@@ -246,7 +246,7 @@ fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
 # carries it forward as an identity. Observed doing exactly that against a live
 # backlog, where it surfaced as `head {"message":"Not Found",...}`.
 fm_outbound_is_sha() {  # <candidate>
-  printf '%s' "$1" | grep -Eq '^[0-9a-f]{7,40}$'
+  printf '%s' "$1" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$'
 }
 
 fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head>
