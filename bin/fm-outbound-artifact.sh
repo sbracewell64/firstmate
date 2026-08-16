@@ -366,6 +366,14 @@ sweep() {
     verdict=$(printf '%s' "$cls" | cut -f1)
     gate=$(printf '%s' "$cls" | cut -f2)
     tier=$(printf '%s' "$cls" | cut -f3)
+    if [ "$verdict" = "unreadable" ]; then
+      item=$(printf '%s' "$rec" | jq -r \
+        'if type == "object" then (.id // empty) else empty end')
+      [ -n "$item" ] || item="backlog-row-$i"
+      row_json "$item" "" unreadable "" "" "" "" "" \
+        unevaluable "$FM_OUTBOUND_TOKEN_BACKLOG_UNREADABLE" "" "" 0 >> "$rows"
+      continue
+    fi
     [ "$verdict" = "waiting" ] || continue
 
     item=$(printf '%s' "$rec" | jq -r '.id // ""')
