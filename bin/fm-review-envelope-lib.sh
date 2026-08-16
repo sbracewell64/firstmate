@@ -255,6 +255,8 @@ CATALOG = {
                  "description": "The decision this envelope asks for, as an uppercase token."},
                 {"name": "outer request_identity", "source": "computed", "required": True,
                  "description": "A derived identity beside the body digest, binding repository, work or forge request, exact head, envelope digest and policy version."},
+                {"name": "outer declared_request_identity", "source": "declared", "required": False,
+                 "description": "The optional request identity claimed by the inputs, preserved beside the computed identity so every validation can recheck it."},
             ],
         },
         {
@@ -1737,6 +1739,7 @@ def command_prepare(args):
     envelope = compile_envelope(args.repo, inputs, args.predecessor, args.evidence_root)
     envelope_digest = digest_of(envelope)
     computed_request_identity = request_identity(envelope, envelope_digest)
+    request_input = as_dict(inputs, "request")
     document = {
         "schema": SCHEMA,
         "compiled_at": now_utc(),
@@ -1749,12 +1752,13 @@ def command_prepare(args):
         },
         "envelope": envelope,
     }
+    if "identity" in request_input:
+        document["declared_request_identity"] = request_input["identity"]
     os.makedirs(args.out, exist_ok=True)
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2, sort_keys=True)
         handle.write("\n")
     classification = classify(envelope, args.repo, args.evidence_root, True)
-    request_input = as_dict(inputs, "request")
     if "identity" in request_input and request_input["identity"] != computed_request_identity:
         classification["refusals"].append(
             {
@@ -1797,6 +1801,17 @@ def command_validate(args):
             "request_identity_mismatch",
             str(path),
             "stored " + str(document.get("request_identity")) + ", recomputed " + recomputed_request_identity,
+            recomputed,
+            args,
+        )
+    if (
+        "declared_request_identity" in document
+        and document["declared_request_identity"] != recomputed_request_identity
+    ):
+        return refused(
+            "request_identity_mismatch",
+            str(document["declared_request_identity"]),
+            "declared identity does not match " + recomputed_request_identity,
             recomputed,
             args,
         )

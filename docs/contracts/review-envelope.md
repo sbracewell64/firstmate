@@ -44,6 +44,7 @@ Who is asking for what, under which policy.
 | `policy.max_base_behind_main` | `declared` | yes | How far the base may trail the trunk before the envelope refuses. |
 | `requested_decision` | `declared` | yes | The decision this envelope asks for, as an uppercase token. |
 | `outer request_identity` | `computed` | yes | A derived identity beside the body digest, binding repository, work or forge request, exact head, envelope digest and policy version. |
+| `outer declared_request_identity` | `declared` | no | The optional request identity claimed by the inputs, preserved beside the computed identity so every validation can recheck it. |
 
 ## candidate
 
