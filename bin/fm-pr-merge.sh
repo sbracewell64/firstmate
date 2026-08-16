@@ -10,20 +10,50 @@
 # state/<id>.meta may carry a stale pr_head=. An early read refuses without
 # recording the PR or arming its poll, then a final authoritative read runs after
 # fm-pr-check.sh and immediately before the verification metadata write and
-# merge. Each `gh pr view` call reads the head, mergeability, review decision,
-# and check rollup together, so every state-based refusal names the exact head it
-# evaluated once GitHub has supplied a readable head.
+# merge. Each read takes the head, mergeability, review decision, and check
+# results from one GraphQL response, so every state-based refusal names the exact
+# head it evaluated once GitHub has supplied a readable head.
+#
+# That query is written here rather than taken from `gh pr view --json
+# statusCheckRollup`, because that field flattens the rollup into members that
+# carry no commit of their own. The rollup is the one GitHub attached to the
+# pull request's latest commit, but nothing in that response says which commit
+# that was, so evidence describing a superseded head reads exactly like evidence
+# describing the head being merged. This asks for that commit's own oid in the
+# same snapshot as headRefOid and refuses unless the two agree, and asks for the
+# rollup's totalCount so members GitHub reported but did not return are refused
+# as unread rather than counted as absent. GitHub serves at most 100 members in
+# one page, which is the connection's own limit and not a choice made here, so a
+# head carrying more than that is refused as unread rather than judged on the
+# part that happened to arrive.
+#
+# A head accumulates every execution ever run against it, not only the current
+# one, so the members are reduced to one verdict per check before anything is
+# counted. Two members are two attempts at one check when they carry the same
+# owning workflow and the same name, and the attempt with the newest run ID
+# speaks for that check. A member GitHub reports with no name is never an
+# attempt at anything, because nothing identifies what it would supersede, so
+# each of those counts on its own. Without that reduction a re-triggered check
+# leaves its earlier run attached to the head forever, and that head can never
+# be merged again however often the check subsequently passes; the only escape is a new
+# head, which for the attestation check needs a fresh attestation, so the
+# pattern repeats. Reduction never excuses a current verdict: a failing latest
+# attempt still refuses, and where attempts tie for latest the worst decides.
 # The merge is refused when:
+#   * the check results GitHub returned belong to a commit other than the head
+#     being merged, or it returned fewer members than it reported - neither is
+#     evidence about this head, and what was not read is never read as green;
 #   * no check runs exist on that head - an empty rollup is never read as green,
 #     which is the whole point of this guard: a cross-repo fork PR held at
 #     action_required dispatches zero workflows and reports zero failures. The
 #     refusal names why the set is empty, separating a head with no CI
 #     configured from one whose workflows are held awaiting approval;
-#   * any check run is not SUCCESS - a queued, in-progress, skipped, neutral,
-#     cancelled, or failed run all refuse, so the guard fails closed on anything
-#     that is not an observed pass. Runs that returned an adverse verdict and
-#     runs that returned no verdict are counted and reported separately, so a
-#     head nothing examined is never described as a head something rejected;
+#   * any check's current attempt is not SUCCESS - a queued, in-progress,
+#     skipped, neutral, cancelled, or failed run all refuse, so the guard fails
+#     closed on anything that is not an observed pass. Checks whose current
+#     attempt returned an adverse verdict and checks whose current attempt
+#     returned no verdict are counted and reported separately, so a head nothing
+#     examined is never described as a head something rejected;
 #   * the pull request is not MERGEABLE - CONFLICTING and a not-yet-computed
 #     UNKNOWN both refuse;
 #   * a review requests changes.
@@ -40,11 +70,13 @@
 # so a typo cannot silently widen the waiver back into a total override, and a
 # bare --allow-unverified carrying no name is refused for the same reason: an
 # override that cannot say what it waived is the defect this argument exists to
-# remove. A name matching more than one check run on the head is refused too:
-# GitHub can carry several runs under one name - two workflows defining the same
-# job, a reusable workflow called twice, a re-run leaving an older suite's run -
-# and one such name would waive that many independent verdicts while the record
-# could still say only the name. The waiver covers exactly one member or none.
+# remove. A name matching more than one check on the head is refused too: two
+# workflows can define the same job name, and one such name would waive that
+# many independent verdicts while the record could still say only the name.
+# Repeated executions of one check are not several verdicts and do not trip
+# that refusal, because the reduction above has already resolved them to the
+# one attempt that speaks for the check. The waiver covers exactly one check or
+# none.
 # The name must be a single line with no quote or backslash character, because
 # it is embedded in the forge query as a string literal and repeated in
 # refusals.
@@ -194,13 +226,32 @@ if ! RECORD=$(fm_pr_identity_record_path "$STATE" "$ID"); then
 fi
 
 # One read of the live pull request, so the head reported in a refusal is the
-# same head the checks, mergeability, and review decision were read from.
-PR_VERIFY_FIELDS=headRefOid,mergeable,reviewDecision,statusCheckRollup
+# same head the checks, mergeability, and review decision were read from, and
+# so the commit its check results are attached to is read from that same
+# snapshot rather than inferred. The $-prefixed names below are GraphQL
+# variables, not shell expansions.
+# shellcheck disable=SC2016
+PR_VERIFY_GRAPHQL='query($owner:String!,$repo:String!,$number:Int!){
+  repository(owner:$owner,name:$repo){
+    pullRequest(number:$number){
+      headRefOid
+      mergeable
+      reviewDecision
+      commits(last:1){nodes{commit{oid
+        statusCheckRollup{contexts(last:100){totalCount nodes{
+          __typename
+          ... on CheckRun{databaseId name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}}
+          ... on StatusContext{context state createdAt}
+        }}}
+      }}}
+    }
+  }
+}'
 # A CheckRun carries .conclusion (empty while queued or running); a legacy
 # StatusContext carries .state instead. Neither is treated as a pass unless it
 # says SUCCESS.
 #
-# The members are counted in three disjoint buckets, not two, because "ran and
+# The checks are counted in three disjoint buckets, not two, because "ran and
 # reported a failure" and "never produced a result" are different facts about a
 # head and collapsing them loses the one this guard exists to report. A run that
 # failed, errored, timed out, or failed to start returned an adverse verdict; a
@@ -209,31 +260,75 @@ PR_VERIFY_FIELDS=headRefOid,mergeable,reviewDecision,statusCheckRollup
 # in its own words. PR_VERIFY_FAILING is the whole adverse set, so anything
 # absent from it that is not SUCCESS counts as unrun rather than as a failure.
 PR_VERIFY_FAILING='["FAILURE","ERROR","TIMED_OUT","STARTUP_FAILURE"]'
-# $s below is jq's own binding, not a shell variable; only the interpolated
-# PR_VERIFY_FAILING array is expanded by the shell.
+
+# The reduction from executions to checks, shared by every line read back below.
+# Each member is keyed by the check it is an attempt at - its owning workflow
+# and its name together, since two workflows may define one job name - and an
+# unnamed member is keyed by its own position so it can never be taken for an
+# attempt at another. Check runs are ordered by their monotonic database ID,
+# with their timestamp as a tie-breaker, while legacy statuses continue to use
+# their creation time. Where attempts tie for latest the worst verdict decides,
+# so a tie can never manufacture a pass.
+#
+# The jq bindings below ($pr, $commit, $adverse, $checks and the rest) are jq's
+# own, not shell variables; only PR_VERIFY_FAILING is expanded by the shell.
 # shellcheck disable=SC2016
-PR_VERIFY_QUERY='"head=\(.headRefOid // "")",
-"mergeable=\(.mergeable // "")",
-"review=\(.reviewDecision // "")",
-"checks=\((.statusCheckRollup // []) | length)",
-"unsuccessful=\((.statusCheckRollup // []) | map(select(((.conclusion // .state // "") | ascii_upcase) != "SUCCESS")) | length)",
-"failing=\((.statusCheckRollup // []) | map(select(((.conclusion // .state // "") | ascii_upcase) as $s | ('"$PR_VERIFY_FAILING"' | index($s)) != null)) | length)",
-"unrun=\((.statusCheckRollup // []) | map(select(((.conclusion // .state // "") | ascii_upcase) as $s | $s != "SUCCESS" and ('"$PR_VERIFY_FAILING"' | index($s)) == null)) | length)"'
+PR_VERIFY_REDUCE='.data.repository.pullRequest as $pr
+| ($pr.commits.nodes[0].commit // {}) as $commit
+| ($commit.statusCheckRollup.contexts // {}) as $contexts
+| ($contexts.nodes // []) as $members
+| ('"$PR_VERIFY_FAILING"') as $adverse
+| ($members | to_entries | map(
+    (.value.name // .value.context // "") as $name
+    | {name: $name,
+       check: (if ($name | length) == 0 then ["unnamed", (.key | tostring)]
+               elif .value.__typename == "CheckRun"
+               then ["run", (.value.checkSuite.workflowRun.workflow.name // ""), $name]
+               else ["status", $name] end),
+       order: (if .value.__typename == "CheckRun"
+               then .value.databaseId
+               else .value.createdAt end),
+       verdict: ((.value.conclusion // .value.state // "") | ascii_upcase)})) as $attempts
+| ($attempts | group_by(.check) | map(
+    . as $group
+    | if (($group | length) > 1 and ($group | any(.order == null)))
+      then {name: $group[0].name, verdict: "UNDECIDABLE"}
+      else (map(.order) | max) as $latest
+      | map(select(.order == $latest)) as $current
+      | {name: $current[0].name,
+         verdict: (if ($current | any(.verdict as $v | ($adverse | index($v)) != null))
+                   then "FAILING"
+                   elif ($current | any(.verdict != "SUCCESS")) then "UNRUN"
+                   else "SUCCESS" end)} end)) as $checks
+| '
+
+# shellcheck disable=SC2016
+PR_VERIFY_QUERY=$PR_VERIFY_REDUCE'"head=\($pr.headRefOid // "")",
+"mergeable=\($pr.mergeable // "")",
+"review=\($pr.reviewDecision // "")",
+"rollup_head=\($commit.oid // "")",
+"members=\($members | length)",
+"reported=\($contexts.totalCount // "")",
+"checks=\($checks | length)",
+"unsuccessful=\($checks | map(select(.verdict != "SUCCESS")) | length)",
+"failing=\($checks | map(select(.verdict == "FAILING")) | length)",
+"unrun=\($checks | map(select(.verdict == "UNRUN")) | length)",
+"undecidable=\($checks | map(select(.verdict == "UNDECIDABLE")) | length)"'
 
 # Three further lines, asked for only when a check is waived, so a merge with no
-# override sends byte-identical query text and reads back the same seven lines it
-# always did. They count the named check's members and how those members break
-# down, which is exactly what has to be subtracted from the totals above. A
-# CheckRun carries .name and a legacy StatusContext carries .context.
+# override sends byte-identical query text and reads back the same lines it
+# always did. They count the checks carrying the waived name and how those
+# checks break down, which is exactly what has to be subtracted from the totals
+# above. They read the same reduced set, so a waived check that was re-triggered
+# is one check here too.
 if [ -n "$WAIVED_CHECK" ]; then
-  PR_VERIFY_WAIVED_SELECT='(.statusCheckRollup // []) | map(select(((.name // .context // "") == "'"$WAIVED_CHECK"'")))'
-  # $s below is jq's own binding, as above; only PR_VERIFY_WAIVED_SELECT and
-  # PR_VERIFY_FAILING are expanded by the shell.
+  # shellcheck disable=SC2016
+  PR_VERIFY_WAIVED_SELECT='$checks | map(select(.name == "'"$WAIVED_CHECK"'"))'
   # shellcheck disable=SC2016
   PR_VERIFY_QUERY=$PR_VERIFY_QUERY',
 "waived=\(('"$PR_VERIFY_WAIVED_SELECT"') | length)",
-"waived_failing=\(('"$PR_VERIFY_WAIVED_SELECT"') | map(select(((.conclusion // .state // "") | ascii_upcase) as $s | ('"$PR_VERIFY_FAILING"' | index($s)) != null)) | length)",
-"waived_unrun=\(('"$PR_VERIFY_WAIVED_SELECT"') | map(select(((.conclusion // .state // "") | ascii_upcase) as $s | $s != "SUCCESS" and ('"$PR_VERIFY_FAILING"' | index($s)) == null)) | length)"'
+"waived_failing=\(('"$PR_VERIFY_WAIVED_SELECT"') | map(select(.verdict == "FAILING")) | length)",
+"waived_unrun=\(('"$PR_VERIFY_WAIVED_SELECT"') | map(select(.verdict == "UNRUN")) | length)"'
 fi
 
 VERIFIED_HEAD=
@@ -267,9 +362,17 @@ empty_rollup_evidence() {
   return 0
 }
 
+# One wording for every way the rollup came back unreadable, because they are
+# one fact about the head: nothing here can be resolved either way.
+refuse_unreadable_rollup() {
+  printf 'error: refusing to merge head %s: the check rollup could not be read from GitHub\n' \
+    "$1" >&2
+}
+
 verify_current_head() {
   local output line joined remaining eff_failing eff_unrun
-  local head='' mergeable='' review='' checks='' unsuccessful='' failing='' unrun=''
+  local head='' mergeable='' review='' checks='' unsuccessful='' failing='' unrun='' undecidable=''
+  local rollup_head='' members='' reported=''
   local waived='' waived_failing='' waived_unrun=''
   local -a reasons=()
 
@@ -277,8 +380,9 @@ verify_current_head() {
     echo "error: refusing to merge: the pull request could not be verified because gh is not on PATH" >&2
     return 1
   }
-  output=$(gh pr view "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" \
-    --json "$PR_VERIFY_FIELDS" -q "$PR_VERIFY_QUERY" 2>/dev/null) || {
+  output=$(gh api graphql -f query="$PR_VERIFY_GRAPHQL" \
+    -f owner="$PR_OWNER" -f repo="$PR_REPO" -F number="$PR_NUMBER" \
+    -q "$PR_VERIFY_QUERY" 2>/dev/null) || {
     echo "error: refusing to merge: the pull request state could not be read from GitHub" >&2
     return 1
   }
@@ -288,10 +392,14 @@ verify_current_head() {
       head=*) head=${line#head=} ;;
       mergeable=*) mergeable=${line#mergeable=} ;;
       review=*) review=${line#review=} ;;
+      rollup_head=*) rollup_head=${line#rollup_head=} ;;
+      members=*) members=${line#members=} ;;
+      reported=*) reported=${line#reported=} ;;
       checks=*) checks=${line#checks=} ;;
       unsuccessful=*) unsuccessful=${line#unsuccessful=} ;;
       failing=*) failing=${line#failing=} ;;
       unrun=*) unrun=${line#unrun=} ;;
+      undecidable=*) undecidable=${line#undecidable=} ;;
       waived=*) waived=${line#waived=} ;;
       waived_failing=*) waived_failing=${line#waived_failing=} ;;
       waived_unrun=*) waived_unrun=${line#waived_unrun=} ;;
@@ -302,23 +410,63 @@ verify_current_head() {
     echo "error: refusing to merge: the pull request head commit could not be read from GitHub" >&2
     return 1
   }
+  # GitHub attaches check results to a commit, and a pull request's latest
+  # commit moves under a force-push or a queued update, so the commit the
+  # results came from is compared against the head being merged instead of
+  # assumed to be it. Results belonging to another commit describe a superseded
+  # head: they are not this head's evidence and are never counted toward it.
+  fm_pr_head_valid "$rollup_head" || {
+    refuse_unreadable_rollup "$head"
+    return 1
+  }
+  if [ "$rollup_head" != "$head" ]; then
+    printf 'error: refusing to merge head %s: GitHub returned check results for commit %s, so nothing here examined the head being merged\n' \
+      "$head" "$rollup_head" >&2
+    return 1
+  fi
+  # A member GitHub reported but did not return is unread rather than absent,
+  # and an unread member could be the one that failed.
+  if [ -z "$members" ] || [ -n "${members//[0-9]/}" ]; then
+    refuse_unreadable_rollup "$head"
+    return 1
+  fi
+  if [ -z "$reported" ]; then
+    # No rollup at all reports no count; anything else owes one.
+    if [ "$members" -ne 0 ]; then
+      refuse_unreadable_rollup "$head"
+      return 1
+    fi
+  elif [ -n "${reported//[0-9]/}" ]; then
+    refuse_unreadable_rollup "$head"
+    return 1
+  elif [ "$reported" -ne "$members" ]; then
+    printf 'error: refusing to merge head %s: GitHub reported %s check results for it but returned %s, so the rest could not be read\n' \
+      "$head" "$reported" "$members" >&2
+    return 1
+  fi
   # Each count is validated on its own. Concatenating them would let one empty
   # field hide behind the other's digits and reach the comparisons below as an
   # empty string, which compares as neither zero nor positive and would merge.
   if [ -z "$checks" ] || [ -n "${checks//[0-9]/}" ] \
     || [ -z "$unsuccessful" ] || [ -n "${unsuccessful//[0-9]/}" ] \
     || [ -z "$failing" ] || [ -n "${failing//[0-9]/}" ] \
-    || [ -z "$unrun" ] || [ -n "${unrun//[0-9]/}" ]; then
-    printf 'error: refusing to merge head %s: the check rollup could not be read from GitHub\n' \
-      "$head" >&2
+    || [ -z "$unrun" ] || [ -n "${unrun//[0-9]/}" ] \
+    || [ -z "$undecidable" ] || [ -n "${undecidable//[0-9]/}" ]; then
+    refuse_unreadable_rollup "$head"
+    return 1
+  fi
+  # A reduction can only ever shrink the members, so more checks than members
+  # means the two lines describe different sets and neither can be trusted.
+  if [ "$checks" -gt "$members" ] || [ "$unsuccessful" -gt "$checks" ] \
+    || [ "$undecidable" -gt "$checks" ]; then
+    refuse_unreadable_rollup "$head"
     return 1
   fi
   # The two disjoint buckets must account for exactly the members that are not
   # successes. A response that breaks that identity was not understood, and an
   # unreadable rollup is reported as unreadable rather than resolved either way.
-  if [ "$((failing + unrun))" -ne "$unsuccessful" ]; then
-    printf 'error: refusing to merge head %s: the check rollup could not be read from GitHub\n' \
-      "$head" >&2
+  if [ "$((failing + unrun + undecidable))" -ne "$unsuccessful" ]; then
+    refuse_unreadable_rollup "$head"
     return 1
   fi
   # The waived counts are subtracted from the totals below, so a count that is
@@ -332,8 +480,7 @@ verify_current_head() {
       || [ "$waived" -gt "$checks" ] \
       || [ "$((waived_failing + waived_unrun))" -gt "$waived" ] \
       || [ "$waived_failing" -gt "$failing" ] || [ "$waived_unrun" -gt "$unrun" ]; then
-      printf 'error: refusing to merge head %s: the check rollup could not be read from GitHub\n' \
-        "$head" >&2
+      refuse_unreadable_rollup "$head"
       return 1
     fi
   fi
@@ -351,7 +498,11 @@ verify_current_head() {
   # is then judged by exactly the counts above, less the waived member's own.
   if [ "$checks" -eq 0 ]; then
     reasons+=("no check runs exist on this head$(empty_rollup_evidence "$head")")
-  elif [ -n "$WAIVED_CHECK" ]; then
+  else
+    [ "$undecidable" -eq 0 ] \
+      || reasons+=("GitHub omitted the ordering value for $undecidable check run group(s), so the current attempt could not be determined")
+  fi
+  if [ "$checks" -ne 0 ] && [ -n "$WAIVED_CHECK" ]; then
     remaining=$((checks - waived))
     if [ "$waived" -eq 0 ]; then
       reasons+=("no check run named \"$WAIVED_CHECK\" exists on this head, so the override names nothing it could waive")
@@ -367,7 +518,7 @@ verify_current_head() {
       [ "$eff_unrun" -eq 0 ] \
         || reasons+=("$eff_unrun of the $remaining check runs other than the waived \"$WAIVED_CHECK\" reported no result (queued, in progress, skipped, neutral, cancelled, or held for approval)")
     fi
-  else
+  elif [ "$checks" -ne 0 ]; then
     [ "$failing" -eq 0 ] \
       || reasons+=("$failing of $checks check runs failed")
     [ "$unrun" -eq 0 ] \
