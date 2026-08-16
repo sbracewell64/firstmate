@@ -40,7 +40,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
    If your `origin` pushes to the parent rather than your fork, name the fork explicitly: `bin/fm-attest.sh write --remote <your-fork-remote>`.
    Repeat this after any later push, because the attestation names one commit and a new commit is a new head.
-9. There is no step 9 in the ordinary case.
+9. No routine human action follows step 8.
    The check ran and refused before the note existed, and publishing a note fires no pull request event of its own, so step 8 re-runs that check for the head it just published; the pull request needs no closing, reopening or editing.
    It uses `gh`, and it tells you plainly when it could not: `gh` missing or unauthenticated, or no write access to the parent repository's Actions, which you do not hold when contributing from a fork.
    Only then, re-run that workflow run from the repository's Actions tab or ask a maintainer to, and do not publish the attestation again - it already names your commit.
