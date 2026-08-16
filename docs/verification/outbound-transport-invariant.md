@@ -23,7 +23,8 @@ $ bash tests/fm-outbound-artifact.test.sh | tail -1
 all fm-outbound-artifact tests passed
 ```
 
-23 cases pass. What follows is why that sentence is worth anything.
+23 cases pass.
+What follows is why that sentence is worth anything.
 
 ## Watched-red evidence, one mutation per control
 
@@ -73,11 +74,21 @@ That last group is the honest reading and not a gap in the check: with no config
 All three were invisible to the fixture suite and appeared only when the command was pointed at a real backlog and a real forge.
 Each now has its own regression control in the suite.
 
-**Tab is IFS whitespace.** The sweep read the classifier's three tab-separated fields with `IFS=$'\t' read`, which collapses runs of tabs, so an untyped gate - the empty middle field, and the exact case the binding check refuses on - silently shifted the tier into the gate slot. It rendered live rows as `gate: prose`. The sweep now uses `cut -f`.
+**Tab is IFS whitespace.**
+The sweep read the classifier's three tab-separated fields with `IFS=$'\t' read`, which collapses runs of tabs, so an untyped gate - the empty middle field, and the exact case the binding check refuses on - silently shifted the tier into the gate slot.
+It rendered live rows as `gate: prose`.
+The sweep now uses `cut -f`.
 
-**A hold reason stops at its first comma.** The backlog parser captures `hold:` with `[^,)]*`. On the live row `RECLASSIFIED ...: VALID UNFINISHED WORK, never submitted`, the parsed `hold_reason` ends at `WORK`, and the two words naming the defect are cut off. Reading `hold_reason` alone made the recognizer blind to all three never-submitted items it had just been widened to catch. The truncation is the backlog parser's own contract and was not changed; the recognizer now reads the untruncated `raw` row as well.
+**A hold reason stops at its first comma.**
+The backlog parser captures `hold:` with `[^,)]*`.
+On the live row `RECLASSIFIED ...: VALID UNFINISHED WORK, never submitted`, the parsed `hold_reason` ends at `WORK`, and the two words naming the defect are cut off.
+Reading `hold_reason` alone made the recognizer blind to all three never-submitted items it had just been widened to catch.
+The truncation is the backlog parser's own contract and was not changed; the recognizer now reads the untruncated `raw` row as well.
 
-**A forge error body is not a head.** `gh api` prints its error payload to stdout and exits non-zero, so an unvalidated read captured a 404 body and carried it forward as the exact head, surfacing in a session-start line as `head {"message":"Not Found",...}`. The invariant still held - the binding check refused it, because a JSON blob is not a sha - so the item stayed red, but for a misreported reason. The head cascade now validates the shape at the point of observation, and an error payload is no observation at all rather than a bad one.
+**A forge error body is not a head.**
+`gh api` prints its error payload to stdout and exits non-zero, so an unvalidated read captured a 404 body and carried it forward as the exact head, surfacing in a session-start line as `head {"message":"Not Found",...}`.
+The invariant still held - the binding check refused it, because a JSON blob is not a sha - so the item stayed red, but for a misreported reason.
+The head cascade now validates the shape at the point of observation, and an error payload is no observation at all rather than a bad one.
 
 ## Refreshing this record
 

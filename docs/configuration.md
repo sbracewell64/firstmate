@@ -181,7 +181,7 @@ The seam reports `wiring: not-wired` until the platform projection resolves this
 
 ## Browser Sol control venue (config/sol-control.json)
 
-`bin/fm-outbound-artifact.sh` enforces one invariant: an item may not remain in a state that implies an outstanding outbound artifact while no applicable durable artifact exists.
+[`bin/fm-outbound-artifact-lib.sh`](../bin/fm-outbound-artifact-lib.sh) owns the outbound transport invariant, while `bin/fm-outbound-artifact.sh` enforces it.
 Detecting that condition needs no configuration and always runs.
 Creating the missing artifact on the `sol-control` channel needs to know where to address it, and that is what this optional local, gitignored file holds.
 
