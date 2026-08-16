@@ -284,6 +284,13 @@ declared_field() {  # <item> <field> -> value or empty
   jq -r --arg k "$2" '.[$k] // ""' "$f" 2>/dev/null || true
 }
 
+classify_record() {  # <record-json>
+  local rec=$1 item declared_gate
+  item=$(printf '%s' "$rec" | jq -r '.id // ""' 2>/dev/null || true)
+  declared_gate=$(declared_field "$item" gate)
+  fm_outbound_classify_record "$rec" "$declared_gate"
+}
+
 pr_head() {  # <pr-url> -> sha or empty
   local url=$1 slug num
   case $url in *://*/*/*/pull/*) ;; *) return 0 ;; esac
@@ -421,7 +428,7 @@ sweep() {
     # collapses a run of tabs into one delimiter and an untyped gate - the empty
     # middle field, which is precisely the case that must be reported - silently
     # shifts the tier into it. Observed against the live backlog as "gate: prose".
-    cls=$(fm_outbound_classify_record "$rec")
+    cls=$(classify_record "$rec")
     verdict=$(printf '%s' "$cls" | cut -f1)
     gate=$(printf '%s' "$cls" | cut -f2)
     tier=$(printf '%s' "$cls" | cut -f3)
@@ -438,7 +445,6 @@ sweep() {
     item=$(printf '%s' "$rec" | jq -r '.id // ""')
     project=$(printf '%s' "$rec" | jq -r '.repo // ""')
     pr_url=$(printf '%s' "$rec" | jq -r '.pr_url // ""')
-    [ -n "$gate" ] || gate=$(declared_field "$item" gate)
     channel=$(fm_outbound_gate_channel "$gate")
     head=$(observe_head "$item" "$pr_url" "$project")
 
@@ -636,8 +642,7 @@ cmd_emit() {
     '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
   [ -n "$rec" ] || die "no durable backlog record for '$item'" 4
 
-  gate=$(fm_outbound_classify_record "$rec" | cut -f2)
-  [ -n "$gate" ] || gate=$(declared_field "$item" gate)
+  gate=$(classify_record "$rec" | cut -f2)
   channel=$(fm_outbound_gate_channel "$gate")
 
   if [ -z "$channel" ]; then
@@ -831,10 +836,9 @@ require_record_applicable_now() {  # <request-id> <record-json>
   current=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
     '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
   [ -n "$current" ] || die "waiting item $item could not be observed while validating $rid" 4
-  gate=$(fm_outbound_classify_record "$current" | cut -f2)
-  [ -n "$gate" ] || gate=$(declared_field "$item" gate)
+  gate=$(classify_record "$current" | cut -f2)
   channel=$(fm_outbound_gate_channel "$gate")
-  [ -n "$channel" ] || die "the current gate for $item could not be observed" 4
+  [ -n "$channel" ] || die "$FM_OUTBOUND_TOKEN_INCOMPLETE: the current gate for $item is incomplete" 3
   project=$(printf '%s' "$current" | jq -r '.repo // ""')
   pr_url=$(printf '%s' "$current" | jq -r '.pr_url // ""')
   pr_ref=$(printf '%s' "$current" | jq -r '.pr_url // "-"')

@@ -91,6 +91,12 @@ configure_venue() {  # <home>
   printf '{"repo":"o/control","issue":2}\n' > "$1/config/sol-control.json"
 }
 
+declare_gate() {  # <home> <gate>
+  mkdir -p "$1/data/waiting-item"
+  jq -n --arg gate "$2" --arg head "$HEAD_A" '{gate:$gate,head:$head}' \
+    > "$1/data/waiting-item/outbound-gate.json"
+}
+
 # The forge shim. Behavior is driven entirely by files in its own state dir, so a
 # case can change what the forge does between two invocations of the command
 # under test - which is what makes the retry and crash-recovery cases real.
@@ -784,6 +790,41 @@ test_detect_only_channel_refuses_to_emit() {
   pass "control 10: the pull-request channel detects but never creates the artifact"
 }
 
+test_typed_gate_uses_declaration_over_prose() {
+  local dir out rc
+  dir=$(new_case typed-declaration)
+  write_snapshot "$dir/snap.json" outbound "awaiting Browser Sol architecture ruling"
+  declare_gate "$dir/home" CONTRIBUTION_SUBMISSION_REQUIRED
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "typed declaration: conflicting prose selected an emitting channel: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CHANNEL_DETECT_ONLY' \
+    || fail "typed declaration: declaration did not select the detect-only channel: $out"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+    || fail "typed declaration: conflicting prose caused a public post"
+  pass "typed declaration: declaration is authoritative over conflicting prose"
+}
+
+test_typed_gate_requires_valid_declaration() {
+  local dir out rc gate
+  for gate in missing unreadable NOT_A_GATE; do
+    dir=$(new_case "typed-$gate")
+    write_snapshot "$dir/snap.json" outbound "awaiting Browser Sol architecture ruling"
+    if [ "$gate" = unreadable ]; then
+      mkdir -p "$dir/home/data/waiting-item"
+      printf '{not-json\n' > "$dir/home/data/waiting-item/outbound-gate.json"
+    elif [ "$gate" != missing ]; then
+      declare_gate "$dir/home" "$gate"
+    fi
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "typed $gate declaration: incomplete binding returned $rc: $out"
+    printf '%s' "$out" | grep -q 'FM_OUTBOUND_INCOMPLETE_BINDING' \
+      || fail "typed $gate declaration: refused for the wrong reason: $out"
+    [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+      || fail "typed $gate declaration: incomplete binding caused a public post"
+  done
+  pass "typed declaration: missing and invalid gates are incomplete bindings"
+}
+
 test_pull_request_probe_prefers_contribution_target() {
   local dir out rc
   dir=$(new_case upstream)
@@ -1036,6 +1077,8 @@ test_close_requires_resumed_work
 test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass
 test_detect_only_channel_refuses_to_emit
+test_typed_gate_uses_declaration_over_prose
+test_typed_gate_requires_valid_declaration
 test_pull_request_probe_prefers_contribution_target
 test_pull_request_must_match_exact_head
 test_never_submitted_branch_is_recognised
