@@ -1424,6 +1424,29 @@ test_duplicate_ruling_ids_are_ambiguous_in_both_orders() {
   pass "duplicate ruling ids refuse independently of array order"
 }
 
+test_a_ruling_without_a_stable_id_refuses() {
+  local case_dir patch variant
+  for variant in missing null empty blank; do
+    case_dir=$(make_case "ruling-id-$variant")
+    case "$variant" in
+      missing) patch='{"rulings": [{"source": "captain", "applies_to": {}}]}' ;;
+      null) patch='{"rulings": [{"id": null, "source": "captain", "applies_to": {}}]}' ;;
+      empty) patch='{"rulings": [{"id": "", "source": "captain", "applies_to": {}}]}' ;;
+      blank) patch='{"rulings": [{"id": "   ", "source": "captain", "applies_to": {}}]}' ;;
+    esac
+    write_inputs "$case_dir" "$patch"
+    capture run_prepare "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "a $variant ruling id refuses"
+    assert_contains "$CAPTURED" 'refusal ruling_id_absent' \
+      "the refusal must name the absent stable ruling id"
+    capture run_validate "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "validation preserves a $variant ruling id refusal"
+    assert_contains "$CAPTURED" 'refusal ruling_id_absent' \
+      "validation must preserve the absent stable ruling id"
+  done
+  pass "missing, null and blank ruling ids refuse before authority lookup"
+}
+
 test_a_ruling_envelope_digest_binds_the_current_envelope() {
   local case_dir prior target_digest
   case_dir=$(make_case ruling-envelope-digest)
@@ -1703,6 +1726,7 @@ test_request_identity_is_recomputed_and_checked
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe
 test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution
 test_duplicate_ruling_ids_are_ambiguous_in_both_orders
+test_a_ruling_without_a_stable_id_refuses
 test_a_ruling_envelope_digest_binds_the_current_envelope
 test_a_blocking_adverse_finding_refuses
 test_a_required_unproven_dimension_is_could_not_observe
