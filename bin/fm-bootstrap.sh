@@ -108,7 +108,7 @@
 #          aggregate timeout skip line with timeout and elapsed seconds.
 #          Set FM_FLEET_PRUNE=0 to skip branch pruning during that refresh.
 #          Set FM_BOOTSTRAP_DETECT_ONLY=1 to skip the MUTATING sweeps
-#          (PR-check migration, task_axis_backfill_sweep, secondmate_sync, secondmate_liveness_sweep,
+#          (PR-check migration, task_axis_backfill_sweep, capacity_retry_sweep, secondmate_sync, secondmate_liveness_sweep,
 #          secondmate_handoff_resume, x_mode_setup, fleet_sync) while still
 #          printing every read-only detect line above.
 #          wake_ledger_terminal_sweep mutates too and honours the same flag by
@@ -1094,6 +1094,56 @@ wake_ledger_terminal_sweep() {
 # an actionable line. A record whose deprecated kind= alias disagrees with an
 # explicit axis is REFUSED rather than converged: either value could be the
 # stale one, so resolving it silently would pick a task's identity by luck.
+# Capacity-deferred work, at the other end of the same seam the watcher polls.
+# A MUTATING sweep, so it runs only when this session holds the fleet lock. It
+# exists because the watcher is not the only thing that can stop: a host reboot,
+# a closed terminal or a replaced session all leave deferrals on disk with
+# nothing running to re-offer them, and session start is the first moment
+# afterwards when something is. Idempotent - a deferral whose retry condition is
+# not yet met is left exactly as it was.
+#
+# Silent when it resumes work or finds nothing due, because a wait that ended by
+# itself is the mechanism working rather than an actionable line. It speaks only
+# for a wait that STOPPED, which is the one state that needs a decision: the
+# work was never dispatched, it is not lost, and somebody has to say whether it
+# is still worth making.
+capacity_retry_sweep() {
+  local rec spent=0 unmeasured=0 spent_ids='' unmeasured_ids='' id term
+  [ -d "$STATE" ] || return 0
+  [ -x "$FM_ROOT/bin/fm-capacity-retry.sh" ] || return 0
+  for rec in "$STATE"/*.capacity; do
+    [ -e "$rec" ] || return 0
+    break
+  done
+  FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-capacity-retry.sh" tick >/dev/null 2>&1 || true
+  for rec in "$STATE"/*.capacity; do
+    [ -f "$rec" ] || continue
+    grep -q '^terminal=' "$rec" 2>/dev/null || continue
+    id=${rec##*/}
+    id=${id%.capacity}
+    # A wait that reached its bound and a wait whose bound was never measurable
+    # are reported as SEPARATE lines. Counting them together would tell the
+    # captain the pool was tried and found empty when the truth may be that the
+    # count bounding the wait could not be written, and the two repairs share
+    # nothing: one is a routing decision, the other is a broken recorder.
+    term=$(sed -n 's/^terminal=\(..*\)$/\1/p' "$STATE/$id.attempt" 2>/dev/null | head -1)
+    if [ "$term" = "blocked_by_evidence_integrity" ]; then
+      unmeasured=$((unmeasured + 1))
+      unmeasured_ids="$unmeasured_ids $id"
+    else
+      spent=$((spent + 1))
+      spent_ids="$spent_ids $id"
+    fi
+  done
+  if [ "$spent" -gt 0 ]; then
+    echo "CAPACITY_DEFERRED: $spent task(s) stopped waiting for model capacity and were never dispatched -$spent_ids - each is held in the backlog and needs a decision on whether the wait is still worth making (bin/fm-capacity-retry.sh list)"
+  fi
+  if [ "$unmeasured" -gt 0 ]; then
+    echo "CAPACITY_UNMEASURED: $unmeasured task(s) stopped waiting for model capacity WITHOUT a measurable bound -$unmeasured_ids - the deferral count could not be written, so how long each waited is unknown and the pool was never shown to be exhausted (bin/fm-capacity-retry.sh list)"
+  fi
+  return 0
+}
+
 task_axis_backfill_sweep() {
   local meta conflicted=0 ids=''
   [ -d "$STATE" ] || return 0
@@ -1334,6 +1384,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \
 fi
 if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" != 1 ]; then
   task_axis_backfill_sweep
+  capacity_retry_sweep
   secondmate_liveness_sweep
   secondmate_sync
   secondmate_handoff_resume

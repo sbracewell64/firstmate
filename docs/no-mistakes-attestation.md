@@ -143,3 +143,4 @@ That is what separates the signature from upstream submission: previously the on
 `tests/fm-attest.test.sh` pins every refusal and its matched positive control through the executable interface, for `bin/fm-attest.sh` and for the workflow's own step scripts, which it lifts out of the workflow by step name and runs as the workflow runs them.
 The two live in one suite because what the check tells a contributor is decided jointly by the verifier's exit status and the step's reading of it, and splitting them lets the two drift apart.
 Each negative fixture differs from the passing one by exactly one property, because a verifier that refused everything would satisfy red-only assertions and would be a worse defect than the honour-system check it replaces.
+The suite was refreshed on 2026-08-13 with `bash tests/fm-attest.test.sh`, which completed successfully with 35 passing cases.

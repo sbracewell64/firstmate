@@ -314,6 +314,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-reasoning-lib.sh"
 # shellcheck source=bin/fm-route-lib.sh
 . "$SCRIPT_DIR/fm-route-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -337,6 +339,13 @@ CAPABILITY_FLOOR=
 TOOLING_GAP_ITEM=
 ROUTE=
 RESOLVED_PROFILE=
+# The capacity observation this dispatch was checked against. Initialized empty
+# so a home that enforces no routed pool writes no capacity fields at all, the
+# same way it writes no route fields: an absent pair means nothing was
+# configured to check, while a written could_not_observe means the check ran and
+# could not establish an answer. Those are different facts and must not collapse.
+CAPACITY_VERDICT=
+CAPACITY_EVIDENCE=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
@@ -1431,6 +1440,93 @@ spawn_admission_gate() {
   return 1
 }
 
+resolve_project_dir_arg() {
+  local path=$1
+  case "$path" in
+    projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
+    *) printf '%s\n' "$path" ;;
+  esac
+}
+
+# Record the durable capacity deferral for a dispatch whose whole floor-meeting
+# pool is out of capacity, so the work resumes by itself when capacity returns
+# instead of waiting for someone to say continue.
+#
+# The typed dispatch fields are handed across unchanged, because the resume is
+# the SAME dispatch and not a new decision: bin/fm-capacity-retry.sh re-enters
+# this script with them and every gate above runs again. Nothing is stored that
+# a shell could expand, and the effective effort band and canonical project path
+# are pinned for the resumed dispatch.
+#
+# A deferral that cannot be recorded is said out loud. The spawn stops either
+# way, and the difference between held work and lost work is exactly this
+# record, so failing to write it must never look like a quiet refusal.
+spawn_capacity_defer() {
+  local retry_after signature reason pool effort_effective project_abs defer_args=() out rc
+  retry_after=$(printf '%s' "$ROUTE_DECISION" | jq -r '
+    [ .candidates[]? | .capacity.until // empty ] | if length > 0 then (min | tostring) else "0" end' 2>/dev/null)
+  # The signature is what the stagnation rule compares, so it names WHICH
+  # candidates are out and WHEN each recovers. A wait whose picture never moves
+  # is a wait that has stopped being a wait.
+  signature=$(printf '%s' "$ROUTE_DECISION" | jq -r '
+    [ .candidates[]? | .model + "=" + ((.capacity.verdict // "unknown"))
+        + "@" + ((.capacity.until // "none") | tostring) ] | sort | join(" ")' 2>/dev/null)
+  pool=$(printf '%s' "$ROUTE_DECISION" | jq -r '(.pool // []) | join(",")' 2>/dev/null)
+  effort_effective=$(printf '%s' "$ROUTE_DECISION" | jq -r '.effort_effective // empty' 2>/dev/null)
+  project_abs=$(cd "$(resolve_project_dir_arg "$PROJ")" 2>/dev/null && pwd -P) || {
+    echo "warning: could not record the capacity deferral for $ID because its project directory could not be resolved: $PROJ" >&2
+    return 1
+  }
+  if [ -n "$pool" ]; then
+    reason="every model in route $ROUTE's pool ($pool) meeting floor ${CAPABILITY_FLOOR:-unconfigured} is currently out of capacity"
+  else
+    # A route may configure no pool of its own, in which case the model this
+    # dispatch named is the only candidate there ever was and there is nothing
+    # to fail over to by construction.
+    reason="route $ROUTE configures no pool, and the model it dispatched on ($MODEL) is currently out of capacity"
+  fi
+  defer_args=("$ID" --route "$ROUTE" --floor "$CAPABILITY_FLOOR" --pool "$pool"
+              --reason "$reason" --retry-after "$retry_after" --signature "$signature"
+              --project "$project_abs" --reason-code "$REASON_CODE")
+  if [ "$KIND" = scout ]; then
+    defer_args+=(--scout)
+  else
+    defer_args+=(--mode "$MODE" --yolo "$YOLO")
+  fi
+  [ -z "$HARNESS_ARG" ] || defer_args+=(--harness "$HARNESS_ARG")
+  [ -z "$MODEL" ] || defer_args+=(--model "$MODEL")
+  [ -z "$effort_effective" ] || defer_args+=(--effort "$effort_effective")
+  [ -z "$BACKEND_ARG" ] || defer_args+=(--backend "$BACKEND_ARG")
+  [ -z "$TOOLING_GAP_ITEM" ] || defer_args+=(--tooling-gap-item "$TOOLING_GAP_ITEM")
+  [ "$ATTEMPT_BUDGET_SET" -eq 0 ] || defer_args+=(--attempt-budget "$ATTEMPT_BUDGET_ARG")
+  [ "$SLOT_BASE_SET" -eq 0 ] || defer_args+=(--slot-base "$SLOT_BASE_ARG")
+  [ "$CONTRIB_SET" -eq 0 ] || defer_args+=(--contribution-target "$CONTRIB_ARG")
+  rc=0
+  out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-capacity-retry.sh" defer "${defer_args[@]}" 2>&1) || rc=$?
+  case "$rc" in
+    0)
+      echo "$ID is held for capacity and will resume by itself once it returns; no operator action is needed. $out" >&2
+      ;;
+    3)
+      printf '%s\n' "$out" >&2
+      ;;
+    *)
+      echo "warning: could not record the capacity deferral for $ID, so this work will NOT resume by itself: $out" >&2
+      echo "warning: hold $ID in the backlog by hand so the request is not lost" >&2
+      ;;
+  esac
+  # The queue substrate is the one admission already uses, so a capacity wait is
+  # visible in the same place as every other held request rather than in a
+  # second queue only this gate knows about.
+  if fm_tasks_axi_backend_available "$CONFIG" \
+    && tasks-axi hold "$ID" --file "$DATA/backlog.md" --kind load --reason "$reason" >/dev/null 2>&1; then
+    echo "queued $ID as a load hold for the automatic capacity retry" >&2
+  else
+    echo "warning: could not queue $ID in the backlog; the durable capacity record still governs the retry" >&2
+  fi
+  return 0
+}
+
 # The registry verdict for every candidate in a route decision, as the
 # "<model><TAB><refusal>" lines bin/fm-route-lib.sh merges. Cost, reachability
 # and concurrency stay with bin/fm-model-registry-lib.sh and are asked here,
@@ -1546,6 +1642,63 @@ if [ "$KIND" != secondmate ]; then
   # outcome is this caller's job. A home with no admission policy exits 0 and
   # nothing changes.
   spawn_admission_gate || exit 1
+
+  if [ "$ROUTE_ENFORCING" -eq 1 ]; then
+    # ELIGIBLE, capacity half. The routing policy admits this model and the
+    # availability record does not hold it; the remaining question is whether the
+    # provider currently has anything left to spend. Asked HERE, after ADMIT and
+    # before anything is allocated, because the platform's measured failure was
+    # discovering an exhausted pool AFTER dispatching into it: every stall then
+    # cost a wake, a diagnosis and a restart, and the fix was one config change
+    # nobody could make until a human noticed.
+    #
+    # ADMIT comes FIRST because a deferral is durable state. A capacity wait
+    # recorded before the fleet has decided it accepts this work at all would let
+    # ELIGIBLE create a resumable obligation that ADMIT never authorized, and the
+    # tick would later re-enter the scheduler on the strength of it. The declared
+    # intake order in `_interfaces.order_at_intake` is ROUTE, ADMIT, ELIGIBLE,
+    # and the earlier arrangement here contradicted the very contract this block
+    # opens by quoting.
+    #
+    # THE FLOOR IS NEVER LOWERED HERE, and there is no code path that could. The
+    # candidates considered are exactly this route's pool as the decision above
+    # already filtered it by the floor, so capacity can only SUBTRACT from that
+    # set. When the subtraction empties it, the lawful outcomes are to wait or to
+    # escalate - never a weaker model, because a floor that is required and
+    # currently unavailable is a wait rather than a downgrade.
+    #
+    # An unobservable candidate stays eligible with its uncertainty disclosed,
+    # which is the standing dispatch rule: missing quota evidence is
+    # could-not-observe, and could-not-observe is neither available nor
+    # unavailable. bin/fm-capacity-lib.sh owns that three-valued mapping and the
+    # reason this one gate deliberately fails toward dispatch.
+    CAPACITY_OBSERVATION=$(fm_capacity_observe \
+      "$(fm_route_config_path "$CONFIG")" \
+      "$(printf '%s' "$ROUTE_DECISION" | jq -r '.candidates[]?.model, (.subject.resolved // empty)' 2>/dev/null | sort -u)")
+    ROUTE_DECISION=$(fm_route_decision_with_capacity "$ROUTE_DECISION" \
+      "$(fm_capacity_lines "$CAPACITY_OBSERVATION")")
+    CAPACITY_VERDICT=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.capacity.verdict // "could_not_observe"' 2>/dev/null)
+    CAPACITY_EVIDENCE=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.capacity.evidence // "no capacity evidence was recorded for this model"' 2>/dev/null)
+    if [ "$CAPACITY_VERDICT" = exhausted ]; then
+      ROUTE_DECISION=$(fm_route_decision_with_registry "$ROUTE_DECISION" \
+        "$(spawn_route_registry_verdicts "$ROUTE_DECISION")")
+    fi
+    if ! CAPACITY_REFUSAL=$(fm_route_capacity_refusal "$ROUTE" "$MODEL" "$ROUTE_DECISION"); then
+      echo "error: $CAPACITY_REFUSAL" >&2
+      fm_capacity_report_lines "$CAPACITY_OBSERVATION" >&2
+      # A pool with nothing left is a DEFERRAL, and a deferral that is not
+      # recorded is work that never resumes. A pool that still holds a
+      # floor-meeting candidate is a substitution the caller re-dispatches, so
+      # nothing is recorded for it: recording a wait for work that can run now
+      # would hold it behind a condition that has already cleared.
+      case "$CAPACITY_REFUSAL" in
+        "$FM_CAPACITY_TOKEN_DEFERRED"*)
+          spawn_capacity_defer
+          ;;
+      esac
+      exit 1
+    fi
+  fi
 fi
 
 # The shared census a batch parent hands down is THIS process's input and nothing
@@ -1630,14 +1783,6 @@ resolved_existing_dir() {
   local path=$1
   [ -d "$path" ] || { echo "error: firstmate home does not exist or is not a directory: $path" >&2; return 1; }
   cd "$path" && pwd -P
-}
-
-resolve_project_dir_arg() {
-  local path=$1
-  case "$path" in
-    projects/*) printf '%s/%s\n' "$PROJECTS" "${path#projects/}" ;;
-    *) printf '%s\n' "$path" ;;
-  esac
 }
 
 path_is_ancestor_of() {
@@ -2897,6 +3042,15 @@ fi
   [ -z "$ROUTE" ] || echo "route=$ROUTE"
   [ -z "$RESOLVED_PROFILE" ] || echo "profile=$RESOLVED_PROFILE"
   [ -z "${ROUTE_POLICY_DIGEST:-}" ] || echo "route_policy_digest=$ROUTE_POLICY_DIGEST"
+  # The capacity this dispatch was admitted against, and the evidence for it.
+  # Written for EVERY ship and scout dispatch in a home that enforces routed
+  # pools, including when the answer was could_not_observe, because that is the
+  # field a reconciliation reads to prove no dispatch proceeded without
+  # consulting availability. An absent pair in an enforcing home means a
+  # dispatch reached a launch without passing the capacity gate, which is the
+  # exact recurrence this closes.
+  [ -z "$CAPACITY_VERDICT" ] || echo "capacity_observed=$CAPACITY_VERDICT"
+  [ -z "$CAPACITY_EVIDENCE" ] || echo "capacity_evidence=$(printf '%s' "$CAPACITY_EVIDENCE" | tr '\n' ' ')"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
   echo "tasktmp=$TASK_TMP"

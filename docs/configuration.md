@@ -445,6 +445,101 @@ A resolved Luna binding lands in `state/<id>.meta` as `profile=luna-max`, includ
 For a routed dispatch, the route and a digest of the enforced policy surface additionally land as `route=` and `route_policy_digest=`, and the recorded `capability_floor=` becomes the route's own.
 Enforcement applies to the next dispatch only; work already under way keeps the record it was dispatched under.
 
+### Quota-aware routing (`_providers`, `_availability.quota_gate`)
+
+The availability record above remembers what FAILED.
+This is the other half: what the provider says BEFORE anything is dispatched, so an exhausted window removes a candidate instead of producing a dead worker.
+`bin/fm-capacity-lib.sh` owns the observation, `bin/fm-route-lib.sh` merges it into eligibility, and `bin/fm-spawn.sh` enforces it at the same chokepoint as the route and the floor.
+
+Availability is read from `quota-axi`, which owns the window semantics entirely.
+Each provider's `quotaSemantics.effectiveAvailability[]` already carries, per scope, the effective remaining percentage after taking the minimum across every window that bounds it.
+Firstmate reads the entry for the most specific scope quota-axi publishes for a model - `model:<model-id>` when there is one, else `all_models` - and never combines windows itself.
+
+The join between the two vocabularies is DECLARED, never inferred.
+quota-axi names providers under its own identifiers and a routed pool names them under this config's, and the two overlap by coincidence rather than by contract.
+
+```json
+{
+  "_providers": {
+    "<provider>": { "quota_observable": true, "quota_axi_provider": "<quota-axi provider id>" }
+  },
+  "_availability": {
+    "quota_gate": { "exhausted_at_percent_remaining": 0 }
+  }
+}
+```
+
+`quota_axi_provider` names the quota-axi provider whose windows actually meter this provider's usage, recorded from evidence such as compared credential claims rather than from a matching prefix.
+`exhausted_at_percent_remaining` is the percentage at or below which a published window counts as spent; it defaults to `0`, so the gate removes a candidate only when the provider itself reports nothing left, and an operator who wants a reserve raises it.
+
+Every candidate gets one of exactly three verdicts, and the third is a real result rather than a missing one.
+
+| verdict | meaning | effect on eligibility |
+| --- | --- | --- |
+| `available` | an observed bound says capacity remains | eligible |
+| `exhausted` | an observed bound says capacity is spent | removed from the schedulable set |
+| `could_not_observe` | neither could be established | eligible, with the reason and its repair recorded |
+
+`could_not_observe` is neither "available" nor "unavailable", and it arises whenever `quota-axi` is absent, older than its compatibility floor, unreadable or slow; a provider declares `quota_observable: false`; a provider declares readable quota but no `quota_axi_provider`; quota-axi reports no such provider, or reports it with unknown semantics; or no published scope covers the model.
+Each case names the exact field or repair, because a disclosure nobody can act on is not a disclosure.
+A home where no provider declares a `quota_axi_provider` skips the read entirely, because no verdict could change either way; the per-model disclosures are identical and the gate costs nothing until a binding exists.
+This one gate therefore fails toward dispatch, which is the opposite of every other safety input in this repo and is deliberate: the observation can only ever remove a candidate the routing policy already admitted, so failing to observe removes nothing and leaves a home exactly as capable as it was before.
+
+Availability may remove a candidate from the currently schedulable set.
+It never lowers the required capability floor.
+The candidates it filters are the claimed route's pool as the floor already filtered it, so when the filtering empties that set the lawful outcomes are to wait or to escalate - never a weaker model.
+
+A capacity substitution must also preserve the RUNNING EFFORT BAND.
+Anything offered in place of a spent model has to express the band the dispatch is actually running at - the effort it named, or the one its floor states - and a candidate whose `_models.<model>.effort_expressible` evidence does not cover that band, or is absent, is not offered at all.
+This is a substitution invariant rather than a floor axis, so it holds even where a route floor states no `effort_floor` or waives it: a floor that requires no particular band still leaves a running band that substitution must not silently change.
+Unverifiable expressibility withholds the candidate rather than admitting it, because declining to substitute leaves the work waiting, which is lawful, while substituting on unverified band evidence is the degradation this gate exists to prevent.
+Because the rule lives in candidate eligibility itself, the spawn chokepoint, `bin/fm-route.sh eligible`, `bin/fm-route.sh next` and the deferred-retry driver all read one answer, and a withheld sibling is named in the refusal rather than silently missing from a shorter list.
+
+The gate is asked in the declared intake order `ROUTE -> ADMIT -> ELIGIBLE`.
+Capacity is therefore evaluated after fleet admission and before anything is allocated: a deferral is durable, resumable state, so recording one before admission has decided the fleet accepts this work at all would let eligibility create an obligation admission never authorized.
+
+Every ship and scout dispatch in a home with routed pools records `capacity_observed=` and `capacity_evidence=` in `state/<id>.meta`, including when the verdict was `could_not_observe`.
+An absent pair means the home enforces no routed pool, which is a different fact from an unobserved one and is never written as one.
+
+Run `bin/fm-route.sh capacity [--route <id>]` to see the current observation for every routed model, and `bin/fm-route.sh eligible --route <id>` for the pool filtered by all four owners at once.
+
+### Capacity deferral record (state/<task-id>.capacity)
+
+When every floor-meeting candidate in a route's pool is out of capacity, the dispatch is DEFERRED rather than refused: the work is recorded, held in the backlog as a `load` hold, and resumed automatically once capacity returns.
+`bin/fm-capacity-retry.sh` owns the record and the resume; nothing else writes it.
+
+The record is a private key=value file holding the route, floor, pool, reason, retry condition and the typed dispatch fields of the call that was deferred.
+Every command refuses a record that is not an ordinary regular file with exactly one link, and leaves the suspect path untouched.
+It stores no command line: every field is re-validated against its own closed vocabulary or path-safety rule and passed as a separate argument to `bin/fm-spawn.sh`, so a state file can never name something to run.
+Because it is a file and keys on the task id rather than a pid, a deferral survives firstmate restart, terminal closure, host reboot and session replacement.
+
+`retry_after` is the earliest recovery time any provider published for the blocked candidates.
+A deferral is re-checked no earlier than that; with no published reset it is re-checked on a doubling backoff from `FM_CAPACITY_RECHECK_BASE` (900 seconds) toward `FM_CAPACITY_RECHECK_CAP` (10800 seconds).
+The check itself is `bin/fm-capacity-retry.sh tick`, which the watcher runs each cycle and session start runs once, and which re-offers the recorded dispatch to `bin/fm-spawn.sh` so ROUTE, capacity, admission, the model registry and the attempt budget are all evaluated again.
+When the recorded model is spent but the pool is not, the substitute is named by the route owner through `bin/fm-route.sh next --after <recorded model>`, which returns the eligible candidates FOLLOWING it in pool order.
+The driver applies no candidate rule of its own: ordering and every eligibility term, band expressibility included, come from the one owner the spawn chokepoint also consults, so a resume can never select a candidate the fresh dispatch would have refused, nor one sitting ahead of the model that failed.
+If no candidate qualifies, the work keeps waiting rather than degrading.
+No model turn is spent asking whether capacity has returned, and the resume records the selected candidate, route and confirmed effort band on the task status log.
+
+Every deferral is counted by `bin/fm-attempt.sh defer`, which owns both bounds and spends no retry attempt, because a task the fleet had no capacity for did not fail.
+`deferral_budget` (default 24) bounds the total so a wait can never become an infinite poll, and `defer_stagnant` against `FM_ATTEMPT_DEFER_STAGNATION_DEFAULT` (default 8) stops a wait whose observed capacity picture has not moved for that many consecutive checks.
+Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature so repeated blindness can still stagnate.
+Both bounds belong to the WORK ITEM rather than to a model, so a substitution inside the pool spends from the budget it inherited and never resets one; otherwise N pool members would multiply into N budgets and the wait would be unbounded while each individual count still looked correct.
+Either bound reaching its limit is the unified terminal state `budget_exhausted`, declared as one `failed:` line on the task's status log, and session start reports those stopped waits as a `CAPACITY_DEFERRED:` diagnostic.
+
+A wait the canonical attempt owner cannot durably count is stopped visibly rather than retained, and it stops in a DIFFERENT terminal state from a wait that reached its bound.
+A spent bound is observed-bad: the pool was tried and the limit was reached, which is a routing fact worth acting on.
+A count that cannot be written is could-not-observe, and the could-not-observe lands on the bound itself rather than on a detail beside it - nothing established that any model was tried and found out of capacity, only that how long the task waited is unknown.
+Recording the second as the first would make a broken recorder indistinguishable from an exhausted pool, so `bin/fm-attempt.sh stop-defer` requires `--observation observed-bad|could-not-observe` with no default and records `budget_exhausted` or `blocked_by_evidence_integrity` accordingly; `loopspecs/terminal-states.json` carries the pair as source `capacity-wait` and its validator refuses a build that maps them onto one unified state.
+Session start reports the unmeasurable stops as a separate `CAPACITY_UNMEASURED:` diagnostic, because repairing a recorder and deciding a wait share no action.
+`bin/fm-attempt.sh stop-defer` is asked for the terminal stop it owns - no second counter, selector or stop authority exists - and the deferral record is then either marked terminal atomically or REMOVED, because a record with no terminal marker reads as an active wait and every later tick would resume it.
+A record that can be neither marked nor removed is reported as needing to be cleared by hand, never left behind quietly.
+If `bin/fm-attempt.sh defer` cannot record the count, the deferral fails closed, marks the capacity record terminal and declares the failed command and attempt-record path on the task status log.
+After any original-model refusal that leaves work undispatched, the retry driver asks the route owner for the next eligible candidate at the recorded floor and effort band.
+If every offered substitute is refused by another dispatch gate, the wait remains active and gains one durable deferral count, while the first distinct refusal is recorded once as a `blocked:` status line.
+Every due retry must durably resume, retain a later check or stop for an invalid durable record, and a failure to refresh the deferral record after counting stops through the attempt owner's unified terminal state with the failed record path declared.
+The work was never dispatched into a pool that could not run it and is not lost; a terminal capacity record requires explicit repair or release rather than silently resuming from unsafe state.
+
 ### Model availability record (state/model-health.json)
 
 A private, gitignored, mode-0600 record of which models and providers the fleet currently cannot reach.
@@ -469,7 +564,8 @@ The state vocabulary is closed to the states the routing config's own failover c
 A hold with a numeric `until` stops binding on read once that epoch passes, so nothing has to run to forget it; a `null` `until` holds until released explicitly, which is what an authentication failure needs.
 An absent file means no remembered cooldown and never that a model is healthy, while a file that exists and cannot be parsed refuses rather than reading as an empty one.
 That refusal names this record and not `crew-dispatch.json`: the two inputs fail independently and are repaired differently, so a refusal that points at the file which parses perfectly costs the whole diagnosis.
-Eligibility reads this record and never probes: a route's ordered pool costs nothing to resolve on the happy path, and probing belongs to failure handling.
+Reading this record never probes: the failure-based availability term is a local lookup, independent of the bounded `quota-axi` read that the quota-aware eligibility term performs before dispatch.
+Route `check` and `routes` remain local reads, while `eligible`, `next`, and `capacity` request a current quota observation as described in "Quota-aware routing" above.
 
 ## Model registry (config/models.json)
 

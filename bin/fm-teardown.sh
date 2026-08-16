@@ -700,6 +700,18 @@ retire_attempt_record() {
     || echo "warning: could not retire the attempt record for $ID" >&2
 }
 
+# A capacity deferral outlives the dispatch that recorded it, so a task released
+# while one is still on disk would keep being re-offered to the spawn chokepoint
+# after its work was done with. Retired on EVERY release, forced or not: unlike
+# the attempt count there is nothing to preserve for a later retry, because the
+# deferral describes a dispatch that never happened.
+retire_capacity_deferral() {
+  [ "$ROLE" != secondmate ] || return 0
+  [ -x "$FM_ROOT/bin/fm-capacity-retry.sh" ] || return 0
+  "$FM_ROOT/bin/fm-capacity-retry.sh" release "$ID" \
+    || echo "warning: could not retire the capacity deferral for $ID" >&2
+}
+
 # bin/fm-commitment-register.sh stores one decision-probe result per task and
 # decision key under state/commitment-probe-cache/<task>__<key>, so a torn-down
 # task's stored verdicts go with it. Left behind, the directory would grow without
@@ -2518,6 +2530,7 @@ rm -f "$STATE/$ID.status" "$STATE/$ID.turn-ended" "$STATE/$ID.meta" \
   "$STATE/$ID.terminal-recorded"
 retire_commitment_probe_cache
 retire_attempt_record
+retire_capacity_deferral
 if [ "$DELIVERABLE" != scout ] && [ "$ROLE" != secondmate ] && [ "$MODE" != local-only ]; then
   "$FM_ROOT/bin/fm-fleet-sync.sh" "$PROJ" || true
 fi

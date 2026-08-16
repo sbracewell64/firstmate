@@ -14,12 +14,19 @@
 #   fm-route.sh check --route <id> --model <name> [--effort <band>]
 #                                            is this exact dispatch allowed?
 #   fm-route.sh eligible --route <id>        the route's pool filtered by the
-#                                            floor, the availability record and
-#                                            the model registry, in pool order
+#                                            floor, the availability record, the
+#                                            model registry and current provider
+#                                            capacity, in pool order
 #   fm-route.sh next --route <id> --after <model>
 #                                            the failover substitute: the next
 #                                            eligible candidate INSIDE the same
 #                                            pool, after <model>
+#   fm-route.sh capacity [--route <id>]      what quota-axi currently says about
+#                                            every routed model, as the
+#                                            three-valued observation the spawn
+#                                            chokepoint reads: available,
+#                                            exhausted, or could-not-observe
+#                                            with the reason and the repair
 #   fm-route.sh availability                 every hold still in force
 #   fm-route.sh availability hold <model> [--scope provider] --state <state>
 #                                [--for-seconds <n>] [--evidence <text>]
@@ -46,10 +53,14 @@
 #      answer that triggers the policy's terminal stop, and it is never a signal
 #      to lower the floor
 #
-# ELIGIBLE composes three landed owners rather than re-deciding them: the floor
+# ELIGIBLE composes four landed owners rather than re-deciding them: the floor
 # and pool from the routing policy (this command), the availability record
-# (bin/fm-route-lib.sh), and cost, routability and concurrency from the model
-# registry (bin/fm-model-registry-lib.sh). No probe runs on the happy path.
+# (bin/fm-route-lib.sh), cost, routability and concurrency from the model
+# registry (bin/fm-model-registry-lib.sh), and current provider capacity from
+# quota-axi (bin/fm-capacity-lib.sh). The first three cost only reads. The
+# fourth costs one bounded quota-axi call per invocation of `eligible` or
+# `capacity`, which is what makes the answer current rather than remembered;
+# `check` and `routes` stay read-only.
 #
 # Environment:
 #   FM_HOME  the firstmate home whose config/ and state/ are read
@@ -66,6 +77,8 @@ export STATE CONFIG
 . "$SCRIPT_DIR/fm-route-lib.sh"
 # shellcheck source=bin/fm-model-registry-lib.sh
 . "$SCRIPT_DIR/fm-model-registry-lib.sh"
+# shellcheck source=bin/fm-capacity-lib.sh
+. "$SCRIPT_DIR/fm-capacity-lib.sh"
 
 usage() {
   awk '
@@ -198,9 +211,19 @@ terminal_report() {  # <decision-json>
                + .held.subject
                + (if .held.until != null then " until epoch " + (.held.until | tostring) else " until released" end)
           elif .registry_refusal != null then .registry_refusal
-          else "eligible" end )'
+          elif (.capacity.verdict // "") == "exhausted" then "out of capacity - " + .capacity.evidence
+          else "eligible"
+               + (if (.capacity.verdict // "") == "could_not_observe"
+                  then " (capacity unobserved: " + .capacity.evidence + ")" else "" end) end )'
+  # Both rejection kinds can name a recovery time and neither owns that answer
+  # alone: an availability hold carries its expiry and an exhausted provider
+  # window carries its reset. Reading only the first would report "none of the
+  # rejections names one" for a route stopped purely on capacity, which is the
+  # common case now and the one an operator most needs a time for.
   printf '%s' "$d" | jq -r '
-    [ .candidates[] | select(.held != null) | .held.until | select(. != null) ] | min
+    [ (.candidates[] | select(.held != null) | .held.until | select(. != null)),
+      (.candidates[] | select((.capacity.verdict // "") == "exhausted")
+        | .capacity.until | select(. != null)) ] | min
     | if . == null then "  earliest known recovery: none of the rejections names one"
       else "  earliest known recovery: epoch " + (. | tostring) end'
   printf '  do not lower the floor and do not substitute a model outside this pool: stop, report, and queue the work.\n'
@@ -280,7 +303,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "$CMD needs --route"
     [ "$CMD" != next ] || [ -n "$AFTER" ] || die "next needs --after <model>"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -288,6 +311,12 @@ case "$CMD" in
     # Every candidate's registry verdict IS the answer here: the eligible list
     # this command prints is the registry-checked one its own header promises.
     DECISION=$(enrich "$DECISION")
+    # And so is its capacity. A list that named a model whose provider window is
+    # spent would send an operator straight into the failure this seam exists to
+    # avoid, and the deferral refusal points them at this command by name.
+    CAPACITY=$(fm_capacity_observe "$CONFIG_FILE" \
+      "$(printf '%s' "$DECISION" | jq -r '.candidates[]?.model')")
+    DECISION=$(fm_route_decision_with_capacity "$DECISION" "$(fm_capacity_lines "$CAPACITY")")
     [ "$(printf '%s' "$DECISION" | jq -r '.route_known')" = true ] \
       || die "route $ROUTE is not defined by $CONFIG_FILE"
     if [ "$CMD" = next ]; then
@@ -318,6 +347,40 @@ case "$CMD" in
       exit 3
     fi
     [ "$JSON" -eq 1 ] || printf '%s\n' "$ELIGIBLE"
+    ;;
+
+  capacity)
+    # The observation the spawn chokepoint reads, printed rather than acted on.
+    # Every routed model is listed, including the ones this fleet cannot measure,
+    # because a disclosure that is only made when it changes an outcome is a
+    # disclosure nobody sees until it is too late to act on.
+    MODELS=$(fm_route_pool_models "$CONFIG") \
+      || die "the routed pools could not be read from $CONFIG_FILE"
+    if [ -n "$ROUTE" ]; then
+      DECISION_RC=0
+      DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE") || DECISION_RC=$?
+      [ "$DECISION_RC" -eq 0 ] \
+        || die "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")"
+      [ "$(printf '%s' "$DECISION" | jq -r '.route_known')" = true ] \
+        || die "route $ROUTE is not defined by $CONFIG_FILE"
+      MODELS=$(printf '%s' "$DECISION" | jq -r '.candidates[]?.model')
+    fi
+    [ -n "$MODELS" ] || die "no routed pool names a model, so there is no capacity to observe"
+    OBSERVATION=$(fm_capacity_observe "$CONFIG_FILE" "$MODELS")
+    if [ "$JSON" -eq 1 ]; then
+      printf '%s\n' "$OBSERVATION"
+    else
+      printf 'quota source: %s\n' \
+        "$(printf '%s' "$OBSERVATION" | jq -r '.source.status + " - " + .source.detail')"
+      fm_capacity_report_lines "$OBSERVATION"
+    fi
+    # Exit status is the answer, so a caller that ignores the output still stops
+    # safely. Exhausted candidates make this NO_CANDIDATE only when every listed
+    # model is out; an unobservable one is neither, and never turns a partial
+    # picture into a terminal one.
+    if [ "$(printf '%s' "$OBSERVATION" | jq -r '[.models[] | select(.verdict != "exhausted")] | length')" = 0 ]; then
+      exit 3
+    fi
     ;;
 
   availability)

@@ -356,8 +356,10 @@ Unsupported effort values are still recorded in task meta when passed to `fm-spa
 That keeps ordinary spawn launch compatible across claude, codex, grok, pi, opencode, and kimi while preserving the requested axes for later audit.
 
 A home may go further and give a rule a route id with an ordered pool, which is the one part of that file the scripts read as policy.
-Which route a task belongs to stays firstmate's judgment; what the scripts then enforce is the claim, at the spawn chokepoint: the model must be inside that route's pool and must meet the route's floor on the axes the config records evidence for, a substitute after a failure comes only from the same pool in pool order, and a route whose candidates are all ineligible stops and reports rather than degrading below its floor.
-`bin/fm-route-lib.sh` owns those rules, `bin/fm-route.sh` reads them, and `state/model-health.json` is the narrow availability record failover writes ([configuration.md](configuration.md#routed-pools-optional)).
+Which route a task belongs to stays firstmate's judgment; what the scripts then enforce is the claim, at the spawn chokepoint: the model must be inside that route's pool and must meet the route's floor on the axes the config records evidence for, and a substitute after a failure comes only from the same pool in pool order.
+A route with no policy-eligible candidate stops and reports rather than degrading below its floor, while a policy-eligible pool removed only by current quota enters the durable capacity wait described below.
+`bin/fm-route-lib.sh` owns those rules, `bin/fm-route.sh` reads them, `state/model-health.json` is the narrow failure-based availability record failover writes, and `bin/fm-capacity-lib.sh` supplies the current quota observation ([configuration.md](configuration.md#routed-pools-optional)).
+When quota removes every candidate that meets the floor, `bin/fm-capacity-retry.sh` records the deferred dispatch and re-enters the same spawn chokepoint after its retry condition instead of creating another scheduler or lowering the floor ([configuration.md](configuration.md#capacity-deferral-record-statecapacity)).
 Enforcement is per dispatch, so activating it never re-checks work already under way.
 
 ## Optional fleet admission control
@@ -370,7 +372,7 @@ The mechanism is deliberately small.
 `bin/fm-admission.sh` composes the existing read-only fleet snapshot into named signals, each with its own validity, and combines them into a `preferred`, `soft`, or `hard` band whose every threshold and mapping is read from configuration.
 Missing or contradictory required evidence maps to the configured `unknown_band` rather than resolving to `preferred`.
 Backlog consistency is a separate signal from worker-census integrity, because a backlog row that contradicts task metadata is a bookkeeping fault to repair, not evidence that the fleet is physically saturated, and one aggregate health bit would close the fleet for the wrong reason.
-The existing per-home session lock is the single-primary admission authority, so there is no new process, daemon, reservation store, or second queue: deferred and refused requests stay in the owning backlog under a `load` hold, and capacity is re-examined at exactly two existing seams, successful cleanup and session start.
+The existing per-home session lock is the single-primary admission authority, so admission adds no process, daemon, reservation store, or second queue: admission-deferred and admission-refused requests stay in the owning backlog under a `load` hold, and admission is re-examined at exactly two existing seams, successful cleanup and session start.
 
 Nothing numeric enforces.
 Only the deterministic safety conditions - admission authority, census integrity, and snapshot freshness - can set a band, and the schema refuses a configuration that tries to enable a threshold whose predictive value is unmeasured.

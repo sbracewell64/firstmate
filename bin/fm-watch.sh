@@ -808,6 +808,20 @@ event_wait_or_sleep() {
   esac
 }
 
+capacity_retry_pending() {
+  local capacity_record terminal
+  for capacity_record in "$STATE"/*.capacity; do
+    [ -e "$capacity_record" ] || [ -L "$capacity_record" ] || return 1
+    [ -f "$capacity_record" ] && [ ! -L "$capacity_record" ] || continue
+    terminal=$(LC_ALL=C awk -F= '
+      $1 == "terminal" { sub(/^[^=]*=/, ""); value = $0 }
+      END { print value }
+    ' "$capacity_record" 2>/dev/null)
+    [ -n "$terminal" ] || return 0
+  done
+  return 1
+}
+
 # --- Main entry: the runtime below runs only when this file is executed as a
 # script. When sourced (unit tests loading the functions above), return here
 # before acquiring the singleton lock or entering the blocking loop.
@@ -903,6 +917,17 @@ while :; do
   # Then deliver any queued-but-unsurfaced result, including one a runner
   # published while this watcher was between cycles.
   procevent_surface_queued
+
+  # Capacity-deferred work. This is what makes a wait end by itself instead of
+  # waiting for someone to notice: work held because no model meeting its floor
+  # had capacity is re-offered to the spawn chokepoint once its recorded retry
+  # condition is met, and dispatches there or keeps waiting there. It costs a
+  # model turn never, and a bounded quota read only when a deferral is actually
+  # due - the record's own next-check time gates that, so a quiet fleet with no
+  # deferrals does nothing but this glob.
+  if capacity_retry_pending; then
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-capacity-retry.sh" tick >/dev/null 2>&1 || true
+  fi
 
   # Slow per-task checks (firstmate writes these, e.g. a merged-PR poll).
   # Time-based via .last-check mtime so the cadence survives watcher restarts.

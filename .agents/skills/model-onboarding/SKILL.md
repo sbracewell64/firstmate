@@ -128,7 +128,7 @@ Four access classes:
 
 Standing prohibitions: do not enable pay-as-you-go, attach a payment method, consume prepaid credits, allow automatic overage, fall through from free into paid, or retry in a way that could trigger billable usage.
 Do not treat free credits as a permanent free tier.
-When free quota is exhausted, stop rather than continue.
+When free quota is exhausted, stop dispatching into the spent window and let the capacity deferral wait rather than crossing into paid usage.
 
 Keys are referenced by environment-variable name only; no key is ever printed, logged, or committed.
 
@@ -148,18 +148,20 @@ Status is orthogonal to availability: a rate-limited approved primary is still a
 ## Runtime failure policy
 
 Firstmate observes availability **unevenly**, and the design says so rather than assuming symmetry.
-Authentication failure, model unavailability and provider unavailability are cheaply observable; rate limiting, daily and free-tier exhaustion, degradation and context incompatibility are visible only from a dispatch failure.
-Build any quota-aware failover for that asymmetry, not around an assumption of symmetric telemetry.
+Declared `quota-axi` bindings make published daily and free-tier exhaustion observable before dispatch, while an absent, unreadable or unbound quota surface remains `could_not_observe` rather than either availability verdict.
+Authentication failure, model unavailability, provider unavailability, rate limiting outside a published quota window, degradation and context incompatibility remain visible only from a dispatch failure.
+[`docs/configuration.md`](../../../docs/configuration.md) "Quota-aware routing" owns the pre-dispatch observation, eligibility and durable deferral contract.
 
 Discriminate a model outage from a provider outage with two probes: a sibling that succeeds means a model outage, so substitute within the tier; a sibling that also fails means a provider outage, so promote a tier.
 
-**On free-tier exhaustion:** mark unavailable, do not cross into paid usage, do not repeatedly retry, fall back only to a same-route candidate on the allowlist that meets the floor, otherwise stop and escalate.
+**On free-tier exhaustion:** do not cross into paid usage; use only a same-route candidate on the allowlist that meets the same floor and running effort band, otherwise let the capacity deferral wait with bounded backoff and resume through the spawn chokepoint.
 
 In a home with routed pools, `bin/fm-route.sh` is how that is done rather than by hand: `availability hold` and `availability release` are the only writers of `state/model-health.json` and refuse a subject no configured pool can match, and `next` names the substitute inside the failed model's own pool, exiting `3` with the terminal report above when there is none.
 
-**The terminal state:**
+**The exhausted-capacity state:**
 
-> **When no candidate in a route's pool meets that route's floor and is available, firstmate stops, queues the work, and reports to the captain immediately, naming the route, the floor, every candidate considered, and why each was unavailable.**
+> **When no candidate in a route's pool meets that route's floor and running effort band and has capacity, firstmate queues an automatic wait whose rechecks use bounded backoff and whose attempt-owned total and stagnation bounds prevent endless polling.**
+> **The wait stops and surfaces for a captain decision only when the attempt owner stops it, its recorded dispatch no longer validates, or its durable retry state cannot be maintained safely.**
 > **It does not degrade, does not substitute below the floor, and does not cross into paid usage to keep working.**
 
 Throughput reaching zero on a route is an acceptable outcome; silent degradation is not.
@@ -233,7 +235,8 @@ Re-escalate O4 -> O2 (never back to O1, which is for unproven models) on any dem
 Promotion activation is a **config and data condition, never a code change**: the named instrument must be producing terminal task lines and `promotion.enabled` must be true.
 `fm_model_promotion_state` reports which of the two is unmet, because a trigger nobody can check is indistinguishable from a rejected one.
 
-Do not build per-model capability scores, a provider-health abstraction layer, or automatic quota-aware profile arrays without fresh evidence that the simpler mechanism failed.
+Do not build per-model capability scores or a provider-health abstraction layer without fresh evidence that the simpler mechanism failed.
+Quota-aware routed-pool eligibility is already owned by `bin/fm-route-lib.sh`; do not add a competing profile-array selector or router.
 Scoring a handful of models on several axes from a short suite manufactures precision the evidence cannot support; pass/fail against a floor is the honest granularity.
 
 ## Operating checklist

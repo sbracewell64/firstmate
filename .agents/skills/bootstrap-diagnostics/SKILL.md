@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, CAPACITY_UNMEASURED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -58,6 +58,19 @@ When any diagnostic needs captain attention, report the plain consequence and re
   The backfill sweep refuses those records instead of converging them, because either side could be the stale one and choosing silently would pick a task's identity by luck.
   Read the named record and settle it from evidence outside the file - what the task was dispatched to produce, and whether it was reflagged - then correct the disagreeing field; `bin/fm-task-axis-lib.sh` owns the axes and the derivation, and `docs/vocabulary-collisions.md` owns the alias's retirement condition.
   A record that appears here after a spawn or a reflag is a writer bug to escalate, not old damage: every current writer writes both sides together.
+- `CAPACITY_DEFERRED: <n> task(s) stopped waiting for model capacity and were never dispatched - <ids>` - each named task was held because every model meeting its capability floor was out of provider capacity, then stopped because a fresh dispatch could not be reconstructed safely or its durable retry state could not be maintained.
+  The work never entered a pool that could not run it and is still held in the backlog, but its automatic wait is no longer active; `bin/fm-capacity-retry.sh list` shows what it was waiting on and why it stopped.
+  The line appears only for a wait that STOPPED; a wait still in progress and a wait that resumed by itself are both silent, because neither needs a decision.
+  Read the recorded reason and route with `bin/fm-capacity-retry.sh list`, then inspect the current picture with `bin/fm-route.sh capacity --route <route>`.
+  Repair the named durable-record failure before attempting another dispatch, or decide the work is no longer wanted, in which case `bin/fm-capacity-retry.sh release <id>` drops the stopped record.
+  A stopped wait has no supported rearm command, so escalate that tooling gap rather than claiming the work will resume.
+  Never resolve one of these by dispatching the same task on a model below its route's floor.
+  A required floor that is currently unavailable is a wait, and quietly running the work on something weaker is the exact failure the deferral exists to prevent.
+- `CAPACITY_UNMEASURED: <n> task(s) stopped waiting for model capacity WITHOUT a measurable bound - <ids>` - each named task stopped because the deferral count that bounds its wait could not be written, not because that bound was reached.
+  This is a defect in the instrument, not a fact about the pool, and it is the one capacity line that is could-not-observe rather than observed-bad.
+  Do not read it as an exhausted pool: nothing here established that any model was tried and found out of capacity, only that how long the task waited is unknown.
+  Repair the recorder first - `state/<id>.attempt` is the record that could not be written, so check its directory's permissions, the free space under `state/`, and whether another process holds the path - then decide the wait again with the same three options `CAPACITY_DEFERRED` offers.
+  Raising the bound before the recorder is fixed only buys another unbounded wait, because the count that would stop it still cannot be written.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
   A skip can also report the bounded fleet-refresh timeout (`FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT`, or a fleet-size-aware default with a 20 second floor); a timeout never blocks startup.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.
