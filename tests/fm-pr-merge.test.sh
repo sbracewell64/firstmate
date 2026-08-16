@@ -93,14 +93,22 @@ make_case() {
 
 # write_verify_payload <file> <head> <mergeable> <review> <checks> <unsuccessful>
 #                      [failing] [unrun]
-# The seven lines fm-pr-merge.sh reads back from its single `gh pr view` call.
-# When a case does not care how the unsuccessful members break down, they
-# default to failures, which is the stricter reading and keeps the pre-existing
-# cases meaning exactly what they meant before the split.
+# The lines fm-pr-merge.sh reads back from its single forge read. When a case
+# does not care how the unsuccessful checks break down, they default to
+# failures, which is the stricter reading and keeps the pre-existing cases
+# meaning exactly what they meant before the split.
+#
+# rollup_head is the commit GitHub attached the results to, and a case that says
+# nothing about it gets the head itself, which is the ordinary state: these
+# cases are about what the results say, not about which commit they belong to.
+# members and reported are the raw member count before executions are reduced to
+# checks and the count GitHub claimed for them; a case that says nothing about
+# them gets a rollup whose members are already one per check and complete.
 write_verify_payload() {
   local failing=${7:-$6} unrun=${8:-0}
-  printf 'head=%s\nmergeable=%s\nreview=%s\nchecks=%s\nunsuccessful=%s\nfailing=%s\nunrun=%s\n' \
-    "$2" "$3" "$4" "$5" "$6" "$failing" "$unrun" > "$1"
+  printf 'head=%s\nmergeable=%s\nreview=%s\nrollup_head=%s\nmembers=%s\nreported=%s\nchecks=%s\nunsuccessful=%s\nfailing=%s\nunrun=%s\n' \
+    "$2" "$3" "$4" "${FM_TEST_ROLLUP_HEAD:-$2}" "${FM_TEST_MEMBERS:-$5}" \
+    "${FM_TEST_REPORTED:-${FM_TEST_MEMBERS:-$5}}" "$5" "$6" "$failing" "$unrun" > "$1"
 }
 
 # A green head: mergeable, no review blocking, ten check runs, none unsuccessful.
@@ -117,12 +125,12 @@ append_waived_counts() {
 }
 
 # gh-axi mock recording every invocation to a log file, and a `gh` mock standing
-# in for the forge. The `gh` mock answers both callers off its argv: the single
-# headRefOid field is fm-pr-check.sh's pr_head lookup, and any request naming
-# statusCheckRollup is fm-pr-merge.sh's merge-time verification. When a JSON
-# fixture is supplied it evaluates the script's real -q query against that
-# fixture with jq, so the query itself is under test and not just the branch
-# logic reading a canned answer.
+# in for the forge. The `gh` mock answers both callers off its argv: a graphql
+# request is fm-pr-merge.sh's merge-time verification, and a plain headRefOid
+# field request is fm-pr-check.sh's pr_head lookup. When a JSON fixture is
+# supplied it evaluates the script's real -q query against that fixture with jq,
+# so the query itself is under test and not just the branch logic reading a
+# canned answer.
 add_gh_mocks() {
   local case_dir=$1 head=${2:-$GREEN_HEAD}
   cat > "$case_dir/fakebin/gh-axi" <<'SH'
@@ -135,30 +143,32 @@ SH
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 fields=
 query=
+verify=
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    graphql) verify=1; shift ;;
     --json) fields=${2:-}; shift; [ "$#" -gt 0 ] && shift ;;
     -q|--jq) query=${2:-}; shift; [ "$#" -gt 0 ] && shift ;;
     *) shift ;;
   esac
 done
-case "$fields" in
-  *statusCheckRollup*)
-    [ "${FM_TEST_GH_VERIFY_RC:-0}" = 0 ] || exit "${FM_TEST_GH_VERIFY_RC}"
-    if [ -n "${FM_TEST_GH_FIXTURE:-}" ]; then
-      jq -r "$query" "$FM_TEST_GH_FIXTURE"
-      exit $?
-    fi
-    if [ -n "${FM_TEST_GH_VERIFY_SEQUENCE_PREFIX:-}" ]; then
-      verify_call=$(cat "$FM_TEST_GH_VERIFY_SEQUENCE_PREFIX.count" 2>/dev/null || printf '0')
-      verify_call=$((verify_call + 1))
-      printf '%s\n' "$verify_call" > "$FM_TEST_GH_VERIFY_SEQUENCE_PREFIX.count"
-      cat "$FM_TEST_GH_VERIFY_SEQUENCE_PREFIX.$verify_call"
-      exit 0
-    fi
-    cat "$FM_TEST_GH_VERIFY_PAYLOAD"
+if [ -n "$verify" ]; then
+  [ "${FM_TEST_GH_VERIFY_RC:-0}" = 0 ] || exit "${FM_TEST_GH_VERIFY_RC}"
+  if [ -n "${FM_TEST_GH_FIXTURE:-}" ]; then
+    jq -r "$query" "$FM_TEST_GH_FIXTURE"
+    exit $?
+  fi
+  if [ -n "${FM_TEST_GH_VERIFY_SEQUENCE_PREFIX:-}" ]; then
+    verify_call=$(cat "$FM_TEST_GH_VERIFY_SEQUENCE_PREFIX.count" 2>/dev/null || printf '0')
+    verify_call=$((verify_call + 1))
+    printf '%s\n' "$verify_call" > "$FM_TEST_GH_VERIFY_SEQUENCE_PREFIX.count"
+    cat "$FM_TEST_GH_VERIFY_SEQUENCE_PREFIX.$verify_call"
     exit 0
-    ;;
+  fi
+  cat "$FM_TEST_GH_VERIFY_PAYLOAD"
+  exit 0
+fi
+case "$fields" in
   *headRefOid*)
     printf '%s\n' "${FM_TEST_GH_HEAD:-}"
     exit 0
@@ -686,8 +696,8 @@ test_unreadable_check_counts_refuse() {
   case_dir=$(make_case unreadable-counts)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nchecks=\nunsuccessful=0\n' "$head" \
-    > "$case_dir/verify.txt"
+  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=\nunsuccessful=0\n' \
+    "$head" "$head" > "$case_dir/verify.txt"
   : > "$case_dir/gh-axi.log"
 
   set +e
@@ -702,8 +712,8 @@ test_unreadable_check_counts_refuse() {
   assert_no_merge_side_effects "$case_dir" unreadable-counts
 
   # The mirrored shape: a readable count with an unreadable failure count.
-  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nchecks=3\nunsuccessful=\n' "$head" \
-    > "$case_dir/verify.txt"
+  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=3\nunsuccessful=\n' \
+    "$head" "$head" > "$case_dir/verify.txt"
   : > "$case_dir/gh-axi.log"
   set +e
   run_pr_merge "$case_dir" task-x1 https://github.com/example/repo/pull/40 \
@@ -1161,9 +1171,25 @@ test_override_is_never_inferred() {
 # own -q expression against JSON shaped exactly like the GitHub responses this
 # guard was built from, so a query that mis-reads the API is caught too.
 # jq is the same filter language gh embeds; the case is skipped without it.
+# write_rollup_fixture <file> <head> <mergeable> <review> <members>
+# A GitHub response carrying the pull request's head, its state, and the rollup
+# GitHub attached to its latest commit. FM_TEST_FIXTURE_OID overrides the commit
+# that rollup belongs to, so evidence about another head can be constructed;
+# FM_TEST_FIXTURE_TOTAL overrides the member count GitHub claims, so a response
+# that returned fewer members than it reported can be too. Both default to the
+# consistent case, which is what every other member of this matrix is about.
 write_rollup_fixture() {
-  printf '{"headRefOid":"%s","mergeable":"%s","reviewDecision":"%s","statusCheckRollup":%s}\n' \
-    "$2" "$3" "$4" "$5" > "$1"
+  local members=$5 rollup total
+  if [ "$members" = null ]; then
+    # A head GitHub attaches no rollup to at all, which is not the same response
+    # as a rollup that is present and empty.
+    rollup=null
+  else
+    total=${FM_TEST_FIXTURE_TOTAL:-$(printf '%s' "$members" | jq 'length')}
+    rollup="{\"contexts\":{\"totalCount\":$total,\"nodes\":$members}}"
+  fi
+  printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","mergeable":"%s","reviewDecision":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":%s}}]}}}}}\n' \
+    "$2" "$3" "$4" "${FM_TEST_FIXTURE_OID-$2}" "$rollup" > "$1"
 }
 
 check_runs_json() {
@@ -1178,6 +1204,15 @@ check_runs_json() {
 # selection has other names to discriminate against.
 named_check_run_json() {
   printf '{"__typename":"CheckRun","name":"%s","status":"COMPLETED","conclusion":"%s"}' "$1" "$2"
+}
+
+# One execution of a check, carrying the three fields that decide whether two
+# members are two attempts at one check or two independent checks: the workflow
+# that owns the run, the run's display name, and when that execution started.
+# Args: name conclusion started_at workflow [status]
+check_run_attempt_json() {
+  printf '{"__typename":"CheckRun","name":"%s","status":"%s","conclusion":"%s","startedAt":"%s","checkSuite":{"workflowRun":{"workflow":{"name":"%s"}}}}' \
+    "$1" "${5:-COMPLETED}" "$2" "$3" "$4"
 }
 
 run_fixture_case() {
@@ -1297,9 +1332,13 @@ test_real_query_against_api_shaped_json() {
   # A legacy commit status names itself in .context rather than .name.
   run_fixture_case waive-legacy-status "[${success_runs%,},$legacy_red]" MERGEABLE '' 71 0 '' \
     --allow-unverified ci/legacy
-  # The same name on two members: one override cannot stand for two verdicts.
+  # The same name on two checks: one override cannot stand for two verdicts.
+  # What makes them two is that two workflows each define the name; two
+  # executions of one workflow's check are attempts at one verdict and are
+  # covered by waive-check-with-repeated-attempts below instead.
   run_fixture_case waive-duplicate-name \
-    "[${success_runs%,},$waived_red,$waived_red]" MERGEABLE '' 75 1 \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE 2026-08-16T10:00:08Z 'Workflow A'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE 2026-08-16T10:00:08Z 'Workflow B')]" \
+    MERGEABLE '' 75 1 \
     "2 check runs on this head are named \"$WAIVED_CHECK_NAME\"" \
     --allow-unverified "$WAIVED_CHECK_NAME"
   # Waiving the only member leaves nothing that examined the head.
@@ -1315,6 +1354,139 @@ test_real_query_against_api_shaped_json() {
     --allow-unverified "$WAIVED_CHECK_NAME"
   pass "fm-pr-merge's own GitHub query reads API-shaped responses correctly, empty rollups included"
 }
+
+# --- superseded executions on one head --------------------------------------
+
+# A head accumulates every execution ever run against it, not just the current
+# one. A check that is re-triggered leaves its earlier run attached forever, so
+# a guard that reads each execution as an independent live verdict can never see
+# that head as green again however often the check subsequently passes. The
+# escape is a new head, which for the attestation check needs a fresh
+# attestation, so the pattern repeats. These cases fix which execution speaks
+# for a check, and equally which members are not attempts at all.
+test_superseded_executions_resolve_to_the_current_one() {
+  if ! command -v jq >/dev/null 2>&1; then
+    pass "fm-pr-merge supersession control skipped: jq is not installed"
+    return 0
+  fi
+  local success_runs early late
+  success_runs=$(check_runs_json 10 SUCCESS)
+  early=2026-08-16T10:00:08Z
+  late=2026-08-16T10:13:47Z
+
+  # The observed shape: the attestation check ran before the attestation note
+  # was published and failed, then re-ran against the now-present evidence and
+  # passed. The failure describes a state of the head that no longer holds.
+  run_fixture_case superseded-failure-then-pass \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 80 0 ''
+  # The same two executions in the other order. A failure with a newer sibling
+  # is not thereby excused: what decides is which execution is current, so this
+  # must still refuse, and refuse for one check rather than for two.
+  run_fixture_case current-attempt-failed \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 81 1 '1 of 11 check runs failed'
+  # A re-trigger that has not finished has superseded the pass that came before
+  # it, and an unfinished run is not a pass. Absence is never green.
+  run_fixture_case current-attempt-in-progress \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" '' "$late" 'Require no-mistakes' IN_PROGRESS)]" \
+    MERGEABLE '' 82 1 '1 of 11 check runs reported no result'
+  # A re-trigger that has not started yet carries no start time at all. It is
+  # still the current execution, so it must not be sorted behind the finished
+  # pass it supersedes.
+  run_fixture_case current-attempt-queued \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),{\"__typename\":\"CheckRun\",\"name\":\"$WAIVED_CHECK_NAME\",\"status\":\"QUEUED\",\"conclusion\":null,\"startedAt\":null,\"checkSuite\":{\"workflowRun\":{\"workflow\":{\"name\":\"Require no-mistakes\"}}}}]" \
+    MERGEABLE '' 83 1 '1 of 11 check runs reported no result'
+  # Cancelled and skipped are not passes either, and a cancelled current
+  # execution does not fall back to the pass it replaced.
+  run_fixture_case current-attempt-cancelled \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" CANCELLED "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 84 1 '1 of 11 check runs reported no result'
+  # Repeated re-triggers do not multiply. Three executions of one check are one
+  # verdict, so the refusal names one failing check and not three.
+  run_fixture_case repeated-attempts-do-not-multiply \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE 2026-08-16T10:05:00Z 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 85 1 '1 of 11 check runs failed'
+  # Nor do they multiply into extra passes: three executions ending in a pass
+  # are one passing check, and the ten unrelated checks still stand on their own.
+  run_fixture_case repeated-attempts-ending-green \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" CANCELLED 2026-08-16T10:05:00Z 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 86 0 ''
+  # Two workflows can define the same job name. Those are two independent
+  # verdicts that merely collide in display, not two attempts at one check, and
+  # collapsing them would discard one of them. The later start must not silence
+  # the earlier failure here.
+  run_fixture_case same-name-two-workflows \
+    "[${success_runs%,},$(check_run_attempt_json 'build' FAILURE "$early" 'Workflow A'),$(check_run_attempt_json 'build' SUCCESS "$late" 'Workflow B')]" \
+    MERGEABLE '' 87 1 '1 of 12 check runs failed'
+  # A member GitHub reports with no name at all cannot be an attempt at
+  # anything, because nothing identifies what it would be superseding. Each one
+  # counts on its own rather than collapsing into a single anonymous check.
+  run_fixture_case unnamed-members-never-collapse \
+    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"},{"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},{"__typename":"CheckRun","status":"COMPLETED","conclusion":"CANCELLED"}]' \
+    MERGEABLE '' 88 1 '3 of 3 check runs reported no result'
+  # A legacy commit status names itself in .context and dates itself in
+  # .createdAt, and is re-posted rather than re-run. The current post decides.
+  run_fixture_case superseded-legacy-status \
+    "[${success_runs%,},{\"__typename\":\"StatusContext\",\"context\":\"ci/legacy\",\"state\":\"FAILURE\",\"createdAt\":\"$early\"},{\"__typename\":\"StatusContext\",\"context\":\"ci/legacy\",\"state\":\"SUCCESS\",\"createdAt\":\"$late\"}]" \
+    MERGEABLE '' 89 0 ''
+
+  # The waiver names a check, not an execution. Re-triggering the check it names
+  # must not turn the override into a refusal for naming several verdicts.
+  run_fixture_case waive-check-with-repeated-attempts \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 90 0 '' --allow-unverified "$WAIVED_CHECK_NAME"
+  # Two workflows sharing that name are still two verdicts, and one override
+  # still cannot stand for both.
+  run_fixture_case waive-same-name-two-workflows \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Workflow A'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$late" 'Workflow B')]" \
+    MERGEABLE '' 91 1 "2 check runs on this head are named \"$WAIVED_CHECK_NAME\"" \
+    --allow-unverified "$WAIVED_CHECK_NAME"
+  pass "fm-pr-merge reads a re-triggered check as one verdict without excusing the current one"
+}
+
+# --- the results must be about the head being merged -------------------------
+
+# GitHub attaches check results to a commit, and a pull request's latest commit
+# moves under a force-push or a queued update. A response is therefore only
+# evidence about the head being merged if it says which commit it describes and
+# that commit is this one. Green results GitHub computed for a commit that is no
+# longer the head are not this head's results, and a response that returned
+# fewer results than it reported has not been read at all.
+test_check_results_are_bound_to_the_head_being_merged() {
+  if ! command -v jq >/dev/null 2>&1; then
+    pass "fm-pr-merge head-binding control skipped: jq is not installed"
+    return 0
+  fi
+  local success_runs superseded=1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c
+  success_runs=$(check_runs_json 10 SUCCESS)
+
+  # Ten passes, every one of them about another commit. Nothing here examined
+  # the head being merged, so the refusal names the commit they do describe
+  # rather than counting them toward this one.
+  FM_TEST_FIXTURE_OID="$superseded" \
+    run_fixture_case results-for-a-superseded-head "[${success_runs%,}]" MERGEABLE '' 92 1 \
+      "GitHub returned check results for commit $superseded"
+  # The override waives one named check inside the verification. It is not a way
+  # to accept a whole response that is about some other commit.
+  FM_TEST_FIXTURE_OID="$superseded" \
+    run_fixture_case results-for-a-superseded-head-with-waiver \
+      "[${success_runs%,},$(named_check_run_json "$WAIVED_CHECK_NAME" FAILURE)]" \
+      MERGEABLE '' 93 1 "GitHub returned check results for commit $superseded" \
+      --allow-unverified "$WAIVED_CHECK_NAME"
+  # A response that does not say which commit its results describe cannot be
+  # resolved either way, so it is unreadable rather than green.
+  FM_TEST_FIXTURE_OID='' \
+    run_fixture_case results-with-no-commit "[${success_runs%,}]" MERGEABLE '' 94 1 \
+      'the check rollup could not be read from GitHub'
+  # GitHub reported forty results and returned ten. The thirty it did not return
+  # are unread, and any of them could be the one that failed.
+  FM_TEST_FIXTURE_TOTAL=40 \
+    run_fixture_case results-partially-returned "[${success_runs%,}]" MERGEABLE '' 95 1 \
+      'GitHub reported 40 check results for it but returned 10'
+  pass "fm-pr-merge refuses check results that are not about the head being merged"
+}
+
 # --- released tasks (fork landing records) ----------------------------------
 # The captain's parked-completion ruling releases a worker once its PR is green
 # and mergeable, which is before the PR lands, so the meta above is gone by the
@@ -1356,14 +1528,19 @@ SH
 #!/usr/bin/env bash
 printf '%s\n' "\$*" >> "\$FM_TEST_GH_LOG"
 fields=
+verify=
 while [ "\$#" -gt 0 ]; do
   case "\$1" in
+    graphql) verify=1; shift ;;
     --json) fields=\${2:-}; shift; [ "\$#" -gt 0 ] && shift ;;
     *) shift ;;
   esac
 done
+if [ -n "\$verify" ]; then
+  cat "\$FM_TEST_GH_VERIFY_PAYLOAD"
+  exit 0
+fi
 case "\$fields" in
-  *statusCheckRollup*) cat "\$FM_TEST_GH_VERIFY_PAYLOAD" ; exit 0 ;;
   *"state,headRefOid"*) printf '%s\t%s\n' '$state' '$head' ; exit 0 ;;
   *headRefOid*) printf '%s\n' '$head' ; exit 0 ;;
 esac
@@ -1577,6 +1754,8 @@ test_verified_merge_records_verification
 test_final_verification_refuses_changed_head
 test_override_is_never_inferred
 test_real_query_against_api_shaped_json
+test_superseded_executions_resolve_to_the_current_one
+test_check_results_are_bound_to_the_head_being_merged
 test_landing_record_lands_released_task
 test_landing_record_refuses_when_pr_is_not_open
 test_landing_record_refuses_different_requested_pr
