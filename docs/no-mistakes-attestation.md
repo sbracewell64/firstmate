@@ -69,6 +69,7 @@ That some pipeline run completed review, test, lint and push against **this exac
 The binding is the property that matters.
 An attestation cannot be copied from another pull request, cannot survive a rebase, an amend or a force-push, and cannot be produced before the commit it names exists.
 Every new head needs its own.
+A commit added after validation is a new head the completed run did not cover, so run the pipeline again before writing its attestation rather than trying to reuse the prior run record.
 
 ## What it does not attest
 
@@ -143,4 +144,4 @@ That is what separates the signature from upstream submission: previously the on
 `tests/fm-attest.test.sh` pins every refusal and its matched positive control through the executable interface, for `bin/fm-attest.sh` and for the workflow's own step scripts, which it lifts out of the workflow by step name and runs as the workflow runs them.
 The two live in one suite because what the check tells a contributor is decided jointly by the verifier's exit status and the step's reading of it, and splitting them lets the two drift apart.
 Each negative fixture differs from the passing one by exactly one property, because a verifier that refused everything would satisfy red-only assertions and would be a worse defect than the honour-system check it replaces.
-The suite was refreshed on 2026-08-13 with `bash tests/fm-attest.test.sh`, which completed successfully with 35 passing cases.
+The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which completed successfully with 45 passing cases.

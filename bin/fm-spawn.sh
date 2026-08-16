@@ -1634,6 +1634,15 @@ if [ "$KIND" != secondmate ]; then
       CAPABILITY_FLOOR=$ROUTE_FLOOR
     fi
     ROUTE_POLICY_DIGEST=$(fm_route_policy_digest "$CONFIG")
+    # The context governor inputs for this dispatch, taken from the SAME
+    # evaluation that produced the recorded route and floor. They excluded
+    # nobody above; the governor resolves their execution relationship.
+    ROUTE_SMART_ZONE_CEILING=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.route_smart_zone_ceiling // empty' 2>/dev/null || true)
+    MODEL_SMART_ZONE_CEILING=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.model_smart_zone_ceiling // empty' 2>/dev/null || true)
+    MODEL_HARD_CONTEXT_LIMIT=$(printf '%s' "$ROUTE_DECISION" \
+      | jq -r '.subject.governed_context.model_hard_context_limit // empty' 2>/dev/null || true)
   fi
 
   # ADMIT. Asked after the route and before anything is allocated, because it is
@@ -2749,7 +2758,14 @@ if [ "$KIND" != secondmate ]; then
       j_stop=$(json_escape "touch $(shell_quote "$TURNEND"); $busy_cmd_prefix idle $busy_suffix --event stop 2>/dev/null || true")
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
-      context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") --record $(shell_quote "$TASK_TMP/context-pressure.json")")
+      context_statusline_args="--record $(shell_quote "$TASK_TMP/context-pressure.json")"
+      [ -z "${ROUTE_SMART_ZONE_CEILING:-}" ] \
+        || context_statusline_args="$context_statusline_args --route-smart-zone-ceiling $(shell_quote "$ROUTE_SMART_ZONE_CEILING")"
+      [ -z "${MODEL_SMART_ZONE_CEILING:-}" ] \
+        || context_statusline_args="$context_statusline_args --model-smart-zone-ceiling $(shell_quote "$MODEL_SMART_ZONE_CEILING")"
+      [ -z "${MODEL_HARD_CONTEXT_LIMIT:-}" ] \
+        || context_statusline_args="$context_statusline_args --model-hard-context-limit $(shell_quote "$MODEL_HARD_CONTEXT_LIMIT")"
+      context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") $context_statusline_args")
       cat > "$WT/.claude/settings.local.json" <<EOF
 {"statusLine":{"type":"command","command":"$context_statusline_command"},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF

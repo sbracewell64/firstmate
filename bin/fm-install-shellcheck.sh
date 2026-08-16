@@ -14,7 +14,7 @@ DESTINATION=${1:?usage: fm-install-shellcheck.sh <destination-directory>}
 TMP=$(mktemp -d "${RUNNER_TEMP:-${TMPDIR:-/tmp}}/fm-shellcheck.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 
-DOWNLOAD_ATTEMPTS=3
+DOWNLOAD_ATTEMPTS=5
 download_attempt=1
 while ! curl -fsSL "$URL" -o "$TMP/$ARCHIVE"; do
   [ "$download_attempt" -lt "$DOWNLOAD_ATTEMPTS" ] || {

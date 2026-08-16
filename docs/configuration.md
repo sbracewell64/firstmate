@@ -334,13 +334,13 @@ For Pi and pi-signed secondmate launches, `fm-spawn.sh` starts the selected exec
 
 Claude Code passes a host-computed `context_window` object to status-line commands with `remaining_percentage`, `used_percentage`, `total_tokens`, and `current_usage`.
 Firstmate's tracked Claude settings send that payload to [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh), which displays the real used and remaining percentages rather than estimating pressure from transcript text.
-At 70 percent used or higher, the display adds `COMPACT NOW: /compact` so the existing compaction doctrine has an instrument-backed trigger.
+The display adds `COMPACT NOW: /compact` at 70 percent used or when resident tokens reach the governed smart-zone ceiling described under [routed pools](#context-is-four-integers-and-only-one-of-them-decides-eligibility), so the existing compaction doctrine has instrument-backed triggers.
 Only `used_percentage` and `remaining_percentage` are required; when the optional `total_tokens` or `current_usage` is missing or invalid, the real percentages and the 70 percent trigger keep rendering and each missing optional field is named in the display, so the instrument never invents a value and never degrades silently.
-A spawned Claude crewmate also receives a git-excluded local setting that writes the `context_window` fields actually present, a `missing_optional_fields` list when any optional field is absent, and the derived `compact_recommended` boolean atomically to `/tmp/fm-<task-id>/context-pressure.json`.
+A spawned Claude crewmate also receives a git-excluded local setting that writes the `context_window` fields actually present, a `missing_optional_fields` list when any optional field is absent, the governed-ceiling evaluation when configured, and the derived `compact_recommended` boolean atomically to `/tmp/fm-<task-id>/context-pressure.json`.
 Generated crewmate instructions tell the worker to use that snapshot as the source of truth at phase boundaries and run `/compact` when the boolean becomes true.
 The snapshot stays in the existing per-task temporary root, so ordinary cleanup removes it without adding fleet state or a new completion signal.
 Payloads without both valid percentages produce no display, remove the optional stale snapshot, and leave the Claude session running normally.
-This is presentation and worker advisory only: it does not emit fleet notifications or change routing, supervision, worker lifecycle, isolation, or completion detection.
+This is execution governance and worker advisory only: it does not emit fleet notifications or change routing eligibility, supervision, worker lifecycle, isolation, or completion detection.
 The other verified worker runtimes do not expose this verified Claude `statusLine` payload contract, so their adapters and behavior remain unchanged.
 
 ## Crew dispatch profiles (config/crew-dispatch.json)
@@ -404,12 +404,14 @@ A config with no `pool` anywhere, or a home with no config at all, otherwise beh
 ```json
 {
   "_floors": {
-    "<floor name>": { "effort_floor": "<band|WAIVED - why>", "context_ceiling": 0,
+    "<floor name>": { "effort_floor": "<band|WAIVED - why>",
+                      "smart_zone_ceiling": 140000,
                       "tool_loop": "<verified-agentic|required|not-required>",
                       "selectable_by_crew_rule": true }
   },
   "_models": {
-    "<provider>/<model-id>": { "smart_zone": 0, "effort_expressible": ["<band>"],
+    "<provider>/<model-id>": { "context_window": 200000, "smart_zone": 140000,
+                               "effort_expressible": ["<band>"],
                                "tool_loop": "<verified-agentic|required|not-required>" }
   },
   "rules": [
@@ -427,11 +429,37 @@ Pool entries and `_models` keys always use the fully qualified `provider/model-i
 Pool order is the failover order, and `promotion_target` names the route a promotion escalates to; neither is traversed automatically.
 
 `_floors` values may stay free-form strings, in which case there is nothing to check.
-An object value declares the three axes a check can mechanically test against `_models`: `effort_floor` as a minimum band that a higher band satisfies and a provider default never establishes, `context_ceiling` as the minimum `smart_zone` a candidate must carry, and `tool_loop` as the minimum recorded loop evidence.
+An object value declares the axes a check can mechanically test against `_models`: `effort_floor` as a minimum band that a higher band satisfies and a provider default never establishes, `minimum_context` as the genuine task minimum a candidate's capacity must meet, `smart_zone_ceiling` as the execution-governance limit the route runs a session at, and `tool_loop` as the minimum recorded loop evidence.
 An `effort_floor` string beginning `WAIVED` waives the effort axis outright, and `selectable_by_crew_rule: false` puts the floor out of reach of every rule.
-A candidate the config lists in a pool but records no evidence for is refused as unverifiable rather than admitted, because unmeasured is not the same as met - including when the config carries no `_models` block at all, which records no evidence for anything.
+
+#### Context is four integers, and only one of them decides eligibility
+
+Context carries four different positive integer token counts, and collapsing any two of them is how a route excludes a model it should have run.
+
+| Concept | Where it is recorded | What it decides |
+|---|---|---|
+| Route minimum required context | `_floors.<id>.minimum_context` | Eligibility, and nothing else asks about it |
+| Route smart-zone ceiling | `_floors.<id>.smart_zone_ceiling` | Execution governance; excludes nobody |
+| Model hard context limit | `_models.<m>.context_window` | The evidence a minimum is checked against |
+| Model smart-zone ceiling | `_models.<m>.smart_zone` | Governance evidence; never eligibility evidence |
+
+`minimum_context` is the only context axis that can refuse a candidate, and it refuses only capacity genuinely too small for the route's work, naming `context_below_minimum` against the model's hard `context_window`.
+It is absent by default, and **absent means no minimum**: a route that states none asks nothing about capacity, so a candidate recording no `context_window` is eligible there rather than unverifiable.
+Where a route does state one, the missing-input rule binds as it does on every other declared axis and unrecorded capacity refuses as `context_unverifiable`.
+
+`smart_zone_ceiling` never excludes anyone.
+It sets the compaction threshold for a running session, so models exposing 120K, 200K, or 1M are fully eligible on a 120K-ceiling route and simply run governed at no more than 120K.
+The governed ceiling is the minimum of the route ceiling, the model's own smart zone, and the model's hard limit; `fm-route.sh --json` carries the three inputs per candidate as `governed_context`, and `fm-spawn.sh` hands them separately to [`bin/fm-context-statusline.sh`](../bin/fm-context-statusline.sh), which computes the minimum and is the one place it changes behavior.
+That governor recommends compaction as soon as resident tokens reach the ceiling; this and its 70%-used trigger are independent, and either one recommends compaction without cancelling the other.
+
+`context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read as one, because a ceiling is what its name always said.
+It never contributes a minimum, so a floor carrying only the retired field states no minimum at all.
+A floor carrying both spellings with different values is refused as `smart_zone_ceiling_contradicted` rather than resolved to either.
+[`docs/vocabulary-collisions.md`](vocabulary-collisions.md) owns its retirement condition.
+A candidate the config lists in a pool but records no model evidence required by a declared floor axis is refused as unverifiable rather than admitted, because unmeasured is not the same as met - including when the config carries no `_models` block at all and the floor declares an axis that requires model evidence.
 A missing input is a refusal and never a skipped check: a dispatch that names no model is refused as unverifiable against the pool it claims, and a rule whose `floor` names an id `_floors` does not define is refused rather than enforcing nothing.
-An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `context_ceiling` and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
+An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `minimum_context` or `smart_zone_ceiling`, and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
+An unreadable ceiling refuses for that reason even though a readable one excludes nobody: a route whose governance number cannot be read cannot govern the session it dispatches.
 A model or provider the availability record currently holds is refused at the same point, naming the held state, the scope, the subject and its recorded expiry, so `check` and `eligible` can never give opposite answers about one model.
 
 Every production selection of Luna has one accepted invocation binding: profile `luna-max`, exact model `openai-codex/gpt-5.6-luna`, harness `pi` or `pi-signed`, and effective effort `max`.

@@ -177,6 +177,80 @@ test_record_requires_absolute_path() {
   pass "context snapshots require an absolute task-scoped path"
 }
 
+# --- the governed smart-zone ceiling ----------------------------------------
+#
+# A route's smart-zone ceiling is an EXECUTION-GOVERNANCE limit: it says when a
+# running session compacts or rotates, and it excludes no model from any route.
+# This is the only place it changes behavior, so these cases pin that it can
+# fire EARLIER than the host's 70% trigger, that it never suppresses that
+# trigger, and that a ceiling it could not evaluate is recorded as unevaluated
+# rather than as a ceiling with room left.
+
+test_the_governed_ceiling_rotates_before_the_host_threshold() {
+  local record out
+  record="$TMP_ROOT/ceiling/context-pressure.json"
+  mkdir -p "${record%/*}"
+
+  # 42% of a 200k window is 84k, comfortably inside a 120k ceiling.
+  out=$(payload 42 58 | "$STATUSLINE" --record "$record" \
+    --route-smart-zone-ceiling 120000 --model-smart-zone-ceiling 140000 --model-hard-context-limit 200000)
+  assert_contains "$out" 'zone 84k/120k' "the governed ceiling and resident tokens are not displayed"
+  assert_no_grep 'COMPACT NOW' <(printf '%s\n' "$out") \
+    "a session inside its governed ceiling was told to compact"
+
+  # 60% of the same window is exactly 120k: the ceiling is reached at 60% used,
+  # ten points BELOW the host trigger. Rotating earlier is the whole point of a
+  # ceiling, and it is why the number must never have decided eligibility.
+  out=$(payload 60 40 | "$STATUSLINE" --record "$record" \
+    --route-smart-zone-ceiling 120000 --model-smart-zone-ceiling 140000 --model-hard-context-limit 200000)
+  assert_contains "$out" 'COMPACT NOW: /compact' \
+    "reaching the governed ceiling below 70% used did not recommend compaction"
+  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+    if (s.compact_recommended !== true) process.exit(1);
+    if (s.governed_ceiling.ceiling_tokens !== 120000) process.exit(1);
+    if (s.governed_ceiling.bound_by.join(",") !== "route_smart_zone_ceiling") process.exit(1);
+    if (s.governed_ceiling.resident_tokens !== 120000) process.exit(1);
+    if (s.governed_ceiling.evaluated !== true) process.exit(1);
+    if (s.governed_ceiling.reached !== true) process.exit(1);' "$record" \
+    || fail "the snapshot did not record the reached governed ceiling"
+
+  # The two triggers are independent: a ceiling with room left never cancels the
+  # host's own 70% advisory.
+  out=$(payload 75 25 | "$STATUSLINE" --record "$record" --model-hard-context-limit 1000000)
+  assert_contains "$out" 'COMPACT NOW: /compact' \
+    "a roomy governed ceiling suppressed the 70% host trigger"
+  pass "the governed smart-zone ceiling rotates a session early and never suppresses the host trigger"
+}
+
+test_an_unevaluable_ceiling_is_recorded_as_unevaluated_not_as_room_left() {
+  local record out
+  record="$TMP_ROOT/ceiling-unevaluable/context-pressure.json"
+  mkdir -p "${record%/*}"
+  # Without total_tokens there is no way to derive resident tokens, so the
+  # ceiling has not been observed to be met and has not been observed to be
+  # exceeded. Recording it as either would be inventing an observation.
+  out=$(printf '{"context_window":{"remaining_percentage":40,"used_percentage":60}}\n' \
+    | "$STATUSLINE" --record "$record" --route-smart-zone-ceiling 120000)
+  assert_contains "$out" 'zone 120k unevaluated' "an unevaluable ceiling is not shown as unevaluated"
+  node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+    if (s.governed_ceiling.evaluated !== false) process.exit(1);
+    if ("reached" in s.governed_ceiling) process.exit(1);
+    if (s.compact_recommended !== false) process.exit(1);' "$record" \
+    || fail "an unevaluable ceiling was resolved into a reached or unreached verdict"
+  pass "a ceiling that could not be evaluated is recorded as unevaluated rather than as room left"
+}
+
+test_an_unreadable_ceiling_refuses_rather_than_running_ungoverned() {
+  local out status
+  out=$(payload 50 50 | "$STATUSLINE" --route-smart-zone-ceiling 120k 2>&1); status=$?
+  expect_code 2 "$status" "a non-numeric ceiling must be refused"
+  assert_contains "$out" 'error: --route-smart-zone-ceiling requires a positive whole number of tokens' \
+    "the ceiling refusal did not explain the requirement"
+  out=$(payload 50 50 | "$STATUSLINE" --model-hard-context-limit 0 2>&1); status=$?
+  expect_code 2 "$status" "a zero ceiling must be refused rather than governing at nothing"
+  pass "a ceiling that cannot be read refuses instead of silently running the session ungoverned"
+}
+
 test_below_threshold_displays_real_pressure_and_records_complete_payload
 test_threshold_is_exact_and_fireable
 test_display_truncates_below_the_exact_threshold
@@ -187,3 +261,6 @@ test_invalid_optional_field_is_named_not_passed_through
 test_invalid_payload_is_silent_and_clears_stale_snapshot
 test_tracked_claude_settings_use_the_telemetry_command
 test_record_requires_absolute_path
+test_the_governed_ceiling_rotates_before_the_host_threshold
+test_an_unevaluable_ceiling_is_recorded_as_unevaluated_not_as_room_left
+test_an_unreadable_ceiling_refuses_rather_than_running_ungoverned

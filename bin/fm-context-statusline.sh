@@ -2,12 +2,31 @@
 # Render Claude Code's host-computed context-window pressure for a Firstmate
 # session without estimating from transcript text.
 # Usage: fm-context-statusline.sh [--record <absolute-path>]
+#        [--route-smart-zone-ceiling <tokens>]
+#        [--model-smart-zone-ceiling <tokens>] [--model-hard-context-limit <tokens>]
 #
 # Claude Code invokes a statusLine command with its JSON payload on stdin.
 # This command reads context_window.remaining_percentage, used_percentage,
 # total_tokens, and current_usage. It prints one compact display line and, when
 # --record is present, atomically writes the reading plus the derived
-# 70%-compaction advisory as JSON for the worker named by a generated brief.
+# compaction advisory as JSON for the worker named by a generated brief.
+#
+# The three context-governance inputs are resolved here into the smart-zone
+# ceiling governing this session: the minimum of the route's ceiling, the
+# model's own smart zone, and the model's hard limit. A ceiling is an
+# EXECUTION-GOVERNANCE limit and never a routing question - it says when a
+# running session compacts, rotates or decomposes, and a model that exposes far
+# more capacity than the ceiling is fully eligible and simply runs governed at
+# it. This is the only place a ceiling changes behavior.
+#
+# The ceiling advises compaction the moment resident tokens reach it. The
+# ceiling and the 70% host trigger are independent: either alone recommends
+# compaction, and neither cancels the other. Resident tokens come from the
+# host's own total_tokens and used_percentage; without total_tokens the ceiling
+# CANNOT BE EVALUATED, and that is recorded as unevaluated rather than resolved
+# either way. A ceiling
+# that could not be checked has not been observed to be met, and it has not
+# been observed to be exceeded either.
 # Only used_percentage and remaining_percentage are required: they alone drive
 # the display and the 70% trigger. total_tokens and current_usage are optional;
 # when either is missing or invalid, the percentages and trigger still render,
@@ -32,25 +51,66 @@ usage() {
 }
 
 record=
-case "${1:-}" in
-  '') ;;
-  -h|--help) usage; exit 0 ;;
-  --record)
-    [ "$#" -eq 2 ] || { usage >&2; exit 2; }
-    record=$2
-    case "$record" in
-      /*) ;;
-      *) echo "error: --record requires an absolute path" >&2; exit 2 ;;
-    esac
-    ;;
-  *) usage >&2; exit 2 ;;
-esac
+route_ceiling=
+model_ceiling=
+model_limit=
+read_token_count() {
+  case "$2" in
+    ''|*[!0-9]*) echo "error: $1 requires a positive whole number of tokens" >&2; exit 2 ;;
+  esac
+  [ "$2" -gt 0 ] 2>/dev/null || { echo "error: $1 requires a positive whole number of tokens" >&2; exit 2; }
+}
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -h|--help) usage; exit 0 ;;
+    --record)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      record=$2
+      case "$record" in
+        /*) ;;
+        *) echo "error: --record requires an absolute path" >&2; exit 2 ;;
+      esac
+      shift 2
+      ;;
+    --route-smart-zone-ceiling)
+      # A ceiling that cannot be read is refused rather than dropped. Silently
+      # ignoring it would leave a session the operator believes is governed
+      # running against the host default alone.
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      route_ceiling=$2
+      read_token_count "$1" "$2"
+      shift 2
+      ;;
+    --model-smart-zone-ceiling)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      model_ceiling=$2
+      read_token_count "$1" "$2"
+      shift 2
+      ;;
+    --model-hard-context-limit)
+      [ "$#" -ge 2 ] || { usage >&2; exit 2; }
+      model_limit=$2
+      read_token_count "$1" "$2"
+      shift 2
+      ;;
+    *) usage >&2; exit 2 ;;
+  esac
+done
 
 IFS= read -r -d '' node_program <<'NODE' || true
 const fs = require("fs");
 const path = require("path");
 
 const record = process.argv[1] || "";
+const governanceInputs = [
+  ["route_smart_zone_ceiling", process.argv[2]],
+  ["model_smart_zone_ceiling", process.argv[3]],
+  ["model_hard_context_limit", process.argv[4]],
+].filter(([, value]) => value).map(([key, value]) => [key, Number(value)]);
+const ceiling = governanceInputs.length > 0
+  ? Math.min(...governanceInputs.map(([, value]) => value))
+  : null;
+const boundBy = governanceInputs.filter(([, value]) => value === ceiling).map(([key]) => key);
 
 function clearStaleRecord() {
   if (!record) return;
@@ -92,7 +152,38 @@ try {
   if (!hasTotal) missingOptional.push("total_tokens");
   if (!hasCurrentUsage) missingOptional.push("current_usage");
 
-  const compactRecommended = used >= 70;
+  // The 70% host trigger, unchanged and unconditional.
+  const usedPercentageTrigger = used >= 70;
+
+  // The governed smart-zone ceiling, evaluated only against evidence the host
+  // actually supplied. Three outcomes, never two: reached, not reached, and -
+  // with no total_tokens to size the window - not evaluable at all. The third
+  // is recorded as itself so a worker never reads an unchecked ceiling as a
+  // ceiling with room left.
+  let governedCeiling = null;
+  if (ceiling !== null && Number.isFinite(ceiling)) {
+    if (hasTotal) {
+      const residentTokens = Math.round((total * used) / 100);
+      governedCeiling = {
+        ceiling_tokens: ceiling,
+        bound_by: boundBy,
+        resident_tokens: residentTokens,
+        evaluated: true,
+        reached: residentTokens >= ceiling,
+      };
+    } else {
+      governedCeiling = {
+        ceiling_tokens: ceiling,
+        bound_by: boundBy,
+        evaluated: false,
+        unevaluated_reason: "total_tokens absent, so resident tokens cannot be derived",
+      };
+    }
+  }
+  const ceilingReached = Boolean(governedCeiling && governedCeiling.reached);
+
+  // Either trigger alone recommends compaction; neither cancels the other.
+  const compactRecommended = usedPercentageTrigger || ceilingReached;
   if (record) {
     try {
       const parent = path.dirname(record);
@@ -106,6 +197,7 @@ try {
         compact_at_used_percentage: 70,
         compact_recommended: compactRecommended,
       };
+      if (governedCeiling) snapshot.governed_ceiling = governedCeiling;
       if (missingOptional.length > 0) snapshot.missing_optional_fields = missingOptional;
       fs.writeFileSync(temporary, `${JSON.stringify(snapshot, null, 2)}\n`, { mode: 0o600 });
       try {
@@ -119,6 +211,11 @@ try {
 
   let line = `CTX ${formatPercentage(used)}% used / ${formatPercentage(remaining)}% left`;
   if (hasTotal) line += ` (${formatTokens(total)})`;
+  if (governedCeiling) {
+    line += governedCeiling.evaluated
+      ? ` | zone ${formatTokens(governedCeiling.resident_tokens)}/${formatTokens(ceiling)}`
+      : ` | zone ${formatTokens(ceiling)} unevaluated`;
+  }
   if (missingOptional.length > 0) line += ` [missing: ${missingOptional.join(", ")}]`;
   if (compactRecommended) line += " | COMPACT NOW: /compact";
   process.stdout.write(line);
@@ -127,4 +224,4 @@ try {
 }
 NODE
 
-node -e "$node_program" "$record"
+node -e "$node_program" "$record" "$route_ceiling" "$model_ceiling" "$model_limit"

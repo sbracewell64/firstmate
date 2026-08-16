@@ -295,8 +295,15 @@ case "$CMD" in
       [ "$JSON" -eq 1 ] || printf 'error: %s\n' "$refusal" >&2
       exit 1
     fi
-    [ "$JSON" -eq 1 ] || printf 'ok: %s at %s is inside route %s\n' \
-      "$MODEL" "${EFFORT:-provider default}" "$ROUTE"
+    # The success line reports that context governance is configured without
+    # resolving its inputs outside the context governor.
+    governed=$(printf '%s' "$DECISION" | jq -r '
+      .subject.governed_context // {}
+      | [ .route_smart_zone_ceiling, .model_smart_zone_ceiling, .model_hard_context_limit ]
+      | map(select(. != null))
+      | if length > 0 then "; context governance configured" else "" end' 2>/dev/null || true)
+    [ "$JSON" -eq 1 ] || printf 'ok: %s at %s is inside route %s%s\n' \
+      "$MODEL" "${EFFORT:-provider default}" "$ROUTE" "$governed"
     ;;
 
   eligible|next)
