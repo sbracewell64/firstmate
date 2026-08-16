@@ -451,6 +451,7 @@ CATALOG = {
         {"code": "ci_duplicate_attempt_undecidable", "meaning": "Repeated attempts at one check cannot be ordered, so none is current."},
         {"code": "capability_candidate_malformed", "meaning": "A capability candidate is neither a bare name nor an absolute path."},
         {"code": "adverse_finding_blocking", "meaning": "A known adverse finding is marked blocking."},
+        {"code": "ruling_id_ambiguous", "meaning": "More than one ruling carries the same stable id."},
         {"code": "ruling_applicability_mismatch", "meaning": "A ruling this envelope relies on does not apply to this candidate."},
         {"code": "request_identity_mismatch", "meaning": "A declared or stored request identity does not match the identity recomputed from the bound facts."},
         {"code": "forge_request_identity_invalid", "meaning": "The authoritative forge request identity is absent or incomplete."},
@@ -1321,7 +1322,19 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
             )
 
     current_envelope_digest = ruling_target_digest(envelope)
-    ruling_index = {str(ruling.get("id")): ruling for ruling in envelope["rulings"]}
+    ruling_ids = [str(ruling.get("id")) for ruling in envelope["rulings"]]
+    ambiguous_ruling_ids = {
+        ruling_id for ruling_id in ruling_ids if ruling_ids.count(ruling_id) > 1
+    }
+    for ruling_id in sorted(ambiguous_ruling_ids):
+        problems.refuse(
+            "ruling_id_ambiguous", ruling_id, "more than one ruling carries this stable id"
+        )
+    ruling_index = {
+        str(ruling.get("id")): ruling
+        for ruling in envelope["rulings"]
+        if str(ruling.get("id")) not in ambiguous_ruling_ids
+    }
     for ruling in envelope["rulings"]:
         applies_to = ruling.get("applies_to") if isinstance(ruling.get("applies_to"), dict) else {}
         mismatches = []

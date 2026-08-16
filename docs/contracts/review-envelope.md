@@ -191,6 +191,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `ci_duplicate_attempt_undecidable` | Repeated attempts at one check cannot be ordered, so none is current. |
 | `capability_candidate_malformed` | A capability candidate is neither a bare name nor an absolute path. |
 | `adverse_finding_blocking` | A known adverse finding is marked blocking. |
+| `ruling_id_ambiguous` | More than one ruling carries the same stable id. |
 | `ruling_applicability_mismatch` | A ruling this envelope relies on does not apply to this candidate. |
 | `request_identity_mismatch` | A declared or stored request identity does not match the identity recomputed from the bound facts. |
 | `forge_request_identity_invalid` | The authoritative forge request identity is absent or incomplete. |

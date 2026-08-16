@@ -1396,6 +1396,34 @@ test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution() {
   pass "a ruling issued against a different candidate cannot authorize resolving an obligation"
 }
 
+test_duplicate_ruling_ids_are_ambiguous_in_both_orders() {
+  local case_dir order rulings
+  for order in applicable-first stale-first; do
+    case_dir=$(make_case "ruling-duplicate-$order")
+    if [ "$order" = applicable-first ]; then
+      rulings='[
+        {"id": "R-1", "source": "captain", "disposition": "APPROVE", "applies_to": {}},
+        {"id": "R-1", "source": "browser-sol", "disposition": "REJECT",
+         "applies_to": {"head": "3333333333333333333333333333333333333333"}}]'
+    else
+      rulings='[
+        {"id": "R-1", "source": "browser-sol", "disposition": "REJECT",
+         "applies_to": {"head": "3333333333333333333333333333333333333333"}},
+        {"id": "R-1", "source": "captain", "disposition": "APPROVE", "applies_to": {}}]'
+    fi
+    write_inputs "$case_dir" '{"rulings": '"$rulings"'}'
+    capture run_prepare "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "duplicate ruling ids refuse in $order order"
+    assert_contains "$CAPTURED" 'refusal ruling_id_ambiguous' \
+      "the refusal must name the ambiguous stable ruling id"
+    capture run_validate "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "validation preserves duplicate ruling refusal in $order order"
+    assert_contains "$CAPTURED" 'refusal ruling_id_ambiguous' \
+      "validation must preserve the ambiguous stable ruling id"
+  done
+  pass "duplicate ruling ids refuse independently of array order"
+}
+
 test_a_ruling_envelope_digest_binds_the_current_envelope() {
   local case_dir prior target_digest
   case_dir=$(make_case ruling-envelope-digest)
@@ -1674,6 +1702,7 @@ test_duplicate_dispositions_refuse_in_both_orders
 test_request_identity_is_recomputed_and_checked
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe
 test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution
+test_duplicate_ruling_ids_are_ambiguous_in_both_orders
 test_a_ruling_envelope_digest_binds_the_current_envelope
 test_a_blocking_adverse_finding_refuses
 test_a_required_unproven_dimension_is_could_not_observe
