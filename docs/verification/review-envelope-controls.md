@@ -48,15 +48,16 @@ Both files are copied because the entrypoint sources its library from its own di
 ## What was measured
 
 Fifty-six controls pass against the shipped scripts.
-Sixty-two mutations were built; sixty-one turned the suite red and one did not, which is recorded and explained below rather than dropped.
+Sixty-two mutations were built; sixty-one turned the suite red and one deliberately did not.
+That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
 
-Each row is one property, the mutation aimed at it, and the exact first failing line that mutation produced.
+Each row is one property, the mutation aimed at it, and the exact first failing line that mutation produced, or an explicit non-red where that is what was measured.
 Every mutation is a real edit to a real code path, and each build was confirmed to differ from the tracked script and to run before the suite was pointed at it.
 That confirmation matters because a variant that never parsed would report a red line that measures the variant rather than the control.
 
 Two rows are marked INVERTED. Those are non-vacuity mutations: they break the ACCEPTING path rather than a guard, and they are not optional, because without them the refusal mutations could all be red for the trivial reason that nothing validates at all.
 
-| Property under test | Mutation injected | Observed red |
+| Property under test | Mutation injected | Observed result |
 | --- | --- | --- |
 | a complete candidate is review-ready | the envelope binds the base commit where the head belongs | `not ok - a complete candidate is review-ready: expected exit 0, got 1` |
 | required contracts are computed from the changed files | a mandatory applicability rule stops being honoured | `not ok - a mandatory contract and a contract whose paths changed are both required` |
@@ -73,6 +74,7 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a red calibration that records a pass refuses | the calibration's recorded outcome is no longer checked | `not ok - a calibration that never went red refuses: expected exit 1, got 0` |
 | a could-not-observe verifier cannot become review-ready | a non-PASS verifier result falls through to the passing path | `not ok - a could-not-observe verifier is not a pass: expected exit 2, got 0` |
 | a broken evidence digest refuses | the evidence check returns before it checks anything | `not ok - evidence that no longer matches its digest refuses: expected exit 1, got 0` |
+| an evidence locator that escapes its root refuses | the lexical parent-traversal guard alone is removed | **NO RED - deliberate, see below**: containment is enforced twice and independently, so removing one guard alone does not falsify this control |
 | a result that does not identify its verifier refuses | a result carrying no verifier identity is accepted | `not ok - a result that does not identify what produced it refuses: expected exit 1, got 0` |
 | wrong head ci refuses | every attempt is treated as if it ran at the candidate head | `not ok - a required platform covered only by another head's run refuses: expected exit 1, got 0` |
 | a skipped required check refuses | a skipped current check stops refusing | `not ok - a skipped required check refuses: expected exit 1, got 0` |
