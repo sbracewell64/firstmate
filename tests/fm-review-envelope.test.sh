@@ -693,6 +693,28 @@ PY
   pass "a verifier result citing a head that is not the candidate refuses"
 }
 
+test_a_verifier_result_without_a_tree_refuses() {
+  local case_dir
+  case_dir=$(make_case verifier-missing-tree)
+  write_inputs "$case_dir"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+del document["verification"]["results"][1]["tree"]
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" env
+  expect_code 1 "$CAPTURED_CODE" "a result without a tree refuses"
+  assert_contains "$CAPTURED" 'refusal required_verifier_wrong_head' \
+    "the refusal must name the absent tree binding"
+  capture run_validate "$case_dir" env
+  expect_code 1 "$CAPTURED_CODE" "validation preserves the missing tree refusal"
+  assert_contains "$CAPTURED" 'refusal required_verifier_wrong_head' \
+    "validation must require the exact tree binding"
+  pass "a required verifier result must bind the candidate tree"
+}
+
 test_a_missing_red_calibration_refuses() {
   local case_dir
   case_dir=$(make_case no-calibration)
@@ -1374,6 +1396,45 @@ test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution() {
   pass "a ruling issued against a different candidate cannot authorize resolving an obligation"
 }
 
+test_a_ruling_envelope_digest_binds_the_current_envelope() {
+  local case_dir prior target_digest
+  case_dir=$(make_case ruling-envelope-digest)
+  prior=$(seed_predecessor "$case_dir")
+  write_inputs "$case_dir" '{
+    "obligations": {
+      "predecessor": {"envelope_digest": "'"$prior"'"},
+      "active": [],
+      "dispositions": [
+        {"id": "OBL-1", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"},
+        {"id": "OBL-2", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"}]}}'
+  capture run_prepare "$case_dir" draft --predecessor "$case_dir/prior"
+  expect_code 0 "$CAPTURED_CODE" "the draft envelope compiles"
+  target_digest=$(python3 - "$case_dir/draft/envelope.json" <<'PY'
+import hashlib, json, sys
+document = json.load(open(sys.argv[1]))
+body = document["envelope"]
+body["rulings"] = []
+encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+print("sha256:" + hashlib.sha256(encoded).hexdigest())
+PY
+)
+  write_inputs "$case_dir" '{
+    "rulings": [{"id": "R-1", "source": "captain", "disposition": "APPROVE",
+                 "relied_upon": true,
+                 "applies_to": {"envelope_digest": "'"$target_digest"'"}}],
+    "obligations": {
+      "predecessor": {"envelope_digest": "'"$prior"'"},
+      "active": [],
+      "dispositions": [
+        {"id": "OBL-1", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"},
+        {"id": "OBL-2", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"}]}}'
+  capture run_prepare "$case_dir" successor --predecessor "$case_dir/prior"
+  expect_code 0 "$CAPTURED_CODE" "a ruling bound to the current envelope applies"
+  capture run_validate "$case_dir" successor
+  expect_code 0 "$CAPTURED_CODE" "validation recomputes current-envelope applicability"
+  pass "a ruling digest binds the current envelope without circularity"
+}
+
 test_a_blocking_adverse_finding_refuses() {
   local case_dir
   case_dir=$(make_case adverse)
@@ -1583,6 +1644,7 @@ test_verifier_results_bind_the_selected_contract_digest
 test_duplicate_contract_ids_are_ambiguous
 test_forge_request_identity_is_required_and_complete
 test_a_verifier_result_bound_to_another_head_refuses
+test_a_verifier_result_without_a_tree_refuses
 test_a_missing_red_calibration_refuses
 test_a_red_calibration_that_records_a_pass_refuses
 test_a_could_not_observe_verifier_cannot_become_review_ready
@@ -1612,6 +1674,7 @@ test_duplicate_dispositions_refuse_in_both_orders
 test_request_identity_is_recomputed_and_checked
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe
 test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution
+test_a_ruling_envelope_digest_binds_the_current_envelope
 test_a_blocking_adverse_finding_refuses
 test_a_required_unproven_dimension_is_could_not_observe
 test_a_fully_excluded_scope_refuses
