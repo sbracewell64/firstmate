@@ -235,7 +235,7 @@ test_absent_notes_ref_refuses_as_absent() {
   head=$(git -C "$repo" rev-parse HEAD)
   out=$(verify_out "$repo" "$head")
   rc=$?
-  [ "$rc" -ne 0 ] || fail "an absent attestation ref was accepted"
+  [ "$rc" -eq 1 ] || fail "an absent attestation ref did not refuse as a verdict (exit $rc): $out"
   assert_contains "$out" "no-attestation-ref" "absent ref did not report its own reason"
   pass "fm-attest.sh: an absent attestation ref refuses as absent"
 }
