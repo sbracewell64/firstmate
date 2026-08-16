@@ -756,9 +756,50 @@ require_record() {  # <request-id>; sets RECORD or exits
   fi
 }
 
+require_record_applicable_now() {  # <request-id> <record-json>
+  local rid=$1 rec=$2 item current gate channel project repo pr_url pr_ref head missing
+  local stored_identity current_identity stored_venue current_venue
+  item=$(printf '%s' "$rec" | jq -r '.identity.item')
+  read_snapshot || die "fleet backlog could not be read while validating $rid" 4
+  current=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
+    '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
+  [ -n "$current" ] || die "waiting item $item could not be observed while validating $rid" 4
+  gate=$(fm_outbound_classify_record "$current" | cut -f2)
+  [ -n "$gate" ] || gate=$(declared_field "$item" gate)
+  channel=$(fm_outbound_gate_channel "$gate")
+  [ -n "$channel" ] || die "the current gate for $item could not be observed" 4
+  project=$(printf '%s' "$current" | jq -r '.repo // ""')
+  pr_url=$(printf '%s' "$current" | jq -r '.pr_url // ""')
+  pr_ref=$(printf '%s' "$current" | jq -r '.pr_url // "-"')
+  head=$(observe_head "$item" "$pr_url" "$project")
+  if [ "$channel" = "pull-request" ]; then
+    repo=$(project_venue "$project" \
+      "$(printf '%s' "$current" | jq -r '.contribution_venue // ""')")
+  else
+    read_sol_config || die "the configured control repository could not be observed" 4
+    repo=$SOL_REPO
+    current_venue="$SOL_REPO#$SOL_ISSUE"
+  fi
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" || true)
+  [ -z "$missing" ] || die "the current identity for $item is incomplete: $(printf '%s' "$missing" | tr '\n' ',')" 4
+  stored_identity=$(printf '%s' "$rec" | jq -r \
+    '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head] | @tsv')
+  current_identity=$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
+    "$gate" "$project" "$repo" "$item" "$pr_ref" "$head")
+  stored_venue=$(printf '%s' "$rec" | jq -r '.venue // ""')
+  if [ "$current_identity" != "$stored_identity" ] \
+    || { [ "$channel" = "sol-control" ] && [ "$current_venue" != "$stored_venue" ]; }; then
+    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
+      '.state = "superseded" | .updated = $n')
+    record_write "$rid" "$rec" || die "could not invalidate stale request $rid" 4
+    printf '%s: request %s no longer matches the complete current identity\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" >&2
+    exit 3
+  fi
+}
+
 cmd_ruling() {  # <request-id> <comment-id> <issue>
   local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict
-  local item project current current_head stored_head pr_url
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -768,26 +809,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
       exit 3 ;;
   esac
-  item=$(printf '%s' "$rec" | jq -r '.identity.item')
-  project=$(printf '%s' "$rec" | jq -r '.identity.project')
-  stored_head=$(printf '%s' "$rec" | jq -r '.identity.head')
-  read_snapshot || die "fleet backlog could not be read while validating ruling $rid" 4
-  current=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
-    '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
-  [ -n "$current" ] || die "waiting item $item could not be observed while validating ruling $rid" 4
-  pr_url=$(printf '%s' "$current" | jq -r '.pr_url // ""')
-  current_head=$(observe_head "$item" "$pr_url" "$project")
-  if [ -z "$current_head" ]; then
-    die "the current exact head for $item could not be observed" 4
-  fi
-  if [ "$current_head" != "$stored_head" ]; then
-    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
-      '.state = "superseded" | .updated = $n')
-    record_write "$rid" "$rec" || die "could not invalidate stale request $rid" 4
-    printf '%s: ruling %s targets stale head %s; current head is %s\n' \
-      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$stored_head" "$current_head" >&2
-    exit 3
-  fi
+  require_record_applicable_now "$rid" "$rec"
   request_comment=$(printf '%s' "$rec" | jq -r '.comment_id // ""')
   if [ -n "$request_comment" ] && [ "$comment" = "$request_comment" ]; then
     printf '%s: request comment %s cannot rule on itself\n' \
@@ -861,7 +883,9 @@ cmd_poll() {
     out=$("$0" ruling --request "$rid" --comment "$comment" --issue "$SOL_ISSUE" 2>&1)
     rc=$?
     [ -z "$out" ] || printf '%s\n' "$out"
-    [ "$rc" -eq 0 ] || failed=$rc
+    if [ "$rc" -eq 4 ] || { [ "$rc" -ne 0 ] && [ "$failed" -eq 0 ]; }; then
+      failed=$rc
+    fi
   done <<EOF
 $comments
 EOF
@@ -877,6 +901,7 @@ cmd_resume() {  # <request-id>
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
     exit 3
   fi
+  require_record_applicable_now "$rid" "$rec"
   rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
     '.resumed = {at:$n} | .state = "resumed" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4

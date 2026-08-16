@@ -87,6 +87,7 @@ make_gh() {  # <dir>
   : > "$1/forge/ruling_id"
   : > "$1/forge/foreign_ruling_body"
   : > "$1/forge/foreign_ruling_id"
+  : > "$1/forge/poll_prefix"
   printf '0\n' > "$1/forge/lose_response_remaining"
   cat > "$1/bin/gh" <<'SH'
 #!/usr/bin/env bash
@@ -99,7 +100,7 @@ is_post=0
 case " $* " in *" --input "*) is_post=1 ;; esac
 
 case "$path" in
-  */pulls/4)
+  */pulls/4|*/pulls/5)
     cat "$F/head"; exit 0 ;;
   */issues/comments/*)
     id=${path##*/}
@@ -148,6 +149,7 @@ case "$path" in
       prev=$a
     done
     if printf '%s' "$*" | grep -q '@base64'; then
+      cat "$F/poll_prefix"
       while read -r id rid; do
         [ -n "$id" ] || continue
         jq -nr --argjson id "$id" --rawfile body "$F/last_request_body" \
@@ -524,6 +526,67 @@ test_stale_ruling_is_invalidated_before_fresh_emission() {
   pass "stale ruling: moved head is refused before fresh reconciliation"
 }
 
+test_complete_identity_is_rechecked_at_ruling_and_resume() {
+  local dir rid out rc state
+  dir=$(new_case ruling-gate)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "identity ruling gate: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 560 accepted
+  jq '.backlog.records[0].hold_reason = "architecture_ruling_required" | .backlog.records[0].title = "architecture decision"' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 560 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "identity ruling gate: changed gate returned $rc: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "superseded" ] || fail "identity ruling gate: stale record remained $state"
+
+  dir=$(new_case ruling-pr)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "identity ruling PR: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 561 accepted
+  jq '.backlog.records[0].pr_url = "https://github.com/o/r/pull/5"' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 561 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "identity ruling PR: changed PR returned $rc: $out"
+
+  dir=$(new_case resume-gate)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "identity resume gate: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 562 accepted
+  run_ob "$dir" ruling --request "$rid" --comment 562 --issue 2 >/dev/null 2>&1 \
+    || fail "identity resume gate: ruling failed"
+  jq '.backlog.records[0].hold_reason = "architecture_ruling_required" | .backlog.records[0].title = "architecture decision"' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" resume --request "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "identity resume gate: changed gate returned $rc: $out"
+
+  dir=$(new_case resume-config)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "identity resume config: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 563 accepted
+  run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 >/dev/null 2>&1 \
+    || fail "identity resume config: ruling failed"
+  printf '{"repo":"o/control","issue":3}\n' > "$dir/home/config/sol-control.json"
+  out=$(run_ob "$dir" resume --request "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "identity resume config: changed config returned $rc: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "superseded" ] || fail "identity resume config: stale record remained $state"
+  pass "identity transitions: ruling and resume require every bound axis"
+}
+
+test_poll_aggregate_preserves_unevaluable_precedence() {
+  local dir out rc
+  dir=$(new_case poll-severity)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll severity: emit failed"
+  printf 'not-base64\n' > "$dir/forge/poll_prefix"
+  write_foreign_ruling "$dir" fm-ob-deadbeefcafe 564
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "poll severity: later defect downgraded status 4 to $rc: $out"
+  pass "poll severity: could-not-observe outranks later defects"
+}
+
 test_disposition_completes_the_correlation() {
   local dir rid rec out rc
   dir=$(new_case c7)
@@ -874,6 +937,8 @@ test_ruling_wakes_the_exact_item
 test_unrelated_ruling_cannot_wake_the_item
 test_inbound_poll_advances_only_matching_ruling
 test_stale_ruling_is_invalidated_before_fresh_emission
+test_complete_identity_is_rechecked_at_ruling_and_resume
+test_poll_aggregate_preserves_unevaluable_precedence
 test_disposition_completes_the_correlation
 test_terminal_request_is_not_applicable
 test_request_requires_readable_correlation
