@@ -357,9 +357,15 @@ write_out() {
   ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-push 2>&1 )
 }
 
+# Publication on its own. write re-evaluates the head it published as its last
+# step, and every case below is about what reaches the push target rather than
+# about what GitHub is then asked to do, so that step is switched off here
+# instead of being pointed at a stub each of them would have to carry. The
+# recheck section owns that step, and one case there proves write still performs
+# it by default, so switching it off here cannot hide it going missing.
 publish_out() {
   local repo=$1
-  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write 2>&1 )
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck 2>&1 )
 }
 
 test_write_refuses_a_run_head_absent_from_this_checkout() {
@@ -1401,6 +1407,747 @@ test_show_reports_an_unknown_commit_as_such() {
   pass "fm-attest.sh: show fails as commit-unknown rather than as an absent attestation"
 }
 
+# ---------------------------------------------------------------------------
+# recheck - publishing an attestation makes the verdict follow it, without
+# anyone closing, reopening or editing a pull request.
+#
+# The property under test throughout is the ACTION taken against the forge, read
+# out of a log of every call, and never a message this program prints about it.
+# A stub that answered "re-run requested" would satisfy an assertion on the
+# wording while re-running nothing, so each case asserts on the POST that was or
+# was not made, and every negative case asserts the POST was NOT made.
+#
+# The stub applies the real --jq filter to real fixture JSON, so the selection
+# rules - this head only, this pull request, the run that started last - are
+# exercised rather than assumed. gh embeds a jq implementation, so the filters
+# are the deliverable and a case that cannot evaluate them skips rather than
+# passing on a weaker check.
+# ---------------------------------------------------------------------------
+
+# A repository whose push target is a real bare repository, so the evidence
+# recheck reads is a note genuinely published rather than one recorded locally.
+# Echoes nothing; sets up "$repo", "$repo.fork.git" and the stub PATH.
+new_published_repo() {
+  local repo=$1 head
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$repo.fork.git"
+  git -C "$repo" remote add origin "$repo.fork.git"
+  git -C "$repo" push -q origin fm/demo
+  add_note "$repo" "$head" "$(good_note "$head")"
+  git -C "$repo" push -q origin "$NOTES_REF:$NOTES_REF"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  install_gh_stub "$repo/stub"
+}
+
+# A gh that answers off its argv and records every call. Reads are answered by
+# applying the caller's own --jq filter, with jq, to a fixture file named in the
+# environment, so a filter that selects the wrong run fails here rather than
+# being papered over by a stub that returns what the test wanted. Writes are
+# recorded and nothing else, because the POST is the observable action.
+install_gh_stub() {
+  local dir=$1
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/gh" <<'FM_GH_STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${FM_TEST_GH_LOG:-/dev/null}"
+[ "${1:-}" = api ] || { echo "gh stub: unexpected call: $*" >&2; exit 3; }
+shift
+method=GET
+path=
+filter=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --method) method=$2; shift 2 ;;
+    --jq) filter=$2; shift 2 ;;
+    -f | -F | -H) shift 2 ;;
+    -*) shift ;;
+    *)
+      [ -n "$path" ] || path=$1
+      shift
+      ;;
+  esac
+done
+case "$method:$path" in
+  POST:*/rerun)
+    [ "${FM_TEST_RERUN_RC:-0}" = 0 ] || {
+      echo "HTTP 403: Resource not accessible by integration" >&2
+      exit "$FM_TEST_RERUN_RC"
+    }
+    exit 0
+    ;;
+esac
+fixture=
+case "$path" in
+  graphql) fixture=${FM_TEST_PULLS_JSON:-} ;;
+  */actions/workflows/*/runs*) fixture=${FM_TEST_RUNS_JSON:-} ;;
+  */pulls/*) fixture=${FM_TEST_PR_JSON:-} ;;
+esac
+[ -n "$fixture" ] && [ -f "$fixture" ] || { echo "gh stub: no fixture for $path" >&2; exit 4; }
+jq -r "$filter" < "$fixture"
+FM_GH_STUB
+  chmod +x "$dir/bin/gh"
+}
+
+# The three fixtures, written from one head so a case that means to change one
+# property changes exactly that one.
+runs_fixture() { # <path> <head> <run>:<attempt>:<status>:<conclusion>:<pr>...
+  local path=$1 head=$2 first=1 spec id attempt status conclusion pr
+  shift 2
+  {
+    printf '{"total_count":%s,"workflow_runs":[' "$#"
+    for spec in "$@"; do
+      IFS=: read -r id attempt status conclusion pr <<EOF
+$spec
+EOF
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      printf '{"id":%s,"run_attempt":%s,"status":"%s","conclusion":%s,"head_sha":"%s","pull_requests":[%s]}' \
+        "$id" "$attempt" "$status" \
+        "$([ "$conclusion" = none ] && printf 'null' || printf '"%s"' "$conclusion")" \
+        "$head" \
+        "$([ -z "$pr" ] && printf '' || printf '{"number":%s}' "$pr")"
+    done
+    printf ']}\n'
+  } > "$path"
+}
+
+pr_fixture() { # <path> <state> <head>
+  printf '{"state":"%s","head":{"sha":"%s"}}\n' "$2" "$3" > "$1"
+}
+
+pulls_fixture() { # <path> <head> <owner/name>:<number>...
+  local path=$1 head=$2 first=1 spec repo number
+  shift 2
+  {
+    printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":['
+    for spec in "$@"; do
+      repo=${spec%%:*}
+      number=${spec##*:}
+      [ "$first" -eq 1 ] || printf ','
+      first=0
+      printf '{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"}}' \
+        "$number" "$head" "$repo"
+    done
+    printf ']}}}}}\n'
+  } > "$path"
+}
+
+# A repository that simply does not have this commit. GraphQL answers that with
+# a null object and a success status, which is a fact about that repository
+# rather than a read that failed, and an unrelated remote in a checkout is
+# ordinary enough that it must not be able to stop the whole command.
+pulls_fixture_commit_absent() { # <path>
+  printf '{"data":{"repository":{"object":null}}}\n' > "$1"
+}
+
+# An open request GitHub still associates with this commit while its head has
+# moved past it. That association is real and permanent - the commit was in that
+# request's history - so it is exactly the shape that must not be mistaken for a
+# request open ON this commit.
+pulls_fixture_other_head() { # <path> <owner/name> <number> <that request's head>
+  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"}}]}}}}}\n' \
+    "$3" "$4" "$2" > "$1"
+}
+
+# A request on this exact head that is no longer open. GitHub returns closed and
+# merged requests here too, and a request that is not open has no check for this
+# to re-evaluate.
+pulls_fixture_state() { # <path> <owner/name> <number> <head> <state>
+  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"%s","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"}}]}}}}}\n' \
+    "$3" "$5" "$4" "$2" > "$1"
+}
+
+# One recheck invocation with the stubs in front of the real tools, its call log
+# in the case's own directory so nothing is shared between cases.
+recheck_out() {
+  local repo=$1
+  shift
+  (
+    cd "$repo" || exit 2
+    PATH="$repo/stub/bin:$PATH" \
+    FM_TEST_GH_LOG="$repo/gh.log" \
+    FM_TEST_RUNS_JSON="$repo/runs.json" \
+    FM_TEST_PR_JSON="$repo/pr.json" \
+    FM_TEST_PULLS_JSON="$repo/pulls.json" \
+      "$ATTEST" recheck "$@" 2>&1
+  )
+}
+
+assert_reran() {
+  local repo=$1 run=$2 label=$3
+  grep -qxF "api --method POST repos/example/repo/actions/runs/$run/rerun" "$repo/gh.log" \
+    || fail "$label: run $run was not re-run (calls: $(tr '\n' '|' < "$repo/gh.log"))"
+  [ "$(grep -c -- '--method POST' "$repo/gh.log")" -eq 1 ] \
+    || fail "$label: more than one write reached the forge"
+}
+
+assert_not_reran() {
+  local repo=$1 label=$2
+  [ -f "$repo/gh.log" ] || return 0
+  grep -q -- '--method POST' "$repo/gh.log" \
+    && fail "$label: a re-run was requested when it must not have been"
+  return 0
+}
+
+# Nothing this does may mutate a pull request. Closing, reopening or editing one
+# is the manual step being removed, and automating it would restore the defect
+# with a different actor rather than remove it.
+assert_left_the_pull_request_alone() {
+  local repo=$1 label=$2
+  [ -f "$repo/gh.log" ] || return 0
+  grep -qE -- '--method (PATCH|PUT|DELETE)|pr edit|pr close|pr reopen' "$repo/gh.log" \
+    && fail "$label: the pull request itself was altered to nudge the check"
+  return 0
+}
+
+jq_or_skip() {
+  command -v jq >/dev/null 2>&1 && return 1
+  pass "SKIP (jq unavailable): $1"
+  return 0
+}
+
+test_recheck_reruns_the_run_that_judged_a_published_head() {
+  local repo head out rc
+  jq_or_skip "a published head is re-evaluated without touching the pull request" && return
+  repo="$TMP_ROOT/recheck-converges"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a published exact-head attestation was not re-evaluated: $out"
+  assert_reran "$repo" 100 "converges"
+  assert_left_the_pull_request_alone "$repo" "converges"
+  assert_contains "$out" "re-ran https://github.com/example/repo/actions/runs/100" \
+    "the re-evaluation did not name the run it re-ran"
+  pass "fm-attest.sh: a published exact-head attestation re-runs the run that judged it"
+}
+
+test_recheck_requests_one_re_evaluation_per_attempt() {
+  local repo head out rc
+  jq_or_skip "re-triggering the same head twice requests nothing the second time" && return
+  repo="$TMP_ROOT/recheck-idempotent"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the first re-evaluation was refused"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  # Still success: nothing is wrong, and there is nothing left to do. The
+  # observable property is the count of writes, not the exit status.
+  [ "$rc" -eq 0 ] || fail "a repeat re-evaluation was reported as a fault: $out"
+  assert_reran "$repo" 100 "idempotent"
+  assert_contains "$out" "already been re-triggered" \
+    "the repeat was not reported as one"
+  pass "fm-attest.sh: an unchanged head and attempt is re-triggered once, not repeatedly"
+}
+
+test_recheck_bounds_repeated_re_evaluation_of_one_head() {
+  local repo head out rc ledger n
+  jq_or_skip "repeated re-evaluation of one head is bounded" && return
+  repo="$TMP_ROOT/recheck-bounded"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  # A fresh run identity each time, so the per-attempt guard above never fires
+  # and the only thing that can stop this is the bound itself.
+  for n in 100 101 102; do
+    runs_fixture "$repo/runs.json" "$head" "$n:1:completed:failure:7"
+    recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+      || fail "re-evaluation $n was refused before the bound"
+  done
+  runs_fixture "$repo/runs.json" "$head" 103:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a fourth re-evaluation of one head was not refused (exit $rc): $out"
+  assert_contains "$out" "recheck-budget-spent" "the bound was not named as the reason"
+  [ "$(grep -c -- '--method POST' "$repo/gh.log")" -eq 3 ] \
+    || fail "the bound did not stop the fourth request"
+  ledger=$(cat "$repo/.git/fm-attest-recheck.log")
+  assert_contains "$ledger" "action=requested" "the ledger recorded no request to audit"
+  pass "fm-attest.sh: re-evaluation of one head is bounded rather than repeated forever"
+}
+
+test_recheck_selects_the_run_that_started_last() {
+  local repo head out
+  jq_or_skip "the run that started last is the one re-run" && return
+  repo="$TMP_ROOT/recheck-latest-run"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  # Two failed runs on one unchanged head, which is what a synchronize followed
+  # by any other subscribed event leaves behind. The merge guard reduces a
+  # check's attempts to the one that started last, so re-running an older run
+  # would leave the newer failure speaking for the check.
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7 220:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7) \
+    || fail "two failed runs on one head refused re-evaluation: $out"
+  assert_reran "$repo" 220 "latest-run"
+  pass "fm-attest.sh: the run that started last is the one re-evaluated"
+}
+
+test_recheck_ignores_runs_belonging_to_another_head() {
+  local repo head other out rc
+  jq_or_skip "a run for another head is not evidence about this one" && return
+  repo="$TMP_ROOT/recheck-other-head"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  other=1111111111111111111111111111111111111111
+  pr_fixture "$repo/pr.json" open "$head"
+  # GitHub answered, and every run it returned belongs to a different commit.
+  printf '{"total_count":1,"workflow_runs":[{"id":101,"run_attempt":1,"status":"completed","conclusion":"failure","head_sha":"%s","pull_requests":[{"number":7}]}]}\n' \
+    "$other" > "$repo/runs.json"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a run for another head was treated as this head's (exit $rc): $out"
+  assert_contains "$out" "no-applicable-run" "another head's run was not excluded by reason"
+  assert_not_reran "$repo" "other-head"
+  # The matched control: the same listing with this head's own run in it.
+  runs_fixture "$repo/runs.json" "$head" 101:1:completed:failure:7
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the same listing naming this head was still refused"
+  assert_reran "$repo" 101 "other-head control"
+  pass "fm-attest.sh: a run for another commit is never this head's applicable run"
+}
+
+test_recheck_refuses_a_head_with_no_applicable_run() {
+  local repo head out rc
+  jq_or_skip "an empty applicable run set is not a passing check" && return
+  repo="$TMP_ROOT/recheck-no-run"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  printf '{"total_count":0,"workflow_runs":[]}\n' > "$repo/runs.json"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "an empty run set was not refused (exit $rc): $out"
+  assert_contains "$out" "no-applicable-run" "an empty run set was not named as its own state"
+  assert_not_reran "$repo" "no-run"
+  pass "fm-attest.sh: a head with no applicable run is refused, never treated as passing"
+}
+
+test_recheck_refuses_a_truncated_run_listing() {
+  local repo head out rc
+  jq_or_skip "a listing GitHub did not return in full is no verdict" && return
+  repo="$TMP_ROOT/recheck-truncated"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  # GitHub says there are more runs than it handed over, so the run that started
+  # last may be one this never saw.
+  printf '{"total_count":140,"workflow_runs":[{"id":100,"run_attempt":1,"status":"completed","conclusion":"failure","head_sha":"%s","pull_requests":[{"number":7}]}]}\n' \
+    "$head" > "$repo/runs.json"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a truncated listing was treated as a whole one (exit $rc): $out"
+  assert_contains "$out" "forge-read-truncated" "a truncated listing was not named as such"
+  assert_not_reran "$repo" "truncated"
+  pass "fm-attest.sh: a truncated run listing reaches no verdict rather than a wrong one"
+}
+
+test_recheck_reports_an_unreadable_forge_as_no_verdict() {
+  local repo head out rc
+  jq_or_skip "a forge that could not be read is not a head with no runs" && return
+  repo="$TMP_ROOT/recheck-forge-unreadable"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  rm -f "$repo/runs.json"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  # Exit 2, not 1: a read that failed says nothing about the evidence, and the
+  # exit status is what a caller branching on it reads.
+  [ "$rc" -eq 2 ] || fail "an unreadable forge did not reach no verdict (exit $rc): $out"
+  assert_contains "$out" "forge-unreadable" "an unreadable forge was not named as such"
+  assert_not_contains "$out" "no-applicable-run" \
+    "a forge this could not read was reported as a head with no runs"
+  assert_not_reran "$repo" "forge-unreadable"
+  pass "fm-attest.sh: a forge that could not be read is could-not-observe, never absence"
+}
+
+test_recheck_does_nothing_when_the_run_already_passed() {
+  local repo head out rc
+  jq_or_skip "a head whose check already passed needs no re-evaluation" && return
+  repo="$TMP_ROOT/recheck-green"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:2:completed:success:7
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "an already green head was reported as a fault: $out"
+  assert_not_reran "$repo" "green"
+  assert_contains "$out" "already passed" "a green run was not reported as one"
+  pass "fm-attest.sh: a head whose check already passed is left alone"
+}
+
+test_recheck_refuses_a_head_the_request_has_moved_off() {
+  local repo head out rc
+  jq_or_skip "a moved pull request head invalidates the attempt" && return
+  repo="$TMP_ROOT/recheck-moved"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open 1111111111111111111111111111111111111111
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a head the request moved off was still re-evaluated (exit $rc): $out"
+  assert_contains "$out" "pull-request-head-moved" "a moved head was not named as such"
+  assert_not_reran "$repo" "moved"
+  # The matched control: the same request open on this exact head.
+  pr_fixture "$repo/pr.json" open "$head"
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the same request open on this head was still refused"
+  assert_reran "$repo" 100 "moved control"
+  pass "fm-attest.sh: a pull request that moved off this head is not re-evaluated for it"
+}
+
+test_recheck_refuses_a_head_with_no_published_attestation() {
+  local repo head later out rc
+  jq_or_skip "a head with no published attestation is not re-evaluated" && return
+  repo="$TMP_ROOT/recheck-unattested"
+  new_published_repo "$repo"
+  printf 'two\n' > "$repo/b.txt"
+  git -C "$repo" add b.txt
+  git -C "$repo" commit -qm two
+  later=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" push -q origin fm/demo
+  pr_fixture "$repo/pr.json" open "$later"
+  runs_fixture "$repo/runs.json" "$later" 100:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$later" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "an unattested head was still re-evaluated (exit $rc): $out"
+  assert_contains "$out" "attestation-not-published-for-head" \
+    "an unattested head was not refused for its own reason"
+  assert_not_reran "$repo" "unattested"
+  # The matched control: the head the published ref does attest.
+  head=$(git -C "$repo" rev-parse 'HEAD^')
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the head the published ref attests was still refused"
+  assert_reran "$repo" 100 "unattested control"
+  pass "fm-attest.sh: an attestation for another commit never re-evaluates this head"
+}
+
+test_recheck_reports_invalid_evidence_as_evidence_not_as_a_missed_step() {
+  local repo head out rc
+  jq_or_skip "invalid published evidence is a verdict on the evidence" && return
+  repo="$TMP_ROOT/recheck-invalid-evidence"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  # A note published for this head that names another commit. The check would
+  # refuse it, so re-running the check could only reproduce that refusal, and
+  # the reader must be sent to the evidence rather than to the forge.
+  add_note "$repo" "$head" "$(good_note 1111111111111111111111111111111111111111)"
+  git -C "$repo" push -q --force origin "$NOTES_REF:$NOTES_REF"
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "invalid published evidence was still re-evaluated (exit $rc): $out"
+  assert_contains "$out" "not attested (attestation-not-bound)" \
+    "invalid evidence was not reported in the evidence's own words"
+  assert_not_contains "$out" "not re-evaluated" \
+    "invalid evidence was dressed up as a re-evaluation that merely did not happen"
+  assert_not_reran "$repo" "invalid-evidence"
+  pass "fm-attest.sh: invalid published evidence is refused as evidence, not re-triggered"
+}
+
+test_recheck_reports_a_run_still_in_flight_rather_than_guessing() {
+  local repo head out rc
+  jq_or_skip "a run still in flight is neither a pass nor a failure" && return
+  repo="$TMP_ROOT/recheck-in-flight"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:in_progress:none:7
+  # No wait at all, so the case is about the answer rather than about how long
+  # the bound is. The bound itself is a knob, and zero is one of its values.
+  out=$(FM_ATTEST_RECHECK_WAIT=0 recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a run in flight was resolved into a verdict (exit $rc): $out"
+  assert_contains "$out" "run-in-progress" "a run in flight was not named as its own state"
+  assert_not_reran "$repo" "in-flight"
+  pass "fm-attest.sh: a run still in flight is reported rather than resolved either way"
+}
+
+test_recheck_without_gh_reports_a_missing_tool_not_a_verdict() {
+  local repo head out rc
+  repo="$TMP_ROOT/recheck-no-gh"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  install_unbounded_path "$repo/bare"
+  out=$(cd "$repo" && PATH="$repo/bare" "$ATTEST" recheck --head "$head" --repo example/repo --pr 7 2>&1)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an absent gh reached a verdict (exit $rc): $out"
+  assert_contains "$out" "forge-tool-missing" "an absent gh was not named as a missing tool"
+  assert_not_contains "$out" "no-applicable-run" \
+    "an absent gh was reported as a head with no runs"
+  pass "fm-attest.sh: an absent gh is a missing tool, never a statement about the check"
+}
+
+test_recheck_reports_no_open_pull_request_as_such() {
+  local repo head out rc
+  jq_or_skip "a head carrying no open pull request has no check to re-evaluate" && return
+  repo="$TMP_ROOT/recheck-no-pr"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  # The landing-branch shape: validated and attested in its own right, proposed
+  # nowhere. Resolution has to reach a github.com repository to ask at all.
+  git -C "$repo" remote add upstream https://github.com/example/repo.git
+  # A re-runnable failed run is in place throughout, so every "nothing to
+  # re-evaluate" case below fails by re-running something rather than by running
+  # out of fixtures. A case that can only fail for want of a fixture proves
+  # nothing about the rule it names.
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pulls_fixture "$repo/pulls.json" "$head"
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a head with no open pull request was reported as a fault: $out"
+  assert_contains "$out" "no open pull request" "an empty answer was not reported as one"
+  # The same outcome from the other shape GitHub gives it: a repository that
+  # does not carry this commit at all.
+  pulls_fixture_commit_absent "$repo/pulls.json"
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a repository without this commit was read as a failed read: $out"
+  # And the third: a request on this exact head that is no longer open. GitHub
+  # returns closed and merged requests here as well, and neither has a check
+  # left for this to re-evaluate.
+  pulls_fixture_state "$repo/pulls.json" example/repo 7 "$head" MERGED
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a merged request on this head was treated as a fault (exit $rc): $out"
+  assert_contains "$out" "no open pull request" \
+    "a request that is not open was counted as one to re-evaluate"
+  assert_not_reran "$repo" "merged-request"
+  # And the fourth shape, which must NOT join them: a repository this could not
+  # read at all. Reading that as "no pull request here" would exit 0 and do
+  # nothing, which is the closest thing in this design to reporting a pass.
+  rm -f "$repo/pulls.json"
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unreadable candidate repository was not could-not-observe (exit $rc): $out"
+  assert_contains "$out" "forge-unreadable" "an unreadable candidate was not named as such"
+  assert_not_contains "$out" "no open pull request" \
+    "a repository this could not read was reported as one with no pull request"
+  assert_not_reran "$repo" "no-pr"
+  # The matched control: the same head with one open request on it.
+  pulls_fixture "$repo/pulls.json" "$head" example/repo:7
+  recheck_out "$repo" --head "$head" >/dev/null \
+    || fail "the same head with an open request was not re-evaluated"
+  assert_reran "$repo" 100 "no-pr control"
+  pass "fm-attest.sh: a head carrying no open pull request is an outcome, not a fault"
+}
+
+test_recheck_ignores_a_request_this_commit_is_only_associated_with() {
+  local repo head out rc
+  jq_or_skip "a request this commit merely appears in is not a request open on it" && return
+  repo="$TMP_ROOT/recheck-associated-only"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" remote add upstream https://github.com/example/repo.git
+  # GitHub associates a pull request with every commit that was ever in its
+  # history, so a request whose head has moved past this commit still comes back
+  # here. Re-evaluating it would judge a head this attestation does not cover.
+  pulls_fixture_other_head "$repo/pulls.json" example/repo 7 \
+    1111111111111111111111111111111111111111
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "an association-only request was treated as a fault (exit $rc): $out"
+  assert_contains "$out" "no open pull request" \
+    "a request open on another head was counted as one open on this head"
+  assert_not_reran "$repo" "associated-only"
+  # The matched control: the same request, open on this exact head.
+  pulls_fixture "$repo/pulls.json" "$head" example/repo:7
+  recheck_out "$repo" --head "$head" >/dev/null \
+    || fail "the same request open on this head was refused"
+  assert_reran "$repo" 100 "associated-only control"
+  pass "fm-attest.sh: only a request open ON this head resolves to this head"
+}
+
+test_recheck_refuses_to_choose_between_two_open_pull_requests() {
+  local repo head out rc
+  jq_or_skip "one head on two open pull requests is not chosen between" && return
+  repo="$TMP_ROOT/recheck-ambiguous"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" remote add upstream https://github.com/example/repo.git
+  pulls_fixture "$repo/pulls.json" "$head" example/repo:7 other/repo:9
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "one head on two requests was resolved anyway (exit $rc): $out"
+  assert_contains "$out" "pull-request-ambiguous" "the ambiguity was not named as such"
+  assert_not_reran "$repo" "ambiguous"
+  pass "fm-attest.sh: one head on two open pull requests is refused rather than guessed"
+}
+
+test_recheck_dry_run_asks_the_forge_to_do_nothing() {
+  local repo head out rc
+  jq_or_skip "a dry run reports what it would do and does none of it" && return
+  repo="$TMP_ROOT/recheck-dry-run"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7 --dry-run)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a dry run was refused: $out"
+  assert_contains "$out" "would re-run" "a dry run did not say what it would have done"
+  assert_not_reran "$repo" "dry-run"
+  [ ! -f "$repo/.git/fm-attest-recheck.log" ] \
+    || assert_not_contains "$(cat "$repo/.git/fm-attest-recheck.log")" "action=requesting" \
+      "a dry run recorded a request it never made"
+  # The matched control: the same call without --dry-run.
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the same call without --dry-run was refused"
+  assert_reran "$repo" 100 "dry-run control"
+  pass "fm-attest.sh: a dry run names the re-run it would make and makes none"
+}
+
+test_recheck_refuses_half_a_pull_request_identity() {
+  local repo head out rc
+  repo="$TMP_ROOT/recheck-half-identity"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  # A number without the repository holding it names nothing, and resolving the
+  # other half would answer a different question than the one asked.
+  out=$(recheck_out "$repo" --head "$head" --pr 7)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "half a pull request identity was accepted (exit $rc): $out"
+  assert_contains "$out" "given together or not at all" \
+    "half an identity was not refused in plain words"
+  out=$(recheck_out "$repo" --head not-a-sha)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a head that is not a sha was accepted (exit $rc): $out"
+  assert_contains "$out" "40-character lowercase sha" "an unusable head was not named as such"
+  assert_not_reran "$repo" "half-identity"
+  pass "fm-attest.sh: an argument this cannot act on is a usage error, named in plain words"
+}
+
+test_recheck_records_every_decision_it_made() {
+  local repo head ledger
+  jq_or_skip "every decision is recorded where it can be audited" && return
+  repo="$TMP_ROOT/recheck-ledger"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the re-evaluation was refused"
+  ledger="$repo/.git/fm-attest-recheck.log"
+  [ -f "$ledger" ] || fail "no re-evaluation record was written"
+  # Repository, pull request and head together, so a record can be matched back
+  # to exactly one thing that was re-triggered.
+  assert_contains "$(cat "$ledger")" "repo=example/repo pr=7 head=$head" \
+    "the record did not bind repository, pull request and head"
+  assert_contains "$(cat "$ledger")" "run=100 attempt=1 action=requested" \
+    "the record did not name what was re-triggered"
+  pass "fm-attest.sh: every re-evaluation decision is recorded with what it bound"
+}
+
+test_recheck_reports_a_refused_rerun_without_claiming_one() {
+  local repo head out rc
+  jq_or_skip "a re-run GitHub refused is reported as refused" && return
+  repo="$TMP_ROOT/recheck-rerun-refused"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head"
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  out=$(FM_TEST_RERUN_RC=1 recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a refused re-run was not reported as reaching no verdict (exit $rc): $out"
+  assert_contains "$out" "rerun-not-requested" "a refused re-run was not named as such"
+  assert_contains "$out" "Actions tab" "the residual manual fallback was not named"
+  assert_contains "$(cat "$repo/.git/fm-attest-recheck.log")" "action=refused" \
+    "a refused request was not recorded"
+  pass "fm-attest.sh: a re-run GitHub refused is reported, never counted as done"
+}
+
+test_write_re_evaluates_the_head_it_published() {
+  local repo head out rc
+  jq_or_skip "write re-evaluates the head it published, by default" && return
+  repo="$TMP_ROOT/write-then-recheck"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  # Nothing published yet for this run: strip the note and the ref so write is
+  # the thing that publishes it, exactly as a contributor runs it.
+  git -C "$repo" update-ref -d "$NOTES_REF"
+  git -C "$repo" push -q --delete origin "$NOTES_REF"
+  # write hands recheck nothing but the head it published, so the pull request
+  # is resolved rather than named, exactly as a contributor's run does it.
+  git -C "$repo" remote add upstream https://github.com/example/repo.git
+  pulls_fixture "$repo/pulls.json" "$head" example/repo:7
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  out=$(
+    cd "$repo" || exit 2
+    PATH="$repo/stub/bin:$PATH" \
+    FM_TEST_GH_LOG="$repo/gh.log" \
+    FM_TEST_RUNS_JSON="$repo/runs.json" \
+    FM_TEST_PR_JSON="$repo/pr.json" \
+    FM_TEST_PULLS_JSON="$repo/pulls.json" \
+      "$ATTEST" write 2>&1
+  )
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "write did not publish and re-evaluate in one step: $out"
+  assert_contains "$out" "published $NOTES_REF" "write did not publish"
+  assert_reran "$repo" 100 "write-then-recheck"
+  assert_left_the_pull_request_alone "$repo" "write-then-recheck"
+  pass "fm-attest.sh: write re-evaluates the head it published without being asked"
+}
+
+test_write_no_recheck_publishes_without_asking_the_forge() {
+  local repo head out rc
+  repo="$TMP_ROOT/write-no-recheck"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" update-ref -d "$NOTES_REF"
+  git -C "$repo" push -q --delete origin "$NOTES_REF"
+  out=$(
+    cd "$repo" || exit 2
+    PATH="$repo/stub/bin:$PATH" FM_TEST_GH_LOG="$repo/gh.log" \
+      "$ATTEST" write --no-recheck 2>&1
+  )
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "write --no-recheck was refused: $out"
+  assert_contains "$out" "published $NOTES_REF" "write --no-recheck did not publish"
+  [ ! -s "$repo/gh.log" ] || fail "write --no-recheck still reached the forge"
+  pass "fm-attest.sh: write --no-recheck publishes and asks the forge nothing"
+}
+
+test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
+  local dir script out rc
+  # The message the workflow actually prints, lifted out of the workflow and run
+  # as the workflow runs it. Once publishing re-evaluates the head on its own,
+  # an instruction to close and reopen the request teaches work that is no
+  # longer needed, and this is the only place that text exists.
+  dir="$TMP_ROOT/step-no-manual-nudge"
+  mkdir -p "$dir"
+  install_verifier_stub "$dir" 1
+  script="$dir/verify-step.sh"
+  workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
+  [ -s "$script" ] || fail "the verify step could not be lifted out of the workflow"
+  out=$(cd "$dir" && HEAD_SHA=0123456789012345678901234567890123456789 \
+    PR_AUTHOR=someone bash "$script" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "the refusal branch did not fail"
+  assert_not_contains "$out" "close and reopen" \
+    "the check still tells a contributor to close and reopen the pull request"
+  assert_not_contains "$out" "edit its title or body" \
+    "the check still tells a contributor to edit the pull request"
+  assert_contains "$out" "bin/fm-attest.sh write" \
+    "the check no longer names the command that publishes and re-evaluates"
+  assert_contains "$out" "Actions tab" \
+    "the check does not name the one fallback that remains"
+  pass "fm-attest.sh: the check sends a contributor to publish, not to edit the request"
+}
+
 test_absent_notes_ref_refuses_as_absent
 test_ref_without_note_for_head_refuses_distinctly
 test_unreadable_notes_ref_refuses_distinctly
@@ -1446,3 +2193,27 @@ test_write_reports_an_unfetchable_push_target_as_such
 test_write_reports_an_unreconcilable_local_ref_as_such
 test_write_reports_an_unrecordable_note_as_such
 test_show_reports_an_unknown_commit_as_such
+test_recheck_reruns_the_run_that_judged_a_published_head
+test_recheck_requests_one_re_evaluation_per_attempt
+test_recheck_bounds_repeated_re_evaluation_of_one_head
+test_recheck_selects_the_run_that_started_last
+test_recheck_ignores_runs_belonging_to_another_head
+test_recheck_refuses_a_head_with_no_applicable_run
+test_recheck_refuses_a_truncated_run_listing
+test_recheck_reports_an_unreadable_forge_as_no_verdict
+test_recheck_does_nothing_when_the_run_already_passed
+test_recheck_refuses_a_head_the_request_has_moved_off
+test_recheck_refuses_a_head_with_no_published_attestation
+test_recheck_reports_invalid_evidence_as_evidence_not_as_a_missed_step
+test_recheck_reports_a_run_still_in_flight_rather_than_guessing
+test_recheck_without_gh_reports_a_missing_tool_not_a_verdict
+test_recheck_reports_no_open_pull_request_as_such
+test_recheck_ignores_a_request_this_commit_is_only_associated_with
+test_recheck_refuses_to_choose_between_two_open_pull_requests
+test_recheck_dry_run_asks_the_forge_to_do_nothing
+test_recheck_refuses_half_a_pull_request_identity
+test_recheck_records_every_decision_it_made
+test_recheck_reports_a_refused_rerun_without_claiming_one
+test_write_re_evaluates_the_head_it_published
+test_write_no_recheck_publishes_without_asking_the_forge
+test_check_step_no_longer_sends_a_contributor_to_edit_the_request
