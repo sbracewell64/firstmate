@@ -368,13 +368,15 @@ test_reviewer_checkout_is_isolated_from_the_source() {
 }
 
 test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
-  local case_dir result reason object
+  local case_dir result reason object candidate_commit candidate_tree checkout_commit checkout_tree
   case_dir=$(make_case restoration)
   write_reviewer "$case_dir/reviewer.sh" 0
   run_launch "$case_dir" rec "$case_dir/reviewer.sh" >/dev/null 2>&1 \
     || fail "control setup: the launch must pass"
   [ "$(record_result "$case_dir/rec")" = PASS ] \
     || fail "control setup: the baseline record must classify PASS"
+  candidate_commit=$(jq -r '.dimensions.candidate_commit.value' "$case_dir/rec/record.json")
+  candidate_tree=$(jq -r '.dimensions.candidate_tree.value' "$case_dir/rec/record.json")
 
   # Simulate a reviewer that did not leave its pinned checkout where it found it.
   git -C "$case_dir/rec/checkout" commit -q --allow-empty -m "reviewer moved HEAD"
@@ -401,15 +403,24 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
     || fail "an attached checkout must fail through the read-time isolation re-proof"
   git -C "$case_dir/rec/checkout" checkout -q --detach
 
-  jq '.dimensions.reviewer_checkout_commit.value = "0000000000000000000000000000000000000000"' \
+  printf 'divergent checkout\n' > "$case_dir/rec/checkout/subject.txt"
+  git -C "$case_dir/rec/checkout" add subject.txt
+  git -C "$case_dir/rec/checkout" commit -qm "diverge from candidate"
+  checkout_commit=$(git -C "$case_dir/rec/checkout" rev-parse HEAD)
+  checkout_tree=$(git -C "$case_dir/rec/checkout" rev-parse 'HEAD^{tree}')
+  jq --arg commit "$checkout_commit" --arg tree "$checkout_tree" \
+    '.dimensions.reviewer_checkout_commit.value = $commit
+     | .dimensions.reviewer_checkout_tree.value = $tree' \
     "$case_dir/rec/record.json" > "$case_dir/rec/record.tmp"
   mv "$case_dir/rec/record.tmp" "$case_dir/rec/record.json"
   [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
     || fail "checkout identity divergent from candidate identity must not pass"
   [ "$(record_reason "$case_dir/rec")" = verification_unreachable ] \
     || fail "divergent checkout identity must fail through the read-time isolation re-proof"
-  jq --arg head "$(git -C "$case_dir/rec/checkout" rev-parse HEAD)" \
-    '.dimensions.reviewer_checkout_commit.value = $head' \
+  git -C "$case_dir/rec/checkout" reset -q --hard "$candidate_commit"
+  jq --arg commit "$candidate_commit" --arg tree "$candidate_tree" \
+    '.dimensions.reviewer_checkout_commit.value = $commit
+     | .dimensions.reviewer_checkout_tree.value = $tree' \
     "$case_dir/rec/record.json" > "$case_dir/rec/record.tmp"
   mv "$case_dir/rec/record.tmp" "$case_dir/rec/record.json"
 
