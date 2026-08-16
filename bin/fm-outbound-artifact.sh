@@ -588,7 +588,7 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head>
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
   local rec gate channel project pr_url pr_ref head venue missing rid record
-  local attempt delay body found existing dedupe_rc
+  local attempt delay body found existing dedupe_rc retry_rc
 
   read_snapshot || die "fleet backlog could not be read" 4
   rec=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
@@ -702,6 +702,20 @@ cmd_emit() {
       printf 'requested: %s on %s#%s\n' "$rid" "$SOL_REPO" "$SOL_ISSUE"
       return 0
     fi
+    found=$(sol_artifact_present "$rid"); retry_rc=$?
+    if [ "$retry_rc" -eq 0 ]; then
+      record=$(printf '%s' "$record" | jq --arg c "$found" --arg n "$(now_iso)" \
+        '.comment_id = $c | .state = "emitted" | .updated = $n')
+      record_write "$rid" "$record" || die "could not write the correlation record" 4
+      printf 'requested: %s on %s#%s (accepted before transport response failed)\n' \
+        "$rid" "$SOL_REPO" "$SOL_ISSUE"
+      return 0
+    fi
+    if [ "$retry_rc" -ne 1 ]; then
+      printf '%s: transport failed and request presence could not be observed; refusing to retry %s\n' \
+        "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED" "$rid" >&2
+      exit 4
+    fi
     [ "$attempt" -lt "$ATTEMPTS" ] || break
     case $delay in ''|*[!0-9]*) delay=0 ;; esac
     if [ "$delay" -gt 0 ]; then sleep "$delay"; delay=$((delay * 2)); fi
@@ -743,7 +757,7 @@ require_record() {  # <request-id>; sets RECORD or exits
 }
 
 cmd_ruling() {  # <request-id> <comment-id> <issue>
-  local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body
+  local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -753,6 +767,12 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
       exit 3 ;;
   esac
+  request_comment=$(printf '%s' "$rec" | jq -r '.comment_id // ""')
+  if [ -n "$request_comment" ] && [ "$comment" = "$request_comment" ]; then
+    printf '%s: request comment %s cannot rule on itself\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
+    exit 3
+  fi
   venue_repo=$(printf '%s' "$rec" | jq -r '.venue' | sed 's/#.*//')
   venue_issue=$(printf '%s' "$rec" | jq -r '.venue' | sed 's/.*#//')
   if [ "$issue" != "$venue_issue" ]; then
@@ -773,7 +793,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
       exit 3
     }
   body=$(printf '%s' "$artifact" | jq -r '.body')
-  printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_BODY_MARKER $rid" \
+  printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_RULING_MARKER $rid" \
     && printf '%s\n' "$body" | grep -Fqx "gate: $(printf '%s' "$rec" | jq -r '.identity.gate')" \
     && printf '%s\n' "$body" | grep -Fqx "project: $(printf '%s' "$rec" | jq -r '.identity.project')" \
     && printf '%s\n' "$body" | grep -Fqx "repo: $(printf '%s' "$rec" | jq -r '.identity.repo')" \
@@ -785,10 +805,44 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
       exit 3
     }
-  rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg n "$(now_iso)" \
-    '.ruling = {comment_id:$c, observed:$n} | .state = "ruled" | .updated = $n')
+  verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p' | head -1)
+  [ -n "$verdict" ] || {
+    printf '%s: comment %s has no ruling verdict\n' "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
+    exit 3
+  }
+  rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg v "$verdict" --arg n "$(now_iso)" \
+    '.ruling = {comment_id:$c, verdict:$v, observed:$n} | .state = "ruled" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
   printf 'ruled: %s wakes %s\n' "$rid" "$(printf '%s' "$rec" | jq -r '.identity.item')"
+}
+
+cmd_poll() {
+  local comments row rid comment rc failed=0 poll_record poll_state
+  read_sol_config || return 0
+  probe_budget || die "the ruling poll probe budget is exhausted" 4
+  comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --paginate \
+    --jq '.[] | [.id, .body] | @base64') || die "ruling comments could not be observed" 4
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    comment=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0] | tostring') \
+      || { failed=4; continue; }
+    rid=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]' \
+      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \(fm-ob-[0-9a-f]*\)$/\1/p" | head -1)
+    [ -n "$rid" ] || continue
+    poll_record=$(record_read "$rid") || poll_record=
+    if [ -n "$poll_record" ]; then
+      poll_state=$(printf '%s' "$poll_record" | jq -r '.state')
+      case $poll_state in
+        resumed|closed|superseded) continue ;;
+        ruled) cmd_resume "$rid" || { rc=$?; failed=$rc; }; continue ;;
+      esac
+    fi
+    cmd_ruling "$rid" "$comment" "$SOL_ISSUE" || { rc=$?; failed=$rc; continue; }
+    cmd_resume "$rid" || { rc=$?; failed=$rc; }
+  done <<EOF
+$comments
+EOF
+  [ "$failed" -eq 0 ] || exit "$failed"
 }
 
 cmd_resume() {  # <request-id>
@@ -844,6 +898,7 @@ case $CMD in
     ;;
   reconcile)
     [ $# -eq 0 ] || die "reconcile takes no arguments"
+    cmd_poll
     sweep || true
     printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="defect" and .channel=="sol-control" and .missing==null) | .item' \
       | while IFS= read -r ITEM; do
@@ -855,6 +910,10 @@ case $CMD in
     sweep || true
     render_defects
     sweep_exit; exit $?
+    ;;
+  poll)
+    [ $# -eq 0 ] || die "poll takes no arguments"
+    cmd_poll
     ;;
   emit)
     ITEM=; RATIONALE=; DRY=0

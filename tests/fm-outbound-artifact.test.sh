@@ -83,6 +83,9 @@ make_gh() {  # <dir>
   printf '0\n' > "$1/forge/fail_remaining"
   : > "$1/forge/post_log"
   : > "$1/forge/last_request_body"
+  : > "$1/forge/ruling_body"
+  : > "$1/forge/ruling_id"
+  printf '0\n' > "$1/forge/lose_response_remaining"
   cat > "$1/bin/gh" <<'SH'
 #!/usr/bin/env bash
 # Minimal gh api shim: pull request head reads, issue comment listing, and
@@ -98,8 +101,13 @@ case "$path" in
     cat "$F/head"; exit 0 ;;
   */issues/comments/*)
     id=${path##*/}
+    if [ -s "$F/ruling_id" ] && [ "$id" = "$(cat "$F/ruling_id")" ]; then
+      body_file="$F/ruling_body"
+    else
+      body_file="$F/last_request_body"
+    fi
     jq -n --argjson id "$id" --arg issue "${RULING_ISSUE:-2}" \
-      --rawfile body "$F/last_request_body" \
+      --rawfile body "$body_file" \
       '{id:$id,issue_url:("https://api.github.com/repos/o/control/issues/"+$issue),body:$body}'
     exit 0 ;;
   */commits/*/pulls)
@@ -120,6 +128,11 @@ case "$path" in
       printf '%s %s\n' "$id" "$rid" >> "$F/comments"
       printf '%s\n' "$body" > "$F/last_request_body"
       printf 'posted %s\n' "$rid" >> "$F/post_log"
+      lost=$(cat "$F/lose_response_remaining")
+      if [ "$lost" -gt 0 ]; then
+        printf '%s\n' "$((lost - 1))" > "$F/lose_response_remaining"
+        exit 1
+      fi
       printf '{"id":%s}\n' "$id"
       exit 0
     fi
@@ -130,6 +143,18 @@ case "$path" in
       case $prev in --jq) want=$(printf '%s' "$a" | sed -n 's/.*contains("\([^"]*\)").*/\1/p') ;; esac
       prev=$a
     done
+    if printf '%s' "$*" | grep -q '@base64'; then
+      while read -r id rid; do
+        [ -n "$id" ] || continue
+        jq -nr --argjson id "$id" --rawfile body "$F/last_request_body" \
+          '[$id,$body] | @base64'
+      done < "$F/comments"
+      if [ -s "$F/ruling_id" ]; then
+        jq -nr --argjson id "$(cat "$F/ruling_id")" --rawfile body "$F/ruling_body" \
+          '[$id,$body] | @base64'
+      fi
+      exit 0
+    fi
     while read -r id rid; do
       [ -n "$id" ] || continue
       if [ -z "$want" ] || [ "$rid" = "$want" ]; then printf '%s\n' "$id"; fi
@@ -139,6 +164,14 @@ esac
 exit 0
 SH
   chmod +x "$1/bin/gh"
+}
+
+write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>]
+  local dir=$1 rid=$2 comment=$3 verdict=${4:-approved}
+  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
+    > "$dir/forge/ruling_body"
+  printf 'verdict: %s\n' "$verdict" >> "$dir/forge/ruling_body"
+  printf '%s\n' "$comment" > "$dir/forge/ruling_id"
 }
 
 # Run the command under test against one case directory.
@@ -320,6 +353,19 @@ test_crash_recovery_adopts_its_own_request() {
   pass "control 4 RECOVERY: a crashed emit adopts its own posted request instead of duplicating"
 }
 
+test_ambiguous_post_is_observed_before_retry() {
+  local dir posts state
+  dir=$(new_case c4ambiguous)
+  printf '1\n' > "$dir/forge/lose_response_remaining"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+    || fail "ambiguous post: accepted request with lost response was not recovered"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 1 ] || fail "ambiguous post: accepted request was duplicated ($posts posts)"
+  state=$(jq -r '.state' "$dir/home/data/outbound-artifacts"/*.json)
+  [ "$state" = "emitted" ] || fail "ambiguous post: recovered record remained $state"
+  pass "ambiguous post: retry re-observes an accepted request before posting again"
+}
+
 test_dedupe_observation_failure_refuses_to_post() {
   local dir out rc posts
   dir=$(new_case c4dedupe)
@@ -372,6 +418,7 @@ test_ruling_wakes_the_exact_item() {
   dir=$(new_case c5)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "control 5: emit failed"
   rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 555
   out=$(run_ob "$dir" ruling --request "$rid" --comment 555 --issue 2 2>&1) \
     || fail "control 5: ruling refused its own request: $out"
   printf '%s' "$out" | grep -q 'wakes waiting-item' \
@@ -387,6 +434,9 @@ test_unrelated_ruling_cannot_wake_the_item() {
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "control 6: emit failed"
   rid=$(emitted_request_id "$dir")
 
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 900 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "control 6: the outbound request comment ruled on itself: $out"
+
   # RED 1: a ruling for an identity nobody asked under.
   out=$(run_ob "$dir" ruling --request fm-ob-deadbeefcafe --comment 777 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "control 6: an unknown request id was accepted, exit $rc: $out"
@@ -397,7 +447,8 @@ test_unrelated_ruling_cannot_wake_the_item() {
   out=$(run_ob "$dir" ruling --request "$rid" --comment 778 --issue 99 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "control 6: a foreign-issue ruling was accepted, exit $rc: $out"
 
-  printf 'unrelated ruling\n' > "$dir/forge/last_request_body"
+  printf 'unrelated ruling\n' > "$dir/forge/ruling_body"
+  printf '779\n' > "$dir/forge/ruling_id"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 779 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "control 6: an unrelated same-issue comment was accepted: $out"
 
@@ -409,11 +460,36 @@ test_unrelated_ruling_cannot_wake_the_item() {
   pass "control 6 RED: an unrelated ruling refuses and cannot wake the waiting item"
 }
 
+test_inbound_poll_advances_only_matching_ruling() {
+  local dir rid out rc state
+  dir=$(new_case poll)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll: emit failed"
+  rid=$(emitted_request_id "$dir")
+  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll: request-only issue failed polling"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "emitted" ] || fail "poll: outbound request comment advanced state to $state"
+  write_ruling "$dir" "$rid" 556 accepted
+  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll: matching ruling was not ingested"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "resumed" ] || fail "poll: matching ruling left state $state"
+
+  dir=$(new_case poll-unrelated)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll unrelated: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" fm-ob-deadbeefcafe 557 rejected
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "poll unrelated: unrelated marker returned $rc: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "emitted" ] || fail "poll unrelated: unrelated ruling advanced state to $state"
+  pass "poll: inbound path resumes only the exactly correlated ruling"
+}
+
 test_disposition_completes_the_correlation() {
   local dir rid rec out rc
   dir=$(new_case c7)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "control 7: emit failed"
   rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 555
 
   # RED: closure cannot skip the chain. An emitted-but-unruled request has no
   # outcome to record, so closing it must refuse.
@@ -443,6 +519,7 @@ test_terminal_request_is_not_applicable() {
   dir=$(new_case c7terminal)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "terminal: emit failed"
   rid=$(awk '{print $2}' "$dir/forge/comments")
+  write_ruling "$dir" "$rid" 44
   run_ob "$dir" ruling --request "$rid" --comment 44 --issue 2 >/dev/null 2>&1 \
     || fail "terminal: ruling failed"
   run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 || fail "terminal: resume failed"
@@ -490,6 +567,7 @@ test_close_requires_resumed_work() {
   dir=$(new_case c7resume)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "resume chain: emit failed"
   rid=$(awk '{print $2}' "$dir/forge/comments")
+  write_ruling "$dir" "$rid" 45
   run_ob "$dir" ruling --request "$rid" --comment 45 --issue 2 >/dev/null 2>&1 \
     || fail "resume chain: ruling failed"
   out=$(run_ob "$dir" close --request "$rid" --disposition accepted 2>&1); rc=$?
@@ -749,10 +827,12 @@ test_duplicate_control_can_fail
 test_transient_failure_retries
 test_exhausted_transport_keeps_the_request
 test_crash_recovery_adopts_its_own_request
+test_ambiguous_post_is_observed_before_retry
 test_dedupe_observation_failure_refuses_to_post
 test_reconcile_emits_sol_control_only
 test_ruling_wakes_the_exact_item
 test_unrelated_ruling_cannot_wake_the_item
+test_inbound_poll_advances_only_matching_ruling
 test_disposition_completes_the_correlation
 test_terminal_request_is_not_applicable
 test_request_requires_readable_correlation

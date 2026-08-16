@@ -1459,6 +1459,31 @@ SH
   pass "bootstrap bounds the outbound sweep and reports timeout as unevaluable"
 }
 
+test_outbound_reconcile_failure_is_reported() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-failure"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+exit 4
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: sweep unevaluable - reconciliation exited 4" \
+    "a failed automatic reconciliation must not disappear as an empty report"
+  pass "bootstrap preserves and reports automatic reconciliation failure"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
@@ -1494,3 +1519,4 @@ test_wake_ledger_terminal_sweep_reports_only_durable_records
 test_open_commitment_denies_a_quiet_session_start
 test_missing_commitment_interpreter_is_not_a_quiet_session_start
 test_outbound_sweep_has_bootstrap_deadline
+test_outbound_reconcile_failure_is_reported

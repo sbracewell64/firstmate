@@ -990,7 +990,7 @@ commitment_register_report() {
 # otherwise report a clean fleet while nothing checked at all - which is the
 # reads-as-working-while-doing-nothing shape the whole mechanism refuses.
 outbound_artifact_report() {
-  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out tmp timeout pid start elapsed
+  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out tmp timeout pid start elapsed child_rc
   local monitor_was_on
   if [ ! -x "$bin" ]; then
     printf 'OUTBOUND: sweep unevaluable - %s is missing or not executable, so no waiting item could be checked\n' \
@@ -1009,9 +1009,9 @@ outbound_artifact_report() {
   case $- in *m*) monitor_was_on=1 ;; esac
   set -m 2>/dev/null || true
   if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ]; then
-    FM_HOME="$FM_HOME" "$bin" defects >"$tmp" 2>/dev/null &
+    FM_HOME="$FM_HOME" "$bin" defects >"$tmp" 2>&1 &
   else
-    FM_HOME="$FM_HOME" "$bin" reconcile >"$tmp" 2>/dev/null &
+    FM_HOME="$FM_HOME" "$bin" reconcile >"$tmp" 2>&1 &
   fi
   pid=$!
   start=$SECONDS
@@ -1027,10 +1027,14 @@ outbound_artifact_report() {
     fi
     sleep 0.1
   done
-  wait "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null
+  child_rc=$?
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
   out=$(cat "$tmp" 2>/dev/null || true)
   rm -f "$tmp"
+  if [ "$child_rc" -ne 0 ]; then
+    printf 'OUTBOUND: sweep unevaluable - reconciliation exited %s while waiting items may remain without artifacts\n' "$child_rc"
+  fi
   [ -n "$out" ] || return 0
   printf '%s\n' "$out"
 }
