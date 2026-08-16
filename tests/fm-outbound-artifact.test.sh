@@ -298,7 +298,7 @@ test_crash_recovery_adopts_its_own_request() {
   # is left at the pre-transport checkpoint while the forge already holds the
   # request. Recovery must adopt it, never post a second one.
   local f
-  f=$(ls "$dir/home/data/outbound-artifacts"/*.json | head -1)
+  f=$(find "$dir/home/data/outbound-artifacts" -maxdepth 1 -type f -name '*.json' -print -quit)
   jq '.state = "emitting" | .comment_id = null' "$f" > "$f.x" && mv "$f.x" "$f"
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "control 4 recovery: recovery emit failed"
   posts=$(wc -l < "$dir/forge/post_log")
@@ -311,7 +311,7 @@ test_crash_recovery_adopts_its_own_request() {
 # --- controls 5-7: correlation ----------------------------------------------
 
 emitted_request_id() {  # <case-dir>
-  jq -r '.request_id' "$(ls "$1/home/data/outbound-artifacts"/*.json | head -1)"
+  jq -r '.request_id' "$(find "$1/home/data/outbound-artifacts" -maxdepth 1 -type f -name '*.json' -print -quit)"
 }
 
 test_ruling_wakes_the_exact_item() {
