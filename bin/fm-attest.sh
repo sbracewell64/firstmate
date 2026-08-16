@@ -1012,8 +1012,7 @@ recheck_ledger_lock() {
             recheck_stale_lock="$recheck_lock_dir.stale.$$.$recheck_lock_waited"
             if mv "$recheck_lock_dir" "$recheck_stale_lock" 2>/dev/null; then
               rm -rf "$recheck_stale_lock"
-              printf 'Reclaimed %s: process %s on %s is gone.\n' \
-                "$recheck_lock_dir" "$recheck_holder_pid" "$recheck_holder_host"
+              emit "Reclaimed $recheck_lock_dir: process $recheck_holder_pid on $recheck_holder_host is gone."
               continue
             fi
           fi

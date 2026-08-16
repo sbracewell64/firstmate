@@ -1798,6 +1798,28 @@ test_recheck_refuses_a_truncated_pull_request_listing() {
   pass "fm-attest.sh: a truncated pull request listing reaches no verdict"
 }
 
+test_recheck_binds_the_published_repository_to_the_pr_head_repository() {
+  local repo head out rc
+  jq_or_skip "a different published repository cannot trigger a PR head recheck" && return
+  repo="$TMP_ROOT/recheck-repository-binding"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" config url."$repo.fork.git".insteadOf https://github.com/other/repo.git
+  git -C "$repo" remote set-url origin https://github.com/other/repo.git
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head" example/repo
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a mismatched head repository was not refused (exit $rc): $out"
+  assert_contains "$out" "pull-request-head-repository-mismatch" "the repository mismatch lacked its own reason"
+  assert_not_reran "$repo" "repository mismatch"
+  pr_fixture "$repo/pr.json" open "$head" other/repo
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the matched head repository control was refused"
+  assert_reran "$repo" 100 "repository-binding control"
+  pass "fm-attest.sh: published evidence is bound to the pull request head repository"
+}
+
 # WHAT IS NOT PROVEN HERE, AND WHY NO CASE ABOVE CLAIMS IT.
 #
 # That two invocations racing for the last slot cannot both take it is NOT
@@ -2436,6 +2458,7 @@ test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
   pass "fm-attest.sh: the check sends a contributor to publish, not to edit the request"
 }
 
+test_cases='
 test_absent_notes_ref_refuses_as_absent
 test_ref_without_note_for_head_refuses_distinctly
 test_unreadable_notes_ref_refuses_distinctly
@@ -2487,6 +2510,7 @@ test_recheck_pre_request_record_consumes_the_attempt
 test_recheck_refuses_while_the_ledger_lock_is_held
 test_recheck_reclaims_only_a_demonstrably_stale_ledger_lock
 test_recheck_refuses_a_truncated_pull_request_listing
+test_recheck_binds_the_published_repository_to_the_pr_head_repository
 test_recheck_matches_a_head_repository_spelled_in_another_case
 test_recheck_matches_a_resolved_head_repository_spelled_in_another_case
 test_recheck_bound_is_not_reset_by_respelling_the_repository
@@ -2513,3 +2537,34 @@ test_recheck_reports_a_refused_rerun_without_claiming_one
 test_write_re_evaluates_the_head_it_published
 test_write_no_recheck_publishes_without_asking_the_forge
 test_check_step_no_longer_sends_a_contributor_to_edit_the_request
+'
+
+missing_invoked=
+for test_case in $test_cases; do
+  declare -F "$test_case" >/dev/null || missing_invoked="$missing_invoked $test_case"
+done
+[ -z "$missing_invoked" ] || fail "invoked test cases are not defined:$missing_invoked"
+
+missing_registered=
+while read -r declaration; do
+  defined_test=${declaration##* }
+  case "$defined_test" in
+    test_*)
+      case "
+$test_cases
+" in
+        *"
+$defined_test
+"*) ;;
+        *) missing_registered="$missing_registered $defined_test" ;;
+      esac
+      ;;
+  esac
+done <<EOF
+$(declare -F)
+EOF
+[ -z "$missing_registered" ] || fail "defined test cases are not invoked:$missing_registered"
+
+for test_case in $test_cases; do
+  "$test_case"
+done
