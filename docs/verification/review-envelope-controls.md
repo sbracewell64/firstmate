@@ -1,7 +1,12 @@
 # Review envelope controls
 
 Maintainer-verification record for [`bin/fm-review-envelope.sh`](../../bin/fm-review-envelope.sh) and [`bin/fm-review-envelope-lib.sh`](../../bin/fm-review-envelope-lib.sh), the `review-envelope/v1` contract, its compiler and its classifier.
-The guarantee it records is that each property was measured with one targeted mutation: single-guard removals; inverted mutations that turn red when an accepting path breaks; and one redundantly enforced property that no single-guard mutation can falsify, measured with both independent guards removed.
+The mutation evidence below covers 56 properties with targeted mutations of the kinds actually recorded: single-guard removals; inverted mutations that turn red when an accepting path breaks; and one redundantly enforced property that no single-guard mutation can falsify, measured with both independent guards removed.
+
+Three current controls are green but have not yet been watched red: order-insensitive facts have stable content identities; a structurally malformed envelope emits a readable could-not-observe record; and the verification record matches the suite's executed control count.
+Their watched-red status is could-not-observe, not an omission and not evidence that measurement is unnecessary.
+A control that has only ever been seen green is indistinguishable from a control that measures nothing, so all three measurements remain outstanding.
+This declaration is a HOLD ON LANDING, not a substitute for measurement: the pull request is not ready while it stands, and real per-property measurements against the final head must replace it before the work is called done.
 
 The library header owns the contract itself, and [`docs/contracts/review-envelope.md`](../contracts/review-envelope.md) is generated from its field catalog.
 This file records only what was measured, and when.
@@ -25,8 +30,8 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 
 ## Environment
 
-Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against the same head, `1be1caef`, so the record describes one experiment rather than several.
+The existing mutation measurements were taken 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
+Every existing measurement below belongs to head `1be1caef`, not the current or final head, so the record describes that one earlier experiment rather than several.
 
 ## Commands
 
@@ -47,7 +52,11 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
+Count claim: the green count-drift control establishes only that the stated count below matches the suite's actual executed control count.
+It says nothing about whether any control was watched red and is not evidence of mutation measurement.
+
 59 controls pass against the shipped scripts.
+Mutation-measurement claim: the existing campaign measured 56 of those controls at head `1be1caef`; the three named above remain could-not-observe until the final-head campaign is completed.
 Sixty-two mutations were built; sixty-one turned the suite red and one deliberately did not.
 That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
 
