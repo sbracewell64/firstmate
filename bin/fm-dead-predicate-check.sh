@@ -107,6 +107,20 @@ search_roots() {
 shell_code() {  # <file>
   awk '
   function blank(s,    n) { n = length(s); return sprintf("%" n "s", "") }
+  function heredoc_word(s,    c, escaped, i, q, word) {
+    sub(/^[[:space:]]*/, "", s)
+    for (i = 1; i <= length(s); i++) {
+      c = substr(s, i, 1)
+      if (escaped) { word = word c; escaped = 0; continue }
+      if (c == "\\") { escaped = 1; continue }
+      if (q != "") { if (c == q) q = ""; else word = word c; continue }
+      if (c == "\047" || c == "\"") { q = c; continue }
+      if (c ~ /[[:space:];|&()<>]/) break
+      word = word c
+    }
+    if (escaped || q != "" || word == "") return ""
+    return word
+  }
   {
     raw = $0
     if (heredoc != "") {
@@ -119,6 +133,12 @@ shell_code() {  # <file>
     out = ""
     for (i = 1; i <= length(raw); i++) {
       c = substr(raw, i, 1)
+      if (quote == "ansi") {
+        out = out " "
+        if (c == "\\") { if (i < length(raw)) { out = out " "; i++ }; continue }
+        if (c == "\047") quote = ""
+        continue
+      }
       if (quote == "\047") {
         out = out " "
         if (c == "\047") quote = ""
@@ -139,6 +159,12 @@ shell_code() {  # <file>
         continue
       }
       if (c == "\047" || c == "\"") { quote = c; out = out " "; continue }
+      if (c == "$" && substr(raw, i + 1, 1) == "\047") {
+        out = out "  "
+        i++
+        quote = "ansi"
+        continue
+      }
       if (c == "\\") { out = out " "; if (i < length(raw)) { out = out " "; i++ }; continue }
       if (c == "$" && substr(raw, i + 1, 1) == "(") {
         out = out "$("
@@ -165,19 +191,16 @@ shell_code() {  # <file>
     print NR ":" out
     probe = out
     if (match(probe, /<<-?[[:space:]]*/)) {
+      if (substr(probe, RSTART, 3) == "<<<") next
+      if (substr(probe, 1, RSTART - 1) ~ /\(\([^)]*$/ && substr(probe, RSTART) ~ /\)\)/) next
       token = substr(raw, RSTART, length(raw) - RSTART + 1)
       strip_tabs = token ~ /^<<-/
       sub(/^<<-?[[:space:]]*/, "", token)
-      if (substr(token, 1, 1) == "\047" || substr(token, 1, 1) == "\"") {
-        delimiter_quote = substr(token, 1, 1)
-        token = substr(token, 2)
-        heredoc = substr(token, 1, index(token, delimiter_quote) - 1)
-      } else {
-        match(token, /^[A-Za-z_][A-Za-z0-9_]*/)
-        heredoc = substr(token, RSTART, RLENGTH)
-      }
+      heredoc = heredoc_word(token)
+      if (heredoc == "") exit 4
     }
   }
+  END { if (heredoc != "") exit 4 }
   ' "$1"
 }
 
@@ -233,6 +256,15 @@ if [ "${#FILES[@]}" -eq 0 ]; then
     "$ENROL_MARKER" >&2
   exit 4
 fi
+
+for f in "${FILES[@]}"; do
+  shell_code "$f" >/dev/null || die "could not parse shell syntax in $f" 4
+done
+while IFS= read -r d; do
+  while IFS= read -r f; do
+    shell_code "$f" >/dev/null || die "could not parse shell syntax in $f" 4
+  done < <(find "$d" -type f -print 2>/dev/null)
+done < <(search_roots)
 
 dead_json='[]'
 marked_json='[]'
