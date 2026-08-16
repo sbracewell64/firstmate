@@ -427,6 +427,7 @@ CATALOG = {
         {"code": "candidate_tree_moved", "meaning": "The bound head no longer carries the bound tree."},
         {"code": "base_moved", "meaning": "The base reference no longer resolves to the bound base."},
         {"code": "declared_head_mismatch", "meaning": "An input asserted a head or base the repository contradicts."},
+        {"code": "requested_decision_invalid", "meaning": "The requested decision is present but is not an uppercase token."},
         {"code": "project_identity_mismatch", "meaning": "The declared repository identity is not this repository's."},
         {"code": "base_not_on_main_line", "meaning": "The base is not an ancestor of the trunk."},
         {"code": "base_behind_main_exceeds_policy", "meaning": "The base trails the trunk by more than policy allows."},
@@ -882,8 +883,6 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
         )
 
     requested_decision = require_field(inputs, "inputs", "requested_decision")
-    if not isinstance(requested_decision, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", requested_decision):
-        raise Unobservable("inputs_malformed", "requested_decision must be an uppercase token")
 
     candidate_in = require_object(inputs, "candidate")
     base_ref = require_field(candidate_in, "candidate", "base_ref")
@@ -1301,6 +1300,16 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
             "forge_request_identity_invalid",
             envelope["identity"]["work"].get("id"),
             "work.request must carry non-empty kind, forge, id and url fields",
+        )
+
+    requested_decision = envelope["identity"].get("requested_decision")
+    if not isinstance(requested_decision, str) or not re.fullmatch(
+        r"[A-Z][A-Z0-9_]*", requested_decision
+    ):
+        problems.refuse(
+            "requested_decision_invalid",
+            requested_decision,
+            "requested_decision must be an uppercase token",
         )
 
     declared_head = candidate.get("declared_head_commit")
