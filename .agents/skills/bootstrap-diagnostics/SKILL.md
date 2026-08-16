@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, CAPACITY_UNMEASURED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, CAPACITY_UNMEASURED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, OUTBOUND, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -102,6 +102,17 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Read a `TIMEOUT:` evidence line as a probe to fix rather than as an ordinary open item, because could-not-observe cannot close a key and a probe that always times out blocks its closure forever.
 - `COMMITMENT: register unreadable - <reason>` - the commitment register itself could not be read, so no commitment was checked at all.
   Treat it as the register failing rather than as an empty register, and repair it before trusting any session-start silence about recorded commitments.
+- `OUTBOUND: <item> is waiting on <gate> with no applicable durable artifact (<token>) - <evidence>` - the item's durable state says it is waiting for something outside the fleet, and the thing it is waiting for was never created or no longer applies to its current head.
+  This is a CONTROL-TRANSPORT DEFECT, not an external wait: nobody is considering that work, and nothing will ever arrive to unblock it, so it does not clear by waiting longer and no amount of patience is the right response.
+  Do not re-hold the item, extend its wait, or describe it to the captain as blocked on an external party - by this evidence there is no external party involved yet.
+  Read the token to choose the repair: `FM_OUTBOUND_NO_ARTIFACT` means nothing was ever asked; `FM_OUTBOUND_STALE_HEAD` means an earlier ask exists but the reviewed head moved, so it answers a different question now; `FM_OUTBOUND_INCOMPLETE_BINDING` and `FM_OUTBOUND_HEAD_UNOBSERVED` mean the item cannot be bound to an exact head at all, which must be repaired before anything is asked rather than papered over with a vague request.
+  On the `sol-control` channel, `bin/fm-outbound-artifact.sh emit <item>` creates the missing request once the binding is complete.
+  On the `pull-request` channel that command deliberately refuses, because opening a pull request is a delivery action owned by the task's selected delivery path (`AGENTS.md` section 7) and an outward-facing one on an upstream contribution; relaunch the work through that path instead, and observe the project's outward-consent posture where it applies.
+- `OUTBOUND: <item> artifact state COULD-NOT-OBSERVE (<token>) - <evidence>` - the sweep could not determine whether the artifact exists, so the item's waiting is neither confirmed legitimate nor confirmed defective.
+  This is the third value and never a pass: repair what stopped the observation rather than reading the absence of a defect as a clean result.
+  `FM_OUTBOUND_TRANSPORT_UNCONFIGURED` means this home has no `config/sol-control.json`, so the venue a request would be posted to is unknown; `docs/configuration.md` owns that file.
+- `OUTBOUND: sweep unevaluable - <reason>` or `OUTBOUND: probe cap <n> reached - ...` - the invariant was not checked across the whole fleet, so session-start silence about stranded work proves nothing this time.
+  Repair the named cause, or re-run `bin/fm-outbound-artifact.sh check` with a higher `FM_OUTBOUND_MAX_PROBES`, before treating the fleet as clean.
 - `SECONDMATE_SYNC: secondmate <id>: skipped: <reason>` - secondmate convergence left a live home on its existing checkout because the home was dirty, diverged, unsafe, on the wrong branch, missing its placement-specific target commit, unreachable, or otherwise not fast-forwardable, or because inherited local-material propagation failed; bootstrap continued, but inspect the reason because the secondmate's tracked instructions, inherited settings, or shared captain preferences may be stale after a primary update.
 - `SECONDMATE_LIVENESS: secondmate <id>: skipped: <reason>|respawn failed after <cause>: <reason>` - the session-start liveness sweep could not guarantee that the registered secondmate is running a real agent process.
   Investigate the reason because that secondmate is not guaranteed live.
