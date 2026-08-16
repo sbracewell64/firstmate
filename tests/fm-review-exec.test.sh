@@ -564,6 +564,8 @@ test_an_unresolvable_reviewer_executable_is_could_not_observe() {
       relative) token=./bin/candidate-reviewer ;;
       path) token=candidate-reviewer ;;
     esac
+    # $0 must be evaluated by the reviewer process, not the test shell.
+    # shellcheck disable=SC2016
     PATH="bin:$PATH" run_launch "$case_dir" "$invocation" "$token" \
       -c 'printf "argv0=%s\n" "$0"' >/dev/null 2>&1 \
       || fail "a $invocation candidate executable must resolve"
