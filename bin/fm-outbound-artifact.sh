@@ -758,6 +758,7 @@ require_record() {  # <request-id>; sets RECORD or exits
 
 cmd_ruling() {  # <request-id> <comment-id> <issue>
   local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict
+  local item project current current_head stored_head pr_url
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -767,6 +768,26 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
       exit 3 ;;
   esac
+  item=$(printf '%s' "$rec" | jq -r '.identity.item')
+  project=$(printf '%s' "$rec" | jq -r '.identity.project')
+  stored_head=$(printf '%s' "$rec" | jq -r '.identity.head')
+  read_snapshot || die "fleet backlog could not be read while validating ruling $rid" 4
+  current=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
+    '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
+  [ -n "$current" ] || die "waiting item $item could not be observed while validating ruling $rid" 4
+  pr_url=$(printf '%s' "$current" | jq -r '.pr_url // ""')
+  current_head=$(observe_head "$item" "$pr_url" "$project")
+  if [ -z "$current_head" ]; then
+    die "the current exact head for $item could not be observed" 4
+  fi
+  if [ "$current_head" != "$stored_head" ]; then
+    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
+      '.state = "superseded" | .updated = $n')
+    record_write "$rid" "$rec" || die "could not invalidate stale request $rid" 4
+    printf '%s: ruling %s targets stale head %s; current head is %s\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$stored_head" "$current_head" >&2
+    exit 3
+  fi
   request_comment=$(printf '%s' "$rec" | jq -r '.comment_id // ""')
   if [ -n "$request_comment" ] && [ "$comment" = "$request_comment" ]; then
     printf '%s: request comment %s cannot rule on itself\n' \
@@ -817,7 +838,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
 }
 
 cmd_poll() {
-  local comments row rid comment rc failed=0 poll_record poll_state
+  local comments row rid comment rc failed=0 poll_record poll_state out
   read_sol_config || return 0
   probe_budget || die "the ruling poll probe budget is exhausted" 4
   comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --paginate \
@@ -834,15 +855,17 @@ cmd_poll() {
       poll_state=$(printf '%s' "$poll_record" | jq -r '.state')
       case $poll_state in
         resumed|closed|superseded) continue ;;
-        ruled) cmd_resume "$rid" || { rc=$?; failed=$rc; }; continue ;;
+        ruled) continue ;;
       esac
     fi
-    cmd_ruling "$rid" "$comment" "$SOL_ISSUE" || { rc=$?; failed=$rc; continue; }
-    cmd_resume "$rid" || { rc=$?; failed=$rc; }
+    out=$("$0" ruling --request "$rid" --comment "$comment" --issue "$SOL_ISSUE" 2>&1)
+    rc=$?
+    [ -z "$out" ] || printf '%s\n' "$out"
+    [ "$rc" -eq 0 ] || failed=$rc
   done <<EOF
 $comments
 EOF
-  [ "$failed" -eq 0 ] || exit "$failed"
+  return "$failed"
 }
 
 cmd_resume() {  # <request-id>
@@ -899,6 +922,7 @@ case $CMD in
   reconcile)
     [ $# -eq 0 ] || die "reconcile takes no arguments"
     cmd_poll
+    POLL_RC=$?
     sweep || true
     printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="defect" and .channel=="sol-control" and .missing==null) | .item' \
       | while IFS= read -r ITEM; do
@@ -909,7 +933,9 @@ case $CMD in
     [ "$RECONCILE_RC" -eq 0 ] || exit "$RECONCILE_RC"
     sweep || true
     render_defects
-    sweep_exit; exit $?
+    sweep_exit; SWEEP_RC=$?
+    [ "$POLL_RC" -eq 0 ] || exit "$POLL_RC"
+    exit "$SWEEP_RC"
     ;;
   poll)
     [ $# -eq 0 ] || die "poll takes no arguments"
