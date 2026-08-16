@@ -132,6 +132,7 @@ test_function_keyword_definition_is_scanned() {
 
 test_explicit_indirect_call_counts() {
   local dir out rc
+  # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
   dir=$(fixture indirect 'live_one() { return 0; }' 'callback=live_one
 # indirect-call: live_one callback dispatch
 "$callback"')
@@ -142,6 +143,7 @@ test_explicit_indirect_call_counts() {
 
 test_call_in_quoted_substitution_counts() {
   local dir out rc
+  # shellcheck disable=SC2016 # The generated fixture runs the substitution at runtime.
   dir=$(fixture quoted-substitution 'live_one() { return 0; }' 'value="$(live_one)"')
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "a call inside a quoted command substitution was refused, exit $rc: $out"
