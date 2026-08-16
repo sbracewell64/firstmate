@@ -1570,6 +1570,17 @@ pulls_fixture_state() { # <path> <owner/name> <number> <head> <state>
     "$3" "$5" "$4" "$2" > "$1"
 }
 
+# A resolved request whose head repository is spelled as the caller asks, so the
+# case-insensitivity of repository identity can be exercised on the RESOLVED
+# path as well as the explicit one. The two read different fields -
+# `.head.repo.full_name` against `headRepository.nameWithOwner` - and GitHub
+# returns its own canonical casing for both, so a fix applied to one of them
+# would leave the other refusing a match that is really a match.
+pulls_fixture_head_repo() { # <path> <head> <base owner/name> <number> <head owner/name>
+  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"},"headRepository":{"nameWithOwner":"%s"}}]}}}}}\n' \
+    "$4" "$2" "$3" "$5" > "$1"
+}
+
 # One recheck invocation with the stubs in front of the real tools, its call log
 # in the case's own directory so nothing is shared between cases.
 recheck_out() {
@@ -1684,61 +1695,152 @@ test_recheck_pre_request_record_consumes_the_attempt() {
   pass "fm-attest.sh: a durable pre-request record consumes its run attempt"
 }
 
-test_recheck_serializes_the_request_bound() {
-  local control repo head first second posts
-  jq_or_skip "concurrent rechecks cannot both pass the request bound" && return
-  control="$TMP_ROOT/recheck-lock-control"
-  new_published_repo "$control"
-  head=$(git -C "$control" rev-parse HEAD)
-  runs_fixture "$control/runs.json" "$head" 100:1:completed:failure:7
-  pr_fixture "$control/pr.json" open "$head"
-  recheck_out "$control" --head "$head" --repo example/repo --pr 7 >/dev/null \
-    || fail "the single-invocation lock control was refused"
-  assert_reran "$control" 100 "request-lock control"
-
-  repo="$TMP_ROOT/recheck-lock-concurrent"
+# The ledger lock, tested by CONTENTION rather than by hoping two processes
+# interleave. The control this replaces asserted a POST count that the
+# per-attempt guard produced on its own: with roughly 200ms of git and gh work
+# before the count and a sub-millisecond window between the count and the
+# append, the second invocation essentially always arrived after the first had
+# appended and was turned away by that guard, so the lock was never exercised
+# and removing it entirely left the case green ten runs out of ten. A control
+# that passes because a DIFFERENT mechanism produced the asserted outcome is
+# measuring that other mechanism.
+#
+# So the lock is isolated instead: something else already holds it, and nothing
+# but the lock can decide what happens next.
+test_recheck_refuses_while_the_ledger_lock_is_held() {
+  local repo head out rc
+  jq_or_skip "a held ledger lock stops the request rather than racing it" && return
+  repo="$TMP_ROOT/recheck-lock-held"
   new_published_repo "$repo"
   head=$(git -C "$repo" rev-parse HEAD)
-  runs_fixture "$repo/runs.json" "$head" 102:1:completed:failure:7
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
   pr_fixture "$repo/pr.json" open "$head"
-  printf 'fm-attest-recheck.v1 ts=unknown repo=example/repo pr=7 head=%s note=unknown run=100 attempt=1 action=requesting reason=attestation-published\n' "$head" > "$repo/.git/fm-attest-recheck.log"
-  printf 'fm-attest-recheck.v1 ts=unknown repo=example/repo pr=7 head=%s note=unknown run=101 attempt=1 action=requesting reason=attestation-published\n' "$head" >> "$repo/.git/fm-attest-recheck.log"
-  mkdir "$repo/.git/fm-attest-recheck.lock"
-  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 > "$repo/first.out" 2>&1 &
-  first=$!
-  fm_test_reap "$first"
-  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 > "$repo/second.out" 2>&1 &
-  second=$!
-  fm_test_reap "$second"
-  sleep 1
+  mkdir -p "$repo/.git/fm-attest-recheck.lock"
+  out=$(FM_ATTEST_RECHECK_LOCK_WAIT=1 recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a held ledger lock did not reach could-not-observe (exit $rc): $out"
+  assert_contains "$out" "ledger-lock-unavailable" "a held lock was not named as its own state"
+  assert_not_reran "$repo" "lock held"
+  # The anchor, differing by exactly one property: nobody holding the lock.
   rmdir "$repo/.git/fm-attest-recheck.lock"
-  wait "$first" || fail "the first concurrent recheck failed: $(cat "$repo/first.out")"
-  wait "$second" || fail "the second concurrent recheck failed: $(cat "$repo/second.out")"
-  posts=$(grep -c -- '--method POST' "$repo/gh.log" || true)
-  [ "$posts" -eq 1 ] || fail "concurrent rechecks made $posts POSTs at the one-slot remainder of the bound"
-  pass "fm-attest.sh: concurrent rechecks reserve the request bound atomically"
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the same call with the lock free was refused"
+  assert_reran "$repo" 100 "lock-free anchor"
+  pass "fm-attest.sh: a held ledger lock stops the request and a free one does not"
 }
 
-test_recheck_binds_the_published_repository_to_the_pr_head_repository() {
+# WHAT IS NOT PROVEN HERE, AND WHY NO CASE ABOVE CLAIMS IT.
+#
+# That two invocations racing for the last slot cannot both take it is NOT
+# tested, and a case asserting it was written, measured, and removed rather than
+# kept. Two independent processes only collide inside a sub-millisecond window
+# between the count and the append; each spends roughly 200ms in git and gh
+# before reaching it, so the later one arrives after the earlier has appended
+# and is turned away by the bound instead. The one thing that can release both
+# at the same instant is the lock itself, which makes any such case synchronize
+# on the very mechanism it claims to test: with the lock removed it stayed green
+# eight runs out of eight, exactly as its predecessor stayed green ten out of
+# ten.
+#
+# So the proven claim is the narrower one the case above does establish: the
+# lock is taken, it is reached before the count, and a holder stops the request
+# rather than letting it proceed. Mutual exclusion between two holders follows
+# from mkdir being atomic on POSIX, which is a property of the operating system
+# rather than of this program, and is stated here as inherited rather than
+# demonstrated. An honest gap is worth more than a green that measures process
+# startup stagger.
+
+# GitHub repository names are case-insensitive, and the two sides of this
+# binding are spelled by different authorities: the push side is lowercased out
+# of a remote URL, the forge side comes back in GitHub's own canonical casing.
+# Comparing them as text refused a match that was really a match, which put the
+# manual re-trigger back for every contributor whose repository name carries a
+# capital. It failed CLOSED, so no head was ever reported green on evidence the
+# check could not see; what it cost was the automation itself.
+#
+# Both resolution paths get this, because they read different fields -
+# `.head.repo.full_name` here and `headRepository.nameWithOwner` below - and a
+# fix applied to one of them passes a suite whose every other fixture is
+# lowercase.
+test_recheck_matches_a_head_repository_spelled_in_another_case() {
   local repo head out rc
-  jq_or_skip "a different published repository cannot trigger a PR head recheck" && return
-  repo="$TMP_ROOT/recheck-repository-binding"
+  jq_or_skip "one repository spelled two ways is one repository" && return
+  repo="$TMP_ROOT/recheck-case-explicit"
   new_published_repo "$repo"
   head=$(git -C "$repo" rev-parse HEAD)
-  git -C "$repo" config url."$repo.fork.git".insteadOf https://github.com/other/repo.git
-  git -C "$repo" remote set-url origin https://github.com/other/repo.git
   runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
-  pr_fixture "$repo/pr.json" open "$head" example/repo
+  # The same repository the note was published to, in GitHub's canonical casing.
+  pr_fixture "$repo/pr.json" open "$head" Example/Repo
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the same repository spelled in another case was refused"
+  assert_reran "$repo" 100 "case-insensitive explicit path"
+  # The anchor that keeps this from passing vacuously: a genuinely DIFFERENT
+  # repository is still refused, so the comparison was relaxed in case and in
+  # nothing else.
+  rm -f "$repo/gh.log"
+  pr_fixture "$repo/pr.json" open "$head" Other/Repo
   out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
   rc=$?
-  [ "$rc" -eq 1 ] || fail "a mismatched head repository was not refused (exit $rc): $out"
-  assert_contains "$out" "pull-request-head-repository-mismatch" "the repository mismatch lacked its own reason"
-  assert_not_reran "$repo" "repository mismatch"
-  pr_fixture "$repo/pr.json" open "$head" other/repo
-  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
-    || fail "the matched head repository control was refused"
-  assert_reran "$repo" 100 "repository-binding control"
-  pass "fm-attest.sh: published evidence is bound to the pull request head repository"
+  [ "$rc" -eq 1 ] || fail "a different repository was accepted as a case variant (exit $rc): $out"
+  assert_contains "$out" "pull-request-head-repository-mismatch" \
+    "a different repository lost its own reason"
+  assert_not_reran "$repo" "case-insensitive explicit anchor"
+  pass "fm-attest.sh: the explicit path matches one repository spelled two ways, and only that"
+}
+
+test_recheck_matches_a_resolved_head_repository_spelled_in_another_case() {
+  local repo head out rc
+  jq_or_skip "the resolved path reads a different field and needs its own case control" && return
+  repo="$TMP_ROOT/recheck-case-resolved"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pulls_fixture_head_repo "$repo/pulls.json" "$head" example/repo 7 Example/Repo
+  recheck_out "$repo" --head "$head" >/dev/null \
+    || fail "the resolved path refused the same repository in another case"
+  assert_reran "$repo" 100 "case-insensitive resolved path"
+  rm -f "$repo/gh.log"
+  pulls_fixture_head_repo "$repo/pulls.json" "$head" example/repo 7 Other/Repo
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "the resolved path accepted a different repository (exit $rc): $out"
+  assert_contains "$out" "pull-request-head-repository-mismatch" \
+    "the resolved path lost the mismatch reason"
+  assert_not_reran "$repo" "case-insensitive resolved anchor"
+  pass "fm-attest.sh: the resolved path matches one repository spelled two ways, and only that"
+}
+
+# The bound is per repository, and a repository is not its spelling. Keying the
+# ledger on the caller's text let three spent re-runs be followed by three more
+# under another capitalisation of the same name, which is the bound this program
+# exists to hold rather than to appear to hold.
+test_recheck_bound_is_not_reset_by_respelling_the_repository() {
+  local repo head out rc n
+  jq_or_skip "the request bound survives the repository being retyped" && return
+  repo="$TMP_ROOT/recheck-bound-spelling"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pr_fixture "$repo/pr.json" open "$head" example/repo
+  for n in 100 101 102; do
+    runs_fixture "$repo/runs.json" "$head" "$n:1:completed:failure:7"
+    recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+      || fail "re-evaluation $n was refused before the bound was spent"
+  done
+  runs_fixture "$repo/runs.json" "$head" 103:1:completed:failure:7
+  out=$(recheck_out "$repo" --head "$head" --repo Example/Repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "another spelling of the same repository got a fresh bound (exit $rc): $out"
+  assert_contains "$out" "recheck-budget-spent" "the bound was not what refused the retyped name"
+  [ "$(grep -c -- '--method POST' "$repo/gh.log")" -eq 3 ] \
+    || fail "the bound did not hold across two spellings of one repository"
+  # The anchor: a genuinely different repository legitimately gets its own bound,
+  # so this held the bound rather than simply refusing everything after three.
+  pr_fixture "$repo/pr.json" open "$head" example/repo
+  recheck_out "$repo" --head "$head" --repo other/repo --pr 7 >/dev/null \
+    || fail "a different repository was denied its own bound"
+  [ "$(grep -c -- '--method POST' "$repo/gh.log")" -eq 4 ] \
+    || fail "a different repository did not get its own bound"
+  pass "fm-attest.sh: the request bound is keyed on the repository, not on its spelling"
 }
 
 test_recheck_refuses_absent_and_unreadable_head_repositories() {
@@ -2313,8 +2415,11 @@ test_show_reports_an_unknown_commit_as_such
 test_recheck_reruns_the_run_that_judged_a_published_head
 test_recheck_requests_one_re_evaluation_per_attempt
 test_recheck_pre_request_record_consumes_the_attempt
-test_recheck_serializes_the_request_bound
+test_recheck_refuses_while_the_ledger_lock_is_held
 test_recheck_binds_the_published_repository_to_the_pr_head_repository
+test_recheck_matches_a_head_repository_spelled_in_another_case
+test_recheck_matches_a_resolved_head_repository_spelled_in_another_case
+test_recheck_bound_is_not_reset_by_respelling_the_repository
 test_recheck_refuses_absent_and_unreadable_head_repositories
 test_recheck_bounds_repeated_re_evaluation_of_one_head
 test_recheck_selects_the_run_that_started_last

@@ -453,6 +453,25 @@ is_repo_slug() {
   return 1
 }
 
+# One repository's identity, for COMPARING and for KEYING only.
+#
+# GitHub repository names are case-insensitive: `Owner/Repo` and `owner/repo`
+# are one repository. The two spellings reach this program from different
+# places and neither is wrong - bin/fm-task-base-lib.sh lowercases a remote
+# URL, while GitHub's API returns its own canonical casing - so any comparison
+# between them has to go through here rather than matching raw text. Two
+# separate defects came from doing it raw: a re-run refused because the same
+# repository was spelled two ways, and a per-head request bound that reset when
+# the caller retyped the name differently, because the ledger was keyed on the
+# spelling instead of on the repository.
+#
+# What gets PRINTED never comes from here. A message that renames a repository
+# is harder to act on than one that leaves it as the reader wrote it, so every
+# diagnostic keeps the original spelling and only the comparison is normalized.
+repo_identity() {
+  printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 # A positive decimal with no leading zero, used for pull request numbers, run
 # identities and attempt counts. Run identities are compared arithmetically
 # below, so a value that is not a plain number is refused rather than coerced.
@@ -933,7 +952,7 @@ recheck_ledger_append() { # <action> <reason> [<run>] [<attempt>]
     '' | *[!0-9A-Za-z:-]*) recheck_stamp=unknown ;;
   esac
   printf '%s ts=%s repo=%s pr=%s head=%s note=%s run=%s attempt=%s action=%s reason=%s\n' \
-    "$RECHECK_RECORD" "$recheck_stamp" "${recheck_repo:-none}" "${recheck_pr:-none}" \
+    "$RECHECK_RECORD" "$recheck_stamp" "${recheck_repo_key:-none}" "${recheck_pr:-none}" \
     "$recheck_head" "${recheck_note_oid:-none}" "${3:-none}" "${4:-none}" "$1" "$2" \
     >> "$recheck_ledger" 2>/dev/null
 }
@@ -1212,6 +1231,7 @@ cmd_recheck() {
   remote=origin
   notes_ref=$NOTES_REF_DEFAULT
   recheck_dry_run=0
+  recheck_repo_key=
   recheck_lock_held=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1368,9 +1388,22 @@ EOF
   is_repo_slug "$recheck_pr_head_repo" || recheck_fail pull-request-head-repository-unreadable \
     "GitHub did not return a usable head repository for pull request $recheck_pr on $recheck_repo." \
     "Nothing was re-triggered because absence and an unreadable repository are not evidence of a match."
-  [ "$recheck_pr_head_repo" = "$recheck_push_repo" ] || recheck_refuse pull-request-head-repository-mismatch \
-    "Pull request $recheck_pr on $recheck_repo reads its head from $recheck_pr_head_repo, but the attestation was read from $recheck_push_repo." \
-    "No head is reported green on unseen evidence, but re-running now would report publication where the check does not look, so nothing was re-triggered."
+  # Compared as identities rather than as text, because the two sides arrive
+  # spelled differently by construction and this binding holds on BOTH paths:
+  # the explicit lookup reads .head.repo.full_name and the resolved one reads
+  # headRepository.nameWithOwner, and GitHub returns its canonical casing for
+  # each while the push side is lowercased from a remote URL. Both spellings are
+  # kept in the message.
+  [ "$(repo_identity "$recheck_pr_head_repo")" = "$(repo_identity "$recheck_push_repo")" ] \
+    || recheck_refuse pull-request-head-repository-mismatch \
+      "Pull request $recheck_pr on $recheck_repo reads its head from $recheck_pr_head_repo, but the attestation was read from $recheck_push_repo." \
+      "No head is reported green on unseen evidence, but re-running now would report publication where the check does not look, so nothing was re-triggered."
+
+  # The ledger is keyed on the repository, not on how this invocation happened
+  # to spell it. Keying on the spelling made the per-head request bound resettable
+  # by retyping the same name in another case, which is the bound this program
+  # exists to hold rather than to appear to hold.
+  recheck_repo_key=$(repo_identity "$recheck_repo")
 
   recheck_ledger_prepare
 
@@ -1403,7 +1436,7 @@ EOF
   # ---- idempotency, the bound, then the one supported action -------------
   recheck_ledger_lock
   recheck_already=$(recheck_ledger_count "$recheck_ledger" \
-    "repo=$recheck_repo pr=$recheck_pr head=$recheck_head run=$recheck_run attempt=$recheck_attempt action=requesting") \
+    "repo=$recheck_repo_key pr=$recheck_pr head=$recheck_head run=$recheck_run attempt=$recheck_attempt action=requesting") \
     || recheck_already=
   case "$recheck_already" in
     '' | *[!0-9]*)
@@ -1419,7 +1452,7 @@ EOF
   fi
 
   recheck_spent=$(recheck_ledger_count "$recheck_ledger" \
-    "repo=$recheck_repo pr=$recheck_pr head=$recheck_head action=requesting") \
+    "repo=$recheck_repo_key pr=$recheck_pr head=$recheck_head action=requesting") \
     || recheck_spent=
   case "$recheck_spent" in
     '' | *[!0-9]*)

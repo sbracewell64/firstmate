@@ -144,7 +144,10 @@ What it establishes before asking GitHub for anything:
 - The repository the check reads - the push target of the named remote, not the local ref - now serves an attestation for **this exact head**, and that attestation passes the same `verify_note_payload` the gate runs.
   A note that is absent there, bound to another commit, or malformed is refused as **evidence**, in the evidence's own words, and no re-run is requested: re-running a check that must refuse again would spend a job to be told what is already known.
 - The pull request is open and its head is still this commit.
-  Its `head.repo.full_name` must also equal the resolved push-target repository from which the attestation was read.
+  Its head repository must also be the resolved push-target repository the attestation was read from, on both paths: the explicit lookup reads `head.repo.full_name` and the resolved one reads `headRepository.nameWithOwner`.
+  Those are compared as identities rather than as text, because GitHub repository names are case-insensitive and the two sides are spelled by different authorities - the push side lowercased out of a remote URL, the forge side in GitHub's own canonical casing.
+  Comparing them raw refused a match that was really a match, which fails closed and so never reports a head green on unseen evidence, but puts the manual re-trigger back for every contributor whose repository name carries a capital.
+  Every message keeps the spelling its reader used; only the comparison is normalized.
   A mismatch refuses before the POST: it cannot produce a false green, but proceeding would report evidence as published where the check does not look and spend a re-run that cannot converge.
   An absent head repository, including a deleted fork, and an unreadable head repository are separate could-not-observe outcomes and are never assumed to match.
   Named explicitly, a request that has moved on is refused as `pull-request-head-moved`, because evidence for a head nobody is proposing does not cover the head under review.
@@ -159,6 +162,7 @@ What it establishes before asking GitHub for anything:
 Every decision is appended to `fm-attest-recheck.log` in the repository's common git directory, one line per decision, binding repository, pull request, head, note object, run and attempt to the action taken and why.
 It is never committed and the check never reads it: it is an audit record of what this program did, not a second place a verdict could come from.
 The count and pre-request append are serialized through a bounded atomic lock shared by every worktree of the clone.
+The record is keyed on the repository rather than on how one invocation spelled it, because keying on the spelling let a spent per-head bound be reset by retyping the same name in another case.
 The record is written **before** the request and consumes that run attempt, because after a crash the program cannot distinguish a request that never happened from one GitHub accepted before the requested record was appended.
 The bound counts attempts rather than successes so that a forge swallowing every request cannot buy unlimited ones.
 
@@ -194,12 +198,19 @@ Each negative fixture differs from the passing one by exactly one property, beca
 The re-evaluation cases assert on the **action taken against the forge**, read out of a log of every call, and never on a message this program prints about it: a stub that answered "re-run requested" would satisfy an assertion on the wording while re-running nothing.
 Every negative case there additionally asserts that no re-run was requested, and the converging cases assert that nothing altered the pull request itself.
 The stub applies the real `--jq` filters to real fixture JSON, so the selection rules - this head only, this pull request, the run that started last - are exercised rather than assumed, and a case that cannot evaluate them skips rather than passing on a weaker check.
-The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which completed successfully with 69 passing cases.
+The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which completed successfully with 75 passing cases.
 
 Each of those cases was watched fail before it was trusted.
-Twelve mutations were applied to the landed code one at a time and the suite re-run against each: removing the re-run request entirely, dropping the exact-head binding from run selection, reading a failed forge read as an empty result set, removing the re-evaluation from `write`, restoring the workflow's "close and reopen" instruction, removing the per-head bound, removing the per-attempt guard, selecting the run that started first instead of last, inverting the moved-head refusal, reading an unreadable candidate repository as one with no pull request, dropping the exact-head binding from pull request resolution, and dropping its open-state filter.
+Twelve mutations were applied to the landed code one at a time and the suite re-run against each: removing the re-run request entirely, dropping the exact-head binding from run selection, reading a failed forge read as an empty result set, removing the re-evaluation from `write`, restoring the workflow's "close and reopen" instruction, removing the per-head bound, removing the per-attempt guard, selecting the run that started first instead of last, inverting the moved-head refusal, reading an unreadable candidate repository as one with no pull request, dropping the exact-head binding from pull request resolution, dropping its open-state filter, removing the case normalization from the head-repository comparison, keying the ledger on the caller's spelling again, and removing the ledger lock.
 Every one was caught by the case that claims that property, and each file was restored and byte-compared afterwards.
 Two of them were caught only after the case was strengthened, and both are recorded here because the first version of each was the failure this discipline exists to find: nothing distinguished a pull request merely associated with a commit from one open on it, and the closed-request case could fail for want of a fixture rather than by re-running something it should not have.
+
+One property is deliberately recorded as **unproven** rather than covered, because the case that claimed it was measured and found to prove something else.
+That two invocations racing for the last slot of the bound cannot both take it is not tested.
+Two independent processes collide only inside the sub-millisecond window between the count and the append, while each spends roughly 200ms in git and `gh` before reaching it, so the later one arrives after the earlier has appended and is turned away by the bound instead.
+The only thing that can release both at the same instant is the lock itself, which makes any such case synchronize on the mechanism it claims to test: two successive attempts at it stayed green with the lock removed entirely, ten runs out of ten and then eight out of eight.
+What is proven is narrower and true: the lock is taken, it is reached before the count, and a holder stops the request rather than letting it proceed, which goes red the moment the lock is removed.
+Mutual exclusion between two holders follows from `mkdir` being atomic on POSIX, a property of the operating system rather than of this program, and is inherited here rather than demonstrated.
 
 Two properties this suite does **not** establish, and neither should be read out of a green run.
 It does not prove GitHub re-runs a `pull_request` run against the unchanged head; that is GitHub's behavior, evidenced separately by pull request 89 of `sbracewell64/firstmate`, whose head `16065de721c8449fe0f72db5ca82f253d5ea6311` reached a green `Require no-mistakes` at `run_attempt` 2 of one run id with no new head.
