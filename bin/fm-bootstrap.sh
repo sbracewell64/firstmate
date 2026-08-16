@@ -989,13 +989,43 @@ commitment_register_report() {
 # otherwise report a clean fleet while nothing checked at all - which is the
 # reads-as-working-while-doing-nothing shape the whole mechanism refuses.
 outbound_artifact_report() {
-  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out
+  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out tmp timeout pid start elapsed
+  local monitor_was_on
   if [ ! -x "$bin" ]; then
     printf 'OUTBOUND: sweep unevaluable - %s is missing or not executable, so no waiting item could be checked\n' \
       "bin/fm-outbound-artifact.sh"
     return 0
   fi
-  out=$(FM_HOME="$FM_HOME" "$bin" defects 2>/dev/null || true)
+  timeout=${FM_OUTBOUND_TIMEOUT:-15}
+  case $timeout in
+    ''|*[!0-9]*|0) timeout=15 ;;
+  esac
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-outbound-bootstrap.XXXXXX" 2>/dev/null) || {
+    printf 'OUTBOUND: sweep unevaluable - bootstrap could not allocate bounded sweep output\n'
+    return 0
+  }
+  monitor_was_on=0
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m 2>/dev/null || true
+  FM_HOME="$FM_HOME" "$bin" defects >"$tmp" 2>/dev/null &
+  pid=$!
+  start=$SECONDS
+  while jobs -r -p | grep -qx "$pid"; do
+    elapsed=$((SECONDS - start))
+    if [ "$elapsed" -ge "$timeout" ]; then
+      kill -TERM "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+      rm -f "$tmp"
+      printf 'OUTBOUND: sweep unevaluable - bootstrap deadline expired after %ss\n' "$timeout"
+      return 0
+    fi
+    sleep 0.1
+  done
+  wait "$pid" 2>/dev/null || true
+  [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+  out=$(cat "$tmp" 2>/dev/null || true)
+  rm -f "$tmp"
   [ -n "$out" ] || return 0
   printf '%s\n' "$out"
 }
