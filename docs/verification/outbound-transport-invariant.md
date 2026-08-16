@@ -21,6 +21,8 @@ So each control below was driven RED by a targeted mutation of the implementatio
 ```sh
 $ bash tests/fm-outbound-artifact.test.sh | tail -1
 all fm-outbound-artifact tests passed
+$ bash tests/fm-bootstrap.test.sh | tail -1
+ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
 23 cases pass.
