@@ -95,7 +95,9 @@ write_inputs() {  # <case-dir> [patch-json]
   local case_dir=$1
   local patch=${2:-}
   [ -n "$patch" ] || patch='{}'
-  python3 - "$case_dir" "$patch" <<'PY'
+  # `|| fail` is not optional here: a malformed patch used to leave the previous
+  # inputs.json in place, and the case then ran green against stale input.
+  python3 - "$case_dir" "$patch" <<'PY' || fail "write_inputs could not build the inputs document"
 import hashlib
 import json
 import subprocess
@@ -1483,7 +1485,31 @@ PY
   expect_code 0 "$CAPTURED_CODE" "a ruling bound to the current envelope applies"
   capture run_validate "$case_dir" successor
   expect_code 0 "$CAPTURED_CODE" "validation recomputes current-envelope applicability"
-  pass "a ruling digest binds the current envelope without circularity"
+
+  # THE CONTROL. The two assertions above are the non-vacuity anchor: they prove
+  # the binding does not refuse spuriously. They cannot prove it ever refuses,
+  # because acceptance is the path that still works with the guard deleted -
+  # measured by removing both applicability sites and watching this suite stay
+  # green. A guard's whole job is refusal, so the refusing assertion is the
+  # measurement and the accepting one only shows the measurement is not trivial.
+  write_inputs "$case_dir" '{
+    "rulings": [{"id": "R-2", "source": "captain", "disposition": "APPROVE",
+                 "relied_upon": true,
+                 "applies_to": {"envelope_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}}],
+    "obligations": {
+      "predecessor": {"envelope_digest": "'"$prior"'"},
+      "active": [],
+      "dispositions": [
+        {"id": "OBL-1", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"},
+        {"id": "OBL-2", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"}]}}'
+  capture run_prepare "$case_dir" foreign --predecessor "$case_dir/prior"
+  expect_code 1 "$CAPTURED_CODE" "a relied-upon ruling bound to another envelope must refuse"
+  assert_contains "$CAPTURED" 'refusal ruling_applicability_mismatch' \
+    "the refusal must name the applicability mismatch"
+  assert_contains "$CAPTURED" 'envelope_digest' \
+    "the refusal must say which applicability axis mismatched"
+
+  pass "a ruling digest binds the current envelope, refusing a ruling bound to another"
 }
 
 test_a_blocking_adverse_finding_refuses() {
