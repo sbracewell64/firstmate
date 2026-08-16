@@ -398,6 +398,28 @@ test_terminal_request_is_not_applicable() {
   pass "terminal: a closed request cannot satisfy a current wait"
 }
 
+test_request_requires_readable_correlation() {
+  local dir rid record out rc
+  dir=$(new_case c7correlation)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments")
+  record="$dir/home/data/outbound-artifacts/$rid.json"
+  rm "$record"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "correlation: missing record returned $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CORRELATION_RECORD_MISSING' \
+    || fail "correlation: missing record satisfied the wait: $out"
+
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: adoption failed"
+  jq '.state = "unknown"' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "correlation: invalid state returned $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
+    || fail "correlation: invalid lifecycle state satisfied the wait: $out"
+  pass "correlation: missing or invalid records cannot satisfy a wait"
+}
+
 test_close_requires_resumed_work() {
   local dir rid out rc state
   dir=$(new_case c7resume)
@@ -647,6 +669,7 @@ test_ruling_wakes_the_exact_item
 test_unrelated_ruling_cannot_wake_the_item
 test_disposition_completes_the_correlation
 test_terminal_request_is_not_applicable
+test_request_requires_readable_correlation
 test_close_requires_resumed_work
 test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass

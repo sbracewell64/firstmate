@@ -149,12 +149,14 @@ record_write() {  # <request-id> <json>
 # Three-valued on purpose: absent and unreadable are different answers, and only
 # the caller knows which of them is safe in its context.
 record_read() {  # <request-id> -> json on stdout; 1 absent, 2 unreadable
-  local path raw
+  local path raw state
   path=$(record_path "$1")
   [ -f "$path" ] || return 1
   raw=$(cat "$path" 2>/dev/null) || return 2
   printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
     '.schema == $s' >/dev/null 2>&1 || return 2
+  state=$(printf '%s' "$raw" | jq -r '.state // ""') || return 2
+  fm_outbound_record_state_valid "$state" || return 2
   printf '%s\n' "$raw"
 }
 
@@ -421,7 +423,10 @@ sweep() {
           [ "$applicability" = "applicable" ] || rc=1
         else
           record_rc=$?
-          [ "$record_rc" -ne 2 ] || rc=2
+          case $record_rc in
+            1) rc=4 ;;
+            *) rc=5 ;;
+          esac
         fi
       fi
     fi
@@ -450,6 +455,14 @@ sweep() {
       3)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
           unevaluable "$FM_OUTBOUND_TOKEN_UNCONFIGURED" "" "" "$stale" >> "$rows"
+        ;;
+      4)
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
+          defect "$FM_OUTBOUND_TOKEN_MISSING_CORRELATION" "" "" "$stale" >> "$rows"
+        ;;
+      5)
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
+          unevaluable "$FM_OUTBOUND_TOKEN_UNREADABLE" "" "" "$stale" >> "$rows"
         ;;
       *)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
