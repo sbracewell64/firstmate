@@ -1430,6 +1430,35 @@ test_missing_commitment_interpreter_is_not_a_quiet_session_start() {
   pass "an absent commitment interpreter is reported, never silently skipped"
 }
 
+test_outbound_sweep_has_bootstrap_deadline() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-timeout"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+sleep 5
+printf 'OUTBOUND: late result must not escape\n'
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_OUTBOUND_TIMEOUT=1 \
+    "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: sweep unevaluable - bootstrap deadline expired after 1s" \
+    "a stalled outbound sweep must fail closed within its bootstrap deadline"
+  assert_not_contains "$out" "late result must not escape" \
+    "a terminated outbound sweep must not relay post-deadline output"
+  pass "bootstrap bounds the outbound sweep and reports timeout as unevaluable"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
@@ -1464,3 +1493,4 @@ test_validation_daemon_unused_root_is_silent
 test_wake_ledger_terminal_sweep_reports_only_durable_records
 test_open_commitment_denies_a_quiet_session_start
 test_missing_commitment_interpreter_is_not_a_quiet_session_start
+test_outbound_sweep_has_bootstrap_deadline
