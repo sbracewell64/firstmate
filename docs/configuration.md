@@ -199,7 +199,7 @@ It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND
 Detection and emission are separated exactly so an unconfigured venue can never read as a satisfied invariant.
 The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
 
-`fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects at every session start so a stranded item surfaces without anyone going looking.
+`fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects and unevaluable observations at every session start so a stranded item or a blind sweep surfaces without anyone going looking.
 [`verification/outbound-transport-invariant.md`](verification/outbound-transport-invariant.md) records the dated watched-red evidence for each control and the commands that refresh it.
 
 ## Gate defaults (.no-mistakes.yaml)
