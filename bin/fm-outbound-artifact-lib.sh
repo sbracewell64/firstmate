@@ -415,8 +415,8 @@ fm_outbound_haystack() {  # <record-json>
     | map(select(. != null)) | join(" ")' 2>/dev/null || true
 }
 
-fm_outbound_classify_record() {  # <record-json>
-  local rec=$1 structured state hold_kind hay gate
+fm_outbound_classify_record() {  # <record-json> [<declared-gate>]
+  local rec=$1 declared_gate=${2:-} structured state hold_kind hay gate
   if ! printf '%s' "$rec" | jq -e 'type == "object"' >/dev/null 2>&1; then
     printf 'unreadable\t\tnone\n'
     return 0
@@ -437,7 +437,10 @@ fm_outbound_classify_record() {  # <record-json>
   hay=$(fm_outbound_haystack "$rec")
 
   if [ "$hold_kind" = "outbound" ]; then
-    gate=$(fm_outbound_gate_from_prose "$hay")
+    gate=
+    if fm_outbound_gate_valid "$declared_gate"; then
+      gate=$declared_gate
+    fi
     printf 'waiting\t%s\ttyped\n' "$gate"
     return 0
   fi
