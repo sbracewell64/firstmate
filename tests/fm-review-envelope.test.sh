@@ -383,8 +383,8 @@ test_requested_decision_is_an_uppercase_token() {
   case_dir=$(make_case requested-decision-token)
   write_inputs "$case_dir" '{"requested_decision": "semantic-review"}'
   capture run_prepare "$case_dir" malformed
-  expect_code 2 "$CAPTURED_CODE" "a malformed requested decision is could-not-observe"
-  assert_contains "$CAPTURED" 'unobserved inputs_malformed' \
+  expect_code 1 "$CAPTURED_CODE" "a malformed requested decision refuses"
+  assert_contains "$CAPTURED" 'refusal requested_decision_invalid' \
     "the malformed requested decision must be named"
 
   write_inputs "$case_dir" '{"requested_decision": "LANDING_AUTHORIZATION"}'

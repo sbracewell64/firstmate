@@ -166,6 +166,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `candidate_tree_moved` | The bound head no longer carries the bound tree. |
 | `base_moved` | The base reference no longer resolves to the bound base. |
 | `declared_head_mismatch` | An input asserted a head or base the repository contradicts. |
+| `requested_decision_invalid` | The requested decision is present but is not an uppercase token. |
 | `project_identity_mismatch` | The declared repository identity is not this repository's. |
 | `base_not_on_main_line` | The base is not an ancestor of the trunk. |
 | `base_behind_main_exceeds_policy` | The base trails the trunk by more than policy allows. |
