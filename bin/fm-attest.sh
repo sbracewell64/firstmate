@@ -130,6 +130,8 @@ RECHECK_WAIT=${FM_ATTEST_RECHECK_WAIT:-180}
 case "$RECHECK_WAIT" in '' | *[!0-9]*) RECHECK_WAIT=180 ;; esac
 RECHECK_POLL=${FM_ATTEST_RECHECK_POLL:-10}
 case "$RECHECK_POLL" in '' | *[!0-9]* | 0*) RECHECK_POLL=10 ;; esac
+RECHECK_LOCK_WAIT=${FM_ATTEST_RECHECK_LOCK_WAIT:-10}
+case "$RECHECK_LOCK_WAIT" in '' | *[!0-9]*) RECHECK_LOCK_WAIT=10 ;; esac
 
 # The ledger record type. One line per decision, in this script's own validated
 # tokens, so what was re-triggered and why can be audited afterwards without
@@ -956,9 +958,51 @@ recheck_ledger_prepare() {
     esac
   fi
   recheck_ledger="$recheck_ledger_dir/fm-attest-recheck.log"
+  recheck_lock_dir="$recheck_ledger_dir/fm-attest-recheck.lock"
   [ ! -e "$recheck_ledger" ] || [ -r "$recheck_ledger" ] || recheck_fail ledger-unreadable \
     "$recheck_ledger exists but cannot be read, so this cannot tell a first re-trigger from a repeat." \
     "Repair or remove it and re-run; nothing was re-triggered."
+}
+
+recheck_ledger_unlock() {
+  [ "${recheck_lock_held:-0}" -eq 1 ] || return 0
+  rmdir "$recheck_lock_dir" >/dev/null 2>&1 || true
+  recheck_lock_held=0
+}
+
+recheck_ledger_lock() {
+  recheck_lock_waited=0
+  while ! mkdir "$recheck_lock_dir" 2>/dev/null; do
+    [ "$recheck_lock_waited" -lt "$RECHECK_LOCK_WAIT" ] || recheck_fail ledger-lock-unavailable \
+      "Could not take the re-evaluation ledger lock at $recheck_lock_dir within ${RECHECK_LOCK_WAIT}s." \
+      "The request bound could not be observed atomically, so nothing was re-triggered."
+    sleep 1
+    recheck_lock_waited=$((recheck_lock_waited + 1))
+  done
+  recheck_lock_held=1
+}
+
+recheck_cleanup() {
+  recheck_ledger_unlock
+  [ -z "${RECHECK_ERR_FILE:-}" ] || rm -f "$RECHECK_ERR_FILE" >/dev/null 2>&1
+  [ -z "${recheck_scratch_ref:-}" ] || git update-ref -d "$recheck_scratch_ref" >/dev/null 2>&1
+}
+
+recheck_resolve_push_repository() {
+  [ -f "$SCRIPT_DIR/fm-task-base-lib.sh" ] || recheck_fail repository-unresolved \
+    "bin/fm-task-base-lib.sh is not beside this script, so the push target cannot be bound to a GitHub repository."
+  # shellcheck source=bin/fm-task-base-lib.sh
+  . "$SCRIPT_DIR/fm-task-base-lib.sh"
+  recheck_push_venue=$(task_base_venue_identity_alias "$push_identity_url" 2>/dev/null) \
+    || recheck_push_venue=$(task_base_venue_identity "$push_identity_url" 2>/dev/null) \
+    || recheck_push_venue=
+  case "$recheck_push_venue" in
+    github.com/*) recheck_push_repo=${recheck_push_venue#github.com/} ;;
+    *) recheck_push_repo= ;;
+  esac
+  is_repo_slug "$recheck_push_repo" || recheck_fail repository-unresolved \
+    "$push_target, the push target of $remote, could not be resolved to an owner/name GitHub repository." \
+    "Nothing was re-triggered because the published evidence repository could not be bound to the pull request head repository."
 }
 
 # The pull request this head is open on, resolved from the repositories this
@@ -981,8 +1025,12 @@ recheck_resolve_pull_request() {
   for recheck_remote_name in "$remote" upstream origin; do
     for recheck_url_kind in --push --all; do
       case "$recheck_url_kind" in
-        --push) recheck_remote_url=$(git remote get-url --push "$recheck_remote_name" 2>/dev/null) || continue ;;
-        *) recheck_remote_url=$(git remote get-url "$recheck_remote_name" 2>/dev/null) || continue ;;
+        --push)
+          recheck_remote_url=$(git config --get "remote.$recheck_remote_name.pushurl" 2>/dev/null) \
+            || recheck_remote_url=$(git config --get "remote.$recheck_remote_name.url" 2>/dev/null) \
+            || continue
+          ;;
+        *) recheck_remote_url=$(git config --get "remote.$recheck_remote_name.url" 2>/dev/null) || continue ;;
       esac
       recheck_venue=$(task_base_venue_identity_alias "$recheck_remote_url" 2>/dev/null) \
         || recheck_venue=$(task_base_venue_identity "$recheck_remote_url" 2>/dev/null) \
@@ -1024,7 +1072,11 @@ recheck_resolve_pull_request() {
           object(oid: $oid) {
             ... on Commit {
               associatedPullRequests(first: 20) {
-                nodes { number state headRefOid baseRepository { nameWithOwner } }
+                nodes {
+                  number state headRefOid
+                  baseRepository { nameWithOwner }
+                  headRepository { nameWithOwner }
+                }
               }
             }
           }
@@ -1034,18 +1086,24 @@ recheck_resolve_pull_request() {
       --jq '(.data.repository.object.associatedPullRequests.nodes // [])[]
             | select(.state == "OPEN")
             | select(.headRefOid == "'"$recheck_head"'")
-            | "\(.baseRepository.nameWithOwner) \(.number)"' \
+            | "\(.baseRepository.nameWithOwner) \(.number) \(.headRepository.nameWithOwner // "absent")"' \
       || recheck_fail forge-unreadable \
         "Could not ask $recheck_slug which pull requests are open on $recheck_head (gh exited $recheck_gh_rc)." \
         "gh said: ${RECHECK_ERR:-(nothing)}" \
         "That is a forge this could not read rather than a head with no pull request, so nothing here says whether one is open on it." \
         "Skip resolution and name the request instead: bin/fm-attest.sh recheck --head $recheck_head --repo <owner/name> --pr <number>"
-    while IFS=' ' read -r recheck_found_repo recheck_found_pr; do
+    while IFS=' ' read -r recheck_found_repo recheck_found_pr recheck_found_head_repo; do
       [ -n "$recheck_found_pr" ] || continue
       is_repo_slug "$recheck_found_repo" || continue
       is_positive_number "$recheck_found_pr" || continue
-      list_has "$recheck_found_repo#$recheck_found_pr" "$recheck_found" && continue
-      recheck_found="$recheck_found $recheck_found_repo#$recheck_found_pr"
+      [ "$recheck_found_head_repo" != absent ] || recheck_fail pull-request-head-repository-absent \
+        "Pull request $recheck_found_pr on $recheck_found_repo has no head repository." \
+        "A deleted fork is not a repository the published attestation can be bound to, so nothing was re-triggered."
+      is_repo_slug "$recheck_found_head_repo" || recheck_fail pull-request-head-repository-unreadable \
+        "GitHub did not return a usable head repository for pull request $recheck_found_pr on $recheck_found_repo." \
+        "Nothing was re-triggered because absence and an unreadable repository are not evidence of a match."
+      list_has "$recheck_found_repo#$recheck_found_pr#$recheck_found_head_repo" "$recheck_found" && continue
+      recheck_found="$recheck_found $recheck_found_repo#$recheck_found_pr#$recheck_found_head_repo"
     done <<EOF
 $RECHECK_OUT
 EOF
@@ -1067,8 +1125,10 @@ EOF
         "Name the one to re-evaluate: bin/fm-attest.sh recheck --head $recheck_head --repo <owner/name> --pr <number>"
       ;;
   esac
-  recheck_repo=${1%#*}
-  recheck_pr=${1##*#}
+  recheck_repo=${1%%#*}
+  recheck_pr=${1#*#}
+  recheck_pr=${recheck_pr%%#*}
+  recheck_pr_head_repo=${1##*#}
 }
 
 # The runs this head's applicable check has produced. A run whose head_sha is
@@ -1152,6 +1212,7 @@ cmd_recheck() {
   remote=origin
   notes_ref=$NOTES_REF_DEFAULT
   recheck_dry_run=0
+  recheck_lock_held=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --head)
@@ -1211,8 +1272,7 @@ cmd_recheck() {
     || fail scratch-file-unavailable \
       "Could not create a temporary file to capture gh's stderr." \
       "Check TMPDIR and its free space, then re-run."
-  # shellcheck disable=SC2064  # The paths are captured now, deliberately.
-  trap "rm -f '$RECHECK_ERR_FILE' >/dev/null 2>&1; git update-ref -d '$recheck_scratch_ref' >/dev/null 2>&1" EXIT
+  trap recheck_cleanup EXIT
 
   # ---- the evidence, as the check itself will read it --------------------
   #
@@ -1222,7 +1282,11 @@ cmd_recheck() {
   # locally but never published, or one a remote rewrote, would otherwise buy a
   # re-trigger that must reproduce the same refusal.
   push_url=$(git remote get-url --push "$remote" 2>/dev/null) || push_url=$remote
+  push_identity_url=$(git config --get "remote.$remote.pushurl" 2>/dev/null) \
+    || push_identity_url=$(git config --get "remote.$remote.url" 2>/dev/null) \
+    || push_identity_url=$push_url
   push_target=$(credential_safe_text "$push_url")
+  recheck_resolve_push_repository
   ls_rc=0
   ls_err=$(git ls-remote --exit-code "$push_url" "$notes_ref" 2>&1 >/dev/null) || ls_rc=$?
   case "$ls_rc" in
@@ -1273,13 +1337,14 @@ cmd_recheck() {
 
   # ---- the pull request this head is open on -----------------------------
   if [ -n "$recheck_repo" ]; then
-    recheck_gh api "repos/$recheck_repo/pulls/$recheck_pr" --jq '"\(.state) \(.head.sha)"' \
+    recheck_gh api "repos/$recheck_repo/pulls/$recheck_pr" --jq '"\(.state) \(.head.sha) \(.head.repo.full_name // "absent")"' \
       || recheck_fail forge-unreadable \
         "Could not read pull request $recheck_pr on $recheck_repo (gh exited $recheck_gh_rc)." \
         "gh said: ${RECHECK_ERR:-(nothing)}" \
         "That is a forge this could not read rather than a request that has moved or closed."
-    recheck_pr_state=${RECHECK_OUT%% *}
-    recheck_pr_head=${RECHECK_OUT##* }
+    read -r recheck_pr_state recheck_pr_head recheck_pr_head_repo <<EOF
+$RECHECK_OUT
+EOF
     [ "$recheck_pr_state" = open ] || recheck_refuse pull-request-not-open \
       "Pull request $recheck_pr on $recheck_repo is '$recheck_pr_state' rather than open." \
       "A request that is not open has no check for this to re-evaluate."
@@ -1296,6 +1361,16 @@ cmd_recheck() {
       exit 0
     fi
   fi
+
+  [ "$recheck_pr_head_repo" != absent ] || recheck_fail pull-request-head-repository-absent \
+    "Pull request $recheck_pr on $recheck_repo has no head repository." \
+    "A deleted fork is not a repository the published attestation can be bound to, so nothing was re-triggered."
+  is_repo_slug "$recheck_pr_head_repo" || recheck_fail pull-request-head-repository-unreadable \
+    "GitHub did not return a usable head repository for pull request $recheck_pr on $recheck_repo." \
+    "Nothing was re-triggered because absence and an unreadable repository are not evidence of a match."
+  [ "$recheck_pr_head_repo" = "$recheck_push_repo" ] || recheck_refuse pull-request-head-repository-mismatch \
+    "Pull request $recheck_pr on $recheck_repo reads its head from $recheck_pr_head_repo, but the attestation was read from $recheck_push_repo." \
+    "No head is reported green on unseen evidence, but re-running now would report publication where the check does not look, so nothing was re-triggered."
 
   recheck_ledger_prepare
 
@@ -1326,8 +1401,9 @@ cmd_recheck() {
   fi
 
   # ---- idempotency, the bound, then the one supported action -------------
+  recheck_ledger_lock
   recheck_already=$(recheck_ledger_count "$recheck_ledger" \
-    "repo=$recheck_repo pr=$recheck_pr head=$recheck_head run=$recheck_run attempt=$recheck_attempt action=requested") \
+    "repo=$recheck_repo pr=$recheck_pr head=$recheck_head run=$recheck_run attempt=$recheck_attempt action=requesting") \
     || recheck_already=
   case "$recheck_already" in
     '' | *[!0-9]*)
@@ -1337,6 +1413,7 @@ cmd_recheck() {
       ;;
   esac
   if [ "$recheck_already" -gt 0 ]; then
+    recheck_ledger_unlock
     emit "fm-attest: attempt $recheck_attempt of run $recheck_run for $recheck_head has already been re-triggered; not requesting it again"
     exit 0
   fi
@@ -1358,17 +1435,21 @@ cmd_recheck() {
 
   recheck_url="https://github.com/$recheck_repo/actions/runs/$recheck_run"
   if [ "$recheck_dry_run" -eq 1 ]; then
+    recheck_ledger_unlock
     emit "fm-attest: would re-run $recheck_url for $recheck_head (attempt $recheck_attempt concluded '$recheck_conclusion')"
     exit 0
   fi
 
-  # Recorded BEFORE the request, so a re-trigger can never happen without a
-  # record of it, and the bound above counts these rather than the successes:
-  # a forge that swallows every request must not buy unlimited attempts.
+  # Recorded BEFORE the request while the count and append share one lock.
+  # This record consumes the attempt because after a crash there is no safe way
+  # to distinguish a request that never happened from one GitHub accepted.
+  # Burning an attempt is safe; posting the same attempt twice is not, and the
+  # total bound leaves room for that fail-closed outcome.
   recheck_ledger_append requesting attestation-published "$recheck_run" "$recheck_attempt" \
     || recheck_fail ledger-unwritable \
       "Could not append to $recheck_ledger, so nothing was re-triggered." \
       "A re-evaluation nobody can audit is worse than one that did not happen: repair that path and re-run."
+  recheck_ledger_unlock
 
   recheck_gh api --method POST "repos/$recheck_repo/actions/runs/$recheck_run/rerun" || {
     recheck_ledger_append refused rerun-not-requested "$recheck_run" "$recheck_attempt"

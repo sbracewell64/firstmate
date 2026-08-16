@@ -1432,7 +1432,8 @@ new_published_repo() {
   new_repo "$repo"
   head=$(git -C "$repo" rev-parse HEAD)
   git init -q --bare "$repo.fork.git"
-  git -C "$repo" remote add origin "$repo.fork.git"
+  git -C "$repo" config url."$repo.fork.git".insteadOf https://github.com/example/repo.git
+  git -C "$repo" remote add origin https://github.com/example/repo.git
   git -C "$repo" push -q origin fm/demo
   add_note "$repo" "$head" "$(good_note "$head")"
   git -C "$repo" push -q origin "$NOTES_REF:$NOTES_REF"
@@ -1512,8 +1513,19 @@ EOF
   } > "$path"
 }
 
-pr_fixture() { # <path> <state> <head>
-  printf '{"state":"%s","head":{"sha":"%s"}}\n' "$2" "$3" > "$1"
+pr_fixture() { # <path> <state> <head> [<head owner/name>|absent|unreadable]
+  local head_repo=${4:-example/repo}
+  case "$head_repo" in
+    absent)
+      printf '{"state":"%s","head":{"sha":"%s","repo":null}}\n' "$2" "$3" > "$1"
+      ;;
+    unreadable)
+      printf '{"state":"%s","head":{"sha":"%s","repo":{"full_name":"not a repository"}}}\n' "$2" "$3" > "$1"
+      ;;
+    *)
+      printf '{"state":"%s","head":{"sha":"%s","repo":{"full_name":"%s"}}}\n' "$2" "$3" "$head_repo" > "$1"
+      ;;
+  esac
 }
 
 pulls_fixture() { # <path> <head> <owner/name>:<number>...
@@ -1526,7 +1538,7 @@ pulls_fixture() { # <path> <head> <owner/name>:<number>...
       number=${spec##*:}
       [ "$first" -eq 1 ] || printf ','
       first=0
-      printf '{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"}}' \
+      printf '{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"},"headRepository":{"nameWithOwner":"example/repo"}}' \
         "$number" "$head" "$repo"
     done
     printf ']}}}}}\n'
@@ -1546,7 +1558,7 @@ pulls_fixture_commit_absent() { # <path>
 # request's history - so it is exactly the shape that must not be mistaken for a
 # request open ON this commit.
 pulls_fixture_other_head() { # <path> <owner/name> <number> <that request's head>
-  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"}}]}}}}}\n' \
+  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"},"headRepository":{"nameWithOwner":"example/repo"}}]}}}}}\n' \
     "$3" "$4" "$2" > "$1"
 }
 
@@ -1554,7 +1566,7 @@ pulls_fixture_other_head() { # <path> <owner/name> <number> <that request's head
 # merged requests here too, and a request that is not open has no check for this
 # to re-evaluate.
 pulls_fixture_state() { # <path> <owner/name> <number> <head> <state>
-  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"%s","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"}}]}}}}}\n' \
+  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":[{"number":%s,"state":"%s","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"},"headRepository":{"nameWithOwner":"example/repo"}}]}}}}}\n' \
     "$3" "$5" "$4" "$2" > "$1"
 }
 
@@ -1644,6 +1656,111 @@ test_recheck_requests_one_re_evaluation_per_attempt() {
   assert_contains "$out" "already been re-triggered" \
     "the repeat was not reported as one"
   pass "fm-attest.sh: an unchanged head and attempt is re-triggered once, not repeatedly"
+}
+
+test_recheck_pre_request_record_consumes_the_attempt() {
+  local control repo head out rc
+  jq_or_skip "a pre-request record survives a crash without permitting a duplicate POST" && return
+  control="$TMP_ROOT/recheck-pre-request-control"
+  new_published_repo "$control"
+  head=$(git -C "$control" rev-parse HEAD)
+  runs_fixture "$control/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$control/pr.json" open "$head"
+  recheck_out "$control" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the no-crash control did not request a re-evaluation"
+  assert_reran "$control" 100 "pre-request control"
+
+  repo="$TMP_ROOT/recheck-pre-request-crash"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  printf 'fm-attest-recheck.v1 ts=unknown repo=example/repo pr=7 head=%s note=unknown run=100 attempt=1 action=requesting reason=attestation-published\n' \
+    "$head" > "$repo/.git/fm-attest-recheck.log"
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a crash-spent attempt was reported as a fault: $out"
+  assert_not_reran "$repo" "pre-request crash"
+  pass "fm-attest.sh: a durable pre-request record consumes its run attempt"
+}
+
+test_recheck_serializes_the_request_bound() {
+  local control repo head first second posts
+  jq_or_skip "concurrent rechecks cannot both pass the request bound" && return
+  control="$TMP_ROOT/recheck-lock-control"
+  new_published_repo "$control"
+  head=$(git -C "$control" rev-parse HEAD)
+  runs_fixture "$control/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$control/pr.json" open "$head"
+  recheck_out "$control" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the single-invocation lock control was refused"
+  assert_reran "$control" 100 "request-lock control"
+
+  repo="$TMP_ROOT/recheck-lock-concurrent"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 102:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  printf 'fm-attest-recheck.v1 ts=unknown repo=example/repo pr=7 head=%s note=unknown run=100 attempt=1 action=requesting reason=attestation-published\n' "$head" > "$repo/.git/fm-attest-recheck.log"
+  printf 'fm-attest-recheck.v1 ts=unknown repo=example/repo pr=7 head=%s note=unknown run=101 attempt=1 action=requesting reason=attestation-published\n' "$head" >> "$repo/.git/fm-attest-recheck.log"
+  mkdir "$repo/.git/fm-attest-recheck.lock"
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 > "$repo/first.out" 2>&1 &
+  first=$!
+  fm_test_reap "$first"
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 > "$repo/second.out" 2>&1 &
+  second=$!
+  fm_test_reap "$second"
+  sleep 1
+  rmdir "$repo/.git/fm-attest-recheck.lock"
+  wait "$first" || fail "the first concurrent recheck failed: $(cat "$repo/first.out")"
+  wait "$second" || fail "the second concurrent recheck failed: $(cat "$repo/second.out")"
+  posts=$(grep -c -- '--method POST' "$repo/gh.log" || true)
+  [ "$posts" -eq 1 ] || fail "concurrent rechecks made $posts POSTs at the one-slot remainder of the bound"
+  pass "fm-attest.sh: concurrent rechecks reserve the request bound atomically"
+}
+
+test_recheck_binds_the_published_repository_to_the_pr_head_repository() {
+  local repo head out rc
+  jq_or_skip "a different published repository cannot trigger a PR head recheck" && return
+  repo="$TMP_ROOT/recheck-repository-binding"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" config url."$repo.fork.git".insteadOf https://github.com/other/repo.git
+  git -C "$repo" remote set-url origin https://github.com/other/repo.git
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head" example/repo
+  out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a mismatched head repository was not refused (exit $rc): $out"
+  assert_contains "$out" "pull-request-head-repository-mismatch" "the repository mismatch lacked its own reason"
+  assert_not_reran "$repo" "repository mismatch"
+  pr_fixture "$repo/pr.json" open "$head" other/repo
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the matched head repository control was refused"
+  assert_reran "$repo" 100 "repository-binding control"
+  pass "fm-attest.sh: published evidence is bound to the pull request head repository"
+}
+
+test_recheck_refuses_absent_and_unreadable_head_repositories() {
+  local repo head out rc shape
+  jq_or_skip "absent and unreadable PR head repositories are could-not-observe" && return
+  repo="$TMP_ROOT/recheck-head-repository-unobservable"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  for shape in absent unreadable; do
+    pr_fixture "$repo/pr.json" open "$head" "$shape"
+    out=$(recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+    rc=$?
+    [ "$rc" -eq 2 ] || fail "a $shape head repository was not could-not-observe (exit $rc): $out"
+    assert_contains "$out" "pull-request-head-repository-$shape" "$shape did not have its own reason"
+    assert_not_reran "$repo" "$shape head repository"
+  done
+  pr_fixture "$repo/pr.json" open "$head" example/repo
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "the readable head repository control was refused"
+  assert_reran "$repo" 100 "readable-head-repository control"
+  pass "fm-attest.sh: absent and unreadable head repositories fail closed distinctly"
 }
 
 test_recheck_bounds_repeated_re_evaluation_of_one_head() {
@@ -2195,6 +2312,10 @@ test_write_reports_an_unrecordable_note_as_such
 test_show_reports_an_unknown_commit_as_such
 test_recheck_reruns_the_run_that_judged_a_published_head
 test_recheck_requests_one_re_evaluation_per_attempt
+test_recheck_pre_request_record_consumes_the_attempt
+test_recheck_serializes_the_request_bound
+test_recheck_binds_the_published_repository_to_the_pr_head_repository
+test_recheck_refuses_absent_and_unreadable_head_repositories
 test_recheck_bounds_repeated_re_evaluation_of_one_head
 test_recheck_selects_the_run_that_started_last
 test_recheck_ignores_runs_belonging_to_another_head

@@ -58,8 +58,8 @@ A **failure** exits 2 and prints `cannot attest (<reason>)`.
 No verdict was reached, so it says nothing about the evidence either way: `not-a-git-repository`, `pipeline-tool-missing`, `head-unresolvable`, `head-detached`, `scratch-file-unavailable`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-not-reconciled`, `attestation-not-recorded`, `attestation-not-published`, or `commit-unknown` for `show`.
 
 `recheck` is about a different subject and does not borrow either headline, because a head can carry perfect evidence and still not be re-evaluated, and reporting that as `not attested` would send a reader to republish a note that is already correct.
-It prints `not re-evaluated (<reason>)` and exits 1 for a fact about this head, this pull request or this repository: `attestation-not-published`, `attestation-not-published-for-head`, `pull-request-not-open`, `pull-request-head-moved`, `pull-request-ambiguous`, `no-applicable-run`, `run-in-progress` or `recheck-budget-spent`.
-It prints `cannot re-evaluate (<reason>)` and exits 2 when the re-evaluation could not be carried out or judged, so nothing it says bears on whether the check would now pass: `forge-tool-missing`, `forge-unreadable`, `forge-read-truncated`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-ref-unreadable`, `rerun-not-requested`, `ledger-unreadable`, `ledger-unwritable`, `ledger-unlocatable` or `repository-unresolved`.
+It prints `not re-evaluated (<reason>)` and exits 1 for a fact about this head, this pull request or this repository: `attestation-not-published`, `attestation-not-published-for-head`, `pull-request-not-open`, `pull-request-head-moved`, `pull-request-head-repository-mismatch`, `pull-request-ambiguous`, `no-applicable-run`, `run-in-progress` or `recheck-budget-spent`.
+It prints `cannot re-evaluate (<reason>)` and exits 2 when the re-evaluation could not be carried out or judged, so nothing it says bears on whether the check would now pass: `forge-tool-missing`, `forge-unreadable`, `forge-read-truncated`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-ref-unreadable`, `pull-request-head-repository-absent`, `pull-request-head-repository-unreadable`, `rerun-not-requested`, `ledger-unreadable`, `ledger-unwritable`, `ledger-unlocatable`, `ledger-lock-unavailable` or `repository-unresolved`.
 Published evidence that is present but invalid is **not** one of these: it exits through `verify`'s own refusals above, because that is a verdict on the evidence rather than a step that did not happen.
 When `recheck` runs as `write`'s last step, every non-zero exit also says that the note was recorded and pushed before it ran, so the repair is never to publish it again.
 
@@ -144,6 +144,9 @@ What it establishes before asking GitHub for anything:
 - The repository the check reads - the push target of the named remote, not the local ref - now serves an attestation for **this exact head**, and that attestation passes the same `verify_note_payload` the gate runs.
   A note that is absent there, bound to another commit, or malformed is refused as **evidence**, in the evidence's own words, and no re-run is requested: re-running a check that must refuse again would spend a job to be told what is already known.
 - The pull request is open and its head is still this commit.
+  Its `head.repo.full_name` must also equal the resolved push-target repository from which the attestation was read.
+  A mismatch refuses before the POST: it cannot produce a false green, but proceeding would report evidence as published where the check does not look and spend a re-run that cannot converge.
+  An absent head repository, including a deleted fork, and an unreadable head repository are separate could-not-observe outcomes and are never assumed to match.
   Named explicitly, a request that has moved on is refused as `pull-request-head-moved`, because evidence for a head nobody is proposing does not cover the head under review.
   Resolved from this checkout's own github.com remotes instead, only a request open **on** this commit counts: GitHub associates a request with every commit that was ever in its history, so a request whose head has moved past this one still comes back and is not it.
   A commit a candidate repository does not carry is a fact about that repository and is passed over; a candidate that could not be read at all stops the command, because not reading a repository is not reading an absence.
@@ -155,7 +158,9 @@ What it establishes before asking GitHub for anything:
 
 Every decision is appended to `fm-attest-recheck.log` in the repository's common git directory, one line per decision, binding repository, pull request, head, note object, run and attempt to the action taken and why.
 It is never committed and the check never reads it: it is an audit record of what this program did, not a second place a verdict could come from.
-The record is written **before** the request, so a re-run can never happen without a record of it, and the bound counts attempts rather than successes so that a forge swallowing every request cannot buy unlimited ones.
+The count and pre-request append are serialized through a bounded atomic lock shared by every worktree of the clone.
+The record is written **before** the request and consumes that run attempt, because after a crash the program cannot distinguish a request that never happened from one GitHub accepted before the requested record was appended.
+The bound counts attempts rather than successes so that a forge swallowing every request cannot buy unlimited ones.
 
 Three outcomes are ordinary rather than faults, and each says so: the run already passed, this attempt was already re-triggered, and no open pull request is on this head at all - the last being the landing-branch shape below.
 
