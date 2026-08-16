@@ -26,7 +26,25 @@ test_resumes_onto_an_expressive_recovered_pool_member() {
   pass "resumes onto a recovered pool member that can express the route effort band"
 }
 
-test_resumes_onto_an_earlier_recovered_pool_member() {
+# NEGATIVE CONTROL: the resume asks the ROUTE OWNER, and only for the candidates
+# that FOLLOW the failed model in its own pool.
+#
+# This case replaces one that asserted the opposite - that a pool member sitting
+# EARLIER than the failed model resumes the work as soon as it recovers. That
+# behaviour is a SECOND FAILOVER SELECTOR: it answers "which model do I
+# substitute to" by walking the whole eligible list, independently of
+# `fm-route.sh next --after`, which is the fleet's canonical answer and is
+# already on main. Two answers to one routing question diverge the moment either
+# changes, and the eligibility-ordered one can reach a model the failed model's
+# pool never names.
+#
+# The pool is vendor/large then alt/large, and the task failed on alt/large, the
+# LAST member. `next --after alt/large` therefore names nobody, and the lawful
+# outcome is to keep waiting rather than to resume backwards onto vendor/large.
+# Against a build whose resume selects by eligibility alone, vendor/large IS
+# selected and the task resumes, so this case goes red - which is the whole
+# point of keeping it.
+test_resume_does_not_select_a_model_before_the_failed_one() {
   local out meta
   make_dispatch_home earlier-resume
   write_brief "$HOME_DIR" earliertask no-mistakes
@@ -35,15 +53,15 @@ test_resumes_onto_an_earlier_recovered_pool_member() {
     --reason-code NL_RULE_CLASSIFICATION --harness codex \
     --route R-PAIR --model alt/large --effort medium)
   assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "both spent candidates must first create a wait"
+  # Only the EARLIER pool member recovers.
   out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
     run_retry "$HOME_DIR" "$(quota_record vendorq=95 altq=0)" tick --id earliertask --force)
   meta="$HOME_DIR/state/earliertask.meta"
-  assert_present "$meta" "the earlier recovered pool member did not resume the task"
-  assert_grep "model=vendor/large" "$meta" "the resumed metadata did not name the earlier recovered member"
-  assert_contains "$out" "vendor/large in route R-PAIR" "the resume output did not name the earlier recovered member"
-  assert_absent "$HOME_DIR/state/earliertask.capacity" "the resumed wait record was not retired"
-  pass "resumes onto an earlier pool member when it recovers first"
+  assert_absent "$meta" "the resume reached backwards to a pool member BEFORE the model that failed, which means it selected a candidate the route owner never offered"
+  assert_not_contains "$out" "vendor/large in route R-PAIR" "the resume named a candidate that does not follow the failed model in pool order"
+  assert_present "$HOME_DIR/state/earliertask.capacity" "with no candidate after the failed model, the lawful outcome is to keep waiting, not to retire the wait"
+  pass "a resume never selects a model before the failed one; with none after it, the wait continues"
 }
 
 test_recorded_effort_survives_policy_edit() {
@@ -446,6 +464,7 @@ test_concurrent_ticks_claim_one_retry_owner() {
   [ "$(wc -l < "$log" | tr -d ' ')" = 1 ] \
     || fail "concurrent ticks both entered the claimed retry reconciliation"
   pass "concurrent ticks give one process exclusive retry ownership"
+}
 
 # NEGATIVE CONTROL: ONE bound per WORK ITEM, not one per model.
 #
@@ -626,7 +645,7 @@ test_bootstrap_reports_the_two_capacity_stops_separately() {
 }
 
 test_resumes_onto_an_expressive_recovered_pool_member
-test_resumes_onto_an_earlier_recovered_pool_member
+test_resume_does_not_select_a_model_before_the_failed_one
 test_recorded_effort_survives_policy_edit
 test_uncounted_deferral_fails_closed
 test_one_bound_per_work_item_across_substitutions

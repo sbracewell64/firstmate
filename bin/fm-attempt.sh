@@ -16,15 +16,27 @@
 #   terminal=<state>     written only when a budget is exhausted (below).
 #   updated=<epoch>      when the record last changed.
 #   deferrals=<n>        capacity deferrals recorded for this task id so far.
+#   deferral_budget=<b>  the most capacity deferrals it may record.
 #   defer_signature=<s>  the capacity picture the last deferral observed.
 #   defer_stagnant=<n>   consecutive deferrals that observed that same picture.
 #
 # WHY CAPACITY DEFERRALS ARE COUNTED HERE AND NOT SOMEWHERE ELSE. A deferral is
 # not a retry of failed work - nothing failed, the fleet simply had no capacity
 # meeting the task's floor - so it must never spend an attempt, and it does not.
-# It is still useful for the backoff owner to know how many observations have
-# occurred and whether the capacity picture changed. Neither observation is a
-# stop authority: provider capacity may lawfully remain unchanged indefinitely.
+# But it is the same QUESTION this file already owns: how many times may this
+# task id repeat something before the repetition itself is the problem? Keeping
+# both counts in one record means a task cannot be bounded by one and unbounded
+# by the other, and means a reader joins on one file rather than two.
+#
+# TWO BOUNDS, BECAUSE THEY CATCH DIFFERENT FAILURES. `deferral_budget` bounds the
+# total, so a wait can never become an infinite poll. `defer_stagnant` bounds
+# consecutive deferrals that observed the IDENTICAL capacity picture, so a wait
+# that is not progressing stops long before the total budget would notice - and a
+# wait that IS progressing, because a reset time appeared or a candidate came
+# back, resets that counter and keeps going. Either bound reaching its limit is
+# the same unified terminal state as an exhausted attempt budget, declared the
+# same way, because in both cases a declared bound was reached before the goal
+# was met.
 #
 # The same two numbers are published onto state/<id>.meta as attempt= and
 # attempt_budget= by bin/fm-spawn.sh, so every reader that already joins on task
@@ -133,10 +145,14 @@
 #       discard deletes the status log along with the task's own failure
 #       declaration, so the end is recorded here or the evidence goes with it.
 #       A task with no open attempt records nothing.
-#   fm-attempt.sh defer <id> [--signature <s>]
-#       Record one CAPACITY deferral observation for this task id. Exit 0 and print
-#       "deferrals=<n> stagnant=<k>". Spends no attempt: a task the fleet had no
-#       capacity for did not fail.
+#   fm-attempt.sh defer <id> [--defer-budget <n>] [--signature <s>]
+#                            [--stagnation-limit <n>]
+#       Record one CAPACITY deferral for this task id and decide whether waiting
+#       again is still within bounds. Exit 0 and print
+#       "deferrals=<n> deferral_budget=<b> stagnant=<k> stagnation_limit=<l>"
+#       when it is; exit 3, record terminal=budget_exhausted and append one
+#       `failed:` line when either bound is spent. Spends no attempt: a task the
+#       fleet had no capacity for did not fail.
 #   fm-attempt.sh stop-defer <id> --reason <text>
 #                            --observation observed-bad|could-not-observe
 #       Stop a capacity wait when its retry owner cannot durably maintain the
@@ -185,6 +201,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ATTEMPT_TERMINAL_STATE=budget_exhausted
 FM_ATTEMPT_UNOBSERVABLE_STATE=blocked_by_evidence_integrity
 ATTEMPT_BUDGET_DEFAULT=${FM_ATTEMPT_BUDGET_DEFAULT:-2}
+# How many capacity deferrals one task id may record, and how many CONSECUTIVE
+# deferrals may observe an unchanged capacity picture before the wait is called
+# stagnant. Both are deliberately far larger than the attempt budget: a provider
+# window can legitimately take days to reset, and stopping a lawful wait early
+# is the failure this closes rather than the one it guards against.
+ATTEMPT_DEFER_BUDGET_DEFAULT=${FM_ATTEMPT_DEFER_BUDGET_DEFAULT:-24}
+ATTEMPT_DEFER_STAGNATION_DEFAULT=${FM_ATTEMPT_DEFER_STAGNATION_DEFAULT:-8}
 # Exit code for a refused retry, distinct from an argument error (2) so a caller
 # can tell "this task is out of budget" from "you called me wrong".
 ATTEMPT_EXHAUSTED_EXIT=3
@@ -272,6 +295,13 @@ attempt_defer_count() {  # <id> -> count on stdout
   printf '%s' "$n"
 }
 
+attempt_defer_budget() {  # <id> -> budget on stdout
+  local b
+  b=$(attempt_field "$STATE/$1.attempt" deferral_budget)
+  attempt_is_count "$b" && [ "$b" -gt 0 ] || b=$ATTEMPT_DEFER_BUDGET_DEFAULT
+  printf '%s' "$b"
+}
+
 # Explicit flag wins, then the record, then the task metadata, then the default.
 attempt_budget() {  # <id> <explicit-or-empty> -> budget on stdout
   local id=$1 explicit=${2-} b
@@ -294,21 +324,23 @@ attempt_budget() {  # <id> <explicit-or-empty> -> budget on stdout
 # behind from an earlier state. Written to a temp file and moved into place, so
 # a concurrent reader sees either the old record or the new one.
 #
-# The three deferral fields are optional trailing arguments, and OMITTING them
+# The four deferral fields are optional trailing arguments, and OMITTING them
 # PRESERVES what the record already holds. That distinction is load-bearing: the
 # attempt path rewrites this record on every check, open and end, and if those
-# writes dropped the deferral count then retry backoff would reset after a
-# relaunch. Passing them explicitly is how the deferral path sets them; passing
-# none is how every other path leaves them alone.
+# writes dropped the deferral count then a single relaunch would silently
+# unbound a wait this file exists to bound. Passing them explicitly is how the
+# deferral path sets them; passing none is how every other path leaves them
+# alone.
 attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty> <failures> <ended>
-                   #   [<deferrals> <signature> <stagnant>]
+                   #   [<deferrals> <deferral-budget> <signature> <stagnant>]
   local id=$1 n=$2 b=$3 term=${4-} failures=${5-0} ended=${6-0} rec tmp
-  local deferrals signature stagnant
+  local deferrals defer_budget signature stagnant
   rec="$STATE/$id.attempt"
-  if [ "$#" -ge 9 ]; then
-    deferrals=$7 signature=$8 stagnant=$9
+  if [ "$#" -ge 10 ]; then
+    deferrals=$7 defer_budget=$8 signature=$9 stagnant=${10}
   else
     deferrals=$(attempt_field "$rec" deferrals)
+    defer_budget=$(attempt_field "$rec" deferral_budget)
     signature=$(attempt_field "$rec" defer_signature)
     stagnant=$(attempt_field "$rec" defer_stagnant)
   fi
@@ -323,6 +355,7 @@ attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty> <failures> <end
     printf 'failures=%s\n' "$failures"
     printf 'ended=%s\n' "$ended"
     [ -z "$deferrals" ] || printf 'deferrals=%s\n' "$deferrals"
+    [ -z "$defer_budget" ] || printf 'deferral_budget=%s\n' "$defer_budget"
     [ -z "$signature" ] || printf 'defer_signature=%s\n' "$signature"
     [ -z "$stagnant" ] || printf 'defer_stagnant=%s\n' "$stagnant"
     [ -z "$term" ] || printf 'terminal=%s\n' "$term"
@@ -389,9 +422,9 @@ cmd_show() {
   require_id "$id"
   shift
   [ "$#" -eq 0 ] || die "show takes only a task id"
-  printf 'attempt=%s attempt_budget=%s deferrals=%s terminal=%s\n' \
+  printf 'attempt=%s attempt_budget=%s deferrals=%s deferral_budget=%s terminal=%s\n' \
     "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
-    "$(attempt_defer_count "$id")" \
+    "$(attempt_defer_count "$id")" "$(attempt_defer_budget "$id")" \
     "$(attempt_field "$STATE/$id.attempt" terminal)"
 }
 
@@ -472,6 +505,27 @@ cmd_end() {
     || die "could not record the end of attempt $prior for $id"
 }
 
+# The capacity-deferral refusal. Recorded once per exhaustion for the same
+# reason the attempt refusal is: the status log is a wake surface and repeating
+# a terminal fact that has not changed only costs supervision turns.
+attempt_defer_refuse() {  # <id> <deferrals> <budget> <stagnant> <limit> <cause>
+  local id=$1 n=$2 budget=$3 stagnant=$4 limit=$5 cause=$6 already
+  already=$(attempt_field "$STATE/$id.attempt" terminal)
+  attempt_write "$id" "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
+    "$FM_ATTEMPT_TERMINAL_STATE" "$(attempt_failures_seen "$id")" \
+    "$(attempt_field "$STATE/$id.attempt" ended)" \
+    "$n" "$budget" "$(attempt_field "$STATE/$id.attempt" defer_signature)" "$stagnant" \
+    || printf 'warning: could not record the exhausted deferral budget for %s\n' "$id" >&2
+  if [ "$already" != "$FM_ATTEMPT_TERMINAL_STATE" ]; then
+    printf '%s: waiting for capacity stopped after %s deferrals of %s allowed, the last %s of them observing an unchanged capacity picture against a stagnation limit of %s (%s)\n' \
+      failed "$n" "$budget" "$stagnant" "$limit" "$FM_ATTEMPT_TERMINAL_STATE" \
+      >> "$STATE/$id.status" 2>/dev/null \
+      || printf 'warning: could not append the exhausted-deferral failure for %s\n' "$id" >&2
+  fi
+  printf 'error: %s has stopped waiting for capacity: %s (%s). The work was never dispatched into a pool that could not run it, and it is not lost - it is held in the backlog. Raise the bound deliberately with --defer-budget <n> if the wait is still worth making; it is recorded.\n' \
+    "$id" "$cause" "$FM_ATTEMPT_TERMINAL_STATE" >&2
+}
+
 # A signature is compared, never parsed, so it only has to be stable and to fit
 # on one line of a key=value record. Whitespace is collapsed rather than
 # rejected, because a caller building one from a candidate list should not have
@@ -481,12 +535,24 @@ attempt_clean_signature() {  # <raw>
 }
 
 cmd_defer() {
-  local id=${1-} prior_sig deferrals stagnant
+  local id=${1-} budget signature stagnation prior_sig deferrals stagnant
   require_id "$id"
   shift
-  PARSED_SIGNATURE=''
+  PARSED_DEFER_BUDGET='' PARSED_SIGNATURE='' PARSED_STAGNATION=''
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --defer-budget)
+        [ "$#" -ge 2 ] || die "--defer-budget needs a value"
+        PARSED_DEFER_BUDGET=$2
+        attempt_is_count "$PARSED_DEFER_BUDGET" && [ "$PARSED_DEFER_BUDGET" -gt 0 ] \
+          || die "--defer-budget must be a positive integer: $PARSED_DEFER_BUDGET"
+        shift 2 ;;
+      --stagnation-limit)
+        [ "$#" -ge 2 ] || die "--stagnation-limit needs a value"
+        PARSED_STAGNATION=$2
+        attempt_is_count "$PARSED_STAGNATION" && [ "$PARSED_STAGNATION" -gt 0 ] \
+          || die "--stagnation-limit must be a positive integer: $PARSED_STAGNATION"
+        shift 2 ;;
       --signature)
         [ "$#" -ge 2 ] || die "--signature needs a value"
         PARSED_SIGNATURE=$(attempt_clean_signature "$2")
@@ -496,28 +562,57 @@ cmd_defer() {
     esac
   done
 
+  budget=$PARSED_DEFER_BUDGET
+  if [ -z "$budget" ]; then
+    budget=$(attempt_field "$STATE/$id.attempt" deferral_budget)
+    attempt_is_count "$budget" && [ "$budget" -gt 0 ] || budget=$ATTEMPT_DEFER_BUDGET_DEFAULT
+  fi
+  stagnation=$PARSED_STAGNATION
+  [ -n "$stagnation" ] || stagnation=$ATTEMPT_DEFER_STAGNATION_DEFAULT
+
   deferrals=$(attempt_field "$STATE/$id.attempt" deferrals)
   attempt_is_count "$deferrals" || deferrals=0
   stagnant=$(attempt_field "$STATE/$id.attempt" defer_stagnant)
   attempt_is_count "$stagnant" || stagnant=0
   prior_sig=$(attempt_field "$STATE/$id.attempt" defer_signature)
 
+  # The total bound is checked BEFORE committing, exactly as the attempt budget
+  # is: a refusal records nothing new to wait on, so it must not consume the
+  # deferral it is refusing.
+  if [ "$deferrals" -ge "$budget" ]; then
+    attempt_defer_refuse "$id" "$deferrals" "$budget" "$stagnant" "$stagnation" \
+      "the deferral budget of $budget is spent"
+    exit "$ATTEMPT_EXHAUSTED_EXIT"
+  fi
+
   deferrals=$((deferrals + 1))
   # An unchanged picture advances the stagnation counter; any change resets it,
   # because a wait whose observed picture is moving is a wait that is working.
-    # A caller that supplies no signature starts a fresh observational run.
+  # A caller that supplies no signature can never look stagnant, which is why
+  # the total budget above still bounds it.
   if [ -n "$PARSED_SIGNATURE" ] && [ "$PARSED_SIGNATURE" = "$prior_sig" ]; then
     stagnant=$((stagnant + 1))
   else
     stagnant=1
   fi
 
+  if [ "$stagnant" -ge "$stagnation" ]; then
+    attempt_write "$id" "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" '' \
+      "$(attempt_failures_seen "$id")" "$(attempt_field "$STATE/$id.attempt" ended)" \
+      "$deferrals" "$budget" "${PARSED_SIGNATURE:-$prior_sig}" "$stagnant" \
+      || die "could not record deferral $deferrals for $id at $STATE/$id.attempt"
+    attempt_defer_refuse "$id" "$deferrals" "$budget" "$stagnant" "$stagnation" \
+      "$stagnant consecutive deferrals observed an unchanged capacity picture, so the wait is not progressing"
+    exit "$ATTEMPT_EXHAUSTED_EXIT"
+  fi
+
   attempt_write "$id" "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
     "$(attempt_field "$STATE/$id.attempt" terminal)" \
     "$(attempt_failures_seen "$id")" "$(attempt_field "$STATE/$id.attempt" ended)" \
-    "$deferrals" "${PARSED_SIGNATURE:-$prior_sig}" "$stagnant" \
+    "$deferrals" "$budget" "${PARSED_SIGNATURE:-$prior_sig}" "$stagnant" \
     || die "could not record deferral $deferrals for $id at $STATE/$id.attempt"
-  printf 'deferrals=%s stagnant=%s\n' "$deferrals" "$stagnant"
+  printf 'deferrals=%s deferral_budget=%s stagnant=%s stagnation_limit=%s\n' \
+    "$deferrals" "$budget" "$stagnant" "$stagnation"
 }
 
 cmd_stop_defer() {
@@ -578,6 +673,13 @@ cmd_retire() {
 
 attempt_is_count "$ATTEMPT_BUDGET_DEFAULT" && [ "$ATTEMPT_BUDGET_DEFAULT" -gt 0 ] \
   || die "FM_ATTEMPT_BUDGET_DEFAULT must be a positive integer: $ATTEMPT_BUDGET_DEFAULT"
+# A misconfigured environment must never unbind a bound. Both deferral defaults
+# are refused outright rather than compared, exactly as the attempt budget is.
+attempt_is_count "$ATTEMPT_DEFER_BUDGET_DEFAULT" && [ "$ATTEMPT_DEFER_BUDGET_DEFAULT" -gt 0 ] \
+  || die "FM_ATTEMPT_DEFER_BUDGET_DEFAULT must be a positive integer: $ATTEMPT_DEFER_BUDGET_DEFAULT"
+attempt_is_count "$ATTEMPT_DEFER_STAGNATION_DEFAULT" && [ "$ATTEMPT_DEFER_STAGNATION_DEFAULT" -gt 0 ] \
+  || die "FM_ATTEMPT_DEFER_STAGNATION_DEFAULT must be a positive integer: $ATTEMPT_DEFER_STAGNATION_DEFAULT"
+
 [ "$#" -ge 1 ] || { usage; exit 2; }
 SUBCOMMAND=$1
 shift

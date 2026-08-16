@@ -12,12 +12,19 @@
 # has cleared.
 #
 # THIS IS NOT A SECOND SCHEDULER, AND THE DISTINCTION IS THE WHOLE DESIGN. It
-# evaluates no route, reads no floor and applies no policy of its own. What it
-# does on resume is offer the route owner's eligible pool, in pool order, back
-# to bin/fm-spawn.sh with the SAME typed dispatch fields and recorded effort
-# band. The route owner excludes candidates that cannot express that band, and
-# spawn rechecks ROUTE, capacity, ADMIT, the model registry, the attempt budget
-# and the pool-slot check at the one chokepoint that owns them.
+# evaluates no route, reads no floor, applies no policy of its own and - the
+# part that is easiest to lose - SELECTS NO MODEL. When a substitute is needed
+# it asks bin/fm-route.sh next --after for the candidates that follow the failed
+# model in ITS OWN pool order, then offers each back to bin/fm-spawn.sh with the
+# SAME typed dispatch fields and recorded effort band. The route owner excludes
+# candidates that cannot express that band, and spawn rechecks ROUTE, capacity,
+# ADMIT, the model registry, the attempt budget and the pool-slot check at the
+# one chokepoint that owns them.
+#
+# Walking the whole eligible list here instead would be a SECOND FAILOVER
+# SELECTOR: two answers to "which model do I substitute to" that diverge the
+# moment either changes, and one of them able to reach a model the failed
+# model's pool never named. There is exactly one answer, and it is not here.
 #
 # NO STORED COMMAND LINE. The record holds TYPED FIELDS and nothing else, and
 # every one is re-validated against its own closed vocabulary or path-safety
@@ -289,6 +296,16 @@ cmd_defer() {
 
   rc=0
   defer_out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" defer "$id" --signature "$signature" 2>&1) || rc=$?
+  # A SPENT BOUND is its own outcome and must be separated here. The attempt
+  # owner has already recorded it as budget_exhausted, which is observed-bad -
+  # the pool was tried and the limit was reached. Letting it fall through to the
+  # unrecordable-count path below would relabel it as an instrument failure,
+  # which is the ruling's forbidden collapse running in the other direction.
+  if [ "$rc" -eq 3 ]; then
+    printf '%s\n' "$defer_out" >&2
+    mark_terminal "$id" "deferral bound spent"
+    return 3
+  fi
   if [ "$rc" -ne 0 ]; then
     stop_wait_unrecordable_bound "$id" "$defer_out"
     return 1
@@ -420,6 +437,16 @@ keep_waiting() {  # <record-file> <refusal>
       || printf '%s\n' "$line" >> "$STATE/$id.status" 2>/dev/null || true
   fi
   defer_out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" defer "$id" --signature "$signature" 2>&1) || rc=$?
+  # A SPENT BOUND is its own outcome and must be separated here. The attempt
+  # owner has already recorded it as budget_exhausted, which is observed-bad -
+  # the pool was tried and the limit was reached. Letting it fall through to the
+  # unrecordable-count path below would relabel it as an instrument failure,
+  # which is the ruling's forbidden collapse running in the other direction.
+  if [ "$rc" -eq 3 ]; then
+    printf '%s\n' "$defer_out" >&2
+    mark_terminal "$id" "deferral bound spent"
+    return 3
+  fi
   if [ "$rc" -ne 0 ]; then
     stop_wait_unrecordable_bound "$id" "$defer_out"
     return 1
@@ -613,10 +640,26 @@ tick_one_claimed() {  # <record-file> <force>
       return 0
       ;;
     *)
+      # The ROUTE OWNER names the substitute. `fm-route.sh next --after` returns
+      # the eligible candidates that FOLLOW the recorded model in pool order,
+      # already checked for floor, hold, registry, capacity and the running
+      # effort band, so there is no predicate to re-apply and no ordering to
+      # re-derive here.
+      #
+      # Asking for the WHOLE eligible list and walking it here - which is what
+      # this did - is a SECOND FAILOVER SELECTOR answering a question the route
+      # owner already owns. It never named the model that failed, so it could
+      # hand back a candidate sitting BEFORE that model in the pool, or reach a
+      # model the failed model's pool does not name at all. The standing rule is
+      # that a substitute comes only from inside the failed model's own pool, in
+      # order, and `next --after` is that rule expressed as code.
+      model=$(field "$rec" model)
       effort=$(field "$rec" effort)
       eligible=
-      eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" eligible \
-        --route "$route" --effort "$effort" 2>/dev/null) || eligible=
+      if [ -n "$model" ]; then
+        eligible=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-route.sh" next \
+          --route "$route" --after "$model" --effort "$effort" 2>/dev/null) || eligible=
+      fi
       while IFS= read -r candidate; do
         [ -n "$candidate" ] || continue
         build_spawn_args "$rec" "$candidate" || continue

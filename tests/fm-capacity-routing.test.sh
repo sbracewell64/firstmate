@@ -428,38 +428,74 @@ test_a_deferral_is_not_resumed_while_capacity_is_still_spent() {
 
 # --- 7. the wait remains automatically resumable -----------------------------
 
-test_a_stagnating_deferral_remains_resumable() {
+# A wait that is still WITHIN its bounds stays automatically resumable. This is
+# the half of the old case that was always right, kept in a form the bound does
+# not contradict: three observations sit well under the stagnation limit, so
+# nothing may terminate them.
+test_a_wait_within_bounds_remains_resumable() {
   local out i
   make_dispatch_home stagnation
   write_brief "$HOME_DIR" stagtask no-mistakes
-  for i in $(seq 1 30); do
+  for i in 1 2 3; do
     out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0)" \
         stagtask "$OK_REPO" --mode no-mistakes --yolo off \
         --reason-code NL_RULE_CLASSIFICATION --harness codex \
         --route R-SOLO --model vendor/large --effort medium)
   done
-  assert_not_contains "$out" "stopped waiting" "an unchanged capacity picture became a stop authority"
-  assert_no_grep "terminal=" "$HOME_DIR/state/stagtask.attempt" "the observation count terminated a lawful wait"
+  assert_not_contains "$out" "stopped waiting" "a wait inside its bounds was stopped early"
+  assert_no_grep "terminal=" "$HOME_DIR/state/stagtask.attempt" "a wait inside its bounds was terminated"
   out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' \
     run_retry "$HOME_DIR" "$(quota_record vendorq=95)" tick --id stagtask --force)
-  assert_present "$HOME_DIR/state/stagtask.meta" "a long unchanged wait did not resume when capacity returned"
-  pass "a long unchanged capacity wait remains automatically resumable"
+  assert_present "$HOME_DIR/state/stagtask.meta" "a wait inside its bounds did not resume when capacity returned"
+  pass "a capacity wait inside its bounds remains automatically resumable"
 }
 
-test_deferral_observations_are_unbounded_and_spend_no_attempt() {
-  local home out
+# NEGATIVE CONTROL: a stagnating wait STOPS rather than polling forever.
+#
+# This replaces a case asserting the opposite - that an unchanged capacity
+# picture may never become a stop authority. That is the unbounded driver the
+# `capacity-retry-bounds` ruling forbids and the exact acceptance criterion this
+# task carries: "prove a stagnating deferral stops rather than polling forever".
+# A wait whose observed picture has not moved for the stagnation limit is not
+# working, and continuing it is a poll with no end.
+#
+# The signature is identical every round, so stagnation is what stops this,
+# reached before the larger total budget. Against a build whose deferral count
+# never terminates a wait, no terminal is ever written and this goes red.
+test_a_stagnating_deferral_stops_rather_than_polling_forever() {
+  local out i
+  make_dispatch_home stagnation-stop
+  write_brief "$HOME_DIR" stopstagtask no-mistakes
+  for i in $(seq 1 30); do
+    out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0)" \
+        stopstagtask "$OK_REPO" --mode no-mistakes --yolo off \
+        --reason-code NL_RULE_CLASSIFICATION --harness codex \
+        --route R-SOLO --model vendor/large --effort medium)
+  done
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/stopstagtask.attempt" \
+    "an unchanged capacity picture never stopped the wait, so the driver polls forever"
+  assert_contains "$out" "stopped waiting" "the stop was not declared to the operator"
+  pass "a stagnating capacity wait stops instead of polling forever"
+}
+
+# Deferrals are BOUNDED and still spend no retry attempt. Those are two separate
+# facts and the old case only kept the second: a task the fleet had no capacity
+# for did not fail, so no attempt is spent - but the waiting itself is bounded,
+# or nothing ever ends it.
+test_deferral_observations_are_bounded_and_spend_no_attempt() {
+  local home out rc=0
   home="$TMP_ROOT/bound/home"
   mkdir -p "$home/state" "$home/data"
   for i in $(seq 1 30); do
     out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
-      "$ATTEMPT" defer boundtask --signature "a=exhausted@1")
+      "$ATTEMPT" defer boundtask --signature "a=exhausted@1" 2>&1) || rc=$?
   done
-  assert_contains "$out" "deferrals=30 stagnant=30" "deferral observations did not remain durable and unbounded"
-  assert_no_grep "terminal=" "$home/state/boundtask.attempt" "deferral observations terminated the wait"
+  expect_code 3 "$rc" "an unchanging observation was never refused, so the wait is unbounded"
+  assert_grep "terminal=budget_exhausted" "$home/state/boundtask.attempt" "the bound was reached but never recorded"
   # A task the fleet had no capacity for did not fail, so no attempt was spent.
   assert_grep "attempt=0" "$home/state/boundtask.attempt" "waiting for capacity must never spend a retry attempt"
-  pass "deferral observations are unbounded and spend no retry attempt"
+  pass "deferral observations are bounded and still spend no retry attempt"
 }
 
 test_an_attempt_write_preserves_the_deferral_count() {
@@ -588,8 +624,9 @@ test_unobservable_quota_is_could_not_observe_and_keeps_the_candidate_eligible
 test_an_unreadable_quota_source_is_could_not_observe_rather_than_either_answer
 test_a_deferral_survives_a_restart_and_resumes_when_capacity_returns
 test_a_deferral_is_not_resumed_while_capacity_is_still_spent
-test_a_stagnating_deferral_remains_resumable
-test_deferral_observations_are_unbounded_and_spend_no_attempt
+test_a_wait_within_bounds_remains_resumable
+test_a_stagnating_deferral_stops_rather_than_polling_forever
+test_deferral_observations_are_bounded_and_spend_no_attempt
 test_an_attempt_write_preserves_the_deferral_count
 test_a_home_with_no_routed_pool_is_untouched
 test_a_deferral_whose_recorded_dispatch_no_longer_validates_is_not_resumed
