@@ -155,7 +155,7 @@ digest_file() {  # <path> -> sha256 hex, or non-zero
 
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-observe_reviewer() {  # <checkout> <executable> <observation> [args...]
+observe_reviewer() {  # <checkout> <executable> <observation> <argv...>
   local checkout=$1 executable=$2 observation=$3
   shift 3
   python3 -c '
@@ -170,7 +170,7 @@ if pid == 0:
     os.close(3)
     try:
         os.chdir(checkout)
-        os.execvp(executable, [executable, *arguments])
+        os.execv(executable, arguments)
     except BaseException as error:
         os.write(write_fd, str(getattr(error, "errno", "exec")).encode())
         os._exit(127)
@@ -343,7 +343,7 @@ cmd_launch() {
   # The raw artifact is captured by THIS process, into a file descriptor it
   # opened itself, so its bytes are an observation rather than a report.
   observe_reviewer "$checkout" "$executable" "$terminal_observation" \
-    "${argv[@]:1}" >"$raw" 2>&1
+    "${argv[@]}" >"$raw" 2>&1
   helper_status=$?
   ended_at=$(now_utc)
   [ "$helper_status" -eq 0 ] \

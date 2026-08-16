@@ -541,19 +541,38 @@ test_an_unresolvable_candidate_is_could_not_observe() {
 }
 
 test_an_unresolvable_reviewer_executable_is_could_not_observe() {
-  local case_dir out recorded
+  local case_dir out recorded observed token invocation
   case_dir=$(make_case bad-executable)
   mkdir -p "$case_dir/src/bin"
-  write_reviewer "$case_dir/src/bin/candidate-reviewer" 0
+  ln -s /bin/bash "$case_dir/src/bin/candidate-reviewer"
   git -C "$case_dir/src" add bin/candidate-reviewer
   git -C "$case_dir/src" commit -qm "add candidate reviewer"
-  run_launch "$case_dir" relative ./bin/candidate-reviewer >/dev/null 2>&1 \
-    || fail "a checkout-relative candidate executable must resolve"
+
+  for invocation in relative path; do
+    case "$invocation" in
+      relative) token=./bin/candidate-reviewer ;;
+      path) token=candidate-reviewer ;;
+    esac
+    PATH="bin:$PATH" run_launch "$case_dir" "$invocation" "$token" \
+      -c 'printf "argv0=%s\n" "$0"' >/dev/null 2>&1 \
+      || fail "a $invocation candidate executable must resolve"
+    recorded=$(jq -r '.dimensions.launch_argv.value[0]' \
+      "$case_dir/$invocation/record.json")
+    observed=$(sed -n 's/^argv0=//p' "$case_dir/$invocation/review.raw")
+    [ "$observed" = "$recorded" ] \
+      || fail "the $invocation reviewer must receive recorded argv[0] (observed $observed, recorded $recorded)"
+    [ "$recorded" = "$token" ] \
+      || fail "the $invocation launch must preserve its original argv[0] token"
+  done
+
   recorded=$(jq -r '.dimensions.launch_executable.value' "$case_dir/relative/record.json")
   [ "$recorded" = "$case_dir/relative/checkout/bin/candidate-reviewer" ] \
     || fail "a relative executable must resolve inside the reviewer checkout (got $recorded)"
   [ "$(record_reason "$case_dir/relative")" = verified ] \
     || fail "a checkout-relative executable must reach the verified result path"
+  [ "$(record_reason "$case_dir/path")" = verified ] \
+    || fail "a PATH-resolved executable must reach the verified result path"
+
   set +e
   out=$(run_launch "$case_dir" rec "$case_dir/no-such-reviewer" 2>&1)
   local code=$?

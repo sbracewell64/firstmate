@@ -38,8 +38,8 @@ FM_REVIEW_EXEC_BIN=<variant> bash tests/fm-review-exec.test.sh
 
 ## Observed red and green, per control
 
-Seventeen controls pass against the shipped script, and eighteen single-defect builds of those same shipped bytes each reddened one of them.
-Every defect build was regenerated from the final bytes after the last change to the script, so no row here was observed against a version that is not the one landing.
+Eighteen controls pass against the shipped script.
+Eighteen single-defect builds produced the nineteen measured control failures below because one label-reading defect reddened two controls.
 
 Each row is one control, the defect that reddened it, and the exact first failing line that defect produced.
 Every defect is a real edit to a real code path: the smallest is one line, and each build was confirmed to differ from the tracked script and to parse before it was run.
@@ -70,7 +70,9 @@ That confirmation matters because a probe that reads a field which does not exis
 Two controls are shadowed in a full-suite run because an earlier control reddens first and the suite stops there.
 Both were additionally run in isolation against their defect build and against the tracked script, and the rows above are those isolated observations.
 
-The controls for a deliberate exit 143, a genuine SIGTERM, dirty and attached reviewer checkouts, divergent checkout and candidate identities, shared object storage on reread, and checkout-relative executable resolution are could-not-observe watched-red gaps because no corresponding defect build has yet been measured.
+## Could-not-observe watched-red gaps
+
+The controls for a deliberate exit 143, a genuine SIGTERM, dirty and attached reviewer checkouts, divergent checkout and candidate identities, shared object storage on reread, and PATH-resolved and checkout-relative executable argv preservation are could-not-observe watched-red gaps because no corresponding defect build has yet been measured.
 
 ## The `--no-local` measurement
 
