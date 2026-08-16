@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, CAPACITY_UNMEASURED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -66,6 +66,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
   A stopped wait has no supported rearm command, so escalate that tooling gap rather than claiming the work will resume.
   Never resolve one of these by dispatching the same task on a model below its route's floor.
   A required floor that is currently unavailable is a wait, and quietly running the work on something weaker is the exact failure the deferral exists to prevent.
+- `CAPACITY_UNMEASURED: <n> task(s) stopped waiting for model capacity WITHOUT a measurable bound - <ids>` - each named task stopped because the deferral count that bounds its wait could not be written, not because that bound was reached.
+  This is a defect in the instrument, not a fact about the pool, and it is the one capacity line that is could-not-observe rather than observed-bad.
+  Do not read it as an exhausted pool: nothing here established that any model was tried and found out of capacity, only that how long the task waited is unknown.
+  Repair the recorder first - `state/<id>.attempt` is the record that could not be written, so check its directory's permissions, the free space under `state/`, and whether another process holds the path - then decide the wait again with the same three options `CAPACITY_DEFERRED` offers.
+  Raising the bound before the recorder is fixed only buys another unbounded wait, because the count that would stop it still cannot be written.
 - `FLEET_SYNC: <repo>: skipped: <reason>` - a benign one-off skip (offline, no origin, local-only); bootstrap continued, investigate only if it blocks work.
   A skip can also report the bounded fleet-refresh timeout (`FM_FLEET_SYNC_BOOTSTRAP_TIMEOUT`, or a fleet-size-aware default with a 20 second floor); a timeout never blocks startup.
 - `FLEET_SYNC: <repo>: recovered: <detail>` - the clone had drifted onto a clean detached HEAD holding no unique commits and the sync self-healed it (re-attached the default branch and fast-forwarded); no action needed, it is reported only so the self-heal is visible.

@@ -371,7 +371,11 @@ current_capacity_signature() {  # <record-file>
 stop_wait_unrecordable_bound() {  # <id> <defer-output> -> 1 always
   local id=$1 defer_out=$2 reason out rc=0 mark_rc=0
   reason="the attempt count could not be recorded at $STATE/$id.attempt: $(clean "$defer_out")"
-  out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" stop-defer "$id" --reason "$reason" 2>&1) || rc=$?
+  # could-not-observe, never observed-bad. Nothing here establishes that the
+  # pool was tried and found empty; what is established is that the instrument
+  # bounding the wait cannot be written, so the bound was never enforceable.
+  out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" stop-defer "$id" \
+    --reason "$reason" --observation could-not-observe 2>&1) || rc=$?
   mark_terminal "$id" "attempt count could not be recorded" || mark_rc=$?
   printf 'failed: waiting for capacity ended because the attempt count could not be recorded by %s defer %s against %s: %s\n' \
     "$ATTEMPT_BIN" "$id" "$STATE/$id.attempt" "$(clean "$defer_out")" \
@@ -388,7 +392,10 @@ stop_wait_unrecordable_bound() {  # <id> <defer-output> -> 1 always
 stop_wait_for_record_failure() {  # <id> <record-file> <detail>
   local id=$1 rec=$2 detail=$3 reason out rc=0
   reason="the deferral record could not be written at $rec: $detail"
-  out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" stop-defer "$id" --reason "$reason" 2>&1) || rc=$?
+  # Also could-not-observe: capacity had not remained exhausted, the record that
+  # would carry the wait forward simply could not be written.
+  out=$(FM_HOME="$FM_HOME" "$ATTEMPT_BIN" stop-defer "$id" \
+    --reason "$reason" --observation could-not-observe 2>&1) || rc=$?
   mark_terminal "$id" "deferral record could not be written"
   if [ "$rc" -ne 0 ]; then
     printf 'error: capacity wait for %s could not be durably stopped after %s: %s\n' "$id" "$reason" "$out" >&2
@@ -528,7 +535,8 @@ build_spawn_args() {  # <record-file> [<model-override>] -> sets SPAWN_ARGS
 # advance, a terminal record is already stopped, and an already-dispatched task
 # retires the obsolete wait rather than creating a second worker.
 tick_one_claimed() {  # <record-file> <force>
-  local rec=$1 force=$2 id now due out rc route effort candidate eligible
+  local rec=$1 force=$2 id now due out rc route effort candidate eligible model
+  local attempt_terminal
   id=$(field "$rec" task)
   if [ -z "$id" ]; then
     mark_record_terminal "$rec" "the deferral record has no task id"
@@ -543,8 +551,16 @@ tick_one_claimed() {  # <record-file> <force>
   if [ -n "$(field "$rec" terminal)" ]; then
     return 0
   fi
-  if "$ATTEMPT_BIN" show "$id" 2>/dev/null | grep -q 'terminal=budget_exhausted'; then
-    mark_terminal "$id" "attempt owner stopped the deferral"
+  # ANY terminal state the attempt owner recorded stops the wait, not just the
+  # exhausted one. Matching a single state by name meant a stop recorded under
+  # any other name read as "still waiting", and every later tick resumed it -
+  # forever, which is the precise shape of the failure this file exists to
+  # remove. The state is carried into the mark so the record says which stop it
+  # was, rather than flattening every stop into one word.
+  attempt_terminal=$("$ATTEMPT_BIN" show "$id" 2>/dev/null \
+    | tr ' ' '\n' | sed -n 's/^terminal=\(..*\)$/\1/p' | head -1)
+  if [ -n "$attempt_terminal" ]; then
+    mark_terminal "$id" "attempt owner stopped the deferral: $attempt_terminal"
     return 0
   fi
   # Work that is already live is not waiting for capacity. This is the one

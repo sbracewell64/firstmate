@@ -256,7 +256,10 @@ test_record_refresh_failure_stops_durably() {
   out=$(FM_CAPACITY_RECORD_COMMIT_BIN="$stub" \
     run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id refreshtask --force) || rc=$?
   expect_code 1 "$rc" "a failed deferral-record refresh must stop the wait"
-  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/refreshtask.attempt" "the attempt owner did not record the unified stop"
+  # A record that could not be WRITTEN is could-not-observe, not exhaustion:
+  # nothing here established that any pool was tried and found empty.
+  assert_grep "terminal=blocked_by_evidence_integrity" "$HOME_DIR/state/refreshtask.attempt" "the attempt owner did not record the unobservable stop"
+  assert_no_grep "terminal=budget_exhausted" "$HOME_DIR/state/refreshtask.attempt" "a record-write failure was recorded as an exhausted budget, which makes a broken recorder indistinguishable from a tried-and-empty pool"
   assert_contains "$out" "deferral record could not be written" "the stop did not distinguish the failed record refresh"
   assert_contains "$out" "$HOME_DIR/state/refreshtask.capacity" "the stop did not name the failed deferral record path"
   assert_grep "failed: waiting for capacity ended because the deferral record could not be written" "$HOME_DIR/state/refreshtask.status" "supervision did not receive the record-write stop"
@@ -443,12 +446,192 @@ test_concurrent_ticks_claim_one_retry_owner() {
   [ "$(wc -l < "$log" | tr -d ' ')" = 1 ] \
     || fail "concurrent ticks both entered the claimed retry reconciliation"
   pass "concurrent ticks give one process exclusive retry ownership"
+
+# NEGATIVE CONTROL: ONE bound per WORK ITEM, not one per model.
+#
+# The ruling's failure here is arithmetic, not policy. Substituting to a
+# floor-meeting pool member is correct failover and must resume, but if the
+# retry bound travels with the MODEL then N pool members multiply into N budgets
+# and the driver runs unbounded while every individual accounting still looks
+# correct. That is the reason the driver never ended, and it is invisible to any
+# check that only asks whether a bound exists.
+#
+# The SIGNATURE is what a substitution changes - it names the capacity picture
+# the wait is now watching - so "a per-model budget" is exactly a build in which
+# a changed signature resets the count. Every defer below therefore carries a
+# DIFFERENT signature and names a different pool member, and the count must
+# still climb 1, then 2, then refuse. Against a per-model bound the second defer
+# reads deferrals=1 and the third is allowed, so this case goes red.
+#
+# Stagnation cannot be what stops it: a changed signature resets the stagnation
+# counter every time, which leaves the total work-item bound as the only thing
+# able to end this wait.
+test_one_bound_per_work_item_across_substitutions() {
+  local rec out rc
+  rec=$(make_refusal_home item-bound); read_home_record "$rec"
+  write_brief "$HOME_DIR" itemtask no-mistakes
+
+  item_defer() {  # <model> <signature>
+    FM_ATTEMPT_DEFER_BUDGET_DEFAULT=2 \
+      run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=0)" defer itemtask \
+      --route R-PAIR --floor F-MED --pool vendor/large,alt/large --reason spent \
+      --signature "$2" --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+      --reason-code NL_RULE_CLASSIFICATION --model "$1" --effort medium 2>&1
+  }
+
+  rc=0; out=$(item_defer vendor/large vendor=spent) || rc=$?
+  expect_code 0 "$rc" "the first wait on this work item must be within bounds"
+  assert_grep "deferrals=1" "$HOME_DIR/state/itemtask.attempt" "the first deferral was not counted against the work item"
+
+  # The substitution. A different pool member, a different capacity picture, and
+  # therefore a different signature - the exact transition a per-model budget
+  # would treat as a fresh start.
+  rc=0; out=$(item_defer alt/large alt=spent) || rc=$?
+  expect_code 0 "$rc" "a substitution inside the pool must keep waiting, not stop"
+  assert_grep "deferrals=2" "$HOME_DIR/state/itemtask.attempt" "the substitution reset the bound instead of spending from the budget it inherited, so each pool member carries its own budget and the driver is unbounded"
+  assert_no_grep "deferrals=1" "$HOME_DIR/state/itemtask.attempt" "the work item's count did not advance across the substitution"
+
+  # Third wait, second substitution: the inherited budget is now spent and the
+  # driver must end regardless of how many pool members are still healthy.
+  rc=0; out=$(item_defer vendor/large vendor=spent-again) || rc=$?
+  expect_code 3 "$rc" "the work item's bound did not stop the driver after two substitutions"
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/itemtask.attempt" "a spent bound is observed-bad and must be recorded as an exhausted budget"
+  assert_contains "$out" "deferral budget of 2 is spent" "the stop did not name the work item's bound"
+  unset -f item_defer
+  pass "one retry bound is owned by the work item and consumed monotonically across substitutions"
+}
+
+# NEGATIVE CONTROL: the two stops are DIFFERENT terminal states.
+#
+# This is the load-bearing half of the ruling. Budget spent is observed-bad: the
+# pool was tried and the bound was reached. Count unrecordable is
+# could-not-observe, and the could-not-observe lands on the BOUND ITSELF - the
+# wait stopped without anything ever establishing that a model was tried and
+# found out of capacity.
+#
+# Report the second as the first and a broken recorder becomes indistinguishable
+# from an exhausted pool: the fleet reads "we tried everything" when the truth is
+# "we could not tell how many times we tried". One is a routing fact worth acting
+# on, the other is a defect in the instrument, and they share no repair.
+#
+# Against a build that records both as exhaustion this case goes red on case B,
+# and the closing assertion goes red on ANY build that gives them one name -
+# including a future one that renames the pair rather than separating them.
+test_the_two_capacity_stops_are_distinguishable() {
+  local rec out rc stub spent_state unmeasured_state
+  rec=$(make_refusal_home two-stops); read_home_record "$rec"
+  write_brief "$HOME_DIR" spenttask no-mistakes
+  write_brief "$HOME_DIR" blindtask no-mistakes
+
+  # Case A - the bound was REACHED. One deferral allowed, so the second refuses.
+  rc=0
+  FM_ATTEMPT_DEFER_BUDGET_DEFAULT=1 \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spenttask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the first wait must be within bounds"
+  rc=0
+  out=$(FM_ATTEMPT_DEFER_BUDGET_DEFAULT=1 \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spenttask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=still-spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium) || rc=$?
+  expect_code 3 "$rc" "a spent bound must stop the wait"
+
+  # Case B - the bound was never MEASURABLE. The count write fails while the
+  # owner can still record the stop, which is the only condition under which a
+  # collapsing build and a distinguishing build differ in the durable record.
+  stub="$TMP_ROOT/two-stops/defer-blind"
+  cat > "$stub" <<SH
+#!/bin/sh
+case "\$1" in
+  defer) printf 'simulated count write failure\n' >&2; exit 1 ;;
+esac
+exec "$ATTEMPT" "\$@"
+SH
+  chmod +x "$stub"
+  rc=0
+  out=$(FM_ATTEMPT_BIN="$stub" \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer blindtask \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium) || rc=$?
+  expect_code 1 "$rc" "an unrecordable count must stop the wait"
+
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/spenttask.attempt" "a reached bound must be recorded as observed-bad exhaustion"
+  assert_grep "terminal=blocked_by_evidence_integrity" "$HOME_DIR/state/blindtask.attempt" "an unrecordable bound must be recorded as could-not-observe, not as exhaustion"
+  assert_no_grep "terminal=budget_exhausted" "$HOME_DIR/state/blindtask.attempt" "the unmeasurable stop was recorded as an exhausted pool, so a broken recorder is indistinguishable from one that was tried and found empty"
+
+  # The distinction has to be READABLE, not merely differently worded. A reader
+  # that cannot separate the two facts from the durable record is the failure,
+  # whatever the two states happen to be called.
+  spent_state=$(sed -n 's/^terminal=\(..*\)$/\1/p' "$HOME_DIR/state/spenttask.attempt" | head -1)
+  unmeasured_state=$(sed -n 's/^terminal=\(..*\)$/\1/p' "$HOME_DIR/state/blindtask.attempt" | head -1)
+  [ -n "$spent_state" ] || fail "the spent bound recorded no terminal state at all"
+  [ -n "$unmeasured_state" ] || fail "the unmeasurable bound recorded no terminal state at all"
+  [ "$spent_state" != "$unmeasured_state" ] \
+    || fail "both capacity stops recorded the same terminal state '$spent_state', so the durable record cannot tell an exhausted pool from a recorder that never measured the bound"
+
+  # RECURRENCE GUARD. The distinction must not be able to decay by OMISSION. A
+  # stop site added later that simply forgets to say what it observed is refused
+  # outright rather than landing on whichever state the owner happens to prefer,
+  # and any preference here is exhaustion - which is the collapse itself. This
+  # is what makes the mechanism gone rather than the symptom corrected.
+  rc=0
+  out=$(FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    "$ATTEMPT" stop-defer guardtask --reason "no observation named" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "stop-defer accepted a stop without naming what was observed, so a later caller can collapse the two terminal states by omission"
+  assert_contains "$out" "different terminal states" "the refusal did not explain why naming the observation is required"
+  ! [ -e "$HOME_DIR/state/guardtask.attempt" ] \
+    || fail "a refused stop still wrote a terminal state to the durable record"
+  pass "a spent bound and an unmeasurable bound are different terminal states in the durable record"
+}
+
+# The captain-facing half of the same rule. "Name which, in the durable record
+# AND in whatever reaches me" - a record that distinguishes the two stops behind
+# a startup line that reports them as one number still tells the fleet the pool
+# was tried and found empty when the truth is that nothing measured the wait.
+#
+# The two lines are asserted to be SEPARATE and to name disjoint task sets, so a
+# build that reverts to one combined count goes red on the missing line, and a
+# build that emits both but files the unmeasured task under the exhausted line
+# goes red on the disjointness assertion.
+test_bootstrap_reports_the_two_capacity_stops_separately() {
+  local home out deferred_line unmeasured_line
+  home="$TMP_ROOT/bootstrap-stops/home"
+  mkdir -p "$home/state" "$home/data" "$home/config" "$home/projects"
+  printf 'manual\n' > "$home/config/backlog-backend"
+  printf 'task=spenttask\nterminal=deferral bound spent\n' > "$home/state/spenttask.capacity"
+  printf 'attempt=1\nattempt_budget=2\nterminal=budget_exhausted\n' > "$home/state/spenttask.attempt"
+  printf 'task=blindtask\nterminal=attempt count could not be recorded\n' > "$home/state/blindtask.capacity"
+  printf 'attempt=1\nattempt_budget=2\nterminal=blocked_by_evidence_integrity\n' > "$home/state/blindtask.attempt"
+
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_PROJECTS_OVERRIDE="$home/projects" \
+    "$ROOT/bin/fm-bootstrap.sh" 2>&1 | grep -E '^CAPACITY_' || true)
+
+  assert_contains "$out" "CAPACITY_DEFERRED: 1 task(s)" "the reached bound was not reported as a stopped wait"
+  assert_contains "$out" "CAPACITY_UNMEASURED: 1 task(s)" "the unmeasurable bound was not reported separately, so a broken recorder is counted as an exhausted pool"
+  # Disjoint sets, checked WITHIN each line rather than across the pair: neither
+  # task may be filed under the other's diagnostic.
+  deferred_line=$(printf '%s\n' "$out" | grep '^CAPACITY_DEFERRED:')
+  unmeasured_line=$(printf '%s\n' "$out" | grep '^CAPACITY_UNMEASURED:')
+  assert_contains "$deferred_line" "spenttask" "the exhausted-pool line did not name the task that reached its bound"
+  assert_contains "$unmeasured_line" "blindtask" "the unmeasurable line did not name the task whose bound was never written"
+  assert_not_contains "$deferred_line" "blindtask" "the task whose bound was never measurable was reported as an exhausted pool"
+  assert_not_contains "$unmeasured_line" "spenttask" "the task that reached its bound was reported as unmeasurable"
+  pass "session start reports a reached bound and an unmeasurable bound as separate diagnostics"
 }
 
 test_resumes_onto_an_expressive_recovered_pool_member
 test_resumes_onto_an_earlier_recovered_pool_member
 test_recorded_effort_survives_policy_edit
 test_uncounted_deferral_fails_closed
+test_one_bound_per_work_item_across_substitutions
+test_the_two_capacity_stops_are_distinguishable
+test_bootstrap_reports_the_two_capacity_stops_separately
 test_same_band_substitution_is_required
 test_unrecordable_bound_leaves_no_active_wait
 test_non_capacity_refusal_consults_route_owner_for_substitute

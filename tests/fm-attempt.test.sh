@@ -255,10 +255,16 @@ test_terminal_state_is_in_the_unified_vocabulary() {
   fi
   grep -q '"name": "budget_exhausted"' "$TERMINAL_STATES" \
     || fail "budget_exhausted must be a member of the unified terminal vocabulary in $TERMINAL_STATES"
+  # This file produces TWO terminal states, and the second one carries the whole
+  # distinction between an exhausted pool and a recorder that never measured the
+  # bound. It has to be a member of the same unified vocabulary, not a private
+  # name invented at the stop site.
+  grep -q '"name": "blocked_by_evidence_integrity"' "$TERMINAL_STATES" \
+    || fail "blocked_by_evidence_integrity must be a member of the unified terminal vocabulary in $TERMINAL_STATES"
   # Negative control: the same check must be able to say no.
   ! grep -q '"name": "attempt_budget_spent"' "$TERMINAL_STATES" \
     || fail "the membership check cannot discriminate: it accepts a name that should not exist"
-  pass "fm-attempt: the produced terminal state is a member of the unified terminal vocabulary"
+  pass "fm-attempt: both produced terminal states are members of the unified terminal vocabulary"
 }
 
 # --- the spawn path that spends the budget ----------------------------------

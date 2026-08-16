@@ -1108,7 +1108,7 @@ wake_ledger_terminal_sweep() {
 # work was never dispatched, it is not lost, and somebody has to say whether it
 # is still worth making.
 capacity_retry_sweep() {
-  local rec stopped=0 ids='' id
+  local rec spent=0 unmeasured=0 spent_ids='' unmeasured_ids='' id term
   [ -d "$STATE" ] || return 0
   [ -x "$FM_ROOT/bin/fm-capacity-retry.sh" ] || return 0
   for rec in "$STATE"/*.capacity; do
@@ -1119,12 +1119,29 @@ capacity_retry_sweep() {
   for rec in "$STATE"/*.capacity; do
     [ -f "$rec" ] || continue
     grep -q '^terminal=' "$rec" 2>/dev/null || continue
-    stopped=$((stopped + 1))
     id=${rec##*/}
-    ids="$ids ${id%.capacity}"
+    id=${id%.capacity}
+    # A wait that reached its bound and a wait whose bound was never measurable
+    # are reported as SEPARATE lines. Counting them together would tell the
+    # captain the pool was tried and found empty when the truth may be that the
+    # count bounding the wait could not be written, and the two repairs share
+    # nothing: one is a routing decision, the other is a broken recorder.
+    term=$(sed -n 's/^terminal=\(..*\)$/\1/p' "$STATE/$id.attempt" 2>/dev/null | head -1)
+    if [ "$term" = "blocked_by_evidence_integrity" ]; then
+      unmeasured=$((unmeasured + 1))
+      unmeasured_ids="$unmeasured_ids $id"
+    else
+      spent=$((spent + 1))
+      spent_ids="$spent_ids $id"
+    fi
   done
-  [ "$stopped" -gt 0 ] || return 0
-  echo "CAPACITY_DEFERRED: $stopped task(s) stopped waiting for model capacity and were never dispatched -$ids - each is held in the backlog and needs a decision on whether the wait is still worth making (bin/fm-capacity-retry.sh list)"
+  if [ "$spent" -gt 0 ]; then
+    echo "CAPACITY_DEFERRED: $spent task(s) stopped waiting for model capacity and were never dispatched -$spent_ids - each is held in the backlog and needs a decision on whether the wait is still worth making (bin/fm-capacity-retry.sh list)"
+  fi
+  if [ "$unmeasured" -gt 0 ]; then
+    echo "CAPACITY_UNMEASURED: $unmeasured task(s) stopped waiting for model capacity WITHOUT a measurable bound -$unmeasured_ids - the deferral count could not be written, so how long each waited is unknown and the pool was never shown to be exhausted (bin/fm-capacity-retry.sh list)"
+  fi
+  return 0
 }
 
 task_axis_backfill_sweep() {

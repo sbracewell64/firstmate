@@ -521,12 +521,17 @@ The driver applies no candidate rule of its own: ordering and every eligibility 
 If no candidate qualifies, the work keeps waiting rather than degrading.
 No model turn is spent asking whether capacity has returned, and the resume records the selected candidate, route and confirmed effort band on the task status log.
 
-Every deferral is counted by `bin/fm-attempt.sh defer` without spending a retry attempt, because a task the fleet had no capacity for did not fail.
-The count drives bounded retry backoff and never stops the wait, because provider capacity may lawfully remain exhausted for an arbitrary duration.
-Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature.
-An unchanged observation advances `defer_stagnant` for disclosure but never becomes a stop authority.
+Every deferral is counted by `bin/fm-attempt.sh defer`, which owns both bounds and spends no retry attempt, because a task the fleet had no capacity for did not fail.
+`deferral_budget` (default 24) bounds the total so a wait can never become an infinite poll, and `defer_stagnant` against `FM_ATTEMPT_DEFER_STAGNATION_DEFAULT` (default 8) stops a wait whose observed capacity picture has not moved for that many consecutive checks.
+Each counted retry recomputes and stores the sorted candidate, verdict and recovery-time signature from the current route-pool observation, while an unreadable observation uses one stable `could_not_observe` signature so repeated blindness can still stagnate.
+Both bounds belong to the WORK ITEM rather than to a model, so a substitution inside the pool spends from the budget it inherited and never resets one; otherwise N pool members would multiply into N budgets and the wait would be unbounded while each individual count still looked correct.
+Either bound reaching its limit is the unified terminal state `budget_exhausted`, declared as one `failed:` line on the task's status log, and session start reports those stopped waits as a `CAPACITY_DEFERRED:` diagnostic.
 
-A wait the canonical attempt owner cannot durably count is stopped visibly rather than retained.
+A wait the canonical attempt owner cannot durably count is stopped visibly rather than retained, and it stops in a DIFFERENT terminal state from a wait that reached its bound.
+A spent bound is observed-bad: the pool was tried and the limit was reached, which is a routing fact worth acting on.
+A count that cannot be written is could-not-observe, and the could-not-observe lands on the bound itself rather than on a detail beside it - nothing established that any model was tried and found out of capacity, only that how long the task waited is unknown.
+Recording the second as the first would make a broken recorder indistinguishable from an exhausted pool, so `bin/fm-attempt.sh stop-defer` requires `--observation observed-bad|could-not-observe` with no default and records `budget_exhausted` or `blocked_by_evidence_integrity` accordingly; `loopspecs/terminal-states.json` carries the pair as source `capacity-wait` and its validator refuses a build that maps them onto one unified state.
+Session start reports the unmeasurable stops as a separate `CAPACITY_UNMEASURED:` diagnostic, because repairing a recorder and deciding a wait share no action.
 `bin/fm-attempt.sh stop-defer` is asked for the terminal stop it owns - no second counter, selector or stop authority exists - and the deferral record is then either marked terminal atomically or REMOVED, because a record with no terminal marker reads as an active wait and every later tick would resume it.
 A record that can be neither marked nor removed is reported as needing to be cleared by hand, never left behind quietly.
 If `bin/fm-attempt.sh defer` cannot record the count, the deferral fails closed, marks the capacity record terminal and declares the failed command and attempt-record path on the task status log.

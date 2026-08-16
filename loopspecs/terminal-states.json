@@ -173,6 +173,25 @@
           "note": "The matrix's always-holding backstop, so a matrix carrying its row always terminates."
         }
       ]
+    },
+    {
+      "source": "capacity-wait",
+      "owner": "bin/fm-attempt.sh FM_ATTEMPT_TERMINAL_STATE and FM_ATTEMPT_UNOBSERVABLE_STATE",
+      "description": "How a task that stopped WAITING FOR MODEL CAPACITY names why it stopped, recorded in state/<id>.attempt by bin/fm-attempt.sh and read by bin/fm-capacity-retry.sh. Registered here because the two stops were previously written under one name, which made a recorder that could not write the deferral count indistinguishable from a pool that had genuinely been tried and found empty. They are different facts with different repairs, so they are mapped to different unified states and stop-defer refuses to record either without being told which was observed.",
+      "map": [
+        {
+          "state": "deferral_budget_spent",
+          "unified": "budget_exhausted",
+          "consequence": "the wait stops and the work is held in the backlog for a decision",
+          "note": "Observed-bad. The bound was REACHED: the deferral count was readable at every step and ran out, or consecutive deferrals observed an unchanged capacity picture past the stagnation limit. This is a routing fact about the pool and is worth acting on. The bound is owned by the WORK ITEM and consumed monotonically across substitutions, so reaching it means this item waited its whole allowance, not that one model did."
+        },
+        {
+          "state": "deferral_count_unrecordable",
+          "unified": "blocked_by_evidence_integrity",
+          "consequence": "the wait stops and the count that bounds it is reported as unwritten",
+          "note": "Could-not-observe, and the could-not-observe lands on the BOUND ITSELF rather than on a detail beside it. Nothing here says the pool was tried and found empty; what is established is that the record bounding the wait could not be written, so the bound was never enforceable. A bound you cannot observe is not a bound, so the wait stops rather than continuing on a warning - continuing is the fail-open shape. This is a defect in the instrument and the repair is to the recorder, not to the routing."
+        }
+      ]
     }
   ],
   "invariants": [

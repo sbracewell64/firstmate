@@ -87,6 +87,15 @@
 #   one name, and tests/fm-attempt.test.sh asserts it against that file
 #   whenever the file is present.
 #
+# A STOP THAT WAS NEVER MEASURABLE IS A SECOND, DIFFERENT TERMINAL STATE. A
+# capacity wait can also end because the count that bounds it could not be
+# written at all, and that is not exhaustion - it is could-not-observe on the
+# bound itself. `stop-defer` therefore requires the caller to name which of the
+# two it saw and records terminal=blocked_by_evidence_integrity for the second,
+# so a defective recorder is never reported as a pool that was tried and found
+# empty. Both names come from the same unified file; see
+# FM_ATTEMPT_UNOBSERVABLE_STATE below.
+#
 #   The status append is deliberately the ONLY terminal producer here. A
 #   `failed:` status line is what CFVC-12's terminal-outcome derivation reads
 #   (bin/fm-wake-ledger.sh `derive`/`sweep`), so exhaustion books outcome=failed
@@ -129,8 +138,16 @@
 #       "deferrals=<n> stagnant=<k>". Spends no attempt: a task the fleet had no
 #       capacity for did not fail.
 #   fm-attempt.sh stop-defer <id> --reason <text>
-#       Stop a capacity wait in the unified terminal state when its retry owner
-#       cannot durably maintain the record that makes another check safe.
+#                            --observation observed-bad|could-not-observe
+#       Stop a capacity wait when its retry owner cannot durably maintain the
+#       record that makes another check safe, and print the resulting
+#       "terminal=<state>". --observation is REQUIRED and names which of the two
+#       stops this is: observed-bad records terminal=budget_exhausted, the bound
+#       was reached; could-not-observe records
+#       terminal=blocked_by_evidence_integrity, the bound was never enforceable.
+#       There is no default, because defaulting would report a broken recorder
+#       as an exhausted pool. A task already in a terminal state keeps the state
+#       it was first recorded in and is not rewritten.
 #   fm-attempt.sh retire <id>
 #       Remove the record. Teardown's ordinary-release hook.
 #
@@ -151,8 +168,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 
-# The one unified terminal state this file may produce.
+# The unified terminal states this file may produce. Two, not one.
+#
+# A bound that was REACHED and a bound that was never OBSERVABLE are different
+# facts, and recording them under one name makes a broken recorder read exactly
+# like an exhausted pool: the fleet is told "we tried everything" when the truth
+# is "we could not tell how many times we tried". One is a routing fact worth
+# acting on, the other is a defect in the instrument, and the repair differs.
+# Both names are CFVC-11's unified vocabulary (loopspecs/terminal-states.json),
+# which already separates them - budget_exhausted is "a declared bound was
+# reached before the goal was met", while blocked_by_evidence_integrity is "a
+# required source was unreadable, so absence of evidence could not be
+# distinguished from evidence of absence". That is precisely a deferral count
+# that cannot be written: the could-not-observe lands on the BOUND ITSELF, not
+# on a detail beside it, and a bound you cannot observe is not a bound.
 FM_ATTEMPT_TERMINAL_STATE=budget_exhausted
+FM_ATTEMPT_UNOBSERVABLE_STATE=blocked_by_evidence_integrity
 ATTEMPT_BUDGET_DEFAULT=${FM_ATTEMPT_BUDGET_DEFAULT:-2}
 # Exit code for a refused retry, distinct from an argument error (2) so a caller
 # can tell "this task is out of budget" from "you called me wrong".
@@ -490,27 +521,51 @@ cmd_defer() {
 }
 
 cmd_stop_defer() {
-  local id=${1-} reason='' already
+  local id=${1-} reason='' observation='' state already
   require_id "$id"
   shift
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --reason) [ "$#" -ge 2 ] || die "--reason needs a value"; reason=$2; shift 2 ;;
+      --observation)
+        [ "$#" -ge 2 ] || die "--observation needs a value"
+        observation=$2
+        shift 2 ;;
       *) die "unknown flag: $1" ;;
     esac
   done
   [ -n "$reason" ] || die "stop-defer needs --reason"
+  # --observation has NO DEFAULT, and that is the whole point. A caller that
+  # does not say which of the two facts it observed would land on whichever
+  # state this file happened to prefer, and any preference here is
+  # budget_exhausted - the exact collapse that makes an instrument failure
+  # indistinguishable from an exhausted pool. Refusing the call is what keeps
+  # the distinction from decaying back into one name the next time a stop site
+  # is added: a new caller cannot compile-by-habit into the wrong terminal.
+  case "$observation" in
+    observed-bad) state=$FM_ATTEMPT_TERMINAL_STATE ;;
+    could-not-observe) state=$FM_ATTEMPT_UNOBSERVABLE_STATE ;;
+    '') die "stop-defer needs --observation observed-bad|could-not-observe: a bound that was reached and a bound that could not be observed are different terminal states and this file will not guess which one you saw" ;;
+    *) die "--observation must be observed-bad or could-not-observe, not '$observation'" ;;
+  esac
   reason=$(attempt_clean_signature "$reason")
   already=$(attempt_field "$STATE/$id.attempt" terminal)
+  # A stop that is already recorded keeps the state it was first recorded in.
+  # The first terminal answer is the true one: letting a later stop overwrite it
+  # would let a broken recorder erase a genuine exhaustion, or an exhaustion
+  # mask an earlier instrument failure. Either direction loses the diagnosis.
+  if [ -n "$already" ]; then
+    printf 'terminal=%s\n' "$already"
+    return 0
+  fi
   attempt_write "$id" "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
-    "$FM_ATTEMPT_TERMINAL_STATE" "$(attempt_failures_seen "$id")" \
+    "$state" "$(attempt_failures_seen "$id")" \
     "$(attempt_field "$STATE/$id.attempt" ended)" \
     || die "could not stop the capacity deferral for $id at $STATE/$id.attempt"
-  if [ "$already" != "$FM_ATTEMPT_TERMINAL_STATE" ]; then
-    printf 'failed: waiting for capacity ended because %s (%s)\n' "$reason" "$FM_ATTEMPT_TERMINAL_STATE" \
-      >> "$STATE/$id.status" 2>/dev/null \
-      || die "could not declare the stopped capacity deferral for $id at $STATE/$id.status"
-  fi
+  printf 'failed: waiting for capacity ended because %s (%s)\n' "$reason" "$state" \
+    >> "$STATE/$id.status" 2>/dev/null \
+    || die "could not declare the stopped capacity deferral for $id at $STATE/$id.status"
+  printf 'terminal=%s\n' "$state"
 }
 
 cmd_retire() {
