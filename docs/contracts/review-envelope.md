@@ -141,7 +141,7 @@ Prior rulings and whether they apply to this exact candidate.
 | Field | Source | Required | Meaning |
 | --- | --- | --- | --- |
 | `id` | `declared` | yes | The ruling's identity in its own authority's namespace. |
-| `applies_to` | `declared` | no | The facts the ruling was issued against, as any of work_id, head, tree or envelope_digest. |
+| `applies_to` | `declared` | no | The facts the ruling was issued against, as any of work_id, head, tree or envelope_digest; envelope_digest is the canonical digest of this envelope with rulings empty, so the identity is current and non-circular. |
 | `relied_upon` | `declared` | no | Whether this envelope leans on the ruling; a relied-upon ruling that does not apply refuses. |
 | `applicable` | `computed` | yes | Whether every fact the ruling was issued against still matches this candidate. |
 

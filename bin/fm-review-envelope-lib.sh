@@ -399,7 +399,7 @@ CATALOG = {
                 {"name": "id", "source": "declared", "required": True,
                  "description": "The ruling's identity in its own authority's namespace."},
                 {"name": "applies_to", "source": "declared", "required": False,
-                 "description": "The facts the ruling was issued against, as any of work_id, head, tree or envelope_digest."},
+                 "description": "The facts the ruling was issued against, as any of work_id, head, tree or envelope_digest; envelope_digest is the canonical digest of this envelope with rulings empty, so the identity is current and non-circular."},
                 {"name": "relied_upon", "source": "declared", "required": False,
                  "description": "Whether this envelope leans on the ruling; a relied-upon ruling that does not apply refuses."},
                 {"name": "applicable", "source": "computed", "required": True,
@@ -823,6 +823,12 @@ def request_identity(envelope, envelope_digest):
     )
 
 
+def ruling_target_digest(envelope):
+    target = json.loads(json.dumps(envelope))
+    target["rulings"] = []
+    return digest_of(target)
+
+
 def outer_integrity_payload(document):
     return {
         "compiled_at": document.get("compiled_at"),
@@ -1123,6 +1129,17 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
         },
     }
 
+    for result in envelope["verification"]["results"]:
+        if not isinstance(result, dict):
+            raise Unobservable("inputs_malformed", "a verification result is not an object")
+        bind_evidence(result.get("evidence"), evidence_root)
+        bind_evidence(as_dict(result, "red_calibration").get("evidence"), evidence_root)
+    for disposition in envelope["obligations"]["dispositions"]:
+        if not isinstance(disposition, dict):
+            raise Unobservable("inputs_malformed", "an obligation disposition is not an object")
+        bind_evidence(disposition.get("evidence"), evidence_root)
+
+    current_envelope_digest = ruling_target_digest(envelope)
     for ruling in as_list(inputs, "rulings"):
         applies_to = as_dict(ruling, "applies_to")
         mismatches = []
@@ -1132,7 +1149,8 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             mismatches.append("head")
         if applies_to.get("tree") and applies_to["tree"] != head_tree:
             mismatches.append("tree")
-        if applies_to.get("envelope_digest") and applies_to["envelope_digest"] != predecessor_digest:
+        if (applies_to.get("envelope_digest")
+                and applies_to["envelope_digest"] != current_envelope_digest):
             mismatches.append("envelope_digest")
         envelope["rulings"].append(
             {
@@ -1145,16 +1163,6 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
                 "mismatches": mismatches,
             }
         )
-
-    for result in envelope["verification"]["results"]:
-        if not isinstance(result, dict):
-            raise Unobservable("inputs_malformed", "a verification result is not an object")
-        bind_evidence(result.get("evidence"), evidence_root)
-        bind_evidence(as_dict(result, "red_calibration").get("evidence"), evidence_root)
-    for disposition in envelope["obligations"]["dispositions"]:
-        if not isinstance(disposition, dict):
-            raise Unobservable("inputs_malformed", "an obligation disposition is not an object")
-        bind_evidence(disposition.get("evidence"), evidence_root)
 
     return envelope
 
@@ -1312,13 +1320,27 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
                 "unproven_dimension_required", finding.get("id"), str(finding.get("statement") or "")
             )
 
+    current_envelope_digest = ruling_target_digest(envelope)
     ruling_index = {str(ruling.get("id")): ruling for ruling in envelope["rulings"]}
     for ruling in envelope["rulings"]:
-        if ruling.get("relied_upon") and not ruling.get("applicable"):
+        applies_to = ruling.get("applies_to") if isinstance(ruling.get("applies_to"), dict) else {}
+        mismatches = []
+        if applies_to.get("work_id") and applies_to["work_id"] != envelope["identity"]["work"]["id"]:
+            mismatches.append("work_id")
+        if applies_to.get("head") and applies_to["head"] != envelope["candidate"]["head_commit"]:
+            mismatches.append("head")
+        if applies_to.get("tree") and applies_to["tree"] != envelope["candidate"]["head_tree"]:
+            mismatches.append("tree")
+        if (applies_to.get("envelope_digest")
+                and applies_to["envelope_digest"] != current_envelope_digest):
+            mismatches.append("envelope_digest")
+        ruling["applicable"] = not mismatches
+        ruling["mismatches"] = mismatches
+        if ruling.get("relied_upon") and mismatches:
             problems.refuse(
                 "ruling_applicability_mismatch",
                 ruling.get("id"),
-                "relied upon but does not apply: " + ", ".join(ruling.get("mismatches") or []),
+                "relied upon but does not apply: " + ", ".join(mismatches),
             )
 
     classify_obligations(problems, envelope, ruling_index, evidence_root, recheck_evidence)
@@ -1417,11 +1439,11 @@ def classify_result(problems, label, result, candidate, evidence_root, recheck_e
             "the result binds head " + str(result.get("head")) + ", the candidate is " + candidate["head_commit"],
         )
         return
-    if result.get("tree") and result["tree"] != candidate["head_tree"]:
+    if result.get("tree") != candidate["head_tree"]:
         problems.refuse(
             "required_verifier_wrong_head",
             label,
-            "the result binds tree " + str(result["tree"]) + ", the candidate tree is " + candidate["head_tree"],
+            "the result binds tree " + str(result.get("tree")) + ", the candidate tree is " + candidate["head_tree"],
         )
         return
     outcome = str(result.get("result") or "").upper()
