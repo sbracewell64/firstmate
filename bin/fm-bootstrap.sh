@@ -1027,8 +1027,13 @@ admission_control_validate() {
 # queued=unknown - is also what a legitimately wiped state/ produces, so the
 # only way the fleet ever notices is a count reported at session start.
 # bin/fm-wake-ledger.sh owns the join and the number; this only reports it.
+#
+# The retired count is reported too, and separately. Invalid evidence that
+# simply stopped appearing in a total would read as evidence that never
+# existed; the raw records are preserved, so the number they left behind is
+# preserved with them.
 wake_ledger_reconcile() {
-  local unjoined
+  local unjoined invalid
   # A code root without the ledger script predates this check; that is a missing
   # feature, not an unreadable ledger, so say nothing rather than misreport it.
   [ -x "$SCRIPT_DIR/fm-wake-ledger.sh" ] || return 0
@@ -1039,10 +1044,18 @@ wake_ledger_reconcile() {
     return 0
   fi
   case "$unjoined" in
-    ''|*[!0-9]*) return 0 ;;
-    0) return 0 ;;
+    ''|*[!0-9]*) unjoined=0 ;;
   esac
-  echo "WAKE_LEDGER: $unjoined outcome record(s) join no wake record - supervision-cost figures drawn from this ledger overcount until they are purged (bin/fm-wake-ledger.sh reconcile)"
+  if [ "$unjoined" -gt 0 ]; then
+    echo "WAKE_LEDGER: $unjoined outcome record(s) join no wake record - supervision-cost figures drawn from this ledger overcount until those records are invalidated, never purged (bin/fm-wake-ledger.sh reconcile --list, then invalidate)"
+  fi
+  # An older ledger script has no --invalid-count; that is a missing feature
+  # rather than a fact about this home, so it stays silent.
+  invalid=$("$SCRIPT_DIR/fm-wake-ledger.sh" reconcile --invalid-count 2>/dev/null) || return 0
+  case "$invalid" in
+    ''|*[!0-9]*|0) return 0 ;;
+  esac
+  echo "BOOTSTRAP_INFO: $invalid wake-ledger record(s) are invalidated and excluded from every count; the raw records are preserved as audit evidence"
 }
 
 # Terminal records for tasks that declared failure and were never torn down.

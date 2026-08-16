@@ -18,10 +18,10 @@
 # Position 1 is the schema token (v1), position 2 the record kind, position 3
 # the epoch seconds this record was written. Per-line versioning rather than a
 # file header keeps an append-only file readable across a format change; a
-# key=value tail lets the three record kinds carry different fields and lets a
+# key=value tail lets the record kinds carry different fields and lets a
 # consumer add fields without invalidating existing lines or parsers.
 #
-# THREE RECORD KINDS:
+# FIVE RECORD KINDS:
 #
 #   wake     one per deduped drained wake-queue row, written by
 #            bin/fm-wake-drain.sh. Deterministic - no judgment involved.
@@ -32,14 +32,68 @@
 #   outcome  one per handled wake, written by the coordinator through this
 #            script's `outcome` subcommand and joined to its wake record on
 #            the (seq, queued) pair. Fields: seq, queued (copied from the
-#            matching wake record, or unknown when none is resolvable),
-#            outcome, task, after (seconds since the wake record), and
-#            optional defect and note.
+#            matching wake record), outcome, task, after (seconds since the
+#            wake record), and optional defect and note. Every outcome record
+#            written since the join refusal landed joins a real wake record;
+#            the ones that do not are historical, and `reconcile` counts them.
 #
 # The durable join identity is the (seq, queued) pair, not seq alone: seq
 # comes from state/.wake-queue.seq, which restarts when state/ is wiped or a
 # home is rebuilt while this file survives, so queued disambiguates a reused
 # sequence.
+#
+#   recovered-outcome
+#            the same coordinator cost, recorded for a home whose wake records
+#            are genuinely gone - a wiped state/, a rebuilt home, evidence
+#            imported from elsewhere. Same fields as outcome, always
+#            queued=unknown, and written ONLY by `outcome --allow-unjoined`.
+#            It is a SEPARATE KIND rather than an outcome record with an
+#            unknown join because the two are different evidence and were
+#            indistinguishable exactly once, at real cost: a fabricated
+#            sequence stored queued=unknown, which is also what a legitimately
+#            wiped state/ produces, so 200 invented records hid inside the
+#            legitimate shape. A separate kind makes recovery evidence
+#            declarable and fabrication unrepresentable in the same breath.
+#            It NEVER enters an ordinary wake metric - not a numerator, not a
+#            denominator, not coverage, not a per-profile join - because it
+#            has no wake record to be a cost against. `report` counts it in a
+#            section of its own so it stays visible rather than silent.
+#
+#   invalidation
+#            a TOMBSTONE: one appended record naming one earlier record that
+#            is not evidence. Fields: target (the invalidated record's kind),
+#            the invalidated record's identity - seq and queued for a wake,
+#            outcome or recovered-outcome record, task and at (that record's
+#            own epoch) for a task record - plus reason, and optional ruling
+#            and evidence pointers. A task record's identity is that pair and
+#            nothing finer, so two terminal lines for one task written in the
+#            same second retire together; a line ordinal would be positional
+#            identity, which is the renumbering this file must never depend on.
+#
+# INVALIDATION IS PRESERVE-AND-INVALIDATE, NEVER PURGE. The raw record stays
+# in the file, byte for byte, and stays readable by anyone auditing what this
+# fleet once believed. What changes is that every count this script produces
+# skips it, and every consumer of those counts inherits that skip, because this
+# script is the only reader of the file. A sidecar exclusion list would be a
+# second truth source: a reader that consulted only the ledger would still see
+# the invalid record as live, which is the whole failure being corrected.
+#
+# A TOMBSTONE IS TERMINAL AND CANNOT BE REVOKED. There is deliberately no
+# record kind that un-invalidates one, because that record would be a way to
+# launder discredited evidence back into a metric by appending a line. A
+# tombstone written in error is corrected in prose, against a raw record that
+# was never touched.
+#
+# A TOMBSTONE MUST NAME A RECORD THAT EXISTS. `invalidate` refuses an identity
+# the file does not hold, for the same reason `outcome` refuses a sequence that
+# joins no wake: an identifier supplied by hand, from memory, after the fact,
+# with nothing checking it is precisely what produced the records this
+# mechanism exists to retire.
+#
+# ORDER MAKES THE BOUNDED READS SAFE. A tombstone is always appended after the
+# record it invalidates, so any tail window holding the record holds the
+# tombstone too. The bounded lookups can therefore never see a record while
+# missing its invalidation.
 #
 #   task     one terminal line per task, written by bin/fm-teardown.sh
 #            immediately before the task metadata is deleted - the last moment
@@ -105,7 +159,11 @@
 # passed sequence that joins no wake record is now refused; --allow-unjoined
 # keeps the genuine wiped-state/ case reachable and a guess unreachable, and
 # `reconcile` counts the records that join nothing so a silent corruption
-# becomes a number a session start can report.
+# becomes a number a session start can report. --allow-unjoined now writes a
+# recovered-outcome record rather than an outcome record, so the legitimate
+# case is DECLARED in the file instead of inferred from an unknown join, and
+# the unjoined-outcome count `reconcile` reports can only shrink from here: no
+# supported path appends another one.
 #
 # THE CRITIC FIELDS: harness/model/effort describe the MAKER. critic_vendor,
 # critic_model and critic_independence describe the checker that reviewed those
@@ -194,8 +252,10 @@
 #       With no seq, record against the most recent wake record no outcome
 #       joins - the normal path. With one or more seq, append one outcome
 #       record each; a seq matching no wake record is refused unless
-#       --allow-unjoined says the wake records are genuinely gone. task and
-#       after are resolved from the matching wake record when --task is absent.
+#       --allow-unjoined says the wake records are genuinely gone, in which
+#       case the record is written as recovered-outcome and never enters an
+#       ordinary wake metric. task and after are resolved from the matching
+#       wake record when --task is absent.
 #   fm-wake-ledger.sh task <id> [--outcome landed|failed|abandoned]
 #                     [--source declared|discarded|unreleased|assumed]
 #                     [--harness H] [--model M] [--effort E] [--mode M]
@@ -238,13 +298,37 @@
 #       --dry-run prints the same lines and writes nothing. Teardown
 #       removes the receipt with the rest of the task's state and writes its
 #       own release record, which supersedes this one.
-#   fm-wake-ledger.sh reconcile [--count]
-#       Count the outcome records that join no wake record. --count prints that
-#       number alone, for a caller that formats its own line. Session-start
-#       bootstrap reports it so the corruption above cannot stay silent.
+#   fm-wake-ledger.sh reconcile [--count|--invalid-count|--list]
+#       Count the LIVE outcome records that join no wake record - invalidated
+#       ones are excluded, because a retired record is no longer a defect the
+#       fleet carries. --count prints that number alone and --invalid-count the
+#       number of invalidated records, both for a caller that formats its own
+#       line. --list prints one <seq>:<queued> identity per live unjoined
+#       outcome record, in file order, which is the input `invalidate` takes on
+#       stdin. THAT LIST IS A CANDIDATE SET, NOT A VERDICT: it says only that a
+#       record joins nothing, which is true of a fabricated sequence and of a
+#       legacy record from a genuinely wiped home alike. Deciding which it is,
+#       and naming a reason for it, is the operator's judgment and this script
+#       will not make it for them. Session-start bootstrap reports both counts
+#       so neither the corruption above nor its retirement can stay silent.
+#   fm-wake-ledger.sh invalidate --target wake|outcome|recovered-outcome|task
+#                     --reason <class> [--ruling <id>] [--evidence <ref>]
+#                     [--stdin] [--dry-run] [<identity>...]
+#       Append one invalidation record per named record, retiring it from every
+#       count this script produces while leaving the raw record untouched.
+#       <identity> is <seq>:<queued> for a wake, outcome or recovered-outcome
+#       record and <task-id>:<epoch> for a task record, where <epoch> is that
+#       terminal line's own position-3 timestamp. --stdin reads the same
+#       identities one per line. An identity the ledger does not hold is
+#       refused before anything is written, and one already invalidated is
+#       reported and skipped so a rerun appends nothing twice. --dry-run prints
+#       what it would append and writes nothing.
 #   fm-wake-ledger.sh report [--since-days <n>]
 #       Summarize the ledger: wake volume and coverage, response latency,
 #       outcome mix, terminal task outcomes, and the per-profile model join.
+#       Invalidated records contribute to none of it, and recovery evidence to
+#       none of the wake metrics; both are counted in sections of their own so
+#       the excluded evidence stays legible instead of vanishing from a total.
 #       The ledger file itself remains the machine interface.
 set -u
 
@@ -281,6 +365,51 @@ LEDGER_LOOKUP_TAIL=${FM_WAKE_LEDGER_LOOKUP_TAIL:-500}
 LEDGER_REPORT_TOP=${FM_WAKE_LEDGER_REPORT_TOP:-10}
 
 TAB=$(printf '\t')
+
+# ONE OWNER OF THE EXCLUSION RULE. Every reader below interpolates this awk
+# prelude instead of restating how a record is identified and how a tombstone
+# names its target. Two copies of that rule would drift the moment only one was
+# edited, and a drifted reader would keep counting a record this file has
+# already retired - which is the exact failure the tombstone exists to end.
+#
+# fieldset()  the key=value tail of the current line, into f[].
+# rec_id()    the identity a tombstone names for a record of that kind.
+# tomb()      records the current line if it is an invalidation, and returns
+#             whether it was one. The value stored is the reason, so a reader
+#             can report WHY a record it skipped was retired.
+# retired()   whether the current line has been invalidated.
+#
+# A tombstone is always appended after the record it names, so a reader that
+# has seen a record has either seen its tombstone already or will see it later
+# in the same pass; every reader below is written to decide at END or on a
+# second pass for that reason, never on first sight of a record.
+# awk source, not shell: the $1/$2 inside it are awk fields and must not expand.
+# shellcheck disable=SC2016
+LEDGER_AWK_LIB='
+function fieldset(   i, p) {
+  split("", f)
+  for (i = 4; i <= NF; i++) {
+    p = index($i, "=")
+    if (p > 0) f[substr($i, 1, p - 1)] = substr($i, p + 1)
+  }
+}
+function join_id(   q) {
+  q = f["queued"]
+  return f["seq"] SUBSEP (q == "" ? "unknown" : q)
+}
+function rec_id(kind) {
+  return (kind == "task") ? f["task"] SUBSEP $3 : join_id()
+}
+function tomb(   t) {
+  if ($2 != "invalidation") return 0
+  t = f["target"]
+  dead[t, (t == "task") ? f["task"] SUBSEP f["at"] : join_id()] = \
+    (f["reason"] == "" ? "unknown" : f["reason"])
+  return 1
+}
+function retired(kind) { return ((kind, rec_id(kind)) in dead) }
+function retired_reason(kind) { return dead[kind, rec_id(kind)] }
+'
 
 usage() {
   LC_ALL=C awk '
@@ -472,25 +601,37 @@ cmd_drain_record() {
 # bounded tail read. With <full> non-empty the whole file is read instead: that
 # is the refusal path only, where a wrong "no such wake" would be as damaging
 # as the guess it exists to stop, so accuracy outranks the constant-time bound.
+#
+# An INVALIDATED wake record is not a wake record here. It must not satisfy the
+# join an explicit sequence is checked against, or a retired record would go on
+# authorizing new outcome records against itself.
 ledger_lookup_wake() {  # <seq> [<full>]
   local seq=$1 full=${2-} found
   [ -f "$LEDGER" ] || return 1
   found=$(
     if [ -n "$full" ]; then cat "$LEDGER"; else tail -n "$LEDGER_LOOKUP_TAIL" "$LEDGER"; fi 2>/dev/null \
     | LC_ALL=C awk -F '\t' \
-    -v want="seq=$seq" -v schema="$LEDGER_SCHEMA" '
-    $1 == schema && $2 == "wake" {
-      match_seq = 0
-      row_task = "-"
-      row_queued = ""
-      for (i = 4; i <= NF; i++) {
-        if ($i == want) match_seq = 1
-        else if (substr($i, 1, 5) == "task=") row_task = substr($i, 6)
-        else if (substr($i, 1, 7) == "queued=") row_queued = substr($i, 8)
-      }
-      if (match_seq) { ts = $3; task = row_task; queued = row_queued; hit = 1 }
+    -v want="$seq" -v schema="$LEDGER_SCHEMA" "$LEDGER_AWK_LIB"'
+    $1 != schema { next }
+    { fieldset() }
+    $2 == "invalidation" { tomb(); next }
+    $2 != "wake" { next }
+    f["seq"] != want { next }
+    {
+      n++
+      r_ts[n] = $3
+      r_task[n] = (f["task"] == "" ? "-" : f["task"])
+      r_queued[n] = (f["queued"] == "" ? "unknown" : f["queued"])
     }
-    END { if (hit) printf "%s\t%s\t%s", ts, task, queued }
+    # Decided at END, never on sight: the tombstone for a record read here can
+    # only appear after it.
+    END {
+      for (i = n; i >= 1; i--) {
+        if (("wake", want SUBSEP r_queued[i]) in dead) continue
+        printf "%s\t%s\t%s", r_ts[i], r_task[i], r_queued[i]
+        exit
+      }
+    }
   ') || return 1
   [ -n "$found" ] || return 1
   printf '%s' "$found"
@@ -507,16 +648,10 @@ ledger_newest_unrecorded_seq() {
   local found
   [ -f "$LEDGER" ] || return 1
   found=$(tail -n "$LEDGER_LOOKUP_TAIL" "$LEDGER" 2>/dev/null | LC_ALL=C awk -F '\t' \
-    -v schema="$LEDGER_SCHEMA" '
-    function fieldset(   i, p) {
-      split("", f)
-      for (i = 4; i <= NF; i++) {
-        p = index($i, "=")
-        if (p > 0) f[substr($i, 1, p - 1)] = substr($i, p + 1)
-      }
-    }
+    -v schema="$LEDGER_SCHEMA" "$LEDGER_AWK_LIB"'
     $1 != schema { next }
     { fieldset() }
+    $2 == "invalidation" { tomb(); next }
     $2 == "wake" {
       q = f["queued"]
       if (q == "") q = "unknown"
@@ -527,10 +662,25 @@ ledger_newest_unrecorded_seq() {
     }
     # The join identity is the (seq, queued) pair, exactly as the report uses
     # it, so a sequence reused across a state wipe never masks the other wake.
-    $2 == "outcome" { done[f["seq"], (f["queued"] == "" ? "unknown" : f["queued"])] = 1 ; next }
+    # A recovered-outcome record never covers a wake: it exists precisely
+    # because there is no wake record to join.
+    $2 == "outcome" {
+      n_out++
+      oseq[n_out] = f["seq"]
+      oq[n_out] = (f["queued"] == "" ? "unknown" : f["queued"])
+      next
+    }
     END {
+      # Both sides are settled at END so a tombstone can retire either half.
+      # An invalidated outcome leaves its wake genuinely unrecorded again,
+      # which is the honest state: the cost was never validly recorded.
+      for (i = 1; i <= n_out; i++) {
+        if (("outcome", oseq[i] SUBSEP oq[i]) in dead) continue
+        recorded[oseq[i], oq[i]] = 1
+      }
       for (i = n; i >= 1; i--) {
-        if (!((wseq[i], wq[i]) in done)) { printf "%s", wseq[i]; exit }
+        if (("wake", wseq[i] SUBSEP wq[i]) in dead) continue
+        if (!((wseq[i], wq[i]) in recorded)) { printf "%s", wseq[i]; exit }
       }
     }
   ') || return 1
@@ -538,38 +688,69 @@ ledger_newest_unrecorded_seq() {
   printf '%s' "$found"
 }
 
-# Outcome records joining no wake record, and the total outcome count, as
-# "<unjoined><TAB><total>". A whole-file read: this is the reconciliation
-# instrument, and a bounded one would under-report the very corruption it
-# exists to expose. An absent ledger is a real zero; a ledger that exists and
-# cannot be read returns nonzero rather than that same zero, because reporting
-# "clean" for a file nobody could open is the silent all-clear this whole
-# subcommand exists to abolish.
+# Live outcome records joining no wake record, the live outcome total, and the
+# count of invalidated records of every kind, as
+# "<unjoined><TAB><total><TAB><invalid>". A whole-file read: this is the
+# reconciliation instrument, and a bounded one would under-report the very
+# corruption it exists to expose. An absent ledger is a real zero; a ledger that
+# exists and cannot be read returns nonzero rather than that same zero, because
+# reporting "clean" for a file nobody could open is the silent all-clear this
+# whole subcommand exists to abolish.
+#
+# An invalidated record leaves both the numerator and the denominator - a
+# retired record is not a defect this fleet still carries, and leaving it in the
+# denominator would make the ratio improve simply by retiring records. It is
+# counted in <invalid> instead, so what left the count stays a number.
 ledger_reconcile_counts() {
-  [ -f "$LEDGER" ] || { printf '0\t0'; return 0; }
-  LC_ALL=C awk -F '\t' -v schema="$LEDGER_SCHEMA" '
-    function fieldset(   i, p) {
-      split("", f)
-      for (i = 4; i <= NF; i++) {
-        p = index($i, "=")
-        if (p > 0) f[substr($i, 1, p - 1)] = substr($i, p + 1)
-      }
+  [ -f "$LEDGER" ] || { printf '0\t0\t0'; return 0; }
+  LC_ALL=C awk -F '\t' -v schema="$LEDGER_SCHEMA" "$LEDGER_AWK_LIB"'
+    NR == FNR {
+      if ($1 != schema) next
+      fieldset()
+      tomb()
+      next
     }
     $1 != schema { next }
     { fieldset() }
-    $2 == "wake" { wake[f["seq"], (f["queued"] == "" ? "unknown" : f["queued"])] = 1; next }
+    $2 == "invalidation" { next }
+    retired($2) { invalid++; next }
+    $2 == "wake" { wake[join_id()] = 1; next }
     $2 == "outcome" {
       total++
-      if (!((f["seq"], (f["queued"] == "" ? "unknown" : f["queued"])) in wake)) unjoined++
+      if (!(join_id() in wake)) unjoined++
       next
     }
-    END { printf "%d\t%d", unjoined + 0, total + 0 }
-  ' "$LEDGER" 2>/dev/null
+    END { printf "%d\t%d\t%d", unjoined + 0, total + 0, invalid + 0 }
+  ' "$LEDGER" "$LEDGER" 2>/dev/null
+}
+
+# One "<seq>:<queued>" per LIVE outcome record joining no wake record, in file
+# order. A CANDIDATE SET for review, never an authorization: joining nothing is
+# equally true of a fabricated sequence and of a legacy record from a genuinely
+# wiped home, and only an operator can tell those apart.
+ledger_unjoined_identities() {
+  [ -f "$LEDGER" ] || return 0
+  LC_ALL=C awk -F '\t' -v schema="$LEDGER_SCHEMA" "$LEDGER_AWK_LIB"'
+    NR == FNR {
+      if ($1 != schema) next
+      fieldset()
+      tomb()
+      next
+    }
+    $1 != schema { next }
+    { fieldset() }
+    $2 == "invalidation" { next }
+    retired($2) { next }
+    $2 == "wake" { wake[join_id()] = 1; next }
+    $2 == "outcome" && !(join_id() in wake) {
+      printf "%s:%s\n", f["seq"], (f["queued"] == "" ? "unknown" : f["queued"])
+    }
+  ' "$LEDGER" "$LEDGER" 2>/dev/null
 }
 
 cmd_outcome() {
   local token='' task='' defect='' note='' allow_unjoined='' resolved='' now seq
-  local wake_row wake_rest wake_ts wake_task wake_queued after
+  local wake_row wake_rest wake_ts wake_task wake_queued after record_kind
   local -a seqs=()
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -620,22 +801,39 @@ cmd_outcome() {
 
   # Refuse before writing anything, so a rejected sequence in a multi-sequence
   # invocation cannot leave a half-recorded batch behind.
-  if [ -z "$allow_unjoined" ]; then
-    for seq in "${seqs[@]}"; do
-      ledger_lookup_wake "$seq" >/dev/null && continue
-      # The bounded read missed it; confirm against the whole file before
-      # refusing, so the refusal states a fact rather than a lookup horizon.
-      ledger_lookup_wake "$seq" full >/dev/null && continue
-      die "wake sequence $seq joins no wake record: pass no sequence to record against the most recent unrecorded wake, or --allow-unjoined if the wake records are genuinely gone"
-    done
-  fi
+  #
+  # The override is checked in BOTH directions. Without it, a sequence that
+  # joins nothing is refused - that is the guard that stopped the fabrication
+  # recurring, and it is unchanged. With it, a sequence that DOES join is
+  # refused too: --allow-unjoined states that the wake records are gone, and a
+  # record contradicting its own declaration would be recovery evidence in
+  # name only.
+  for seq in "${seqs[@]}"; do
+    if ledger_lookup_wake "$seq" >/dev/null || ledger_lookup_wake "$seq" full >/dev/null; then
+      [ -z "$allow_unjoined" ] \
+        || die "wake sequence $seq joins a live wake record, so --allow-unjoined does not apply: record it without the override"
+      continue
+    fi
+    # The bounded read missed it; the full read above confirmed the absence, so
+    # the refusal states a fact rather than a lookup horizon.
+    [ -n "$allow_unjoined" ] \
+      || die "wake sequence $seq joins no wake record: pass no sequence to record against the most recent unrecorded wake, or --allow-unjoined if the wake records are genuinely gone"
+  done
+
+  # The record kind IS the declaration. An override-written record is recovery
+  # evidence from a home whose wake records are gone, and carrying it as an
+  # ordinary outcome record with an unknown join is exactly the shape a
+  # fabricated sequence hid inside.
+  record_kind=outcome
+  [ -z "$allow_unjoined" ] || record_kind=recovered-outcome
 
   now=$(date +%s)
   for seq in "${seqs[@]}"; do
     wake_task=$task
     wake_queued=unknown
     after=unknown
-    if wake_row=$(ledger_lookup_wake "$seq") || wake_row=$(ledger_lookup_wake "$seq" full); then
+    if [ -z "$allow_unjoined" ] \
+      && { wake_row=$(ledger_lookup_wake "$seq") || wake_row=$(ledger_lookup_wake "$seq" full); }; then
       wake_ts=${wake_row%%"$TAB"*}
       case "$wake_ts" in
         ''|*[!0-9]*) wake_ts= ;;
@@ -662,8 +860,9 @@ cmd_outcome() {
       "after=$after"
     [ -z "$defect" ] || set -- "$@" "defect=$(ledger_sanitize "$defect" "$LEDGER_SHORT_MAX")"
     [ -z "$note" ] || set -- "$@" "note=$(ledger_sanitize "$note" "$LEDGER_NOTE_MAX")"
-    ledger_append "$now" outcome "$@" || {
-      printf 'error: could not append outcome record for wake %s to %s\n' "$seq" "$LEDGER" >&2
+    ledger_append "$now" "$record_kind" "$@" || {
+      printf 'error: could not append %s record for wake %s to %s\n' \
+        "$record_kind" "$seq" "$LEDGER" >&2
       return 1
     }
   done
@@ -787,24 +986,33 @@ cmd_task() {
 #      that cannot see as a task that never happened, which is the collapse
 #      every consumer of this file is built to refuse.
 #
-# The LAST record wins, matching every other reader here: `sweep` may record a
-# declared failure at declaration time and a later teardown records the same
-# task's release.
+# The LAST LIVE record wins, matching every other reader here: `sweep` may
+# record a declared failure at declaration time and a later teardown records the
+# same task's release. An invalidated terminal line is not a candidate, so
+# retiring one restores the previous live record rather than leaving the task
+# with no answer.
 cmd_task_record() {
   local id=${1:-}
   [ -n "$id" ] || die "task-record needs a task id"
   fm_task_id_path_safe "$id" || die "unsafe task id: $id"
   [ -f "$LEDGER" ] && [ -r "$LEDGER" ] || return 3
-  LC_ALL=C awk -F"$TAB" -v want="task=$id" '
-    $2 == "task" {
-      match_found = 0
-      for (i = 4; i <= NF; i++) if ($i == want) match_found = 1
-      if (!match_found) next
+  LC_ALL=C awk -F"$TAB" -v want="$id" -v schema="$LEDGER_SCHEMA" "$LEDGER_AWK_LIB"'
+    NR == FNR {
+      if ($1 != schema) next
+      fieldset()
+      tomb()
+      next
+    }
+    $2 != "task" { next }
+    { fieldset() }
+    f["task"] != want { next }
+    retired("task") { next }
+    {
       last = ""
       for (i = 4; i <= NF; i++) last = last $i "\n"
     }
     END { if (last == "") exit 1; printf "%s", last }
-  ' "$LEDGER"
+  ' "$LEDGER" "$LEDGER"
 }
 
 # --- terminal outcome derivation --------------------------------------------
@@ -919,10 +1127,14 @@ cmd_sweep() {
 }
 
 cmd_reconcile() {
-  local count_only='' counts unjoined total
+  local mode='' counts rest unjoined total invalid
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      --count) count_only=1; shift ;;
+      --count|--invalid-count|--list)
+        [ -z "$mode" ] || die "reconcile takes one of --count, --invalid-count or --list"
+        mode=${1#--}
+        shift
+        ;;
       -h|--help) usage; exit 0 ;;
       *) die "unknown flag for reconcile: $1" ;;
     esac
@@ -930,22 +1142,210 @@ cmd_reconcile() {
 
   counts=$(ledger_reconcile_counts) || die "could not read $LEDGER"
   unjoined=${counts%%"$TAB"*}
-  total=${counts#*"$TAB"}
+  rest=${counts#*"$TAB"}
+  total=${rest%%"$TAB"*}
+  invalid=${rest#*"$TAB"}
   # A partial read must not become a fabricated number: this subcommand exists
   # to expose fabricated numbers.
-  [ "$counts" = "$unjoined$TAB$total" ] || die "could not read $LEDGER"
+  [ "$counts" = "$unjoined$TAB$total$TAB$invalid" ] || die "could not read $LEDGER"
   case "$unjoined" in ''|*[!0-9]*) die "could not read $LEDGER" ;; esac
   case "$total" in ''|*[!0-9]*) die "could not read $LEDGER" ;; esac
-  if [ -n "$count_only" ]; then
-    printf '%s\n' "$unjoined"
-    return 0
-  fi
+  case "$invalid" in ''|*[!0-9]*) die "could not read $LEDGER" ;; esac
+  case "$mode" in
+    count) printf '%s\n' "$unjoined"; return 0 ;;
+    invalid-count) printf '%s\n' "$invalid"; return 0 ;;
+    list)
+      # The read already succeeded above, so an empty list here is a real empty
+      # set rather than an unreadable file reported as a clean one.
+      ledger_unjoined_identities
+      return 0
+      ;;
+  esac
   if [ "$unjoined" -eq 0 ]; then
-    printf 'wake ledger: all %s outcome record(s) join a wake record\n' "$total"
+    printf 'wake ledger: all %s live outcome record(s) join a wake record\n' "$total"
+  else
+    printf 'wake ledger: %s of %s live outcome record(s) join no wake record\n' "$unjoined" "$total"
+    printf 'these record a cost against a wake that was never drained here; they are evidence of a bad join, not of supervision work\n'
+    printf 'review them with "reconcile --list", then retire the ones you can account for with "invalidate --target outcome --reason <class>"\n'
+  fi
+  # Printed even at zero unjoined, and always: what was retired has to stay a
+  # number somewhere, or invalidation would read as the records never having
+  # existed - which is the purge this mechanism exists instead of.
+  if [ "$invalid" -gt 0 ]; then
+    printf '%s further record(s) are invalidated and excluded from every count above; the raw records are preserved\n' "$invalid"
+  fi
+  return 0
+}
+
+# Parse "<a>:<b>" into FM_LEDGER_ID_A / FM_LEDGER_ID_B. Returns nonzero on a
+# shape this script cannot identify a record by.
+ledger_split_identity() {  # <identity>
+  local raw=$1
+  case "$raw" in
+    *:*) ;;
+    *) return 1 ;;
+  esac
+  FM_LEDGER_ID_A=${raw%%:*}
+  FM_LEDGER_ID_B=${raw#*:}
+  [ -n "$FM_LEDGER_ID_A" ] && [ -n "$FM_LEDGER_ID_B" ]
+}
+
+cmd_invalidate() {
+  local target='' reason='' ruling='' evidence='' dry='' from_stdin='' raw
+  local now tmp line kind id_a id_b n_ok=0 n_dead=0
+  local -a ids=()
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --target) [ "$#" -ge 2 ] || die "--target needs a value"; target=$2; shift 2 ;;
+      --reason) [ "$#" -ge 2 ] || die "--reason needs a value"; reason=$2; shift 2 ;;
+      --ruling) [ "$#" -ge 2 ] || die "--ruling needs a value"; ruling=$2; shift 2 ;;
+      --evidence) [ "$#" -ge 2 ] || die "--evidence needs a value"; evidence=$2; shift 2 ;;
+      --stdin) from_stdin=1; shift ;;
+      --dry-run) dry=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      -*) die "unknown flag for invalidate: $1" ;;
+      *) ids+=("$1"); shift ;;
+    esac
+  done
+
+  case "$target" in
+    wake|outcome|recovered-outcome|task) ;;
+    '') die "invalidate needs --target (wake outcome recovered-outcome task)" ;;
+    invalidation) die "an invalidation record cannot itself be invalidated: a tombstone is terminal, and a record that un-retired evidence would be a way to launder it back into a count" ;;
+    *) die "unknown invalidation target: $target (wake outcome recovered-outcome task)" ;;
+  esac
+  # The reason is required, and a closed character class rather than free text,
+  # because it is a class a reader groups by - not a sentence.
+  case "$reason" in
+    '') die "invalidate needs --reason naming why these records are not evidence" ;;
+    *[!A-Za-z0-9._-]*) die "reason class must be [A-Za-z0-9._-]: $reason" ;;
+  esac
+  case "$ruling" in
+    ''|*[!A-Za-z0-9._-]*)
+      [ -z "$ruling" ] || die "ruling id must be [A-Za-z0-9._-]: $ruling" ;;
+  esac
+
+  if [ -n "$from_stdin" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in ''|'#'*) continue ;; esac
+      ids+=("$line")
+    done
+  fi
+  if [ "${#ids[@]}" -eq 0 ]; then
+    # No identities AND no --stdin is a usage error. --stdin with nothing on it
+    # is the ordinary rerun of `reconcile --list | invalidate --stdin` once
+    # every candidate is retired, so it is a no-op - but a SAID no-op: "read
+    # nothing" and "did the work" must not print the same line, because a
+    # producer that died upstream also delivers an empty set.
+    [ -n "$from_stdin" ] || die "invalidate needs at least one record identity, or --stdin"
+    printf 'read no record identities on stdin; nothing was invalidated\n'
     return 0
   fi
-  printf 'wake ledger: %s of %s outcome record(s) join no wake record\n' "$unjoined" "$total"
-  printf 'these record a cost against a wake that was never drained here; they are evidence of a bad join, not of supervision work\n'
+
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-wake-ledger-invalidate.XXXXXX") \
+    || die "cannot create a work directory"
+  trap 'rm -rf "$tmp"' EXIT
+
+  : > "$tmp/want"
+  for raw in "${ids[@]}"; do
+    ledger_split_identity "$raw" \
+      || die "record identity must be <seq>:<queued> for a wake, outcome or recovered-outcome record and <task-id>:<epoch> for a task record: $raw"
+    id_a=$FM_LEDGER_ID_A
+    id_b=$FM_LEDGER_ID_B
+    if [ "$target" = task ]; then
+      fm_task_id_path_safe "$id_a" || die "unsafe task id: $id_a"
+      case "$id_b" in ''|*[!0-9]*) die "a task record is identified by its own epoch: $raw" ;; esac
+    else
+      case "$id_a" in ''|*[!0-9]*) die "wake sequence must be a number: $raw" ;; esac
+      case "$id_b" in
+        unknown) ;;
+        ''|*[!0-9]*) die "queued must be an epoch or the literal unknown: $raw" ;;
+      esac
+    fi
+    printf '%s\t%s\n' "$id_a" "$id_b" >> "$tmp/want"
+  done
+
+  [ -f "$LEDGER" ] && [ -r "$LEDGER" ] || die "could not read $LEDGER"
+
+  # ONE READ, THREE ANSWERS. Every requested identity is classified against the
+  # file before anything is appended: present and live, present and already
+  # retired, or absent. A tombstone naming a record the file does not hold
+  # would be an identifier supplied by hand with nothing checking it, which is
+  # precisely the defect this mechanism retires.
+  LC_ALL=C awk -F '\t' \
+    -v schema="$LEDGER_SCHEMA" -v target="$target" "$LEDGER_AWK_LIB"'
+    NR == FNR {
+      k = $1 SUBSEP $2
+      if (k in want) next
+      want[k] = 1
+      n++
+      wa[n] = $1
+      wb[n] = $2
+      next
+    }
+    $1 != schema { next }
+    { fieldset() }
+    $2 == "invalidation" { tomb(); next }
+    $2 == target { have[rec_id(target)] = 1; next }
+    END {
+      for (i = 1; i <= n; i++) {
+        k = wa[i] SUBSEP wb[i]
+        if (!(k in have)) { printf "missing\t%s:%s\n", wa[i], wb[i]; continue }
+        if ((target, k) in dead) { printf "retired\t%s:%s\n", wa[i], wb[i]; continue }
+        printf "live\t%s:%s\n", wa[i], wb[i]
+      }
+    }
+  ' "$tmp/want" "$LEDGER" > "$tmp/classified" || die "could not read $LEDGER"
+
+  if grep -q '^missing'"$TAB" "$tmp/classified" 2>/dev/null; then
+    printf 'error: these %s record identities are not in %s:\n' "$target" "$LEDGER" >&2
+    LC_ALL=C sed -n "s/^missing$TAB/  /p" "$tmp/classified" >&2
+    printf 'nothing was written. a tombstone must name a record this ledger actually holds.\n' >&2
+    rm -rf "$tmp"
+    trap - EXIT
+    exit 2
+  fi
+
+  now=$(date +%s)
+  while IFS="$TAB" read -r kind raw; do
+    case "$kind" in
+      retired) n_dead=$((n_dead + 1)); continue ;;
+      live) ;;
+      *) continue ;;
+    esac
+    ledger_split_identity "$raw" || continue
+    if [ "$target" = task ]; then
+      set -- "target=$target" \
+        "task=$(ledger_sanitize "$FM_LEDGER_ID_A" "$LEDGER_ID_MAX")" \
+        "at=$FM_LEDGER_ID_B"
+    else
+      set -- "target=$target" "seq=$FM_LEDGER_ID_A" "queued=$FM_LEDGER_ID_B"
+    fi
+    set -- "$@" "reason=$(ledger_sanitize "$reason" "$LEDGER_SHORT_MAX")"
+    [ -z "$ruling" ] || set -- "$@" "ruling=$(ledger_sanitize "$ruling" "$LEDGER_SHORT_MAX")"
+    [ -z "$evidence" ] || set -- "$@" "evidence=$(ledger_sanitize "$evidence" "$LEDGER_KEY_MAX")"
+    if [ -n "$dry" ]; then
+      printf 'would invalidate %s %s\n' "$target" "$raw"
+    else
+      ledger_append "$now" invalidation "$@" || {
+        printf 'error: could not append an invalidation record for %s %s to %s\n' \
+          "$target" "$raw" "$LEDGER" >&2
+        rm -rf "$tmp"
+        trap - EXIT
+        return 1
+      }
+    fi
+    n_ok=$((n_ok + 1))
+  done < "$tmp/classified"
+
+  if [ -n "$dry" ]; then
+    printf 'would invalidate %s %s record(s); %s already invalidated\n' "$n_ok" "$target" "$n_dead"
+  else
+    printf 'invalidated %s %s record(s); %s already invalidated. the raw records are preserved\n' \
+      "$n_ok" "$target" "$n_dead"
+  fi
+  rm -rf "$tmp"
+  trap - EXIT
   return 0
 }
 
@@ -988,18 +1388,34 @@ cmd_report() {
     -v cutoff="$cutoff" \
     -v top="$LEDGER_REPORT_TOP" \
     -v latfile="$tmp/lat" \
-    -v dimensions="$FM_INDEPENDENCE_DIMENSIONS" '
-    function fieldset(   i, p) {
-      split("", f)
-      for (i = 4; i <= NF; i++) {
-        p = index($i, "=")
-        if (p > 0) f[substr($i, 1, p - 1)] = substr($i, p + 1)
-      }
+    -v dimensions="$FM_INDEPENDENCE_DIMENSIONS" "$LEDGER_AWK_LIB"'
+    # Pass one collects every tombstone, with no window filter: a record inside
+    # the window can be retired by a tombstone written after it, and a windowed
+    # first pass would let exactly that record keep counting.
+    NR == FNR {
+      if ($1 != schema) next
+      fieldset()
+      tomb()
+      next
     }
     $1 != schema { next }
+    { fieldset() }
+    $2 == "invalidation" { next }
+    # Counted here and nowhere else. An invalidated record contributes to no
+    # numerator, no denominator, no ranking and no trend below - and the count
+    # of what was excluded is printed, so the evidence is retired rather than
+    # disappeared.
+    retired($2) {
+      if ($3 + 0 >= cutoff) { dead_kind[$2]++; dead_why[retired_reason($2)]++; dead_total++ }
+      next
+    }
     $3 + 0 < cutoff { next }
-    {
-      fieldset()
+    # Recovery evidence has no wake record to be a cost against, so it enters
+    # none of the wake metrics below. It gets a count of its own instead.
+    $2 == "recovered-outcome" {
+      recovered++
+      recovered_by_token[f["outcome"]]++
+      next
     }
     $2 == "wake" {
       seq = f["seq"]
@@ -1078,6 +1494,20 @@ cmd_report() {
         printf "  by token:"
         split("absorbed inspected steered decided escalated repaired false-positive", ov, " ")
         for (i = 1; i <= 7; i++) if (ov[i] in by_outcome) printf "  %s %d", ov[i], by_outcome[ov[i]]
+        printf "\n"
+      }
+
+      # Counted apart from every figure above, and said out loud, because
+      # recovery evidence records a real cost against wake records this home no
+      # longer holds. Folding it into the wake metrics would put a numerator
+      # over a denominator that cannot contain it.
+      if (recovered > 0) {
+        printf "\nrecovery evidence: %d recovered-outcome record(s)", recovered
+        printf " - imported from a home whose wake records are gone;"
+        printf " EXCLUDED from wake volume, coverage and the per-profile join above\n"
+        printf "  by token:"
+        split("absorbed inspected steered decided escalated repaired false-positive", ov, " ")
+        for (i = 1; i <= 7; i++) if (ov[i] in recovered_by_token) printf "  %s %d", ov[i], recovered_by_token[ov[i]]
         printf "\n"
       }
 
@@ -1185,8 +1615,23 @@ cmd_report() {
         }
         if (omitted > 0) printf "  (%d more task(s) not shown)\n", omitted
       }
+
+      # LAST, AND ALWAYS WHEN NONZERO. Invalid evidence that simply vanished
+      # from the totals would read as evidence that never existed, which is the
+      # purge this mechanism exists instead of. The raw records are still in the
+      # file; what this says is how many of them no figure above counted.
+      if (dead_total > 0) {
+        printf "\ninvalidated evidence: %d record(s) EXCLUDED from every count above", dead_total
+        printf " (raw records preserved in the ledger)\n"
+        printf "  by kind:  "
+        split("wake outcome recovered-outcome task", dk, " ")
+        for (i = 1; i <= 4; i++) if (dk[i] in dead_kind) printf "  %s %d", dk[i], dead_kind[dk[i]]
+        printf "\n  by reason:"
+        for (k in dead_why) printf "  %s %d", k, dead_why[k]
+        printf "\n"
+      }
     }
-  ' "$LEDGER"
+  ' "$LEDGER" "$LEDGER"
 
   if [ -s "$tmp/lat" ]; then
     printf '\n'
@@ -1218,7 +1663,8 @@ case "$SUBCOMMAND" in
   derive) cmd_derive "$@" ;;
   sweep) cmd_sweep "$@" ;;
   reconcile) cmd_reconcile "$@" ;;
+  invalidate) cmd_invalidate "$@" ;;
   report) cmd_report "$@" ;;
   -h|--help|help) usage ;;
-  *) die "unknown subcommand: $SUBCOMMAND (drain-record outcome task task-record derive sweep reconcile report)" ;;
+  *) die "unknown subcommand: $SUBCOMMAND (drain-record outcome task task-record derive sweep reconcile invalidate report)" ;;
 esac
