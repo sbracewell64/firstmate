@@ -51,8 +51,8 @@
 #   launch_cwd                 the exact working directory it ran in
 #   started_at                 when the launch happened
 #   ended_at                   when the terminal state was observed
-#   terminal_state             exited, signalled, running, or not_started
-#   exit_status                the exit code or signal number
+#   terminal_state             exited, running, or not_started
+#   exit_status                the exit code
 #   artifact_sha256            the digest of the raw captured review artifact
 #
 # The raw artifact's LOCATION is the record's own directory, which is why it is
@@ -65,9 +65,10 @@
 #   PASS             every dimension observed, and the reviewer reached a normal
 #                    terminal state
 #   FAIL             every dimension observed, and the reviewer reached a bad
-#                    terminal state (non-zero exit, or a signal)
+#                    terminal state (a non-zero unambiguous exit)
 #   NO_VERIFIER_RAN  any dimension unobserved, or no terminal state observed at
-#                    all. A reviewer still running has NOT executed for this
+#                    all. This includes the shell's ambiguous 128+n status
+#                    range. A reviewer still running has NOT executed for this
 #                    purpose: liveness is the proxy, not the observation.
 #
 # A missing dimension outranks a good terminal state. Sixteen observed and one
@@ -291,11 +292,11 @@ cmd_launch() {
 
   # --- launch ----------------------------------------------------------------
   local executable
-  executable=$(command -v -- "${argv[0]}" 2>/dev/null) \
+  executable=$(cd "$checkout" && command -v -- "${argv[0]}" 2>/dev/null) \
     || cno "reviewer executable does not resolve: ${argv[0]}"
   case "$executable" in
     /*) ;;
-    *) executable=$(cd "$(dirname "$executable")" && pwd)/$(basename "$executable") \
+    *) executable=$(cd "$checkout/$(dirname "$executable")" && pwd)/$(basename "$executable") \
          || cno "reviewer executable path cannot be resolved" ;;
   esac
   [ -x "$executable" ] || cno "reviewer executable is not executable: $executable"
@@ -309,8 +310,7 @@ cmd_launch() {
   status=$?
   ended_at=$(now_utc)
 
-  # A shell reports a signalled child as 128+n, which is how a reviewer that was
-  # killed is told apart from one that chose its own exit code.
+  # A shell reports both a signalled child and a deliberate exit as 128+n.
   #
   # There is deliberately no deadline option here. Wrapping the launch in
   # timeout(1) would make exit 124 mean either "the deadline killed it" or "the
@@ -319,11 +319,9 @@ cmd_launch() {
   # that never terminates is already covered: with no terminal state observed,
   # the result is could-not-observe.
   if [ "$status" -gt 128 ] && [ "$status" -lt 192 ]; then
-    terminal_state=signalled
-    status=$((status - 128))
-  else
-    terminal_state=exited
+    cno "reviewer terminal state is ambiguous at shell status $status"
   fi
+  terminal_state=exited
 
   [ -f "$raw" ] || cno "raw review artifact was not captured"
   local artifact_sha256
@@ -443,10 +441,12 @@ derive_result() {  # <dir>; sets DERIVED_RESULT and DERIVED_REASON
   # without an isolated materialized checkout still standing at the exact
   # candidate tree behind it, so the cheapest forgery - a plausible record with
   # no reviewer behind it - reaches could-not-observe rather than a pass.
-  local co coc cot
+  local co coc cot cc ct
   co=$(jq -r '.dimensions.reviewer_checkout.value' "$record" 2>/dev/null)
   coc=$(jq -r '.dimensions.reviewer_checkout_commit.value' "$record" 2>/dev/null)
   cot=$(jq -r '.dimensions.reviewer_checkout_tree.value' "$record" 2>/dev/null)
+  cc=$(jq -r '.dimensions.candidate_commit.value' "$record" 2>/dev/null)
+  ct=$(jq -r '.dimensions.candidate_tree.value' "$record" 2>/dev/null)
   command -v git >/dev/null 2>&1 || { DERIVED_REASON=verifier_unavailable; return 0; }
   [ -d "$co" ] || { DERIVED_REASON=verification_unreachable; return 0; }
   [ "$(git -C "$co" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
@@ -455,9 +455,21 @@ derive_result() {  # <dir>; sets DERIVED_RESULT and DERIVED_REASON
     || { DERIVED_REASON=verification_unreachable; return 0; }
   [ "$(git -C "$co" rev-parse 'HEAD^{tree}' 2>/dev/null)" = "$cot" ] \
     || { DERIVED_REASON=verification_unreachable; return 0; }
+  [ "$coc" = "$cc" ] && [ "$cot" = "$ct" ] \
+    || { DERIVED_REASON=verification_unreachable; return 0; }
+  ! git -C "$co" symbolic-ref -q HEAD >/dev/null 2>&1 \
+    || { DERIVED_REASON=verification_unreachable; return 0; }
+  git -C "$co" diff --quiet --ignore-submodules -- 2>/dev/null \
+    || { DERIVED_REASON=verification_unreachable; return 0; }
+  git -C "$co" diff --cached --quiet --ignore-submodules -- 2>/dev/null \
+    || { DERIVED_REASON=verification_unreachable; return 0; }
+  [ -z "$(git -C "$co" ls-files --others --exclude-standard 2>/dev/null | head -n 1)" ] \
+    || { DERIVED_REASON=verification_unreachable; return 0; }
   [ "$(git -C "$co" rev-parse --git-common-dir 2>/dev/null)" = .git ] \
     || { DERIVED_REASON=verification_unreachable; return 0; }
   [ ! -e "$co/.git/objects/info/alternates" ] \
+    || { DERIVED_REASON=verification_unreachable; return 0; }
+  [ -z "$(find "$co/.git/objects" -type f -links +1 -print 2>/dev/null | head -n 1)" ] \
     || { DERIVED_REASON=verification_unreachable; return 0; }
 
   term=$(jq -r '.dimensions.terminal_state.value' "$record" 2>/dev/null)

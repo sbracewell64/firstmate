@@ -368,7 +368,7 @@ test_reviewer_checkout_is_isolated_from_the_source() {
 }
 
 test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
-  local case_dir result reason
+  local case_dir result reason object
   case_dir=$(make_case restoration)
   write_reviewer "$case_dir/reviewer.sh" 0
   run_launch "$case_dir" rec "$case_dir/reviewer.sh" >/dev/null 2>&1 \
@@ -385,6 +385,33 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe() {
     || fail "a checkout moved off the pinned candidate must not still pass (got $result)"
   [ "$reason" = verification_unreachable ] \
     || fail "the reason must name the unverifiable checkout (got $reason)"
+
+  git -C "$case_dir/rec/checkout" reset -q --hard HEAD~1
+  printf 'dirty\n' > "$case_dir/rec/checkout/subject.txt"
+  [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
+    || fail "a dirty reviewer checkout must not still pass"
+  git -C "$case_dir/rec/checkout" reset -q --hard
+
+  git -C "$case_dir/rec/checkout" switch -q -c attached-review
+  [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
+    || fail "an attached reviewer checkout must not still pass"
+  git -C "$case_dir/rec/checkout" checkout -q --detach
+
+  jq '.dimensions.reviewer_checkout_commit.value = "0000000000000000000000000000000000000000"' \
+    "$case_dir/rec/record.json" > "$case_dir/rec/record.tmp"
+  mv "$case_dir/rec/record.tmp" "$case_dir/rec/record.json"
+  [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
+    || fail "checkout identity divergent from candidate identity must not pass"
+  jq --arg head "$(git -C "$case_dir/rec/checkout" rev-parse HEAD)" \
+    '.dimensions.reviewer_checkout_commit.value = $head' \
+    "$case_dir/rec/record.json" > "$case_dir/rec/record.tmp"
+  mv "$case_dir/rec/record.tmp" "$case_dir/rec/record.json"
+
+  object=$(find "$case_dir/rec/checkout/.git/objects" -type f | head -n 1)
+  ln "$object" "$object.shared"
+  [ "$(record_result "$case_dir/rec")" = NO_VERIFIER_RAN ] \
+    || fail "shared reviewer object storage must not still pass on reread"
+  rm "$object.shared"
   pass "a reviewer checkout moved off the pinned candidate is could-not-observe"
 }
 
@@ -445,25 +472,23 @@ test_a_tampered_artifact_breaks_the_digest_binding() {
   pass "a tampered raw artifact breaks the record's digest binding"
 }
 
-test_a_signalled_reviewer_is_observed_bad_not_unobserved() {
-  local case_dir result
+test_an_ambiguous_shell_status_is_could_not_observe() {
+  local case_dir out
   case_dir=$(make_case signalled)
   cat > "$case_dir/reviewer.sh" <<'EOF'
 #!/usr/bin/env bash
-kill -TERM $$
-sleep 5
+exit 143
 EOF
   chmod +x "$case_dir/reviewer.sh"
   set +e
-  run_launch "$case_dir" rec "$case_dir/reviewer.sh" >/dev/null 2>&1
+  out=$(run_launch "$case_dir" rec "$case_dir/reviewer.sh" 2>&1)
   local code=$?
   set -e
-  expect_code 1 "$code" "a reviewer killed by a signal reached a terminal state"
-  result=$(record_result "$case_dir/rec")
-  [ "$result" = FAIL ] || fail "a signalled reviewer is observed-bad, not unobserved (got $result)"
-  [ "$(jq -r '.dimensions.terminal_state.value' "$case_dir/rec/record.json")" = signalled ] \
-    || fail "the record must name the signalled terminal state"
-  pass "a signalled reviewer is an observed-bad execution"
+  expect_code 2 "$code" "a shell status that cannot distinguish signal from exit is could-not-observe"
+  assert_contains "$out" 'terminal state is ambiguous' \
+    "the refusal must name the ambiguous terminal observation"
+  [ ! -f "$case_dir/rec/record.json" ] || fail "an ambiguous terminal state must write no record"
+  pass "an ambiguous shell terminal status is could-not-observe"
 }
 
 test_an_unresolvable_candidate_is_could_not_observe() {
@@ -482,8 +507,17 @@ test_an_unresolvable_candidate_is_could_not_observe() {
 }
 
 test_an_unresolvable_reviewer_executable_is_could_not_observe() {
-  local case_dir out
+  local case_dir out recorded
   case_dir=$(make_case bad-executable)
+  mkdir -p "$case_dir/src/bin"
+  write_reviewer "$case_dir/src/bin/candidate-reviewer" 0
+  git -C "$case_dir/src" add bin/candidate-reviewer
+  git -C "$case_dir/src" commit -qm "add candidate reviewer"
+  run_launch "$case_dir" relative ./bin/candidate-reviewer >/dev/null 2>&1 \
+    || fail "a checkout-relative candidate executable must resolve"
+  recorded=$(jq -r '.dimensions.launch_executable.value' "$case_dir/relative/record.json")
+  [ "$recorded" = "$case_dir/relative/checkout/bin/candidate-reviewer" ] \
+    || fail "a relative executable must resolve inside the reviewer checkout (got $recorded)"
   set +e
   out=$(run_launch "$case_dir" rec "$case_dir/no-such-reviewer" 2>&1)
   local code=$?
@@ -509,6 +543,6 @@ test_reviewer_moving_its_checkout_off_the_candidate_is_could_not_observe
 test_refuses_to_overwrite_an_existing_record
 test_a_missing_dimension_outranks_a_clean_exit
 test_a_tampered_artifact_breaks_the_digest_binding
-test_a_signalled_reviewer_is_observed_bad_not_unobserved
+test_an_ambiguous_shell_status_is_could_not_observe
 test_an_unresolvable_candidate_is_could_not_observe
 test_an_unresolvable_reviewer_executable_is_could_not_observe
