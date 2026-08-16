@@ -381,6 +381,37 @@ test_disposition_completes_the_correlation() {
   pass "control 7: request, ruling, resumed item and disposition form one closed chain"
 }
 
+test_terminal_request_is_not_applicable() {
+  local dir rid out rc
+  dir=$(new_case c7terminal)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "terminal: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments")
+  run_ob "$dir" ruling --request "$rid" --comment 44 >/dev/null 2>&1 \
+    || fail "terminal: ruling failed"
+  run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 || fail "terminal: resume failed"
+  run_ob "$dir" close --request "$rid" --disposition accepted >/dev/null 2>&1 \
+    || fail "terminal: close failed"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "terminal: closed request satisfied a new wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_NO_ARTIFACT' \
+    || fail "terminal: closed request failed for the wrong reason: $out"
+  pass "terminal: a closed request cannot satisfy a current wait"
+}
+
+test_close_requires_resumed_work() {
+  local dir rid out rc state
+  dir=$(new_case c7resume)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "resume chain: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments")
+  run_ob "$dir" ruling --request "$rid" --comment 45 >/dev/null 2>&1 \
+    || fail "resume chain: ruling failed"
+  out=$(run_ob "$dir" close --request "$rid" --disposition accepted 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "resume chain: close skipped resume: $out"
+  state=$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")
+  [ "$state" = "ruled" ] || fail "resume chain: refused close mutated state to $state"
+  pass "resume chain: disposition cannot bypass resumed work"
+}
+
 # --- fail-closed properties --------------------------------------------------
 
 test_incomplete_binding_refuses_rather_than_emitting_vaguely() {
@@ -615,6 +646,8 @@ test_crash_recovery_adopts_its_own_request
 test_ruling_wakes_the_exact_item
 test_unrelated_ruling_cannot_wake_the_item
 test_disposition_completes_the_correlation
+test_terminal_request_is_not_applicable
+test_close_requires_resumed_work
 test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass
 test_detect_only_channel_refuses_to_emit

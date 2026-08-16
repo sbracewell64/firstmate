@@ -297,7 +297,8 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
   [ -n "$venue" ] || return 3
   [ -n "$sha" ] || return 2
   probe_budget || return 2
-  out=$(obs gh api "repos/$venue/commits/$sha/pulls" --jq '.[].number') || return 2
+  out=$(obs gh api "repos/$venue/commits/$sha/pulls" \
+    --jq '.[] | select(.state == "open") | .number') || return 2
   if [ -n "$out" ]; then printf '%s\n' "$out" | head -1; return 0; fi
   return 1
 }
@@ -345,6 +346,7 @@ row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <ve
 sweep() {
   local rows count i rec verdict gate tier item project pr_url pr_ref head
   local channel venue repo rid missing stale present rc row token capped cls
+  local existing record_state applicability record_rc
 
   if ! read_snapshot; then
     SWEEP=$(jq -n '{schema:"fm-outbound-sweep.v1",readable:false,capped:false,
@@ -410,6 +412,18 @@ sweep() {
       present=$(pr_artifact_present "$venue" "$head"); rc=$?
     else
       present=$(sol_artifact_present "$rid"); rc=$?
+      if [ "$rc" -eq 0 ]; then
+        if existing=$(record_read "$rid"); then
+          record_state=$(printf '%s' "$existing" | jq -r '.state')
+          applicability=$(fm_outbound_applicability \
+            "$(printf '%s' "$existing" | jq -r '.identity.head // ""')" \
+            "$head" "$record_state")
+          [ "$applicability" = "applicable" ] || rc=1
+        else
+          record_rc=$?
+          [ "$record_rc" -ne 2 ] || rc=2
+        fi
+      fi
     fi
 
     # A local record is consulted only to EXPLAIN an absence, never to create a
@@ -731,13 +745,11 @@ cmd_close() {  # <request-id> <disposition>
   local rid=$1 disp=$2 rec state
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
-  case $state in
-    ruled|resumed) ;;
-    *)
-      printf '%s: request %s is %s; only a ruled or resumed request can be closed\n' \
-        "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
-      exit 3 ;;
-  esac
+  if [ "$state" != "resumed" ]; then
+    printf '%s: request %s is %s; only a resumed request can be closed\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
+    exit 3
+  fi
   rec=$(printf '%s' "$rec" | jq --arg d "$disp" --arg n "$(now_iso)" \
     '.disposition = {outcome:$d, at:$n} | .state = "closed" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
