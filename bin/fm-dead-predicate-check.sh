@@ -14,20 +14,24 @@
 # class should not begin by miscounting its own founding evidence.
 #
 # Fixing three call sites leaves the mechanism that produced them intact, so this
-# is the class control: in an ENROLLED file, a function with no call site anywhere
-# in the repository is a defect, and the only way to keep one is to say so in
-# writing at the definition itself.
+# control checks canonical `name() {` definitions against explicitly accepted
+# direct-call forms. A definition or call form outside that syntax is UNCHECKED,
+# returns could-not-observe, and names the file and construct. Within the accepted
+# syntax, a function with no call site is a defect, and the only way to keep one
+# is to say so in writing at the definition itself.
 #
-# WHY EVERY FUNCTION AND NOT JUST THE PREDICATES. A naming heuristic - `_valid`,
-# `_applicability` - is a rule an author can walk around by choosing another name,
-# and it goes quietly vacuous the day someone does. Dead code in a library whose
-# whole job is refusing unsafe states is a defect whatever it is called, so the
-# rule needs no heuristic and has nothing to game.
+# ACCEPTED SYNTAX. Definitions are unindented `name() {` lines. Calls begin a
+# command after indentation and optional shell control words, follow an unquoted
+# command boundary, occur in a command substitution, begin a canonical one-line
+# function body, name a trap handler, or use an `indirect-call: name` mark. A
+# `printf` command is accepted only as opaque data and never as call evidence.
+# Heredocs and every other function definition or function-name use are UNCHECKED
+# rather than interpreted or skipped.
 #
 # WHAT THIS DOES NOT CATCH, STATED SO THE COVERAGE CANNOT INFLATE.
 #
-# This control answers exactly one question: is a function defined and never
-# consulted. It does NOT catch the adjacent and more common shape - a predicate
+# This control answers exactly one question within its accepted syntax: is a
+# function defined and never consulted. It does NOT catch the adjacent shape - a predicate
 # that IS called but checks less than its name claims. The same review that found
 # the two dead predicates here also found `record_read` validating only a record's
 # schema while its name and every call site implied it validated the record, and
@@ -95,145 +99,36 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Where a call site may live. Searching the whole repository rather than a
-# declared consumer list is deliberate: a consumer list is another thing that can
-# be wrong, and a function used anywhere is not dead.
-search_roots() {
-  for d in "$ROOT/bin" "$ROOT/tests" "$ROOT/.agents"; do
-    [ -d "$d" ] && printf '%s\n' "$d"
-  done
-}
-
-shell_code() {  # <file>
-  awk '
-  function blank(s,    n) { n = length(s); return sprintf("%" n "s", "") }
-  function heredoc_word(s,    c, escaped, i, q, word) {
-    sub(/^[[:space:]]*/, "", s)
-    for (i = 1; i <= length(s); i++) {
-      c = substr(s, i, 1)
-      if (escaped) { word = word c; escaped = 0; continue }
-      if (c == "\\") { escaped = 1; continue }
-      if (q != "") { if (c == q) q = ""; else word = word c; continue }
-      if (c == "\047" || c == "\"") { q = c; continue }
-      if (c ~ /[[:space:];|&()<>]/) break
-      word = word c
-    }
-    if (escaped || q != "" || word == "") return ""
-    return word
-  }
-  {
-    raw = $0
-    if (heredoc != "") {
-      end = raw
-      if (strip_tabs) sub(/^\t+/, "", end)
-      print NR ":" blank(raw)
-      if (end == heredoc) { heredoc = ""; strip_tabs = 0 }
-      next
-    }
-    out = ""
-    for (i = 1; i <= length(raw); i++) {
-      c = substr(raw, i, 1)
-      if (quote == "ansi") {
-        out = out " "
-        if (c == "\\") { if (i < length(raw)) { out = out " "; i++ }; continue }
-        if (c == "\047") quote = ""
-        continue
-      }
-      if (quote == "\047") {
-        out = out " "
-        if (c == "\047") quote = ""
-        continue
-      }
-      if (quote == "\"") {
-        if (c == "$" && substr(raw, i + 1, 1) == "(") {
-          out = out "$("
-          i++
-          substitution++
-          resume_quote[substitution] = "\""
-          quote = ""
-          continue
-        }
-        out = out " "
-        if (c == "\\") { if (i < length(raw)) { out = out " "; i++ }; continue }
-        if (c == "\"") quote = ""
-        continue
-      }
-      if (c == "\047" || c == "\"") { quote = c; out = out " "; continue }
-      if (c == "$" && substr(raw, i + 1, 1) == "\047") {
-        out = out "  "
-        i++
-        quote = "ansi"
-        continue
-      }
-      if (c == "\\") { out = out " "; if (i < length(raw)) { out = out " "; i++ }; continue }
-      if (c == "$" && substr(raw, i + 1, 1) == "(") {
-        out = out "$("
-        i++
-        substitution++
-        resume_quote[substitution] = ""
-        continue
-      }
-      if (c == "#" && (i == 1 || substr(raw, i - 1, 1) ~ /[[:space:];|&(){}]/)) {
-        out = out blank(substr(raw, i))
-        break
-      }
-      out = out c
-      if (substitution > 0 && c == "(") {
-        substitution++
-        resume_quote[substitution] = ""
-      }
-      if (substitution > 0 && c == ")") {
-        quote = resume_quote[substitution]
-        delete resume_quote[substitution]
-        substitution--
-      }
-    }
-    print NR ":" out
-    probe = out
-    if (match(probe, /<<-?[[:space:]]*/)) {
-      if (substr(probe, RSTART, 3) == "<<<") next
-      if (substr(probe, 1, RSTART - 1) ~ /\(\([^)]*$/ && substr(probe, RSTART) ~ /\)\)/) next
-      token = substr(raw, RSTART, length(raw) - RSTART + 1)
-      strip_tabs = token ~ /^<<-/
-      sub(/^<<-?[[:space:]]*/, "", token)
-      heredoc = heredoc_word(token)
-      if (heredoc == "") exit 4
-    }
-  }
-  END { if (heredoc != "") exit 4 }
-  ' "$1"
-}
-
 function_definitions() {  # <file>
-  shell_code "$1" | sed -nE \
-    -e 's/^([0-9]+):[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*\(\)[[:space:]]*(\{|$).*/\1:\2/p' \
-    -e 's/^([0-9]+):[[:space:]]*function[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)([[:space:]]*\(\))?[[:space:]]*(\{|$).*/\1:\2/p'
+  grep -nE '^[A-Za-z_][A-Za-z0-9_]*\(\)[[:space:]]*\{' "$1" \
+    | sed -E 's/^([0-9]+):([A-Za-z_][A-Za-z0-9_]*)\(\).*/\1:\2/'
 }
 
 function_has_call_site() {  # <function>
-  local fn=$1 d source
-  while IFS= read -r d; do
-    while IFS= read -r source; do
-      if shell_code "$source" | awk -v fn="$fn" '
-      {
-        line = $0
-        sub(/^[0-9]+:/, "", line)
-        if (line ~ ("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*(\\{|$)")) {
-          sub("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{?[[:space:]]*", "", line)
-        } else if (line ~ ("^[[:space:]]*function[[:space:]]+" fn "([[:space:]]*\\(\\))?[[:space:]]*(\\{|$)")) {
-          sub("^[[:space:]]*function[[:space:]]+" fn "([[:space:]]*\\(\\))?[[:space:]]*\\{?[[:space:]]*", "", line)
-        }
-        if (line ~ ("(^|[;|&(){}])[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)")) found = 1
-        if (line ~ ("(^|[;|&(){}])[[:space:]]*trap[[:space:]]+[\047\"]?" fn "([^A-Za-z0-9_]|$)")) found = 1
-      }
+  local fn=$1 f
+  for f in "${FILES[@]}"; do
+    if awk -v fn="$fn" '
+      $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
+      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       END { exit(found ? 0 : 1) }
-      '; then
-        return 0
-      fi
-      grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$source" \
-        && return 0
-    done < <(find "$d" -type f -print 2>/dev/null)
-  done < <(search_roots)
+    ' "$f"; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -258,13 +153,44 @@ if [ "${#FILES[@]}" -eq 0 ]; then
 fi
 
 for f in "${FILES[@]}"; do
-  shell_code "$f" >/dev/null || die "could not parse shell syntax in $f" 4
+  [ -r "$f" ] || die "target is unreadable: $f" 4
+  grep -qxF "$ENROL_MARKER" "$f" 2>/dev/null || die "target is not enrolled: $f" 4
+  unsupported=$({ grep -nF '<<' "$f" | grep -vF '<<<'; grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"; } | head -1)
+  [ -z "$unsupported" ] \
+    || die "UNCHECKED $f:${unsupported%%:*} unsupported construct: ${unsupported#*:}" 4
 done
-while IFS= read -r d; do
-  while IFS= read -r f; do
-    shell_code "$f" >/dev/null || die "could not parse shell syntax in $f" 4
-  done < <(find "$d" -type f -print 2>/dev/null)
-done < <(search_roots)
+
+FUNCTIONS=()
+for f in "${FILES[@]}"; do
+  while IFS= read -r line; do FUNCTIONS+=("${line#*:}"); done < <(function_definitions "$f")
+done
+for fn in "${FUNCTIONS[@]}"; do
+  for f in "${FILES[@]}"; do
+    grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$f" && continue
+    unsupported=$(awk -v fn="$fn" '
+      $0 ~ "^[[:space:]]*#" { next }
+      $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
+      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
+      $0 ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)") { print NR ":" $0; exit }
+    ' "$f")
+    [ -z "$unsupported" ] \
+      || die "UNCHECKED $f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}" 4
+  done
+done
 
 dead_json='[]'
 marked_json='[]'

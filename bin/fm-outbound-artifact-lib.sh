@@ -388,9 +388,7 @@ fm_outbound_prose_matches() {  # <text>
   while IFS= read -r token; do
     [ -n "$token" ] || continue
     case $lower in *"$token"*) return 0 ;; esac
-  done <<EOF
-$FM_OUTBOUND_PROSE_TOKENS
-EOF
+  done <<< "$FM_OUTBOUND_PROSE_TOKENS"
   return 1
 }
 

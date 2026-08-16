@@ -30,7 +30,7 @@ fixture() {
   local dir="$TMP_ROOT/$1" lib=$2 consumer=${3:-}
   mkdir -p "$dir/bin"
   printf '# shellcheck shell=bash\n%s\n%s\n' "$MARKER" "$lib" > "$dir/bin/sample-lib.sh"
-  [ -z "$consumer" ] || printf '%s\n' "$consumer" > "$dir/bin/consumer.sh"
+  [ -z "$consumer" ] || printf '%s\n%s\n' "$MARKER" "$consumer" > "$dir/bin/consumer.sh"
   printf '%s\n' "$dir"
 }
 
@@ -61,15 +61,15 @@ test_mentions_are_not_call_sites() {
   dir=$(fixture mentions 'dead_one() { return 0; }' '# dead_one is documented here
 printf "%s\\n" "dead_one"')
   out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "comments and strings counted as call sites, exit $rc: $out"
-  pass "comments and quoted fixture text are not call sites"
+  [ "$rc" -eq 3 ] || fail "quoted fixture text counted as a call, exit $rc: $out"
+  pass "quoted fixture text is not a call site"
 }
 
 test_quoted_command_shape_is_not_a_call_site() {
   local dir out rc
   dir=$(fixture quoted-shape 'dead_one() { return 0; }' "printf '%s\\n' '; dead_one'")
   out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "quoted command-shaped text counted as a call site, exit $rc: $out"
+  [ "$rc" -eq 3 ] || fail "quoted command-shaped text counted as a call, exit $rc: $out"
   pass "quoted command-shaped text is not a call site"
 }
 
@@ -79,8 +79,10 @@ test_heredoc_payload_is_not_a_call_site() {
 ; dead_one
 EOF')
   out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "heredoc payload counted as a call site, exit $rc: $out"
-  pass "heredoc payload is not a call site"
+  [ "$rc" -eq 4 ] || fail "a heredoc was interpreted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'UNCHECKED.*consumer.sh.*cat <<EOF' \
+    || fail "the heredoc refusal did not name its file and construct: $out"
+  pass "heredocs are reported unchecked"
 }
 
 test_punctuated_heredoc_does_not_hide_later_functions() {
@@ -91,9 +93,8 @@ payload
 END-MARK
 dead_one() { return 0; }' 'live_one')
   out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "a punctuated heredoc hid a later function, exit $rc: $out"
-  printf '%s' "$out" | grep -q 'dead_one' || fail "the post-heredoc function was not named: $out"
-  pass "punctuated heredocs preserve later function scanning"
+  [ "$rc" -eq 4 ] || fail "a punctuated heredoc was interpreted, exit $rc: $out"
+  pass "punctuated heredocs are reported unchecked"
 }
 
 test_escaped_heredoc_payload_is_not_code() {
@@ -102,17 +103,31 @@ test_escaped_heredoc_payload_is_not_code() {
 ; dead_one
 EOF')
   out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "an escaped heredoc payload counted as code, exit $rc: $out"
-  pass "escaped heredoc delimiters receive shell quote removal"
+  [ "$rc" -eq 4 ] || fail "an escaped heredoc was interpreted, exit $rc: $out"
+  pass "escaped heredocs are reported unchecked"
+}
+
+test_multiple_heredocs_are_reported_unchecked() {
+  local dir out rc
+  dir=$(fixture multiple-heredocs 'dead_one() { return 0; }' 'cat <<A <<B
+A
+; dead_one
+B')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "multiple heredocs were interpreted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'UNCHECKED.*cat <<A <<B' \
+    || fail "the multiple-heredoc refusal was not actionable: $out"
+  pass "multiple heredocs are reported unchecked"
 }
 
 test_function_keyword_definition_is_scanned() {
   local dir out rc
   dir=$(fixture function-keyword 'function dead_one { return 0; }')
   out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "a function-keyword definition was omitted, exit $rc: $out"
-  printf '%s' "$out" | grep -q 'dead_one' || fail "the alternate definition was not named: $out"
-  pass "function-keyword definitions are scanned"
+  [ "$rc" -eq 4 ] || fail "a function-keyword definition was interpreted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'UNCHECKED.*function dead_one' \
+    || fail "the alternate definition was not named: $out"
+  pass "function-keyword definitions are reported unchecked"
 }
 
 test_explicit_indirect_call_counts() {
@@ -221,6 +236,7 @@ test_quoted_command_shape_is_not_a_call_site
 test_heredoc_payload_is_not_a_call_site
 test_punctuated_heredoc_does_not_hide_later_functions
 test_escaped_heredoc_payload_is_not_code
+test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
