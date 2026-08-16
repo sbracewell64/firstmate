@@ -237,7 +237,7 @@ test_absent_notes_ref_refuses_as_absent() {
   rc=$?
   [ "$rc" -eq 1 ] || fail "an absent attestation ref did not refuse as a verdict (exit $rc): $out"
   assert_contains "$out" "no-attestation-ref" "absent ref did not report its own reason"
-  pass "fm-attest.sh: an absent attestation ref refuses as absent"
+  pass "fm-attest.sh: an absent attestation ref refuses with verdict exit 1"
 }
 
 test_ref_without_note_for_head_refuses_distinctly() {
@@ -255,7 +255,7 @@ test_ref_without_note_for_head_refuses_distinctly() {
   assert_contains "$out" "$NOTES_REF exists but carries no attestation for $head." \
     "missing-note refusal evidence did not identify the exact unattested head"
   assert_not_contains "$out" "no-attestation-ref" "a present ref was reported as an absent one"
-  pass "fm-attest.sh: an attestation for another commit is not evidence for this one"
+  pass "fm-attest.sh: a missing head attestation refuses with verdict exit 1"
 }
 
 test_unreadable_notes_ref_refuses_distinctly() {
