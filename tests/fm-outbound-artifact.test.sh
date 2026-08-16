@@ -85,6 +85,8 @@ make_gh() {  # <dir>
   : > "$1/forge/last_request_body"
   : > "$1/forge/ruling_body"
   : > "$1/forge/ruling_id"
+  : > "$1/forge/foreign_ruling_body"
+  : > "$1/forge/foreign_ruling_id"
   printf '0\n' > "$1/forge/lose_response_remaining"
   cat > "$1/bin/gh" <<'SH'
 #!/usr/bin/env bash
@@ -101,7 +103,9 @@ case "$path" in
     cat "$F/head"; exit 0 ;;
   */issues/comments/*)
     id=${path##*/}
-    if [ -s "$F/ruling_id" ] && [ "$id" = "$(cat "$F/ruling_id")" ]; then
+    if [ -s "$F/foreign_ruling_id" ] && [ "$id" = "$(cat "$F/foreign_ruling_id")" ]; then
+      body_file="$F/foreign_ruling_body"
+    elif [ -s "$F/ruling_id" ] && [ "$id" = "$(cat "$F/ruling_id")" ]; then
       body_file="$F/ruling_body"
     else
       body_file="$F/last_request_body"
@@ -149,6 +153,10 @@ case "$path" in
         jq -nr --argjson id "$id" --rawfile body "$F/last_request_body" \
           '[$id,$body] | @base64'
       done < "$F/comments"
+      if [ -s "$F/foreign_ruling_id" ]; then
+        jq -nr --argjson id "$(cat "$F/foreign_ruling_id")" \
+          --rawfile body "$F/foreign_ruling_body" '[$id,$body] | @base64'
+      fi
       if [ -s "$F/ruling_id" ]; then
         jq -nr --argjson id "$(cat "$F/ruling_id")" --rawfile body "$F/ruling_body" \
           '[$id,$body] | @base64'
@@ -172,6 +180,14 @@ write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>]
     > "$dir/forge/ruling_body"
   printf 'verdict: %s\n' "$verdict" >> "$dir/forge/ruling_body"
   printf '%s\n' "$comment" > "$dir/forge/ruling_id"
+}
+
+write_foreign_ruling() {  # <case-dir> <request-id> <comment-id>
+  local dir=$1 rid=$2 comment=$3
+  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
+    > "$dir/forge/foreign_ruling_body"
+  printf 'verdict: rejected\n' >> "$dir/forge/foreign_ruling_body"
+  printf '%s\n' "$comment" > "$dir/forge/foreign_ruling_id"
 }
 
 # Run the command under test against one case directory.
@@ -471,17 +487,41 @@ test_inbound_poll_advances_only_matching_ruling() {
   write_ruling "$dir" "$rid" 556 accepted
   run_ob "$dir" poll >/dev/null 2>&1 || fail "poll: matching ruling was not ingested"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "resumed" ] || fail "poll: matching ruling left state $state"
+  [ "$state" = "ruled" ] || fail "poll: matching ruling falsely recorded state $state"
+  run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 \
+    || fail "poll: explicit work resumption could not advance the ruled request"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "resumed" ] || fail "poll: explicit resume left state $state"
 
   dir=$(new_case poll-unrelated)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll unrelated: emit failed"
   rid=$(emitted_request_id "$dir")
-  write_ruling "$dir" fm-ob-deadbeefcafe 557 rejected
+  write_foreign_ruling "$dir" fm-ob-deadbeefcafe 557
+  write_ruling "$dir" "$rid" 558 accepted
   out=$(run_ob "$dir" poll 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "poll unrelated: unrelated marker returned $rc: $out"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "emitted" ] || fail "poll unrelated: unrelated ruling advanced state to $state"
-  pass "poll: inbound path resumes only the exactly correlated ruling"
+  [ "$state" = "ruled" ] \
+    || fail "poll unrelated: earlier foreign marker blocked the later valid ruling ($state)"
+  pass "poll: inbound path records exact rulings without claiming work resumed"
+}
+
+test_stale_ruling_is_invalidated_before_fresh_emission() {
+  local dir rid out rc old_state posts
+  dir=$(new_case stale-ruling)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "stale ruling: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 559 accepted
+  set_head "$dir" "$HEAD_B"
+  out=$(run_ob "$dir" reconcile 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "stale ruling: expected aggregate refusal, got $rc: $out"
+  old_state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$old_state" = "superseded" ] || fail "stale ruling: old request remained $old_state"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 2 ] || fail "stale ruling: fresh head was not emitted after refusal ($posts posts)"
+  [ "$(find "$dir/home/data/outbound-artifacts" -type f -name '*.json' | wc -l)" -eq 2 ] \
+    || fail "stale ruling: fresh head did not receive a distinct record"
+  pass "stale ruling: moved head is refused before fresh reconciliation"
 }
 
 test_disposition_completes_the_correlation() {
@@ -833,6 +873,7 @@ test_reconcile_emits_sol_control_only
 test_ruling_wakes_the_exact_item
 test_unrelated_ruling_cannot_wake_the_item
 test_inbound_poll_advances_only_matching_ruling
+test_stale_ruling_is_invalidated_before_fresh_emission
 test_disposition_completes_the_correlation
 test_terminal_request_is_not_applicable
 test_request_requires_readable_correlation
