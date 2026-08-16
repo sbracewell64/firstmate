@@ -1,6 +1,6 @@
 {
   "environment": "Linux 6.18.33.2-microsoft-standard-WSL2",
-  "head": "39d4ad4e2bb661a8b04577c901f43592eed6c12f",
+  "head": "61cdb47b65c1df89c308cb2edc2b54a17a55b76b",
   "mutations": [
     {
       "id": "green-baseline",
@@ -346,13 +346,28 @@
       "id": "malformed-body-handler-narrowed",
       "observed": "not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')",
       "property": "a structurally malformed envelope is could-not-observe"
+    },
+    {
+      "id": "verification-applicability-optional",
+      "observed": "not ok - absent applicability rules are could-not-observe: expected exit 2, got 0",
+      "property": "verification applicability must be declared explicitly"
+    },
+    {
+      "id": "explicit-no-contracts-rejected",
+      "observed": "not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2",
+      "property": "an explicit no-contracts declaration is accepted"
+    },
+    {
+      "id": "requested-decision-token-unchecked",
+      "observed": "not ok - a malformed requested decision refuses: expected exit 1, got 0",
+      "property": "requested decisions accept only uppercase tokens"
     }
   ],
   "note": "The binding is the subjects map: these measurements describe exactly these bytes. The head is recorded so the record's stated head can be checked against it, but the digests are what cannot be satisfied by relabelling.",
   "schema": "review-envelope-campaign/v1",
   "subjects": {
-    "bin/fm-review-envelope-lib.sh": "sha256:f0b5d12b8b375ab20e09929194e41c53ac8b8cda7b6cf42ed0fc9df25b97c9ea",
+    "bin/fm-review-envelope-lib.sh": "sha256:4deb147f7b56558c5dd4f3ab707cb5a06edb58c0b69a049d8fbb89a8efda25f0",
     "bin/fm-review-envelope.sh": "sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a",
-    "tests/fm-review-envelope.test.sh": "sha256:1835ebaeaac7d5f8f0be6015e8cfda6114a5ae55a91262170c84cdbd4663cb23"
+    "tests/fm-review-envelope.test.sh": "sha256:38f7d1ba61fd091346563f2b23f50d0857344b2c96d28b47ec4733d1a64e3dea"
   }
 }

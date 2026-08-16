@@ -26,15 +26,15 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against head `39d4ad4e`, the commit whose subject bytes the campaign artifact records, so the table describes one experiment and is current for the code shipped here.
+Every measurement below was taken against head `61cdb47b`, the commit whose subject bytes the campaign artifact records, so the table describes one experiment and is current for the code shipped here.
 
 ## Campaign artifact
 
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `39d4ad4e2bb661a8b04577c901f43592eed6c12f`.
-Mutations built: 69.
+Campaign head: `61cdb47b65c1df89c308cb2edc2b54a17a55b76b`.
+Mutations built: 72.
 
 ## Commands
 
@@ -55,11 +55,11 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
-64 controls pass against the shipped scripts.
+67 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
-Mutation-measurement claim: 69 mutations were built against the subjects recorded in the campaign artifact, and 68 turned the suite red.
+Mutation-measurement claim: 72 mutations were built against the subjects recorded in the campaign artifact, and 71 turned the suite red.
 Coverage is counted per property rather than per test function, because a named property whose mutation leaves the suite green is uncovered however many controls exist.
 
 One mutation deliberately did not turn the suite red.
@@ -75,6 +75,9 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | --- | --- | --- |
 | a complete candidate is review-ready | the envelope binds the base commit where the head belongs | `not ok - a complete candidate is review-ready: expected exit 0, got 1` |
 | required contracts are computed from the changed files | a mandatory applicability rule stops being honoured | `not ok - a mandatory contract and a contract whose paths changed are both required` |
+| verification applicability must be declared explicitly | absent and empty applicability declarations are accepted | `not ok - absent applicability rules are could-not-observe: expected exit 2, got 0` |
+| an explicit no-contracts declaration is accepted | an explicit declaration with a reason is rejected | `not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2` |
+| requested decisions accept only uppercase tokens | malformed requested-decision tokens are no longer refused | `not ok - a malformed requested decision refuses: expected exit 1, got 0` |
 | identical facts produce an identical digest | the compile time is moved inside the digested body | `not ok - nothing time-varying may sit inside the digested body` |
 | a stale envelope refuses | the candidate reference is no longer compared with the bound head | `not ok - a stale envelope refuses: expected exit 1, got 0` |
 | a base that falls behind the trunk refuses | the base-to-trunk distance is no longer compared with policy | `not ok - the refusal must name the policy bound it exceeded (missing: 'refusal base_behind_main_exceeds_policy')` |
@@ -190,7 +193,7 @@ They are not two halves of equal weight - one is the measurement, and the other 
 
 This campaign also establishes that it was the ONLY control of that shape here, with evidence rather than by assertion.
 Any accepting-only control would leave its guard's deletion undetected and would therefore surface as a green mutation.
-69 mutations produced exactly three greens, and all three are accounted for: two are the redundancy above, re-measured until red, and the third was this control.
+72 mutations produced exactly three greens, and all three are accounted for: two are the redundancy above, re-measured until red, and the third was this control.
 
 ## One commit's content was deliberately not carried forward
 
