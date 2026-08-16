@@ -47,7 +47,7 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
-Fifty-six controls pass against the shipped scripts.
+59 controls pass against the shipped scripts.
 Sixty-two mutations were built; sixty-one turned the suite red and one deliberately did not.
 That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
 

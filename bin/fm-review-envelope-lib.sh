@@ -1903,7 +1903,9 @@ def command_validate(args):
         )
     try:
         recomputed_request_identity = request_identity(body, recomputed)
-    except (KeyError, TypeError, AttributeError) as error:
+    except Unobservable:
+        raise
+    except Exception as error:
         raise Unobservable(
             "envelope_unreadable",
             "envelope body is structurally malformed: " + str(error),
@@ -1931,7 +1933,9 @@ def command_validate(args):
     recheck = not args.no_recheck
     try:
         classification = classify(body, args.repo, args.evidence_root, recheck)
-    except (KeyError, TypeError, AttributeError) as error:
+    except Unobservable:
+        raise
+    except Exception as error:
         raise Unobservable(
             "envelope_unreadable",
             "envelope body is structurally malformed: " + str(error),
