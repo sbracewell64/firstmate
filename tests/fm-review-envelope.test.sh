@@ -365,6 +365,74 @@ PY
   pass "unmoved facts compile to the identical digest, and no time-varying value sits inside the body"
 }
 
+test_order_insensitive_facts_produce_an_identical_identity() {
+  local case_dir first_digest second_digest first_identity second_identity
+  case_dir=$(make_case canonical-fact-order)
+  write_inputs "$case_dir" '{"obligations": {"active": [{"id": "OBL-2"}, {"id": "OBL-1"}]}}'
+  capture run_prepare "$case_dir" first
+  expect_code 0 "$CAPTURED_CODE" "the first fact order compiles"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["verification"]["contracts"].reverse()
+document["verification"]["results"].reverse()
+document["obligations"]["active"].reverse()
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" second
+  expect_code 0 "$CAPTURED_CODE" "the reordered facts compile"
+  read -r first_digest first_identity < <(python3 - "$case_dir/first/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  read -r second_digest second_identity < <(python3 - "$case_dir/second/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  [ "$first_digest" = "$second_digest" ] \
+    || fail "order-insensitive facts must have one envelope digest"
+  [ "$first_identity" = "$second_identity" ] \
+    || fail "order-insensitive facts must have one request identity"
+  pass "order-insensitive facts have stable content identities"
+}
+
+test_a_structurally_malformed_envelope_is_could_not_observe() {
+  local case_dir
+  case_dir=$(make_case malformed-stored-envelope)
+  write_inputs "$case_dir"
+  capture run_prepare "$case_dir" malformed
+  expect_code 0 "$CAPTURED_CODE" "the valid precursor envelope compiles"
+  python3 - "$case_dir/malformed/envelope.json" <<'PY'
+import hashlib, json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["envelope"] = {}
+canonical = json.dumps(document["envelope"], sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+document["digest"]["value"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
+payload = {
+    "compiled_at": document.get("compiled_at"),
+    "compiler": document.get("compiler"),
+    "body_digest": document["digest"]["value"],
+    "request_identity": document.get("request_identity"),
+    "declared_request_identity": document.get("declared_request_identity"),
+}
+canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+document["outer_digest"]["value"] = "sha256:" + hashlib.sha256(canonical).hexdigest()
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" malformed
+  expect_code 2 "$CAPTURED_CODE" "a structurally malformed body is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved envelope_unreadable' \
+    "the readable verify record must name the malformed envelope"
+  assert_not_contains "$CAPTURED" 'Traceback' "validation must never end with a structural exception"
+  pass "a structurally malformed envelope emits a readable could-not-observe record"
+}
+
 # --- staleness --------------------------------------------------------------
 
 test_a_stale_envelope_refuses() {
@@ -1447,6 +1515,8 @@ test_the_generated_contract_page_matches_the_catalog() {
 test_a_complete_candidate_is_review_ready
 test_required_contracts_are_computed_from_the_changed_files
 test_identical_facts_produce_an_identical_digest
+test_order_insensitive_facts_produce_an_identical_identity
+test_a_structurally_malformed_envelope_is_could_not_observe
 test_a_stale_envelope_refuses
 test_a_base_that_falls_behind_the_trunk_refuses
 test_an_asserted_head_the_repository_contradicts_refuses

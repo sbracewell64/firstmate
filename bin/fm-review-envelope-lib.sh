@@ -192,6 +192,19 @@ def digest_of(value):
     return "sha256:" + hashlib.sha256(canonical_bytes(value)).hexdigest()
 
 
+def sorted_records(records, identity_fields, label):
+    for record in records:
+        if not isinstance(record, dict):
+            raise Unobservable("inputs_malformed", label + " contains a non-object")
+    return sorted(
+        records,
+        key=lambda record: (
+            tuple(str(record.get(field, "")) for field in identity_fields),
+            canonical_bytes(record),
+        ),
+    )
+
+
 def digest_file(path):
     hasher = hashlib.sha256()
     with open(path, "rb") as handle:
@@ -1072,8 +1085,16 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
         "verification": {
             "applicability_rules": rules,
             "required_contract_ids": sorted(required_ids),
-            "contracts": as_list(verification_in, "contracts"),
-            "results": as_list(verification_in, "results"),
+            "contracts": sorted_records(
+                as_list(verification_in, "contracts"),
+                ("id", "version", "digest"),
+                "verification contracts",
+            ),
+            "results": sorted_records(
+                as_list(verification_in, "results"),
+                ("contract_id", "contract_digest", "world", "verifier_id", "verifier_digest"),
+                "verification results",
+            ),
         },
         "capabilities": capabilities,
         "ci": {
@@ -1093,8 +1114,12 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             "predecessor_digest": predecessor_digest,
             "predecessor_contradiction": predecessor_contradiction,
             "predecessor_active": predecessor_active,
-            "active": as_list(obligations_in, "active"),
-            "dispositions": as_list(obligations_in, "dispositions"),
+            "active": sorted_records(
+                as_list(obligations_in, "active"), ("id",), "active obligations"
+            ),
+            "dispositions": sorted_records(
+                as_list(obligations_in, "dispositions"), ("id",), "obligation dispositions"
+            ),
         },
     }
 
@@ -1876,7 +1901,14 @@ def command_validate(args):
             "the declared request identity state is absent",
             str(path),
         )
-    recomputed_request_identity = request_identity(body, recomputed)
+    try:
+        recomputed_request_identity = request_identity(body, recomputed)
+    except (KeyError, TypeError, AttributeError) as error:
+        raise Unobservable(
+            "envelope_unreadable",
+            "envelope body is structurally malformed: " + str(error),
+            str(path),
+        )
     if document.get("request_identity") != recomputed_request_identity:
         return refused(
             "request_identity_mismatch",
@@ -1897,7 +1929,14 @@ def command_validate(args):
             args,
         )
     recheck = not args.no_recheck
-    classification = classify(body, args.repo, args.evidence_root, recheck)
+    try:
+        classification = classify(body, args.repo, args.evidence_root, recheck)
+    except (KeyError, TypeError, AttributeError) as error:
+        raise Unobservable(
+            "envelope_unreadable",
+            "envelope body is structurally malformed: " + str(error),
+            str(path),
+        )
     if not recheck:
         # An explicit, recorded declination. It can never reach review-ready,
         # because the bytes behind the bound digests were not looked at.
