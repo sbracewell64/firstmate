@@ -95,7 +95,7 @@ Verification contracts by identity and digest, and their exact-head results.
 
 | Field | Source | Required | Meaning |
 | --- | --- | --- | --- |
-| `applicability_rules` | `declared` | yes | Rules mapping changed paths to required contract ids; a mandatory rule applies to every candidate. |
+| `applicability_rules` | `declared` | yes | Either non-empty rules mapping changed paths to required contract ids, including a mandatory rule, or an explicit none with a reason; absence or an empty list is could-not-observe. |
 | `required_contract_ids` | `computed` | yes | The contracts this candidate must satisfy, computed from the observed changed files against those rules. |
 | `contracts` | `declared` | yes | Contract references by id, version and digest, plus their declared execution worlds. |
 | `results` | `declared` | yes | One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration. |
@@ -232,6 +232,7 @@ None of them is a pass, and none of them is skippable.
 | `unproven_dimension_required` | A declared required dimension is known to be unproven. |
 | `predecessor_undeclared` | The inputs carry no predecessor block, so obligation continuity cannot be judged. |
 | `predecessor_unreadable` | The declared predecessor envelope could not be read, or does not match its own digest. |
+| `verification_applicability_undeclared` | The inputs carry neither non-empty verification applicability rules nor an explicit none with a reason, so required contracts cannot be judged. |
 | `evidence_recheck_declined` | Validation was told not to re-read the evidence bytes, and did not. |
 | `outer_integrity_digest_unobserved` | The outer integrity digest is absent, so outer facts cannot be checked. |
 | `request_identity_claim_unobserved` | The declared request identity state is absent rather than an explicit value or null. |

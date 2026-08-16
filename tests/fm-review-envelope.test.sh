@@ -323,6 +323,78 @@ test_required_contracts_are_computed_from_the_changed_files() {
   pass "which contracts are required is computed from the observed changed files"
 }
 
+test_verification_applicability_must_be_declared_explicitly() {
+  local case_dir
+  case_dir=$(make_case verification-applicability-absent)
+  write_inputs "$case_dir"
+  python3 - "$case_dir/inputs.json" <<'PY' || fail "the absent-rules fixture must be writable"
+import json
+import sys
+
+path = sys.argv[1]
+document = json.load(open(path))
+del document["verification"]["applicability_rules"]
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(document, handle, indent=2)
+    handle.write("\n")
+PY
+  capture run_prepare "$case_dir" env
+  expect_code 2 "$CAPTURED_CODE" "absent applicability rules are could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved verification_applicability_undeclared' \
+    "the absent applicability declaration must be named"
+
+  case_dir=$(make_case verification-applicability-empty)
+  write_inputs "$case_dir" '{"verification": {"applicability_rules": []}}'
+  capture run_prepare "$case_dir" env
+  expect_code 2 "$CAPTURED_CODE" "empty applicability rules are could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved verification_applicability_undeclared' \
+    "the empty applicability declaration must be named"
+
+  case_dir=$(make_case verification-applicability-no-baseline)
+  write_inputs "$case_dir" '{"verification": {"applicability_rules": [
+      {"contract_id": "shell-surface", "paths": [{"type": "glob", "value": "nothing/*"}]}]}}'
+  capture run_prepare "$case_dir" env
+  expect_code 2 "$CAPTURED_CODE" "applicability rules without a mandatory baseline are could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved verification_applicability_undeclared' \
+    "the missing mandatory applicability rule must be named"
+  pass "verification applicability cannot disappear into an empty required-contract set"
+}
+
+test_no_verification_contracts_requires_an_explicit_reason() {
+  local case_dir
+  case_dir=$(make_case verification-applicability-none)
+  write_inputs "$case_dir" '{"verification": {
+      "applicability_rules": {"none": true, "reason": "this project declares no verification contracts"},
+      "contracts": [],
+      "results": []}}'
+  capture run_prepare "$case_dir" env
+  expect_code 0 "$CAPTURED_CODE" "an explicit reason may declare that no contracts are required"
+  assert_contains "$CAPTURED" 'review-envelope: REVIEW_READY' \
+    "an explicit no-contracts declaration must not be vacuously rejected"
+  assert_grep '"reason": "this project declares no verification contracts"' \
+    "$case_dir/env/envelope.json" "the envelope must bind the no-contracts reason"
+  assert_required_set "$case_dir/env/envelope.json" \
+    "the explicit no-contracts declaration must compute an empty required set"
+  pass "an explicit no-contracts declaration and its reason are preserved"
+}
+
+test_requested_decision_is_an_uppercase_token() {
+  local case_dir
+  case_dir=$(make_case requested-decision-token)
+  write_inputs "$case_dir" '{"requested_decision": "semantic-review"}'
+  capture run_prepare "$case_dir" malformed
+  expect_code 2 "$CAPTURED_CODE" "a malformed requested decision is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved inputs_malformed' \
+    "the malformed requested decision must be named"
+
+  write_inputs "$case_dir" '{"requested_decision": "LANDING_AUTHORIZATION"}'
+  capture run_prepare "$case_dir" valid
+  expect_code 0 "$CAPTURED_CODE" "an uppercase requested-decision token is accepted"
+  assert_contains "$CAPTURED" 'review-envelope: REVIEW_READY' \
+    "the valid token control must reach review-ready"
+  pass "requested decisions accept only documented uppercase tokens"
+}
+
 test_identical_facts_produce_an_identical_digest() {
   local case_dir first second
   case_dir=$(make_case idempotent)
@@ -1770,6 +1842,9 @@ PYEOF
 
 test_a_complete_candidate_is_review_ready
 test_required_contracts_are_computed_from_the_changed_files
+test_verification_applicability_must_be_declared_explicitly
+test_no_verification_contracts_requires_an_explicit_reason
+test_requested_decision_is_an_uppercase_token
 test_identical_facts_produce_an_identical_digest
 test_order_insensitive_facts_produce_an_identical_identity
 test_a_structurally_malformed_envelope_is_could_not_observe

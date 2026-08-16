@@ -151,6 +151,7 @@ import fnmatch
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -339,7 +340,7 @@ CATALOG = {
             "description": "Verification contracts by identity and digest, and their exact-head results.",
             "fields": [
                 {"name": "applicability_rules", "source": "declared", "required": True,
-                 "description": "Rules mapping changed paths to required contract ids; a mandatory rule applies to every candidate."},
+                 "description": "Either non-empty rules mapping changed paths to required contract ids, including a mandatory rule, or an explicit none with a reason; absence or an empty list is could-not-observe."},
                 {"name": "required_contract_ids", "source": "computed", "required": True,
                  "description": "The contracts this candidate must satisfy, computed from the observed changed files against those rules."},
                 {"name": "contracts", "source": "declared", "required": True,
@@ -485,6 +486,7 @@ CATALOG = {
         {"code": "unproven_dimension_required", "meaning": "A declared required dimension is known to be unproven."},
         {"code": "predecessor_undeclared", "meaning": "The inputs carry no predecessor block, so obligation continuity cannot be judged."},
         {"code": "predecessor_unreadable", "meaning": "The declared predecessor envelope could not be read, or does not match its own digest."},
+        {"code": "verification_applicability_undeclared", "meaning": "The inputs carry neither non-empty verification applicability rules nor an explicit none with a reason, so required contracts cannot be judged."},
         {"code": "evidence_recheck_declined", "meaning": "Validation was told not to re-read the evidence bytes, and did not."},
         {"code": "outer_integrity_digest_unobserved", "meaning": "The outer integrity digest is absent, so outer facts cannot be checked."},
         {"code": "request_identity_claim_unobserved", "meaning": "The declared request identity state is absent rather than an explicit value or null."},
@@ -880,8 +882,8 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
         )
 
     requested_decision = require_field(inputs, "inputs", "requested_decision")
-    if not isinstance(requested_decision, str) or not requested_decision.strip():
-        raise Unobservable("inputs_malformed", "requested_decision must be a non-empty token")
+    if not isinstance(requested_decision, str) or not re.fullmatch(r"[A-Z][A-Z0-9_]*", requested_decision):
+        raise Unobservable("inputs_malformed", "requested_decision must be an uppercase token")
 
     candidate_in = require_object(inputs, "candidate")
     base_ref = require_field(candidate_in, "candidate", "base_ref")
@@ -928,9 +930,41 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
                 break
 
     verification_in = as_dict(inputs, "verification")
-    rules = as_list(verification_in, "applicability_rules")
+    if "applicability_rules" not in verification_in:
+        raise Unobservable(
+            "verification_applicability_undeclared",
+            "verification must declare non-empty applicability rules, or an explicit none with a reason",
+        )
+    applicability_rules = verification_in["applicability_rules"]
+    if isinstance(applicability_rules, list):
+        if not applicability_rules:
+            raise Unobservable(
+                "verification_applicability_undeclared",
+                "verification applicability rules cannot be an empty list",
+            )
+        rules = applicability_rules
+    elif isinstance(applicability_rules, dict) and applicability_rules.get("none") is True:
+        reason = applicability_rules.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise Unobservable(
+                "verification_applicability_undeclared",
+                "explicitly declaring no verification contracts requires a reason",
+            )
+        rules = []
+    else:
+        raise Unobservable(
+            "inputs_malformed",
+            "verification.applicability_rules must be a non-empty list or an explicit none with a reason",
+        )
+    if rules and not any(isinstance(rule, dict) and rule.get("mandatory") is True for rule in rules):
+        raise Unobservable(
+            "verification_applicability_undeclared",
+            "verification applicability rules must include a mandatory rule",
+        )
     required_ids = set()
     for rule in rules:
+        if not isinstance(rule, dict):
+            raise Unobservable("inputs_malformed", "an applicability rule must be an object")
         contract_id = rule.get("contract_id")
         if not contract_id:
             raise Unobservable("inputs_malformed", "an applicability rule names no contract")
@@ -1091,7 +1125,7 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             "head_is_ancestor_of_main": is_ancestor(repo, head_commit, main_commit),
         },
         "verification": {
-            "applicability_rules": rules,
+            "applicability_rules": applicability_rules,
             "required_contract_ids": sorted(required_ids),
             "contracts": sorted_records(
                 as_list(verification_in, "contracts"),
