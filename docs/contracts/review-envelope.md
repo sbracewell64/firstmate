@@ -43,6 +43,7 @@ Who is asking for what, under which policy.
 | `policy.version` | `declared` | yes | The review-policy version this envelope was compiled under. |
 | `policy.max_base_behind_main` | `declared` | yes | How far the base may trail the trunk before the envelope refuses. |
 | `requested_decision` | `declared` | yes | The decision this envelope asks for, as an uppercase token. |
+| `outer request_identity` | `computed` | yes | A derived identity beside the body digest, binding repository, work or forge request, exact head, envelope digest and policy version. |
 
 ## candidate
 
@@ -185,12 +186,14 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `capability_candidate_malformed` | A capability candidate is neither a bare name nor an absolute path. |
 | `adverse_finding_blocking` | A known adverse finding is marked blocking. |
 | `ruling_applicability_mismatch` | A ruling this envelope relies on does not apply to this candidate. |
+| `request_identity_mismatch` | A declared or stored request identity does not match the identity recomputed from the bound facts. |
 | `obligation_dropped` | A predecessor obligation is unaccounted for. |
 | `obligation_preserved_but_absent` | An obligation was called preserved and is not in the active set. |
 | `obligation_satisfied_without_evidence` | A satisfied obligation names no evidence that resolves and digests. |
 | `obligation_resolved_without_authority` | A resolved obligation names no authority and reason. |
 | `obligation_superseded_without_replacement` | A superseded obligation names no active replacement. |
 | `obligation_disposition_unknown` | A disposition names an obligation the predecessor never held. |
+| `obligation_disposition_duplicate` | More than one disposition names the same predecessor obligation. |
 | `obligation_disposition_contradicts_active_set` | An obligation is both discharged and still active. |
 | `obligation_duplicate_id` | One obligation id is missing or appears twice. |
 | `predecessor_contradiction` | A predecessor envelope was supplied against inputs that declare none. |

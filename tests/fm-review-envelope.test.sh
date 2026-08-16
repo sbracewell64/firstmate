@@ -585,6 +585,38 @@ PY
   pass "an evidence locator that reaches outside its root refuses rather than being followed"
 }
 
+test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading() {
+  local case_dir
+  case_dir=$(make_case evidence-symlink-escape)
+  printf 'external bytes that must not be read\n' > "$case_dir/outside.log"
+  ln -s "$case_dir/outside.log" "$case_dir/evidence/linked.log"
+  write_inputs "$case_dir"
+  python3 - "$case_dir" <<'PY'
+import hashlib, json, sys
+case_dir = sys.argv[1]
+path = case_dir + "/inputs.json"
+document = json.load(open(path))
+digest = "sha256:" + hashlib.sha256(open(case_dir + "/outside.log", "rb").read()).hexdigest()
+document["verification"]["results"][1]["evidence"] = {
+    "locator": "linked.log",
+    "sha256": digest,
+}
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" env
+  expect_code 1 "$CAPTURED_CODE" "a symlink outside the evidence root refuses"
+  assert_contains "$CAPTURED" 'refusal evidence_locator_broken' \
+    "the refusal must name the escaped evidence locator"
+  python3 - "$case_dir/env/envelope.json" <<'PY' \
+    || fail "escaped evidence must refuse before any bytes are read or digested"
+import json, sys
+block = json.load(open(sys.argv[1]))["envelope"]["verification"]["results"][1]["evidence"]
+if block.get("resolved") or "observed_sha256" in block or "matches" in block:
+    sys.exit(1)
+PY
+  pass "a symlink cannot carry evidence outside its root into the envelope"
+}
+
 test_a_result_that_does_not_identify_its_verifier_refuses() {
   local case_dir
   case_dir=$(make_case unpinned-verifier)
@@ -955,6 +987,65 @@ test_a_disposition_for_an_obligation_the_predecessor_never_held_refuses() {
   pass "a disposition naming an obligation the predecessor never held refuses"
 }
 
+test_duplicate_dispositions_refuse_in_both_orders() {
+  local case_dir prior order dispositions
+  for order in preserved-first resolved-first; do
+    case_dir=$(make_case "obligation-duplicate-$order")
+    prior=$(seed_predecessor "$case_dir")
+    if [ "$order" = preserved-first ]; then
+      dispositions='[
+        {"id": "OBL-1", "disposition": "PRESERVED"},
+        {"id": "OBL-1", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"},
+        {"id": "OBL-2", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"}]'
+    else
+      dispositions='[
+        {"id": "OBL-1", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"},
+        {"id": "OBL-1", "disposition": "PRESERVED"},
+        {"id": "OBL-2", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"}]'
+    fi
+    write_inputs "$case_dir" '{"obligations": {
+      "predecessor": {"envelope_digest": "'"$prior"'"},
+      "active": [{"id": "OBL-1", "statement": "still active"}],
+      "dispositions": '"$dispositions"'}}'
+    capture run_prepare "$case_dir" successor --predecessor "$case_dir/prior"
+    expect_code 1 "$CAPTURED_CODE" "duplicate dispositions refuse in $order order"
+    assert_contains "$CAPTURED" 'refusal obligation_disposition_duplicate' \
+      "the duplicate refusal must not depend on disposition order"
+  done
+  pass "duplicate obligation dispositions refuse independently of array order"
+}
+
+test_request_identity_is_recomputed_and_checked() {
+  local case_dir identity
+  case_dir=$(make_case request-identity)
+  write_inputs "$case_dir"
+  run_prepare "$case_dir" first >/dev/null 2>&1
+  identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' \
+    "$case_dir/first/envelope.json")
+  write_inputs "$case_dir" '{"request": {"identity": "'"$identity"'"}}'
+  capture run_prepare "$case_dir" matching
+  expect_code 0 "$CAPTURED_CODE" "a correctly recomputed request identity is accepted"
+
+  write_inputs "$case_dir" '{"request": {"identity": "sha256:'"$(printf 'f%.0s' $(seq 64))"'"}}'
+  capture run_prepare "$case_dir" mismatching
+  expect_code 1 "$CAPTURED_CODE" "a mismatched claimed request identity refuses"
+  assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
+    "the refusal must name the request identity mismatch"
+
+  python3 - "$case_dir/matching/envelope.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["request_identity"] = "sha256:" + "0" * 64
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" matching
+  expect_code 1 "$CAPTURED_CODE" "validate recomputes the stored request identity"
+  assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
+    "validation must name the stored request identity mismatch"
+  pass "request identity claims and stored identities are checked against recomputation"
+}
+
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe() {
   local case_dir
   case_dir=$(make_case obligation-wrong-predecessor)
@@ -1189,6 +1280,7 @@ test_a_red_calibration_that_records_a_pass_refuses
 test_a_could_not_observe_verifier_cannot_become_review_ready
 test_a_broken_evidence_digest_refuses
 test_an_evidence_locator_that_escapes_its_root_refuses
+test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading
 test_a_result_that_does_not_identify_its_verifier_refuses
 test_wrong_head_ci_refuses
 test_a_skipped_required_check_refuses
@@ -1208,6 +1300,8 @@ test_a_superseded_obligation_without_a_replacement_refuses
 test_a_resolution_without_an_authority_refuses
 test_a_successor_that_declares_no_predecessor_is_could_not_observe
 test_a_disposition_for_an_obligation_the_predecessor_never_held_refuses
+test_duplicate_dispositions_refuse_in_both_orders
+test_request_identity_is_recomputed_and_checked
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe
 test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution
 test_a_blocking_adverse_finding_refuses
