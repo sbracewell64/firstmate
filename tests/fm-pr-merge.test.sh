@@ -1195,7 +1195,7 @@ write_rollup_fixture() {
 check_runs_json() {
   local total=$1 conclusion=$2 i out=
   for ((i = 0; i < total; i++)); do
-    out="$out{\"__typename\":\"CheckRun\",\"name\":\"ci/job-$i\",\"status\":\"COMPLETED\",\"conclusion\":\"$conclusion\"},"
+    out="$out{\"__typename\":\"CheckRun\",\"databaseId\":$((1000 + i)),\"name\":\"ci/job-$i\",\"status\":\"COMPLETED\",\"conclusion\":\"$conclusion\"},"
   done
   printf '%s' "$out"
 }
@@ -1203,16 +1203,18 @@ check_runs_json() {
 # One named check run, so a waiver has something concrete to name and the
 # selection has other names to discriminate against.
 named_check_run_json() {
-  printf '{"__typename":"CheckRun","name":"%s","status":"COMPLETED","conclusion":"%s"}' "$1" "$2"
+  printf '{"__typename":"CheckRun","databaseId":2000,"name":"%s","status":"COMPLETED","conclusion":"%s"}' "$1" "$2"
 }
 
 # One execution of a check, carrying the three fields that decide whether two
 # members are two attempts at one check or two independent checks: the workflow
-# that owns the run, the run's display name, and when that execution started.
-# Args: name conclusion started_at workflow [status]
+# that owns the run, the run's display name, and its monotonic run ID.
+# Args: name conclusion started_at workflow [status] [database_id]
 check_run_attempt_json() {
-  printf '{"__typename":"CheckRun","name":"%s","status":"%s","conclusion":"%s","startedAt":"%s","checkSuite":{"workflowRun":{"workflow":{"name":"%s"}}}}' \
-    "$1" "${5:-COMPLETED}" "$2" "$3" "$4"
+  local started_at="\"$3\""
+  [ "$3" != null ] || started_at=null
+  printf '{"__typename":"CheckRun","databaseId":%s,"name":"%s","status":"%s","conclusion":"%s","startedAt":%s,"checkSuite":{"workflowRun":{"workflow":{"name":"%s"}}}}' \
+    "${6:-2000}" "$1" "${5:-COMPLETED}" "$2" "$started_at" "$4"
 }
 
 run_fixture_case() {
@@ -1260,35 +1262,35 @@ test_real_query_against_api_shaped_json() {
   # One still-running check run among nine passes: not yet an observed pass, and
   # not a failure either - it has returned no verdict at all.
   run_fixture_case in-progress \
-    "[${success_runs%,},{\"__typename\":\"CheckRun\",\"status\":\"IN_PROGRESS\",\"conclusion\":\"\"}]" \
+    "[${success_runs%,},{\"__typename\":\"CheckRun\",\"databaseId\":2000,\"status\":\"IN_PROGRESS\",\"conclusion\":\"\"}]" \
     MERGEABLE '' 54 1 '1 of 11 check runs reported no result'
   # A held cross-repo workflow reports ACTION_REQUIRED rather than a pass. This
   # is the live shape of the 2026-08-02 defect once GitHub does surface the run.
   run_fixture_case action-required \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"ACTION_REQUIRED"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"ACTION_REQUIRED"}]' \
     MERGEABLE '' 55 1 '1 of 1 check runs reported no result'
   # The brief's named non-verifying conclusions: each ran to completion and
   # decided nothing, so a rollup made only of them is not a green rollup.
   run_fixture_case only-skipped \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"SKIPPED"}]' \
     MERGEABLE '' 60 1 '1 of 1 check runs reported no result'
   run_fixture_case only-neutral \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"NEUTRAL"}]' \
     MERGEABLE '' 61 1 '1 of 1 check runs reported no result'
   run_fixture_case only-cancelled \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"CANCELLED"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"CANCELLED"}]' \
     MERGEABLE '' 62 1 '1 of 1 check runs reported no result'
   # A whole rollup of non-verifying members alongside real passes still refuses:
   # the weakest member decides, and three of these decided nothing.
   run_fixture_case skipped-among-passes \
-    "[${success_runs%,},{\"__typename\":\"CheckRun\",\"status\":\"COMPLETED\",\"conclusion\":\"SKIPPED\"},{\"__typename\":\"CheckRun\",\"status\":\"COMPLETED\",\"conclusion\":\"NEUTRAL\"},{\"__typename\":\"CheckRun\",\"status\":\"COMPLETED\",\"conclusion\":\"CANCELLED\"}]" \
+    "[${success_runs%,},{\"__typename\":\"CheckRun\",\"databaseId\":2000,\"status\":\"COMPLETED\",\"conclusion\":\"SKIPPED\"},{\"__typename\":\"CheckRun\",\"databaseId\":2001,\"status\":\"COMPLETED\",\"conclusion\":\"NEUTRAL\"},{\"__typename\":\"CheckRun\",\"databaseId\":2002,\"status\":\"COMPLETED\",\"conclusion\":\"CANCELLED\"}]" \
     MERGEABLE '' 63 1 '3 of 13 check runs reported no result'
   # The adverse conclusions, which must read as failures rather than as absence.
   run_fixture_case timed-out \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"TIMED_OUT"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"TIMED_OUT"}]' \
     MERGEABLE '' 64 1 '1 of 1 check runs failed'
   run_fixture_case startup-failure \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"STARTUP_FAILURE"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"STARTUP_FAILURE"}]' \
     MERGEABLE '' 65 1 '1 of 1 check runs failed'
   # A legacy commit status carries .state instead of .conclusion.
   run_fixture_case legacy-status-success \
@@ -1395,13 +1397,26 @@ test_superseded_executions_resolve_to_the_current_one() {
   # still the current execution, so it must not be sorted behind the finished
   # pass it supersedes.
   run_fixture_case current-attempt-queued \
-    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),{\"__typename\":\"CheckRun\",\"name\":\"$WAIVED_CHECK_NAME\",\"status\":\"QUEUED\",\"conclusion\":null,\"startedAt\":null,\"checkSuite\":{\"workflowRun\":{\"workflow\":{\"name\":\"Require no-mistakes\"}}}}]" \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),{\"__typename\":\"CheckRun\",\"databaseId\":2001,\"name\":\"$WAIVED_CHECK_NAME\",\"status\":\"QUEUED\",\"conclusion\":null,\"startedAt\":null,\"checkSuite\":{\"workflowRun\":{\"workflow\":{\"name\":\"Require no-mistakes\"}}}}]" \
     MERGEABLE '' 83 1 '1 of 11 check runs reported no result'
   # Cancelled and skipped are not passes either, and a cancelled current
   # execution does not fall back to the pass it replaced.
   run_fixture_case current-attempt-cancelled \
     "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" CANCELLED "$late" 'Require no-mistakes')]" \
     MERGEABLE '' 84 1 '1 of 11 check runs reported no result'
+  # A cancelled attempt that never started is still older when its run ID says
+  # so, and cannot mask the successful rerun that followed it.
+  run_fixture_case null-started-cancelled-before-pass \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" CANCELLED null 'Require no-mistakes' COMPLETED 2000),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes' COMPLETED 2001)]" \
+    MERGEABLE '' 96 0 ''
+  # Start timestamps are not unique. The higher run ID decides both directions,
+  # and the timestamp remains only a deterministic tie-breaker.
+  run_fixture_case equal-start-higher-id-passed \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes' COMPLETED 2000),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes' COMPLETED 2001)]" \
+    MERGEABLE '' 97 0 ''
+  run_fixture_case equal-start-higher-id-failed \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes' COMPLETED 2000),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes' COMPLETED 2001)]" \
+    MERGEABLE '' 98 1 '1 of 11 check runs failed'
   # Repeated re-triggers do not multiply. Three executions of one check are one
   # verdict, so the refusal names one failing check and not three.
   run_fixture_case repeated-attempts-do-not-multiply \
@@ -1414,8 +1429,9 @@ test_superseded_executions_resolve_to_the_current_one() {
     MERGEABLE '' 86 0 ''
   # Two workflows can define the same job name. Those are two independent
   # verdicts that merely collide in display, not two attempts at one check, and
-  # collapsing them would discard one of them. The later start must not silence
-  # the earlier failure here.
+  # collapsing them would discard one of them. This is the cross-workflow
+  # masking control: a later success must not silence the other workflow's
+  # failure on the same head.
   run_fixture_case same-name-two-workflows \
     "[${success_runs%,},$(check_run_attempt_json 'build' FAILURE "$early" 'Workflow A'),$(check_run_attempt_json 'build' SUCCESS "$late" 'Workflow B')]" \
     MERGEABLE '' 87 1 '1 of 12 check runs failed'
@@ -1423,7 +1439,7 @@ test_superseded_executions_resolve_to_the_current_one() {
   # anything, because nothing identifies what it would be superseding. Each one
   # counts on its own rather than collapsing into a single anonymous check.
   run_fixture_case unnamed-members-never-collapse \
-    '[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"},{"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"},{"__typename":"CheckRun","status":"COMPLETED","conclusion":"CANCELLED"}]' \
+    '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"SKIPPED"},{"__typename":"CheckRun","databaseId":2001,"status":"COMPLETED","conclusion":"NEUTRAL"},{"__typename":"CheckRun","databaseId":2002,"status":"COMPLETED","conclusion":"CANCELLED"}]' \
     MERGEABLE '' 88 1 '3 of 3 check runs reported no result'
   # A legacy commit status names itself in .context and dates itself in
   # .createdAt, and is re-posted rather than re-run. The current post decides.

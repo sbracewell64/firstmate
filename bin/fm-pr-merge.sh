@@ -30,12 +30,12 @@
 # A head accumulates every execution ever run against it, not only the current
 # one, so the members are reduced to one verdict per check before anything is
 # counted. Two members are two attempts at one check when they carry the same
-# owning workflow and the same name, and the attempt that started last speaks
-# for that check. A member GitHub reports with no name is never an attempt at
-# anything, because nothing identifies what it would supersede, so each of those
-# counts on its own. Without that reduction a re-triggered check leaves its
-# earlier run attached to the head forever and that head can never be merged
-# again however often the check subsequently passes; the only escape is a new
+# owning workflow and the same name, and the attempt with the newest run ID
+# speaks for that check. A member GitHub reports with no name is never an
+# attempt at anything, because nothing identifies what it would supersede, so
+# each of those counts on its own. Without that reduction a re-triggered check
+# leaves its earlier run attached to the head forever, and that head can never
+# be merged again however often the check subsequently passes; the only escape is a new
 # head, which for the attestation check needs a fresh attestation, so the
 # pattern repeats. Reduction never excuses a current verdict: a failing latest
 # attempt still refuses, and where attempts tie for latest the worst decides.
@@ -240,7 +240,7 @@ PR_VERIFY_GRAPHQL='query($owner:String!,$repo:String!,$number:Int!){
       commits(last:1){nodes{commit{oid
         statusCheckRollup{contexts(last:100){totalCount nodes{
           __typename
-          ... on CheckRun{name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}}
+          ... on CheckRun{databaseId name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}}
           ... on StatusContext{context state createdAt}
         }}}
       }}}
@@ -265,11 +265,10 @@ PR_VERIFY_FAILING='["FAILURE","ERROR","TIMED_OUT","STARTUP_FAILURE"]'
 # Each member is keyed by the check it is an attempt at - its owning workflow
 # and its name together, since two workflows may define one job name - and an
 # unnamed member is keyed by its own position so it can never be taken for an
-# attempt at another. The latest attempt is the one that started last, and a
-# member with no start time at all has not started yet, which is later than any
-# that has; that keeps a fresh re-trigger from being read as the finished pass
-# it supersedes. Where attempts tie for latest the worst verdict decides, so a
-# tie can never manufacture a pass.
+# attempt at another. Check runs are ordered by their monotonic database ID,
+# with their timestamp as a tie-breaker, while legacy statuses continue to use
+# their creation time. Where attempts tie for latest the worst verdict decides,
+# so a tie can never manufacture a pass.
 #
 # The jq bindings below ($pr, $commit, $adverse, $checks and the rest) are jq's
 # own, not shell variables; only PR_VERIFY_FAILING is expanded by the shell.
@@ -285,12 +284,13 @@ PR_VERIFY_REDUCE='.data.repository.pullRequest as $pr
        check: (if ($name | length) > 0
                then ["named", (.value.checkSuite.workflowRun.workflow.name // ""), $name]
                else ["unnamed", (.key | tostring)] end),
-       started: [(if (.value.startedAt // .value.createdAt) == null then 1 else 0 end),
-                 ((.value.startedAt // .value.createdAt) // "")],
+       order: (if .value.__typename == "CheckRun"
+               then [(.value.databaseId // 0), (.value.startedAt // "")]
+               else [(.value.createdAt // "")] end),
        verdict: ((.value.conclusion // .value.state // "") | ascii_upcase)})) as $attempts
 | ($attempts | group_by(.check) | map(
-    (map(.started) | max) as $latest
-    | map(select(.started == $latest)) as $current
+    (map(.order) | max) as $latest
+    | map(select(.order == $latest)) as $current
     | {name: $current[0].name,
        verdict: (if ($current | any(.verdict as $v | ($adverse | index($v)) != null))
                  then "FAILING"
