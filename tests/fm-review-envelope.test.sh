@@ -116,9 +116,10 @@ def sha(name):
         return "sha256:" + hashlib.sha256(handle.read()).hexdigest()
 
 
-def result(contract, world, log, red):
+def result(contract, contract_digest, world, log, red):
     return {
         "contract_id": contract,
+        "contract_digest": contract_digest,
         "world": world,
         "verifier_id": contract + "-verifier",
         "verifier_digest": "sha256:" + hashlib.sha256(contract.encode()).hexdigest(),
@@ -137,7 +138,16 @@ def result(contract, world, log, red):
 baseline = {
     "schema": "review-envelope-inputs/v1",
     "project": {"id": "fixture-project"},
-    "work": {"id": "fixture-work", "increment": "A1"},
+    "work": {
+        "id": "fixture-work",
+        "increment": "A1",
+        "request": {
+            "kind": "change-request",
+            "forge": "fixture-forge",
+            "id": "42",
+            "url": "https://fixture.invalid/project/requests/42",
+        },
+    },
     "policy": {"version": "review-policy/1", "max_base_behind_main": 0},
     "requested_decision": "SEMANTIC_REVIEW",
     "candidate": {"base_ref": "main", "head_ref": "candidate"},
@@ -153,8 +163,8 @@ baseline = {
             {"id": "shell-surface", "version": "1", "digest": "sha256:bb", "execution_worlds": ["offline-ci"]},
         ],
         "results": [
-            result("repo-baseline", "offline-ci", "baseline.log", "baseline-red.log"),
-            result("shell-surface", "offline-ci", "shell.log", "shell-red.log"),
+            result("repo-baseline", "sha256:aa", "offline-ci", "baseline.log", "baseline-red.log"),
+            result("shell-surface", "sha256:bb", "offline-ci", "shell.log", "shell-red.log"),
         ],
     },
     "capabilities": [
@@ -467,6 +477,92 @@ PY
   assert_contains "$CAPTURED" 'refusal missing_required_verifier_result' \
     "the refusal must name the uncovered world"
   pass "a required verification contract with no verifier result refuses"
+}
+
+test_verifier_results_bind_the_selected_contract_digest() {
+  local case_dir variant
+  for variant in missing mismatched; do
+    case_dir=$(make_case "result-contract-digest-$variant")
+    write_inputs "$case_dir"
+    python3 - "$case_dir/inputs.json" "$variant" <<'PY'
+import json, sys
+path, variant = sys.argv[1:]
+document = json.load(open(path))
+result = document["verification"]["results"][1]
+if variant == "missing":
+    del result["contract_digest"]
+else:
+    result["contract_digest"] = "sha256:stale"
+json.dump(document, open(path, "w"), indent=2)
+PY
+    capture run_prepare "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "$variant contract digest binding refuses during prepare"
+    assert_contains "$CAPTURED" 'refusal verification_result_contract_mismatch' \
+      "the refusal must name the result-to-contract mismatch"
+    capture run_validate "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "$variant contract digest binding refuses during validate"
+    assert_contains "$CAPTURED" 'refusal verification_result_contract_mismatch' \
+      "validation must preserve the result-to-contract mismatch"
+  done
+  pass "verifier results require the selected contract's exact digest"
+}
+
+test_duplicate_contract_ids_are_ambiguous() {
+  local case_dir variant
+  for variant in identical conflicting; do
+    case_dir=$(make_case "duplicate-contract-$variant")
+    write_inputs "$case_dir"
+    python3 - "$case_dir/inputs.json" "$variant" <<'PY'
+import json, sys
+path, variant = sys.argv[1:]
+document = json.load(open(path))
+duplicate = dict(document["verification"]["contracts"][0])
+if variant == "conflicting":
+    duplicate["digest"] = "sha256:conflicting"
+document["verification"]["contracts"].append(duplicate)
+json.dump(document, open(path, "w"), indent=2)
+PY
+    capture run_prepare "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "$variant duplicate contract id refuses during prepare"
+    assert_contains "$CAPTURED" 'refusal verification_contract_id_ambiguous' \
+      "the refusal must name the ambiguous stable contract id"
+    capture run_validate "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "$variant duplicate contract id refuses during validate"
+    assert_contains "$CAPTURED" 'refusal verification_contract_id_ambiguous' \
+      "validation must preserve the ambiguous stable contract id"
+  done
+  pass "duplicate verification contract ids refuse independently of content"
+}
+
+test_forge_request_identity_is_required_and_complete() {
+  local case_dir variant
+  for variant in absent missing-forge empty-url missing-id; do
+    case_dir=$(make_case "forge-request-$variant")
+    write_inputs "$case_dir"
+    python3 - "$case_dir/inputs.json" "$variant" <<'PY'
+import json, sys
+path, variant = sys.argv[1:]
+document = json.load(open(path))
+if variant == "absent":
+    del document["work"]["request"]
+elif variant == "missing-forge":
+    del document["work"]["request"]["forge"]
+elif variant == "empty-url":
+    document["work"]["request"]["url"] = ""
+else:
+    del document["work"]["request"]["id"]
+json.dump(document, open(path, "w"), indent=2)
+PY
+    capture run_prepare "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "$variant forge request identity refuses during prepare"
+    assert_contains "$CAPTURED" 'refusal forge_request_identity_invalid' \
+      "the refusal must name the invalid authoritative forge request identity"
+    capture run_validate "$case_dir" env
+    expect_code 1 "$CAPTURED_CODE" "$variant forge request identity refuses during validate"
+    assert_contains "$CAPTURED" 'refusal forge_request_identity_invalid' \
+      "validation must preserve the forge request identity refusal"
+  done
+  pass "authoritative forge request identity is required and structurally validated"
 }
 
 test_a_verifier_result_bound_to_another_head_refuses() {
@@ -1358,6 +1454,9 @@ test_a_tampered_envelope_body_refuses
 test_an_envelope_is_written_once
 test_a_missing_required_contract_refuses
 test_a_missing_required_verifier_result_refuses
+test_verifier_results_bind_the_selected_contract_digest
+test_duplicate_contract_ids_are_ambiguous
+test_forge_request_identity_is_required_and_complete
 test_a_verifier_result_bound_to_another_head_refuses
 test_a_missing_red_calibration_refuses
 test_a_red_calibration_that_records_a_pass_refuses

@@ -249,7 +249,7 @@ CATALOG = {
                  "description": "The work item this candidate belongs to."},
                 {"name": "work.increment", "source": "declared", "required": False,
                  "description": "The increment within that work item."},
-                {"name": "work.request", "source": "declared", "required": False,
+                {"name": "work.request", "source": "declared", "required": True,
                  "description": "The forge request this candidate is carried by, as kind, forge, id and url."},
                 {"name": "policy.version", "source": "declared", "required": True,
                  "description": "The review-policy version this envelope was compiled under."},
@@ -332,7 +332,7 @@ CATALOG = {
                 {"name": "contracts", "source": "declared", "required": True,
                  "description": "Contract references by id, version and digest, plus their declared execution worlds."},
                 {"name": "results", "source": "declared", "required": True,
-                 "description": "One result per contract and world, each binding its verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration."},
+                 "description": "One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration."},
             ],
         },
         {
@@ -420,7 +420,9 @@ CATALOG = {
         {"code": "changed_file_set_empty", "meaning": "The contribution changes nothing."},
         {"code": "scope_fully_excluded", "meaning": "Every changed path is excluded, so nothing is under review."},
         {"code": "missing_required_verification_contract", "meaning": "A computed-required contract has no reference, or its reference carries no digest."},
+        {"code": "verification_contract_id_ambiguous", "meaning": "More than one verification contract reference carries the same stable id."},
         {"code": "missing_required_verifier_result", "meaning": "A required contract has no result for a required world."},
+        {"code": "verification_result_contract_mismatch", "meaning": "A verifier result does not bind the selected contract's exact digest."},
         {"code": "verifier_identity_unpinned", "meaning": "A required result names no verifier id and digest, so what ran is not identified."},
         {"code": "required_verifier_failed", "meaning": "A required verifier reached an adverse verdict."},
         {"code": "required_verifier_wrong_head", "meaning": "A required verifier result binds a head or tree that is not the candidate's."},
@@ -438,6 +440,7 @@ CATALOG = {
         {"code": "adverse_finding_blocking", "meaning": "A known adverse finding is marked blocking."},
         {"code": "ruling_applicability_mismatch", "meaning": "A ruling this envelope relies on does not apply to this candidate."},
         {"code": "request_identity_mismatch", "meaning": "A declared or stored request identity does not match the identity recomputed from the bound facts."},
+        {"code": "forge_request_identity_invalid", "meaning": "The authoritative forge request identity is absent or incomplete."},
         {"code": "obligation_dropped", "meaning": "A predecessor obligation is unaccounted for."},
         {"code": "obligation_preserved_but_absent", "meaning": "An obligation was called preserved and is not in the active set."},
         {"code": "obligation_satisfied_without_evidence", "meaning": "A satisfied obligation names no evidence that resolves and digests."},
@@ -792,10 +795,7 @@ def resolve_evidence(root, locator):
 def request_identity(envelope, envelope_digest):
     project = envelope["identity"]["project"]
     work = envelope["identity"]["work"]
-    forge_request = work.get("request")
-    work_identity = {"id": work["id"]}
-    if isinstance(forge_request, dict) and forge_request.get("id") is not None:
-        work_identity["forge_request_id"] = forge_request["id"]
+    work_identity = {"id": work["id"], "forge_request": work.get("request")}
     return digest_of(
         {
             "project": {
@@ -1218,6 +1218,22 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
 
     classify_repository(problems, envelope, repo)
 
+    forge_request = envelope["identity"]["work"].get("request")
+    request_fields_valid = isinstance(forge_request, dict) and all(
+        isinstance(forge_request.get(field), str) and bool(forge_request[field].strip())
+        for field in ("kind", "forge", "url")
+    )
+    request_id = forge_request.get("id") if isinstance(forge_request, dict) else None
+    request_id_valid = (
+        isinstance(request_id, str) and bool(request_id.strip())
+    ) or (isinstance(request_id, int) and not isinstance(request_id, bool))
+    if not request_fields_valid or not request_id_valid:
+        problems.refuse(
+            "forge_request_identity_invalid",
+            envelope["identity"]["work"].get("id"),
+            "work.request must carry non-empty kind, forge, id and url fields",
+        )
+
     declared_head = candidate.get("declared_head_commit")
     if declared_head and declared_head != candidate["head_commit"]:
         problems.refuse(
@@ -1306,7 +1322,15 @@ def classify_verification(problems, envelope, evidence_root, recheck_evidence):
     contracts = {}
     for entry in envelope["verification"]["contracts"]:
         if isinstance(entry, dict) and entry.get("id"):
-            contracts[str(entry["id"])] = entry
+            contract_id = str(entry["id"])
+            if contract_id in contracts:
+                problems.refuse(
+                    "verification_contract_id_ambiguous",
+                    contract_id,
+                    "more than one contract reference carries this stable id",
+                )
+                continue
+            contracts[contract_id] = entry
     results = {}
     for result in envelope["verification"]["results"]:
         if isinstance(result, dict):
@@ -1341,6 +1365,16 @@ def classify_verification(problems, envelope, evidence_root, recheck_evidence):
                 )
                 continue
             for result in matching:
+                if result.get("contract_digest") != contract.get("digest"):
+                    problems.refuse(
+                        "verification_result_contract_mismatch",
+                        label,
+                        "the result binds contract digest "
+                        + str(result.get("contract_digest"))
+                        + ", the selected contract binds "
+                        + str(contract.get("digest")),
+                    )
+                    continue
                 classify_result(problems, label, result, envelope["candidate"], evidence_root, recheck_evidence)
 
 
