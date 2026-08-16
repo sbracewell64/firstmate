@@ -7,7 +7,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 
 Verified on 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
-The current green suites were re-run at implementation head `da46bfd3d6a80c934596459c466927f54feb3100` after typed outbound gates were made authoritative over conflicting prose.
+The current green suites were re-run at implementation head `6ecba8a87901faa361e9f8cde23cdb8bf4327a1a` after typed outbound gates were made authoritative over conflicting prose.
 
 ## Why this record exists
 
