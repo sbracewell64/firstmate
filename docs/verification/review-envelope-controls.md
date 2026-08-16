@@ -3,6 +3,11 @@
 Maintainer-verification record for [`bin/fm-review-envelope.sh`](../../bin/fm-review-envelope.sh) and [`bin/fm-review-envelope-lib.sh`](../../bin/fm-review-envelope-lib.sh), the `review-envelope/v1` contract, its compiler and its classifier.
 The mutation evidence below covers 56 properties with targeted mutations of the kinds actually recorded: single-guard removals; inverted mutations that turn red when an accepting path breaks; and one redundantly enforced property that no single-guard mutation can falsify, measured with both independent guards removed.
 
+Seven current controls are green and have NOT yet been watched red: `test_a_ruling_envelope_digest_binds_the_current_envelope`, `test_a_ruling_without_a_stable_id_refuses`, `test_a_structurally_malformed_envelope_is_could_not_observe`, `test_a_verifier_result_without_a_tree_refuses`, `test_duplicate_ruling_ids_are_ambiguous_in_both_orders`, `test_order_insensitive_facts_produce_an_identical_identity`, and `test_the_verification_record_matches_the_executed_control_count`.
+Their watched-red status is could-not-observe: not an omission, and not evidence that measurement is unnecessary.
+A control that has only ever been seen green is indistinguishable from a control that measures nothing, so all seven measurements remain outstanding.
+This declaration is a HOLD ON LANDING, not a substitute for measurement: the pull request is not ready while it stands, and real per-property measurements against the final head must replace it before the work is called done.
+
 The library header owns the contract itself, and [`docs/contracts/review-envelope.md`](../contracts/review-envelope.md) is generated from its field catalog.
 This file records only what was measured, and when.
 
@@ -26,7 +31,7 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against the same head, `98b1d34fdb00d6da0cceb82af6ffd98904c2111b`, so the record describes one experiment rather than several.
+Every measurement below belongs to head `1be1caef`, NOT the current head, so the table describes that one earlier experiment and is not current for the code shipped here.
 
 ## Commands
 
@@ -48,7 +53,11 @@ Both files are copied because the entrypoint sources its library from its own di
 ## What was measured
 
 63 controls pass against the shipped scripts.
-Of those, 59 suite controls exercise the 56 properties measured in the mutation campaign at head `98b1d34fdb00d6da0cceb82af6ffd98904c2111b`; coverage is counted per property rather than per test function.
+Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
+It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
+
+Mutation-measurement claim: the campaign measured 56 properties at head `1be1caef`, and coverage is counted per property rather than per test function.
+The seven controls named at the top of this file are not among them, and the compiler has changed since that campaign, so those measurements are not current for this head.
 Sixty-two mutations were built; sixty-one turned the suite red and one deliberately did not.
 That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
 
@@ -144,3 +153,20 @@ For those, the suite's first red belongs to the earlier assertion, so the proper
 | a correct claim with intact digests validates | INVERTED: an intact outer digest is made to refuse | `matching-claim-intact-digests-validates exit=1 (expected 0)` |
 
 Against the tracked build the same three measurements read `exit=1`, `exit=0` and `exit=0` respectively, so each is a real change of behaviour and not a constant.
+
+## A prior commit relabelled measurements it did not take
+
+This is recorded because it is a measured failure of the process that produces this file, and because the commits that caused it are preserved in history rather than rewritten out of it.
+
+Commit `50257ee3` was titled "record final-head mutation campaign" and ran no campaign.
+It was documentation-only, three insertions and eleven deletions, with no measurement data of any kind.
+It deleted the hold declaring which controls were unwatched, deleted the separation between the count claim and the measurement claim, and rewrote the environment section so that measurements taken at head `1be1caef` were labelled as taken at head `98b1d34f`.
+Commit `7090fcd3` then expanded that label to the full forty-character SHA, adding precision to a claim with no evidence beneath it, which makes a fabrication read as more rigorous rather than less.
+
+The sharpest part is what the count-drift control did while that claim stood.
+It PASSED, correctly, because the stated control count did match the suite.
+A reader could therefore have taken a green control as evidence that the campaign had run, when the control had never examined that question at all - and the sentence that stopped it being read that way was the one the fabricating commit deleted.
+The mechanism worked; the sentence that stopped it being misread did not survive.
+
+That is the argument for the rule this file now follows: PROSE MUST NOT BE THE EVIDENCE.
+A claim that is cheap to rewrite will eventually be rewritten, so the campaign must leave a durable artifact whose own content binds the head it was produced at, and this record's claims must be checkable against that artifact rather than asserted beside it.
