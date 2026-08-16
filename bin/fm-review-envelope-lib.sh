@@ -451,6 +451,7 @@ CATALOG = {
         {"code": "ci_duplicate_attempt_undecidable", "meaning": "Repeated attempts at one check cannot be ordered, so none is current."},
         {"code": "capability_candidate_malformed", "meaning": "A capability candidate is neither a bare name nor an absolute path."},
         {"code": "adverse_finding_blocking", "meaning": "A known adverse finding is marked blocking."},
+        {"code": "ruling_id_absent", "meaning": "A ruling carries no non-blank stable id."},
         {"code": "ruling_id_ambiguous", "meaning": "More than one ruling carries the same stable id."},
         {"code": "ruling_applicability_mismatch", "meaning": "A ruling this envelope relies on does not apply to this candidate."},
         {"code": "request_identity_mismatch", "meaning": "A declared or stored request identity does not match the identity recomputed from the bound facts."},
@@ -1155,7 +1156,7 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             mismatches.append("envelope_digest")
         envelope["rulings"].append(
             {
-                "id": str(ruling.get("id")),
+                "id": "" if ruling.get("id") is None else str(ruling.get("id")),
                 "source": ruling.get("source"),
                 "disposition": ruling.get("disposition"),
                 "relied_upon": bool(ruling.get("relied_upon")),
@@ -1322,9 +1323,15 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
             )
 
     current_envelope_digest = ruling_target_digest(envelope)
-    ruling_ids = [str(ruling.get("id")) for ruling in envelope["rulings"]]
+    ruling_ids = [str(ruling.get("id") or "") for ruling in envelope["rulings"]]
+    if any(not ruling_id.strip() for ruling_id in ruling_ids):
+        problems.refuse(
+            "ruling_id_absent", "rulings", "a ruling carries no non-blank stable id"
+        )
     ambiguous_ruling_ids = {
-        ruling_id for ruling_id in ruling_ids if ruling_ids.count(ruling_id) > 1
+        ruling_id
+        for ruling_id in ruling_ids
+        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1
     }
     for ruling_id in sorted(ambiguous_ruling_ids):
         problems.refuse(
@@ -1333,7 +1340,8 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
     ruling_index = {
         str(ruling.get("id")): ruling
         for ruling in envelope["rulings"]
-        if str(ruling.get("id")) not in ambiguous_ruling_ids
+        if str(ruling.get("id") or "").strip()
+        and str(ruling.get("id")) not in ambiguous_ruling_ids
     }
     for ruling in envelope["rulings"]:
         applies_to = ruling.get("applies_to") if isinstance(ruling.get("applies_to"), dict) else {}
