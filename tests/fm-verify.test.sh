@@ -686,12 +686,73 @@ EOF
 }
 test_review_mutation_transports_all_three_values
 
+# --- review-envelope ---------------------------------------------------------
+#
+# The adapter transports bin/fm-review-envelope.sh's result rather than forming
+# one. What matters here is that an envelope which cannot be read at all is
+# could-not-observe rather than an absent obligation, and that a candidate the
+# repository has moved past reaches the adapter as a failure rather than as a
+# retained pass. tests/fm-review-envelope.test.sh owns the contract's controls.
+test_review_envelope_transports_all_three_values() {
+  local case_dir
+  case_dir=$TMP/review-envelope
+  mkdir -p "$case_dir/evidence" "$case_dir/absent"
+  git init -q -b main "$case_dir/repo"
+  printf 'root\n' > "$case_dir/repo/README.md"
+  git -C "$case_dir/repo" add README.md
+  git -C "$case_dir/repo" commit -qm root
+  git -C "$case_dir/repo" checkout -q -b candidate
+  printf 'change\n' > "$case_dir/repo/tool.txt"
+  git -C "$case_dir/repo" add tool.txt
+  git -C "$case_dir/repo" commit -qm candidate
+  git -C "$case_dir/repo" checkout -q main
+  cat > "$case_dir/inputs.json" <<'INPUTS'
+{
+  "schema": "review-envelope-inputs/v1",
+  "project": {"id": "verify-fixture"},
+  "work": {"id": "verify-fixture-work"},
+  "policy": {"version": "review-policy/1", "max_base_behind_main": 0},
+  "requested_decision": "SEMANTIC_REVIEW",
+  "candidate": {"base_ref": "main", "head_ref": "candidate"},
+  "applicability": {"main_ref": "main"},
+  "verification": {"applicability_rules": [], "contracts": [], "results": []},
+  "ci": {"required_platforms": [], "attempts": []},
+  "findings": {"adverse": [], "unproven": []},
+  "obligations": {"predecessor": {"none": true, "reason": "fixture"}, "active": [], "dispositions": []}
+}
+INPUTS
+
+  expect_verify NO_VERIFIER_RAN usage_error \
+    "review-envelope with no repository or evidence root" -- review-envelope "$case_dir/absent"
+  expect_verify NO_VERIFIER_RAN verification_incomplete \
+    "review-envelope with no envelope to read" -- \
+    review-envelope "$case_dir/absent" "$case_dir/repo" "$case_dir/evidence"
+
+  "$ROOT/bin/fm-review-envelope.sh" prepare --repo "$case_dir/repo" \
+    --inputs "$case_dir/inputs.json" --evidence-root "$case_dir/evidence" \
+    --out "$case_dir/env" >/dev/null 2>&1
+  expect_verify PASS verified \
+    "review-envelope with a review-ready candidate" -- \
+    review-envelope "$case_dir/env" "$case_dir/repo" "$case_dir/evidence"
+
+  git -C "$case_dir/repo" checkout -q candidate
+  printf 'more\n' >> "$case_dir/repo/tool.txt"
+  git -C "$case_dir/repo" commit -qam "the candidate moves"
+  git -C "$case_dir/repo" checkout -q main
+  expect_verify FAIL verifier_reported_failure \
+    "review-envelope whose candidate has moved" -- \
+    review-envelope "$case_dir/env" "$case_dir/repo" "$case_dir/evidence"
+
+  pass "review-envelope transports all three values and cannot retain a stale pass"
+}
+test_review_envelope_transports_all_three_values
+
 # --- the conformance obligation ---------------------------------------------
 #
 # Every declared verifier ships with a control proving its unobservable case is
 # distinct. Adding one without such a control fails here rather than shipping a
 # verifier that cannot say "I could not look".
-COVERED='browser merge-clean pr-checks review-exec review-mutation'
+COVERED='browser merge-clean pr-checks review-envelope review-exec review-mutation'
 declared=$("$VERIFY" --list | LC_ALL=C sort | tr '\n' ' ')
 declared=${declared% }
 [ "$declared" = "$COVERED" ] ||
