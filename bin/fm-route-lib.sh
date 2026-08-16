@@ -254,7 +254,7 @@ fm_route_policy_digest() {  # [<config-dir>]
 #       ABSENT MEANS NO MINIMUM, never a minimum inferred from another number.
 #   route smart-zone ceiling        `_floors.<id>.smart_zone_ceiling`
 #       Execution governance: how much context this route permits a running
-#       session to accumulate before it compacts, rotates or decomposes. It
+#       session to accumulate before recommending compaction. It
 #       EXCLUDES NOTHING - a model exposing far more capacity than the ceiling
 #       is fully eligible and simply runs governed at it.
 #   model hard context limit        `_models.<m>.context_window`
@@ -264,9 +264,9 @@ fm_route_policy_digest() {  # [<config-dir>]
 #       The model's own cognitive-quality target. Governance evidence, never
 #       eligibility evidence.
 #
-# The governed answer is `effective_working_ceiling`, computed by the EXISTING
-# context governor (`bin/fm-context-statusline.sh`) from the three validated
-# inputs this decision record carries. Nothing here rotates a session.
+# The governed ceiling is computed by the EXISTING context governor
+# (`bin/fm-context-statusline.sh`) from the three validated inputs this decision
+# record carries. Nothing here rotates a session.
 #
 # `context_ceiling` is the retired spelling of `smart_zone_ceiling` and is read
 # as one - it is a ceiling, exactly as its name always said. It never

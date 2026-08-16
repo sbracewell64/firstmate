@@ -167,10 +167,10 @@ Until then it is a dual-written deprecated alias with exactly one owner, and a m
 | **Disposition** | DISSOLVED BY SPLIT |
 | **Routing-floor sense** | the `context_ceiling` field of `_floors.<id>` in `config/crew-dispatch.json`, split into `minimum_context` and `smart_zone_ceiling` |
 | **Model-evidence sense** | `_models.<m>.context_window`, the model's hard limit, and `_models.<m>.smart_zone`, its own smart-zone ceiling - both keep their names |
-| **Governor sense** | the effective working ceiling that the context governor resolves from its route-ceiling, model-ceiling, and hard-limit inputs, not a config field |
+| **Governor sense** | the governed ceiling that the context governor resolves from its route-ceiling, model-ceiling, and hard-limit inputs, not a config field |
 
 One field named CEILING was enforced as a MINIMUM.
-The evaluator read `_floors.<id>.context_ceiling`, compared it against a candidate's `smart_zone`, and emitted a rejection rule named `context_below_floor` - so a number the captain chose to make sessions rotate EARLIER excluded every model whose smart zone sat below it, across nearly the whole routing table.
+The evaluator read `_floors.<id>.context_ceiling`, compared it against a candidate's `smart_zone`, and emitted a rejection rule named `context_below_floor` - so a number the captain chose to trigger compaction earlier excluded every model whose smart zone sat below it, across nearly the whole routing table.
 Two incompatible senses had been sharing one identifier: a ceiling that governs how much context a running session may accumulate, and a minimum that says how much a candidate must be able to hold for the work to be possible at all.
 Naming one thing after the first and enforcing it as the second is how the defect survived being read.
 
