@@ -281,21 +281,25 @@ PR_VERIFY_REDUCE='.data.repository.pullRequest as $pr
 | ($members | to_entries | map(
     (.value.name // .value.context // "") as $name
     | {name: $name,
-       check: (if ($name | length) > 0
-               then ["named", (.value.checkSuite.workflowRun.workflow.name // ""), $name]
-               else ["unnamed", (.key | tostring)] end),
+       check: (if ($name | length) == 0 then ["unnamed", (.key | tostring)]
+               elif .value.__typename == "CheckRun"
+               then ["run", (.value.checkSuite.workflowRun.workflow.name // ""), $name]
+               else ["status", $name] end),
        order: (if .value.__typename == "CheckRun"
-               then [(.value.databaseId // 0), (.value.startedAt // "")]
-               else [(.value.createdAt // "")] end),
+               then .value.databaseId
+               else .value.createdAt end),
        verdict: ((.value.conclusion // .value.state // "") | ascii_upcase)})) as $attempts
 | ($attempts | group_by(.check) | map(
-    (map(.order) | max) as $latest
-    | map(select(.order == $latest)) as $current
-    | {name: $current[0].name,
-       verdict: (if ($current | any(.verdict as $v | ($adverse | index($v)) != null))
-                 then "FAILING"
-                 elif ($current | any(.verdict != "SUCCESS")) then "UNRUN"
-                 else "SUCCESS" end)})) as $checks
+    . as $group
+    | if (($group | length) > 1 and ($group | any(.order == null)))
+      then {name: $group[0].name, verdict: "UNDECIDABLE"}
+      else (map(.order) | max) as $latest
+      | map(select(.order == $latest)) as $current
+      | {name: $current[0].name,
+         verdict: (if ($current | any(.verdict as $v | ($adverse | index($v)) != null))
+                   then "FAILING"
+                   elif ($current | any(.verdict != "SUCCESS")) then "UNRUN"
+                   else "SUCCESS" end)} end)) as $checks
 | '
 
 # shellcheck disable=SC2016
@@ -308,7 +312,8 @@ PR_VERIFY_QUERY=$PR_VERIFY_REDUCE'"head=\($pr.headRefOid // "")",
 "checks=\($checks | length)",
 "unsuccessful=\($checks | map(select(.verdict != "SUCCESS")) | length)",
 "failing=\($checks | map(select(.verdict == "FAILING")) | length)",
-"unrun=\($checks | map(select(.verdict == "UNRUN")) | length)"'
+"unrun=\($checks | map(select(.verdict == "UNRUN")) | length)",
+"undecidable=\($checks | map(select(.verdict == "UNDECIDABLE")) | length)"'
 
 # Three further lines, asked for only when a check is waived, so a merge with no
 # override sends byte-identical query text and reads back the same lines it
@@ -366,7 +371,7 @@ refuse_unreadable_rollup() {
 
 verify_current_head() {
   local output line joined remaining eff_failing eff_unrun
-  local head='' mergeable='' review='' checks='' unsuccessful='' failing='' unrun=''
+  local head='' mergeable='' review='' checks='' unsuccessful='' failing='' unrun='' undecidable=''
   local rollup_head='' members='' reported=''
   local waived='' waived_failing='' waived_unrun=''
   local -a reasons=()
@@ -394,6 +399,7 @@ verify_current_head() {
       unsuccessful=*) unsuccessful=${line#unsuccessful=} ;;
       failing=*) failing=${line#failing=} ;;
       unrun=*) unrun=${line#unrun=} ;;
+      undecidable=*) undecidable=${line#undecidable=} ;;
       waived=*) waived=${line#waived=} ;;
       waived_failing=*) waived_failing=${line#waived_failing=} ;;
       waived_unrun=*) waived_unrun=${line#waived_unrun=} ;;
@@ -444,20 +450,22 @@ verify_current_head() {
   if [ -z "$checks" ] || [ -n "${checks//[0-9]/}" ] \
     || [ -z "$unsuccessful" ] || [ -n "${unsuccessful//[0-9]/}" ] \
     || [ -z "$failing" ] || [ -n "${failing//[0-9]/}" ] \
-    || [ -z "$unrun" ] || [ -n "${unrun//[0-9]/}" ]; then
+    || [ -z "$unrun" ] || [ -n "${unrun//[0-9]/}" ] \
+    || [ -z "$undecidable" ] || [ -n "${undecidable//[0-9]/}" ]; then
     refuse_unreadable_rollup "$head"
     return 1
   fi
   # A reduction can only ever shrink the members, so more checks than members
   # means the two lines describe different sets and neither can be trusted.
-  if [ "$checks" -gt "$members" ]; then
+  if [ "$checks" -gt "$members" ] || [ "$unsuccessful" -gt "$checks" ] \
+    || [ "$undecidable" -gt "$checks" ]; then
     refuse_unreadable_rollup "$head"
     return 1
   fi
   # The two disjoint buckets must account for exactly the members that are not
   # successes. A response that breaks that identity was not understood, and an
   # unreadable rollup is reported as unreadable rather than resolved either way.
-  if [ "$((failing + unrun))" -ne "$unsuccessful" ]; then
+  if [ "$((failing + unrun + undecidable))" -ne "$unsuccessful" ]; then
     refuse_unreadable_rollup "$head"
     return 1
   fi
@@ -490,7 +498,11 @@ verify_current_head() {
   # is then judged by exactly the counts above, less the waived member's own.
   if [ "$checks" -eq 0 ]; then
     reasons+=("no check runs exist on this head$(empty_rollup_evidence "$head")")
-  elif [ -n "$WAIVED_CHECK" ]; then
+  else
+    [ "$undecidable" -eq 0 ] \
+      || reasons+=("GitHub omitted the ordering value for $undecidable check run group(s), so the current attempt could not be determined")
+  fi
+  if [ "$checks" -ne 0 ] && [ -n "$WAIVED_CHECK" ]; then
     remaining=$((checks - waived))
     if [ "$waived" -eq 0 ]; then
       reasons+=("no check run named \"$WAIVED_CHECK\" exists on this head, so the override names nothing it could waive")
@@ -506,7 +518,7 @@ verify_current_head() {
       [ "$eff_unrun" -eq 0 ] \
         || reasons+=("$eff_unrun of the $remaining check runs other than the waived \"$WAIVED_CHECK\" reported no result (queued, in progress, skipped, neutral, cancelled, or held for approval)")
     fi
-  else
+  elif [ "$checks" -ne 0 ]; then
     [ "$failing" -eq 0 ] \
       || reasons+=("$failing of $checks check runs failed")
     [ "$unrun" -eq 0 ] \

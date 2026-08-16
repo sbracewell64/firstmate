@@ -106,7 +106,7 @@ make_case() {
 # them gets a rollup whose members are already one per check and complete.
 write_verify_payload() {
   local failing=${7:-$6} unrun=${8:-0}
-  printf 'head=%s\nmergeable=%s\nreview=%s\nrollup_head=%s\nmembers=%s\nreported=%s\nchecks=%s\nunsuccessful=%s\nfailing=%s\nunrun=%s\n' \
+  printf 'head=%s\nmergeable=%s\nreview=%s\nrollup_head=%s\nmembers=%s\nreported=%s\nchecks=%s\nunsuccessful=%s\nfailing=%s\nunrun=%s\nundecidable=0\n' \
     "$2" "$3" "$4" "${FM_TEST_ROLLUP_HEAD:-$2}" "${FM_TEST_MEMBERS:-$5}" \
     "${FM_TEST_REPORTED:-${FM_TEST_MEMBERS:-$5}}" "$5" "$6" "$failing" "$unrun" > "$1"
 }
@@ -696,7 +696,7 @@ test_unreadable_check_counts_refuse() {
   case_dir=$(make_case unreadable-counts)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=\nunsuccessful=0\n' \
+  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=\nunsuccessful=0\nundecidable=0\n' \
     "$head" "$head" > "$case_dir/verify.txt"
   : > "$case_dir/gh-axi.log"
 
@@ -712,7 +712,7 @@ test_unreadable_check_counts_refuse() {
   assert_no_merge_side_effects "$case_dir" unreadable-counts
 
   # The mirrored shape: a readable count with an unreadable failure count.
-  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=3\nunsuccessful=\n' \
+  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=3\nunsuccessful=\nundecidable=0\n' \
     "$head" "$head" > "$case_dir/verify.txt"
   : > "$case_dir/gh-axi.log"
   set +e
@@ -1211,10 +1211,18 @@ named_check_run_json() {
 # that owns the run, the run's display name, and its monotonic run ID.
 # Args: name conclusion started_at workflow [status] [database_id]
 check_run_attempt_json() {
-  local started_at="\"$3\""
+  local started_at="\"$3\"" database_id=${6:-}
   [ "$3" != null ] || started_at=null
+  if [ -z "$database_id" ]; then
+    case "$3" in
+      2026-08-16T10:00:08Z|null) database_id=2000 ;;
+      2026-08-16T10:05:00Z) database_id=2001 ;;
+      2026-08-16T10:13:47Z) database_id=2002 ;;
+      *) database_id=2000 ;;
+    esac
+  fi
   printf '{"__typename":"CheckRun","databaseId":%s,"name":"%s","status":"%s","conclusion":"%s","startedAt":%s,"checkSuite":{"workflowRun":{"workflow":{"name":"%s"}}}}' \
-    "${6:-2000}" "$1" "${5:-COMPLETED}" "$2" "$started_at" "$4"
+    "$database_id" "$1" "${5:-COMPLETED}" "$2" "$started_at" "$4"
 }
 
 run_fixture_case() {
@@ -1446,6 +1454,19 @@ test_superseded_executions_resolve_to_the_current_one() {
   run_fixture_case superseded-legacy-status \
     "[${success_runs%,},{\"__typename\":\"StatusContext\",\"context\":\"ci/legacy\",\"state\":\"FAILURE\",\"createdAt\":\"$early\"},{\"__typename\":\"StatusContext\",\"context\":\"ci/legacy\",\"state\":\"SUCCESS\",\"createdAt\":\"$late\"}]" \
     MERGEABLE '' 89 0 ''
+
+  run_fixture_case same-name-run-fails-status-passes \
+    "[${success_runs%,},$(check_run_attempt_json 'shared' FAILURE "$late" ''),{\"__typename\":\"StatusContext\",\"context\":\"shared\",\"state\":\"SUCCESS\",\"createdAt\":\"$late\"}]" \
+    MERGEABLE '' 99 1 '1 of 12 check runs failed'
+  run_fixture_case same-name-run-passes-status-fails \
+    "[${success_runs%,},$(check_run_attempt_json 'shared' SUCCESS "$late" ''),{\"__typename\":\"StatusContext\",\"context\":\"shared\",\"state\":\"FAILURE\",\"createdAt\":\"$late\"}]" \
+    MERGEABLE '' 100 1 '1 of 12 check runs failed'
+  run_fixture_case repeated-run-without-id-is-undecidable \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes' COMPLETED null),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes' COMPLETED null)]" \
+    MERGEABLE '' 101 1 'current attempt could not be determined'
+  run_fixture_case single-run-without-id-is-observable \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes' COMPLETED null)]" \
+    MERGEABLE '' 102 0 ''
 
   # The waiver names a check, not an execution. Re-triggering the check it names
   # must not turn the override into a refusal for naming several verdicts.
