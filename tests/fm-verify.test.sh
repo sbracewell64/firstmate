@@ -505,12 +505,62 @@ expect_code 3 "$code" "coercion of an observed result"
 assert_contains "$err" 'only NO_VERIFIER_RAN is coercible' "observed-result coercion refusal"
 pass "a coercion with no reason, or of a result that was actually observed, is refused"
 
+# --- review-exec -------------------------------------------------------------
+#
+# The adapter transports bin/fm-review-exec.sh's result rather than forming one,
+# so its unobservable case is the one that matters here: a review whose
+# execution record is absent must be could-not-observe, never an absent
+# obligation. tests/fm-review-exec.test.sh owns the substrate's own controls.
+test_review_exec_transports_all_three_values() {
+  local case_dir
+  case_dir=$TMP/review-exec
+  mkdir -p "$case_dir/empty"
+  git init -q "$case_dir/primary"
+  printf 'subject\n' > "$case_dir/primary/subject.txt"
+  git -C "$case_dir/primary" add subject.txt
+  git -C "$case_dir/primary" commit -qm candidate
+  git -C "$case_dir/primary" worktree add -q "$case_dir/src" HEAD
+  cat > "$case_dir/reviewer.sh" <<'REVIEWER'
+#!/usr/bin/env bash
+exit "${1:-0}"
+REVIEWER
+  chmod +x "$case_dir/reviewer.sh"
+
+  # No record at all: the empty set, which is the case a two-valued adapter
+  # would report as nothing-wrong.
+  expect_verify NO_VERIFIER_RAN empty_result_set \
+    "review-exec with no execution record" -- review-exec "$case_dir/empty"
+  expect_verify NO_VERIFIER_RAN usage_error \
+    "review-exec with no record directory" -- review-exec
+
+  "$ROOT/bin/fm-review-exec.sh" launch --attempt a1 --role runtime-change-review \
+    --reviewer test-binding --effort xhigh --source "$case_dir/src" \
+    --candidate HEAD --out "$case_dir/good" -- "$case_dir/reviewer.sh" 0 >/dev/null 2>&1
+  expect_verify PASS verified \
+    "review-exec with an observed-good execution" -- review-exec "$case_dir/good"
+
+  "$ROOT/bin/fm-review-exec.sh" launch --attempt a2 --role runtime-change-review \
+    --reviewer test-binding --effort xhigh --source "$case_dir/src" \
+    --candidate HEAD --out "$case_dir/bad" -- "$case_dir/reviewer.sh" 4 >/dev/null 2>&1
+  expect_verify FAIL verifier_reported_failure \
+    "review-exec with an observed-bad execution" -- review-exec "$case_dir/bad"
+
+  # An observed-good execution whose evidence stopped being reachable is
+  # could-not-observe again, not a retained pass.
+  rm -rf "$case_dir/good/checkout"
+  expect_verify NO_VERIFIER_RAN verification_unreachable \
+    "review-exec whose reviewer checkout is gone" -- review-exec "$case_dir/good"
+
+  pass "review-exec transports all three values and cannot retain a stale pass"
+}
+test_review_exec_transports_all_three_values
+
 # --- the conformance obligation ---------------------------------------------
 #
 # Every declared verifier ships with a control proving its unobservable case is
 # distinct. Adding one without such a control fails here rather than shipping a
 # verifier that cannot say "I could not look".
-COVERED='browser merge-clean pr-checks'
+COVERED='browser merge-clean pr-checks review-exec'
 declared=$("$VERIFY" --list | LC_ALL=C sort | tr '\n' ' ')
 declared=${declared% }
 [ "$declared" = "$COVERED" ] ||

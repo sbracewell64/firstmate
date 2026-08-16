@@ -383,6 +383,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/review-execution-evidence.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/runtime-backends.md",
       "audience": "maintainer-verification"
     },
