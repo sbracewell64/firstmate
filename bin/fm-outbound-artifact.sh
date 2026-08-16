@@ -25,6 +25,9 @@
 #   fm-outbound-artifact.sh defects
 #       One line per defect, for a relay such as bin/fm-bootstrap.sh. Silent when
 #       the invariant holds, and never silent when it could not be checked.
+#   fm-outbound-artifact.sh reconcile
+#       Emit every complete sol-control request found missing by one sweep.
+#       Pull-request rows remain detect-only.
 #   fm-outbound-artifact.sh emit <item-id> [--rationale-file <path>] [--dry-run]
 #       Create or adopt the durable artifact for one item, on an emit-capable
 #       channel. Idempotent on the request identity.
@@ -326,10 +329,11 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
 # The venue a project's contributions are offered to. Read from the clone's own
 # remotes rather than guessed from a name, because this fleet's projects
 # routinely fetch from upstream and push to a fork.
-project_venue() {  # <project> -> owner/name or empty
-  local dir=$PROJECTS/$1 url
+project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
+  local dir=$PROJECTS/$1 declared=${2:-} url
+  if [ -n "$declared" ]; then printf '%s\n' "$declared"; return 0; fi
   [ -d "$dir/.git" ] || return 0
-  url=$(obs git --no-optional-locks -C "$dir" remote get-url --push origin) || url=
+  url=$(obs git --no-optional-locks -C "$dir" remote get-url upstream) || url=
   [ -n "$url" ] || url=$(obs git --no-optional-locks -C "$dir" remote get-url origin) || url=
   [ -n "$url" ] || return 0
   printf '%s' "$url" | sed -e 's#\.git$##' -e 's#^git@[^:]*:##' -e 's#^[a-z+]*://[^/]*/##'
@@ -406,7 +410,7 @@ sweep() {
     head=$(observe_head "$item" "$pr_url" "$project")
 
     if [ "$channel" = "pull-request" ]; then
-      venue=$(project_venue "$project")
+      venue=$(project_venue "$project" "$(printf '%s' "$rec" | jq -r '.contribution_venue // ""')")
     else
       venue=
       read_sol_config && venue=$SOL_REPO
@@ -584,7 +588,7 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head>
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
   local rec gate channel project pr_url pr_ref head venue missing rid record
-  local attempt delay body found existing
+  local attempt delay body found existing dedupe_rc
 
   read_snapshot || die "fleet backlog could not be read" 4
   rec=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
@@ -652,7 +656,8 @@ cmd_emit() {
   # Dedupe against the forge FIRST. This is both ordinary duplicate suppression
   # and the crash-recovery path, because they are the same question: does an
   # artifact carrying this id already exist?
-  if found=$(sol_artifact_present "$rid"); then
+  found=$(sol_artifact_present "$rid"); dedupe_rc=$?
+  if [ "$dedupe_rc" -eq 0 ]; then
     if existing=$(record_read "$rid"); then
       record=$(printf '%s' "$existing" | jq --arg c "$found" --arg n "$(now_iso)" \
         '.comment_id = $c | .state = (if .state == "emitting" then "emitted" else .state end) | .updated = $n')
@@ -664,6 +669,11 @@ cmd_emit() {
     record_write "$rid" "$record" || die "could not write the correlation record" 4
     printf 'already requested: %s (comment %s)\n' "$rid" "$found"
     return 0
+  fi
+  if [ "$dedupe_rc" -ne 1 ]; then
+    printf '%s: could not conclusively establish that request %s is absent; refusing to post\n' \
+      "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED" "$rid" >&2
+    exit 4
   fi
 
   if ! record=$(record_read "$rid"); then
@@ -732,8 +742,8 @@ require_record() {  # <request-id>; sets RECORD or exits
   fi
 }
 
-cmd_ruling() {  # <request-id> <comment-id> <issue-or-empty>
-  local rid=$1 comment=$2 issue=$3 rec state venue_issue
+cmd_ruling() {  # <request-id> <comment-id> <issue>
+  local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -743,14 +753,38 @@ cmd_ruling() {  # <request-id> <comment-id> <issue-or-empty>
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
       exit 3 ;;
   esac
-  if [ -n "$issue" ]; then
-    venue_issue=$(printf '%s' "$rec" | jq -r '.venue' | sed 's/.*#//')
-    if [ "$issue" != "$venue_issue" ]; then
-      printf '%s: ruling arrived on issue %s but %s was asked on issue %s\n' \
-        "$FM_OUTBOUND_TOKEN_MISMATCH" "$issue" "$rid" "$venue_issue" >&2
-      exit 3
-    fi
+  venue_repo=$(printf '%s' "$rec" | jq -r '.venue' | sed 's/#.*//')
+  venue_issue=$(printf '%s' "$rec" | jq -r '.venue' | sed 's/.*#//')
+  if [ "$issue" != "$venue_issue" ]; then
+    printf '%s: ruling arrived on issue %s but %s was asked on issue %s\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$issue" "$rid" "$venue_issue" >&2
+    exit 3
   fi
+  read_sol_config || die "the configured ruling venue could not be observed" 4
+  [ "$SOL_REPO" = "$venue_repo" ] && [ "$SOL_ISSUE" = "$venue_issue" ] \
+    || die "the configured ruling venue no longer matches request $rid" 4
+  artifact=$(obs gh api "repos/$venue_repo/issues/comments/$comment") \
+    || die "ruling comment $comment could not be observed" 4
+  printf '%s' "$artifact" | jq -e --arg c "$comment" --arg i "$issue" \
+    '(.id|tostring) == $c and (.issue_url | endswith("/issues/" + $i)) and (.body|type) == "string"' \
+    >/dev/null 2>&1 || {
+      printf '%s: comment %s is not the requested inbound artifact\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
+      exit 3
+    }
+  body=$(printf '%s' "$artifact" | jq -r '.body')
+  printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_BODY_MARKER $rid" \
+    && printf '%s\n' "$body" | grep -Fqx "gate: $(printf '%s' "$rec" | jq -r '.identity.gate')" \
+    && printf '%s\n' "$body" | grep -Fqx "project: $(printf '%s' "$rec" | jq -r '.identity.project')" \
+    && printf '%s\n' "$body" | grep -Fqx "repo: $(printf '%s' "$rec" | jq -r '.identity.repo')" \
+    && printf '%s\n' "$body" | grep -Fqx "item: $(printf '%s' "$rec" | jq -r '.identity.item')" \
+    && printf '%s\n' "$body" | grep -Fqx "pull-request: $(printf '%s' "$rec" | jq -r '.identity.pr // "-"')" \
+    && printf '%s\n' "$body" | grep -Fqx "exact-head: $(printf '%s' "$rec" | jq -r '.identity.head')" \
+    || {
+      printf '%s: comment %s does not carry the exact request identity\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
+      exit 3
+    }
   rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg n "$(now_iso)" \
     '.ruling = {comment_id:$c, observed:$n} | .state = "ruled" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
@@ -808,6 +842,20 @@ case $CMD in
     else render_human; fi
     sweep_exit; exit $?
     ;;
+  reconcile)
+    [ $# -eq 0 ] || die "reconcile takes no arguments"
+    sweep || true
+    printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="defect" and .channel=="sol-control" and .missing==null) | .item' \
+      | while IFS= read -r ITEM; do
+          [ -n "$ITEM" ] || continue
+          cmd_emit "$ITEM" "" 0 || exit $?
+        done
+    RECONCILE_RC=${PIPESTATUS[1]}
+    [ "$RECONCILE_RC" -eq 0 ] || exit "$RECONCILE_RC"
+    sweep || true
+    render_defects
+    sweep_exit; exit $?
+    ;;
   emit)
     ITEM=; RATIONALE=; DRY=0
     while [ $# -gt 0 ]; do
@@ -831,7 +879,8 @@ case $CMD in
         *) die "unknown option '$1'" ;;
       esac
     done
-    [ -n "$RID" ] && [ -n "$COMMENT" ] || die "ruling needs --request and --comment"
+    [ -n "$RID" ] && [ -n "$COMMENT" ] && [ -n "$ISSUE" ] \
+      || die "ruling needs --request, --comment, and --issue"
     cmd_ruling "$RID" "$COMMENT" "$ISSUE"
     ;;
   resume)

@@ -976,10 +976,11 @@ commitment_register_report() {
 # and three finished branches were never offered to anyone. Nothing surfaced them
 # until a person went looking. Session start is where that stops being luck.
 #
-# Read-only, detect-only, and bounded by the command's own probe cap and per-probe
-# timeout, so it runs in a lock-refused session too. It is never suppressed by
-# age, count, or rate: quieting the question would hide a genuine stranded item
-# along with the noise, which is the failure it exists to prevent.
+# A mutable locked session reconciles missing sol-control requests before
+# reporting, while a detect-only lock-refused session performs the same bounded
+# read without emitting. Pull-request waits remain detect-only in both paths.
+# It is never suppressed by age, count, or rate: quieting the question would hide
+# a genuine stranded item along with the noise, which is the failure it prevents.
 # bin/fm-outbound-artifact.sh owns the sweep, the verdicts, and the exact line
 # wording; this function only relays it.
 #
@@ -1007,7 +1008,11 @@ outbound_artifact_report() {
   monitor_was_on=0
   case $- in *m*) monitor_was_on=1 ;; esac
   set -m 2>/dev/null || true
-  FM_HOME="$FM_HOME" "$bin" defects >"$tmp" 2>/dev/null &
+  if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ]; then
+    FM_HOME="$FM_HOME" "$bin" defects >"$tmp" 2>/dev/null &
+  else
+    FM_HOME="$FM_HOME" "$bin" reconcile >"$tmp" 2>/dev/null &
+  fi
   pid=$!
   start=$SECONDS
   while jobs -r -p | grep -qx "$pid"; do

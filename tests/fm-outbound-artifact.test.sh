@@ -82,6 +82,7 @@ make_gh() {  # <dir>
   : > "$1/forge/comments"
   printf '0\n' > "$1/forge/fail_remaining"
   : > "$1/forge/post_log"
+  : > "$1/forge/last_request_body"
   cat > "$1/bin/gh" <<'SH'
 #!/usr/bin/env bash
 # Minimal gh api shim: pull request head reads, issue comment listing, and
@@ -95,9 +96,19 @@ case " $* " in *" --input "*) is_post=1 ;; esac
 case "$path" in
   */pulls/4)
     cat "$F/head"; exit 0 ;;
+  */issues/comments/*)
+    id=${path##*/}
+    jq -n --argjson id "$id" --arg issue "${RULING_ISSUE:-2}" \
+      --rawfile body "$F/last_request_body" \
+      '{id:$id,issue_url:("https://api.github.com/repos/o/control/issues/"+$issue),body:$body}'
+    exit 0 ;;
+  */commits/*/pulls)
+    cat "$F/pr_number" 2>/dev/null || true
+    exit 0 ;;
   */issues/*/comments)
     if [ "$is_post" = 1 ]; then
-      body=$(cat)
+      payload=$(cat)
+      body=$(printf '%s' "$payload" | jq -r '.body')
       left=$(cat "$F/fail_remaining" 2>/dev/null || echo 0)
       if [ "$left" -gt 0 ]; then
         printf '%s\n' "$((left - 1))" > "$F/fail_remaining"
@@ -107,6 +118,7 @@ case "$path" in
       rid=$(printf '%s' "$body" | sed -n 's/.*\(fm-ob-[0-9a-f]*\).*/\1/p' | head -1)
       id=$(( $(wc -l < "$F/comments") + 900 ))
       printf '%s %s\n' "$id" "$rid" >> "$F/comments"
+      printf '%s\n' "$body" > "$F/last_request_body"
       printf 'posted %s\n' "$rid" >> "$F/post_log"
       printf '{"id":%s}\n' "$id"
       exit 0
@@ -308,6 +320,47 @@ test_crash_recovery_adopts_its_own_request() {
   pass "control 4 RECOVERY: a crashed emit adopts its own posted request instead of duplicating"
 }
 
+test_dedupe_observation_failure_refuses_to_post() {
+  local dir out rc posts
+  dir=$(new_case c4dedupe)
+  cat > "$dir/bin/gh" <<'SH'
+#!/usr/bin/env bash
+case " $* " in
+  *" /pulls/4 "*) cat "$FORGE_DIR/head"; exit 0 ;;
+esac
+for arg in "$@"; do
+  case $arg in */pulls/4) cat "$FORGE_DIR/head"; exit 0 ;; esac
+done
+exit 1
+SH
+  chmod +x "$dir/bin/gh"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "dedupe observation: expected could-not-observe, got $rc: $out"
+  printf '%s' "$out" | grep -q 'could not conclusively establish' \
+    || fail "dedupe observation: refusal did not name inconclusive absence: $out"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 0 ] || fail "dedupe observation: posted despite a failed preflight"
+  pass "dedupe observation: emission fails closed unless absence is conclusive"
+}
+
+test_reconcile_emits_sol_control_only() {
+  local dir out rc posts
+  dir=$(new_case cadence)
+  out=$(run_ob "$dir" reconcile 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "cadence: reconcile did not satisfy the sol-control wait: $out"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 1 ] || fail "cadence: reconcile posted $posts requests, expected one"
+  write_snapshot "$dir/snap.json" external "never submitted - no pull request exists for this branch"
+  jq '.backlog.records[0].contribution_venue = "o/r"' "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  : > "$dir/forge/post_log"
+  out=$(run_ob "$dir" reconcile 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "cadence: detect-only missing PR did not remain red: $out"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+    || fail "cadence: reconcile gained pull-request delivery authority"
+  pass "cadence: reconcile emits sol-control and leaves pull requests detect-only"
+}
+
 # --- controls 5-7: correlation ----------------------------------------------
 
 emitted_request_id() {  # <case-dir>
@@ -335,7 +388,7 @@ test_unrelated_ruling_cannot_wake_the_item() {
   rid=$(emitted_request_id "$dir")
 
   # RED 1: a ruling for an identity nobody asked under.
-  out=$(run_ob "$dir" ruling --request fm-ob-deadbeefcafe --comment 777 2>&1); rc=$?
+  out=$(run_ob "$dir" ruling --request fm-ob-deadbeefcafe --comment 777 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "control 6: an unknown request id was accepted, exit $rc: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RULING_IDENTITY_MISMATCH' \
     || fail "control 6: refused for the wrong reason: $out"
@@ -343,6 +396,10 @@ test_unrelated_ruling_cannot_wake_the_item() {
   # RED 2: the right request, but a ruling that arrived on a different issue.
   out=$(run_ob "$dir" ruling --request "$rid" --comment 778 --issue 99 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "control 6: a foreign-issue ruling was accepted, exit $rc: $out"
+
+  printf 'unrelated ruling\n' > "$dir/forge/last_request_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 779 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "control 6: an unrelated same-issue comment was accepted: $out"
 
   # Neither refusal may have touched the record.
   [ "$(run_ob "$dir" show "$rid" | jq -r '.ruling')" = "null" ] \
@@ -363,7 +420,7 @@ test_disposition_completes_the_correlation() {
   out=$(run_ob "$dir" close --request "$rid" --disposition approved 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "control 7: closure skipped the ruling step, exit $rc: $out"
 
-  run_ob "$dir" ruling --request "$rid" --comment 555 >/dev/null 2>&1 \
+  run_ob "$dir" ruling --request "$rid" --comment 555 --issue 2 >/dev/null 2>&1 \
     || fail "control 7: ruling failed"
   run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 || fail "control 7: resume failed"
   run_ob "$dir" close --request "$rid" --disposition approved >/dev/null 2>&1 \
@@ -386,7 +443,7 @@ test_terminal_request_is_not_applicable() {
   dir=$(new_case c7terminal)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "terminal: emit failed"
   rid=$(awk '{print $2}' "$dir/forge/comments")
-  run_ob "$dir" ruling --request "$rid" --comment 44 >/dev/null 2>&1 \
+  run_ob "$dir" ruling --request "$rid" --comment 44 --issue 2 >/dev/null 2>&1 \
     || fail "terminal: ruling failed"
   run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 || fail "terminal: resume failed"
   run_ob "$dir" close --request "$rid" --disposition accepted >/dev/null 2>&1 \
@@ -421,7 +478,7 @@ test_request_requires_readable_correlation() {
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: repair failed"
   jq '.identity.item = "another-item"' "$record" > "$record.tmp"
   mv "$record.tmp" "$record"
-  out=$(run_ob "$dir" ruling --request "$rid" --comment 46 2>&1); rc=$?
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 46 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 4 ] || fail "correlation: mismatched identity accepted a ruling: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
     || fail "correlation: mismatched identity was not unreadable: $out"
@@ -433,7 +490,7 @@ test_close_requires_resumed_work() {
   dir=$(new_case c7resume)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "resume chain: emit failed"
   rid=$(awk '{print $2}' "$dir/forge/comments")
-  run_ob "$dir" ruling --request "$rid" --comment 45 >/dev/null 2>&1 \
+  run_ob "$dir" ruling --request "$rid" --comment 45 --issue 2 >/dev/null 2>&1 \
     || fail "resume chain: ruling failed"
   out=$(run_ob "$dir" close --request "$rid" --disposition accepted 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "resume chain: close skipped resume: $out"
@@ -489,6 +546,20 @@ test_detect_only_channel_refuses_to_emit() {
   [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
     || fail "control 10: the detect-only channel posted something"
   pass "control 10: the pull-request channel detects but never creates the artifact"
+}
+
+test_pull_request_probe_prefers_contribution_target() {
+  local dir out rc
+  dir=$(new_case upstream)
+  write_snapshot "$dir/snap.json" external "never submitted - no pull request exists for this branch"
+  jq '.backlog.records[0].contribution_venue = "upstream/project"' "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  printf '101\n' > "$dir/forge/pr_number"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "PR venue: declared contribution target was not probed: $out"
+  printf '%s' "$out" | grep -q 'pull/101' \
+    || fail "PR venue: upstream pull request was not reported: $out"
+  pass "PR venue: detection uses the declared contribution target"
 }
 
 test_never_submitted_branch_is_recognised() {
@@ -678,6 +749,8 @@ test_duplicate_control_can_fail
 test_transient_failure_retries
 test_exhausted_transport_keeps_the_request
 test_crash_recovery_adopts_its_own_request
+test_dedupe_observation_failure_refuses_to_post
+test_reconcile_emits_sol_control_only
 test_ruling_wakes_the_exact_item
 test_unrelated_ruling_cannot_wake_the_item
 test_disposition_completes_the_correlation
@@ -687,6 +760,7 @@ test_close_requires_resumed_work
 test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass
 test_detect_only_channel_refuses_to_emit
+test_pull_request_probe_prefers_contribution_target
 test_never_submitted_branch_is_recognised
 test_done_rows_are_not_waiting
 test_unstructured_row_is_not_silently_clear
