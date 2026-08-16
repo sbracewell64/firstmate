@@ -122,7 +122,7 @@ That output is quoted through the same scrubbing as git's, because `no-mistakes`
 Only what the tool writes to stdout decides which of them it is, because unrelated notices such as its version-upgrade banner go to stderr and must never stand in for a run record; stderr is quoted alongside stdout purely as diagnostic detail.
 Every call to the tool is time-bounded, so one blocked on a lock or a network read refuses as `run-record-unreadable` rather than hanging at a contributor's terminal.
 `bin/fm-timeout-lib.sh` owns imposing that bound, and `bin/fm-nm-run-lib.sh` delegates to it rather than carrying a second copy of the mechanism.
-`docs/configuration.md` owns the `FM_ATTEST_NM_TIMEOUT`, `FM_ATTEST_RECHECK_WAIT` and `FM_ATTEST_RECHECK_POLL` knobs, including why a non-positive `FM_ATTEST_NM_TIMEOUT` falls back to the default rather than shortening the bound while a zero `FM_ATTEST_RECHECK_WAIT` is a real value.
+`docs/configuration.md` owns the `FM_ATTEST_NM_TIMEOUT`, `FM_ATTEST_RECHECK_WAIT`, `FM_ATTEST_RECHECK_POLL` and `FM_ATTEST_RECHECK_LOCK_WAIT` knobs, including why a non-positive `FM_ATTEST_NM_TIMEOUT` falls back to the default rather than shortening the bound while zero is a real value for the wait and lock bounds.
 
 When `no-mistakes` publishes this note itself, the helper becomes redundant and nothing about the check changes: the note format is the contract, and which program writes it is not.
 
@@ -159,7 +159,8 @@ What it establishes before asking GitHub for anything:
 - Nothing has already been done about it.
   One re-run per run attempt, and at most three per repository, pull request and head, counted from a durable record.
 
-Every decision is appended to `fm-attest-recheck.log` in the repository's common git directory, one line per decision, binding repository, pull request, head, note object, run and attempt to the action taken and why.
+Every re-run request is appended to `fm-attest-recheck.log` in the repository's common git directory before it is made, binding repository, pull request, head, note object, run and attempt to the action taken and why.
+The log also records later request outcomes and the ordinary skip states that are reached after its prerequisites have been established.
 It is never committed and the check never reads it: it is an audit record of what this program did, not a second place a verdict could come from.
 The count and pre-request append are serialized through a bounded atomic lock shared by every worktree of the clone.
 The lock records its host and process, reclaims a holder only when that process is demonstrably gone on this host, and fails closed for live or unobservable holders.
@@ -196,23 +197,11 @@ A head proposed nowhere has no check to re-evaluate, and `write` reports exactly
 The two live in one suite because what the check tells a contributor is decided jointly by the verifier's exit status and the step's reading of it, and splitting them lets the two drift apart.
 Each negative fixture differs from the passing one by exactly one property, because a verifier that refused everything would satisfy red-only assertions and would be a worse defect than the honour-system check it replaces.
 
-The re-evaluation cases assert on the **action taken against the forge**, read out of a log of every call, and never on a message this program prints about it: a stub that answered "re-run requested" would satisfy an assertion on the wording while re-running nothing.
+The re-evaluation cases assert on the **action taken against the forge**, read out of a log of every call, and never on a message this program prints about it.
 Every negative case there additionally asserts that no re-run was requested, and the converging cases assert that nothing altered the pull request itself.
-The stub applies the real `--jq` filters to real fixture JSON, so the selection rules - this head only, this pull request, the run that started last - are exercised rather than assumed, and a case that cannot evaluate them skips rather than passing on a weaker check.
-The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which completed successfully with 75 passing cases.
+The stub applies the real `--jq` filters to real fixture JSON, so the selection rules - this head only, this pull request, the run that started last - are exercised rather than assumed.
 
-Each of those cases was watched fail before it was trusted.
-Twelve mutations were applied to the landed code one at a time and the suite re-run against each: removing the re-run request entirely, dropping the exact-head binding from run selection, reading a failed forge read as an empty result set, removing the re-evaluation from `write`, restoring the workflow's "close and reopen" instruction, removing the per-head bound, removing the per-attempt guard, selecting the run that started first instead of last, inverting the moved-head refusal, reading an unreadable candidate repository as one with no pull request, dropping the exact-head binding from pull request resolution, dropping its open-state filter, removing the case normalization from the head-repository comparison, keying the ledger on the caller's spelling again, and removing the ledger lock.
-Every one was caught by the case that claims that property, and each file was restored and byte-compared afterwards.
-Two of them were caught only after the case was strengthened, and both are recorded here because the first version of each was the failure this discipline exists to find: nothing distinguished a pull request merely associated with a commit from one open on it, and the closed-request case could fail for want of a fixture rather than by re-running something it should not have.
-
-One property is deliberately recorded as **unproven** rather than covered, because the case that claimed it was measured and found to prove something else.
-That two invocations racing for the last slot of the bound cannot both take it is not tested.
-Two independent processes collide only inside the sub-millisecond window between the count and the append, while each spends roughly 200ms in git and `gh` before reaching it, so the later one arrives after the earlier has appended and is turned away by the bound instead.
-The only thing that can release both at the same instant is the lock itself, which makes any such case synchronize on the mechanism it claims to test: two successive attempts at it stayed green with the lock removed entirely, ten runs out of ten and then eight out of eight.
-What is proven is narrower and true: the lock is taken, it is reached before the count, and a holder stops the request rather than letting it proceed, which goes red the moment the lock is removed.
-Mutual exclusion between two holders follows from `mkdir` being atomic on POSIX, a property of the operating system rather than of this program, and is inherited here rather than demonstrated.
-
-Two properties this suite does **not** establish, and neither should be read out of a green run.
-It does not prove GitHub re-runs a `pull_request` run against the unchanged head; that is GitHub's behavior, evidenced separately by pull request 89 of `sbracewell64/firstmate`, whose head `16065de721c8449fe0f72db5ca82f253d5ea6311` reached a green `Require no-mistakes` at `run_attempt` 2 of one run id with no new head.
-It does not prove that a stale failed attempt cannot block a merge after a later pass; `bin/fm-pr-merge.sh` owns that reduction and `tests/fm-pr-merge.test.sh` owns its proof.
+The suite proves that the ledger lock is taken before the count and that a holder stops the request.
+It does not directly prove that two invocations racing for the last budget slot cannot both take it; mutual exclusion between holders is inherited from the atomicity of POSIX `mkdir`.
+It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
+The stale-attempt merge reduction is separately owned and proved by `bin/fm-pr-merge.sh` and `tests/fm-pr-merge.test.sh`.

@@ -29,9 +29,9 @@
 # repository the check reads now serves a valid attestation for that exact head,
 # finds the open pull request the head belongs to, and re-runs the workflow run
 # that already judged it, which is GitHub's own way of re-deriving a verdict for
-# an unchanged head. It is bounded, idempotent, and records every decision, and
-# it never reports anything about the check itself: GitHub stays the only place
-# a verdict comes from. --no-recheck on write skips it.
+# an unchanged head. It is bounded, idempotent, and durably records each request
+# before making it. It never reports anything about the check itself: GitHub
+# stays the only place a verdict comes from. --no-recheck on write skips it.
 #
 # verify is the CI side. It reads a note already fetched into this repository
 # and reports one distinct reason per failure, so an absent attestation is
