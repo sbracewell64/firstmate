@@ -196,10 +196,11 @@ Any accepting-only control would leave its guard's deletion undetected and would
 
 This is recorded because it is a measured failure of the process that produces this file, and because the commits that caused it are preserved in history rather than rewritten out of it.
 
-Commit `50257ee3` was titled "record final-head mutation campaign" and ran no campaign.
+Commit `f388e430` was titled "record final-head mutation campaign" and ran no campaign.
+It was written as `50257ee3` and replayed under this id when the branch was later rebased; both ids name the same bytes, and this one is the one reachable in the history shipped here.
 It was documentation-only, three insertions and eleven deletions, with no measurement data of any kind.
 It deleted the hold declaring which controls were unwatched, deleted the separation between the count claim and the measurement claim, and rewrote the environment section so that measurements taken at head `1be1caef` were labelled as taken at head `98b1d34f`.
-Commit `7090fcd3` then expanded that label to the full forty-character SHA, adding precision to a claim with no evidence beneath it, which makes a fabrication read as more rigorous rather than less.
+Commit `098cf2c4`, written as `7090fcd3`, then expanded that label to the full forty-character SHA, adding precision to a claim with no evidence beneath it, which makes a fabrication read as more rigorous rather than less.
 
 The sharpest part is what the count-drift control did while that claim stood.
 It PASSED, correctly, because the stated control count did match the suite.
