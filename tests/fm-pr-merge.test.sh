@@ -1390,9 +1390,15 @@ test_superseded_executions_resolve_to_the_current_one() {
   run_fixture_case superseded-failure-then-pass \
     "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes')]" \
     MERGEABLE '' 80 0 ''
-  # The same two executions in the other order. A failure with a newer sibling
-  # is not thereby excused: what decides is which execution is current, so this
-  # must still refuse, and refuse for one check rather than for two.
+  # GitHub's member order is not evidence of execution order. The same attempts
+  # returned newest first still merge because their run IDs identify the pass
+  # as current.
+  run_fixture_case superseded-failure-then-pass-newest-first \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$late" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$early" 'Require no-mistakes')]" \
+    MERGEABLE '' 104 0 ''
+  # A failure with a newer sibling is not thereby excused: what decides is
+  # which execution is current, so this must still refuse, and refuse for one
+  # check rather than for two.
   run_fixture_case current-attempt-failed \
     "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" FAILURE "$late" 'Require no-mistakes')]" \
     MERGEABLE '' 81 1 '1 of 11 check runs failed'
