@@ -27,6 +27,7 @@ set -u
 BASE_PATH=${FM_TEST_BASE_PATH:-/usr/bin:/bin:/usr/sbin:/sbin}
 TMP_ROOT=$(fm_test_tmproot fm-bootstrap-tests)
 export FM_BACKEND_CMUX_BUNDLE_BIN="$TMP_ROOT/no-bundled-cmux"
+# Keep a developer's ambient no-mistakes run state from changing bootstrap diagnostics.
 export NM_HOME="$TMP_ROOT/no-mistakes-unused"
 
 # Hermetic runtime-backend detection. These cases pin the backend per-home via
