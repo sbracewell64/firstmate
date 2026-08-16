@@ -1532,7 +1532,7 @@ pulls_fixture() { # <path> <head> <owner/name>:<number>...
   local path=$1 head=$2 first=1 spec repo number
   shift 2
   {
-    printf '{"data":{"repository":{"object":{"associatedPullRequests":{"nodes":['
+    printf '{"data":{"repository":{"object":{"associatedPullRequests":{"pageInfo":{"hasNextPage":false},"nodes":['
     for spec in "$@"; do
       repo=${spec%%:*}
       number=${spec##*:}
@@ -1543,6 +1543,11 @@ pulls_fixture() { # <path> <head> <owner/name>:<number>...
     done
     printf ']}}}}}\n'
   } > "$path"
+}
+
+pulls_fixture_truncated() { # <path> <head> <owner/name> <number>
+  printf '{"data":{"repository":{"object":{"associatedPullRequests":{"pageInfo":{"hasNextPage":true},"nodes":[{"number":%s,"state":"OPEN","headRefOid":"%s","baseRepository":{"nameWithOwner":"%s"},"headRepository":{"nameWithOwner":"example/repo"}}]}}}}}\n' \
+    "$4" "$2" "$3" > "$1"
 }
 
 # A repository that simply does not have this commit. GraphQL answers that with
@@ -1716,17 +1721,81 @@ test_recheck_refuses_while_the_ledger_lock_is_held() {
   runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
   pr_fixture "$repo/pr.json" open "$head"
   mkdir -p "$repo/.git/fm-attest-recheck.lock"
+  printf '%s %s\n' "$(hostname)" "$$" > "$repo/.git/fm-attest-recheck.lock/holder"
   out=$(FM_ATTEST_RECHECK_LOCK_WAIT=1 recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
   rc=$?
   [ "$rc" -eq 2 ] || fail "a held ledger lock did not reach could-not-observe (exit $rc): $out"
   assert_contains "$out" "ledger-lock-unavailable" "a held lock was not named as its own state"
   assert_not_reran "$repo" "lock held"
   # The anchor, differing by exactly one property: nobody holding the lock.
+  rm "$repo/.git/fm-attest-recheck.lock/holder"
   rmdir "$repo/.git/fm-attest-recheck.lock"
   recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
     || fail "the same call with the lock free was refused"
   assert_reran "$repo" 100 "lock-free anchor"
   pass "fm-attest.sh: a held ledger lock stops the request and a free one does not"
+}
+
+test_recheck_reclaims_only_a_demonstrably_stale_ledger_lock() {
+  local repo head out rc stale_pid
+  jq_or_skip "only a demonstrably stale ledger lock is reclaimed" && return
+
+  repo="$TMP_ROOT/recheck-lock-stale"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  stale_pid=999999
+  while ps -p "$stale_pid" >/dev/null 2>&1; do stale_pid=$((stale_pid - 1)); done
+  mkdir -p "$repo/.git/fm-attest-recheck.lock"
+  printf '%s %s\n' "$(hostname)" "$stale_pid" > "$repo/.git/fm-attest-recheck.lock/holder"
+  recheck_out "$repo" --head "$head" --repo example/repo --pr 7 >/dev/null \
+    || fail "a demonstrably stale local lock was not reclaimed"
+  assert_reran "$repo" 100 "stale local lock"
+
+  repo="$TMP_ROOT/recheck-lock-remote"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  mkdir -p "$repo/.git/fm-attest-recheck.lock"
+  printf 'another-host.invalid %s\n' "$stale_pid" > "$repo/.git/fm-attest-recheck.lock/holder"
+  out=$(FM_ATTEST_RECHECK_LOCK_WAIT=0 recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a different-host lock was reclaimed (exit $rc): $out"
+  assert_not_reran "$repo" "different-host lock"
+
+  repo="$TMP_ROOT/recheck-lock-unobservable"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  mkdir -p "$repo/.git/fm-attest-recheck.lock"
+  out=$(FM_ATTEST_RECHECK_LOCK_WAIT=0 recheck_out "$repo" --head "$head" --repo example/repo --pr 7)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a lock without an observable holder was reclaimed (exit $rc): $out"
+  assert_not_reran "$repo" "unobservable lock"
+  pass "fm-attest.sh: only a demonstrably stale ledger lock is reclaimed"
+}
+
+test_recheck_refuses_a_truncated_pull_request_listing() {
+  local repo head out rc
+  jq_or_skip "a truncated pull request listing reaches no verdict" && return
+  repo="$TMP_ROOT/recheck-truncated-pulls"
+  new_published_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  pulls_fixture_truncated "$repo/pulls.json" "$head" example/repo 7
+  runs_fixture "$repo/runs.json" "$head" 100:1:completed:failure:7
+  pr_fixture "$repo/pr.json" open "$head"
+  out=$(recheck_out "$repo" --head "$head")
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a truncated pull request listing was accepted (exit $rc): $out"
+  assert_not_reran "$repo" "truncated pull request listing"
+  pulls_fixture "$repo/pulls.json" "$head" example/repo:7
+  recheck_out "$repo" --head "$head" >/dev/null \
+    || fail "the complete pull request listing anchor was refused"
+  assert_reran "$repo" 100 "complete pull request listing anchor"
+  pass "fm-attest.sh: a truncated pull request listing reaches no verdict"
 }
 
 # WHAT IS NOT PROVEN HERE, AND WHY NO CASE ABOVE CLAIMS IT.
@@ -2416,7 +2485,8 @@ test_recheck_reruns_the_run_that_judged_a_published_head
 test_recheck_requests_one_re_evaluation_per_attempt
 test_recheck_pre_request_record_consumes_the_attempt
 test_recheck_refuses_while_the_ledger_lock_is_held
-test_recheck_binds_the_published_repository_to_the_pr_head_repository
+test_recheck_reclaims_only_a_demonstrably_stale_ledger_lock
+test_recheck_refuses_a_truncated_pull_request_listing
 test_recheck_matches_a_head_repository_spelled_in_another_case
 test_recheck_matches_a_resolved_head_repository_spelled_in_another_case
 test_recheck_bound_is_not_reset_by_respelling_the_repository

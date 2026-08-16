@@ -985,6 +985,7 @@ recheck_ledger_prepare() {
 
 recheck_ledger_unlock() {
   [ "${recheck_lock_held:-0}" -eq 1 ] || return 0
+  rm -f "$recheck_lock_dir/holder" >/dev/null 2>&1 || true
   rmdir "$recheck_lock_dir" >/dev/null 2>&1 || true
   recheck_lock_held=0
 }
@@ -992,6 +993,33 @@ recheck_ledger_unlock() {
 recheck_ledger_lock() {
   recheck_lock_waited=0
   while ! mkdir "$recheck_lock_dir" 2>/dev/null; do
+    recheck_lock_host=$(hostname 2>/dev/null) || recheck_lock_host=
+    recheck_holder_host=
+    recheck_holder_pid=
+    if [ -n "$recheck_lock_host" ] && [ -r "$recheck_lock_dir/holder" ]; then
+      IFS=' ' read -r recheck_holder_host recheck_holder_pid < "$recheck_lock_dir/holder" || {
+        recheck_holder_host=
+        recheck_holder_pid=
+      }
+    fi
+    case "$recheck_holder_pid" in
+      '' | *[!0-9]*) ;;
+      *)
+        if [ "$recheck_holder_host" = "$recheck_lock_host" ] && command -v ps >/dev/null 2>&1; then
+          ps -p "$recheck_holder_pid" >/dev/null 2>&1
+          recheck_ps_rc=$?
+          if [ "$recheck_ps_rc" -eq 1 ]; then
+            recheck_stale_lock="$recheck_lock_dir.stale.$$.$recheck_lock_waited"
+            if mv "$recheck_lock_dir" "$recheck_stale_lock" 2>/dev/null; then
+              rm -rf "$recheck_stale_lock"
+              printf 'Reclaimed %s: process %s on %s is gone.\n' \
+                "$recheck_lock_dir" "$recheck_holder_pid" "$recheck_holder_host"
+              continue
+            fi
+          fi
+        fi
+        ;;
+    esac
     [ "$recheck_lock_waited" -lt "$RECHECK_LOCK_WAIT" ] || recheck_fail ledger-lock-unavailable \
       "Could not take the re-evaluation ledger lock at $recheck_lock_dir within ${RECHECK_LOCK_WAIT}s." \
       "The request bound could not be observed atomically, so nothing was re-triggered."
@@ -999,6 +1027,21 @@ recheck_ledger_lock() {
     recheck_lock_waited=$((recheck_lock_waited + 1))
   done
   recheck_lock_held=1
+  recheck_lock_host=$(hostname 2>/dev/null) || recheck_lock_host=
+  case "$recheck_lock_host" in
+    '' | *[!0-9A-Za-z._-]*)
+      recheck_ledger_unlock
+      recheck_fail ledger-lock-unavailable \
+        "Could not record this process as the holder of $recheck_lock_dir." \
+        "The lock could not be made safely reclaimable, so nothing was re-triggered."
+      ;;
+  esac
+  printf '%s %s\n' "$recheck_lock_host" "$$" > "$recheck_lock_dir/holder" 2>/dev/null || {
+    recheck_ledger_unlock
+    recheck_fail ledger-lock-unavailable \
+      "Could not record this process as the holder of $recheck_lock_dir." \
+      "The lock could not be made safely reclaimable, so nothing was re-triggered."
+  }
 }
 
 recheck_cleanup() {
@@ -1082,6 +1125,9 @@ recheck_resolve_pull_request() {
   # repository that genuinely could not be resolved still arrives as an error.
   # An unrelated remote is an ordinary thing for a checkout to carry, so that
   # distinction decides whether one of them can stop the whole command.
+  # A partial association listing could otherwise become a silent no-op: a
+  # mechanism whose job is to act automatically must never be able to do
+  # nothing quietly when GitHub says it withheld part of the answer.
   recheck_found=
   for recheck_slug in $recheck_candidates; do
     # shellcheck disable=SC2016  # $owner, $name and $oid are GraphQL variables.
@@ -1091,6 +1137,7 @@ recheck_resolve_pull_request() {
           object(oid: $oid) {
             ... on Commit {
               associatedPullRequests(first: 20) {
+                pageInfo { hasNextPage }
                 nodes {
                   number state headRefOid
                   baseRepository { nameWithOwner }
@@ -1102,16 +1149,24 @@ recheck_resolve_pull_request() {
         }
       }' \
       -f owner="${recheck_slug%%/*}" -f name="${recheck_slug##*/}" -f oid="$recheck_head" \
-      --jq '(.data.repository.object.associatedPullRequests.nodes // [])[]
-            | select(.state == "OPEN")
-            | select(.headRefOid == "'"$recheck_head"'")
-            | "\(.baseRepository.nameWithOwner) \(.number) \(.headRepository.nameWithOwner // "absent")"' \
+      --jq '"page-info \(.data.repository.object.associatedPullRequests.pageInfo.hasNextPage // false)",
+            ((.data.repository.object.associatedPullRequests.nodes // [])[]
+             | select(.state == "OPEN")
+             | select(.headRefOid == "'"$recheck_head"'")
+             | "\(.baseRepository.nameWithOwner) \(.number) \(.headRepository.nameWithOwner // "absent")")' \
       || recheck_fail forge-unreadable \
         "Could not ask $recheck_slug which pull requests are open on $recheck_head (gh exited $recheck_gh_rc)." \
         "gh said: ${RECHECK_ERR:-(nothing)}" \
         "That is a forge this could not read rather than a head with no pull request, so nothing here says whether one is open on it." \
         "Skip resolution and name the request instead: bin/fm-attest.sh recheck --head $recheck_head --repo <owner/name> --pr <number>"
+    recheck_page_info=${RECHECK_OUT%%
+*}
+    [ "$recheck_page_info" = "page-info true" ] && recheck_fail pull-request-list-truncated \
+      "GitHub returned only part of the pull request associations for $recheck_head in $recheck_slug." \
+      "Nothing was re-triggered because a partial pull request listing cannot resolve the request." \
+      "Skip resolution and name it: bin/fm-attest.sh recheck --head $recheck_head --repo <owner/name> --pr <number>"
     while IFS=' ' read -r recheck_found_repo recheck_found_pr recheck_found_head_repo; do
+      [ "$recheck_found_repo" != page-info ] || continue
       [ -n "$recheck_found_pr" ] || continue
       is_repo_slug "$recheck_found_repo" || continue
       is_positive_number "$recheck_found_pr" || continue
