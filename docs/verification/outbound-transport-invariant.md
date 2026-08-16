@@ -27,7 +27,7 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 34 outbound-artifact cases, 18 dead-predicate cases, and the bootstrap integration case pass.
+The 35 outbound-artifact cases, 18 dead-predicate cases, and the bootstrap integration case pass.
 What follows is why that sentence is worth anything.
 
 ## Watched-red evidence, one mutation per control
