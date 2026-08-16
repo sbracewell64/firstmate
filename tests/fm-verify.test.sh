@@ -710,7 +710,15 @@ test_review_envelope_transports_all_three_values() {
 {
   "schema": "review-envelope-inputs/v1",
   "project": {"id": "verify-fixture"},
-  "work": {"id": "verify-fixture-work"},
+  "work": {
+    "id": "verify-fixture-work",
+    "request": {
+      "kind": "pull-request",
+      "forge": "fixture-forge",
+      "id": "1",
+      "url": "https://fixture.invalid/reviews/1"
+    }
+  },
   "policy": {"version": "review-policy/1", "max_base_behind_main": 0},
   "requested_decision": "SEMANTIC_REVIEW",
   "candidate": {"base_ref": "main", "head_ref": "candidate"},
