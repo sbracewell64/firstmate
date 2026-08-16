@@ -811,8 +811,8 @@ event_wait_or_sleep() {
 capacity_retry_pending() {
   local capacity_record terminal
   for capacity_record in "$STATE"/*.capacity; do
-    [ -e "$capacity_record" ] || return 1
-    [ -f "$capacity_record" ] || continue
+    [ -e "$capacity_record" ] || [ -L "$capacity_record" ] || return 1
+    [ -f "$capacity_record" ] && [ ! -L "$capacity_record" ] || continue
     terminal=$(LC_ALL=C awk -F= '
       $1 == "terminal" { sub(/^[^=]*=/, ""); value = $0 }
       END { print value }

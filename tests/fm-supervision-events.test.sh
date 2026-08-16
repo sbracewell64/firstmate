@@ -48,8 +48,9 @@ test_capacity_retry_pending_ignores_terminal_diagnostics() {
   if capacity_retry_pending; then
     fail "a terminal capacity diagnostic still schedules a retry sweep"
   fi
+  ln -s "$STATE_DIR/missing-capacity-target" "$STATE_DIR/dangling.capacity"
   printf 'task=waiting\nterminal=\n' > "$STATE_DIR/waiting.capacity"
-  capacity_retry_pending || fail "an active capacity wait did not schedule a retry sweep"
+  capacity_retry_pending || fail "a dangling capacity link blocked a later active wait"
   pass "capacity retry sweeps require a non-terminal wait"
 }
 

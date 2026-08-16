@@ -609,7 +609,7 @@ SH
 }
 
 test_spent_deferral_bound_cannot_be_raised_in_place() {
-  local rec out rc
+  local rec out rc stop_out
   rec=$(make_refusal_home spent-override); read_home_record "$rec"
   write_brief "$HOME_DIR" spentoverride no-mistakes
 
@@ -621,15 +621,16 @@ test_spent_deferral_bound_cannot_be_raised_in_place() {
     --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null 2>&1 || rc=$?
   expect_code 0 "$rc" "the first deferral must spend the one allowed wait"
   rc=0
-  out=$(FM_ATTEMPT_DEFER_BUDGET_DEFAULT=1 \
+  stop_out=$(FM_ATTEMPT_DEFER_BUDGET_DEFAULT=1 \
     run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spentoverride \
     --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
     --signature vendor=still-spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
     --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium) || rc=$?
   expect_code 3 "$rc" "the second deferral must exhaust the recorded bound"
-  assert_contains "$out" "A higher --defer-budget must be chosen before the bound is spent" "the stop did not distinguish advance configuration from recovery"
-  assert_contains "$out" "retire the durable attempt record through ordinary task teardown" "the stop did not name the recovery that actually clears spent state"
-  assert_not_contains "$out" "release" "the stop advertised release even though it preserves the spent attempt record"
+  assert_contains "$stop_out" "A higher --defer-budget must be chosen before the bound is spent" "the stop did not distinguish advance configuration from recovery"
+  assert_contains "$stop_out" "bin/fm-capacity-retry.sh release spentoverride" "the stop did not first name the command that drops the capacity record"
+  assert_contains "$stop_out" "bin/fm-attempt.sh retire spentoverride" "the stop did not then name the command that clears the spent attempt record"
+  assert_contains "$stop_out" "both are required" "the stop did not prevent release alone from being mistaken for recovery"
 
   rc=0
   FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
@@ -641,6 +642,21 @@ test_spent_deferral_bound_cannot_be_raised_in_place() {
   expect_code 0 "$rc" "the retry driver must handle a terminal wait without failing"
   assert_absent "$HOME_DIR/state/spentoverride.meta" "the retry driver resumed a wait whose bound was already spent"
   assert_grep "terminal=" "$HOME_DIR/state/spentoverride.capacity" "the driver did not preserve a terminal diagnostic record"
+
+  run_retry "$HOME_DIR" "$(quota_record vendorq=95)" release spentoverride \
+    || fail "the message's capacity release command failed"
+  assert_absent "$HOME_DIR/state/spentoverride.capacity" "capacity release did not drop the stopped wait record"
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/spentoverride.attempt" "capacity release incorrectly cleared the spent attempt state by itself"
+  FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" "$ATTEMPT" retire spentoverride \
+    || fail "the message's attempt retirement command failed"
+  assert_absent "$HOME_DIR/state/spentoverride.attempt" "attempt retirement did not clear the spent bound"
+  rc=0
+  run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spentoverride \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=fresh-wait --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the message's complete recovery did not permit a fresh work item"
+  assert_no_grep "terminal=" "$HOME_DIR/state/spentoverride.attempt" "the fresh work item inherited the retired terminal state"
   pass "a spent deferral bound stays spent and names only executable recovery"
 }
 

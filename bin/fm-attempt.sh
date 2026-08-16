@@ -522,8 +522,8 @@ attempt_defer_refuse() {  # <id> <deferrals> <budget> <stagnant> <limit> <cause>
       >> "$STATE/$id.status" 2>/dev/null \
       || printf 'warning: could not append the exhausted-deferral failure for %s\n' "$id" >&2
   fi
-  printf 'error: %s has stopped waiting for capacity: %s (%s). The work was never dispatched into a pool that could not run it, and it is not lost - it is held in the backlog. A higher --defer-budget must be chosen before the bound is spent; there is no in-place grant after exhaustion. Continuing now requires a new decision: retire the durable attempt record through ordinary task teardown, then dispatch the task afresh as a new work item.\n' \
-    "$id" "$cause" "$FM_ATTEMPT_TERMINAL_STATE" >&2
+  printf 'error: %s has stopped waiting for capacity: %s (%s). The work was never dispatched into a pool that could not run it, and it is not lost - it is held in the backlog. A higher --defer-budget must be chosen before the bound is spent; there is no in-place grant after exhaustion. Continuing now requires a new decision: run bin/fm-capacity-retry.sh release %s and then bin/fm-attempt.sh retire %s; both are required. Then dispatch the task afresh as a new work item.\n' \
+    "$id" "$cause" "$FM_ATTEMPT_TERMINAL_STATE" "$id" "$id" >&2
 }
 
 # A signature is compared, never parsed, so it only has to be stable and to fit
