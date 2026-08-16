@@ -44,7 +44,21 @@ Both files are copied because the entrypoint sources its library from its own di
 
 Fifty-three controls pass against the shipped scripts.
 Fifty-one single-defect builds produced the fifty-one measured control failures below for the original fifty controls, because the dropped-obligation control was measured twice: once with its refusal removed, and once with the predecessor's obligation set read as empty, which is the shape the original incident took.
-The later evidence-symlink, duplicate-disposition and request-identity hardening controls have current green results but do not yet have watched-red measurements recorded here.
+
+## Outstanding watched-red measurements
+
+The following three controls have been observed passing and have NOT been observed failing:
+
+- Evidence-symlink containment.
+- Duplicate obligation dispositions.
+- Request identity and its integrity binding.
+
+A control that has only ever been seen green is indistinguishable from a control that measures nothing.
+Their per-property watched-red measurements are outstanding, not unnecessary, so this record declares them COULD-NOT-OBSERVE.
+This declaration is a HOLD ON LANDING, not a substitute for measurement.
+The pull request is not ready while this gap remains, and this declaration must be replaced by real per-property measurements before the work is called done.
+
+## Measured watched-red controls
 
 Each row is one control, the defect that reddened it, and the exact first failing line that defect produced.
 Every defect is a real edit to a real code path, and each build was confirmed to differ from the tracked script and to run before the suite was pointed at it.
