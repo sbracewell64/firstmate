@@ -17,6 +17,7 @@
 # edit, because the entrypoint sources its library from its own directory;
 # docs/verification/review-envelope-controls.md records those runs.
 set -u
+export FM_TEST_IDENTITY_CONTRACT=1
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -430,6 +431,47 @@ PY
   assert_contains "$CAPTURED" 'unobserved envelope_unreadable' \
     "the readable verify record must name the malformed envelope"
   assert_not_contains "$CAPTURED" 'Traceback' "validation must never end with a structural exception"
+
+  capture run_prepare "$case_dir" unknown-verdict
+  expect_code 0 "$CAPTURED_CODE" "the unknown-verdict precursor envelope compiles"
+  python3 - "$case_dir/unknown-verdict/envelope.json" <<'PY'
+import hashlib, json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+body = document["envelope"]
+body["ci"]["checks"][0]["verdict"] = "UNKNOWN"
+
+
+def digest(value):
+    canonical = json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
+
+
+body_digest = digest(body)
+project = body["identity"]["project"]
+work = body["identity"]["work"]
+document["digest"]["value"] = body_digest
+document["request_identity"] = digest({
+    "project": {"id": project["id"], "root_commits": project["root_commits"]},
+    "work": {"id": work["id"], "forge_request": work.get("request")},
+    "candidate_head_commit": body["candidate"]["head_commit"],
+    "envelope_digest": body_digest,
+    "policy_version": body["identity"]["policy"]["version"],
+})
+document["outer_digest"]["value"] = digest({
+    "compiled_at": document.get("compiled_at"),
+    "compiler": document.get("compiler"),
+    "body_digest": body_digest,
+    "request_identity": document.get("request_identity"),
+    "declared_request_identity": document.get("declared_request_identity"),
+})
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" unknown-verdict
+  expect_code 2 "$CAPTURED_CODE" "an unknown stored verdict is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved envelope_unreadable' \
+    "the readable verify record must classify every structural failure"
+  assert_not_contains "$CAPTURED" 'Traceback' "an unknown verdict must never escape as an exception"
   pass "a structurally malformed envelope emits a readable could-not-observe record"
 }
 
@@ -1512,6 +1554,19 @@ test_the_generated_contract_page_matches_the_catalog() {
   pass "the tracked contract page is exactly what the field catalog generates"
 }
 
+test_the_verification_record_matches_the_executed_control_count() {
+  local recorded executed actual
+  recorded=$(sed -n 's/^\([0-9][0-9]*\) controls pass against the shipped scripts\.$/\1/p' \
+    "$ROOT/docs/verification/review-envelope-controls.md")
+  executed=$(printf '%s' "$FM_TEST_PASSED_TESTS" | awk 'NF' | LC_ALL=C sort -u | wc -l)
+  actual=$((executed + 1))
+  [ -n "$recorded" ] || fail "the verification record must state one numeric control count"
+  [ "$actual" -gt 1 ] || fail "the control-count comparison must observe executed controls"
+  [ "$recorded" -eq "$actual" ] \
+    || fail "the verification record states $recorded controls, but the suite executed $actual"
+  pass "the verification record matches the suite's executed control count"
+}
+
 test_a_complete_candidate_is_review_ready
 test_required_contracts_are_computed_from_the_changed_files
 test_identical_facts_produce_an_identical_digest
@@ -1570,3 +1625,5 @@ test_declining_the_evidence_recheck_cannot_reach_review_ready
 test_validate_rechecks_evidence_bytes
 test_a_crashed_compiler_cannot_reach_a_verdict
 test_the_generated_contract_page_matches_the_catalog
+test_the_verification_record_matches_the_executed_control_count
+fm_test_contract "${BASH_SOURCE[0]}"
