@@ -1412,6 +1412,9 @@ test_superseded_executions_resolve_to_the_current_one() {
   run_fixture_case current-attempt-cancelled \
     "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" CANCELLED "$late" 'Require no-mistakes')]" \
     MERGEABLE '' 84 1 '1 of 11 check runs reported no result'
+  run_fixture_case current-attempt-skipped \
+    "[${success_runs%,},$(check_run_attempt_json "$WAIVED_CHECK_NAME" SUCCESS "$early" 'Require no-mistakes'),$(check_run_attempt_json "$WAIVED_CHECK_NAME" SKIPPED "$late" 'Require no-mistakes')]" \
+    MERGEABLE '' 103 1 '1 of 11 check runs reported no result'
   # A cancelled attempt that never started is still older when its run ID says
   # so, and cannot mask the successful rerun that followed it.
   run_fixture_case null-started-cancelled-before-pass \
