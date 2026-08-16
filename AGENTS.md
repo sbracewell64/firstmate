@@ -86,6 +86,7 @@ config/cmux-socket-password  optional cmux control-socket password; LOCAL, gitig
 config/wedge-alarm  optional away-mode wedge-alarm active-alert directives; LOCAL, gitignored; absent means auto (macOS Notification Center when available); see docs/wedge-alarm.md
 config/unattended-session  optional launch entry id an OS timer's unattended session start uses; LOCAL, gitignored; absent falls back to state/.launch-last, and neither present refuses rather than guessing a harness; see docs/configuration.md "Unattended session execution" (section 13)
 config/decision-surface-platform  optional path to the deterministic platform's AXI launcher, enabling the decision-surface platform probe; LOCAL, gitignored; absent means the platform seam is unconfigured and the fleet-side surface stands alone; see docs/configuration.md "Platform decision-surface seam"
+config/sol-control.json  optional Browser Sol control venue the outbound transport invariant addresses a request to; LOCAL, gitignored; absent leaves a waiting item's artifact state could-not-observe rather than clear, so it never reads as satisfied; see docs/configuration.md "Browser Sol control venue"
 config/x-mode.env    generated X-mode watcher cadence; LOCAL, gitignored; source before arming watcher when present
 data/                personal fleet records; LOCAL, gitignored as a whole
   backlog.md         task queue, dependencies, history
@@ -95,6 +96,8 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   projects.md        thin fleet navigation registry recording each project's standing delivery posture; firstmate-private, parsed for mechanical sync and seeding by fm-project-mode.sh (section 6)
   secondmates.md      local and remote secondmate routing table; firstmate-private, maintained by the secondmate seed helpers (section 6)
   wake-ledger.tsv    append-only wake-outcome and terminal-task evidence; bin/fm-wake-ledger.sh owns its format, vocabulary, and append semantics
+  outbound-artifacts/  durable correlation records joining an outbound request to its ruling, the item it resumed, and its disposition; written only by bin/fm-outbound-artifact.sh, which owns their format, identity rule and crash-safe checkpointing. ONE record serves both directions, so a ruling stays attributable to the request that asked for it
+  <id>/outbound-gate.json  OPTIONAL typed declaration that this item is waiting on an outbound artifact, naming its gate and exact head; the canonical alternative to firstmate recognising the wait from hold prose
   commitments/       OPTIONAL home-private commitment entries, same schema as the tracked commitments/ registry; LOCAL, gitignored; for captain-private commitments that must not reach a shared template repo. Absent is silent, unlike the tracked registry, whose absence is could-not-observe
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when role=secondmate
   <id>/report.md     scout task deliverable, written by the crewmate; survives teardown
@@ -275,6 +278,9 @@ Its `owners` ledger names the deterministic work with no landed owner yet; that 
 Load `decision-surface` before asserting any of those facts, before dispatching work that may already exist, and whenever a check returns contradicted or unevaluable.
 
 Before making a negative control-plane claim from a remote collection, use `bin/fm-control-read.sh`; its header owns the retrieval and conclusion contract.
+
+An item waiting on an outbound artifact, such as an independent review or a pull request, is legitimately blocked only while an applicable one actually exists.
+`bin/fm-outbound-artifact.sh check` owns that fact and session start relays its defects; waiting with no applicable artifact is a transport defect to repair, never an external wait to report as blocked.
 
 ### Intake and authority
 
@@ -553,7 +559,7 @@ It performs guarded fast-forward updates of firstmate and registered secondmate 
 
 These skills are not captain-invocable; load them only at their precise triggers.
 
-- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `MODEL_REGISTRY:`, `MODEL_PRICE:`, `MODEL_VERIFY:`, `ADMISSION_CONTROL:`, `WAKE_LEDGER:`, `TASK_AXIS_BACKFILL:`, `CAPACITY_DEFERRED:`, `CAPACITY_UNMEASURED:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `VALIDATION_DAEMON:`, `COMMITMENT:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
+- `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `MODEL_REGISTRY:`, `MODEL_PRICE:`, `MODEL_VERIFY:`, `ADMISSION_CONTROL:`, `WAKE_LEDGER:`, `TASK_AXIS_BACKFILL:`, `CAPACITY_DEFERRED:`, `CAPACITY_UNMEASURED:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `VALIDATION_DAEMON:`, `COMMITMENT:`, `OUTBOUND:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
 - `decision-surface` - load before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact, before dispatching work that may already exist, and whenever a `bin/fm-decision-surface.sh check` returns contradicted or unevaluable.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.

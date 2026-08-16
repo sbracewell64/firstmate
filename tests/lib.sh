@@ -55,6 +55,23 @@ FM_TEST_EMPTY_COMMITMENT_DIR="${TMPDIR:-/tmp}/fm-test-empty-commitment-register"
 mkdir -p "$FM_TEST_EMPTY_COMMITMENT_DIR" 2>/dev/null || true
 export FM_COMMITMENT_DIR="$FM_TEST_EMPTY_COMMITMENT_DIR"
 
+# Point every suite's session-start outbound sweep (bootstrap's OUTBOUND check)
+# at an EMPTY backlog, for the same reason and by the same discipline as the two
+# above: whether this machine's real fleet currently strands work must not leak
+# into a suite that asserts exact bootstrap output.
+#
+# It is an empty backlog rather than an absent one on purpose. A fixture home is
+# usually not a git repository, so the real snapshot reader fails there and the
+# sweep correctly answers could-not-observe - which PRINTS, because a blind sweep
+# that stayed quiet would be the defect the invariant exists to refuse. Handing
+# it a readable empty backlog is what makes silence mean "nothing is stranded"
+# instead of "nothing was checked". Cases that exercise the sweep set
+# FM_OUTBOUND_SNAPSHOT per invocation, which wins.
+FM_TEST_EMPTY_SNAPSHOT="${TMPDIR:-/tmp}/fm-test-empty-fleet-snapshot.json"
+printf '%s\n' '{"schema":"fm-fleet-snapshot.v1","backlog":{"present":true,"records":[]},"tasks":[]}' \
+  > "$FM_TEST_EMPTY_SNAPSHOT" 2>/dev/null || true
+export FM_OUTBOUND_SNAPSHOT="$FM_TEST_EMPTY_SNAPSHOT"
+
 # Resolve the repo root from this library's own location. Consumed by sourcing
 # test files, not by this library, so it reads as "unused" here.
 # shellcheck disable=SC2034

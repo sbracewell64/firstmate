@@ -18,6 +18,10 @@
 #                  _scheduling.admission_control - <reason>",
 #                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",
 #                 "COMMITMENT: register unreadable - <reason>",
+#                 "OUTBOUND: <item> is waiting on <gate> with no applicable
+#                  durable artifact (<token>) - <evidence>",
+#                 "OUTBOUND: <item> artifact state COULD-NOT-OBSERVE (<token>) - <evidence>",
+#                 "OUTBOUND: sweep unevaluable - <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "VALIDATION_DAEMON: down|unknown - <evidence>",
@@ -962,6 +966,40 @@ commitment_register_report() {
   printf '%s\n' "$out"
 }
 
+# Relay every item waiting on an outbound artifact that does not exist.
+#
+# This is the structural half of the outbound transport invariant, and it is the
+# half that makes it an invariant rather than a command. The defect it reports -
+# work sitting in a waiting state that nobody ever asked anyone about - is
+# INVISIBLE by construction: it produces no failure, no error, and no wake, which
+# is exactly how four pull requests waited days for a review nobody had requested
+# and three finished branches were never offered to anyone. Nothing surfaced them
+# until a person went looking. Session start is where that stops being luck.
+#
+# Read-only, detect-only, and bounded by the command's own probe cap and per-probe
+# timeout, so it runs in a lock-refused session too. It is never suppressed by
+# age, count, or rate: quieting the question would hide a genuine stranded item
+# along with the noise, which is the failure it exists to prevent.
+# bin/fm-outbound-artifact.sh owns the sweep, the verdicts, and the exact line
+# wording; this function only relays it.
+#
+# An ABSENT command is the one way this relay could go quietly vacuous, so it is
+# the loudest case here rather than the silent one. A home running a bin/ that
+# predates the invariant, or one whose exec bit a checkout dropped, would
+# otherwise report a clean fleet while nothing checked at all - which is the
+# reads-as-working-while-doing-nothing shape the whole mechanism refuses.
+outbound_artifact_report() {
+  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out
+  if [ ! -x "$bin" ]; then
+    printf 'OUTBOUND: sweep unevaluable - %s is missing or not executable, so no waiting item could be checked\n' \
+      "bin/fm-outbound-artifact.sh"
+    return 0
+  fi
+  out=$(FM_HOME="$FM_HOME" "$bin" defects 2>/dev/null || true)
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out"
+}
+
 model_registry_validate() {
   local reg dispatch err drift routed
   reg="$CONFIG/models.json"
@@ -1373,6 +1411,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != 
   echo "BOOTSTRAP_INFO: crew harness override active: $crew"
 fi
 commitment_register_report
+outbound_artifact_report
 crew_dispatch_validate
 model_registry_validate
 admission_control_validate

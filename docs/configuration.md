@@ -179,6 +179,29 @@ An absent file means the seam is unconfigured, which is the shipped default and 
 The seam reports `wiring: not-wired` until the platform projection resolves this home's fleet task ids: a reachable launcher that names none of this fleet's work is projecting other identities, so consuming it as fleet truth would be the same silent contradiction the surface exists to prevent.
 [`verification/decision-surface.md`](verification/decision-surface.md) records the dated probe evidence and the command that refreshes it.
 
+## Browser Sol control venue (config/sol-control.json)
+
+`bin/fm-outbound-artifact.sh` enforces one invariant: an item may not remain in a state that implies an outstanding outbound artifact while no applicable durable artifact exists.
+Detecting that condition needs no configuration and always runs.
+Creating the missing artifact on the `sol-control` channel needs to know where to address it, and that is what this optional local, gitignored file holds.
+
+The file is one JSON object with two required fields.
+
+```json
+{ "repo": "owner/name", "issue": 2 }
+```
+
+`repo` is the control repository in `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
+`issue` may be a number or a string; both are read the same way.
+
+An absent or incomplete file does not make a waiting item clear.
+It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND_TRANSPORT_UNCONFIGURED`, exit 4 - because the sweep genuinely cannot see the venue it would have to look at.
+Detection and emission are separated exactly so an unconfigured venue can never read as a satisfied invariant.
+The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
+
+`fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects at every session start so a stranded item surfaces without anyone going looking.
+[`verification/outbound-transport-invariant.md`](verification/outbound-transport-invariant.md) records the dated watched-red evidence for each control and the commands that refresh it.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and pins `commands.lint` to `bin/fm-lint.sh` so local lint matches CI.

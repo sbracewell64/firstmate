@@ -575,11 +575,22 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
 # cases catch the old "everything but orca demands tmux" bug: with the buggy
 # TOOLS list a herdr/zellij/cmux home would report MISSING: tmux here.
 make_fake_toolchain_no_tmux() {  # <case-dir> <extra-cli...>
-  local dir=$1 fakebin
+  local dir=$1 fakebin real_jq
   shift
   fakebin=$(make_fake_toolchain "$dir")
   rm -f "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" jq "$@"
+  fm_fake_exit0 "$fakebin" "$@"
+  # jq is stubbed elsewhere only to satisfy a presence check, but bootstrap's
+  # outbound sweep actually RUNS it, and an exit-0 stub that prints nothing makes
+  # that sweep correctly report could-not-observe - which is a real diagnostic,
+  # not the silence this case asserts. A genuine dependency present means the
+  # genuine binary here.
+  real_jq=$(command -v jq 2>/dev/null || true)
+  if [ -n "$real_jq" ]; then
+    ln -sf "$real_jq" "$fakebin/jq"
+  else
+    fm_fake_exit0 "$fakebin" jq
+  fi
   printf '%s\n' "$fakebin"
 }
 
