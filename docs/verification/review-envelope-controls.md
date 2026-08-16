@@ -33,6 +33,14 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
 Every measurement below belongs to head `1be1caef`, NOT the current head, so the table describes that one earlier experiment and is not current for the code shipped here.
 
+## Campaign artifact
+
+The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
+A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
+
+Campaign head: `0000000`.
+Mutations built: 0.
+
 ## Commands
 
 The green pass, which must show every control passing:
@@ -52,7 +60,7 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
-63 controls pass against the shipped scripts.
+64 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 

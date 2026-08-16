@@ -1679,6 +1679,69 @@ test_the_verification_record_matches_the_executed_control_count() {
   pass "the verification record matches the suite's executed control count"
 }
 
+# The measurement record's claims are checked against a durable artifact rather
+# than taken on their own word. A prior commit on this branch retitled itself
+# "record final-head mutation campaign", ran nothing, and relabelled
+# measurements taken at one head as taken at another - and every check in this
+# suite still passed, because nothing bound the prose to the experiment.
+#
+# The binding is by CONTENT DIGEST of the measured subjects, not by a commit
+# label, because a label can be rewritten as cheaply as the sentence it appears
+# in. This deliberately couples to subject identity rather than to subject text:
+# it never asserts what any source byte is, only that the bytes measured are the
+# bytes shipped.
+test_the_measurement_record_is_backed_by_the_campaign_artifact() {
+  local artifact=$ROOT/docs/verification/review-envelope-campaign.json
+  local record=$ROOT/docs/verification/review-envelope-controls.md
+  [ -f "$artifact" ] || fail "the campaign artifact is absent, so no measurement claim is checkable"
+  python3 - "$artifact" "$record" "$ROOT" <<'PYEOF' || fail "the measurement record is not backed by the campaign artifact"
+import hashlib, json, re, sys
+
+artifact_path, record_path, root = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    artifact = json.load(open(artifact_path, encoding="utf-8"))
+except (OSError, ValueError) as error:
+    sys.stderr.write("campaign artifact is unreadable: %s\n" % error)
+    sys.exit(1)
+record = open(record_path, encoding="utf-8").read()
+
+# The measured subjects must still be the shipped subjects, byte for byte.
+for path, recorded in sorted(artifact.get("subjects", {}).items()):
+    try:
+        actual = "sha256:" + hashlib.sha256(open(root + "/" + path, "rb").read()).hexdigest()
+    except OSError as error:
+        sys.stderr.write("measured subject is unreadable: %s\n" % error)
+        sys.exit(1)
+    if actual != recorded:
+        sys.stderr.write(
+            "%s changed since the campaign: measured %s, shipped %s\n" % (path, recorded, actual))
+        sys.exit(1)
+
+# The record's stated head must be the artifact's, so relabelling the prose
+# alone contradicts the experiment instead of quietly redescribing it.
+stated = re.search(r"^Campaign head: `([0-9a-f]{7,40})`\.$", record, re.M)
+if not stated:
+    sys.stderr.write("the record states no campaign head in the required form\n")
+    sys.exit(1)
+if stated.group(1) != artifact.get("head"):
+    sys.stderr.write(
+        "record states campaign head %s, artifact was produced at %s\n"
+        % (stated.group(1), artifact.get("head")))
+    sys.exit(1)
+
+built = re.search(r"^Mutations built: ([0-9]+)\.$", record, re.M)
+if not built:
+    sys.stderr.write("the record states no mutation count in the required form\n")
+    sys.exit(1)
+if int(built.group(1)) != len(artifact.get("mutations", [])):
+    sys.stderr.write(
+        "record states %s mutations, artifact holds %d\n"
+        % (built.group(1), len(artifact.get("mutations", []))))
+    sys.exit(1)
+PYEOF
+  pass "the measurement record's claims are backed by the campaign artifact"
+}
+
 test_a_complete_candidate_is_review_ready
 test_required_contracts_are_computed_from_the_changed_files
 test_identical_facts_produce_an_identical_digest
@@ -1741,5 +1804,6 @@ test_declining_the_evidence_recheck_cannot_reach_review_ready
 test_validate_rechecks_evidence_bytes
 test_a_crashed_compiler_cannot_reach_a_verdict
 test_the_generated_contract_page_matches_the_catalog
+test_the_measurement_record_is_backed_by_the_campaign_artifact
 test_the_verification_record_matches_the_executed_control_count
 fm_test_contract "${BASH_SOURCE[0]}"
