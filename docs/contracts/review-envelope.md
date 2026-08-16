@@ -41,7 +41,7 @@ Who is asking for what, under which policy.
 | `project.origin_url` | `derived` | no | The configured origin remote, recorded when one exists. |
 | `work.id` | `declared` | yes | The work item this candidate belongs to. |
 | `work.increment` | `declared` | no | The increment within that work item. |
-| `work.request` | `declared` | no | The forge request this candidate is carried by, as kind, forge, id and url. |
+| `work.request` | `declared` | yes | The forge request this candidate is carried by, as kind, forge, id and url. |
 | `policy.version` | `declared` | yes | The review-policy version this envelope was compiled under. |
 | `policy.max_base_behind_main` | `declared` | yes | How far the base may trail the trunk before the envelope refuses. |
 | `requested_decision` | `declared` | yes | The decision this envelope asks for, as an uppercase token. |
@@ -98,7 +98,7 @@ Verification contracts by identity and digest, and their exact-head results.
 | `applicability_rules` | `declared` | yes | Rules mapping changed paths to required contract ids; a mandatory rule applies to every candidate. |
 | `required_contract_ids` | `computed` | yes | The contracts this candidate must satisfy, computed from the observed changed files against those rules. |
 | `contracts` | `declared` | yes | Contract references by id, version and digest, plus their declared execution worlds. |
-| `results` | `declared` | yes | One result per contract and world, each binding its verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration. |
+| `results` | `declared` | yes | One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration. |
 
 ## capabilities
 
@@ -173,7 +173,9 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `changed_file_set_empty` | The contribution changes nothing. |
 | `scope_fully_excluded` | Every changed path is excluded, so nothing is under review. |
 | `missing_required_verification_contract` | A computed-required contract has no reference, or its reference carries no digest. |
+| `verification_contract_id_ambiguous` | More than one verification contract reference carries the same stable id. |
 | `missing_required_verifier_result` | A required contract has no result for a required world. |
+| `verification_result_contract_mismatch` | A verifier result does not bind the selected contract's exact digest. |
 | `verifier_identity_unpinned` | A required result names no verifier id and digest, so what ran is not identified. |
 | `required_verifier_failed` | A required verifier reached an adverse verdict. |
 | `required_verifier_wrong_head` | A required verifier result binds a head or tree that is not the candidate's. |
@@ -191,6 +193,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `adverse_finding_blocking` | A known adverse finding is marked blocking. |
 | `ruling_applicability_mismatch` | A ruling this envelope relies on does not apply to this candidate. |
 | `request_identity_mismatch` | A declared or stored request identity does not match the identity recomputed from the bound facts. |
+| `forge_request_identity_invalid` | The authoritative forge request identity is absent or incomplete. |
 | `obligation_dropped` | A predecessor obligation is unaccounted for. |
 | `obligation_preserved_but_absent` | An obligation was called preserved and is not in the active set. |
 | `obligation_satisfied_without_evidence` | A satisfied obligation names no evidence that resolves and digests. |
