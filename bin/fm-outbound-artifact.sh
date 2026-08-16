@@ -152,6 +152,8 @@ record_write() {  # <request-id> <json>
   mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
 }
 
+record_identity_cno() { printf '%s\n' "$FM_OUTBOUND_IDENTITY_CNO"; }
+
 # Three-valued on purpose: absent and unreadable are different answers, and only
 # the caller knows which of them is safe in its context.
 # Prints one of the three identity verdicts. It recomputes the identity from the
@@ -164,24 +166,23 @@ record_write() {  # <request-id> <json>
 # different repairs.
 record_identity_verdict() {  # <record-json> <expected-id>
   local raw=$1 expected=$2 state stored gate project repo item pr head computed
-  cno() { printf '%s\n' "$FM_OUTBOUND_IDENTITY_CNO"; }
   printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
-    '.schema == $s' >/dev/null 2>&1 || { cno; return 0; }
-  state=$(printf '%s' "$raw" | jq -er '.state // empty') || { cno; return 0; }
-  fm_outbound_record_state_valid "$state" || { cno; return 0; }
-  stored=$(printf '%s' "$raw" | jq -er '.request_id // empty') || { cno; return 0; }
-  gate=$(printf '%s' "$raw" | jq -er '.identity.gate // empty') || { cno; return 0; }
-  project=$(printf '%s' "$raw" | jq -er '.identity.project // empty') || { cno; return 0; }
-  repo=$(printf '%s' "$raw" | jq -er '.identity.repo // empty') || { cno; return 0; }
-  item=$(printf '%s' "$raw" | jq -er '.identity.item // empty') || { cno; return 0; }
-  pr=$(printf '%s' "$raw" | jq -r '.identity.pr // "-"') || { cno; return 0; }
-  head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || { cno; return 0; }
+    '.schema == $s' >/dev/null 2>&1 || { record_identity_cno; return 0; }
+  state=$(printf '%s' "$raw" | jq -er '.state // empty') || { record_identity_cno; return 0; }
+  fm_outbound_record_state_valid "$state" || { record_identity_cno; return 0; }
+  stored=$(printf '%s' "$raw" | jq -er '.request_id // empty') || { record_identity_cno; return 0; }
+  gate=$(printf '%s' "$raw" | jq -er '.identity.gate // empty') || { record_identity_cno; return 0; }
+  project=$(printf '%s' "$raw" | jq -er '.identity.project // empty') || { record_identity_cno; return 0; }
+  repo=$(printf '%s' "$raw" | jq -er '.identity.repo // empty') || { record_identity_cno; return 0; }
+  item=$(printf '%s' "$raw" | jq -er '.identity.item // empty') || { record_identity_cno; return 0; }
+  pr=$(printf '%s' "$raw" | jq -r '.identity.pr // "-"') || { record_identity_cno; return 0; }
+  head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || { record_identity_cno; return 0; }
   # An identity that cannot be bound cannot be compared: that is an absent
   # identity, not one naming something else.
   fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" \
-    >/dev/null 2>&1 || { cno; return 0; }
+    >/dev/null 2>&1 || { record_identity_cno; return 0; }
   computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head") \
-    || { cno; return 0; }
+    || { record_identity_cno; return 0; }
   if [ "$stored" = "$expected" ] && [ "$computed" = "$expected" ]; then
     printf '%s\n' "$FM_OUTBOUND_IDENTITY_VALID"
   else
@@ -951,9 +952,7 @@ cmd_poll() {
     if [ "$rc" -eq 4 ] || { [ "$rc" -ne 0 ] && [ "$failed" -eq 0 ]; }; then
       failed=$rc
     fi
-  done <<EOF
-$comments
-EOF
+  done <<< "$comments"
   return "$failed"
 }
 
