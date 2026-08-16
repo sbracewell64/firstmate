@@ -522,7 +522,7 @@ attempt_defer_refuse() {  # <id> <deferrals> <budget> <stagnant> <limit> <cause>
       >> "$STATE/$id.status" 2>/dev/null \
       || printf 'warning: could not append the exhausted-deferral failure for %s\n' "$id" >&2
   fi
-  printf 'error: %s has stopped waiting for capacity: %s (%s). The work was never dispatched into a pool that could not run it, and it is not lost - it is held in the backlog. Raise the bound deliberately with --defer-budget <n> if the wait is still worth making; it is recorded.\n' \
+  printf 'error: %s has stopped waiting for capacity: %s (%s). The work was never dispatched into a pool that could not run it, and it is not lost - it is held in the backlog. A higher --defer-budget must be chosen before the bound is spent; there is no in-place grant after exhaustion. Continuing now requires a new decision: retire the durable attempt record through ordinary task teardown, then dispatch the task afresh as a new work item.\n' \
     "$id" "$cause" "$FM_ATTEMPT_TERMINAL_STATE" >&2
 }
 

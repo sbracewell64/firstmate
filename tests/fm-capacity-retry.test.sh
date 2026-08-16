@@ -608,6 +608,42 @@ SH
   pass "a spent bound and an unmeasurable bound are different terminal states in the durable record"
 }
 
+test_spent_deferral_bound_cannot_be_raised_in_place() {
+  local rec out rc
+  rec=$(make_refusal_home spent-override); read_home_record "$rec"
+  write_brief "$HOME_DIR" spentoverride no-mistakes
+
+  rc=0
+  FM_ATTEMPT_DEFER_BUDGET_DEFAULT=1 \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spentoverride \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the first deferral must spend the one allowed wait"
+  rc=0
+  out=$(FM_ATTEMPT_DEFER_BUDGET_DEFAULT=1 \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0)" defer spentoverride \
+    --route R-SOLO --floor F-MED --pool vendor/large --reason spent \
+    --signature vendor=still-spent --project "$PROJ_DIR" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --model vendor/large --effort medium) || rc=$?
+  expect_code 3 "$rc" "the second deferral must exhaust the recorded bound"
+  assert_contains "$out" "A higher --defer-budget must be chosen before the bound is spent" "the stop did not distinguish advance configuration from recovery"
+  assert_contains "$out" "retire the durable attempt record through ordinary task teardown" "the stop did not name the recovery that actually clears spent state"
+  assert_not_contains "$out" "release" "the stop advertised release even though it preserves the spent attempt record"
+
+  rc=0
+  FM_HOME="$HOME_DIR" FM_STATE_OVERRIDE="$HOME_DIR/state" \
+    "$ATTEMPT" defer spentoverride --defer-budget 5 --signature vendor=still-spent >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the recorded override must remain writable without reopening the work item"
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/spentoverride.attempt" "the larger supplied budget cleared the terminal state"
+  rc=0
+  out=$(run_retry "$HOME_DIR" "$(quota_record vendorq=95)" tick --id spentoverride --force) || rc=$?
+  expect_code 0 "$rc" "the retry driver must handle a terminal wait without failing"
+  assert_absent "$HOME_DIR/state/spentoverride.meta" "the retry driver resumed a wait whose bound was already spent"
+  assert_grep "terminal=" "$HOME_DIR/state/spentoverride.capacity" "the driver did not preserve a terminal diagnostic record"
+  pass "a spent deferral bound stays spent and names only executable recovery"
+}
+
 # The captain-facing half of the same rule. "Name which, in the durable record
 # AND in whatever reaches me" - a record that distinguishes the two stops behind
 # a startup line that reports them as one number still tells the fleet the pool
@@ -650,6 +686,7 @@ test_recorded_effort_survives_policy_edit
 test_uncounted_deferral_fails_closed
 test_one_bound_per_work_item_across_substitutions
 test_the_two_capacity_stops_are_distinguishable
+test_spent_deferral_bound_cannot_be_raised_in_place
 test_bootstrap_reports_the_two_capacity_stops_separately
 test_same_band_substitution_is_required
 test_unrecordable_bound_leaves_no_active_wait
