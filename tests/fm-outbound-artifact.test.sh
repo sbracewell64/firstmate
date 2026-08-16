@@ -457,7 +457,7 @@ test_done_rows_are_not_waiting() {
 }
 
 test_unstructured_row_is_not_silently_clear() {
-  local out v
+  local dir out rc v
   # A row this parser cannot read must not read as clear. It is classified
   # unreadable, which is the third value rather than a quiet pass.
   v=$(
@@ -474,7 +474,16 @@ test_unstructured_row_is_not_silently_clear() {
   )
   [ "$out" = "unreadable" ] \
     || fail "control 13: unparseable JSON classified as '$out', not unreadable"
-  pass "control 13: an unreadable row is could-not-observe, never clear"
+  dir=$(new_case c13)
+  jq '.backlog.records = [{structured:false,raw:"a free-form line"}]' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "control 13: unreadable backlog row returned $rc instead of unevaluable: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_BACKLOG_ROW_UNREADABLE' \
+    || fail "control 13: sweep silently omitted its unreadable row: $out"
+  pass "control 13: an unreadable backlog row is could-not-observe, never clear"
 }
 
 test_recognition_survives_a_truncated_hold_reason() {
