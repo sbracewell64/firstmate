@@ -139,7 +139,16 @@ case "$path" in
       '{id:$id,issue_url:("https://api.github.com/repos/o/control/issues/"+$issue),body:$body}'
     exit 0 ;;
   */commits/*/pulls)
-    cat "$F/pr_number" 2>/dev/null || true
+    query=
+    prev=
+    for a in "$@"; do
+      case $prev in --jq) query=$a ;; esac
+      prev=$a
+    done
+    current=$(cat "$F/pr_head" 2>/dev/null || true)
+    case $query in
+      *".head.sha == \"$current\""*) cat "$F/pr_number" 2>/dev/null || true ;;
+    esac
     exit 0 ;;
   */issues/*/comments)
     if [ "$is_post" = 1 ]; then
@@ -662,7 +671,7 @@ test_terminal_request_is_not_applicable() {
 }
 
 test_request_requires_readable_correlation() {
-  local dir rid record out rc
+  local dir rid record valid_record out rc
   dir=$(new_case c7correlation)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: emit failed"
   rid=$(awk '{print $2}' "$dir/forge/comments")
@@ -674,6 +683,8 @@ test_request_requires_readable_correlation() {
     || fail "correlation: missing record satisfied the wait: $out"
 
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: adoption failed"
+  valid_record="$dir/valid-record.json"
+  cp "$record" "$valid_record"
   jq '.state = "unknown"' "$record" > "$record.tmp"
   mv "$record.tmp" "$record"
   out=$(run_ob "$dir" check 2>&1); rc=$?
@@ -681,9 +692,17 @@ test_request_requires_readable_correlation() {
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
     || fail "correlation: invalid lifecycle state satisfied the wait: $out"
 
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correlation: repair failed"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "correlation: emit overwrote an unreadable record: $out"
+  [ "$(jq -r '.state' "$record")" = "unknown" ] \
+    || fail "correlation: refused emit mutated the unreadable record"
+  cp "$valid_record" "$record"
   jq '.identity.item = "another-item"' "$record" > "$record.tmp"
   mv "$record.tmp" "$record"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "correlation: emit did not refuse a foreign keyed record: $out"
+  [ "$(jq -r '.identity.item' "$record")" = "another-item" ] \
+    || fail "correlation: refused emit overwrote the foreign keyed record"
   # A MISMATCH is not could-not-observe. This record is perfectly readable and
   # says plainly that it belongs to another request, which is a correlation
   # defect (exit 3) and not a failure to observe (exit 4). The distinction is not
@@ -698,7 +717,7 @@ test_request_requires_readable_correlation() {
     || fail "correlation: mismatched identity was not reported as a mismatch: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
     && fail "correlation: a readable foreign record was reported as unreadable: $out"
-  pass "correlation: missing, invalid, and mismatched records each refuse, and are told apart"
+  pass "correlation: missing, invalid, and mismatched records refuse without overwrite"
 }
 
 test_close_requires_resumed_work() {
@@ -772,11 +791,25 @@ test_pull_request_probe_prefers_contribution_target() {
   jq '.backlog.records[0].contribution_venue = "upstream/project"' "$dir/snap.json" > "$dir/snap2.json"
   mv "$dir/snap2.json" "$dir/snap.json"
   printf '101\n' > "$dir/forge/pr_number"
+  printf '%s\n' "$HEAD_A" > "$dir/forge/pr_head"
   out=$(run_ob "$dir" check 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "PR venue: declared contribution target was not probed: $out"
   printf '%s' "$out" | grep -q 'pull/101' \
     || fail "PR venue: upstream pull request was not reported: $out"
   pass "PR venue: detection uses the declared contribution target"
+}
+
+test_pull_request_must_match_exact_head() {
+  local dir out rc
+  dir=$(new_case pr-exact-head)
+  write_snapshot "$dir/snap.json" external "never submitted - no pull request exists for this branch"
+  printf '101\n' > "$dir/forge/pr_number"
+  printf '%s\n' "$HEAD_B" > "$dir/forge/pr_head"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "PR exact head: a PR advanced beyond the requested commit satisfied the wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_NO_ARTIFACT' \
+    || fail "PR exact head: the advanced PR was refused for the wrong reason: $out"
+  pass "PR detection requires the pull request head to equal the waiting head"
 }
 
 test_never_submitted_branch_is_recognised() {
@@ -1004,6 +1037,7 @@ test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass
 test_detect_only_channel_refuses_to_emit
 test_pull_request_probe_prefers_contribution_target
+test_pull_request_must_match_exact_head
 test_never_submitted_branch_is_recognised
 test_done_rows_are_not_waiting
 test_unstructured_row_is_not_silently_clear

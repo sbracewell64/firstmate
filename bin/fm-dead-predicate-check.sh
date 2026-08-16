@@ -104,6 +104,30 @@ search_roots() {
   done
 }
 
+function_has_call_site() {  # <function>
+  local fn=$1 d source
+  while IFS= read -r d; do
+    while IFS= read -r source; do
+      if awk -v fn="$fn" '
+      {
+        line = $0
+        sub(/[[:space:]]*#.*/, "", line)
+        if (line ~ ("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{")) {
+          sub("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*\\{[[:space:]]*", "", line)
+        } else if (line ~ ("^[[:space:]]*" fn "[[:space:]]*\\(\\)[[:space:]]*$")) next
+        if (line ~ ("(^|[;|&(){}])[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)")) found = 1
+        if (line ~ ("(^|[;|&(){}])[[:space:]]*trap[[:space:]]+[\047\"]?" fn "([^A-Za-z0-9_]|$)")) found = 1
+        if ($0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) found = 1
+      }
+      END { exit(found ? 0 : 1) }
+      ' "$source"; then
+        return 0
+      fi
+    done < <(find "$d" -type f -print 2>/dev/null)
+  done < <(search_roots)
+  return 1
+}
+
 enrolled_files() {
   if [ "${#TARGETS[@]}" -gt 0 ]; then
     printf '%s\n' "${TARGETS[@]}"
@@ -136,15 +160,7 @@ for f in "${FILES[@]}"; do
     lineno=${line%%:*}
     fn=$(printf '%s' "${line#*:}" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)().*/\1/p')
     [ -n "$fn" ] || continue
-    # Total occurrences of the bare identifier across the searched roots, minus
-    # this definition. Zero means nothing anywhere consults it.
-    uses=0
-    while IFS= read -r d; do
-      n=$(grep -rhoE "\\b$fn\\b" "$d" 2>/dev/null | wc -l)
-      uses=$((uses + n))
-    done < <(search_roots)
-    uses=$((uses - 1))
-    [ "$uses" -le 0 ] || continue
+    function_has_call_site "$fn" && continue
     prev=$((lineno - 1))
     if [ "$prev" -ge 1 ] && sed -n "${prev}p" "$f" | grep -qF "$KEEP_MARKER"; then
       reason=$(sed -n "${prev}p" "$f" | sed "s/.*${KEEP_MARKER}[[:space:]]*//")

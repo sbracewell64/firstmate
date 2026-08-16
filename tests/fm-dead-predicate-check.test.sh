@@ -56,6 +56,25 @@ test_consulted_function_passes() {
   pass "a function with a call site passes"
 }
 
+test_mentions_are_not_call_sites() {
+  local dir out rc
+  dir=$(fixture mentions 'dead_one() { return 0; }' '# dead_one is documented here
+printf "%s\\n" "dead_one"')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "comments and strings counted as call sites, exit $rc: $out"
+  pass "comments and quoted fixture text are not call sites"
+}
+
+test_explicit_indirect_call_counts() {
+  local dir out rc
+  dir=$(fixture indirect 'live_one() { return 0; }' 'callback=live_one
+# indirect-call: live_one callback dispatch
+"$callback"')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "an explicitly identified indirect call was refused, exit $rc: $out"
+  pass "an explicit indirect call site counts as consulted"
+}
+
 test_call_site_inside_its_own_file_counts() {
   local dir out rc
   # A helper used only by its own library is consulted. Counting only external
@@ -139,6 +158,8 @@ test_repository_is_clean_under_the_control() {
 
 test_dead_function_is_refused
 test_consulted_function_passes
+test_mentions_are_not_call_sites
+test_explicit_indirect_call_counts
 test_call_site_inside_its_own_file_counts
 test_blanket_exemption_cannot_silence
 test_adjacent_mark_keeps_one_and_still_reports_it
