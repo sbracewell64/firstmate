@@ -1025,12 +1025,19 @@ test_request_identity_is_recomputed_and_checked() {
   write_inputs "$case_dir" '{"request": {"identity": "'"$identity"'"}}'
   capture run_prepare "$case_dir" matching
   expect_code 0 "$CAPTURED_CODE" "a correctly recomputed request identity is accepted"
+  assert_grep "\"declared_request_identity\": \"$identity\"" \
+    "$case_dir/matching/envelope.json" \
+    "the matching declared identity must remain visible in the outer document"
 
   write_inputs "$case_dir" '{"request": {"identity": "sha256:'"$(printf 'f%.0s' $(seq 64))"'"}}'
   capture run_prepare "$case_dir" mismatching
   expect_code 1 "$CAPTURED_CODE" "a mismatched claimed request identity refuses"
   assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
     "the refusal must name the request identity mismatch"
+  capture run_validate "$case_dir" mismatching
+  expect_code 1 "$CAPTURED_CODE" "validation preserves the compile-time request identity refusal"
+  assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
+    "validation must reproduce the refusal from the preserved declared claim"
 
   python3 - "$case_dir/matching/envelope.json" <<'PY'
 import json, sys
