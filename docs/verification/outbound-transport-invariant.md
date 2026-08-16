@@ -21,11 +21,13 @@ So each control below was driven RED by a targeted mutation of the implementatio
 ```sh
 $ bash tests/fm-outbound-artifact.test.sh | tail -1
 all fm-outbound-artifact tests passed
+$ bash tests/fm-dead-predicate-check.test.sh | tail -1
+all fm-dead-predicate-check tests passed
 $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 34 outbound-artifact cases and the bootstrap integration case pass.
+The 34 outbound-artifact cases, 18 dead-predicate cases, and the bootstrap integration case pass.
 What follows is why that sentence is worth anything.
 
 ## Watched-red evidence, one mutation per control
@@ -141,18 +143,13 @@ Each row states what the control actually establishes and what it does not. A kn
 | `disposition-completes-chain` | Closure requires ruling and resumption first | Closure accepts an `emitted` request - observed red | - |
 | `identity-mismatch-distinct` | A readable record naming another request refuses as a mismatch, NOT as unreadable | Collapse the two verdicts into one return - this is the defect that shipped | Does not cover a record whose non-identity fields are wrong |
 | `head-object-id-width` | A 64-character value is refused for a sha1 repository; an abbreviation is refused; an unresolvable well-shaped id is refused; undeterminable format refuses | Accept any 7-40 hex, or a bare 40-or-64 - observed red | **No sha256 repository was available.** Acceptance of a 64-character head in a sha256 repository is UNPROVEN |
-| `dead-predicate` | A function in an enrolled file with zero call sites repo-wide is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review |
-
-### Two costs this record should carry
-
-**The head-bound attestation must be republished on every base advance.** It is bound to a head, and `refs/notes` is not a pull-request head, so publishing it fires no event and the previous verdict stands until something re-evaluates the head. Editing the pull request is the documented re-trigger, and the workflow subscribes to `edited` for exactly this. During this increment the base advanced once and the trap recurred on the second head. That is a recurring cost, not a one-off.
-
-**A ruling that differs from the reviewer's proposed remedy does not land by itself.** `--action fix --findings X` says *fix this finding*; it cannot say *fix it this way*. The ruling's substance lives in the decision record and the steer, both outside the pipeline, so wherever a ruling differs from the remedy the reviewer proposed - which is exactly when the ruling was worth writing - the difference silently fails to reach the code unless a person carries it there. It happened here: a ruling explicitly rejecting a bare 40-or-64 predicate was answered with a bare 40-or-64 predicate. The defence is a control that names the distinguishing case, because the control is the only part of a ruling the machinery can enforce. This is the transport law applied to decisions: correct content authored is not correct content delivered.
+| `dead-predicate` | A function in an enrolled file with zero call sites repo-wide is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Add an uncalled canonical function to an enrolled file - observed red | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review |
 
 ## Refreshing this record
 
 ```sh
 $ bash tests/fm-outbound-artifact.test.sh
+$ bash tests/fm-dead-predicate-check.test.sh
 $ bin/fm-lint.sh
 $ FM_HOME=<home> FM_OUTBOUND_DIR=<scratch> bin/fm-outbound-artifact.sh check
 ```
