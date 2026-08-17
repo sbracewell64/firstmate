@@ -2,8 +2,8 @@
 
 Maintainer-verification record for [`bin/fm-review-mutation.sh`](../../bin/fm-review-mutation.sh), the proof owner that answers whether a named target assertion ran and what it concluded.
 The guarantee measured here is narrow and exact: no label, marker, or caller-supplied name can establish that a named assertion executed.
-The watched-red evidence below describes only the pinned `43b78b12` subject and the 32-control, 30-defect inventory recorded for that execution.
-Later source-adjacent output guards in the checked-out subject add three controls and three defect builds, so they require a fresh watched-red measurement before this record can describe the checked-out subject as fully witnessed.
+An earlier version of this record described only the pinned `43b78b12` subject and its 32-control, 30-defect inventory, but that scope was superseded by the re-measurement below.
+The watched-red evidence now describes the pinned `fe9efa50` subject and its 35-control, 33-defect inventory, including the three source-adjacent output guards added after the earlier measurement.
 
 The script's own header owns the law, the fold, the twenty-two bound dimensions, and the mechanics.
 This file records only what was measured, and when.
@@ -20,7 +20,7 @@ The defect builds are materialized into a temporary directory and removed; no tr
 The catalogue that defines them is tracked, in [`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py), so every row below is replayable by someone who did not run it.
 
 The controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
-A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the other thirty, which is a coverage claim resting on an observation that was never made.
+A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the other thirty-four, which is a coverage claim resting on an observation that was never made.
 Running each control separately produces a complete matrix, including the row that matters most: **controls no defect reddened**, which is reported rather than left to be inferred from a table that happens to look full.
 
 ### What this measurement caught in its own controls
