@@ -276,6 +276,10 @@ elif mode == "stale":
         "path": "retired_array",
         "order": "canonicalized",
         "reason": "deliberately stale test entry",
+        "experiment": {
+            "kind": "could-not-observe",
+            "reason": "deliberately stale test entry",
+        },
     })
 elif mode != "current":
     sys.stderr.write("unknown array-registry check mode: " + mode + "\n")
@@ -296,7 +300,6 @@ def walk(node, path=""):
 
 walk(body)
 declared = set()
-meaningful = {}
 for entry in entries:
     path = entry.get("path")
     order = entry.get("order")
@@ -310,24 +313,24 @@ for entry in entries:
     if not isinstance(reason, str) or not reason.strip():
         sys.stderr.write("array registry has no reason: " + path + "\n")
         sys.exit(1)
-    if order == "order-meaningful":
-        exercise = entry.get("exercise")
-        if not isinstance(exercise, str) or not exercise:
-            sys.stderr.write("order-meaningful array has no exercise: " + path + "\n")
+    experiment = entry.get("experiment")
+    if not isinstance(experiment, dict):
+        sys.stderr.write("array registry has no experiment: " + path + "\n")
+        sys.exit(1)
+    kind = experiment.get("kind")
+    if kind == "input-recompile":
+        if not isinstance(experiment.get("input_path"), str) or not experiment["input_path"]:
+            sys.stderr.write("array input experiment has no input path: " + path + "\n")
             sys.exit(1)
-        meaningful[path] = exercise
+    elif kind == "could-not-observe":
+        if not isinstance(experiment.get("reason"), str) or not experiment["reason"].strip():
+            sys.stderr.write("unobservable array experiment has no reason: " + path + "\n")
+            sys.exit(1)
+    else:
+        sys.stderr.write("array registry has an invalid experiment: " + path + "\n")
+        sys.exit(1)
     declared.add(path)
 
-expected_meaningful = {
-    "capabilities[].candidates": "capability-candidates",
-    "capabilities[].identity_argv": "capability-identity-argv",
-    "capabilities[].probes": "capability-candidates",
-    "capabilities[].selected.identity_argv": "capability-identity-argv",
-    "scope.excluded": "scope-exclusions",
-}
-if meaningful != expected_meaningful:
-    sys.stderr.write("order-meaningful exercise registry differs: " + repr(meaningful) + "\n")
-    sys.exit(1)
 missing = sorted(observed - declared)
 stale = sorted(declared - observed)
 if missing:
@@ -336,6 +339,157 @@ if stale:
     sys.stderr.write("stale array classifications: " + ", ".join(stale) + "\n")
 if missing or stale:
     sys.exit(1)
+PY
+}
+
+exercise_array_registry() {  # <case-dir> <envelope> <registry> <binary> <mode>
+  python3 - "$@" <<'PY'
+import copy, json, os, subprocess, sys
+
+case_dir, envelope_path, registry_path, binary, mode = sys.argv[1:]
+baseline = json.load(open(envelope_path))
+baseline_identity = baseline["request_identity"]
+registry = json.load(open(registry_path))
+entries = copy.deepcopy(registry["classifications"])
+
+if mode == "canonical-as-meaningful":
+    entry = next(item for item in entries
+                 if item["order"] == "canonicalized"
+                 and item["experiment"]["kind"] == "input-recompile")
+    entry["order"] = "order-meaningful"
+elif mode == "meaningful-as-canonical":
+    entry = next(item for item in entries
+                 if item["order"] == "order-meaningful"
+                 and item["experiment"]["kind"] == "input-recompile")
+    entry["order"] = "canonicalized"
+elif mode != "current":
+    sys.stderr.write("unknown array exercise mode: " + mode + "\n")
+    sys.exit(1)
+
+
+def arrays_at(document, path):
+    nodes = [document]
+    parts = path.split(".")
+    for index, part in enumerate(parts):
+        expand = part.endswith("[]")
+        key = part[:-2] if expand else part
+        last = index == len(parts) - 1
+        values = []
+        for node in nodes:
+            if not isinstance(node, dict) or key not in node:
+                continue
+            value = node[key]
+            if last:
+                values.append(value)
+            elif expand and isinstance(value, list):
+                values.extend(value)
+            else:
+                values.append(value)
+        nodes = values
+    return [node for node in nodes if isinstance(node, list)]
+
+
+for index, entry in enumerate(entries):
+    path = entry["path"]
+    experiment = entry["experiment"]
+    if experiment["kind"] == "could-not-observe":
+        print("could-not-observe " + path + ": " + experiment["reason"])
+        continue
+    inputs = json.load(open(os.path.join(case_dir, "inputs.json")))
+    candidates = arrays_at(inputs, experiment["input_path"])
+    target = next(
+        (array for array in candidates
+         if len(array) >= 2
+         and json.dumps(array[0], sort_keys=True) != json.dumps(array[1], sort_keys=True)),
+        None,
+    )
+    if target is None:
+        sys.stderr.write("could-not-observe " + path + ": fixture has fewer than two distinct entries\n")
+        sys.exit(2)
+    target.reverse()
+    input_path = os.path.join(case_dir, "array-input-%s-%d.json" % (mode, index))
+    output_path = os.path.join(case_dir, "array-output-%s-%d" % (mode, index))
+    with open(input_path, "w", encoding="utf-8") as handle:
+        json.dump(inputs, handle, indent=2)
+    environment = os.environ.copy()
+    environment["PATH"] = os.path.join(case_dir, "fakebin") + os.pathsep + environment["PATH"]
+    completed = subprocess.run(
+        [binary, "prepare", "--repo", os.path.join(case_dir, "repo"),
+         "--inputs", input_path, "--evidence-root", os.path.join(case_dir, "evidence"),
+         "--out", output_path],
+        env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    )
+    envelope_file = os.path.join(output_path, "envelope.json")
+    if not os.path.isfile(envelope_file):
+        sys.stderr.write("array experiment produced no envelope for " + path + "\n")
+        sys.exit(1)
+    observed_identity = json.load(open(envelope_file))["request_identity"]
+    changed = observed_identity != baseline_identity
+    expected_changed = entry["order"] == "order-meaningful"
+    if changed != expected_changed:
+        expectation = "change" if expected_changed else "remain stable"
+        sys.stderr.write("isolated reorder of " + path + " expected identity to " + expectation + "\n")
+        sys.exit(1)
+PY
+}
+
+write_array_registry_inputs() {  # <case-dir>
+  local case_dir=$1
+  write_probe "$case_dir/fakebin/fm-probe-beta" 'fm-probe-beta 2.0.0'
+  write_inputs "$case_dir" '{
+    "scope": {"excluded": [
+      {"id": "docs-first", "type": "prefix", "value": "docs/", "reason": "docs"},
+      {"id": "docs-second", "type": "glob", "value": "docs/*", "reason": "docs fallback"}]},
+    "verification": {"applicability_rules": [
+      {"contract_id": "repo-baseline", "mandatory": true},
+      {"contract_id": "shell-surface", "paths": [
+        {"type": "glob", "value": "bin/*"},
+        {"type": "glob", "value": "docs/*"}]}]},
+    "capabilities": [
+      {"id": "probe-a", "mandatory": true, "candidates": ["fm-probe-alpha", "fm-probe-beta"],
+       "identity_argv": ["--version", "--verbose"]},
+      {"id": "probe-z", "mandatory": true, "candidates": ["fm-probe-beta", "fm-probe-alpha"],
+       "identity_argv": ["--verbose", "--version"]}],
+    "findings": {
+      "adverse": [{"id": "F-2", "blocking": false}, {"id": "F-1", "blocking": false}],
+      "unproven": [{"id": "U-2", "required": false}, {"id": "U-1", "required": false}]},
+    "rulings": [
+      {"id": "R-2", "source": "captain", "relied_upon": false, "applies_to": {
+        "work_id": "other-work", "head": "1111111111111111111111111111111111111111",
+        "tree": "2222222222222222222222222222222222222222",
+        "envelope_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+      {"id": "R-1", "source": "captain", "relied_upon": false, "applies_to": {}}],
+    "obligations": {
+      "active": [{"id": "OBL-2"}, {"id": "OBL-1"}],
+      "dispositions": [
+        {"id": "OLD-2", "disposition": "PRESERVED"},
+        {"id": "OLD-1", "disposition": "PRESERVED"}]}}'
+  python3 - "$case_dir/inputs.json" <<'PY'
+import copy, json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["ci"]["required_platforms"] = ["linux", "windows"]
+linux = document["ci"]["attempts"][0]
+windows = copy.deepcopy(linux)
+windows.update({"name": "test-windows", "platform": "windows", "order": 101})
+document["ci"]["attempts"].append(windows)
+for order, name in ((90, "headless-a"), (91, "headless-b")):
+    attempt = copy.deepcopy(linux)
+    attempt.update({"name": name, "head": "", "order": order})
+    document["ci"]["attempts"].append(attempt)
+for order, name in ((80, "wrong-a"), (81, "wrong-b")):
+    attempt = copy.deepcopy(linux)
+    attempt.update({"name": name, "head": str(order) * 40, "order": order})
+    document["ci"]["attempts"].append(attempt)
+additional = []
+for contract in document["verification"]["contracts"]:
+    contract["execution_worlds"] = ["offline-ci", "portable-ci"]
+for result in document["verification"]["results"]:
+    portable = copy.deepcopy(result)
+    portable["world"] = "portable-ci"
+    additional.append(portable)
+document["verification"]["results"].extend(additional)
+json.dump(document, open(path, "w"), indent=2)
 PY
 }
 
@@ -671,17 +825,10 @@ test_array_classification_registry_is_total() {
   local case_dir registry
   case_dir=$(make_case array-registry)
   registry=$ROOT/docs/verification/review-envelope-array-classifications.json
-  write_inputs "$case_dir" '{"rulings": [{
-    "id": "R-all-mismatches",
-    "source": "captain",
-    "relied_upon": false,
-    "applies_to": {
-      "work_id": "other-work",
-      "head": "1111111111111111111111111111111111111111",
-      "tree": "2222222222222222222222222222222222222222",
-      "envelope_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}}]}'
+  write_array_registry_inputs "$case_dir"
   capture run_prepare "$case_dir" env
-  expect_code 0 "$CAPTURED_CODE" "the populated registry fixture compiles"
+  expect_code 1 "$CAPTURED_CODE" "the populated registry fixture compiles to a classified envelope"
+  assert_present "$case_dir/env/envelope.json" "the populated registry fixture must emit an envelope"
 
   capture check_array_registry "$case_dir/env/envelope.json" "$registry" current
   expect_code 0 "$CAPTURED_CODE" "every current array path is classified"
@@ -698,53 +845,33 @@ test_array_classification_registry_is_total() {
   pass "the recursive array registry is total in both directions"
 }
 
-test_capability_order_meaningful_arrays_change_identity() {
-  local case_dir first_identity second_identity
-  case_dir=$(make_case capability-candidate-order)
-  write_probe "$case_dir/fakebin/fm-probe-beta" 'fm-probe-beta 2.0.0'
-  write_inputs "$case_dir" '{"capabilities": [{
-    "id": "probe",
-    "mandatory": true,
-    "candidates": ["fm-probe-alpha", "fm-probe-beta"],
-    "identity_argv": ["--version"]}]}'
-  capture run_prepare "$case_dir" first
-  expect_code 0 "$CAPTURED_CODE" "the first capability candidate order compiles"
-  python3 - "$case_dir/inputs.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-document = json.load(open(path))
-document["capabilities"][0]["candidates"].reverse()
-json.dump(document, open(path, "w"), indent=2)
-PY
-  capture run_prepare "$case_dir" second
-  expect_code 0 "$CAPTURED_CODE" "the reversed capability candidate order compiles"
-  first_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/first/envelope.json")
-  second_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/second/envelope.json")
-  [ "$first_identity" != "$second_identity" ] \
-    || fail "reordering capability candidates and their probes must change request identity"
+test_array_classifications_are_exercised_in_isolation() {
+  local case_dir registry
+  case_dir=$(make_case array-registry-exercises)
+  registry=$ROOT/docs/verification/review-envelope-array-classifications.json
+  write_array_registry_inputs "$case_dir"
+  capture run_prepare "$case_dir" baseline
+  expect_code 1 "$CAPTURED_CODE" "the array experiment baseline emits a classified envelope"
+  assert_present "$case_dir/baseline/envelope.json" "the array experiment baseline must emit an envelope"
 
-  case_dir=$(make_case capability-identity-argv-order)
-  write_inputs "$case_dir" '{"capabilities": [{
-    "id": "probe",
-    "mandatory": true,
-    "candidates": ["fm-probe-alpha"],
-    "identity_argv": ["--version", "--verbose"]}]}'
-  capture run_prepare "$case_dir" first
-  expect_code 0 "$CAPTURED_CODE" "the first capability identity argument order compiles"
-  python3 - "$case_dir/inputs.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-document = json.load(open(path))
-document["capabilities"][0]["identity_argv"].reverse()
-json.dump(document, open(path, "w"), indent=2)
-PY
-  capture run_prepare "$case_dir" second
-  expect_code 0 "$CAPTURED_CODE" "the reversed capability identity argument order compiles"
-  first_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/first/envelope.json")
-  second_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/second/envelope.json")
-  [ "$first_identity" != "$second_identity" ] \
-    || fail "reordering capability identity arguments must change request identity"
-  pass "order-meaningful capability arrays change derived identity"
+  capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
+    "$registry" "$BIN" current
+  expect_code 0 "$CAPTURED_CODE" "every observable registry path has the declared isolated outcome"
+  assert_contains "$CAPTURED" 'could-not-observe capabilities[].probes:' \
+    "an output path coupled to its source must be named as unobservable"
+
+  capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
+    "$registry" "$BIN" canonical-as-meaningful
+  expect_code 1 "$CAPTURED_CODE" "misclassifying a canonical path as meaningful fails"
+  assert_contains "$CAPTURED" 'expected identity to change' \
+    "the false order-meaningful declaration must fail for its observed stable identity"
+
+  capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
+    "$registry" "$BIN" meaningful-as-canonical
+  expect_code 1 "$CAPTURED_CODE" "misclassifying a meaningful path as canonical fails"
+  assert_contains "$CAPTURED" 'expected identity to remain stable' \
+    "the false canonical declaration must fail for its observed identity change"
+  pass "registry-driven isolated reorder experiments enforce every observable classification"
 }
 
 test_ci_canonicalization_preserves_meaningful_differences() {
@@ -2385,7 +2512,7 @@ test_identical_facts_produce_an_identical_digest
 test_order_insensitive_facts_produce_an_identical_identity
 test_nested_order_insensitive_facts_produce_an_identical_identity
 test_array_classification_registry_is_total
-test_capability_order_meaningful_arrays_change_identity
+test_array_classifications_are_exercised_in_isolation
 test_ci_canonicalization_preserves_meaningful_differences
 test_exclusion_rule_order_remains_meaningful
 test_a_structurally_malformed_envelope_is_could_not_observe
