@@ -1047,13 +1047,30 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
                 "malformed_candidate": malformed,
             }
         )
+    capabilities = sorted_records(capabilities, ("id",), "capabilities")
 
     ci_in = as_dict(inputs, "ci")
-    attempts = as_list(ci_in, "attempts")
-    exact, wrong_head, head_unknown = [], [], []
-    for attempt in attempts:
+    attempts = []
+    for attempt in as_list(ci_in, "attempts"):
         if not isinstance(attempt, dict):
             raise Unobservable("inputs_malformed", "a continuous integration attempt is not an object")
+        attempts.append(
+            {
+                "name": str(attempt.get("name") or ""),
+                "workflow": str(attempt.get("workflow") or ""),
+                "platform": str(attempt.get("platform") or ""),
+                "head": str(attempt.get("head") or ""),
+                "order": attempt.get("order"),
+                "conclusion": str(attempt.get("conclusion") or attempt.get("state") or "").upper(),
+            }
+        )
+    attempts = sorted_records(
+        attempts,
+        ("workflow", "name", "head", "order", "platform", "conclusion"),
+        "continuous integration attempts",
+    )
+    exact, wrong_head, head_unknown = [], [], []
+    for attempt in attempts:
         attempt_head = attempt.get("head")
         summary = {
             "name": str(attempt.get("name") or ""),
@@ -1173,7 +1190,15 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             "head_is_ancestor_of_main": is_ancestor(repo, head_commit, main_commit),
         },
         "verification": {
-            "applicability_rules": applicability_rules,
+            "applicability_rules": (
+                sorted_records(
+                    applicability_rules,
+                    ("contract_id",),
+                    "verification applicability rules",
+                )
+                if isinstance(applicability_rules, list)
+                else applicability_rules
+            ),
             "required_contract_ids": sorted(required_ids),
             "contracts": sorted_records(
                 as_list(verification_in, "contracts"),
@@ -1191,12 +1216,28 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             "required_platforms": sorted(str(entry) for entry in as_list(ci_in, "required_platforms")),
             "attempts": attempts,
             "checks": reduce_checks(exact),
-            "wrong_head_attempts": wrong_head,
-            "head_unknown_attempts": head_unknown,
+            "wrong_head_attempts": sorted_records(
+                wrong_head,
+                ("workflow", "name", "head", "platform", "verdict"),
+                "wrong-head continuous integration attempts",
+            ),
+            "head_unknown_attempts": sorted_records(
+                head_unknown,
+                ("workflow", "name", "platform", "verdict"),
+                "head-unknown continuous integration attempts",
+            ),
         },
         "findings": {
-            "adverse": as_list(as_dict(inputs, "findings"), "adverse"),
-            "unproven": as_list(as_dict(inputs, "findings"), "unproven"),
+            "adverse": sorted_records(
+                as_list(as_dict(inputs, "findings"), "adverse"),
+                ("id",),
+                "adverse findings",
+            ),
+            "unproven": sorted_records(
+                as_list(as_dict(inputs, "findings"), "unproven"),
+                ("id",),
+                "unproven findings",
+            ),
         },
         "rulings": [],
         "obligations": {
@@ -1247,6 +1288,7 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
                 "mismatches": mismatches,
             }
         )
+    envelope["rulings"] = sorted_records(envelope["rulings"], ("id",), "rulings")
 
     return envelope
 

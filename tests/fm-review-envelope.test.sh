@@ -443,7 +443,34 @@ PY
 test_order_insensitive_facts_produce_an_identical_identity() {
   local case_dir first_digest second_digest first_identity second_identity
   case_dir=$(make_case canonical-fact-order)
-  write_inputs "$case_dir" '{"obligations": {"active": [{"id": "OBL-2"}, {"id": "OBL-1"}]}}'
+  write_inputs "$case_dir" '{
+    "capabilities": [
+      {"id": "probe-z", "mandatory": true, "candidates": ["fm-probe-alpha"], "identity_argv": ["--version"]},
+      {"id": "probe-a", "mandatory": true, "candidates": ["fm-probe-alpha"], "identity_argv": ["--version"]}],
+    "ci": {"attempts": [
+      {"name": "test", "workflow": "CI", "platform": "linux", "head": "", "order": 98, "conclusion": "SUCCESS", "provider_timestamp": "2026-08-17T12:00:00Z"},
+      {"name": "test", "workflow": "CI", "platform": "linux", "head": "1111111111111111111111111111111111111111", "order": 97, "conclusion": "FAILURE"},
+      {"name": "test", "workflow": "CI", "platform": "linux", "head": "candidate", "order": 99, "conclusion": "FAILURE"},
+      {"name": "test", "workflow": "CI", "platform": "linux", "head": "candidate", "order": 100, "conclusion": "SUCCESS"}]},
+    "findings": {
+      "adverse": [{"id": "F-2", "blocking": false}, {"id": "F-1", "blocking": false}],
+      "unproven": [{"id": "U-2", "required": false}, {"id": "U-1", "required": false}]},
+    "rulings": [
+      {"id": "R-2", "source": "captain", "applies_to": {}},
+      {"id": "R-1", "source": "captain", "applies_to": {}}],
+    "obligations": {"active": [{"id": "OBL-2"}, {"id": "OBL-1"}]}}'
+  python3 - "$case_dir/inputs.json" "$case_dir/repo" <<'PY'
+import json, subprocess, sys
+path, repo = sys.argv[1:]
+document = json.load(open(path))
+head = subprocess.run(
+    ["git", "-C", repo, "rev-parse", "candidate"], capture_output=True, text=True, check=True
+).stdout.strip()
+for attempt in document["ci"]["attempts"]:
+    if attempt["head"] == "candidate":
+        attempt["head"] = head
+json.dump(document, open(path, "w"), indent=2)
+PY
   capture run_prepare "$case_dir" first
   expect_code 0 "$CAPTURED_CODE" "the first fact order compiles"
   python3 - "$case_dir/inputs.json" <<'PY'
@@ -452,6 +479,12 @@ path = sys.argv[1]
 document = json.load(open(path))
 document["verification"]["contracts"].reverse()
 document["verification"]["results"].reverse()
+document["verification"]["applicability_rules"].reverse()
+document["capabilities"].reverse()
+document["ci"]["attempts"].reverse()
+document["findings"]["adverse"].reverse()
+document["findings"]["unproven"].reverse()
+document["rulings"].reverse()
 document["obligations"]["active"].reverse()
 json.dump(document, open(path, "w"), indent=2)
 PY
@@ -474,6 +507,64 @@ PY
   [ "$first_identity" = "$second_identity" ] \
     || fail "order-insensitive facts must have one request identity"
   pass "order-insensitive facts have stable content identities"
+}
+
+test_ci_canonicalization_preserves_meaningful_differences() {
+  local case_dir first_digest first_identity second_digest second_identity
+  case_dir=$(make_case canonical-ci-meaning)
+  write_inputs "$case_dir"
+  capture run_prepare "$case_dir" first
+  expect_code 0 "$CAPTURED_CODE" "the passing CI attempt compiles"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["ci"]["attempts"][0]["conclusion"] = "SKIPPED"
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" second
+  expect_code 1 "$CAPTURED_CODE" "the meaningfully different CI attempt refuses"
+  read -r first_digest first_identity < <(python3 - "$case_dir/first/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  read -r second_digest second_identity < <(python3 - "$case_dir/second/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  [ "$first_digest" != "$second_digest" ] \
+    || fail "a meaningful CI verdict difference must change the envelope digest"
+  [ "$first_identity" != "$second_identity" ] \
+    || fail "a meaningful CI verdict difference must change the request identity"
+  pass "CI canonicalization preserves meaningful verdict differences"
+}
+
+test_exclusion_rule_order_remains_meaningful() {
+  local case_dir first_rule second_rule
+  case_dir=$(make_case meaningful-exclusion-order)
+  write_inputs "$case_dir" '{"scope": {"excluded": [
+    {"id": "docs-first", "type": "prefix", "value": "docs/", "reason": "docs"},
+    {"id": "all-second", "type": "glob", "value": "*", "reason": "all"}]}}'
+  capture run_prepare "$case_dir" first
+  expect_code 1 "$CAPTURED_CODE" "the first exclusion order compiles to a refusal"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["scope"]["excluded"].reverse()
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" second
+  expect_code 1 "$CAPTURED_CODE" "the reversed exclusion order compiles to a refusal"
+  first_rule=$(python3 -c 'import json,sys; print(next(row["excluded_by"] for row in json.load(open(sys.argv[1]))["envelope"]["candidate"]["changed_files"] if row["path"] == "docs/notes.md"))' "$case_dir/first/envelope.json")
+  second_rule=$(python3 -c 'import json,sys; print(next(row["excluded_by"] for row in json.load(open(sys.argv[1]))["envelope"]["candidate"]["changed_files"] if row["path"] == "docs/notes.md"))' "$case_dir/second/envelope.json")
+  [ "$first_rule" = docs-first ] || fail "the first matching exclusion rule must receive credit"
+  [ "$second_rule" = all-second ] || fail "reordering matching exclusions must change the credited rule"
+  pass "exclusion rules retain first-match-wins order"
 }
 
 test_a_structurally_malformed_envelope_is_could_not_observe() {
@@ -2050,6 +2141,8 @@ test_no_verification_contracts_requires_an_explicit_reason
 test_requested_decision_is_an_uppercase_token
 test_identical_facts_produce_an_identical_digest
 test_order_insensitive_facts_produce_an_identical_identity
+test_ci_canonicalization_preserves_meaningful_differences
+test_exclusion_rule_order_remains_meaningful
 test_a_structurally_malformed_envelope_is_could_not_observe
 test_a_stale_envelope_refuses
 test_a_base_that_falls_behind_the_trunk_refuses
