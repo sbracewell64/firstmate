@@ -27,9 +27,20 @@
 #   precedence       an observation gap masking a real finding
 #   prose            a caller declaration reaching a verdict
 #
-# The binary under test is resolvable through FM_REVIEW_MUTATION_BIN so the same
-# controls can be re-run against deliberately defective builds to watch them go
-# red; docs/verification/review-mutation-proof.md records those runs.
+# Three seams exist so these controls can be re-run against deliberately
+# defective builds and watched going red; docs/verification/review-mutation-proof.md
+# records those runs. Each defaults to the shipped artifact, so none of them
+# changes anything in production:
+#
+#   FM_REVIEW_MUTATION_BIN     the proof owner under test
+#   FM_VERIFY_BIN              the wrapper that transports its result, which
+#                              resolves the proof owner from its OWN directory
+#   FM_REVIEW_MUTATION_RECORD  the verification record the drift control reads.
+#                              The drift control's subject is the RECORD, not the
+#                              binary, so overriding the binary cannot redden it;
+#                              without this seam it would be the one control that
+#                              could never be watched red, which is exactly the
+#                              condition it was written to detect elsewhere.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -759,11 +770,26 @@ test_a_missing_execution_substrate_is_could_not_observe() {
 }
 
 # This proves inventory agreement only and is not evidence that any matrix row was measured.
+# The drift control. It proves INVENTORY AGREEMENT ONLY - that the record's
+# documented control count and file digests match the suite that is actually
+# running - and it is NOT evidence that any matrix row was ever measured. A
+# green inventory sitting on top of unmeasured rows is precisely the collapse
+# the record's two separate claims exist to prevent.
+#
+# It counts from the suite's own EXECUTED identities, never from a second number
+# written down somewhere, and it reports its own success only after it has
+# established the thing that success attests to. Emitting the success line first
+# would be this increment's own defect turned on its own suite.
 test_verification_record_inventory_matches_executed_controls() {
-  local record=$ROOT/docs/verification/review-mutation-proof.md
+  local record=${FM_REVIEW_MUTATION_RECORD:-$ROOT/docs/verification/review-mutation-proof.md}
   local documented_count executed_count documented path actual
 
-  pass "the verification record inventory agrees with the executed controls"
+  # This control counts every identity that has already passed, plus itself,
+  # which is executing right now. That arithmetic is only complete if nothing is
+  # declared after it, so being last is asserted rather than assumed: a later
+  # insertion would otherwise silently under-count and still look green.
+  [ "${FM_CONTROLS[${#FM_CONTROLS[@]} - 1]}" = test_verification_record_inventory_matches_executed_controls ] \
+    || fail "the inventory control must be the last declared control, or its count is short by whatever follows it"
 
   [ -r "$record" ] || fail "the mutation verification record must be readable"
   documented_count=$(sed -n 's/^inventory_control_count: \([0-9][0-9]*\)$/\1/p' "$record")
@@ -771,11 +797,19 @@ test_verification_record_inventory_matches_executed_controls() {
     || fail "the mutation verification record must carry one parseable inventory control count"
   [ "$(printf '%s\n' "$documented_count" | wc -l | tr -d ' ')" = 1 ] \
     || fail "the mutation verification record must carry exactly one inventory control count"
-  executed_count=$(printf '%s' "$FM_TEST_PASSED_TESTS" | awk 'NF && !seen[$0]++ { count++ } END { print count + 0 }')
+  # Distinct identities that have already reported success, plus this one, which
+  # is executing but has deliberately not reported yet.
+  executed_count=$(printf '%s' "$FM_TEST_PASSED_TESTS" \
+    | awk 'NF && !seen[$0]++ { count++ } END { print count + 1 }')
   [ "$documented_count" = "$executed_count" ] \
-    || fail "the documented control count must equal the suite's executed identity count"
+    || fail "the documented control count ($documented_count) must equal the suite's executed identity count ($executed_count)"
 
-  for path in bin/fm-review-mutation.sh bin/fm-verify.sh tests/fm-review-mutation.test.sh; do
+  # The measured subjects, plus the harness that defines the defects. The
+  # harness is included deliberately: it is the measuring instrument, and a
+  # changed defect catalogue means the recorded matrix rows describe defects
+  # that are no longer the ones on disk.
+  for path in bin/fm-review-mutation.sh bin/fm-verify.sh \
+    tests/fm-review-mutation.test.sh tests/review-mutation-red-matrix.py; do
     documented=$(sed -n "s|^inventory_sha256: $path \([0-9a-f][0-9a-f]*\)$|\\1|p" "$record")
     [ "${#documented}" = 64 ] \
       || fail "the mutation verification record must carry one parseable digest for $path"
@@ -785,6 +819,9 @@ test_verification_record_inventory_matches_executed_controls() {
     [ "$documented" = "$actual" ] \
       || fail "the documented digest must match the current bytes of $path"
   done
+
+  # Reported last, and only now: everything it attests to has been established.
+  pass "the verification record inventory agrees with the executed controls"
 }
 
 # The declared control set, in order. Naming it once lets a measurement run a
