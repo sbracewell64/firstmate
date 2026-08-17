@@ -44,7 +44,7 @@ export FM_GATE_REFUSE_BYPASS=1
 # Same hermeticity discipline as pinning PATH: the tests decide the inputs.
 # Include this shell's process identity and verify absence so a stale directory
 # from an earlier run cannot turn the intended no-daemon input into an outage.
-FM_TEST_ABSENT_NM_HOME="${TMPDIR:-/tmp}/fm-test-absent-nm-home-$BASHPID"
+FM_TEST_ABSENT_NM_HOME="${TMPDIR:-/tmp}/fm-test-absent-nm-home-$$"
 while [ -e "$FM_TEST_ABSENT_NM_HOME" ]; do
   FM_TEST_ABSENT_NM_HOME=${FM_TEST_ABSENT_NM_HOME}x
 done
