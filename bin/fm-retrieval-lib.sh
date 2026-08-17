@@ -442,7 +442,7 @@ fm_retrieval_validate_records() {  # <jsonl-records> <id-field> <text-field> <ti
 # out so the ordering is stated in one place and cannot be reordered by editing
 # the traversal.
 fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
-  local records=$1 staged=$2 pages_file=$3 dir meta observed
+  local records=$1 staged=$2 pages_file=$3 dir meta observed digest
   dir=$(dirname "$records")
   [ -d "$dir" ] || mkdir -p "$dir" || {
     fm_retrieval_set_reason usage_error "cannot write to $dir"
@@ -460,6 +460,11 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     fm_retrieval_set_reason usage_error "cannot publish the record set at $records"
     return 1
   }
+  digest=$(fm_retrieval_sha256 "$records") || {
+    fm_retrieval_set_reason state_uncommitted \
+      "the published record set could not be bound to a SHA-256 digest"
+    return 1
+  }
 
   jq -cn \
     --arg schema "$FM_RETRIEVAL_SCHEMA" \
@@ -468,11 +473,12 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     --arg detail "$FM_RETRIEVAL_DETAIL" \
     --arg observed "$observed" \
     --arg reader "${FM_RETRIEVAL_GH:-gh}" \
+    --arg digest "sha256:$digest" \
     --argjson records "$FM_RETRIEVAL_RECORDS" \
     --argjson duplicates "$FM_RETRIEVAL_DUPLICATES" \
     --slurpfile pages "$pages_file" \
     '{schema: $schema, retrieval: $retrieval, reason: $reason, detail: $detail,
-      observed_at: $observed, reader: $reader, records: $records,
+      observed_at: $observed, reader: $reader, record_digest: $digest, records: $records,
       duplicates: $duplicates, pages: $pages}' > "$meta.staging" || {
     fm_retrieval_set_reason usage_error "cannot stage the completeness proof"
     return 1
@@ -485,11 +491,21 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
   return 0
 }
 
+fm_retrieval_sha256() {  # <file>
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | awk 'NF { print $1; exit }'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | awk 'NF { print $1; exit }'
+  else
+    return 1
+  fi
+}
+
 # fm_retrieval_load <records-file>: adopt a previously published read. The proof
 # is required: a record set with none is an interrupted write, and the count of
 # whatever survived is not a fact about the collection.
 fm_retrieval_load() {  # <records-file>
-  local records=$1 meta=$1.meta
+  local records=$1 meta=$1.meta expected_digest actual_digest
   if [ ! -f "$records" ]; then
     fm_retrieval_set_reason state_uncommitted "no record set at $records"
     return 1
@@ -503,6 +519,25 @@ fm_retrieval_load() {  # <records-file>
   if ! jq -e --arg s "$FM_RETRIEVAL_SCHEMA" '.schema == $s' "$meta" >/dev/null 2>&1; then
     fm_retrieval_set_reason schema_unexpected \
       "$meta is not a $FM_RETRIEVAL_SCHEMA proof"
+    return 1
+  fi
+  expected_digest=$(jq -r '.record_digest // empty' "$meta" 2>/dev/null)
+  case "$expected_digest" in
+    sha256:*) ;;
+    *)
+      fm_retrieval_set_reason state_uncommitted \
+        "$meta carries no usable record digest"
+      return 1
+      ;;
+  esac
+  actual_digest=$(fm_retrieval_sha256 "$records") || {
+    fm_retrieval_set_reason state_uncommitted \
+      "$records could not be checked against its record digest"
+    return 1
+  }
+  if [ "$expected_digest" != "sha256:$actual_digest" ]; then
+    fm_retrieval_set_reason state_uncommitted \
+      "$records does not match the record digest in $meta"
     return 1
   fi
   fm_retrieval_set_reason "$(jq -r '.reason' "$meta")" "$(jq -r '.detail' "$meta")" || return 1

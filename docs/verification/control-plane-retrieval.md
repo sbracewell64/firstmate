@@ -104,9 +104,26 @@ JavaScript, TypeScript, Python, and batch files add native `fetch`, `XMLHttpRequ
 Executable configuration uses both classifier families because hook and command fields can launch either form.
 Any language without a classifier is `UNCHECKED` rather than scanned with a pattern that cannot see it.
 
-Three review rounds exposed the same pattern at successively deeper layers: the traversal validated identity but not every named schema field, the gate enforced classifications without proving its own file universe, and replay reached a verdict without the validation used by fetch.
+Four review rounds exposed the same pattern at successively deeper layers: the traversal validated identity but not every named schema field, the gate enforced classifications without proving its own file universe, replay reached a verdict without the validation used by fetch, and the replay proof was not bound to the records it certified.
 The contract was correct about the thing it gated while incomplete about itself each time.
 A completeness contract must satisfy its own law, and checking that law rather than a checklist is what exposed each path.
+This round converged because the remaining classifier item is a measured coverage improvement rather than a defect that makes the retrieval verdict unsafe.
+
+The replay proof now carries a SHA-256 digest of the exact JSONL record bytes.
+Replay recomputes that digest before schema validation or selection, and a missing digest, unavailable digest tool, or byte mismatch is unobserved state that forces `INDETERMINATE`.
+
+One coverage emitter owns the computed verdict and named `UNCHECKED` list for census, violation, coverage-refusal, and passing exits.
+An unclassified site can therefore no longer conceal that the file universe was also incomplete.
+
+### Deliberately deferred native-classifier reach
+
+The native pattern currently recognizes `fetch`, `XMLHttpRequest`, `axios`, `octokit`, `urllib`, `requests`, and `http.client`.
+It does not recognize ordinary forms including Node `https.get`, `https.request`, and `http.get`, `undici`, Python `httpx` and `aiohttp`, `got`, or a forge CLI invoked through a subprocess whose command appears on another line.
+The recognized set came from an example list in the ruling, and extending an example enumeration is the same class of error this contract exists to prevent.
+The durable follow-up is to invert the test so a file is clean only when the gate can establish it has no outbound capability, while any outbound-capable file without a classified site is `UNCHECKED`.
+This is a coverage limitation under a verdict that refuses to overclaim, rather than authority to declare an unseen language clean.
+The follow-up must not be closed by widening the classifier alone, because the verdict is the guarantee and classifier breadth is only its reach.
+Fixing classifier breadth without first making the coverage verdict visible on every path would have been the unsafe ordering.
 
 ## Classification of every enforced site
 
@@ -164,7 +181,7 @@ bash tests/fm-retrieval-contract.test.sh
 
 Controls covering the commissioned list: an applicable ruling only on page 2 or later; multiple pages with the oldest record on page 1; the latest applicable ruling not on the first page; page 1 carrying a ruling a later page supersedes; pagination stopping early; one page that cannot be read; duplicate identifiers across pages; an irrelevant later comment after the applicable ruling; an identifier present only in quoted or reply prose; prefix collision, `X` versus `X` plus a suffix; complete retrieval with a genuinely absent ruling, the negative that must stay assertable; and complete retrieval with exactly one applicable ruling, the non-vacuity anchor.
 
-Beyond that list: an absent reader tool, a moved response schema, live and replayed records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, valid replay anchors for both `PRESENT` and `ABSENT`, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, per-language gate coverage including native reads and its `UNCHECKED` class, and the three rollup-cap behaviors.
+Beyond that list: an absent reader tool, a moved response schema, live and replayed records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, digest refusal after record deletion, append, reorder, or a missing digest, valid replay anchors for both `PRESENT` and `ABSENT`, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, per-language gate coverage including native reads and its `UNCHECKED` class, coverage emission beside violations, and the three rollup-cap behaviors.
 
 ### Negative controls: each guard watched failing
 

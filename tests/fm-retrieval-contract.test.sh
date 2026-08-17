@@ -160,6 +160,22 @@ assert_field() {  # <record> <name> <expected> <label>
   [ "$got" = "$3" ] || fail "$4: expected $2=$3, got '$got' in record: $1"
 }
 
+fixture_sha256() {  # <file>
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{print $1}'
+  else
+    sha256sum "$1" | awk '{print $1}'
+  fi
+}
+
+rebind_records() {  # <records-file>
+  local records=$1 staged=$1.meta.staged digest
+  digest=$(fixture_sha256 "$records")
+  jq --arg digest "sha256:$digest" '.record_digest = $digest' \
+    "$records.meta" > "$staged"
+  mv "$staged" "$records.meta"
+}
+
 # --- controls ---------------------------------------------------------------
 
 # The defect's exact shape: the applicable ruling is not on page one. A reader
@@ -587,6 +603,7 @@ test_replay_without_text_field_fails_closed() {
   run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --records "$records"
   jq -c 'del(.body)' "$records" > "$staged"
   mv "$staged" "$records"
+  rebind_records "$records"
   RECORD=$("$READ" --replay "$records" --claim exists --identity req-7 \
     --applicable APPROVE 2>&1) && RC=0 || RC=$?
   assert_field "$RECORD" retrieval unobserved "replay missing text field"
@@ -606,6 +623,7 @@ test_replay_without_time_field_fails_closed() {
   run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --records "$records"
   jq -c 'del(.created_at)' "$records" > "$staged"
   mv "$staged" "$records"
+  rebind_records "$records"
   RECORD=$("$READ" --replay "$records" --claim exists --identity req-7 \
     --applicable APPROVE 2>&1) && RC=0 || RC=$?
   assert_field "$RECORD" retrieval unobserved "replay missing time field"
@@ -613,6 +631,65 @@ test_replay_without_time_field_fails_closed() {
   assert_field "$RECORD" conclusion INDETERMINATE "replay missing time field"
   expect_code 2 "$RC" "replay missing configured time cannot report absence"
   pass "replay missing the configured time field fails closed"
+}
+
+BOUND_REPLAY_RECORDS=
+prepare_bound_replay() {  # <name>
+  local fix=$TMP_ROOT/fix-bound-$1
+  BOUND_REPLAY_RECORDS="$TMP_ROOT/bound-$1.jsonl"
+  mkdir -p "$fix/pages" || fail "could not create bound replay fixture"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')" \
+    "$(comment 12 2026-08-02T00:00:00Z 'REJECT req-8')")"
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists \
+    --records "$BOUND_REPLAY_RECORDS"
+}
+
+assert_bound_replay_refused() {  # <label>
+  local label=$1
+  RECORD=$("$READ" --replay "$BOUND_REPLAY_RECORDS" --claim exists \
+    --identity req-7 --applicable APPROVE 2>&1) && RC=0 || RC=$?
+  assert_field "$RECORD" retrieval unobserved "$label"
+  assert_field "$RECORD" conclusion INDETERMINATE "$label"
+  expect_code 2 "$RC" "$label cannot produce a replay verdict"
+}
+
+test_replay_with_deleted_records_fails_closed() {
+  local staged
+  prepare_bound_replay deleted
+  staged="$BOUND_REPLAY_RECORDS.staged"
+  sed -n '2,$p' "$BOUND_REPLAY_RECORDS" > "$staged"
+  mv "$staged" "$BOUND_REPLAY_RECORDS"
+  assert_bound_replay_refused "deleted replay records"
+  pass "deleting committed replay records invalidates their proof"
+}
+
+test_replay_with_appended_records_fails_closed() {
+  prepare_bound_replay appended
+  comment 13 2026-08-03T00:00:00Z 'APPROVE req-9' >> "$BOUND_REPLAY_RECORDS"
+  assert_bound_replay_refused "appended replay records"
+  pass "appending committed replay records invalidates their proof"
+}
+
+test_replay_with_reordered_records_fails_closed() {
+  local staged
+  prepare_bound_replay reordered
+  staged="$BOUND_REPLAY_RECORDS.staged"
+  awk '{ line[NR] = $0 } END { for (i = NR; i > 0; i--) print line[i] }' \
+    "$BOUND_REPLAY_RECORDS" > "$staged"
+  mv "$staged" "$BOUND_REPLAY_RECORDS"
+  assert_bound_replay_refused "reordered replay records"
+  pass "reordering committed replay records invalidates their proof"
+}
+
+test_replay_without_record_digest_fails_closed() {
+  local staged
+  prepare_bound_replay nodigest
+  staged="$BOUND_REPLAY_RECORDS.meta.staged"
+  jq 'del(.record_digest)' "$BOUND_REPLAY_RECORDS.meta" > "$staged"
+  mv "$staged" "$BOUND_REPLAY_RECORDS.meta"
+  assert_bound_replay_refused "digestless replay proof"
+  pass "a replay proof without a record digest fails closed"
 }
 
 # --- the consumer type ------------------------------------------------------
@@ -711,6 +788,20 @@ test_check_discovers_a_native_non_shell_read() {
   assert_contains "$out" "src/reader.js:1" "the native classifier names the read"
   assert_contains "$out" "no fm-retrieval-audit" "the native read requires classification"
   pass "a native non-shell read is discovered by its language classifier"
+}
+
+test_check_reports_coverage_beside_violations() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-violation-and-unchecked"
+  mkdir -p "$dir/bin"
+  printf '%s\n' 'out=$(gh api repos/o/r/issues/1/comments)' > "$dir/bin/reader.sh"
+  printf '%s\n' 'opaque outbound implementation' > "$dir/bin/reader.xyz"
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 1 "$rc" "site violations retain precedence over incomplete coverage"
+  assert_contains "$out" "coverage=incomplete" "the violation path reports coverage"
+  assert_contains "$out" "UNCHECKED" "the violation path reports unchecked files"
+  assert_contains "$out" "bin/reader.xyz" "the violation path names unchecked files"
+  pass "site violations cannot conceal incomplete gate coverage"
 }
 
 test_check_rejects_an_unknown_classification() {
@@ -864,12 +955,17 @@ run test_records_and_provenance_are_written_and_committed_last
 run test_replay_of_a_committed_read_reaches_the_same_conclusion
 run test_replay_without_text_field_fails_closed
 run test_replay_without_time_field_fails_closed
+run test_replay_with_deleted_records_fails_closed
+run test_replay_with_appended_records_fails_closed
+run test_replay_with_reordered_records_fails_closed
+run test_replay_without_record_digest_fails_closed
 run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
 run test_check_accepts_a_classified_read
 run test_check_rejects_an_unchecked_non_shell_file
 run test_check_discovers_a_native_non_shell_read
+run test_check_reports_coverage_beside_violations
 run test_check_rejects_an_unknown_classification
 run test_check_requires_a_reason_with_the_classification
 run test_check_passes_this_repository

@@ -304,22 +304,27 @@ done)
 COVERAGE=complete
 [ -z "$UNCHECKED" ] || COVERAGE=incomplete
 
+emit_coverage() {
+  printf 'fm-retrieval-check: coverage=%s scanned=%s out_of_scope=%s universe=%s\n' \
+    "$COVERAGE" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
+    "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
+    "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')"
+  [ -z "$UNCHECKED" ] || printf '%s\n' "$UNCHECKED" | sed 's/^/UNCHECKED\t/'
+}
+
 SITES=$(printf '%s\n' "$RESULTS" | awk 'NF' | wc -l | tr -d ' ')
 VIOLATIONS=$(printf '%s\n' "$RESULTS" \
   | awk -F '\t' '$1 == "UNCLASSIFIED" || $1 == "UNKNOWN-CLASS" || $1 == "NO-REASON"')
 
 if [ "$MODE" = audit ]; then
-  printf 'fm-retrieval-check: census root=%s sites=%s scanned=%s out_of_scope=%s universe=%s coverage=%s\n' \
-    "$ROOT" "$SITES" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
-    "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
-    "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')" "$COVERAGE"
+  printf 'fm-retrieval-check: census root=%s sites=%s\n' "$ROOT" "$SITES"
   printf '\nclassification census:\n'
   printf '%s\n' "$RESULTS" | awk -F '\t' 'NF { print $1 }' \
     | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | sed 's/^/  /'
   printf '\nsites:\n'
   printf '%s\n' "$RESULTS" | awk -F '\t' 'NF { printf "  %s\t%s\t%s\n", $2, $1, $3 }'
+  emit_coverage
   [ "$COVERAGE" = complete ] && exit 0
-  printf '%s\n' "$UNCHECKED" | sed 's/^/UNCHECKED\t/' >&2
   exit 2
 fi
 
@@ -351,19 +356,17 @@ on the same line or one of the three lines above it. Run
 'fm-retrieval-check.sh --list-classes' for the vocabulary and this script's
 header for what each class means.
 EOF
+  emit_coverage >&2
   exit 1
 fi
 
 if [ "$COVERAGE" != complete ]; then
-  printf 'fm-retrieval-check: coverage=%s; no clean-tree verdict is permitted\n' "$COVERAGE" >&2
-  printf '%s\n' "$UNCHECKED" | sed 's/^/UNCHECKED\t/' >&2
+  emit_coverage >&2
   exit 2
 fi
 
-printf 'fm-retrieval-check: ok sites=%s scanned=%s out_of_scope=%s universe=%s coverage=%s root=%s\n' \
-  "$SITES" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
-  "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
-  "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')" "$COVERAGE" "$ROOT"
+emit_coverage
+printf 'fm-retrieval-check: ok sites=%s root=%s\n' "$SITES" "$ROOT"
 # The class breakdown is printed on the passing path too, because "every site is
 # classified" and "which reasons the tree is relying on" are different facts and
 # only the second one tells a reader whether the mix looks right.
