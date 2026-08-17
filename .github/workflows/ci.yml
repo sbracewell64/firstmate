@@ -192,6 +192,7 @@ jobs:
           set -eu
           command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
           command -v python3 >/dev/null || { echo "::error::python3 is required"; exit 1; }
+          # fm-retrieval-audit: not-a-read - tool-presence probe only
           command -v curl >/dev/null || { echo "::error::curl is required"; exit 1; }
           command -v tar >/dev/null || { echo "::error::tar is required"; exit 1; }
           jq --version

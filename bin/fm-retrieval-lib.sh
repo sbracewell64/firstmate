@@ -357,17 +357,13 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
         "page $pages was not a JSON array"
       break
     fi
-    local required_field
-    for required_field in "$id_field" "$text_field" "$time_field"; do
-      [ -n "$required_field" ] || continue
-      if ! jq -e --arg f "$required_field" \
-        "all(.[]; $FM_RETRIEVAL_HAS_FIELD_EXPR)" \
-        "$body" >/dev/null 2>&1; then
-        fm_retrieval_set_reason schema_unexpected \
-          "page $pages carried a record with no $required_field"
-        break 2
-      fi
-    done
+    jq -c '.[]' "$body" > "$tmp/page-records" || {
+      fm_retrieval_set_reason schema_unexpected \
+        "page $pages could not be read as records"
+      break
+    }
+    fm_retrieval_validate_records "$tmp/page-records" "$id_field" \
+      "$text_field" "$time_field" "page $pages" || break
 
     page_records=$(jq 'length' "$body")
     while IFS= read -r line; do
@@ -425,6 +421,21 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
   rc=$?
   rm -rf "$tmp"
   return "$rc"
+}
+
+fm_retrieval_validate_records() {  # <jsonl-records> <id-field> <text-field> <time-field> <source>
+  local records=$1 id_field=$2 text_field=$3 time_field=$4 source=$5 required_field
+  for required_field in "$id_field" "$text_field" "$time_field"; do
+    [ -n "$required_field" ] || continue
+    if ! jq -se --arg f "$required_field" \
+      "all(.[]; ($FM_RETRIEVAL_HAS_FIELD_EXPR))" \
+      "$records" >/dev/null 2>&1; then
+      fm_retrieval_set_reason schema_unexpected \
+        "$source carried a record with no $required_field"
+      return 1
+    fi
+  done
+  return 0
 }
 
 # Publish the record set and then its proof, proof last. Called by fetch; split

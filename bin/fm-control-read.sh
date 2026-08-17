@@ -271,7 +271,10 @@ fi
 RETRIEVED=0
 if [ -n "$REPLAY" ]; then
   RECORDS=$REPLAY
-  fm_retrieval_load "$RECORDS" && RETRIEVED=1
+  if fm_retrieval_load "$RECORDS"; then
+    fm_retrieval_validate_records "$RECORDS" "$ID_FIELD" "$TEXT_FIELD" \
+      "$TIME_FIELD" "replayed record set" && RETRIEVED=1
+  fi
 else
   fm_retrieval_fetch "$FIRST_URL" "$RECORDS" "$ID_FIELD" "$MAX_PAGES" "$MAX_RECORDS" \
     "$TEXT_FIELD" "$TIME_FIELD" \
@@ -285,7 +288,8 @@ fi
 # fm_retrieval_conclude refuses to do.
 if [ "$FM_RETRIEVAL_REASON" != state_uncommitted ] \
   && [ "$FM_RETRIEVAL_REASON" != transport_unavailable ] \
-  && [ "$FM_RETRIEVAL_REASON" != usage_error ]; then
+  && [ "$FM_RETRIEVAL_REASON" != usage_error ] \
+  && [ "$FM_RETRIEVAL_REASON" != schema_unexpected ]; then
   fm_retrieval_select "$RECORDS" "$ID_FIELD" "$TEXT_FIELD" "$TIME_FIELD" \
     "$DISCOVER" "$IDENTITY" "$APPLICABLE" "$IDENTITY_MODE"
 fi

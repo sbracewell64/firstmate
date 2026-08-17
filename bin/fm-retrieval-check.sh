@@ -137,6 +137,10 @@ AUDIT_PATTERN=$AUDIT_PATTERN'|total_count|totalCount|hasNextPage|pageInfo'
 AUDIT_PATTERN=$AUDIT_PATTERN'|[(](first|last):'
 AUDIT_PATTERN=$AUDIT_PATTERN'|(^|[^A-Za-z0-9_.-])(gh|gh-axi|glab)[[:space:]]'
 
+NATIVE_PATTERN='(^|[^A-Za-z0-9_.-])(fetch|XMLHttpRequest)[[:space:]]*[(]'
+NATIVE_PATTERN=$NATIVE_PATTERN'|(^|[^A-Za-z0-9_.-])(axios|octokit|urllib|requests|http[.]client)([^A-Za-z0-9_.-]|$)'
+NATIVE_PATTERN=$NATIVE_PATTERN'|(^|[^A-Za-z0-9_.-])(child_process|subprocess).*([^A-Za-z0-9_.-]|^)(gh|gh-axi|glab)([^A-Za-z0-9_.-]|$)'
+
 ANNOTATION='fm-retrieval-audit:'
 
 while [ "$#" -gt 0 ]; do
@@ -187,39 +191,55 @@ OUT_OF_SCOPE=
 UNCHECKED=
 while IFS= read -r file; do
   [ -n "$file" ] || continue
+  if [ -L "$ROOT/$file" ]; then
+    OUT_OF_SCOPE="${OUT_OF_SCOPE}${OUT_OF_SCOPE:+
+}$file\tsymlink has no executable content of its own"
+    continue
+  fi
   case "$file" in
-    .git/*|.github/*|.claude/*|docs/*|data/*|assets/*|tests/*|LICENSE|*.md|*.json|*.yml|*.yaml|*.toml|*.txt|.gitignore|.gitattributes)
+    docs/*|data/*|assets/*|tests/*|commitments/*|loopspecs/*|capabilities/*|LICENSE|*.md|*.txt|.gitignore|.gitattributes)
       OUT_OF_SCOPE="${OUT_OF_SCOPE}${OUT_OF_SCOPE:+
-}$file\tprose, data, workflow configuration, static assets, or test fixtures cannot perform a production control-plane read"
+}$file\tfile is maintained prose, inert data, a static asset, or a test fixture"
       ;;
-    *.sh|*.bash|*.bat|*.py|*.js|*.mjs|*.cjs|*.ts|*.tsx|*.go|*.rs|*.rb|*.pl)
+    *.sh|*.bash)
       FILES="${FILES}${FILES:+
-}$file"
+}$file"$'\t'"shell"
+      ;;
+    .github/workflows/*.yml|.github/workflows/*.yaml)
+      FILES="${FILES}${FILES:+
+}$file"$'\t'"workflow"
+      ;;
+    *.py|*.js|*.mjs|*.cjs|*.ts|*.tsx|*.bat)
+      FILES="${FILES}${FILES:+
+}$file"$'\t'"native"
+      ;;
+    *.json|*.toml|*.yml|*.yaml)
+      FILES="${FILES}${FILES:+
+}$file"$'\t'"config"
       ;;
     *)
-      if [ -x "$ROOT/$file" ] && file "$ROOT/$file" 2>/dev/null | grep -q text; then
-        FILES="${FILES}${FILES:+
+      UNCHECKED="${UNCHECKED}${UNCHECKED:+
 }$file"
-      else
-        UNCHECKED="${UNCHECKED}${UNCHECKED:+
-}$file"
-      fi
       ;;
   esac
 done <<EOF
 $UNIVERSE
 EOF
 
-PATTERN=$ENFORCED_PATTERN
-[ "$MODE" = check ] || PATTERN=$AUDIT_PATTERN
-
 # One awk pass per file. The annotation is accepted on the flagged line itself or
 # on one of the three lines above it, because a flagged line that ends a shell
 # continuation cannot carry a trailing comment and its statement's own first line
 # is the nearest place a comment is legal.
-scan_file() {  # <file>
-  local file=$1
-  awk -v file="$file" -v pat="$PATTERN" -v anno="$ANNOTATION" -v classes="$CLASSES" '
+scan_file() {  # <file> <classifier>
+  local file=$1 classifier=$2 pattern=$ENFORCED_PATTERN
+  [ "$MODE" = check ] || pattern=$AUDIT_PATTERN
+  case "$classifier" in
+    shell|workflow) ;;
+    native) pattern="$pattern|$NATIVE_PATTERN" ;;
+    config) pattern="$pattern|$NATIVE_PATTERN" ;;
+    *) return 1 ;;
+  esac
+  awk -v file="$file" -v pat="$pattern" -v anno="$ANNOTATION" -v classes="$CLASSES" '
     BEGIN {
       n = split(classes, c, " ")
       for (i = 1; i <= n; i++) known[c[i]] = 1
@@ -276,33 +296,31 @@ scan_file() {  # <file>
   ' "$ROOT/$file"
 }
 
-RESULTS=$(printf '%s\n' "$FILES" | while IFS= read -r f; do
+RESULTS=$(printf '%s\n' "$FILES" | while IFS=$'\t' read -r f classifier; do
   [ -n "$f" ] || continue
-  scan_file "$f"
+  scan_file "$f" "$classifier"
 done)
 
-if [ -n "$UNCHECKED" ]; then
-  printf '%s\n' "$UNCHECKED" | while IFS= read -r file; do
-    printf 'UNCHECKED\t%s\tfile capability could not be classified\n' "$file"
-  done >&2
-  exit 1
-fi
+COVERAGE=complete
+[ -z "$UNCHECKED" ] || COVERAGE=incomplete
 
 SITES=$(printf '%s\n' "$RESULTS" | awk 'NF' | wc -l | tr -d ' ')
 VIOLATIONS=$(printf '%s\n' "$RESULTS" \
   | awk -F '\t' '$1 == "UNCLASSIFIED" || $1 == "UNKNOWN-CLASS" || $1 == "NO-REASON"')
 
 if [ "$MODE" = audit ]; then
-  printf 'fm-retrieval-check: census root=%s sites=%s scanned=%s out_of_scope=%s universe=%s coverage=complete\n' \
+  printf 'fm-retrieval-check: census root=%s sites=%s scanned=%s out_of_scope=%s universe=%s coverage=%s\n' \
     "$ROOT" "$SITES" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
     "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
-    "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')"
+    "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')" "$COVERAGE"
   printf '\nclassification census:\n'
   printf '%s\n' "$RESULTS" | awk -F '\t' 'NF { print $1 }' \
     | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | sed 's/^/  /'
   printf '\nsites:\n'
   printf '%s\n' "$RESULTS" | awk -F '\t' 'NF { printf "  %s\t%s\t%s\n", $2, $1, $3 }'
-  exit 0
+  [ "$COVERAGE" = complete ] && exit 0
+  printf '%s\n' "$UNCHECKED" | sed 's/^/UNCHECKED\t/' >&2
+  exit 2
 fi
 
 if [ -n "$VIOLATIONS" ]; then
@@ -336,10 +354,16 @@ EOF
   exit 1
 fi
 
-printf 'fm-retrieval-check: ok sites=%s scanned=%s out_of_scope=%s universe=%s coverage=complete root=%s\n' \
+if [ "$COVERAGE" != complete ]; then
+  printf 'fm-retrieval-check: coverage=%s; no clean-tree verdict is permitted\n' "$COVERAGE" >&2
+  printf '%s\n' "$UNCHECKED" | sed 's/^/UNCHECKED\t/' >&2
+  exit 2
+fi
+
+printf 'fm-retrieval-check: ok sites=%s scanned=%s out_of_scope=%s universe=%s coverage=%s root=%s\n' \
   "$SITES" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
   "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
-  "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')" "$ROOT"
+  "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')" "$COVERAGE" "$ROOT"
 # The class breakdown is printed on the passing path too, because "every site is
 # classified" and "which reasons the tree is relying on" are different facts and
 # only the second one tells a reader whether the mix looks right.

@@ -94,9 +94,19 @@ Those tokens are evidence that a site already proves its own extent, which is wh
 They also occur inside multi-line quoted query bodies, where the shell has no syntax for a comment, so enforcing them would demand an annotation in a position that cannot exist.
 [`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh) asserts the census stays strictly broader than the enforced set, so narrowing it back fails a control.
 
-The gate enumerates every tracked file and partitions the universe into scannable source, explicitly out-of-scope prose, data, configuration, and assets, or `UNCHECKED` files whose capability it cannot classify.
+The gate enumerates every tracked file and partitions the universe by each file's actual role into scannable executable content, explicitly inert prose, data, assets, and test fixtures, or `UNCHECKED` files whose capability it cannot classify.
 An `UNCHECKED` file is named and makes the gate non-zero, so coverage incompleteness cannot produce a pass.
-The passing record reports scanned, out-of-scope, and total universe counts with `coverage=complete`.
+Coverage is computed from that partition on every run rather than printed as a literal.
+The passing record reports scanned, out-of-scope, and total universe counts with the measured `coverage=complete` verdict.
+
+Shell files and workflow YAML `run:` blocks use the shell read-form classifier.
+JavaScript, TypeScript, Python, and batch files add native `fetch`, `XMLHttpRequest`, HTTP-client, API-library, and subprocess read forms.
+Executable configuration uses both classifier families because hook and command fields can launch either form.
+Any language without a classifier is `UNCHECKED` rather than scanned with a pattern that cannot see it.
+
+Three review rounds exposed the same pattern at successively deeper layers: the traversal validated identity but not every named schema field, the gate enforced classifications without proving its own file universe, and replay reached a verdict without the validation used by fetch.
+The contract was correct about the thing it gated while incomplete about itself each time.
+A completeness contract must satisfy its own law, and checking that law rather than a checklist is what exposed each path.
 
 ## Classification of every enforced site
 
@@ -154,7 +164,7 @@ bash tests/fm-retrieval-contract.test.sh
 
 Controls covering the commissioned list: an applicable ruling only on page 2 or later; multiple pages with the oldest record on page 1; the latest applicable ruling not on the first page; page 1 carrying a ruling a later page supersedes; pagination stopping early; one page that cannot be read; duplicate identifiers across pages; an irrelevant later comment after the applicable ruling; an identifier present only in quoted or reply prose; prefix collision, `X` versus `X` plus a suffix; complete retrieval with a genuinely absent ruling, the negative that must stay assertable; and complete retrieval with exactly one applicable ruling, the non-vacuity anchor.
 
-Beyond that list: an absent reader tool, a moved response schema, records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, replay of a committed read, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, gate coverage including its `UNCHECKED` class, and the three rollup-cap behaviors.
+Beyond that list: an absent reader tool, a moved response schema, live and replayed records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, valid replay anchors for both `PRESENT` and `ABSENT`, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, per-language gate coverage including native reads and its `UNCHECKED` class, and the three rollup-cap behaviors.
 
 ### Negative controls: each guard watched failing
 

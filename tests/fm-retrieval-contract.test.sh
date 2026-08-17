@@ -553,7 +553,7 @@ test_records_and_provenance_are_written_and_committed_last() {
 }
 
 test_replay_of_a_committed_read_reaches_the_same_conclusion() {
-  local fix records
+  local fix records absent_records
   fix=$(fixture_new replay)
   records="$TMP_ROOT/replay-records.jsonl"
   fixture_page "$fix" 1 - 200 "$(page_body \
@@ -565,7 +565,54 @@ test_replay_of_a_committed_read_reaches_the_same_conclusion() {
   assert_field "$RECORD" conclusion PRESENT "replayed read"
   assert_field "$RECORD" retrieval complete "replayed read"
   expect_code 0 "$RC" "a committed complete read replays to the same conclusion"
-  pass "a committed read replays without asking the source again"
+  absent_records="$TMP_ROOT/replay-absent-records.jsonl"
+  run_read "$fix" --identity req-8 --applicable APPROVE --claim exists \
+    --records "$absent_records"
+  assert_field "$RECORD" conclusion ABSENT "absent source read"
+  RECORD=$("$READ" --replay "$absent_records" --claim exists --identity req-8 \
+    --applicable APPROVE 2>&1) && RC=0 || RC=$?
+  assert_field "$RECORD" conclusion ABSENT "replayed absent read"
+  assert_field "$RECORD" retrieval complete "replayed absent read"
+  expect_code 1 "$RC" "a committed complete absence remains assertable on replay"
+  pass "valid committed reads replay to both PRESENT and ABSENT"
+}
+
+test_replay_without_text_field_fails_closed() {
+  local fix records staged
+  fix=$(fixture_new replay-notext)
+  records="$TMP_ROOT/replay-notext.jsonl"
+  staged="$TMP_ROOT/replay-notext-staged.jsonl"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')")"
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --records "$records"
+  jq -c 'del(.body)' "$records" > "$staged"
+  mv "$staged" "$records"
+  RECORD=$("$READ" --replay "$records" --claim exists --identity req-7 \
+    --applicable APPROVE 2>&1) && RC=0 || RC=$?
+  assert_field "$RECORD" retrieval unobserved "replay missing text field"
+  assert_field "$RECORD" reason schema_unexpected "replay missing text field"
+  assert_field "$RECORD" conclusion INDETERMINATE "replay missing text field"
+  expect_code 2 "$RC" "replay missing configured text cannot report absence"
+  pass "replay missing the configured text field fails closed"
+}
+
+test_replay_without_time_field_fails_closed() {
+  local fix records staged
+  fix=$(fixture_new replay-notime)
+  records="$TMP_ROOT/replay-notime.jsonl"
+  staged="$TMP_ROOT/replay-notime-staged.jsonl"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')")"
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --records "$records"
+  jq -c 'del(.created_at)' "$records" > "$staged"
+  mv "$staged" "$records"
+  RECORD=$("$READ" --replay "$records" --claim exists --identity req-7 \
+    --applicable APPROVE 2>&1) && RC=0 || RC=$?
+  assert_field "$RECORD" retrieval unobserved "replay missing time field"
+  assert_field "$RECORD" reason schema_unexpected "replay missing time field"
+  assert_field "$RECORD" conclusion INDETERMINATE "replay missing time field"
+  expect_code 2 "$RC" "replay missing configured time cannot report absence"
+  pass "replay missing the configured time field fails closed"
 }
 
 # --- the consumer type ------------------------------------------------------
@@ -636,6 +683,7 @@ SH
   out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
   expect_code 0 "$rc" "a classified read passes"
   assert_contains "$out" "fm-retrieval-check: ok" "the pass names itself"
+  assert_contains "$out" "coverage=complete" "the pass proves complete coverage"
   pass "the check accepts a read carrying an exact classification and reason"
 }
 
@@ -645,10 +693,24 @@ test_check_rejects_an_unchecked_non_shell_file() {
   mkdir -p "$dir/bin"
   printf '%s\n' 'gh api repos/o/r/issues/1/comments' > "$dir/bin/reader.xyz"
   out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
-  expect_code 1 "$rc" "an unclassifiable tracked file is not a coverage pass"
+  expect_code 2 "$rc" "an unclassifiable tracked file has a distinct coverage status"
   assert_contains "$out" "UNCHECKED" "the coverage failure names its class"
   assert_contains "$out" "bin/reader.xyz" "the coverage failure names the file"
+  assert_not_contains "$out" "coverage=complete" "unchecked coverage is never complete"
   pass "a non-shell tracked file cannot pass outside the gate universe"
+}
+
+test_check_discovers_a_native_non_shell_read() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-native"
+  mkdir -p "$dir/src"
+  printf '%s\n' 'const result = await fetch("https://api.example.test/comments");' \
+    > "$dir/src/reader.js"
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 1 "$rc" "an unclassified native read is rejected"
+  assert_contains "$out" "src/reader.js:1" "the native classifier names the read"
+  assert_contains "$out" "no fm-retrieval-audit" "the native read requires classification"
+  pass "a native non-shell read is discovered by its language classifier"
 }
 
 test_check_rejects_an_unknown_classification() {
@@ -800,11 +862,14 @@ run test_not_authorized_read_is_could_not_observe
 run test_unreadable_subject_is_could_not_observe
 run test_records_and_provenance_are_written_and_committed_last
 run test_replay_of_a_committed_read_reaches_the_same_conclusion
+run test_replay_without_text_field_fails_closed
+run test_replay_without_time_field_fails_closed
 run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
 run test_check_accepts_a_classified_read
 run test_check_rejects_an_unchecked_non_shell_file
+run test_check_discovers_a_native_non_shell_read
 run test_check_rejects_an_unknown_classification
 run test_check_requires_a_reason_with_the_classification
 run test_check_passes_this_repository
