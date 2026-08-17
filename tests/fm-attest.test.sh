@@ -1293,6 +1293,62 @@ test_reconcile_validates_the_initial_observation_before_sleeping() {
   pass "fm-attest.sh: initial absence revalidates the pull request head before sleep"
 }
 
+test_reconcile_refuses_wrong_head_evidence_arriving_during_the_wait() {
+  local dir head other out rc stub body
+  dir="$TMP_ROOT/reconcile-arriving-wrong-head"
+  head=$(new_reconcile_fixture "$dir")
+  printf 'other\n' > "$dir/work/other.txt"
+  git -C "$dir/work" add other.txt
+  git -C "$dir/work" commit -qm other
+  other=$(git -C "$dir/work" rev-parse HEAD)
+  git -C "$dir/work" checkout -q "$head"
+  body="$dir/wrong-head-note"
+  good_note "$other" > "$body"
+  stub="$dir/stub"
+  mkdir -p "$stub"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'git -C %q notes --ref=%q add -f -F %q %q >/dev/null 2>&1\n' "$dir/work" "$NOTES_REF" "$body" "$head"
+    printf 'git -C %q push -q -f attestation-source %q\n' "$dir/work" "$NOTES_REF:$NOTES_REF"
+  } > "$stub/sleep"
+  chmod +x "$stub/sleep"
+
+  out=$(PATH="$stub:$PATH" run_reconcile "$dir" --head "$head" --window 20 --poll 1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "wrong-head evidence arriving during the wait passed (exit $rc): $out"
+  assert_contains "$out" "attestation-not-bound" "arriving evidence was not bound to the evaluated head"
+  pass "fm-attest.sh: arriving evidence must bind the exact evaluated head"
+}
+
+test_reconcile_accepts_exact_head_evidence_when_the_pull_request_moves() {
+  local dir head moved out rc stub body
+  dir="$TMP_ROOT/reconcile-arriving-exact-head-after-move"
+  head=$(new_reconcile_fixture "$dir")
+  printf 'moved\n' > "$dir/work/moved.txt"
+  git -C "$dir/work" add moved.txt
+  git -C "$dir/work" commit -qm moved
+  moved=$(git -C "$dir/work" rev-parse HEAD)
+  git -C "$dir/work" checkout -q "$head"
+  body="$dir/exact-head-note"
+  good_note "$head" > "$body"
+  stub="$dir/stub"
+  mkdir -p "$stub"
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'git -C %q push -q -f pullrequest-source %q\n' "$dir/work" "$moved:refs/pull/1/head"
+    printf 'git -C %q notes --ref=%q add -f -F %q %q >/dev/null 2>&1\n' "$dir/work" "$NOTES_REF" "$body" "$head"
+    printf 'git -C %q push -q -f attestation-source %q\n' "$dir/work" "$NOTES_REF:$NOTES_REF"
+  } > "$stub/sleep"
+  chmod +x "$stub/sleep"
+
+  out=$(PATH="$stub:$PATH" run_reconcile "$dir" --head "$head" --window 20 --poll 1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "valid exact-head evidence was rejected after the pull request moved (exit $rc): $out"
+  assert_contains "$out" "attested $head" "the canonical verifier did not accept the evaluated head"
+  assert_not_contains "$out" "now proposes $moved" "head movement overruled already-arrived exact-head evidence"
+  pass "fm-attest.sh: pull request movement does not falsify exact-head evidence"
+}
+
 test_reconcile_waits_only_for_absence() {
   local dir head out rc started waited blob neighbour
   # The correspondence this window rests on, asserted rather than assumed: the
@@ -2940,6 +2996,8 @@ test_reconcile_does_not_grace_evidence_already_seen_to_be_invalid
 test_reconcile_ignores_local_evidence_when_the_authoritative_ref_is_absent
 test_reconcile_consults_the_clock_only_after_absence_applies
 test_reconcile_validates_the_initial_observation_before_sleeping
+test_reconcile_refuses_wrong_head_evidence_arriving_during_the_wait
+test_reconcile_accepts_exact_head_evidence_when_the_pull_request_moves
 test_reconcile_waits_only_for_absence
 test_reconcile_stops_when_the_pull_request_head_moves
 test_reconcile_reports_an_unreadable_repository_as_no_verdict
