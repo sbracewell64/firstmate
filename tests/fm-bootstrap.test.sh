@@ -43,6 +43,11 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
 # treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1.
 make_fake_toolchain() {
   local dir=$1 fakebin
+  # Generic bootstrap cases model an observed-empty fleet, not a home whose
+  # project universe is unreadable to the outbound inventory sweep.
+  mkdir -p "$dir/home/data" "$(dirname "$dir")/home/data"
+  : > "$dir/home/data/projects.md"
+  : > "$(dirname "$dir")/home/data/projects.md"
   fakebin=$(fm_fakebin "$dir")
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi lavish-axi
   cat > "$fakebin/gh-axi" <<'SH'

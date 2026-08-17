@@ -7,7 +7,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 
 Verified on 2026-08-17 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
-The current focused green suites were re-run at exact implementation head `425d0056ca0f6a9990b24e482d0e654b7428d825` after the dead-predicate control became repository-wide and identity-bound retrieval was revalidated.
+The current focused green suites were re-run at exact implementation head `08de042f9963e2374bed71ff5674d59403cc2270` after branch inventory became complete over its owned read boundaries and identity-bound retrieval was revalidated.
 
 ## Why this record exists
 
@@ -29,10 +29,10 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 45 outbound-artifact cases, 33 dead-predicate cases, and the bootstrap integration cases pass.
+The 56 outbound-artifact cases, 33 dead-predicate cases, and the bootstrap integration cases pass.
 What follows is why that sentence is worth anything.
 
-The focused suites were re-run on 2026-08-17 at exact implementation head `425d0056ca0f6a9990b24e482d0e654b7428d825` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh`; the command exited 0.
+The focused suites were re-run on 2026-08-17 at exact implementation head `08de042f9963e2374bed71ff5674d59403cc2270` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh`; the command exited 0.
 
 ## Watched-red evidence, one mutation per control
 
@@ -58,24 +58,13 @@ It still refused, which is why the mistake survives reading, but it refused with
 That is the three-value collapse the whole mechanism exists to prevent, reproduced inside the mechanism.
 `require_record` now answers through a global and the mutation fires, as the table records.
 
-## Non-vacuity against the live fleet
+## Branch inventory non-vacuity
 
 A recognizer that matches nothing is the failure mode this invariant is most exposed to, because a clean report and a blind one are the same output.
-Run read-only against the primary home, with records directed to a scratch directory so nothing in that home is written:
-
-```sh
-$ FM_HOME=<primary-home> FM_OUTBOUND_DIR=<scratch> FM_OUTBOUND_MAX_PROBES=4 \
-    bin/fm-outbound-artifact.sh check | head -1
-outbound artifacts: 0 satisfied, 9 defect, 4 unevaluable
-```
-
-The nine defects include every item this increment was commissioned from, and each is recognised from durable state with no annotation written for the invariant's benefit:
-
-- `fleet-attention-advisory-signal`, `engraphis-consolidation-dry-run-default`, and `engraphis-structured-graph-api-upstream` type as `CONTRIBUTION_SUBMISSION_REQUIRED` on the `pull-request` channel - finished branches with no pull request on any remote.
-- `engraphis-reserved-defects-recovery` types the same way and was **not** among the items reported when this work was commissioned, so the sweep found one the manual pass missed.
-- The four SSSF hardening rows type as `INDEPENDENT_BROWSER_REVIEW_REQUIRED` on the `sol-control` channel and report `FM_OUTBOUND_TRANSPORT_UNCONFIGURED`, because the primary home has no `config/sol-control.json` yet.
-
-That last group is the honest reading and not a gap in the check: with no configured venue the sweep cannot see whether a request exists, so it reports could-not-observe rather than either verdict.
+The anchor control creates real work on an `fm/<item>` branch while its backlog row says nothing about submission, then proves the sweep reports `recognised: inventory` and exits 3.
+Before branch enumeration, that same fixture reported zero defects at exit 0, so the control establishes that the finding comes from enumerating refs rather than from an annotation.
+Its negative controls prove that work already contained in the landing target, including squash-landed content, is excluded rather than reported forever.
+The observation-gap controls make an absent project registry, unreadable project posture, failed ref or object-width read, unresolved landing target, and failed candidate-ref enumeration exit 4 with the affected item or project named.
 
 ## Three defects this found in itself, against live data
 
@@ -152,6 +141,7 @@ Each row states what the control actually establishes and what it does not. A kn
 | `head-object-id-width` | A 64-character value is refused for a sha1 repository; an abbreviation is refused; an unresolvable well-shaped id is refused; undeterminable format refuses | Accept any 7-40 hex, or a bare 40-or-64 - observed red | **No sha256 repository was available.** Acceptance of a 64-character head in a sha256 repository is UNPROVEN |
 | `unambiguous-ruling-verdict` | Exactly one verdict line is required, and ambiguity refuses while naming its count | Add a quoted prior verdict beside the decided verdict | Does not decide which verdict was intended when a ruling contains more than one |
 | `dead-predicate` | A function in an enrolled file with no call site in its complete possible-caller universe is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review. `DEAD` is issued only when every possible caller is parseable; an unparseable file that does not even loosely mention that predicate is outside its property-scoped universe, while a loose mention can only make the verdict could-not-observe and can never confirm a call |
+| `branch-inventory` | An unannotated `fm/<item>` branch with unlanded work and no exact-head pull request is a defect; landed work is excluded; owned read failures are observation gaps | Remove branch enumeration - the anchor returns to zero defects at exit 0 | Covers registered non-local-only projects and the `fm/<item>` namespace only |
 
 ## One recurrence, four instances: a canonical thing that exists and is not consulted
 
