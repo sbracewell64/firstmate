@@ -263,6 +263,21 @@ read_execution() {  # <record-dir>; sets EXEC_RESULT and EXEC_REASON
   return 0
 }
 
+execution_matches() {  # <record-dir> <commit> <tree> <argv-json>
+  local dir=$1 commit=$2 tree=$3 argv_json=$4 record
+  record=$dir/record.json
+  [ -f "$record" ] || return 1
+  jq -e --arg commit "$commit" --arg tree "$tree" --argjson argv "$argv_json" '
+    .schema == "fm-review-exec.v1"
+    and .dimensions.candidate_commit.observed == true
+    and .dimensions.candidate_commit.value == $commit
+    and .dimensions.candidate_tree.observed == true
+    and .dimensions.candidate_tree.value == $tree
+    and .dimensions.launch_argv.observed == true
+    and .dimensions.launch_argv.value == $argv
+  ' "$record" >/dev/null 2>&1
+}
+
 # --- the fold ----------------------------------------------------------------
 #
 # One function, so the ordering that encodes the precedence law exists once.
@@ -366,6 +381,103 @@ build_variant() {  # <staging> <candidate-tree> <candidate-commit> <path> <mode>
     || return 1
   git -C "$staging" update-ref "refs/heads/fm-mutation-$variant" "$commit" 2>/dev/null || return 1
   printf '%s %s\n' "$commit" "$tree"
+}
+
+validate_mutation_evidence() {  # <staging> <work> <record>
+  local staging=$1 work=$2 record=$3
+  python3 - "$staging" "$work" "$record" <<'PY'
+import hashlib
+import json
+import subprocess
+import sys
+
+staging, work, record_path = sys.argv[1:]
+try:
+    with open(record_path, "rb") as handle:
+        record = json.load(handle)
+    dimensions = record["dimensions"]
+    values = {name: dimension["value"] for name, dimension in dimensions.items()}
+    candidate = values["candidate_commit"]
+    path = values["target_path"]
+    entry = subprocess.check_output(
+        ["git", "-C", staging, "ls-tree", "-z", candidate, "--", path], stderr=subprocess.DEVNULL
+    ).rstrip(b"\0").split(b"\t", 1)
+    if len(entry) != 2:
+        raise ValueError
+    metadata = entry[0].decode().split()
+    if len(metadata) != 3 or metadata[1] != "blob":
+        raise ValueError
+    mode, _, candidate_blob = metadata
+    entry_path = entry[1].decode()
+    if entry_path != path or mode not in ("100644", "100755"):
+        raise ValueError
+    original = subprocess.check_output(
+        ["git", "-C", staging, "cat-file", "blob", candidate_blob], stderr=subprocess.DEVNULL
+    )
+    with open(work + "/target.bytes", "rb") as handle:
+        target = handle.read()
+    with open(work + "/falsify.bytes", "rb") as handle:
+        falsify = handle.read()
+    with open(work + "/satisfy.bytes", "rb") as handle:
+        satisfy = handle.read()
+    if not target:
+        raise ValueError
+    positions = []
+    offset = original.find(target)
+    while offset != -1:
+        positions.append(offset)
+        offset = original.find(target, offset + 1)
+    if len(positions) != 1:
+        raise ValueError
+    offset = positions[0]
+    expected = {
+        "baseline": original[:offset] + target + original[offset + len(target):],
+        "falsified": original[:offset] + falsify + original[offset + len(target):],
+        "satisfied": original[:offset] + satisfy + original[offset + len(target):],
+    }
+    object_format = subprocess.check_output(
+        ["git", "-C", staging, "rev-parse", "--show-object-format"], stderr=subprocess.DEVNULL
+    ).decode().strip()
+    digest = getattr(hashlib, object_format)
+    expected_blobs = {
+        name: digest(b"blob " + str(len(content)).encode() + b"\0" + content).hexdigest()
+        for name, content in expected.items()
+    }
+    if (
+        values["target_mode"] != mode
+        or values["target_blob"] != candidate_blob
+        or values["target_sha256"] != hashlib.sha256(target).hexdigest()
+        or values["target_length"] != len(target)
+        or values["target_occurrences"] != 1
+        or values["target_offset"] != offset
+    ):
+        raise ValueError
+    for name in ("baseline", "falsified", "satisfied"):
+        commit = values[name + "_commit"]
+        tree = values[name + "_tree"]
+        actual_tree = subprocess.check_output(
+            ["git", "-C", staging, "rev-parse", commit + "^{tree}"], stderr=subprocess.DEVNULL
+        ).decode().strip()
+        parents = subprocess.check_output(
+            ["git", "-C", staging, "show", "-s", "--format=%P", commit], stderr=subprocess.DEVNULL
+        ).decode().strip().split()
+        mutant_entry = subprocess.check_output(
+            ["git", "-C", staging, "ls-tree", "-z", commit, "--", path], stderr=subprocess.DEVNULL
+        ).rstrip(b"\0").split(b"\t", 1)
+        mutant_metadata = mutant_entry[0].decode().split() if len(mutant_entry) == 2 else []
+        if (
+            actual_tree != tree
+            or parents != [candidate]
+            or len(mutant_metadata) != 3
+            or mutant_metadata[0] != mode
+            or mutant_metadata[1] != "blob"
+            or mutant_metadata[2] != expected_blobs[name]
+            or mutant_entry[1].decode() != path
+        ):
+            raise ValueError
+except (AttributeError, OSError, KeyError, TypeError, ValueError, subprocess.SubprocessError):
+    sys.exit(1)
+PY
 }
 
 # The isolation law, applied to this script's own disposable clone. Each
@@ -756,6 +868,17 @@ derive_result() {  # <dir>; sets DERIVED_*
     [ "$(git -C "$staging" -c core.quotePath=false diff --name-only "$cc" "$changed" 2>/dev/null)" = "$path" ] \
       || return 0
   done
+
+  validate_mutation_evidence "$staging" "$dir/work" "$record" || return 0
+
+  local argv_json
+  argv_json=$(jq -c '.dimensions.probe_argv.value' "$record" 2>/dev/null) || return 0
+  [ "$(jq -r '.dimensions.baseline_execution.value.record' "$record" 2>/dev/null)" = exec/baseline ] || return 0
+  [ "$(jq -r '.dimensions.falsified_execution.value.record' "$record" 2>/dev/null)" = exec/falsified ] || return 0
+  [ "$(jq -r '.dimensions.satisfied_execution.value.record' "$record" 2>/dev/null)" = exec/satisfied ] || return 0
+  execution_matches "$dir/exec/baseline" "$bc" "$bt" "$argv_json" || return 0
+  execution_matches "$dir/exec/falsified" "$fc" "$ft" "$argv_json" || return 0
+  execution_matches "$dir/exec/satisfied" "$sc" "$st" "$argv_json" || return 0
 
   read_execution "$dir/exec/baseline"; b=$EXEC_RESULT
   read_execution "$dir/exec/falsified"; n=$EXEC_RESULT

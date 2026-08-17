@@ -474,6 +474,31 @@ test_an_edited_record_cannot_be_read_into_a_verdict() {
   pass "stored-outcome: edited execution results in the record cannot reach a verdict"
 }
 
+test_an_execution_from_the_wrong_variant_is_could_not_observe() {
+  local case_dir
+  case_dir=$(make_case wrong_execution)
+  set +e
+  run_prove "$case_dir" honest bash tests/honest.sh >/dev/null 2>&1
+  set -e
+  rm -rf "$case_dir/honest/exec/baseline"
+  cp -R "$case_dir/honest/exec/satisfied" "$case_dir/honest/exec/baseline"
+  [ "$(record_result "$case_dir/honest")" = NO_VERIFIER_RAN ] \
+    || fail "an execution for another mutation must not enter the fold"
+  pass "stored-outcome: every execution is bound to its mutation and probe argv"
+}
+
+test_preserved_mutation_bytes_are_rederived() {
+  local case_dir
+  case_dir=$(make_case changed_bytes)
+  set +e
+  run_prove "$case_dir" honest bash tests/honest.sh >/dev/null 2>&1
+  set -e
+  printf 'exit 0\n' >"$case_dir/honest/work/falsify.bytes"
+  [ "$(record_result "$case_dir/honest")" = NO_VERIFIER_RAN ] \
+    || fail "changed preserved bytes must invalidate the claimed mutant"
+  pass "stored-outcome: mutation blobs and metadata are rederived from preserved bytes"
+}
+
 test_a_missing_dimension_outranks_a_clean_fold() {
   local case_dir rec out code
   case_dir=$(make_case missing_dimension)
@@ -740,6 +765,8 @@ FM_CONTROLS=(
   test_refuses_to_overwrite_an_existing_record
   test_a_record_whose_mutants_are_gone_is_could_not_observe
   test_an_edited_record_cannot_be_read_into_a_verdict
+  test_an_execution_from_the_wrong_variant_is_could_not_observe
+  test_preserved_mutation_bytes_are_rederived
   test_a_missing_dimension_outranks_a_clean_fold
   test_a_record_pointing_at_another_path_is_could_not_observe
   test_a_caller_declaration_cannot_change_the_verdict
