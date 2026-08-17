@@ -43,6 +43,28 @@
 # never measured. It is caught by review, and this comment is the record that it
 # is review's job rather than this file's.
 #
+# WHEN A `DEAD` VERDICT MAY BE TRUSTED, AND HOW MUCH OF THE REPOSITORY IS READ.
+#
+# `DEAD` is issued only when EVERY file that could have held a call site was
+# parseable. If any possible consumer is outside the accepted syntax, the
+# predicate is COULD_NOT_OBSERVE instead - never `DEAD`. That is the property
+# that makes a `DEAD` verdict actionable: it says the call site is absent, not
+# merely that this control failed to find one. An earlier version counted call
+# sites only inside ENROLLED files, so a predicate called solely from an
+# unenrolled consumer was reported `DEAD` although it was live - a false positive
+# in the direction that invites deleting working code, and a verdict that
+# depended on which files happened to be enrolled rather than on the code.
+#
+# The cost is visibility, and it is large enough to state plainly: on this
+# repository 118 consumer files parse and 215 do not, so most of the tree is
+# currently unreadable to this control and could_not_observe is its honest answer
+# for any predicate whose consumers live in that majority. That is a measurement
+# rather than a failure - the way to shrink 215 is to make more files parse - but
+# it must never be mistaken for a clean repository. Every unchecked consumer is
+# named in the output, and the summary line always prints `alive=` and
+# `could_not_observe=` counts, because "nothing is dead" and "nothing could be
+# resolved" are different facts that a single ok line would otherwise conflate.
+#
 # The checkable rule that came out of that finding, and which belongs with the
 # code rather than here: any record retrieved BY KEY must have its content-derived
 # identity verified against that key, and a mismatch must refuse rather than
@@ -106,8 +128,13 @@ function_definitions() {  # <file>
 
 function_has_call_site() {  # <function>
   local fn=$1 f
-  for f in "${FILES[@]}"; do
-    if awk -v fn="$fn" '
+  for f in "${SCANNABLE[@]}"; do
+    # The indirect-call mark is deliberately a COMMENT, so it must be read from
+    # the raw file: the stripped text has comments removed, which is correct for
+    # call detection and would silently discard the one call form that is
+    # declared rather than written.
+    grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
+    if strip_single_quoted "$f" | awk -v fn="$fn" '
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
@@ -125,11 +152,75 @@ function_has_call_site() {  # <function>
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       END { exit(found ? 0 : 1) }
-    ' "$f"; then
+    '; then
       return 0
     fi
   done
   return 1
+}
+
+# Blank every single-quoted span, so quoted text is DATA and never read as code.
+#
+# This is a real walk over two states rather than a per-line heuristic, because
+# the heuristic was wrong in the direction that matters. Counting quotes per line
+# treats a MULTI-LINE single-quoted string - a jq program, a multi-line constant -
+# as unbalanced, which marked most of this repository unreadable and turned every
+# predicate into could-not-observe. A single quote inside DOUBLE quotes is not a
+# quote opener, which is why double-quote state is tracked too: without it the
+# quote-escape dance this repo uses everywhere would desynchronise the walk.
+#
+# Prints the file with single-quoted spans blanked. Exits 1 if a span is still
+# open at end of file, the one case this cannot resolve.
+strip_single_quoted() {  # <file>
+  awk '
+    BEGIN { insq = 0; indq = 0 }
+    {
+      out = ""
+      n = length($0)
+      for (i = 1; i <= n; i++) {
+        c = substr($0, i, 1)
+        if (insq) { if (c == "\047") insq = 0; continue }
+        # A comment ends the line. Shell ignores an apostrophe in prose, and
+        # without this every "control\047s" or "doesn\047t" in a header opened a
+        # quote that never closed, so the file read as unterminated and every
+        # predicate in it became could-not-observe.
+        if (c == "#" && !indq && (i == 1 || substr($0, i-1, 1) ~ /[ \t]/)) break
+        if (c == "\047" && !indq) { insq = 1; continue }
+        if (c == "\"") indq = !indq
+        out = out c
+      }
+      print out
+    }
+    END { if (insq) exit 1 }
+  ' "$1"
+}
+
+# Why a file may not be reasoned about at all. Returns the offending
+# "<line>:<text>" on stdout and 1 when the file is outside the accepted syntax.
+file_parse_refusal() {  # <file>
+  local f=$1 hit
+  hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
+          grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
+        } | head -1)
+  if [ -z "$hit" ] && ! strip_single_quoted "$f" >/dev/null 2>&1; then
+    hit="0:unterminated single-quoted string"
+  fi
+  [ -z "$hit" ] && return 0
+  printf '%s\n' "$hit"
+  return 1
+}
+
+# Every shell file a call site could live in. The scan is REPO-WIDE because the
+# property is repo-wide: a predicate called from anywhere is not dead. Retreating
+# to enrolled files narrowed the scope AND silently changed what DEAD means, so
+# the same call produced a different verdict depending on which files happened to
+# be enrolled - a verdict that depends on configuration rather than on the code.
+consumer_files() {
+  local d
+  for d in "$ROOT/bin" "$ROOT/tests" "$ROOT/.agents"; do
+    [ -d "$d" ] || continue
+    find "$d" -type f \( -name '*.sh' -o -name '*.bash' \) 2>/dev/null
+  done | sort -u
 }
 
 enrolled_files() {
@@ -160,6 +251,22 @@ for f in "${FILES[@]}"; do
     || die "UNCHECKED $f:${unsupported%%:*} unsupported construct: ${unsupported#*:}" 4
 done
 
+# Partition every consumer into those this control can reason about and those it
+# cannot. An unchecked consumer is NAMED, not skipped: the list is the honest
+# measurement of how much of the repository this control can actually see, and
+# the way to shorten it is to make more files parse.
+SCANNABLE=()
+UNCHECKED_CONSUMERS=()
+while IFS= read -r cf; do
+  [ -n "$cf" ] || continue
+  [ -r "$cf" ] || { UNCHECKED_CONSUMERS+=("$cf: unreadable"); continue; }
+  if refusal=$(file_parse_refusal "$cf"); then
+    SCANNABLE+=("$cf")
+  else
+    UNCHECKED_CONSUMERS+=("$cf:${refusal%%:*} ${refusal#*:}")
+  fi
+done < <(consumer_files)
+
 FUNCTIONS=()
 for f in "${FILES[@]}"; do
   while IFS= read -r line; do FUNCTIONS+=("${line#*:}"); done < <(function_definitions "$f")
@@ -167,7 +274,7 @@ done
 for fn in "${FUNCTIONS[@]}"; do
   for f in "${FILES[@]}"; do
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$f" && continue
-    unsupported=$(awk -v fn="$fn" '
+    unsupported=$(strip_single_quoted "$f" | awk -v fn="$fn" '
       $0 ~ "^[[:space:]]*#" { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }
@@ -186,7 +293,7 @@ for fn in "${FUNCTIONS[@]}"; do
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
       $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
       $0 ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)") { print NR ":" $0; exit }
-    ' "$f")
+    ')
     [ -z "$unsupported" ] \
       || die "UNCHECKED $f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}" 4
   done
@@ -194,8 +301,11 @@ done
 
 dead_json='[]'
 marked_json='[]'
+cno_json='[]'
 DEAD=0
 MARKED=0
+CNO=0
+ALIVE=0
 
 for f in "${FILES[@]}"; do
   [ -r "$f" ] || die "target is unreadable: $f" 4
@@ -204,13 +314,24 @@ for f in "${FILES[@]}"; do
     lineno=${line%%:*}
     fn=${line#*:}
     [ -n "$fn" ] || continue
-    function_has_call_site "$fn" && continue
+    if function_has_call_site "$fn"; then ALIVE=$((ALIVE + 1)); continue; fi
     prev=$((lineno - 1))
     if [ "$prev" -ge 1 ] && sed -n "${prev}p" "$f" | grep -qF "$KEEP_MARKER"; then
       reason=$(sed -n "${prev}p" "$f" | sed "s/.*${KEEP_MARKER}[[:space:]]*//")
       marked_json=$(printf '%s' "$marked_json" | jq --arg f "$f" --arg fn "$fn" \
         --argjson l "$lineno" --arg r "$reason" '. + [{file:$f,function:$fn,line:$l,reason:$r}]')
       MARKED=$((MARKED + 1))
+      continue
+    fi
+    # No call site among the files this control can read. Whether that means
+    # DEAD depends on whether it could read everywhere: with an unchecked
+    # consumer outstanding, the call site may be in a file nobody looked at, and
+    # asserting DEAD there would licence deleting live code. Missing a dead
+    # predicate wastes an opportunity; deleting a live one is an outage.
+    if [ "${#UNCHECKED_CONSUMERS[@]}" -gt 0 ]; then
+      cno_json=$(printf '%s' "$cno_json" | jq --arg f "$f" --arg fn "$fn" --argjson l "$lineno" \
+        '. + [{file:$f,function:$fn,line:$l}]')
+      CNO=$((CNO + 1))
       continue
     fi
     dead_json=$(printf '%s' "$dead_json" | jq --arg f "$f" --arg fn "$fn" --argjson l "$lineno" \
@@ -221,20 +342,45 @@ done
 
 if [ "$JSON" -eq 1 ]; then
   jq -n --argjson dead "$dead_json" --argjson marked "$marked_json" \
+    --argjson cno "$cno_json" \
     --argjson files "$(printf '%s\n' "${FILES[@]}" | jq -R . | jq -s .)" \
-    '{schema:"fm-dead-predicate-check.v1",enrolled:$files,dead:$dead,marked:$marked}'
+    --argjson unchecked "$(printf '%s\n' "${UNCHECKED_CONSUMERS[@]:-}" | jq -R . | jq -s 'map(select(. != ""))')" \
+    --argjson scanned "${#SCANNABLE[@]}" --argjson alive "$ALIVE" \
+    '{schema:"fm-dead-predicate-check.v1",enrolled:$files,scanned_consumers:$scanned,
+      unchecked_consumers:$unchecked,alive:$alive,dead:$dead,could_not_observe:$cno,marked:$marked}'
 else
   printf '%s' "$marked_json" | jq -r '.[] |
     "  marked   \(.function)  \(.file):\(.line)  unused by design: \(.reason)"'
+  printf '%s' "$cno_json" | jq -r '.[] |
+    "  CNO      \(.function)  \(.file):\(.line)  no call site among files this control can read"'
   printf '%s' "$dead_json" | jq -r '.[] |
     "  DEAD     \(.function)  \(.file):\(.line)  defined and never consulted"'
-  if [ "$DEAD" -eq 0 ]; then
-    printf 'fm-dead-predicate-check: ok enrolled=%s marked=%s\n' "${#FILES[@]}" "$MARKED"
-  else
+  if [ "${#UNCHECKED_CONSUMERS[@]}" -gt 0 ]; then
+    printf '\n%s consumer file(s) UNCHECKED - outside the accepted syntax, so no call site in them was read:\n' \
+      "${#UNCHECKED_CONSUMERS[@]}"
+    printf '  %s\n' "${UNCHECKED_CONSUMERS[@]}"
+    printf 'This list measures how much of the repository this control can see. Shorten it by making files parse.\n'
+  fi
+  if [ "$DEAD" -eq 0 ] && [ "$CNO" -eq 0 ]; then
+    # alive= and could_not_observe= are printed ALWAYS, including when both are
+    # zero. A line reading only "no dead predicates" is equally consistent with
+    # every predicate resolved and with none of them being resolvable, and those
+    # are different facts. A quiet control must never read as a clean repository.
+    printf 'fm-dead-predicate-check: ok enrolled=%s scanned=%s unchecked=%s alive=%s could_not_observe=%s marked=%s\n' \
+      "${#FILES[@]}" "${#SCANNABLE[@]}" "${#UNCHECKED_CONSUMERS[@]}" "$ALIVE" "$CNO" "$MARKED"
+  elif [ "$DEAD" -gt 0 ]; then
     printf '\n%s function(s) exist but nothing consults them. A guard nothing calls is not a guard.\n' "$DEAD"
     printf 'Wire each one in, or mark the definition with "# %s <reason>" on the line above it.\n' "$KEEP_MARKER"
+  else
+    printf '\n%s function(s) COULD NOT BE OBSERVED: no call site was found, but an unchecked consumer may hold one.\n' "$CNO"
+    printf 'That is not a pass and not a dead predicate. Make the unchecked consumers parse to resolve it.\n'
   fi
 fi
 
+# Exit is three-valued and in that order of severity. Unchecked consumers ALONE
+# never make this red: a control that is permanently red gets ignored and then
+# removed, and every case it enforces would be lost with it. They are reported
+# and counted, and only bite when a predicate's verdict actually depends on one.
 [ "$DEAD" -eq 0 ] || exit 3
+[ "$CNO" -eq 0 ] || exit 4
 exit 0

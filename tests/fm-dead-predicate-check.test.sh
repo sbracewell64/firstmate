@@ -34,6 +34,20 @@ fixture() {
   printf '%s\n' "$dir"
 }
 
+# A consumer that is NOT enrolled. The property is repo-wide, so a call from here
+# is still a call; scoping the scan to enrolled files made the verdict depend on
+# configuration rather than on the code.
+add_plain_consumer() {  # <dir> <body>
+  printf '#!/usr/bin/env bash\n%s\n' "$2" > "$1/bin/plain-consumer.sh"
+}
+
+# A consumer this control cannot parse. Its presence must be REPORTED, must not
+# turn the control red on its own, and must turn an otherwise-dead predicate into
+# could-not-observe rather than dead.
+add_unparseable_consumer() {  # <dir>
+  printf '#!/usr/bin/env bash\ncat <<EOF\npayload\nEOF\n' > "$1/bin/unparseable.sh"
+}
+
 run_check() { FM_ROOT_OVERRIDE="$1" "$CHECK" "${@:2}"; }
 
 test_dead_function_is_refused() {
@@ -231,8 +245,89 @@ test_repository_is_clean_under_the_control() {
   pass "every enrolled file in this repository has its guards consulted"
 }
 
+test_call_from_unenrolled_consumer_counts() {
+  local dir out rc
+  dir=$(fixture unenrolled-caller 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "unenrolled consumer: a real call was not counted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'DEAD' \
+    && fail "unenrolled consumer: a called predicate was reported dead: $out"
+  pass "a call from a non-enrolled consumer counts, so the verdict follows the code not the configuration"
+}
+
+test_single_quoted_substitution_is_not_a_call() {
+  local dir out rc
+  # Falsification seven. Text inside single quotes is DATA; a command
+  # substitution written there is never executed and is not evidence of a call.
+  dir=$(fixture single-quoted-sub "live_one() { return 0; }
+dead_one() { return 0; }
+helper() { printf '%s' '\$(dead_one)'; }")
+  add_plain_consumer "$dir" 'live_one
+helper'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "single-quoted substitution: dead_one was not reported, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'DEAD .*dead_one' \
+    || fail "single-quoted substitution: quoted data counted as a call: $out"
+  pass "a command substitution inside single quotes is data, not a call site"
+}
+
+test_quoted_prose_describing_a_call_is_not_a_call() {
+  local dir out rc
+  # Contributed by the reviewer of this control, who wrote the previous case into
+  # a message inside double quotes and watched their own shell execute it. Text
+  # that DESCRIBES a call, in a context that never runs it, must not count - and
+  # that is evidently easy to get wrong even while concentrating on it.
+  dir=$(fixture quoted-prose "live_one() { return 0; }
+dead_one() { return 0; }
+note() { printf '%s' 'call dead_one to do the thing'; }")
+  add_plain_consumer "$dir" 'live_one
+note'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "quoted prose: dead_one was not reported, exit $rc: $out"
+  pass "prose naming a function inside quotes is not a call site"
+}
+
+test_unchecked_consumers_are_named_but_not_red() {
+  local dir out rc
+  dir=$(fixture unchecked-not-red 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  add_unparseable_consumer "$dir"
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "unchecked consumers: control went non-zero with every predicate alive, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'UNCHECKED' \
+    || fail "unchecked consumers: the gap was not reported: $out"
+  printf '%s' "$out" | grep -q 'unparseable.sh' \
+    || fail "unchecked consumers: the file was not named: $out"
+  pass "unchecked consumers are named and counted, and do not make the control red on their own"
+}
+
+test_unresolvable_predicate_is_could_not_observe_not_dead() {
+  local dir out rc
+  # The load-bearing distinction. With an unchecked consumer outstanding, a
+  # predicate with no visible call site MIGHT be called in the file nobody could
+  # read. Reporting DEAD there would licence deleting live code.
+  dir=$(fixture cno-not-dead 'live_one() { return 0; }
+maybe_used() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  add_unparseable_consumer "$dir"
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "cno: expected could-not-observe exit 4, got $rc: $out"
+  printf '%s' "$out" | grep -q 'CNO .*maybe_used' \
+    || fail "cno: predicate not reported as could-not-observe: $out"
+  printf '%s' "$out" | grep -q 'DEAD .*maybe_used' \
+    && fail "cno: an unobservable predicate was reported DEAD: $out"
+  pass "an unobservable predicate is could-not-observe, never dead and never clean"
+}
+
 test_dead_function_is_refused
 test_consulted_function_passes
+test_call_from_unenrolled_consumer_counts
+test_single_quoted_substitution_is_not_a_call
+test_quoted_prose_describing_a_call_is_not_a_call
+test_unchecked_consumers_are_named_but_not_red
+test_unresolvable_predicate_is_could_not_observe_not_dead
 test_mentions_are_not_call_sites
 test_quoted_command_shape_is_not_a_call_site
 test_heredoc_payload_is_not_a_call_site
