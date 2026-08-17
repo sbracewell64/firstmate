@@ -964,6 +964,20 @@ test_independent_review_precedes_handoff_submission() {
   pass "combined prose: independent review takes precedence over contribution handoff"
 }
 
+test_architecture_ruling_precedes_handoff_submission() {
+  local dir out rc
+  dir=$(new_case combined-architecture-handoff)
+  write_snapshot "$dir/snap.json" external \
+    "released for handoff awaiting architecture ruling"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "combined architecture prose: an existing pull request satisfied the missing ruling request: $out"
+  printf '%s' "$out" | grep -q 'ARCHITECTURE_RULING_REQUIRED' \
+    || fail "combined architecture prose: architecture ruling did not take precedence: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_NO_ARTIFACT' \
+    || fail "combined architecture prose: the missing Sol request was not reported: $out"
+  pass "combined architecture prose: architecture ruling takes precedence over contribution handoff"
+}
+
 test_typed_gate_uses_declaration_over_prose() {
   local dir out rc
   dir=$(new_case typed-declaration)
@@ -1270,6 +1284,7 @@ test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass
 test_detect_only_channel_refuses_to_emit
 test_independent_review_precedes_handoff_submission
+test_architecture_ruling_precedes_handoff_submission
 test_typed_gate_uses_declaration_over_prose
 test_typed_gate_requires_valid_declaration
 test_pull_request_probe_prefers_contribution_target

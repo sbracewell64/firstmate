@@ -377,14 +377,14 @@ fm_outbound_gate_from_prose() {  # <text> -> gate or empty
       printf 'EXACT_HEAD_BROWSER_REVIEW_REQUIRED\n' ;;
     *never\ submitted*|*"no pull request"*)
       printf 'CONTRIBUTION_SUBMISSION_REQUIRED\n' ;;
-    *independent_browser_review_required*|*"independent browser review"*|*"independent review"*|*"independent acceptance"*|*"independently adjudicate"*)
-      printf 'INDEPENDENT_BROWSER_REVIEW_REQUIRED\n' ;;
-    *"released for handoff"*)
-      printf 'CONTRIBUTION_SUBMISSION_REQUIRED\n' ;;
     *architecture_ruling_required*|*"architecture ruling"*)
       printf 'ARCHITECTURE_RULING_REQUIRED\n' ;;
     *awaiting_browser_sol*|*"awaiting browser sol"*|*"awaiting a browser sol"*)
       printf 'AWAITING_BROWSER_SOL\n' ;;
+    *independent_browser_review_required*|*"independent browser review"*|*"independent review"*|*"independent acceptance"*|*"independently adjudicate"*)
+      printf 'INDEPENDENT_BROWSER_REVIEW_REQUIRED\n' ;;
+    *"released for handoff"*)
+      printf 'CONTRIBUTION_SUBMISSION_REQUIRED\n' ;;
     *) printf '' ;;
   esac
 }
