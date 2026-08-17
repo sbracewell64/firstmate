@@ -1054,18 +1054,29 @@ cmd_catalogue() {
     # an argv element is allowed to end in one. The argv a catalogue declares has
     # to reach the probe as the argv it declared.
     local -a probe=()
-    local line
-    while IFS= read -r -d '' line; do
-      probe+=("$line")
-    done < <(python3 -c '
+    local line probe_argv=$bytes/probe.argv probe_error=$bytes/probe.error
+    if ! python3 -c '
 import json
 import sys
 
 with open(sys.argv[1], "rb") as handle:
     catalogue = json.load(handle)
-for argument in catalogue["cases"][int(sys.argv[2])].get("probe", []):
+probe = catalogue["cases"][int(sys.argv[2])].get("probe", [])
+if not isinstance(probe, list):
+    raise ValueError("probe is not an array")
+for index, argument in enumerate(probe):
+    if not isinstance(argument, str):
+        raise ValueError(f"probe element {index} is not a string")
+    if "\0" in argument:
+        raise ValueError(f"probe element {index} contains a NUL byte")
     sys.stdout.write(argument + "\0")
-' "$catalogue" "$i" 2>/dev/null)
+' "$catalogue" "$i" >"$probe_argv" 2>"$probe_error"; then
+      line=$(tail -n 1 "$probe_error" 2>/dev/null)
+      cno "catalogue case $case_id probe argv could not be decoded: ${line:-decoder failed without an error}"
+    fi
+    while IFS= read -r -d '' line; do
+      probe+=("$line")
+    done <"$probe_argv"
     [ "${#probe[@]}" -gt 0 ] || cno "catalogue case $case_id has no probe argv"
 
     "$SELF" prove --case "$case_id" --source "$source" --candidate "$candidate" \
