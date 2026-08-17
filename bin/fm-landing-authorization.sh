@@ -202,7 +202,7 @@ correlation_read() {  # <request-id>
   local rid=$1 path raw schema stored
   path="$CORRELATION_DIR/$rid.json"
   if [ ! -e "$path" ]; then
-    refuse "$FM_AUTH_TOKEN_ABSENT" \
+    unobserved "$FM_AUTH_TOKEN_ABSENT" \
       "no correlation record for $rid, so no request asked for this ruling"
   fi
   raw=$(cat "$path" 2>/dev/null) \
@@ -269,8 +269,17 @@ claim_acquire() {  # <auth-id>
     return 1
   fi
   CLAIM=$dir
-  trap claim_release EXIT INT TERM
+  trap claim_release EXIT
+  trap 'claim_terminate INT' INT
+  trap 'claim_terminate TERM' TERM
   return 0
+}
+
+claim_terminate() {  # <signal>
+  local signal=$1 group=${BASHPID:-$$}
+  trap - EXIT INT TERM
+  kill -s "$signal" -- "-$group" 2>/dev/null || exit 4
+  exit 4
 }
 
 claim_release() {
@@ -394,6 +403,10 @@ cmd_mint() {  # <request-id>
   id=$(fm_auth_id "$rid" "$comment" "$verdict" "$item" "$project" "$repo" "$pr" "$head") \
     || die "the authorization identity could not be computed" 4
 
+  claim_acquire "$id" \
+    || refuse "$FM_AUTH_TOKEN_IN_FLIGHT" \
+      "another operation on $id holds the claim"
+
   # Idempotent on identity. The same ruling for the same head reproduces the same
   # id, so a second mint returns the first authorization rather than granting a
   # second one against the same approval.
@@ -452,6 +465,17 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
   [ $# -gt 0 ] || refuse "$FM_AUTH_TOKEN_NO_ACT" \
     "spend was given no command to perform, so there is nothing to authorize"
 
+  if ! claim_acquire "$id"; then
+    auth_read "$id"; rc=$?
+    if [ "$rc" -eq 0 ] \
+      && [ "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')" = spending ]; then
+      unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "a spend of $id began and recorded no outcome, so whether the act happened is unknown; reconcile it from an observation before any further attempt"
+    fi
+    refuse "$FM_AUTH_TOKEN_IN_FLIGHT" \
+      "another spend of $id holds the claim; one authority is spent by one caller"
+  fi
+
   auth_read "$id"; rc=$?
   case $rc in
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
@@ -481,10 +505,6 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
       unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
         "authorization $id is in state '$state', which this contract does not know" ;;
   esac
-
-  claim_acquire "$id" \
-    || refuse "$FM_AUTH_TOKEN_IN_FLIGHT" \
-      "another spend of $id holds the claim; one authority is spent by one caller"
 
   grant_head=$(printf '%s' "$rec" | jq -r '.grant.head')
 
@@ -597,7 +617,7 @@ cmd_status() {  # <auth-id>
   [ -n "$id" ] || die "status needs an authorization id" 2
   auth_read "$id"; rc=$?
   case $rc in
-    3) printf '%s\n' "$FM_AUTH_STATUS_ABSENT"; exit 3 ;;
+    3) printf '%s\n' "$FM_AUTH_STATUS_ABSENT"; exit 4 ;;
     4) printf '%s\n' "$FM_AUTH_STATUS_UNREADABLE"; exit 4 ;;
   esac
   reported=$(fm_auth_reported_status "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')")
@@ -708,7 +728,7 @@ command -v jq >/dev/null 2>&1 || die "jq is required" 4
 
 [ $# -gt 0 ] || { usage; exit 2; }
 CMD=$1; shift
-if [ "$CMD" = spend ] || [ "$CMD" = reconcile ]; then
+if [ "$CMD" = mint ] || [ "$CMD" = spend ] || [ "$CMD" = reconcile ]; then
   if [ "${FM_AUTH_OWNED_GROUP:-}" != "${BASHPID:-$$}" ]; then
     command -v perl >/dev/null 2>&1 || die "perl is required for process-group ownership" 4
     exec perl -e '

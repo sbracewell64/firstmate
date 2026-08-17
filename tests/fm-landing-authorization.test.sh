@@ -502,7 +502,7 @@ test_a_correlation_record_filed_under_another_id_is_refused() {
   dir=$(new_case absent) || fail "absent: fixture failed"
   rm -f "$(corr_path "$dir")"
   out=$(run_auth "$dir" mint fm-ob-abcdef123456 2>&1); rc=$?
-  expect_code 3 "$rc" "absent: an absent record must refuse: $out"
+  expect_code 4 "$rc" "absent: an absent record must be could-not-observe: $out"
   assert_contains "$out" "FM_AUTH_CORRELATION_ABSENT" "absent: refusal token"
   pass "a correlation record filed under another id is refused"
 }
@@ -564,6 +564,50 @@ test_a_spend_already_in_flight_is_refused() {
   expect_code 0 "$rc" "in-flight: a released claim must spend: $out"
   [ "$(act_count "$dir")" = 1 ] || fail "in-flight: the act did not run once"
   pass "a spend already in flight is refused"
+}
+
+test_concurrent_spends_revalidate_after_claiming() {
+  local dir id act first second first_pid second_pid
+  dir=$(new_case concurrent-spend) || fail "concurrent-spend: fixture failed"
+  id=$(mint_id "$dir")
+  act=$(act_script "$dir")
+
+  run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" >"$dir/first.out" 2>&1 &
+  first_pid=$!
+  fm_test_reap "$first_pid"
+  run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" >"$dir/second.out" 2>&1 &
+  second_pid=$!
+  fm_test_reap "$second_pid"
+  wait "$first_pid" || true
+  wait "$second_pid" || true
+  first=$(cat "$dir/first.out")
+  second=$(cat "$dir/second.out")
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "concurrent-spend: concurrent callers ran the act more than once: $first / $second"
+  pass "concurrent spends revalidate after claiming"
+}
+
+test_concurrent_mints_cannot_replace_a_spent_record() {
+  local dir first second first_pid second_pid id act
+  dir=$(new_case concurrent-mint) || fail "concurrent-mint: fixture failed"
+  run_auth "$dir" mint fm-ob-abcdef123456 >"$dir/first-mint.out" 2>&1 &
+  first_pid=$!
+  fm_test_reap "$first_pid"
+  run_auth "$dir" mint fm-ob-abcdef123456 >"$dir/second-mint.out" 2>&1 &
+  second_pid=$!
+  fm_test_reap "$second_pid"
+  wait "$first_pid" || true
+  wait "$second_pid" || true
+  first=$(awk '{print $1}' "$dir/first-mint.out")
+  second=$(awk '{print $1}' "$dir/second-mint.out")
+  id=${first:-$second}
+  fm_auth_id_shape "$id" || fail "concurrent-mint: neither mint produced an authorization"
+  act=$(act_script "$dir")
+  run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" >/dev/null 2>&1 \
+    || fail "concurrent-mint: minted authorization could not be spent"
+  [ "$(run_auth "$dir" status "$id" 2>&1)" = spent ] \
+    || fail "concurrent-mint: spent record was replaced"
+  pass "concurrent mints cannot replace a spent record"
 }
 
 # --- 12: enumeration is three-valued -----------------------------------------
@@ -698,6 +742,8 @@ test_minting_the_same_ruling_twice_grants_one_authorization
 test_a_correlation_record_filed_under_another_id_is_refused
 test_an_unobservable_head_stops_the_spend_without_destroying_the_authorization
 test_a_spend_already_in_flight_is_refused
+test_concurrent_spends_revalidate_after_claiming
+test_concurrent_mints_cannot_replace_a_spent_record
 test_a_partial_enumeration_is_could_not_observe_rather_than_a_short_list
 test_reconciliation_cannot_reclaim_a_live_spenders_authorization
 test_malformed_authorization_ids_cannot_address_the_store
