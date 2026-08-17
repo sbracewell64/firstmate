@@ -62,7 +62,7 @@ Each shard is still strictly serial in itself, and separate runners mean no two 
 `.github/workflows/ci.yml` mirrors that count in its matrix, and the regression suite requires the matrix to contain every composed serial shard.
 
 Assignment is longest-processing-time bin packing over per-script duration hints embedded in `bin/fm-test-run.sh`.
-A script with no hint gets the `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default, set to the measured per-script mean.
+A script with no hint gets the `PORTABLE_SERIAL_DEFAULT_WEIGHT_MS` default, rounded from the measured per-script mean.
 Hints only affect balance: the coverage guard keeps the partition complete and disjoint whatever they say, so a stale hint costs a slower shard rather than lost coverage.
 
 ### Declared budget and where the numbers come from
@@ -100,7 +100,7 @@ Negative durations are structurally invalid evidence because they could otherwis
 The lane-drift bound carries the stable semantic verdict, while shard headroom is compared only with the hang tripwire so ordinary per-shard jitter is not called a defect.
 `bin/fm-test-run.sh` owns both current thresholds and their measured margins.
 
-That second bound is what catches the shape of the original incident, where the lane total looked unremarkable while one shard carried the imbalance to the edge of its timeout.
+The shard-headroom bound detects dangerous imbalance independently of lane growth, before an overloaded shard reaches its timeout.
 
 A job cannot read its own `timeout-minutes`, so the workflow passes its literal through `FM_SERIAL_TIMEOUT_MINUTES` and the control refuses a value that disagrees with the one its bounds were derived against, the same way a lane name carrying the wrong shard count is refused.
 

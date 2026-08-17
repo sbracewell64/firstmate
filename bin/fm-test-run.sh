@@ -106,9 +106,9 @@ JOBS_MAX=8
 # docs/fm-test-portable-shards.md owns how to re-derive them.
 #
 # BASIS (2026-08-17). Measured on this repo's own main-push CI runs 32044341699
-# and 32046031290, whose portable-serial inventory matched this head's 122
-# scripts exactly. Per-shard timing artifacts summed to 2398034 ms and 2335349 ms
-# of script time; the mean, 2366725 ms, is the declared budget below. Job wall
+# and 32046031290, whose portable-serial inventories matched each other at 122
+# scripts. Per-shard timing artifacts summed to 2398034 ms and 2335349 ms of
+# script time; the mean, 2366725 ms, is the declared budget below. Job wall
 # exceeded script sum by under 10 s on every shard, so the shard wall is the
 # script sum for budgeting purposes.
 #
@@ -150,9 +150,10 @@ PORTABLE_SERIAL_BUDGET_DRIFT_PCT=25
 # shard spread, but still low enough to fire before a shard reaches the cap.
 PORTABLE_SERIAL_SHARD_HEADROOM_PCT=60
 
-# Balance hint for a portable-serial script with no measured duration. Set to the
-# measured per-script mean of the declared budget (2366725/122 = 19399 ms) so a
-# newly added test neither starves nor overloads the shard it lands in.
+# Balance hint for a portable-serial script with no measured duration. Rounded
+# from the measured per-script mean of the declared budget
+# (2366725/122 = 19399 ms) so a newly added test neither starves nor overloads
+# the shard it lands in.
 PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 
 usage() {
