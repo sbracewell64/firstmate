@@ -18,7 +18,8 @@ Fifteen correction rounds did not fix it, which is why it was retired rather tha
 A control that has only ever been seen green is indistinguishable from that defect.
 Every control in [`tests/fm-review-mutation.test.sh`](../../tests/fm-review-mutation.test.sh) is therefore run against every single-defect build, individually, and the unmodified suite is trusted passing only after that.
 The defect builds are materialized into a temporary directory and removed; no tracked file is ever mutated to produce them.
-The catalogue that defines them is tracked, in [`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py), so every row below is replayable by someone who did not run it.
+The catalogue that defines them is tracked in [`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py), so every recorded row is replayable by someone who did not run it.
+Every defect identifier used in this record is defined by that tracked catalogue and remains replayable whether or not this record currently carries a matrix.
 
 The controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
 A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the other thirty-four, which is a coverage claim resting on an observation that was never made.
@@ -32,7 +33,7 @@ A control was found inadequate rather than recorded as passing.
 The source-custody control originally observed the source only after the run finished, so a build that mutated the source in place and restored it in a `finally` satisfied every check it made.
 That is the shape the standing law names - a control must never mutate the artifact it protects, and restore-in-finally is not sufficient because a concurrent reader sees the mutated state.
 It now samples the source **from inside the probe**, the one thing running at the moment any mutation would be live, once per execution.
-The build it could not see is `D12`, and it is red in the matrix.
+The measured red witness was `D12`, whose build remains defined and replayable from the tracked catalogue.
 
 Five controls were then found to have no red witness at all, once each control was run separately rather than as a suite.
 Builds `D19` through `D23` were written for exactly those five.
@@ -49,7 +50,7 @@ The ruling superseded both the executed-identity count and the last-control asse
 Position is irrelevant to a declared count, so retaining a last-control assertion would guard no property.
 The resulting rule is that the named target and the observed failing control must match; a neighbouring or broader red is not evidence for the target.
 
-The correction is checkable in the matrix below rather than asserted here: that control's witnesses are now `D26`, `D27` and `D28` alone - the three builds that actually make the inventory check fail - where the contaminated measurement had credited it with twenty-nine.
+The correction is checkable in the recorded matrix when one is present: the inventory control's witnesses were `D26`, `D27` and `D28` alone - the three builds that actually make the inventory check fail - where the contaminated measurement had credited it with twenty-nine.
 A repair that removes twenty-six false witnesses makes the claim smaller and true, which is the direction a correction to a verification record should move.
 
 Last, the proof owner was found writing into a source it had just refused.
@@ -116,7 +117,7 @@ A single entry, for checking one row of a matrix result:
 tests/review-mutation-red-matrix.py replay <defect> <control>
 ```
 
-Both drive the suite through four seams, each read only by the test file and each defaulting to the tracked artifact, so they exist for this measurement and change nothing in production:
+Both drive the suite through four seams, each read only by the test file and each defaulting to the tracked artifact, so they exist for matrix measurement and change nothing in production:
 
 | Seam | Overrides | Why it has to exist separately |
 | --- | --- | --- |
@@ -125,7 +126,7 @@ Both drive the suite through four seams, each read only by the test file and eac
 | `FM_REVIEW_MUTATION_RECORD` | this record | the drift control's subject is the RECORD, not the binary, so no defect build could otherwise reach it - it would be the one control that could never be watched red |
 | `FM_REVIEW_MUTATION_ONLY` | which control runs | refuses a name not in `FM_CONTROLS` rather than running nothing, because selecting a control that does not exist would otherwise report a clean run having observed nothing at all |
 
-Each defect build was confirmed to differ from the tracked script and to parse before it was run.
+For the superseded measurement, each defect build was confirmed to differ from the tracked script and to parse before it was run.
 That confirmation matters because a build that fails to parse fails every control unconditionally, corroborating whatever it was pointed at while measuring nothing.
 
 ## Observed red and green
