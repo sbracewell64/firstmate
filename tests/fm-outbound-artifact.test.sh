@@ -508,7 +508,8 @@ test_reconcile_emits_sol_control_only() {
   posts=$(wc -l < "$dir/forge/post_log")
   [ "$posts" -eq 1 ] || fail "cadence: reconcile posted $posts requests, expected one"
   write_snapshot "$dir/snap.json" external "never submitted - no pull request exists for this branch"
-  jq '.backlog.records[0].contribution_venue = "o/r"' "$dir/snap.json" > "$dir/snap2.json"
+  jq '.backlog.records[0].contribution_venue = "o/r"
+    | .backlog.records[0].pr_url = null' "$dir/snap.json" > "$dir/snap2.json"
   mv "$dir/snap2.json" "$dir/snap.json"
   : > "$dir/forge/post_log"
   out=$(run_ob "$dir" reconcile 2>&1); rc=$?
@@ -949,6 +950,20 @@ test_detect_only_channel_refuses_to_emit() {
   pass "control 10: the pull-request channel detects but never creates the artifact"
 }
 
+test_independent_review_precedes_handoff_submission() {
+  local dir out rc
+  dir=$(new_case combined-review-handoff)
+  write_snapshot "$dir/snap.json" external \
+    "released for handoff pending independent acceptance"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "combined prose: an existing pull request satisfied missing independent review: $out"
+  printf '%s' "$out" | grep -q 'INDEPENDENT_BROWSER_REVIEW_REQUIRED' \
+    || fail "combined prose: independent review did not take precedence: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_NO_ARTIFACT' \
+    || fail "combined prose: the missing Sol request was not reported: $out"
+  pass "combined prose: independent review takes precedence over contribution handoff"
+}
+
 test_typed_gate_uses_declaration_over_prose() {
   local dir out rc
   dir=$(new_case typed-declaration)
@@ -1254,6 +1269,7 @@ test_close_requires_resumed_work
 test_incomplete_binding_refuses_rather_than_emitting_vaguely
 test_unobservable_forge_is_not_a_pass
 test_detect_only_channel_refuses_to_emit
+test_independent_review_precedes_handoff_submission
 test_typed_gate_uses_declaration_over_prose
 test_typed_gate_requires_valid_declaration
 test_pull_request_probe_prefers_contribution_target
