@@ -60,9 +60,6 @@
 #   FM_LANDING_AUTH_DIR    authorization store (default: $FM_HOME/data/landing-authorizations)
 #   FM_OUTBOUND_DIR        correlation records (default: $FM_HOME/data/outbound-artifacts)
 #                          Owned by bin/fm-outbound-artifact.sh; read-only here.
-#   FM_AUTH_PAUSE_AFTER_INTENT_FILE
-#                          test-only fault injection: pause after intent until
-#                          the named file exists.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -254,15 +251,18 @@ observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
 # `reconcile` clears both together, which is the only path that has an
 # observation to justify it.
 claim_acquire() {  # <auth-id>
-  local dir pid identity
+  local dir pid identity group
   dir=$(auth_claim_path "$1") || return 1
+  pid=${BASHPID:-$$}
+  group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 1
+  [ "$group" = "$pid" ] || return 1
+  identity=$(fm_pid_identity "$pid") || return 1
   mkdir -p "$AUTH_DIR" || return 1
   mkdir "$dir" 2>/dev/null || return 1
-  pid=${BASHPID:-$$}
-  identity=$(fm_pid_identity "$pid") || { rmdir "$dir" 2>/dev/null; return 1; }
   printf '%s\n' "$pid" > "$dir/owner-pid" \
     && printf '%s\n' "$identity" > "$dir/owner-identity" \
-    || { rm -f "$dir/owner-pid" "$dir/owner-identity"; rmdir "$dir" 2>/dev/null; return 1; }
+    && printf '%s\n' "$group" > "$dir/owner-group" \
+    || { rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"; rmdir "$dir" 2>/dev/null; return 1; }
   CLAIM=$dir
   trap claim_release EXIT INT TERM
   return 0
@@ -270,42 +270,49 @@ claim_acquire() {  # <auth-id>
 
 claim_release() {
   [ -n "$CLAIM" ] || return 0
-  rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity"
+  rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity" "$CLAIM/owner-group"
   rmdir "$CLAIM" 2>/dev/null || true
   CLAIM=
 }
 
 claim_owner_state() {  # <auth-id>
-  local dir pid identity current proc_root out
+  local dir pid identity group current current_group proc_root groups
   dir=$(auth_claim_path "$1") || { printf 'unobserved\n'; return; }
   pid=$(cat "$dir/owner-pid" 2>/dev/null) \
     && identity=$(cat "$dir/owner-identity" 2>/dev/null) \
+    && group=$(cat "$dir/owner-group" 2>/dev/null) \
     || { printf 'unobserved\n'; return; }
   case $pid in ''|*[!0-9]*) printf 'unobserved\n'; return ;; esac
+  [ "$group" = "$pid" ] || { printf 'unobserved\n'; return; }
   [ -n "$identity" ] || { printf 'unobserved\n'; return; }
   if current=$(fm_pid_identity "$pid" 2>/dev/null); then
     if [ "$current" = "$identity" ]; then
-      printf 'live\n'
-    else
-      printf 'gone\n'
+      current_group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') \
+        || { printf 'unobserved\n'; return; }
+      if [ "$current_group" = "$group" ]; then printf 'live\n'; else printf 'unobserved\n'; fi
+      return
     fi
-    return
+  else
+    proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+    if [ -d "$proc_root" ] && [ -e "$proc_root/$pid" ]; then
+      printf 'unobserved\n'
+      return
+    fi
   fi
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
-  if [ -d "$proc_root" ]; then
-    if [ -e "$proc_root/$pid" ]; then printf 'unobserved\n'; else printf 'gone\n'; fi
-    return
-  fi
-  out=$(LC_ALL=C ps -p "$pid" -o pid= 2>/dev/null) \
+  groups=$(LC_ALL=C ps -e -o pgid= 2>/dev/null) \
     || { printf 'unobserved\n'; return; }
-  if [ -n "$out" ]; then printf 'unobserved\n'; else printf 'gone\n'; fi
+  if printf '%s\n' "$groups" | awk -v wanted="$group" '$1 == wanted { found=1 } END { exit !found }'; then
+    printf 'live\n'
+  else
+    printf 'gone\n'
+  fi
 }
 
 claim_reclaim_gone() {  # <auth-id>
   local dir
   [ "$(claim_owner_state "$1")" = gone ] || return 1
   dir=$(auth_claim_path "$1") || return 1
-  rm -f "$dir/owner-pid" "$dir/owner-identity" || return 1
+  rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group" || return 1
   rmdir "$dir" 2>/dev/null || return 1
   claim_acquire "$1"
 }
@@ -522,10 +529,6 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the spend of $id could not be recorded before the act, so no act was performed"
 
-  if [ -n "${FM_AUTH_PAUSE_AFTER_INTENT_FILE:-}" ]; then
-    while [ ! -e "$FM_AUTH_PAUSE_AFTER_INTENT_FILE" ]; do sleep 0.01; done
-  fi
-
   "$@"
   rc=$?
 
@@ -678,6 +681,26 @@ command -v jq >/dev/null 2>&1 || die "jq is required" 4
 
 [ $# -gt 0 ] || { usage; exit 2; }
 CMD=$1; shift
+if [ "$CMD" = spend ] || [ "$CMD" = reconcile ]; then
+  if [ "${FM_AUTH_OWNED_GROUP:-}" != "${BASHPID:-$$}" ]; then
+    command -v perl >/dev/null 2>&1 || die "perl is required for process-group ownership" 4
+    exec perl -e '
+      defined(my $pid = fork) or exit 125;
+      if ($pid == 0) {
+        setpgrp(0, 0) or exit 125;
+        $ENV{FM_AUTH_OWNED_GROUP} = $$;
+        exec @ARGV;
+        exit 125;
+      }
+      waitpid($pid, 0) == $pid or exit 125;
+      my $status = $?;
+      exit(128 + ($status & 127)) if $status & 127;
+      exit($status >> 8);' "$0" "$CMD" "$@"
+  fi
+  [ "${FM_AUTH_OWNED_GROUP:-}" = "${BASHPID:-$$}" ] \
+    || die "authorization command does not own its process group" 4
+  unset FM_AUTH_OWNED_GROUP
+fi
 case $CMD in
   mint) cmd_mint "${1:-}" ;;
   spend) [ $# -gt 0 ] || die "spend needs an authorization id" 2

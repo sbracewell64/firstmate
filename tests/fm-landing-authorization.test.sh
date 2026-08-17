@@ -136,7 +136,6 @@ run_auth() {  # <dir> <args...>
     PATH="$dir/fakebin:$PATH" \
     FM_HOME="$dir/home" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
-    FM_AUTH_PAUSE_AFTER_INTENT_FILE="${FM_AUTH_PAUSE_AFTER_INTENT_FILE:-}" \
     "$AUTH" "$@" )
 }
 
@@ -154,16 +153,26 @@ corr_path() {  # <dir> [<request-id>]
   printf '%s/home/data/outbound-artifacts/%s.json\n' "$1" "${2:-fm-ob-abcdef123456}"
 }
 
-crash_spend_after_intent() {  # <dir> <auth-id> <act>
-  local dir=$1 id=$2 act=$3 claim record owner job i
+blocking_act_script() {  # <dir>
+  local dir=$1
+  printf '%s\n' '#!/usr/bin/env bash' \
+    ": > '$dir/act-entered'" \
+    "printf '%s\\n' \"\$\$\" > '$dir/act-child'" \
+    "while [ ! -e '$dir/act-release' ]; do sleep 0.01; done" > "$dir/blocking-act.sh"
+  chmod +x "$dir/blocking-act.sh"
+  printf '%s\n' "$dir/blocking-act.sh"
+}
+
+crash_spend_during_act() {  # <dir> <auth-id> <act>
+  local dir=$1 id=$2 act=$3 claim record owner child child_group job i
   claim="$dir/home/data/landing-authorizations/.$id.claim"
   record="$dir/home/data/landing-authorizations/$id.json"
-  FM_AUTH_PAUSE_AFTER_INTENT_FILE="$dir/release-spend" \
-    run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" > "$dir/crash-spend.out" 2>&1 &
+  run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" > "$dir/crash-spend.out" 2>&1 &
   job=$!
   fm_test_reap "$job"
   for i in $(seq 1 300); do
     if [ -s "$claim/owner-pid" ] \
+      && [ -s "$dir/act-child" ] \
       && [ "$(jq -r '.state // ""' "$record" 2>/dev/null)" = spending ]; then
       break
     fi
@@ -173,10 +182,27 @@ crash_spend_after_intent() {  # <dir> <auth-id> <act>
   [ "$(jq -r '.state // ""' "$record" 2>/dev/null)" = spending ] \
     || fail "restart: spender did not persist intent before SIGKILL"
   owner=$(cat "$claim/owner-pid")
+  child=$(cat "$dir/act-child")
   fm_test_reap "$owner"
+  fm_test_reap "$child"
+  child_group=$(ps -o pgid= -p "$child" 2>/dev/null | tr -d '[:space:]')
+  [ "$child_group" = "$owner" ] \
+    || fail "restart: blocking act group $child_group differs from owner $owner"
   kill -KILL "$owner" || fail "restart: could not SIGKILL spender $owner"
   wait "$job" 2>/dev/null || true
   [ -d "$claim" ] || fail "restart: SIGKILL did not leave an orphaned claim"
+  kill -0 -- "-$owner" 2>/dev/null \
+    || fail "restart: blocking act did not survive its wrapper"
+  CRASH_GROUP=$owner
+}
+
+wait_for_group_exit() {  # <group>
+  local group=$1 i
+  for i in $(seq 1 300); do
+    kill -0 -- "-$group" 2>/dev/null || return 0
+    sleep 0.01
+  done
+  return 1
 }
 
 # --- 1: the non-vacuity control ----------------------------------------------
@@ -289,10 +315,10 @@ test_a_moved_forge_head_is_refused_even_when_the_caller_states_the_approved_head
 test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   local dir id act out rc
   dir=$(new_case restart) || fail "restart: fixture failed"
-  act=$(act_script "$dir")
+  act=$(blocking_act_script "$dir")
   id=$(mint_id "$dir")
 
-  crash_spend_after_intent "$dir" "$id" "$act"
+  crash_spend_during_act "$dir" "$id" "$act"
 
   # The state after the crash is DETERMINABLE and is neither of the neighbours.
   # Reporting granted would invite a retry that lands twice; reporting spent
@@ -312,8 +338,13 @@ test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   out=$(run_auth "$dir" reconcile "$id" --observed not-applied 2>&1); rc=$?
   expect_code 2 "$rc" "restart: reconciling with no evidence must be a usage error"
 
+  out=$(run_auth "$dir" reconcile "$id" --observed not-applied --evidence 'pr 7 shows no merge commit' 2>&1); rc=$?
+  expect_code 4 "$rc" "restart: reconciliation reclaimed while the act child lived: $out"
+  : > "$dir/act-release"
+  wait_for_group_exit "$CRASH_GROUP" || fail "restart: blocking act group did not exit"
   out=$(run_auth "$dir" reconcile "$id" --observed not-applied --evidence 'pr 7 shows no merge commit' 2>&1)
   assert_contains "$out" "granted" "restart: reconciling not-applied did not restore the authority"
+  act=$(act_script "$dir")
   out=$(run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" 2>&1); rc=$?
   expect_code 0 "$rc" "restart: after reconciliation the authority must spend: $out"
   [ "$(act_count "$dir")" = 1 ] || fail "restart: the reconciled authority did not run the act once"
@@ -321,9 +352,11 @@ test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   # The other reconciliation direction exhausts the authority rather than
   # restoring it, so an act that DID happen is never paid for twice.
   dir=$(new_case restart-applied) || fail "restart-applied: fixture failed"
-  act=$(act_script "$dir")
+  act=$(blocking_act_script "$dir")
   id=$(mint_id "$dir")
-  crash_spend_after_intent "$dir" "$id" "$act"
+  crash_spend_during_act "$dir" "$id" "$act"
+  : > "$dir/act-release"
+  wait_for_group_exit "$CRASH_GROUP" || fail "restart-applied: blocking act group did not exit"
   run_auth "$dir" reconcile "$id" --observed applied --evidence 'pr 7 merged at 1111111' >/dev/null 2>&1 \
     || fail "restart-applied: reconciling applied failed"
   out=$(run_auth "$dir" status "$id" 2>&1)
