@@ -942,6 +942,8 @@ for raw in sys.argv[7:]:
         doc = json.loads(p.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         unobserved(f"{p} is not readable timing JSON ({exc.__class__.__name__})")
+    if not isinstance(doc, dict):
+        unobserved(f"{p} timing JSON is not an object")
     m = lane_re.match(str(doc.get("selection") or ""))
     if not m:
         continue  # another lane's artifact; this control only judges the serial lane
@@ -951,14 +953,19 @@ for raw in sys.argv[7:]:
     if idx in seen:
         unobserved(f"shard {idx} appears in more than one timing artifact")
     rows = doc.get("scripts")
-    if not rows:
+    if not isinstance(rows, list) or not rows:
         unobserved(f"shard {idx} timing artifact lists no scripts")
     paths, total = [], 0
     for row in rows:
+        if not isinstance(row, dict):
+            unobserved(f"shard {idx} has an invalid script record")
         ms = row.get("duration_ms")
         if type(ms) is not int or ms < 0:
             unobserved(f"shard {idx} has a script with an invalid measured duration")
-        paths.append(row.get("path"))
+        path = row.get("path")
+        if not isinstance(path, str) or not path:
+            unobserved(f"shard {idx} has a script with an invalid path")
+        paths.append(path)
         total += ms
     seen[idx] = (total, paths)
 
