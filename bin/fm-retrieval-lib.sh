@@ -128,6 +128,7 @@ FM_RETRIEVAL_SELECTED_AT=
 FM_RETRIEVAL_SELECTED_URL=
 
 FM_RETRIEVAL_CONCLUSION=
+FM_RETRIEVAL_SOURCE=
 
 fm_retrieval_reset() {
   FM_RETRIEVAL_COMPLETENESS=
@@ -148,6 +149,7 @@ fm_retrieval_reset() {
   FM_RETRIEVAL_SELECTED_AT=
   FM_RETRIEVAL_SELECTED_URL=
   FM_RETRIEVAL_CONCLUSION=
+  FM_RETRIEVAL_SOURCE=
 }
 
 # fm_retrieval_completeness_of <reason>: the completeness value a reason implies.
@@ -843,25 +845,43 @@ fm_retrieval_conclude() {  # <claim>
 
 FM_RETRIEVAL_FIELDS='source,retrieval,reason,pages,records,duplicates,reported,candidates,matches,quoted_only,prefix_rejected,claim,conclusion,selected,evidence_ref'
 
+fm_retrieval_encode_field() {  # <value>
+  local value=$1
+  value=${value//'%'/'%25'}
+  value=${value//$'\r'/'%0D'}
+  value=${value//$'\n'/'%0A'}
+  value=${value//','/'%2C'}
+  printf '%s' "$value"
+}
+
+fm_retrieval_decode_field() {  # <value>
+  local value=$1
+  value=${value//'%2C'/','}
+  value=${value//'%0A'/$'\n'}
+  value=${value//'%0D'/$'\r'}
+  value=${value//'%25'/'%'}
+  FM_RETRIEVAL_DECODED=$value
+}
+
 # fm_retrieval_emit <source> <claim>: the one record shape, on stdout.
 fm_retrieval_emit() {  # <source> <claim>
   printf 'retrieval[1]{%s}:\n' "$FM_RETRIEVAL_FIELDS"
   printf '  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
-    "${1:--}" \
-    "${FM_RETRIEVAL_COMPLETENESS:-unobserved}" \
-    "${FM_RETRIEVAL_REASON:-usage_error}" \
-    "${FM_RETRIEVAL_PAGES:-0}" \
-    "${FM_RETRIEVAL_RECORDS:-0}" \
-    "${FM_RETRIEVAL_DUPLICATES:-0}" \
-    "${FM_RETRIEVAL_REPORTED:-unknown}" \
-    "${FM_RETRIEVAL_CANDIDATES:-0}" \
-    "${FM_RETRIEVAL_MATCHES:-0}" \
-    "${FM_RETRIEVAL_QUOTED_ONLY:-0}" \
-    "${FM_RETRIEVAL_PREFIX_REJECTED:-0}" \
-    "${2:-exists}" \
-    "${FM_RETRIEVAL_CONCLUSION:-INDETERMINATE}" \
-    "${FM_RETRIEVAL_SELECTED_ID:--}" \
-    "${FM_RETRIEVAL_PROVENANCE:--}"
+    "$(fm_retrieval_encode_field "${1:--}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_COMPLETENESS:-unobserved}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_REASON:-usage_error}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_PAGES:-0}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_RECORDS:-0}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_DUPLICATES:-0}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_REPORTED:-unknown}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_CANDIDATES:-0}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_MATCHES:-0}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_QUOTED_ONLY:-0}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_PREFIX_REJECTED:-0}")" \
+    "$(fm_retrieval_encode_field "${2:-exists}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_CONCLUSION:-INDETERMINATE}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_SELECTED_ID:--}")" \
+    "$(fm_retrieval_encode_field "${FM_RETRIEVAL_PROVENANCE:--}")"
 }
 
 # fm_retrieval_parse <record>: read one record and export its fields. Refuses
@@ -874,6 +894,7 @@ fm_retrieval_parse() {  # <record>
   FM_RETRIEVAL_COMPLETENESS=
   FM_RETRIEVAL_REASON=
   FM_RETRIEVAL_CONCLUSION=
+  FM_RETRIEVAL_SOURCE=
   row=$(printf '%s\n' "$record" | sed -n 's/^  //p' | head -1)
   [ -n "$row" ] || return 1
   IFS=, read -r -a names <<< "$FM_RETRIEVAL_FIELDS"
@@ -883,7 +904,9 @@ fm_retrieval_parse() {  # <record>
   i=0
   while [ "$i" -lt "$n" ]; do
     name=${names[$i]}
-    value=${values[$i]}
+    fm_retrieval_decode_field "${values[$i]}"
+    value=$FM_RETRIEVAL_DECODED
+    values[$i]=$FM_RETRIEVAL_DECODED
     case "$name" in
       retrieval)
         case "$value" in complete|incomplete|unobserved) ;; *) return 1 ;; esac
@@ -897,6 +920,7 @@ fm_retrieval_parse() {  # <record>
   i=0
   while [ "$i" -lt "$n" ]; do
     case "${names[$i]}" in
+      source) FM_RETRIEVAL_SOURCE=${values[$i]} ;;
       retrieval) FM_RETRIEVAL_COMPLETENESS=${values[$i]} ;;
       reason) FM_RETRIEVAL_REASON=${values[$i]} ;;
       conclusion) FM_RETRIEVAL_CONCLUSION=${values[$i]} ;;

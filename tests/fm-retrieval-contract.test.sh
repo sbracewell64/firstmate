@@ -160,6 +160,19 @@ assert_field() {  # <record> <name> <expected> <label>
   [ "$got" = "$3" ] || fail "$4: expected $2=$3, got '$got' in record: $1"
 }
 
+parsed_field() {  # <record> <name>
+  FM_RETRIEVAL_TEST_RECORD=$1 FM_RETRIEVAL_TEST_FIELD=$2 \
+    FM_RETRIEVAL_TEST_LIB=$LIB bash -c '
+      . "$FM_RETRIEVAL_TEST_LIB"
+      fm_retrieval_parse "$FM_RETRIEVAL_TEST_RECORD" || exit 1
+      case "$FM_RETRIEVAL_TEST_FIELD" in
+        source) printf "%s" "$FM_RETRIEVAL_SOURCE" ;;
+        evidence_ref) printf "%s" "$FM_RETRIEVAL_PROVENANCE" ;;
+        *) exit 2 ;;
+      esac
+    '
+}
+
 fixture_sha256() {  # <file>
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$1" | awk '{print $1}'
@@ -655,6 +668,49 @@ test_replay_of_a_committed_read_reaches_the_same_conclusion() {
   assert_field "$RECORD" retrieval complete "replayed absent read"
   expect_code 1 "$RC" "a committed complete absence remains assertable on replay"
   pass "valid committed reads replay to both PRESENT and ABSENT"
+}
+
+test_comma_paths_round_trip_through_the_public_contract() {
+  local fix fakebin endpoint records evidence_root record rc=0 handled
+  fix=$(fixture_new comma-paths)
+  endpoint='fixture,control?fm_page=1'
+  records="$TMP_ROOT/replay,evidence.jsonl"
+  evidence_root="$TMP_ROOT/evidence,root"
+  mkdir -p "$evidence_root"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 21 2026-08-02T00:00:00Z 'APPROVE req-7')")"
+  fakebin=$(install_fake_gh "$fix")
+  RC=0
+  RECORD=$(PATH="$fakebin:$PATH" TMPDIR="$evidence_root" FM_RETRIEVAL_SLEEP=: \
+    "$READ" endpoint "$endpoint" --identity req-7 --applicable APPROVE \
+    --claim exists --records "$records" 2>&1) || RC=$?
+  expect_code 0 "$RC" "a comma-bearing endpoint remains PRESENT"
+  [ "$(parsed_field "$RECORD" source)" = "endpoint:$endpoint" ] \
+    || fail "comma paths: live source did not round trip"
+  case "$(parsed_field "$RECORD" evidence_ref)" in
+    "$evidence_root"/*) ;;
+    *) fail "comma paths: live evidence did not round trip" ;;
+  esac
+  record=$(TMPDIR="$evidence_root" FM_RETRIEVAL_SLEEP=: "$READ" \
+    --replay "$records" --identity req-7 --applicable APPROVE \
+    --claim exists 2>&1) || rc=$?
+  expect_code 0 "$rc" "a comma-bearing replay path remains PRESENT"
+  handled=$(FM_RETRIEVAL_TEST_RECORD=$record FM_RETRIEVAL_TEST_LIB=$LIB bash -c '
+    . "$FM_RETRIEVAL_TEST_LIB"
+    on_present() { printf PRESENT; }
+    on_absent() { printf ABSENT; }
+    on_indeterminate() { printf INDETERMINATE; }
+    fm_retrieval_case "$FM_RETRIEVAL_TEST_RECORD" \
+      on_present on_absent on_indeterminate
+  ') || fail "comma paths: the public consumer refused the replay record"
+  [ "$handled" = PRESENT ] || fail "comma paths: replay conclusion changed to $handled"
+  [ "$(parsed_field "$record" source)" = "replay:$records" ] \
+    || fail "comma paths: replay source did not round trip"
+  case "$(parsed_field "$record" evidence_ref)" in
+    "$evidence_root"/*) ;;
+    *) fail "comma paths: replay evidence did not round trip" ;;
+  esac
+  pass "comma-bearing endpoint, replay, and evidence paths remain consumable"
 }
 
 test_replay_without_text_field_fails_closed() {
@@ -1185,6 +1241,7 @@ run test_not_authorized_read_is_could_not_observe
 run test_unreadable_subject_is_could_not_observe
 run test_records_and_provenance_are_written_and_committed_last
 run test_replay_of_a_committed_read_reaches_the_same_conclusion
+run test_comma_paths_round_trip_through_the_public_contract
 run test_replay_without_text_field_fails_closed
 run test_replay_without_time_field_fails_closed
 run test_replay_with_deleted_records_fails_closed
