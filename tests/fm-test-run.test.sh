@@ -958,6 +958,25 @@ PY
   [ "$rc" -eq 3 ] || fail "an invalid script path must be could-not-observe (exit 3), got $rc"
   assert_contains "$out" "verdict=could-not-observe" "an invalid script path must report could-not-observe"
 
+  # A malformed extra artifact must not disappear as though it belonged to a
+  # different lane and let an otherwise complete artifact set pass.
+  fm_write_serial_fixture "$tmp/invalid-selection" 1000
+  cp "$tmp/invalid-selection/shard-1.json" "$tmp/invalid-selection/malformed.json"
+  python3 - "$tmp/invalid-selection/malformed.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = {"lane": "portable-serial-1of8"}
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/invalid-selection"/*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a structurally invalid selection must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a structurally invalid selection must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "a structurally invalid selection must not report drifted"
+
   rm -rf "$tmp"
   pass "serial budget control reports could-not-observe instead of passing on absent or invalid evidence"
 }
