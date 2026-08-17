@@ -888,7 +888,7 @@ PY
 }
 
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading() {
-  local case_dir swap_pid attempt
+  local case_dir seam prepare_pid prepare_code attempt
   case_dir=$(make_case evidence-symlink-escape)
   printf 'external bytes that must not be read\n' > "$case_dir/outside.log"
   ln -s "$case_dir/outside.log" "$case_dir/evidence/linked.log"
@@ -917,25 +917,72 @@ if block.get("resolved") or "observed_sha256" in block or "matches" in block:
     sys.exit(1)
 PY
 
-  printf 'internal bytes that do not match the declared digest\n' > "$case_dir/evidence/internal.log"
+  rm "$case_dir/evidence/linked.log"
+  printf 'internal bytes bound through the opened handle\n' > "$case_dir/evidence/linked.log"
+  python3 - "$case_dir" <<'PY'
+import hashlib, json, sys
+case_dir = sys.argv[1]
+path = case_dir + "/inputs.json"
+document = json.load(open(path))
+digest = "sha256:" + hashlib.sha256(
+    open(case_dir + "/evidence/linked.log", "rb").read()
+).hexdigest()
+document["verification"]["results"][1]["evidence"]["sha256"] = digest
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" seam-unset
+  expect_code 0 "$CAPTURED_CODE" "the inert synchronization seam must not change evidence binding"
+  assert_contains "$CAPTURED" 'REVIEW_READY' \
+    "ordinary evidence binding must remain review-ready with the seam unset"
+
+  seam=$case_dir/evidence-opened-seam
   (
-    while :; do
-      ln -sfn "$case_dir/evidence/internal.log" "$case_dir/evidence/linked.log"
-      ln -sfn "$case_dir/outside.log" "$case_dir/evidence/linked.log"
-    done
-  ) &
-  swap_pid=$!
-  fm_test_reap "$swap_pid"
-  for attempt in $(seq 1 40); do
-    capture run_prepare "$case_dir" "race-$attempt"
-    if [ "$CAPTURED_CODE" -eq 0 ]; then
-      fail "a symlink swap bound bytes outside the evidence root"
-    fi
-    assert_not_contains "$CAPTURED" 'REVIEW_READY' \
-      "a swapped evidence name must never authorize outside bytes"
+    export FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM=$seam
+    export FM_REVIEW_ENVELOPE_TEST_OPENED_LOCATOR=linked.log
+    run_prepare "$case_dir" seam-engaged
+  ) > "$case_dir/seam.out" 2>&1 &
+  prepare_pid=$!
+  fm_test_reap "$prepare_pid"
+  for attempt in $(seq 1 200); do
+    [ -f "$seam.opened" ] && break
+    sleep 0.01
   done
-  kill "$swap_pid" 2>/dev/null || true
-  wait "$swap_pid" 2>/dev/null || true
+  [ -f "$seam.opened" ] || fail "the evidence-opened synchronization seam was never reached"
+  mv "$case_dir/evidence/linked.log" "$case_dir/evidence/opened.log"
+  cp "$case_dir/outside.log" "$case_dir/evidence/linked.log"
+  printf 'continue\n' > "$seam.continue"
+  for attempt in $(seq 1 200); do
+    [ -f "$seam.hashed" ] && break
+    sleep 0.01
+  done
+  [ -f "$seam.hashed" ] || fail "the opened evidence handle was never hashed"
+  rm "$case_dir/evidence/linked.log"
+  mv "$case_dir/evidence/opened.log" "$case_dir/evidence/linked.log"
+  printf 'restored\n' > "$seam.restored"
+  if wait "$prepare_pid"; then
+    prepare_code=0
+  else
+    prepare_code=$?
+  fi
+  expect_code 0 "$prepare_code" "a pathname swap after opening must not change the bound bytes"
+  assert_grep 'review-envelope: REVIEW_READY' "$case_dir/seam.out" \
+    "the opened in-root evidence must remain review-ready after its pathname is swapped"
+  python3 - "$case_dir" <<'PY' \
+    || fail "the evidence digest must come from the opened handle, not its swapped pathname"
+import hashlib, json, sys
+case_dir = sys.argv[1]
+block = json.load(open(case_dir + "/seam-engaged/envelope.json"))[
+    "envelope"
+]["verification"]["results"][1]["evidence"]
+opened = "sha256:" + hashlib.sha256(
+    open(case_dir + "/evidence/linked.log", "rb").read()
+).hexdigest()
+swapped = "sha256:" + hashlib.sha256(
+    open(case_dir + "/outside.log", "rb").read()
+).hexdigest()
+if block.get("observed_sha256") != opened or block.get("observed_sha256") == swapped:
+    sys.exit(1)
+PY
   pass "a symlink cannot carry evidence outside its root into the envelope"
 }
 
@@ -1938,6 +1985,9 @@ for entry in mutations:
         )
         sys.exit(1)
 
+if os.environ.get("FM_REVIEW_ENVELOPE_CAMPAIGN_REPLAY_CHILD") == "1":
+    sys.exit(0)
+
 # Replay the lexically first mutation id, so every verifier exercises the same
 # deep proof and its result never depends on chance or artifact ordering.
 entry = min(mutations, key=lambda item: item["id"])
@@ -1971,6 +2021,7 @@ environment = os.environ.copy()
 environment["FM_REVIEW_ENVELOPE_BIN"] = os.path.join(
     variant_root, "bin", "fm-review-envelope.sh"
 )
+environment["FM_REVIEW_ENVELOPE_CAMPAIGN_REPLAY_CHILD"] = "1"
 replayed = subprocess.run(
     ["bash", os.path.join(replay_root, "tests", "fm-review-envelope.test.sh")],
     cwd=replay_root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

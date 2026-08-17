@@ -156,6 +156,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 SCHEMA = "review-envelope/v1"
@@ -217,6 +218,30 @@ def digest_handle(handle):
 def digest_file(path):
     with open(path, "rb") as handle:
         return digest_handle(handle)
+
+
+def digest_evidence_handle(handle, locator):
+    # Test-only synchronization seam for repointing a name after this handle opens.
+    test_seam = os.environ.get("FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM")
+    test_locator = os.environ.get("FM_REVIEW_ENVELOPE_TEST_OPENED_LOCATOR")
+    if not test_seam or locator != test_locator or os.path.exists(test_seam + ".hashed"):
+        return digest_handle(handle)
+    with open(test_seam + ".opened", "x", encoding="utf-8") as signal:
+        signal.write("opened\n")
+    deadline = time.monotonic() + 10
+    while not os.path.exists(test_seam + ".continue"):
+        if time.monotonic() >= deadline:
+            raise OSError("test synchronization seam timed out before hashing")
+        time.sleep(0.01)
+    observed = digest_handle(handle)
+    with open(test_seam + ".hashed", "x", encoding="utf-8") as signal:
+        signal.write("hashed\n")
+    deadline = time.monotonic() + 10
+    while not os.path.exists(test_seam + ".restored"):
+        if time.monotonic() >= deadline:
+            raise OSError("test synchronization seam timed out after hashing")
+        time.sleep(0.01)
+    return observed
 
 
 def now_utc():
@@ -878,7 +903,7 @@ def bind_evidence(block, evidence_root):
     block["resolution_detail"] = problem
     if handle is not None:
         with handle:
-            observed = digest_handle(handle)
+            observed = digest_evidence_handle(handle, block.get("locator"))
         block["observed_sha256"] = observed
         block["matches"] = observed == block.get("sha256")
 
@@ -1586,7 +1611,7 @@ def check_evidence(problems, label, block, evidence_root, recheck_evidence):
         problems.refuse("evidence_locator_broken", label, problem)
         return
     with handle:
-        observed = digest_handle(handle)
+        observed = digest_evidence_handle(handle, block.get("locator"))
     if observed != block.get("sha256"):
         problems.refuse(
             "evidence_digest_mismatch",
