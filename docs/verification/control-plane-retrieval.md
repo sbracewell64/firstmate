@@ -10,6 +10,11 @@ Each header owns its own contract; this file records what was measured.
 Verified on 2026-08-17 with gh 2.96.0, jq 1.8.1, and ShellCheck 0.11.0 on Linux 6.18.33.2-microsoft-standard-WSL2.
 Re-run the commands below rather than trusting the recorded output.
 
+## Strongest live proof
+
+The same question against the real GitHub API returned assertable `ABSENT` after a complete 6-page traversal of 29 records and `INDETERMINATE` when bounded to one page.
+This reproduces and reverses the original defect on demand against the real forge rather than a fixture.
+
 ## The defect
 
 A control-plane read reported that the reviewing authority had not replied, repeatedly over several hours, while three rulings sat unread.
@@ -89,7 +94,9 @@ Those tokens are evidence that a site already proves its own extent, which is wh
 They also occur inside multi-line quoted query bodies, where the shell has no syntax for a comment, so enforcing them would demand an annotation in a position that cannot exist.
 [`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh) asserts the census stays strictly broader than the enforced set, so narrowing it back fails a control.
 
-Measured on 2026-08-17: 167 shell files, 109 census sites, 61 enforced sites.
+The gate enumerates every tracked file and partitions the universe into scannable source, explicitly out-of-scope prose, data, configuration, and assets, or `UNCHECKED` files whose capability it cannot classify.
+An `UNCHECKED` file is named and makes the gate non-zero, so coverage incompleteness cannot produce a pass.
+The passing record reports scanned, out-of-scope, and total universe counts with `coverage=complete`.
 
 ## Classification of every enforced site
 
@@ -138,7 +145,7 @@ It is classified `conservative-negative`: a miss returns non-zero and the landed
 
 ## Controls
 
-[`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh), 34 controls, in the portable-serial lane and therefore a required CI shard.
+[`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh), in the portable-serial lane and therefore a required CI shard.
 Every negative case asserts the retrieval completeness value alongside the conclusion, so no case can call a result "no ruling" unless completeness is itself proven.
 
 ```sh
@@ -147,7 +154,7 @@ bash tests/fm-retrieval-contract.test.sh
 
 Controls covering the commissioned list: an applicable ruling only on page 2 or later; multiple pages with the oldest record on page 1; the latest applicable ruling not on the first page; page 1 carrying a ruling a later page supersedes; pagination stopping early; one page that cannot be read; duplicate identifiers across pages; an irrelevant later comment after the applicable ruling; an identifier present only in quoted or reply prose; prefix collision, `X` versus `X` plus a suffix; complete retrieval with a genuinely absent ruling, the negative that must stay assertable; and complete retrieval with exactly one applicable ruling, the non-vacuity anchor.
 
-Beyond that list: an absent reader tool, a moved response schema, a record with no immutable identity, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, replay of a committed read, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, the four check behaviors, and the three rollup-cap behaviors.
+Beyond that list: an absent reader tool, a moved response schema, records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, replay of a committed read, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, gate coverage including its `UNCHECKED` class, and the three rollup-cap behaviors.
 
 ### Negative controls: each guard watched failing
 
@@ -240,7 +247,7 @@ exit=1
 
 It does not change what any ruling means, alter hold semantics, or touch the control protocol; applicability is a pattern the caller supplies.
 
-The enforced check reads tracked shell under `bin/`, so a read added in another language, or outside that tree, is not covered by it.
+The enforced check scans tracked source files regardless of their location and refuses unknown file capabilities as `UNCHECKED` rather than silently excluding them.
 
 `complete` means the source published no further continuation at the moment of the read.
 A record created after the traversal passed its page is a later fact about the source rather than an error in this one, which is why the observation time is in the proof sidecar.

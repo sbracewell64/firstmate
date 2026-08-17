@@ -430,6 +430,30 @@ test_record_without_identity_field_fails_closed() {
   pass "a record carrying no immutable identity fails closed"
 }
 
+test_record_without_text_field_fails_closed() {
+  local fix
+  fix=$(fixture_new notext)
+  fixture_page "$fix" 1 - 200 '[{"id":11,"created_at":"2026-08-01T00:00:00Z"}]'
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists
+  assert_field "$RECORD" retrieval unobserved "missing text field"
+  assert_field "$RECORD" reason schema_unexpected "missing text field"
+  assert_field "$RECORD" conclusion INDETERMINATE "missing text field"
+  expect_code 2 "$RC" "a missing configured text field cannot report absence"
+  pass "a record missing the configured text field fails closed"
+}
+
+test_record_without_time_field_fails_closed() {
+  local fix
+  fix=$(fixture_new notime)
+  fixture_page "$fix" 1 - 200 '[{"id":11,"body":"APPROVE req-7"}]'
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists
+  assert_field "$RECORD" retrieval unobserved "missing time field"
+  assert_field "$RECORD" reason schema_unexpected "missing time field"
+  assert_field "$RECORD" conclusion INDETERMINATE "missing time field"
+  expect_code 2 "$RC" "a missing configured time field cannot report absence"
+  pass "a record missing the configured time field fails closed"
+}
+
 test_unparsable_continuation_fails_closed() {
   local fix fakebin record rc=0
   fix=$(fixture_new badlink)
@@ -615,6 +639,18 @@ SH
   pass "the check accepts a read carrying an exact classification and reason"
 }
 
+test_check_rejects_an_unchecked_non_shell_file() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-unchecked"
+  mkdir -p "$dir/bin"
+  printf '%s\n' 'gh api repos/o/r/issues/1/comments' > "$dir/bin/reader.xyz"
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 1 "$rc" "an unclassifiable tracked file is not a coverage pass"
+  assert_contains "$out" "UNCHECKED" "the coverage failure names its class"
+  assert_contains "$out" "bin/reader.xyz" "the coverage failure names the file"
+  pass "a non-shell tracked file cannot pass outside the gate universe"
+}
+
 test_check_rejects_an_unknown_classification() {
   local dir out rc=0
   dir="$TMP_ROOT/check-badclass"
@@ -755,6 +791,8 @@ run test_complete_retrieval_with_exactly_one_ruling
 run test_absent_reader_tool_is_could_not_observe
 run test_schema_movement_fails_closed
 run test_record_without_identity_field_fails_closed
+run test_record_without_text_field_fails_closed
+run test_record_without_time_field_fails_closed
 run test_unparsable_continuation_fails_closed
 run test_bounded_retry_recovers_a_transient_page
 run test_rate_limited_read_is_could_not_observe
@@ -766,6 +804,7 @@ run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
 run test_check_accepts_a_classified_read
+run test_check_rejects_an_unchecked_non_shell_file
 run test_check_rejects_an_unknown_classification
 run test_check_requires_a_reason_with_the_classification
 run test_check_passes_this_repository

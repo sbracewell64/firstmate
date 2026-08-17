@@ -274,6 +274,7 @@ if [ -n "$REPLAY" ]; then
   fm_retrieval_load "$RECORDS" && RETRIEVED=1
 else
   fm_retrieval_fetch "$FIRST_URL" "$RECORDS" "$ID_FIELD" "$MAX_PAGES" "$MAX_RECORDS" \
+    "$TEXT_FIELD" "$TIME_FIELD" \
     && RETRIEVED=1
 fi
 

@@ -87,10 +87,9 @@
 #   fm-retrieval-check.sh --pattern [--audit]      print the pattern in use
 #   fm-retrieval-check.sh -h | --help
 #
-# Exit status: 0 when every enforced site is classified (or for a census), 1 for
-# an unclassified, unknown, or unreasoned site, 2 for a usage or environment
-# error. An environment error is never a pass: a run that could not read the
-# tree reports that rather than reporting no violations.
+# Exit status: 0 when every scannable enforced site is classified and every
+# tracked file is covered, 1 for an unclassified, unknown, unreasoned, or
+# unchecked file, and 2 for a usage or environment error.
 set -u
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -164,27 +163,52 @@ if [ "$MODE" = pattern ]; then
   exit 0
 fi
 
-# The file set: tracked shell under bin/ when the root is a git checkout, and
-# every bin/*.sh under it otherwise, so the check runs the same way on a fixture
-# tree as on this repository. An empty file set is an environment error rather
-# than a clean run: a check that examined nothing has not passed.
+# The universe is every tracked file, not a list of known implementations.
 collect_files() {
   local listed=
   if [ -d "$ROOT/.git" ] || git -C "$ROOT" rev-parse --git-dir >/dev/null 2>&1; then
-    listed=$(git -C "$ROOT" ls-files -- 'bin/*.sh' 'bin/backends/*.sh' 2>/dev/null)
+    listed=$(git -C "$ROOT" ls-files 2>/dev/null)
   fi
   if [ -z "$listed" ]; then
-    listed=$(cd "$ROOT" && find bin -type f -name '*.sh' 2>/dev/null | LC_ALL=C sort)
+    listed=$(cd "$ROOT" && find . -type f 2>/dev/null | sed 's#^./##' | LC_ALL=C sort)
   fi
   printf '%s\n' "$listed" | awk 'NF'
 }
 
-FILES=$(collect_files)
-if [ -z "$FILES" ]; then
-  printf 'fm-retrieval-check: no shell scripts found under %s/bin, so nothing was examined\n' \
+UNIVERSE=$(collect_files)
+if [ -z "$UNIVERSE" ]; then
+  printf 'fm-retrieval-check: no files found under %s, so nothing was examined\n' \
     "$ROOT" >&2
   exit 2
 fi
+
+FILES=
+OUT_OF_SCOPE=
+UNCHECKED=
+while IFS= read -r file; do
+  [ -n "$file" ] || continue
+  case "$file" in
+    .git/*|.github/*|.claude/*|docs/*|data/*|assets/*|tests/*|LICENSE|*.md|*.json|*.yml|*.yaml|*.toml|*.txt|.gitignore|.gitattributes)
+      OUT_OF_SCOPE="${OUT_OF_SCOPE}${OUT_OF_SCOPE:+
+}$file\tprose, data, workflow configuration, static assets, or test fixtures cannot perform a production control-plane read"
+      ;;
+    *.sh|*.bash|*.bat|*.py|*.js|*.mjs|*.cjs|*.ts|*.tsx|*.go|*.rs|*.rb|*.pl)
+      FILES="${FILES}${FILES:+
+}$file"
+      ;;
+    *)
+      if [ -x "$ROOT/$file" ] && file "$ROOT/$file" 2>/dev/null | grep -q text; then
+        FILES="${FILES}${FILES:+
+}$file"
+      else
+        UNCHECKED="${UNCHECKED}${UNCHECKED:+
+}$file"
+      fi
+      ;;
+  esac
+done <<EOF
+$UNIVERSE
+EOF
 
 PATTERN=$ENFORCED_PATTERN
 [ "$MODE" = check ] || PATTERN=$AUDIT_PATTERN
@@ -257,13 +281,22 @@ RESULTS=$(printf '%s\n' "$FILES" | while IFS= read -r f; do
   scan_file "$f"
 done)
 
+if [ -n "$UNCHECKED" ]; then
+  printf '%s\n' "$UNCHECKED" | while IFS= read -r file; do
+    printf 'UNCHECKED\t%s\tfile capability could not be classified\n' "$file"
+  done >&2
+  exit 1
+fi
+
 SITES=$(printf '%s\n' "$RESULTS" | awk 'NF' | wc -l | tr -d ' ')
 VIOLATIONS=$(printf '%s\n' "$RESULTS" \
   | awk -F '\t' '$1 == "UNCLASSIFIED" || $1 == "UNKNOWN-CLASS" || $1 == "NO-REASON"')
 
 if [ "$MODE" = audit ]; then
-  printf 'fm-retrieval-check: census root=%s sites=%s files=%s\n' \
-    "$ROOT" "$SITES" "$(printf '%s\n' "$FILES" | wc -l | tr -d ' ')"
+  printf 'fm-retrieval-check: census root=%s sites=%s scanned=%s out_of_scope=%s universe=%s coverage=complete\n' \
+    "$ROOT" "$SITES" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
+    "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
+    "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')"
   printf '\nclassification census:\n'
   printf '%s\n' "$RESULTS" | awk -F '\t' 'NF { print $1 }' \
     | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | sed 's/^/  /'
@@ -303,8 +336,10 @@ EOF
   exit 1
 fi
 
-printf 'fm-retrieval-check: ok sites=%s files=%s root=%s\n' \
-  "$SITES" "$(printf '%s\n' "$FILES" | wc -l | tr -d ' ')" "$ROOT"
+printf 'fm-retrieval-check: ok sites=%s scanned=%s out_of_scope=%s universe=%s coverage=complete root=%s\n' \
+  "$SITES" "$(printf '%s\n' "$FILES" | awk 'NF' | wc -l | tr -d ' ')" \
+  "$(printf '%s\n' "$OUT_OF_SCOPE" | awk 'NF' | wc -l | tr -d ' ')" \
+  "$(printf '%s\n' "$UNIVERSE" | awk 'NF' | wc -l | tr -d ' ')" "$ROOT"
 # The class breakdown is printed on the passing path too, because "every site is
 # classified" and "which reasons the tree is relying on" are different facts and
 # only the second one tells a reader whether the mix looks right.

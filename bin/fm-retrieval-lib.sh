@@ -294,7 +294,7 @@ fm_retrieval_fetch_page() {  # <url> <headers-out> <body-out>
   done
 }
 
-# fm_retrieval_fetch <first-url> <records-file> <id-field> [max-pages] [max-records]
+# fm_retrieval_fetch <first-url> <records-file> <id-field> [max-pages] [max-records] [text-field] [time-field]
 #
 # Traverses from <first-url> to the end of the collection, writing one JSON
 # record per line to <records-file> and its completeness/provenance proof to
@@ -309,10 +309,11 @@ fm_retrieval_fetch_page() {  # <url> <headers-out> <body-out>
 # remains of an interrupted read, and fm_retrieval_load reports it as
 # state_uncommitted rather than as a complete set of whatever survived. Re-running
 # with the same path is idempotent because both renames replace atomically.
-fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max-records]
+fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max-records] [text-field] [time-field]
   local url=$1 records=$2 id_field=$3
   local max_pages=${4:-${FM_RETRIEVAL_MAX_PAGES:-50}}
   local max_records=${5:-0}
+  local text_field=${6:-} time_field=${7:-}
   local tmp headers body pages=0 next rc seen_file out_file
   local page_records total=0 dups=0 attempts
 
@@ -356,13 +357,17 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
         "page $pages was not a JSON array"
       break
     fi
-    if ! jq -e --arg f "$id_field" \
-      "all(.[]; $FM_RETRIEVAL_HAS_FIELD_EXPR)" \
-      "$body" >/dev/null 2>&1; then
-      fm_retrieval_set_reason schema_unexpected \
-        "page $pages carried a record with no $id_field"
-      break
-    fi
+    local required_field
+    for required_field in "$id_field" "$text_field" "$time_field"; do
+      [ -n "$required_field" ] || continue
+      if ! jq -e --arg f "$required_field" \
+        "all(.[]; $FM_RETRIEVAL_HAS_FIELD_EXPR)" \
+        "$body" >/dev/null 2>&1; then
+        fm_retrieval_set_reason schema_unexpected \
+          "page $pages carried a record with no $required_field"
+        break 2
+      fi
+    done
 
     page_records=$(jq 'length' "$body")
     while IFS= read -r line; do
