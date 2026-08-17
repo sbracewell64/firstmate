@@ -40,8 +40,12 @@ That binding lives in two places, and no single defect defeated both, so the con
 `D29` removes both, because removing one leaves the other standing and reddens nothing.
 
 The inventory drift control was also reporting its own success before running its checks, so that it could count its own identity.
-It now counts the suite's declared controls without executing them and reports only after its checks.
-A full run separately binds the declared controls to the identities that actually executed.
+An interim correction counted the identities that had already passed plus the inventory control itself and required that control to be last.
+Independent review found that selecting the inventory control ran every control, so 26 of the 29 defect builds credited as its red witnesses had actually failed in another control and only three had exercised the inventory check.
+Reading the recorded failure text for every matrix row established that this false attribution was confined to the inventory-control row, because every other selection ran exactly its named control.
+The ruling superseded both the executed-identity count and the last-control assertion: the inventory control now counts the suite's declared controls without executing them and reports only after its checks, while a full run separately binds declared controls to the identities that actually executed.
+Position is irrelevant to a declared count, so retaining a last-control assertion would guard no property.
+The resulting rule is that the named target and the observed failing control must match; a neighbouring or broader red is not evidence for the target.
 
 ## What the proof owner establishes, and what it does not
 
