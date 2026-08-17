@@ -978,6 +978,15 @@ for raw in sys.argv[7:]:
             unobserved(f"shard {idx} has a script with an invalid path")
         paths.append(path)
         total += ms
+    summary = doc.get("summary")
+    if not isinstance(summary, dict):
+        unobserved(f"shard {idx} timing artifact has an invalid summary")
+    for field in ("total", "failed", "skipped_gate", "duration_ms"):
+        value = summary.get(field)
+        if type(value) is not int or value < 0:
+            unobserved(f"shard {idx} timing artifact has an invalid summary {field}")
+    if summary["total"] != len(rows) or summary["duration_ms"] != total:
+        unobserved(f"shard {idx} timing artifact summary disagrees with its script records")
     seen[idx] = (total, paths)
 
 missing_shards = [i for i in range(1, shards + 1) if i not in seen]

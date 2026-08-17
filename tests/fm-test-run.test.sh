@@ -958,6 +958,24 @@ PY
   [ "$rc" -eq 3 ] || fail "an invalid script path must be could-not-observe (exit 3), got $rc"
   assert_contains "$out" "verdict=could-not-observe" "an invalid script path must report could-not-observe"
 
+  # The summary is part of the timing artifact's structure. A syntactically
+  # valid object with a malformed summary must not reach the drift arithmetic.
+  fm_write_serial_fixture "$tmp/invalid-summary" 1000
+  python3 - "$tmp/invalid-summary/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"] = {"total": "unknown"}
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/invalid-summary"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a structurally invalid summary must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an invalid summary must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "an invalid summary must not report drifted"
+
   # A malformed extra artifact must not disappear as though it belonged to a
   # different lane and let an otherwise complete artifact set pass.
   fm_write_serial_fixture "$tmp/invalid-selection" 1000
