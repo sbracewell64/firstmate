@@ -460,7 +460,7 @@ The count outlives the task metadata deliberately - an ordinary teardown retires
 Secondmate relaunches are exempt, since their relaunch is unattended liveness recovery rather than a retry.
 
 Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
-[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, landing-record rule, PR-discovery fallback, and stale-lock recovery procedure.
+[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the recoverable-work proofs, publication observation, landing-record rule, PR-discovery fallback, and stale-lock recovery procedure.
 
 ## Optional X mode
 

@@ -8,24 +8,35 @@
 # reminder on the same seam: successful cleanup is admission's primary release
 # trigger, so the fleet band is recomputed before any load-held request is
 # released. Homes without that policy see no extra line.
-# REFUSES if the worktree holds work that has not LANDED, because cleanup
-# hard-resets/removes the worktree and kills its processes. Work has landed when it is
-# reachable from any remote-tracking branch (a fork counts as a remote, so
+# REFUSES if the worktree holds work that is not RECOVERABLE, because cleanup
+# hard-resets/removes the worktree and kills its processes. Work is recoverable when
+# it is reachable from any remote-tracking branch (a fork counts as a remote, so
 # upstream-contribution PRs pushed to a fork satisfy this in any mode), OR - for a
-# normal ship task whose commits are not so reachable - when its PR is merged and
-# GitHub reports a PR head that contains the current local work, or its content is
-# already present in the up-to-date default branch. This recognizes the common
-# squash-merge-then-delete-branch flow, where the branch's own commits live nowhere
-# on a remote yet the change is fully in main.
-# The PR itself is resolved from the task's recorded pr= when present, or - when
+# normal ship task whose commits are not so reachable - when either of two
+# authorities outside this worktree says so:
+#   PUBLISHED - the forge reports a pull/merge request head that contains the
+#     current local work. A no-mistakes run pushes the branch from its OWN gate
+#     worktree, so the push that made the work retrievable happens in a copy of the
+#     repository the task worktree structurally cannot observe; only the forge can
+#     answer. The request's state is not consulted, because publication rather than
+#     merge is what puts the commits beyond this worktree's reach.
+#   LANDED - the content is already present in the up-to-date default branch. This
+#     recognizes the common squash-merge-then-delete-branch flow, where the branch's
+#     own commits live nowhere on a remote yet the change is fully in main.
+# The request itself is resolved from the task's recorded pr= when present, or - when
 # no pr= was ever recorded (e.g. a yolo-authorized merge on a repo with no PR CI,
 # where the usual "checks green" fm-pr-check.sh trigger never fires) - by looking
-# up a merged PR whose head branch matches the worktree's branch, fetching its head
+# up a request whose head branch matches the worktree's branch, fetching its head
 # via refs/pull/<n>/head when the branch itself was deleted. So a missing pr= never
-# by itself causes a false refusal of landed work.
-# A gh lookup error falls back to the content check; if that is also inconclusive,
-# teardown refuses rather than risk discarding unlanded work.
-# Uncommitted changes are never landed.
+# by itself causes a false refusal of recoverable work.
+# The publication observation is three-valued and its value is printed on refusal:
+# published, not-published, and could-not-observe. Could-not-observe - no request
+# nameable, an unreachable forge, a request the forge reports no head for, or a head
+# that cannot be resolved here - falls back to the content check, and if that is
+# also inconclusive teardown refuses rather than risk discarding unpublished work.
+# The guard never weakens in the dark.
+# Uncommitted changes are never recoverable, whatever the forge reports about the
+# commits: publication covers what was committed, and nothing else.
 # local-only projects additionally accept work merged into the local default
 # branch (firstmate performs that merge after configured approval) as a fallback
 # for the common case where there is no remote at all.
@@ -773,6 +784,28 @@ pr_number_from_branch() {
   printf '%s' "$n"
 }
 
+# Canonical URL of the request this task's work belongs to: the recorded pr=
+# when there is one, otherwise a request discovered from the branch name and
+# resolved to its own canonical URL by the forge. A URL rather than a number,
+# because bin/fm-pr-lib.sh's fm_pr_forge_view is the single reader of a
+# request's state and head, and it addresses a request by URL. Keeping one
+# reader matters more here than covering every URL its parser declines: a second
+# forge reader inside a safety guard is a drift risk, and a URL that parser
+# declines reaches the caller as could-not-observe, which refuses.
+# Returns non-zero when no request can be named at all, which the caller treats
+# as could-not-observe rather than as evidence about the work.
+pr_url_for_task() {  # <branch>
+  local branch=$1 n url
+  if [ -n "$PR_URL" ]; then
+    printf '%s' "$PR_URL"
+    return 0
+  fi
+  n=$(pr_number_from_branch "$branch") || return 1
+  url=$( cd "$WT" && gh pr view "$n" --json url -q .url 2>/dev/null ) || return 1
+  [ -n "$url" ] || return 1
+  printf '%s' "$url"
+}
+
 pr_number_from_target() {
   local target=$1 n
   case "$target" in
@@ -831,32 +864,82 @@ $unpushed
 EOF
 }
 
-# Is the worktree's PR merged for local work contained in that PR? Resolves the
-# PR from the recorded pr= URL first, then from the branch name, and asks GitHub
-# for both the PR state and head. Returns non-zero when the PR is not merged, the
-# current work is not contained in the PR head, no PR is found, or any gh error
-# occurs - the caller then falls back to the content check.
-pr_is_merged() {
-  local branch=$1 target view state head current
-  if [ -n "$PR_URL" ]; then
-    target=$PR_URL
-  else
-    target=$(pr_number_from_branch "$branch") || return 1
+# The three-valued result of the last publication observation, set only by
+# forge_publication_observe and read by the refusal message, so an operator sees
+# WHICH value teardown reached rather than only that it refused.
+PUBLICATION_OBSERVATION=
+PUBLICATION_DETAIL=
+
+# Has this worktree's committed work been PUBLISHED to the authoritative forge?
+#
+# The forge is the only subject that can answer. A no-mistakes run pushes the
+# branch from its own gate worktree, so the push that put these commits somewhere
+# a reset here cannot reach them happens in a copy of the repository this
+# worktree never sees. Asking this worktree's remote-tracking refs is a true
+# observation about the wrong subject: it answers "is this commit on a remote I
+# can see", and the question that decides safety is "is this work retrievable".
+#
+# Sets PUBLICATION_OBSERVATION to exactly one of three values:
+#   published          the forge reports a request head that CONTAINS this work
+#   not-published      the forge answered, and its head does not contain this work
+#   could-not-observe  no request could be named, the forge could not be reached,
+#                      it reported no head (a GitLab merge request never carries
+#                      one), or that head cannot be resolved to a commit here
+# and PUBLICATION_DETAIL to one short phrase naming why, for the refusal message.
+# Returns 0 only for published, so the two other values refuse at every call
+# site: could-not-observe is a real result, and it is never a pass.
+#
+# The request's STATE is deliberately not consulted. Publication, not merge, is
+# what makes the work retrievable, so an open request whose head carries these
+# commits is as safe as a merged one; whether it merged is a separate question
+# that content_in_default and the landing record answer.
+#
+# WHY THIS ONE ASKS ABOUT COMMITS AND content_in_default ASKS ABOUT CONTENT
+# bin/fm-landed-lib.sh's header owns the argument that LANDING must be measured
+# as content, because a squash, a rebase, or a replay puts the same change in
+# the trunk under a different commit id. PUBLICATION is the opposite question:
+# it asks whether the exact commits this cleanup is about to destroy exist under
+# an object the forge names, so commit identity is the property and content
+# equivalence would be strictly weaker - a forge head with a matching tree but
+# different commits does not hold the commits at risk. The one shape where
+# identity alone would false-refuse, a local commit replayed into the request,
+# is covered by the patch-id fallback below rather than by loosening this to a
+# content test. And fm_landed_tree_contains could not serve here regardless: it
+# measures a ref against the worktree's own HEAD, not against an arbitrary sha.
+forge_publication_observe() {  # <branch>
+  local branch=$1 url head current
+  PUBLICATION_OBSERVATION=could-not-observe
+  PUBLICATION_DETAIL=
+  if ! url=$(pr_url_for_task "$branch") || [ -z "$url" ]; then
+    PUBLICATION_DETAIL="no pull request is recorded for this task and none was found for branch $branch"
+    return 1
   fi
-  [ -n "$target" ] || return 1
-  view=$(cd "$WT" && gh pr view "$target" --json state,headRefOid -q '.state + "\t" + .headRefOid' 2>/dev/null) || return 1
-  state=${view%%$'\t'*}
-  head=${view#*$'\t'}
-  [ "$state" != "$view" ] || return 1
-  case "$state" in
-    MERGED|merged) ;;
-    *) return 1 ;;
-  esac
-  [ -n "$head" ] || return 1
-  ensure_commit_object "$target" "$head" || return 1
-  current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null) || return 1
-  git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null && return 0
-  unpushed_patches_are_in_pr_head "$head"
+  if ! fm_pr_forge_view "$url"; then
+    PUBLICATION_DETAIL="the forge did not answer for $url"
+    return 1
+  fi
+  head=$FM_PR_FORGE_HEAD
+  if [ -z "$head" ]; then
+    PUBLICATION_DETAIL="the forge reported no head for $url"
+    return 1
+  fi
+  if ! ensure_commit_object "$url" "$head"; then
+    PUBLICATION_DETAIL="the head $head the forge reports for $url cannot be resolved here"
+    return 1
+  fi
+  if ! current=$(git -C "$WT" rev-parse --verify HEAD 2>/dev/null); then
+    PUBLICATION_DETAIL="the worktree's own HEAD is unreadable"
+    return 1
+  fi
+  if git -C "$WT" merge-base --is-ancestor "$current" "$head" 2>/dev/null \
+    || unpushed_patches_are_in_pr_head "$head"; then
+    PUBLICATION_OBSERVATION=published
+    PUBLICATION_DETAIL="$url is at $head"
+    return 0
+  fi
+  PUBLICATION_OBSERVATION=not-published
+  PUBLICATION_DETAIL="$url is at $head, which does not contain this work"
+  return 1
 }
 
 # Is the branch's content already present in the up-to-date default branch?
@@ -892,14 +975,18 @@ content_in_default() {
   fm_landed_tree_contains "$WT" "$ref"
 }
 
-# Has the worktree's committed work actually LANDED, though its commits are not
-# reachable from any remote-tracking branch? True when a merged PR proves the
-# current local work is contained in the PR head, OR the content is already in the
-# default branch (fallback, which also covers the no-PR and gh-error paths). False
-# only for genuinely unlanded work.
-work_is_landed() {
+# Is the worktree's committed work safe to discard, though its commits are
+# reachable from no remote-tracking branch this worktree can see? Two independent
+# authorities can say yes, and neither of them is this worktree's remote list:
+#   published - the forge holds a request head containing this work, so the work
+#               survives whatever happens to this copy
+#   landed    - the content is already in the up-to-date default branch, which
+#               also covers a squash merge that deleted the head branch
+# Every other answer, including every could-not-observe from either authority, is
+# non-zero, so the caller refuses. The guard never weakens in the dark.
+work_is_recoverable() {
   local branch=$1
-  pr_is_merged "$branch" && return 0
+  forge_publication_observe "$branch" && return 0
   content_in_default
 }
 
@@ -1238,9 +1325,15 @@ validate_worktree_teardown_safety() {
       branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
       TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
     fi
-    if ! work_is_landed "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote and not landed." >&2
+    if ! work_is_recoverable "$branch"; then
+      echo "REFUSED: worktree $WT has work not on any remote, not published at the forge, and not landed." >&2
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
+      # Name which of the three values the publication observation reached. A
+      # could-not-observe refusal and a not-published refusal are the same
+      # action and different facts, and only the operator can close the gap.
+      printf 'publication: %s (%s)\n' \
+        "${PUBLICATION_OBSERVATION:-could-not-observe}" \
+        "${PUBLICATION_DETAIL:-publication was never observed}" >&2
       echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
