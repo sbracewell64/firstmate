@@ -996,6 +996,7 @@ test_bootstrap_follows_a_route_owner_shim() {
   rec=$(make_home ownershim); read_home "$rec"
   reset_register
   shim="$FAKEBIN/fm-route.sh"
+  # shellcheck disable=SC2016 # $1 belongs to the generated fake and must reach it unexpanded.
   printf '%s\n' '#!/bin/sh' \
     'case "$1" in' \
     '  routes) printf '\''%s\n'\'' '\''[{"id":"R-RUNTIME","path":"/shim/target","source":"rule","rule":{"route":"R-RUNTIME","floor":"F-RUNTIME","pool":["alpha/one"],"use":{"harness":"pi","model":"alpha/one","effort":"xhigh"}}},{"id":"R-GENHARD","path":"/shim/bootstrap","source":"rule","rule":{"route":"R-GENHARD","floor":"F-GENHARD","pool":["alpha/one"],"use":{"harness":"pi","model":"alpha/one","effort":"xhigh"}}}]'\'' ;;' \
