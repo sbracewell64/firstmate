@@ -92,7 +92,7 @@ inventory_control_count: 31
 inventory_sha256: bin/fm-review-mutation.sh fcc9998483e554db47311a3b54bbcc4d219f79ffbdc472a1019654e78d0ed36e
 inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
 inventory_sha256: tests/fm-review-mutation.test.sh 94613e6c6215177001d44079500680fa1377afea8c00c1d594ba3bee69afa879
-inventory_sha256: tests/review-mutation-red-matrix.py d974973bb05d9e870b094115cc48ed3d684b88a380f3fffaf6f0ab4cbbca5387
+inventory_sha256: tests/review-mutation-red-matrix.py 876a0991d51f556999886482d5abb405488ff9d1d671fdccd947c567dcc08d48
 ```
 
 This is an inventory claim only: these files and control count agree with the suite that passes on the current bytes.
