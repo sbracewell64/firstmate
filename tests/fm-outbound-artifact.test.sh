@@ -170,6 +170,7 @@ case "$path" in
       id=$(( $(wc -l < "$F/comments") + 900 ))
       printf '%s %s\n' "$id" "$rid" >> "$F/comments"
       printf '%s\n' "$body" > "$F/last_request_body"
+      printf '%s\n' "$body" > "$F/comment-$id.body"
       printf 'posted %s\n' "$rid" >> "$F/post_log"
       lost=$(cat "$F/lose_response_remaining")
       if [ "$lost" -gt 0 ]; then
@@ -190,7 +191,9 @@ case "$path" in
       cat "$F/poll_prefix"
       while read -r id rid; do
         [ -n "$id" ] || continue
-        jq -nr --argjson id "$id" --rawfile body "$F/last_request_body" \
+        body_file="$F/comment-$id.body"
+        [ -f "$body_file" ] || body_file="$F/last_request_body"
+        jq -nr --argjson id "$id" --rawfile body "$body_file" \
           '[$id,$body] | @base64'
       done < "$F/comments"
       if [ -s "$F/foreign_ruling_id" ]; then
@@ -283,6 +286,55 @@ test_request_present_is_green() {
   printf '%s' "$out" | grep -q '1 satisfied' \
     || fail "control 1 negative: not reported satisfied: $out"
   pass "control 1 GREEN: the same item with a request on the forge is satisfied"
+}
+
+test_request_presence_requires_exact_validated_identity() {
+  local dir rid body posts
+
+  dir=$(new_case presence-mention)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: seed emit failed"
+  rid=$(emitted_request_id "$dir")
+  body=$(cat "$dir/forge/last_request_body")
+  : > "$dir/forge/comments"
+  rm -f "$dir/home/data/outbound-artifacts"/*.json
+  printf '901 %s\n' "$rid" > "$dir/forge/comments"
+  printf 'discussion merely mentions %s\n' "$rid" > "$dir/forge/comment-901.body"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: mention blocked emission"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 2 ] || fail "presence identity: a mere mention satisfied presence"
+
+  dir=$(new_case presence-prefix)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: prefix seed emit failed"
+  rid=$(emitted_request_id "$dir")
+  body=$(cat "$dir/forge/last_request_body")
+  : > "$dir/forge/comments"
+  rm -f "$dir/home/data/outbound-artifacts"/*.json
+  printf '902 %s-extra\n' "$rid" > "$dir/forge/comments"
+  printf '%s\n' "$body" | sed "1s/$rid/$rid-extra/" > "$dir/forge/comment-902.body"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: prefix blocked emission"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 2 ] \
+    || fail "presence identity: a longer prefix-sharing id satisfied presence"
+
+  dir=$(new_case presence-mismatch)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: mismatch seed emit failed"
+  rid=$(emitted_request_id "$dir")
+  body=$(cat "$dir/forge/last_request_body")
+  : > "$dir/forge/comments"
+  rm -f "$dir/home/data/outbound-artifacts"/*.json
+  printf '903 %s\n' "$rid" > "$dir/forge/comments"
+  printf '%s\n' "$body" | sed 's/^item: waiting-item$/item: another-item/' > "$dir/forge/comment-903.body"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: mismatch blocked emission"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 2 ] \
+    || fail "presence identity: a mismatched embedded identity satisfied presence"
+
+  dir=$(new_case presence-exact)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: exact seed emit failed"
+  rid=$(emitted_request_id "$dir")
+  rm -f "$dir/home/data/outbound-artifacts"/*.json
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "presence identity: exact request was refused"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 1 ] \
+    || fail "presence identity: an exact validated request was duplicated"
+  pass "presence identity: exact marker and complete embedded identity are required"
 }
 
 # --- control 2: an exact head change invalidates the previous request --------
@@ -1054,6 +1106,7 @@ test_binding_refuses_a_vague_head() {
 
 test_no_request_is_red
 test_request_present_is_green
+test_request_presence_requires_exact_validated_identity
 test_head_change_invalidates
 test_head_change_fresh_request_is_green
 test_no_duplicate_requests
