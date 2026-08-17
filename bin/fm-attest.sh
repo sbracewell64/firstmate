@@ -12,6 +12,8 @@
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
 #   fm-attest.sh show [--commit <rev>] [--notes-ref <ref>]
 #   fm-attest.sh verify --head <sha> [--notes-ref <ref>]
+#   fm-attest.sh reconcile --head <sha> --remote <name> --pr <number> --pr-remote <name> [--notes-ref <ref>] [--window <seconds>] [--poll <seconds>]
+#   fm-attest.sh --supports <capability>
 #   fm-attest.sh --print-format
 #   fm-attest.sh --help
 #
@@ -36,6 +38,13 @@
 # verify is the CI side. It reads a note already fetched into this repository
 # and reports one distinct reason per failure, so an absent attestation is
 # never reported as a rejected one and never as a passing one.
+#
+# reconcile is the CI side's bounded window. A genuinely pipeline-raised head is
+# pushed before its note exists, so the check's first look can be a near miss
+# rather than a verdict about the change. reconcile re-reads the authoritative
+# ref for a short, explicit bound while - and only while - no note exists for
+# this head yet, then hands the terminal verdict to verify. It never reaches a
+# verdict of its own, so nothing can pass except through verify.
 #
 # Every exit from either side names its own cause. A refusal (exit 1) is a
 # verdict on the evidence; a failure (exit 2) means no verdict was reached, and
@@ -88,13 +97,13 @@ KNOWN_KEYS="$ATTESTATION_KEY head run gates tool"
 # ---------------------------------------------------------------------------
 #
 # The note can only exist after the push it attests, and that push is what
-# started the check, so the first evaluation of a genuinely pipeline-raised head
-# runs before its evidence exists and correctly refuses. Publishing the note
-# repairs the evidence but not the verdict: refs/notes/no-mistakes is not a pull
-# request head, so pushing it fires no pull_request event and nothing re-reads
-# the head. recheck is what re-reads it, so that publishing an attestation
-# converges on its own instead of waiting for someone to close and reopen a pull
-# request.
+# started the check, so a genuinely pipeline-raised head can still reach a first
+# refusal when its evidence lands after reconcile's bounded window. Publishing
+# the note repairs the evidence but not that verdict: refs/notes/no-mistakes is
+# not a pull request head, so pushing it fires no pull_request event and nothing
+# re-reads the head. recheck is what re-reads it, so that publishing an
+# attestation converges on its own instead of waiting for someone to close and
+# reopen a pull request.
 #
 # It re-runs the workflow run that already evaluated this exact head. That is
 # GitHub's own supported mechanism and it keeps GitHub the single authority: the
@@ -137,6 +146,48 @@ case "$RECHECK_LOCK_WAIT" in '' | *[!0-9]*) RECHECK_LOCK_WAIT=10 ;; esac
 # tokens, so what was re-triggered and why can be audited afterwards without
 # asking the forge what it thinks it was told.
 RECHECK_RECORD=fm-attest-recheck.v1
+
+# ---------------------------------------------------------------------------
+# reconcile - the bounded window before a terminal verdict
+# ---------------------------------------------------------------------------
+#
+# recheck above repairs the VERDICT after the evidence lands. This repairs the
+# FIRST look, and the two are layered rather than alternatives: a short window
+# absorbs the near miss, and recheck remains the recovery for everything past
+# it. Neither is a second truth store, because neither reaches a verdict -
+# recheck asks GitHub to re-derive one and this hands one to verify.
+#
+# How long to wait is the only judgement here, and it was measured rather than
+# picked. Across 45 attestations published to this repository, the delay from
+# the pull request event that started a check to the note being published ran
+# from 9 seconds to 1815, with a median of 200. Those observations cluster: 11
+# of the 45 land within 55 seconds and the next one is at 75, because the short
+# ones are a publication that raced its own push while the long ones are a
+# pipeline still working. 60 seconds covers that cluster and stops before the
+# tail begins.
+#
+# It is deliberately NOT sized to the tail. Waiting out a pipeline would be an
+# unbounded wait wearing a bound: it would hold a runner for the length of
+# somebody else's validation run, and the head would still be unattested for
+# every second of it. The tail is recheck's, and docs/no-mistakes-attestation.md
+# owns what this covers and what it does not.
+#
+# 0 is a real value here and means "look once, do not wait", which is what the
+# window collapses to when the caller does not want one. A poll of 0 would spin,
+# so an unusable poll falls back to the default; this is the same reading the
+# recheck knobs above apply to their own values.
+RECONCILE_WINDOW=${FM_ATTEST_RECONCILE_WINDOW:-60}
+case "$RECONCILE_WINDOW" in '' | *[!0-9]*) RECONCILE_WINDOW=60 ;; esac
+RECONCILE_POLL=${FM_ATTEST_RECONCILE_POLL:-15}
+case "$RECONCILE_POLL" in '' | *[!0-9]* | 0*) RECONCILE_POLL=15 ;; esac
+
+# What this program can be asked to do, for a caller that has to know before
+# asking. The workflow runs this script from the pull request's own head, so a
+# head raised before a subcommand existed does not carry it, and a caller that
+# probed by running it could not tell "this program does not do that" from
+# "that failed". Answering as an exit status rather than as text keeps the probe
+# out of the business of reading messages.
+CAPABILITIES="write verify recheck reconcile show"
 
 # ---------------------------------------------------------------------------
 # printing - the one path text leaves this script by
@@ -648,6 +699,267 @@ EOF
       "The attestation for $expect_head does not record a completed '$gate' step." \
       "Required steps: $REQUIRED_GATES."
   done
+}
+
+# ---------------------------------------------------------------------------
+# reconcile - the CI side's bounded window
+# ---------------------------------------------------------------------------
+#
+# One question only: is there any evidence for this head yet? Whether evidence
+# is valid, bound, complete or readable is verify's, and reconcile ends by
+# asking it. That split is the whole safety of the window: it can delay a
+# verdict, it cannot reach one, and it cannot delay one already reached.
+
+# This host's clock, or a stop. A window whose end cannot be computed is not a
+# bounded wait, and guessing one would be the unbounded wait this must not be.
+reconcile_clock() {
+  reconcile_epoch=$(date +%s 2>/dev/null) || reconcile_epoch=
+  is_positive_number "$reconcile_epoch" || fail clock-unreadable \
+    "This host's clock could not be read, so the re-read window could not be bounded." \
+    "Nothing was waited for, and this says nothing about whether $reconcile_head carries an attestation."
+}
+
+# One repository, named for a reader rather than for git. The caller passes
+# configured remote names, so a credential in a remote's URL stays in git's
+# configuration and never crosses this program's interface; but "the remote
+# 'attestation-source' would not serve it" sends nobody anywhere, so the URL is
+# resolved back out and made safe to print by the same scrubber every other line
+# here goes through. A URL that cannot be proved credential-free is replaced by
+# the marker rather than shown, and the remote's own name still names it.
+reconcile_repository_name() {
+  reconcile_url=$(git remote get-url "$1" 2>/dev/null) || reconcile_url=
+  if [ -z "$reconcile_url" ]; then
+    printf "the remote '%s'" "$1"
+    return 0
+  fi
+  printf '%s' "$(credential_safe_text "$reconcile_url")"
+}
+
+# The one place this program reads the attestation ref from the repository the
+# check reads: the first look and every re-read in the window go through here,
+# so the two can never come to disagree about what an unreadable repository
+# means.
+#
+# Three answers, three rather than two on purpose. The ref advertised and
+# fetched is evidence for verify to judge. The ref not being there at all is an
+# ordinary state - a repository that has never carried an attestation - and is
+# left absent for verify to name in its own words. Anything else is a read that
+# did not happen, and it stops the command rather than being resolved as either
+# of the first two.
+reconcile_read_source() {
+  reconcile_ls_rc=0
+  git ls-remote --exit-code "$reconcile_remote" "$reconcile_notes_ref" >/dev/null 2>&1 \
+    || reconcile_ls_rc=$?
+  case "$reconcile_ls_rc" in
+    0)
+      git fetch --quiet --no-tags --force "$reconcile_remote" \
+        "$reconcile_notes_ref:$reconcile_notes_ref" >/dev/null 2>&1 \
+        || fail attestation-source-unfetchable \
+          "$reconcile_source advertises $reconcile_notes_ref but would not serve it." \
+          "Not reading a repository is not reading an absence: this says nothing about whether $reconcile_head carries an attestation."
+      ;;
+    2)
+      git update-ref -d "$reconcile_notes_ref" >/dev/null 2>&1 \
+        || fail attestation-source-unfetchable \
+          "$reconcile_source serves no $reconcile_notes_ref, but the local copy could not be cleared." \
+          "The authoritative absence could not be reconciled with the evidence verify would read."
+      ;;
+    *)
+      fail attestation-source-unreadable \
+        "$reconcile_notes_ref could not be read from $reconcile_source (git exited $reconcile_ls_rc)." \
+        "Not reading a repository is not reading an absence: this says nothing about whether $reconcile_head carries an attestation."
+      ;;
+  esac
+}
+
+# Whether this head has no evidence yet, which is the only state worth waiting
+# through. These are deliberately the same two conditions verify reports as
+# head-commit-unavailable and no-attestation-ref / no-attestation-for-head, read
+# here as "nothing to verify yet" rather than as a verdict:
+#
+#   head commit absent          not waiting. No publication puts a commit in
+#                               this checkout, and verify says so in its words.
+#   git notes exits 1           WAITING. The ref is not here, or carries nothing
+#                               for this commit; a note published a moment from
+#                               now changes exactly that.
+#   git notes exits 0           not waiting. Evidence exists. Whether it is good
+#                               is verify's to say, and to say immediately.
+#   git notes exits otherwise   not waiting. A ref that cannot be read as notes
+#                               is damaged rather than empty, and publishing
+#                               into it repairs nothing.
+#
+# Absence is the only state that waits. Evidence already observed to be invalid,
+# unbound, stale or unreadable leaves through verify on the first look, because
+# a window that graced bad evidence would be buying time for the exact thing
+# this check exists to refuse.
+reconcile_absent() {
+  git rev-parse --verify --quiet "$1^{commit}" >/dev/null 2>&1 || return 1
+  reconcile_note_rc=0
+  git notes --ref="$2" show "$1" >/dev/null 2>&1 || reconcile_note_rc=$?
+  [ "$reconcile_note_rc" -eq 1 ]
+}
+
+# The pull request's head, re-read on every observation this window makes.
+# Waiting is a bet that evidence for THIS head is about to arrive; once the
+# request proposes a different commit, nobody is going to publish for this one
+# and the remaining bound would be spent reaching the verdict already in hand.
+#
+# refs/pull/<n>/head is GitHub's own record of what a pull request proposes, so
+# it answers that directly, over the same read-only protocol and to the same
+# host as the attestation ref beside it. Nothing the check does not already hold
+# is needed to read it.
+#
+# Movement is not a verdict and does not become one here: it ends the wait and
+# leaves the verdict to verify, which still judges the head this run was raised
+# for. Failing to read it at all is a read that did not happen and stops the
+# command, because treating an unanswered question as "still ours" would be
+# waiting on a fact never established. Returns 1 for movement, and does not
+# return at all for a read that failed.
+reconcile_revalidate_head() {
+  reconcile_ls_rc=0
+  reconcile_ls=$(git ls-remote --exit-code "$reconcile_pr_remote" \
+    "refs/pull/$reconcile_pr/head" 2>/dev/null) || reconcile_ls_rc=$?
+  case "$reconcile_ls_rc" in
+    0) ;;
+    2)
+      fail pull-request-head-absent \
+        "$reconcile_pr_source serves no refs/pull/$reconcile_pr/head, so the head under review could not be confirmed." \
+        "That is a question that went unanswered rather than an attestation that is not there."
+      ;;
+    *)
+      fail pull-request-head-unreadable \
+        "refs/pull/$reconcile_pr/head could not be read from $reconcile_pr_source (git exited $reconcile_ls_rc)." \
+        "Not reading a pull request's head is not reading a head that has not moved."
+      ;;
+  esac
+  reconcile_current=${reconcile_ls%%$'\n'*}
+  reconcile_current=${reconcile_current%%[!0-9a-f]*}
+  is_full_sha "$reconcile_current" || fail pull-request-head-unreadable \
+    "refs/pull/$reconcile_pr/head on $reconcile_pr_source did not name a commit."
+  [ "$reconcile_current" = "$reconcile_head" ]
+}
+
+cmd_reconcile() {
+  reconcile_head=
+  reconcile_remote=
+  reconcile_pr=
+  reconcile_pr_remote=
+  reconcile_notes_ref=$NOTES_REF_DEFAULT
+  reconcile_window=$RECONCILE_WINDOW
+  reconcile_poll=$RECONCILE_POLL
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --head)
+        [ "$#" -ge 2 ] || die "--head needs a value"
+        reconcile_head=$2
+        shift 2
+        ;;
+      --remote)
+        [ "$#" -ge 2 ] || die "--remote needs a value"
+        reconcile_remote=$2
+        shift 2
+        ;;
+      --pr)
+        [ "$#" -ge 2 ] || die "--pr needs a value"
+        reconcile_pr=$2
+        shift 2
+        ;;
+      --pr-remote)
+        [ "$#" -ge 2 ] || die "--pr-remote needs a value"
+        reconcile_pr_remote=$2
+        shift 2
+        ;;
+      --notes-ref)
+        [ "$#" -ge 2 ] || die "--notes-ref needs a value"
+        reconcile_notes_ref=$2
+        shift 2
+        ;;
+      --window)
+        [ "$#" -ge 2 ] || die "--window needs a value"
+        case "$2" in '' | *[!0-9]*) die "--window must be a number of seconds" ;; esac
+        reconcile_window=$2
+        shift 2
+        ;;
+      --poll)
+        [ "$#" -ge 2 ] || die "--poll needs a value"
+        case "$2" in '' | *[!0-9]*) die "--poll must be a number of seconds" ;; esac
+        [ "$2" -gt 0 ] || die "--poll must be more than zero, because a poll of zero does not pause"
+        reconcile_poll=$2
+        shift 2
+        ;;
+      *) die "unexpected argument: $1" ;;
+    esac
+  done
+  [ -n "$reconcile_head" ] || die "reconcile needs --head <sha>"
+  is_full_sha "$reconcile_head" || die "--head must be a 40-character lowercase sha"
+  # All three travel together. Re-reading evidence without revalidating the head
+  # would wait on a request that has moved on, and revalidating the head without
+  # re-reading evidence would confirm the head and learn nothing new about it, so
+  # neither half is a window on its own.
+  [ -n "$reconcile_remote" ] || die "reconcile needs --remote <name>"
+  [ -n "$reconcile_pr" ] || die "reconcile needs --pr <number>"
+  is_positive_number "$reconcile_pr" || die "--pr must be a pull request number"
+  [ -n "$reconcile_pr_remote" ] || die "reconcile needs --pr-remote <name>"
+
+  git rev-parse --git-dir >/dev/null 2>&1 || fail not-a-git-repository \
+    "This directory is not inside a git repository."
+  reconcile_source=$(reconcile_repository_name "$reconcile_remote")
+  reconcile_pr_source=$(reconcile_repository_name "$reconcile_pr_remote")
+
+  reconcile_read_source
+
+  if ! reconcile_absent "$reconcile_head" "$reconcile_notes_ref"; then
+    cmd_verify --head "$reconcile_head" --notes-ref "$reconcile_notes_ref"
+    return $?
+  fi
+
+  reconcile_revalidate_head || {
+    {
+      emit "fm-attest: pull request $reconcile_pr now proposes $reconcile_current, so waiting for an attestation on $reconcile_head stopped here."
+      emit "The verdict below is about $reconcile_head, which is the commit this check was raised for."
+    } >&2
+    cmd_verify --head "$reconcile_head" --notes-ref "$reconcile_notes_ref"
+    return $?
+  }
+
+  reconcile_clock
+  reconcile_deadline=$((reconcile_epoch + reconcile_window))
+
+  # Every path out of this loop reaches the same verdict below it. The loop
+  # decides only how long the check keeps looking, and the sleep is clamped to
+  # what remains, so the total waited is at most --window and never the window
+  # plus one more poll.
+  reconcile_exhausted=0
+  while :; do
+    reconcile_clock
+    reconcile_left=$((reconcile_deadline - reconcile_epoch))
+    if [ "$reconcile_left" -le 0 ]; then
+      reconcile_exhausted=1
+      break
+    fi
+    if [ "$reconcile_left" -gt "$reconcile_poll" ]; then
+      reconcile_left=$reconcile_poll
+    fi
+    sleep "$reconcile_left"
+    reconcile_read_source
+    reconcile_absent "$reconcile_head" "$reconcile_notes_ref" || break
+    reconcile_revalidate_head || {
+      {
+        emit "fm-attest: pull request $reconcile_pr now proposes $reconcile_current, so waiting for an attestation on $reconcile_head stopped here."
+        emit "The verdict below is about $reconcile_head, which is the commit this check was raised for."
+      } >&2
+      break
+    }
+  done
+
+  # The bound, said out loud at the only moment it decided anything. A reader
+  # who has just been told this head is unattested is owed how long it was given
+  # to become attested, because otherwise the one number that shaped the verdict
+  # is the one number nowhere in it.
+  [ "$reconcile_exhausted" -eq 0 ] || emit \
+    "fm-attest: no attestation for $reconcile_head arrived in the ${reconcile_window}s window this check allows for one just published." >&2
+
+  cmd_verify --head "$reconcile_head" --notes-ref "$reconcile_notes_ref"
 }
 
 # ---------------------------------------------------------------------------
@@ -1593,7 +1905,17 @@ case "$command" in
   write) cmd_write "$@" ;;
   verify) cmd_verify "$@" ;;
   recheck) cmd_recheck "$@" ;;
+  reconcile) cmd_reconcile "$@" ;;
   show) cmd_show "$@" ;;
+  # A capability query, answered as an exit status and nothing else: zero for a
+  # capability this program has, non-zero for one it does not. It is not a
+  # verdict and borrows neither error model, so a caller reads only whether it
+  # succeeded. A copy of this script old enough to predate the query itself
+  # answers non-zero by not recognizing it, which is the same answer.
+  --supports)
+    [ "$#" -ge 1 ] || die "--supports needs a capability"
+    list_has "$1" "$CAPABILITIES"
+    ;;
   --print-format) print_format ;;
   -h | --help)
     usage
