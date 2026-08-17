@@ -191,7 +191,8 @@ test_ref_without_note_for_head_refuses_distinctly() {
   add_note "$repo" "$other" "$(good_note "$other")"
   out=$(verify_out "$repo" "$head")
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a head with no attestation was accepted"
+  [ "$rc" -eq 1 ] \
+    || fail "a missing exact-head attestation did not return the verifier's refusal verdict (exit $rc): $out"
   assert_contains "$out" "no-attestation-for-head" "missing note for the head was not reported distinctly"
   assert_not_contains "$out" "no-attestation-ref" "a present ref was reported as an absent one"
   pass "fm-attest.sh: an attestation for another commit is not evidence for this one"
