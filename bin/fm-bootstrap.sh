@@ -1032,7 +1032,7 @@ outbound_artifact_report() {
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
   out=$(cat "$tmp" 2>/dev/null || true)
   rm -f "$tmp"
-  if [ "$child_rc" -ne 0 ]; then
+  if [ "$child_rc" -ne 0 ] && [ "$child_rc" -ne 3 ]; then
     printf 'OUTBOUND: sweep unevaluable - reconciliation exited %s while waiting items may remain without artifacts\n' "$child_rc"
   fi
   [ -n "$out" ] || return 0
