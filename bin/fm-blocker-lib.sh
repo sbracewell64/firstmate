@@ -153,7 +153,8 @@ _fm_blocker_show() {  # <id> [home] -> show output on stdout; rc 2 = could-not-o
   local id=${1:-} home=${2:-${FM_HOME:-}} out
   fm_task_id_path_safe "$id" || return 2
   _fm_blocker_reader || return 2
-  if [ -n "$home" ] && [ -d "$home" ]; then
+  if [ -n "$home" ]; then
+    [ -d "$home" ] && [ -r "$home" ] || return 2
     out=$(cd "$home" && tasks-axi show "$id" --full 2>/dev/null) || return 2
   else
     out=$(tasks-axi show "$id" --full 2>/dev/null) || return 2

@@ -250,6 +250,38 @@ test_absent_reader_is_could_not_observe() {
   pass "an absent backlog reader is could-not-observe, never a suppression"
 }
 
+test_unreadable_explicit_home_never_falls_back_to_current_directory() {
+  local dir cwd explicit_home r first
+  dir=$(make_case unreadable-explicit-home)
+  cwd="$dir/current-home"
+  explicit_home="$dir/unreadable-home"
+  mkdir -p "$cwd/fixtures"
+  printf 'not a readable backlog directory\n' > "$explicit_home"
+  put_task "$dir" upstream state=in_flight held=yes hold_kind=external
+  put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
+  cp "$dir/fixtures/upstream" "$dir/fixtures/held" "$cwd/fixtures/"
+
+  first=$(cd "$cwd" && PATH="$dir/fakebin:$PATH" FM_FAKE_TASKS_DIR="$cwd/fixtures" \
+    bash -c '
+      set -u
+      # shellcheck disable=SC1090
+      . "$1"
+      fm_blocker_movement "$2" "$3"
+    ' _ "$LIB" held "$dir/state")
+  commit_baseline "$dir" held "$first" || fail "could not commit the current-directory control baseline"
+
+  r=$(cd "$cwd" && PATH="$dir/fakebin:$PATH" FM_FAKE_TASKS_DIR="$cwd/fixtures" \
+    bash -c '
+      set -u
+      # shellcheck disable=SC1090
+      . "$1"
+      fm_blocker_movement "$2" "$3" "$4"
+    ' _ "$LIB" held "$dir/state" "$explicit_home")
+  [ "$(verdict_of "$r")" = unobserved ] \
+    || fail "an unreadable explicit home consulted the same-id task in the current directory and suppressed: $r"
+  pass "an unreadable explicit home surfaces without consulting the current directory"
+}
+
 # The very first evaluation has nothing to compare against. Movement is
 # unobservable then, so it surfaces once and records the baseline it will use
 # next time - it does not quietly assume nothing changed.
@@ -755,6 +787,7 @@ test_prose_edit_is_not_movement
 test_no_recorded_blocker_keeps_the_timer
 test_unreadable_blocker_is_could_not_observe
 test_absent_reader_is_could_not_observe
+test_unreadable_explicit_home_never_falls_back_to_current_directory
 test_first_observation_is_could_not_observe
 test_blocker_leaving_the_set_is_movement
 test_last_blocker_clearing_is_movement_then_falls_back_to_the_timer
