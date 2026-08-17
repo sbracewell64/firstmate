@@ -373,12 +373,14 @@ fm_outbound_gate_from_prose() {  # <text> -> gate or empty
   local lower
   lower=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
   case $lower in
-    *never\ submitted*|*"no pull request"*|*"released for handoff"*)
-      printf 'CONTRIBUTION_SUBMISSION_REQUIRED\n' ;;
     *exact_head_browser_review_required*|*"exact head browser review"*)
       printf 'EXACT_HEAD_BROWSER_REVIEW_REQUIRED\n' ;;
+    *never\ submitted*|*"no pull request"*)
+      printf 'CONTRIBUTION_SUBMISSION_REQUIRED\n' ;;
     *independent_browser_review_required*|*"independent browser review"*|*"independent review"*|*"independent acceptance"*|*"independently adjudicate"*)
       printf 'INDEPENDENT_BROWSER_REVIEW_REQUIRED\n' ;;
+    *"released for handoff"*)
+      printf 'CONTRIBUTION_SUBMISSION_REQUIRED\n' ;;
     *architecture_ruling_required*|*"architecture ruling"*)
       printf 'ARCHITECTURE_RULING_REQUIRED\n' ;;
     *awaiting_browser_sol*|*"awaiting browser sol"*|*"awaiting a browser sol"*)
