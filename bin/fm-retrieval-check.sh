@@ -88,8 +88,8 @@
 #   fm-retrieval-check.sh -h | --help
 #
 # Exit status: 0 when every scannable enforced site is classified and every
-# tracked file is covered, 1 for an unclassified, unknown, unreasoned, or
-# unchecked file, and 2 for a usage or environment error.
+# tracked file is covered, 1 for an unclassified, unknown, or unreasoned site,
+# and 2 for incomplete file coverage or a usage or environment error.
 set -u
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

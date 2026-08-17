@@ -67,9 +67,9 @@
 #                        precisely the shape that reads as a successful answer.
 #   --records <path>      keep the retrieved record set and its completeness
 #                        proof at <path> and <path>.meta instead of a temporary
-#                        file. The proof is written last and its presence is the
-#                        commit point, so an interrupted read is never adopted as
-#                        a complete one.
+#                        file. The proof is written last and binds the exact
+#                        record bytes by SHA-256, so a missing, mismatched, or
+#                        unverifiable pair is never adopted as complete.
 #   --id-field <name>    immutable remote identity (default: id). Required on
 #                        every record: without it a collection cannot be
 #                        deduplicated across a page window that shifts while
