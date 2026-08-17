@@ -110,14 +110,14 @@ That confirmation matters because a build that fails to parse fails every contro
 
 ### Inventory claim
 
-The suite executes 31 controls, and the current measured-file inventory is:
+The suite executes 32 controls, and the current measured-file inventory is:
 
 ```
-inventory_control_count: 31
-inventory_sha256: bin/fm-review-mutation.sh fcc9998483e554db47311a3b54bbcc4d219f79ffbdc472a1019654e78d0ed36e
+inventory_control_count: 32
+inventory_sha256: bin/fm-review-mutation.sh 8673819cbb853d25a862cfb90bd0ed149587e9e71c8b93c167a043ddeb85db63
 inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
-inventory_sha256: tests/fm-review-mutation.test.sh 8cc6ccbf05b0e2aded4f60801d785e1c333364a2790a6aa58b880cdba354c9b0
-inventory_sha256: tests/review-mutation-red-matrix.py 876a0991d51f556999886482d5abb405488ff9d1d671fdccd947c567dcc08d48
+inventory_sha256: tests/fm-review-mutation.test.sh 87b6b5375af0c2a1e2e5fe7ece0bfdf8bc3a8fd38c9841366503b311fc58be0d
+inventory_sha256: tests/review-mutation-red-matrix.py 4396e4bf5ba5b2927b022c1958f13bcbd3f87b27967a6cd728a2f57e8506477f
 ```
 
 This is an inventory claim only: it says these files and this control count agree with the suite that runs today.
