@@ -26,7 +26,12 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against head `61cdb47b`, the commit whose subject bytes the campaign artifact records, so the table describes one experiment and is current for the code shipped here.
+THE MEASUREMENT CLAIM BELOW IS CURRENTLY UNSOUND, AND THIS IS A HOLD ON LANDING.
+A later commit relabelled the campaign head from `39d4ad4e` to `61cdb47b` and rewrote the recorded subject digests, without re-running the 69 measurements that had been taken at `39d4ad4e`.
+Those 69 therefore describe subject bytes that have since changed, and they are NOT current for the code shipped here.
+Three further entries were added by that same commit for the three controls added alongside it; whether they were genuinely measured is COULD-NOT-OBSERVE, because a campaign leaves no trace outside these two files and nothing distinguishes a real run from a written one.
+That uncertainty is recorded rather than resolved in either direction.
+The pull request is not ready while this stands, and it is discharged only by re-measuring every mutation at the final head.
 
 ## Campaign artifact
 
@@ -59,7 +64,9 @@ Both files are copied because the entrypoint sources its library from its own di
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
-Mutation-measurement claim: 72 mutations were built against the subjects recorded in the campaign artifact, and 71 turned the suite red.
+Mutation-measurement claim: SUSPENDED, see the hold above.
+69 entries were measured at head `39d4ad4e` against subject bytes that have since changed; 3 entries are of could-not-observe provenance.
+No claim is made here that any of them is current for this head.
 Coverage is counted per property rather than per test function, because a named property whose mutation leaves the suite green is uncovered however many controls exist.
 
 One mutation deliberately did not turn the suite red.
