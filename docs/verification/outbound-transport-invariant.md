@@ -169,6 +169,24 @@ The completeness predicate is PROPERTY-SCOPED, not global. The universe for one 
 
 The sweep that found the third instance nearly missed the correct code beside it: filtering for unanchored `grep` on `-qx` skipped the `-Fqx` whole-line matches, which are the opposite of containment and are the validator the fix reuses. A class sweep has to cover flag-order and flag-combination variants rather than the canonical spelling, or it acquires a blind spot of the same kind it is hunting.
 
+## The completeness claim is scoped, and what owns the rest
+
+The dead-predicate control's per-predicate universe check closes the class for its own enumeration path: every read it performs is three-valued, and a failed read yields could-not-observe rather than a negative answer.
+
+It does not close the class for the shared landing library its callers use.
+`fm_landed_candidate_refs` returns success whenever any candidate ref resolved, so a push-target read that fails inside the library leaves that ref absent from a non-empty list, and an incomplete candidate set is indistinguishable from a complete one to any caller.
+That gap is filed as `landed-lib-unreadable-push-target-collapses` and is deliberately out of scope here: the library is shared with the worktree guard, teardown, the decision surface and the task-base library, and changing its landing semantics from a task about outbound transport would be an unreviewed change to the guards that protect unlanded work.
+
+Saying so is the point. A control described as class-level that silently depended on someone else's unfixed read would be exactly the coverage inflation the rest of this record refuses.
+
+## One widening, and the measurement that earned it
+
+After merging repaired main, eight predicates reported could-not-observe because a call written as `|| ! fm_outbound_is_sha ...` - a continuation line opening with `||` and a negation - was not in the accepted call-site syntax, so its whole file was refused and every predicate it consumes lost its caller universe.
+
+Two fixes existed and only one is legitimate. Rewriting the call site would have made the file pass; widening accepted syntax to silence a refusal is shaping a control around its own answer. The choice was therefore decided by measurement: that form occurs 65 times across `bin/` and once in this module, which makes it a normal idiom of the codebase and its absence an under-specification rather than an oddity in the caller.
+
+Verified in both directions, because adding an accepted call form is precisely the change that can re-open a falsification: the eight predicates resolve to alive, and a quoted `|| ! dead_one` is still reported DEAD, so prose still cannot confirm a call through the new rule.
+
 ## Refreshing this record
 
 ```sh
