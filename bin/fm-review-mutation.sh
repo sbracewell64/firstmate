@@ -165,6 +165,10 @@
 # because an assertion spans lines and an argv-passed literal invites a shell to
 # reshape it before this script ever sees it.
 #
+# --out must resolve outside the source checkout and must not contain a `..`
+# component. Both prove and catalogue judge that path from its nearest existing
+# ancestor before creating it, so a refusal leaves no trace in the source.
+#
 # prove writes <dir>/record.json and returns 0 for PASS, 1 for FAIL, and 2 for
 # could-not-observe, matching bin/fm-verify.sh so a caller reading nothing but
 # the status still gets the fail-closed answer.
