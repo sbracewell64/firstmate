@@ -281,13 +281,18 @@ fm_route_policy_digest() {  # [<config-dir>]
 # A misspelling - `verified_agentic` for `verified-agentic` - is the likeliest
 # way a floor ever reaches this code, and an axis that silently enforces nothing
 # for it is a floor an operator believes is armed.
+# The closed floor ordering is owned here and shared by every route comparison.
 # shellcheck disable=SC2016 # jq program, not shell expansion.
-FM_ROUTE_DECISION_JQ="$FM_ROUTE_ENTRIES_JQ"'
+FM_ROUTE_FLOOR_RANK_JQ='
 def bands: ["low","medium","high","xhigh","max","ultra"];
 def rank($b): (if ($b | type) == "string" then (bands | index($b)) else null end);
 def loop_rank($v): (if ($v | type) == "string"
                     then {"not-required":0,"required":1,"verified-agentic":2}[$v]
                     else null end);
+'
+
+# shellcheck disable=SC2016 # jq program, not shell expansion.
+FM_ROUTE_DECISION_JQ="$FM_ROUTE_ENTRIES_JQ$FM_ROUTE_FLOOR_RANK_JQ"'
 def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else null end);
 def luna_max_profile:
   {name:"luna-max", model:"openai-codex/gpt-5.6-luna", effort:"max",
@@ -536,6 +541,22 @@ def effective_route_profile($rule; $path; $model; $harness):
                      eligible:(($v | length) == 0 and $h == null)} ]}
   end
 '
+
+fm_route_floor_meets() {  # <config-file> <candidate-floor> <target-floor>
+  local file=$1 candidate=$2 target=$3
+  jq -e --arg candidate "$candidate" --arg target "$target" "$FM_ROUTE_FLOOR_RANK_JQ"'
+    (._floors[$candidate] // null) as $candidate_floor
+    | (._floors[$target] // null) as $target_floor
+    | select(($candidate_floor | type) == "object" and ($target_floor | type) == "object")
+    | select(rank($candidate_floor.effort_floor) != null and rank($target_floor.effort_floor) != null)
+    | select(loop_rank($candidate_floor.tool_loop) != null and loop_rank($target_floor.tool_loop) != null)
+    | (rank($candidate_floor.effort_floor) >= rank($target_floor.effort_floor))
+      and (($candidate_floor.context_ceiling | type) == "number")
+      and (($target_floor.context_ceiling | type) == "number")
+      and ($candidate_floor.context_ceiling >= $target_floor.context_ceiling)
+      and (loop_rank($candidate_floor.tool_loop) >= loop_rank($target_floor.tool_loop))
+  ' "$file" >/dev/null 2>&1
+}
 
 # fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>] [<harness>]
 # Print the decision record for one route. Return non-zero when the decision

@@ -82,6 +82,8 @@ qual() {
 write_contract() {
   local id=$1 role=$2 risk=$3 axis=$4 adj=$5 adjc=${6:-job-adjudicator}
   local adj_block='{"required": false, "why_not": "the oracle grades the candidate from outside it"}'
+  local required_dependencies='["file_digest", "contract_version"]'
+  [ "$id" != job-adjudicator ] || required_dependencies='["contract_version"]'
   [ "$adj" != yes ] || adj_block=$(printf '{"required": true, "adjudicator_contract": "%s", "independence_dimensions": ["binding"]}' "$adjc")
   cat > "$CDIR/$id.json" <<JSON
 {
@@ -106,7 +108,7 @@ write_contract() {
     "controls": "run-controls.sh"
   },
   "adjudication": $adj_block,
-  "required_freshness_dependencies": ["file_digest", "contract_version"]
+  "required_freshness_dependencies": $required_dependencies
 }
 JSON
 }
@@ -156,6 +158,11 @@ reset_register() {
   rm -f "$RDIR"/*.json "$CDIR"/*.json
   write_contract job-maker JOB_MAKER job-risk-v1 maker_qualification yes
   write_contract job-adjudicator JOB_ADJUDICATOR job-evidence-v1 exact_change_review no
+  write_record job-adjudicator-record \
+    '.contract = "job-adjudicator" | .role = "JOB_ADJUDICATOR" | .risk_class = "job-evidence-v1"
+     | .binding.provider = "beta" | .binding.model = "beta/two"
+     | .adjudication.adjudicator_binding = "zeta/nine"
+     | .freshness_dependencies |= map(select(.kind != "file_digest"))'
   printf '{"package":"job-fixture","version":"1.0.0"}\n' > "$DEP_FILE"
 }
 
@@ -288,6 +295,14 @@ test_a_predicate_pass_without_adjudication_is_qualification_required() {
   pass "a predicate pass without adjudication is QUALIFICATION_REQUIRED"
 }
 
+test_an_unqualified_adjudicator_pass_is_not_consumed() {
+  reset_register
+  write_record alpha-one-job '.adjudication.adjudicator_binding = "fabricated/reviewer"'
+  [ "$(state_of job-maker alpha/one)" = QUALIFICATION_REQUIRED ] \
+    || fail "a fabricated adjudicator identity certified a maker"
+  pass "an adjudicator pass must cross the qualification guard"
+}
+
 # --- the record key ----------------------------------------------------------
 
 test_a_different_harness_or_effort_is_a_near_miss_not_a_match() {
@@ -307,6 +322,17 @@ test_a_different_harness_or_effort_is_a_near_miss_not_a_match() {
   pass "a different harness or effort is a near miss not a match"
 }
 
+test_a_different_harness_version_is_a_distinct_observation() {
+  reset_register
+  write_record alpha-one-job
+  write_record alpha-one-new-version '.binding.harness_version = "10.0.0"'
+  [ "$(qual state --contract job-maker --model alpha/one --harness pi --harness-version 9.9.9 --effort high --json 2>/dev/null | jq -r '.record')" = alpha-one-job ] \
+    || fail "the exact harness-version tuple did not select its own observation"
+  [ "$(qual state --contract job-maker --model alpha/one --harness pi --harness-version 10.0.0 --effort high --json 2>/dev/null | jq -r '.record')" = alpha-one-new-version ] \
+    || fail "records differing only in harness version collapsed into one observation"
+  pass "a different harness version is a distinct observation"
+}
+
 test_two_records_for_one_tuple_are_could_not_observe() {
   reset_register
   write_record alpha-one-job
@@ -316,8 +342,22 @@ test_two_records_for_one_tuple_are_could_not_observe() {
   [ "$st" = COULD_NOT_OBSERVE ] \
     || fail "two records claiming one tuple read $st; which observation applies cannot be settled by filename order"
   assert_contains "$(qual state --contract job-maker --model alpha/one 2>&1)" \
-    "more than one record" "the duplicate was not named"
+    "supersession graph" "the duplicate was not named"
   pass "two records for one tuple are could-not-observe"
+}
+
+test_a_declared_supersession_selects_the_retained_successor() {
+  reset_register
+  write_record alpha-one-old '.result = "FAILED" | .result_evidence = "the earlier observation failed"'
+  write_record alpha-one-new '.supersedes = "alpha-one-old"'
+  local out
+  out=$(qual state --contract job-maker --model alpha/one --harness pi --harness-version 9.9.9 --effort high --json 2>/dev/null)
+  [ "$(printf '%s' "$out" | jq -r '.record')" = alpha-one-new ] \
+    || fail "the declared successor did not supersede the retained earlier evidence"
+  [ "$(printf '%s' "$out" | jq -r '.state')" = QUALIFIED ] \
+    || fail "a valid supersession chain did not expose its current observation"
+  assert_present "$RDIR/alpha-one-old.json" "the superseded adverse evidence was removed"
+  pass "a declared supersession selects the retained successor"
 }
 
 test_an_absent_contract_is_could_not_observe_and_never_a_pass() {
@@ -584,8 +624,11 @@ test_an_unrelated_byte_change_does_not_invalidate_a_record
 test_an_unobservable_dependency_is_could_not_observe_and_not_a_pass
 test_a_failed_record_reopens_only_on_a_material_change
 test_a_predicate_pass_without_adjudication_is_qualification_required
+test_an_unqualified_adjudicator_pass_is_not_consumed
 test_a_different_harness_or_effort_is_a_near_miss_not_a_match
+test_a_different_harness_version_is_a_distinct_observation
 test_two_records_for_one_tuple_are_could_not_observe
+test_a_declared_supersession_selects_the_retained_successor
 test_an_absent_contract_is_could_not_observe_and_never_a_pass
 test_an_inadmissible_record_is_could_not_observe_and_never_used
 test_record_admissibility_refuses_stored_state_synonyms_and_estimates

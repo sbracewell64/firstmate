@@ -47,9 +47,9 @@ command -v jq >/dev/null 2>&1 || fail "fm-route-qualification: jq is required"
 qualification_activation_id() {
   local digest
   if command -v sha256sum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print substr($1,1,40)}')
+    digest=$(printf '%s\0%s\0%s\0%s\0%s' "$1" "$2" "$3" 9.9.9 "$4" | sha256sum | awk '{print substr($1,1,40)}')
   else
-    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
+    digest=$(printf '%s\0%s\0%s\0%s\0%s' "$1" "$2" "$3" 9.9.9 "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
   fi
   printf 'qualify-%s\n' "$digest"
 }
@@ -137,6 +137,8 @@ JSON
 }
 
 write_contract() {  # <id> <role> <axis>
+  local adjudication=true
+  [ "$1" != runtime-job-adjudicator ] || adjudication=false
   cat > "$CDIR/$1.json" <<JSON
 {
   "qualification_schema_version": 1,
@@ -153,7 +155,7 @@ write_contract() {  # <id> <role> <axis>
     "check": "bin/fm-qualification.sh",
     "expect": "QUALIFIED"
   },
-  "adjudication": { "required": true, "adjudicator_contract": "runtime-job-adjudicator",
+  "adjudication": { "required": $adjudication, "adjudicator_contract": "runtime-job-adjudicator",
                     "independence_dimensions": ["binding"] },
   "required_freshness_dependencies": ["contract_version"]
 }
@@ -311,6 +313,7 @@ run_qual() {  # <home> <args...>
     FM_DECISION_SURFACE_SNAPSHOT="${SNAPSHOT:-}" \
     FM_QUALIFICATION_CONTRACT_DIR="$CDIR" FM_QUALIFICATION_RECORD_DIR="$RDIR" \
     FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+    FM_QUALIFICATION_HARNESS_VERSION=9.9.9 \
     FM_BACKEND=tmux HERDR_ENV='' \
     PATH="${FAKEBIN:-}:$PATH" \
     "$QUAL" "$@" 2>&1
@@ -325,6 +328,7 @@ run_spawn() {  # <home> <fakebin> <args...>
     FM_DECISION_SURFACE_SNAPSHOT="${SNAPSHOT:-}" \
     FM_QUALIFICATION_CONTRACT_DIR="$CDIR" FM_QUALIFICATION_RECORD_DIR="$RDIR" \
     FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+    FM_QUALIFICATION_HARNESS_VERSION=9.9.9 \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }
@@ -335,7 +339,8 @@ reset_register() {
   write_contract runtime-job-design RUNTIME_JOB_DESIGNER design_challenge
   write_contract runtime-job-change RUNTIME_JOB_CHANGE_REVIEWER exact_change_review
   write_contract runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR exact_change_review
-  write_record beta-two-adjudicator runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR beta/two beta QUALIFIED
+  write_record zeta-nine-adjudicator runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR zeta/nine zeta QUALIFIED \
+    '.adjudication.adjudicator_binding = "beta/two"'
 }
 
 zero() {  # <home> <route>
@@ -716,8 +721,8 @@ test_duplicate_qualification_workflows_are_suppressed() {
   assert_contains "$out" "FM_QUALIFICATION_ALREADY_ACTIVE" "a second workflow was created for the same pair"
   [ "$first" = "$(cat "$HOME_DIR/state/qualification/$AID_ALPHA.activation")" ] \
     || fail "the existing activation record was rewritten by the duplicate request"
-  [ "$(grep -c "^block some-work" "$TASKS_LOG")" = 1 ] \
-    || fail "the duplicate request blocked the work a second time"
+  [ "$(grep -c "^block some-work" "$TASKS_LOG")" = 2 ] \
+    || fail "the duplicate request did not idempotently reconfirm the blocker edge"
   pass "duplicate qualification workflows are suppressed"
 }
 

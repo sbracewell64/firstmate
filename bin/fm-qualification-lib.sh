@@ -610,12 +610,12 @@ fm_qualification_freshness_verdict() {  # <observations-json>
 # The state decision
 # ---------------------------------------------------------------------------
 
-# fm_qualification_state <contract-id> <model> [<harness>] [<native-effort>]
+# fm_qualification_state <contract-id> <model> [<harness>] [<harness-version>] [<native-effort>]
 # Print one fm-qualification-state.v1 record. Always exits 0 with a record: the
 # ANSWER is the state field, and there is no failure mode that prints nothing,
 # because a caller reading an empty result would have to invent a value.
 fm_qualification_state() {
-  local contract_id=$1 model=$2 harness=${3:-} effort=${4:-}
+  local contract_id=$1 model=$2 harness=${3:-} harness_version=${4:-} effort=${5:-}
   local contract rc=0 files record='' record_id='' near='[]' problems
   local state reason obs='[]' verdict recorded='' excluded=null
 
@@ -648,29 +648,61 @@ fm_qualification_state() {
     return 0
   fi
 
+  local chain chain_status chain_tip
+  chain=$(printf '%s\n' "$files" | xargs -r jq -s -r \
+    --arg contract "$contract_id" --arg model "$model" --arg harness "$harness" \
+    --arg harness_version "$harness_version" --arg effort "$effort" '
+      [ .[] | select(.contract == $contract and .binding.model == $model)
+        | select(($harness == "") or (.binding.harness == $harness))
+        | select(($harness_version == "") or (.binding.harness_version == $harness_version))
+        | select(($effort == "") or (.binding.native_effort == $effort)) ] as $records
+      | ($records | map(.id)) as $ids
+      | ($records | map(select((.supersedes? // "") != ""))) as $edges
+      | ($ids - ($edges | map(.supersedes))) as $tips
+      | if ($records | length) <= 1 then "ok\u001f" + ($records[0].id // "")
+        elif (all($edges[]; .supersedes as $superseded | ($ids | index($superseded)) != null) | not) then "invalid\u001fsupersedes names a record outside the same tuple"
+        elif (($edges | map(.supersedes) | unique | length) != ($edges | length)) then "invalid\u001fmore than one record supersedes the same predecessor"
+        elif ($edges | length) != (($records | length) - 1) or ($tips | length) != 1 then "invalid\u001fthe supersession graph is not one complete acyclic chain"
+        else "ok\u001f" + $tips[0] end' 2>/dev/null) || chain='invalidthe supersession chain could not be read'
+  IFS=$'\x1f' read -r chain_status chain_tip <<EOF
+$chain
+EOF
+  if [ "$chain_status" = invalid ]; then
+    fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
+      COULD_NOT_OBSERVE "$FM_QUAL_TOKEN_INADMISSIBLE: $chain_status: $chain_tip" '' '' '[]' '[]'
+    return 0
+  fi
+
   # The applicable record and the near misses, in one pass. A record for the same
   # contract and model under a DIFFERENT harness or native effort is a near miss
   # and never a match: it observed a different thing. Reporting it is what stops
   # "there is no record" from being indistinguishable from "there is a record for
   # a tuple you did not ask about".
-  local f rid rmodel rharness reffort rcontract rresult
+  local f rid rmodel rharness rharness_version reffort rcontract rresult rsupersedes
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     # U+001F for the same reason the dependency reader uses it: an empty middle
     # field under a tab IFS shifts every later field left, and here that would
     # silently compare a record's result against its native effort.
-    IFS=$'\x1f' read -r rid rcontract rmodel rharness reffort rresult <<EOF2
+    IFS=$'\x1f' read -r rid rcontract rmodel rharness rharness_version reffort rresult rsupersedes <<EOF2
 $(jq -r '[ (.id // ""), (.contract // ""), (.binding.model // ""), (.binding.harness // ""),
-           (.binding.native_effort // ""), (.result // "") ] | join("\u001f")' "$f" 2>/dev/null)
+           (.binding.harness_version // ""), (.binding.native_effort // ""), (.result // ""),
+           (.supersedes // "") ] | join("\u001f")' "$f" 2>/dev/null)
 EOF2
     [ "$rcontract" = "$contract_id" ] || continue
     [ "$rmodel" = "$model" ] || continue
     if { [ -z "$harness" ] || [ "$rharness" = "$harness" ]; } &&
+       { [ -z "$harness_version" ] || [ "$rharness_version" = "$harness_version" ]; } &&
        { [ -z "$effort" ] || [ "$reffort" = "$effort" ]; }; then
+      [ "$rid" = "$chain_tip" ] || continue
       # A later record for the same tuple wins only when it declares that it
       # supersedes the earlier one; otherwise two records for one tuple is a
       # register defect, reported rather than resolved by filename order.
-      if [ -n "$record" ]; then
+      if [ -n "$record" ] && [ "$rsupersedes" = "$record_id" ]; then
+        :
+      elif [ -n "$record" ] && [ "$(printf '%s' "$record" | jq -r '.supersedes // ""')" = "$rid" ]; then
+        continue
+      elif [ -n "$record" ]; then
         fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
           COULD_NOT_OBSERVE "$FM_QUAL_TOKEN_INADMISSIBLE: more than one record claims contract $contract_id on $model for this tuple ($record_id and $rid); which observation applies could not be determined" \
           '' '' '[]' '[]'
@@ -680,8 +712,8 @@ EOF2
       record_id=$rid
       recorded=$rresult
     else
-      near=$(printf '%s' "$near" | jq -c --arg id "$rid" --arg h "$rharness" --arg e "$reffort" --arg r "$rresult" \
-        '. + [{record:$id, harness:$h, native_effort:$e, result:$r}]' 2>/dev/null)
+      near=$(printf '%s' "$near" | jq -c --arg id "$rid" --arg h "$rharness" --arg hv "$rharness_version" --arg e "$reffort" --arg r "$rresult" \
+        '. + [{record:$id, harness:$h, harness_version:$hv, native_effort:$e, result:$r}]' 2>/dev/null)
     fi
   done <<EOF
 $files
@@ -715,9 +747,12 @@ EOF
   # alone, however good it was. This is the one place where a self-declared pass
   # is turned back into missing evidence, and it is deliberately not a failure:
   # nothing adverse was observed about the binding.
-  local adj_required adj_result
+  local adj_required adj_result adj_binding adj_contract adj_dimensions adj_refusal
   adj_required=$(printf '%s' "$contract" | jq -r '.adjudication.required // false' 2>/dev/null)
   adj_result=$(printf '%s' "$record" | jq -r '.adjudication.adjudicator_result // ""' 2>/dev/null)
+  adj_binding=$(printf '%s' "$record" | jq -r '.adjudication.adjudicator_binding // ""' 2>/dev/null)
+  adj_contract=$(printf '%s' "$contract" | jq -r '.adjudication.adjudicator_contract // ""' 2>/dev/null)
+  adj_dimensions=$(printf '%s' "$contract" | jq -r '(.adjudication.independence_dimensions // []) | join(",")' 2>/dev/null)
 
   case "$recorded" in
     COULD_NOT_OBSERVE)
@@ -740,6 +775,10 @@ EOF
       if [ "$adj_required" = true ] && [ "$adj_result" != QUALIFIED ]; then
         state=QUALIFICATION_REQUIRED
         reason="record $record_id records a predicate pass, and contract $contract_id requires assignment-distinct adjudication which returned ${adj_result:-nothing}; a maker run never certifies itself"
+      elif [ "$adj_required" = true ] &&
+           ! adj_refusal=$(fm_qualification_adjudicator_refusal "$model" "$adj_binding" "$adj_contract" "$adj_dimensions"); then
+        state=QUALIFICATION_REQUIRED
+        reason="record $record_id carries an adjudicator pass that did not pass the reviewer qualification and independence guard: $adj_refusal"
       elif [ "$verdict" = changed ]; then
         state=QUALIFICATION_STALE
         reason="record $record_id qualified this binding, and a declared material dependency has since changed: $(printf '%s' "$obs" | jq -r '[.[] | select(.observation == "changed") | .detail] | join("; ")')"
@@ -756,7 +795,7 @@ EOF
   esac
 
   fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
-    "$state" "$reason" "$record_id" "$recorded" "$obs" "$near" "$excluded"
+    "$state" "$reason" "$record_id" "$recorded" "$obs" "$near" "$excluded" "$harness_version"
 }
 
 # The one renderer, so every caller reads the same shape.
@@ -764,7 +803,7 @@ fm_qualification_state_record() {
   # <contract> <model> <harness> <effort> <state> <reason> <record-id>
   # <recorded-result> <observations-json> <near-json> [<excluded-json>]
   local contract=$1 model=$2 harness=$3 effort=$4 state=$5 reason=$6
-  local record=$7 recorded=$8 obs=${9:-'[]'} near=${10:-'[]'} excluded=${11:-null}
+  local record=$7 recorded=$8 obs=${9:-'[]'} near=${10:-'[]'} excluded=${11:-null} harness_version=${12:-}
   if ! command -v jq >/dev/null 2>&1; then
     printf '{"schema":"%s","state":"COULD_NOT_OBSERVE"}\n' "$FM_QUALIFICATION_STATE_SCHEMA"
     return 0
@@ -772,13 +811,14 @@ fm_qualification_state_record() {
   jq -n -c \
     --arg schema "$FM_QUALIFICATION_STATE_SCHEMA" \
     --arg contract "$contract" --arg model "$model" \
-    --arg harness "$harness" --arg effort "$effort" \
+    --arg harness "$harness" --arg harness_version "$harness_version" --arg effort "$effort" \
     --arg state "$state" --arg reason "$reason" \
     --arg record "$record" --arg recorded "$recorded" \
     --argjson obs "${obs:-[]}" --argjson near "${near:-[]}" \
     --argjson excluded "${excluded:-null}" \
     '{schema:$schema, contract:$contract, model:$model,
       harness:(if $harness == "" then null else $harness end),
+      harness_version:(if $harness_version == "" then null else $harness_version end),
       native_effort:(if $effort == "" then null else $effort end),
       state:$state, reason:$reason,
       record:(if $record == "" then null else $record end),
@@ -880,6 +920,23 @@ fm_qualification_reviewer_refusal() {
   return 0
 }
 
+fm_qualification_adjudicator_refusal() {  # <maker> <adjudicator> <contract> <comma-dimensions>
+  local maker=$1 adjudicator=$2 contract=$3 dimensions=$4 verdict dimension value
+  fm_qualification_reviewer_refusal "$maker" "$adjudicator" "$contract" || return 1
+  verdict=$(fm_qualification_independence "$maker" "$adjudicator")
+  while IFS= read -r dimension; do
+    [ -n "$dimension" ] || continue
+    value=$(printf '%s\n' "$verdict" | tr ' ' '\n' | awk -F= -v key="$dimension" '$1 == key { print $2; exit }')
+    if [ "$value" != PASS ]; then
+      printf 'assignment independence dimension %s is %s (%s)\n' "$dimension" "${value:-COULD_NOT_OBSERVE}" "$verdict"
+      return 1
+    fi
+  done <<EOF
+$(printf '%s' "$dimensions" | tr ',' '\n')
+EOF
+  return 0
+}
+
 # ---------------------------------------------------------------------------
 # Route integration
 # ---------------------------------------------------------------------------
@@ -978,7 +1035,7 @@ EOF2
     evidence=
     while IFS= read -r contract; do
       [ -n "$contract" ] || continue
-      state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
+      state=$(fm_qualification_state "$contract" "$model" "$harness" "" "$effort")
       st=$(printf '%s' "$state" | jq -r '.state' 2>/dev/null)
       case "$st" in
         QUALIFIED) rank=0 ;;
