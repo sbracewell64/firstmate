@@ -91,6 +91,64 @@ install_hanging_pipeline_stub() {
   chmod +x "$dir/bin/no-mistakes"
 }
 
+# A pull request as this check sees it, in three repositories rather than one,
+# because the check reads two of them and they are not always the same: the
+# repository the branch was pushed to, which serves the attestation ref; the base
+# repository, which serves refs/pull/<n>/head; and the workspace the job checks
+# out, which addresses both by the remote names the workflow configures.
+#
+# Every path is derived after `local` has assigned, never in the same statement
+# as the directory it is built from, because bash expands every right-hand side
+# on that line before assigning any of them and a fixture that hands `git -C` an
+# empty path runs against the checkout these tests live in.
+new_reconcile_fixture() {
+  local dir=$1
+  local source_repo base_repo work
+  source_repo="$dir/source.git"
+  base_repo="$dir/base.git"
+  work="$dir/work"
+  mkdir -p "$dir"
+  git init -q --bare "$source_repo"
+  git init -q --bare "$base_repo"
+  new_repo "$work"
+  git -C "$work" remote add attestation-source "$source_repo"
+  git -C "$work" remote add pullrequest-source "$base_repo"
+  git -C "$work" push -q attestation-source HEAD:refs/heads/topic
+  git -C "$work" push -q pullrequest-source HEAD:refs/pull/1/head
+  git -C "$work" rev-parse HEAD
+}
+
+# Publishes a note to the repository the check reads and leaves the workspace
+# without it, which is the state a job is in whenever an attestation lands after
+# its checkout: the evidence exists where the check looks, and only a re-read
+# finds it.
+publish_to_source() {
+  local dir=$1 head=$2 body=$3
+  local work
+  work="$dir/work"
+  git -C "$work" notes --ref="$NOTES_REF" add -f -m "$body" "$head" >/dev/null 2>&1
+  git -C "$work" push -q -f attestation-source "$NOTES_REF:$NOTES_REF"
+  git -C "$work" update-ref -d "$NOTES_REF" 2>/dev/null || :
+}
+
+run_reconcile() {
+  local dir=$1
+  shift
+  (
+    cd "$dir/work" || exit 2
+    "$ATTEST" reconcile --remote attestation-source \
+      --pr 1 --pr-remote pullrequest-source "$@" 2>&1
+  )
+}
+
+# Wall-clock seconds around one call, so a window that was honoured and a window
+# that was skipped can be told apart by the only thing that distinguishes them.
+elapsed_seconds() {
+  local started
+  started=$1
+  echo $(($(date +%s) - started))
+}
+
 # One step's own script, lifted out of the workflow and run as the workflow runs
 # it, so what the check tells a contributor is exercised rather than asserted
 # against YAML text. The step is found by name, and an extraction that yields
@@ -1076,6 +1134,290 @@ test_write_rejects_a_zero_bound_rather_than_running_the_read_unbounded() {
 }
 
 # ---------------------------------------------------------------------------
+# reconcile - the bounded window before a terminal verdict. Every case here is
+# about WHEN the verdict is reached, because what the verdict is remains
+# verify's and is pinned above. Two properties carry the rest: the window is
+# entered only for absence, and it always ends.
+# ---------------------------------------------------------------------------
+
+test_reconcile_converges_on_an_attestation_published_during_the_window() {
+  local dir head out rc started waited publisher
+  dir="$TMP_ROOT/reconcile-converges"
+  head=$(new_reconcile_fixture "$dir")
+
+  # The negative control first, and on this fixture rather than a described one:
+  # with nothing publishing, the same call must refuse. A convergence assertion
+  # on a fixture that was already green would prove nothing at all.
+  out=$(run_reconcile "$dir" --head "$head" --window 2 --poll 1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "an unattested head was not refused before the publisher ran (exit $rc): $out"
+
+  # The race this whole window exists for: the note lands after the check has
+  # looked once and found nothing.
+  (
+    sleep 2
+    publish_to_source "$dir" "$head" "$(good_note "$head")"
+  ) &
+  publisher=$!
+  fm_test_reap "$publisher"
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 30 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  wait "$publisher" 2>/dev/null || :
+  [ "$rc" -eq 0 ] || fail "an attestation published during the window did not converge (exit $rc): $out"
+  assert_contains "$out" "attested $head" "the converging call did not report the head it attested"
+  [ "$waited" -ge 2 ] \
+    || fail "the window returned in ${waited}s, before the note existed, so it cannot have re-read anything"
+  [ "$waited" -lt 30 ] || fail "the window ran to its bound instead of converging on the published note"
+  pass "fm-attest.sh: reconcile converges on an attestation published during its window"
+}
+
+test_reconcile_refuses_a_head_no_attestation_arrives_for() {
+  local dir head out rc started waited
+  dir="$TMP_ROOT/reconcile-exhausts"
+  head=$(new_reconcile_fixture "$dir")
+
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 4 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  # The acceptance criterion the window is not allowed to cost: a head nobody
+  # has attested is still refused, and refused within the bound rather than
+  # whenever evidence might turn up.
+  [ "$rc" -eq 1 ] || fail "a head with no attestation was not refused as a verdict (exit $rc): $out"
+  assert_contains "$out" "no-attestation-ref" "the exhausted window did not report the evidence's own state"
+  [ "$waited" -ge 4 ] || fail "the window ended after ${waited}s, short of the 4s it was given"
+  [ "$waited" -lt 20 ] || fail "the window did not end at its bound: it took ${waited}s"
+  # The bound is the one number that shaped this verdict, so it is in it.
+  assert_contains "$out" "4s window" "the refusal did not say how long it waited"
+
+  # The matched control, differing by one property: the same fixture with the
+  # attestation already published passes without waiting at all.
+  publish_to_source "$dir" "$head" "$(good_note "$head")"
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 4 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$rc" -eq 0 ] || fail "an attested head was refused by the same call (exit $rc): $out"
+  [ "$waited" -lt 4 ] || fail "an attested head was made to wait out the window"
+  pass "fm-attest.sh: reconcile refuses an unattested head within its documented bound"
+}
+
+test_reconcile_does_not_grace_evidence_already_seen_to_be_invalid() {
+  local dir head out rc started waited other body
+  dir="$TMP_ROOT/reconcile-no-grace"
+  head=$(new_reconcile_fixture "$dir")
+  other=0123456789012345678901234567890123456789
+
+  # The window is for absence. Evidence that has already been looked at and
+  # found bad is a verdict, and a window that delayed it would be buying time
+  # for exactly what this check exists to refuse.
+  for body in \
+    "$(printf 'no-mistakes-attestation: v1\nhead: %s\nrun: R1\ngates: review,test,lint,push\ntool: nm/v1\n' "$other")" \
+    "$(printf 'no-mistakes-attestation: v1\nhead: %s\nrun: R1\ngates: review,test,lint,push\ntool: nm/v1\nunknown: field\n' "$head")" \
+    "$(printf 'no-mistakes-attestation: v1\nhead: %s\nrun: R1\ngates: test,lint,push\ntool: nm/v1\n' "$head")"; do
+    publish_to_source "$dir" "$head" "$body"
+    started=$(date +%s)
+    out=$(run_reconcile "$dir" --head "$head" --window 20 --poll 1)
+    rc=$?
+    waited=$(elapsed_seconds "$started")
+    [ "$rc" -eq 1 ] || fail "invalid evidence was not refused as a verdict (exit $rc): $out"
+    [ "$waited" -lt 20 ] \
+      || fail "invalid evidence was given the whole ${waited}s window instead of being refused on sight"
+    assert_not_contains "$out" "window this check allows" \
+      "invalid evidence was reported as an attestation that never arrived"
+  done
+
+  # The matched control on the same fixture: change only the payload's validity
+  # and the identical call passes.
+  publish_to_source "$dir" "$head" "$(good_note "$head")"
+  out=$(run_reconcile "$dir" --head "$head" --window 20 --poll 1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a valid attestation was refused by the same call (exit $rc): $out"
+  pass "fm-attest.sh: reconcile refuses invalid evidence on sight rather than waiting it out"
+}
+
+test_reconcile_waits_only_for_absence() {
+  local dir head out rc started waited blob neighbour
+  # The correspondence this window rests on, asserted rather than assumed: the
+  # states verify names as an absent attestation are exactly the states worth
+  # waiting through, and every other refusal is reached at once. A later reason
+  # added on one side and not the other shows up here.
+  dir="$TMP_ROOT/reconcile-absence-only"
+  head=$(new_reconcile_fixture "$dir")
+
+  # Absent ref: waits.
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 3 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  assert_contains "$out" "no-attestation-ref" "an absent ref was not reported as such"
+  [ "$waited" -ge 3 ] || fail "an absent attestation ref did not wait out the window"
+
+  # Ref present, nothing for THIS head: waits, because publication changes it.
+  # The ref is made to exist by attesting a different commit, which is the shape
+  # every repository that has ever shipped an attestation is already in.
+  printf 'other\n' > "$dir/work/other.txt"
+  git -C "$dir/work" add other.txt
+  git -C "$dir/work" commit -qm other
+  neighbour=$(git -C "$dir/work" rev-parse HEAD)
+  git -C "$dir/work" checkout -q "$head"
+  publish_to_source "$dir" "$neighbour" "$(good_note "$neighbour")"
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 3 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  assert_contains "$out" "no-attestation-for-head" "a ref carrying no note for this head was not reported as such"
+  [ "$waited" -ge 3 ] || fail "a ref carrying no note for this head did not wait out the window"
+
+  # A head this checkout does not carry: does not wait. No publication puts a
+  # commit in a checkout, so the wait could only ever expire.
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head 0123456789012345678901234567890123456789 --window 20 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$rc" -eq 1 ] || fail "an absent head commit was not refused as a verdict (exit $rc): $out"
+  assert_contains "$out" "head-commit-unavailable" "an absent head commit was not reported as its own state"
+  [ "$waited" -lt 20 ] || fail "an absent head commit was waited out for ${waited}s"
+
+  # A ref that resolves but is not notes: does not wait. Publishing into a
+  # damaged ref repairs nothing, so waiting for a publication is waiting for
+  # something that would not help.
+  blob=$(printf 'not a notes tree\n' | git -C "$dir/work" hash-object -w --stdin)
+  git -C "$dir/work" update-ref "$NOTES_REF" "$blob"
+  git -C "$dir/work" remote set-url attestation-source "$dir/empty.git"
+  git init -q --bare "$dir/empty.git"
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 20 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$rc" -eq 1 ] || fail "an unreadable attestation ref was not refused as a verdict (exit $rc): $out"
+  assert_contains "$out" "attestation-ref-unreadable" "an unreadable ref did not report its own reason"
+  [ "$waited" -lt 20 ] || fail "an unreadable ref was waited out for ${waited}s as if it were absence"
+  pass "fm-attest.sh: reconcile waits for an absent attestation and for nothing else"
+}
+
+test_reconcile_stops_when_the_pull_request_head_moves() {
+  local dir head moved out rc started waited
+  dir="$TMP_ROOT/reconcile-head-moves"
+  head=$(new_reconcile_fixture "$dir")
+  printf 'two\n' > "$dir/work/b.txt"
+  git -C "$dir/work" add b.txt
+  git -C "$dir/work" commit -qm two
+  moved=$(git -C "$dir/work" rev-parse HEAD)
+  # The pipeline attests the commit it actually validated, which is the new one.
+  # An attestation for it says nothing about the head this run was raised for,
+  # and the verdict below has to keep saying so.
+  publish_to_source "$dir" "$moved" "$(good_note "$moved")"
+  git -C "$dir/work" checkout -q "$head"
+
+  # The request now proposes another commit, so no attestation for this one is
+  # coming and the remaining bound would buy nothing. The verdict is still this
+  # head's, reached early rather than differently.
+  git -C "$dir/work" push -q -f pullrequest-source "$moved:refs/pull/1/head"
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 30 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$rc" -eq 1 ] || fail "a head the request moved off was not refused as a verdict (exit $rc): $out"
+  assert_contains "$out" "now proposes $moved" "the early stop did not say which commit the request now proposes"
+  assert_contains "$out" "no-attestation-for-head" "the verdict was not about the head this run was raised for"
+  [ "$waited" -lt 30 ] || fail "a moved head was waited out for the whole ${waited}s window"
+
+  # The matched control, differing by one property: with the request still on
+  # this head, the same call spends the window it was given.
+  git -C "$dir/work" push -q -f pullrequest-source "$head:refs/pull/1/head"
+  started=$(date +%s)
+  out=$(run_reconcile "$dir" --head "$head" --window 3 --poll 1)
+  rc=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$rc" -eq 1 ] || fail "an unmoved head was not refused (exit $rc): $out"
+  assert_not_contains "$out" "now proposes" "an unmoved head was reported as one the request moved off"
+  [ "$waited" -ge 3 ] || fail "an unmoved head did not wait out its window"
+  pass "fm-attest.sh: reconcile stops waiting once the pull request proposes another commit"
+}
+
+test_reconcile_reports_an_unreadable_repository_as_no_verdict() {
+  local dir head out rc
+  dir="$TMP_ROOT/reconcile-unreadable"
+  head=$(new_reconcile_fixture "$dir")
+
+  # Not reading a repository is not reading an absence. Both are red, and that
+  # is not the point: one sends a contributor to publish an attestation and the
+  # other sends them to re-run a job, and a check that confused them would be
+  # committing the defect it exists to remove.
+  git -C "$dir/work" remote set-url attestation-source "$dir/not-a-repository.git"
+  out=$(run_reconcile "$dir" --head "$head" --window 3 --poll 1)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unreadable attestation repository reached a verdict (exit $rc): $out"
+  assert_contains "$out" "attestation-source-unreadable" "an unreadable source did not report its own reason"
+  assert_not_contains "$out" "no-attestation-ref" "a repository that was never read was reported as carrying no attestation"
+
+  git -C "$dir/work" remote set-url attestation-source "$dir/source.git"
+  git -C "$dir/work" push -q pullrequest-source --delete refs/pull/1/head
+  out=$(run_reconcile "$dir" --head "$head" --window 3 --poll 1)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unconfirmable pull request head reached a verdict (exit $rc): $out"
+  assert_contains "$out" "pull-request-head-absent" "an absent pull request head did not report its own reason"
+  assert_not_contains "$out" "no-attestation-ref" "a head that could not be confirmed was reported as carrying no attestation"
+
+  # The matched control: with both repositories readable again, the same call
+  # reaches an ordinary verdict rather than a failure.
+  git -C "$dir/work" push -q pullrequest-source "$head:refs/pull/1/head"
+  out=$(run_reconcile "$dir" --head "$head" --window 1 --poll 1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "two readable repositories did not reach a verdict (exit $rc): $out"
+  pass "fm-attest.sh: reconcile keeps a repository it could not read apart from an attestation that is not there"
+}
+
+test_reconcile_repeats_without_compounding() {
+  local dir head first second rc_first rc_second started waited
+  dir="$TMP_ROOT/reconcile-replay"
+  head=$(new_reconcile_fixture "$dir")
+
+  # A pull_request workflow run can be replayed, and this window keeps nothing
+  # between runs: each is bounded on its own and each reaches the same verdict.
+  # A window that accumulated would either stop waiting for a head that never
+  # got its bound, or wait longer every time a run was re-run.
+  started=$(date +%s)
+  first=$(run_reconcile "$dir" --head "$head" --window 2 --poll 1)
+  rc_first=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$waited" -lt 10 ] || fail "the first evaluation took ${waited}s for a 2s window"
+
+  started=$(date +%s)
+  second=$(run_reconcile "$dir" --head "$head" --window 2 --poll 1)
+  rc_second=$?
+  waited=$(elapsed_seconds "$started")
+  [ "$rc_first" -eq "$rc_second" ] \
+    || fail "a replayed evaluation reached a different verdict ($rc_first then $rc_second)"
+  assert_contains "$second" "no-attestation-ref" "the replayed evaluation did not reach the same state"
+  [ "$waited" -ge 2 ] || fail "the replayed evaluation skipped the window the first one was given"
+  [ "$waited" -lt 10 ] || fail "the replayed evaluation waited ${waited}s, longer than its own bound"
+  assert_contains "$first" "no-attestation-ref" "the first evaluation did not reach the state being replayed"
+  pass "fm-attest.sh: a replayed evaluation is bounded on its own and reaches the same verdict"
+}
+
+test_supports_answers_for_capabilities_this_program_has() {
+  local rc
+  # The workflow asks this before choosing what to run, because a head raised
+  # before a subcommand existed does not carry it and must not be failed for the
+  # age of its checkout. The answer is an exit status, so a caller never has to
+  # tell "does not do that" from "that failed" by reading a message.
+  "$ATTEST" --supports reconcile >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "--supports denied a capability this program has (exit $rc)"
+  "$ATTEST" --supports verify >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "--supports denied verify (exit $rc)"
+  "$ATTEST" --supports something-else >/dev/null 2>&1
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "--supports claimed a capability this program does not have"
+  pass "fm-attest.sh: --supports answers for what this program can be asked to do"
+}
+
+# ---------------------------------------------------------------------------
 # The workflow's own step scripts. The check fails closed on every path below;
 # what these pin is what it tells the contributor, because a gate that reports
 # evidence it never examined as absent evidence is committing the defect the
@@ -1092,7 +1434,7 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   [ -s "$script" ] || fail "the verify step's own script could not be read out of the workflow"
 
   run_verify_step() {
-    ( cd "$dir" && HEAD_SHA="$head" PR_AUTHOR=someone bash "$script" 2>&1 )
+    ( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
   }
 
   # Exit 1 is a refusal: the evidence was examined and found absent. That is a
@@ -1143,76 +1485,75 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   pass "no-mistakes-required.yml: a verifier that could not run is not reported as an absent attestation"
 }
 
-test_check_step_reads_the_head_repository_without_logging_its_token() {
-  local dir script log out rc
-  dir="$TMP_ROOT/workflow-fetch"
+test_check_step_addresses_both_repositories_without_logging_its_token() {
+  local dir script log out rc repo fork
+  dir="$TMP_ROOT/workflow-address"
   mkdir -p "$dir/bin"
-  script="$dir/fetch-step.sh"
+  script="$dir/address-step.sh"
   log="$dir/git-said.log"
-  workflow_step_script 'Fetch the attestation ref from the head repository' > "$script"
-  [ -s "$script" ] || fail "the fetch step's own script could not be read out of the workflow"
-  # git quotes the whole remote URL back in its own http errors, and when the
-  # head repository is the base repository that URL carries the job token. This
-  # stand-in does exactly that, and also records what it said, so the assertion
-  # below cannot pass merely because the fixture stayed quiet.
+  workflow_step_script 'Address the repositories the attestation is read from' > "$script"
+  [ -s "$script" ] || fail "the addressing step's own script could not be read out of the workflow"
+
+  # First, against real git in a real repository, because what this step is for
+  # is the two remotes the verifier then reads, and only real git can be asked
+  # whether they are there. The attestation is published to the head repository
+  # and refs/pull/* lives in the base repository, so a step that addressed one
+  # of them twice would leave the verifier reading the wrong place.
+  repo="$dir/same-repo"
+  new_repo "$repo"
+  out=$(cd "$repo" && HEAD_REPO=owner/repo BASE_REPO=owner/repo \
+    GH_TOKEN=ghs_fixturetokenvalue bash "$script" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "addressing two readable repositories failed the step: $out"
+  assert_contains "$(git -C "$repo" remote get-url attestation-source)" \
+    "https://x-access-token:ghs_fixturetokenvalue@github.com/owner/repo.git" \
+    "the attestation is not read from the head repository through the job's token"
+  assert_contains "$(git -C "$repo" remote get-url pullrequest-source)" \
+    "https://x-access-token:ghs_fixturetokenvalue@github.com/owner/repo.git" \
+    "the pull request head is not read from the base repository through the job's token"
+  assert_not_contains "$out" "ghs_fixturetokenvalue" "the job token reached the step's output"
+
+  # A fork's attestation is read through its plain https URL, which carries the
+  # token from the workspace's git configuration rather than from the URL; the
+  # base repository it is compared against is still read through the token URL.
+  fork="$dir/fork"
+  new_repo "$fork"
+  out=$(cd "$fork" && HEAD_REPO=someone/fork BASE_REPO=owner/repo \
+    GH_TOKEN=ghs_fixturetokenvalue bash "$script" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "addressing a fork failed the step: $out"
+  assert_contains "$(git -C "$fork" remote get-url attestation-source)" \
+    "https://github.com/someone/fork.git" "a fork's attestation is not read from the fork"
+  assert_not_contains "$(git -C "$fork" remote get-url attestation-source)" \
+    "ghs_fixturetokenvalue" "a fork's URL was given the job token it does not take"
+
+  # Then against a git that quotes the whole tokenized URL back the way real git
+  # does in its own errors, and records what it said, so the assertion that none
+  # of it reached the log cannot pass merely because the fixture stayed quiet.
   # shellcheck disable=SC2016  # Expansion is deliberately deferred to the stub.
   {
     printf '#!/usr/bin/env bash\n'
-    printf 'case "${1:-}" in\n'
-    printf '  ls-remote) exit "${FM_FAKE_GIT_LS_RC:-0}" ;;\n'
-    printf '  fetch)\n'
-    printf '    printf "fatal: unable to access %%s: the server said no\\n" "$5" | tee -a %s >&2\n' "$log"
-    printf '    exit "${FM_FAKE_GIT_FETCH_RC:-0}"\n'
-    printf '  ;;\n'
-    printf 'esac\n'
+    printf 'printf "fatal: unable to access %%s: the server said no\\n" "$*" | tee -a %s >&2\n' "$log"
+    printf 'exit "${FM_FAKE_GIT_RC:-0}"\n'
   } > "$dir/bin/git"
   chmod +x "$dir/bin/git"
-
-  run_fetch_step() {
-    (
-      cd "$dir" || exit 1
-      PATH="$dir/bin:$PATH" HEAD_REPO=owner/repo BASE_REPO=owner/repo \
-        GH_TOKEN=ghs_fixturetokenvalue bash "$script" 2>&1
-    )
-  }
-
-  FM_FAKE_GIT_FETCH_RC=128
-  export FM_FAKE_GIT_FETCH_RC
-  out=$(run_fetch_step)
+  out=$(cd "$dir" && PATH="$dir/bin:$PATH" HEAD_REPO=owner/repo BASE_REPO=owner/repo \
+    GH_TOKEN=ghs_fixturetokenvalue bash "$script" 2>&1)
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a fetch that failed was reported as a successful read"
+  [ "$rc" -eq 0 ] || fail "the addressing step failed on git output it should have suppressed: $out"
   assert_contains "$(cat "$log")" "ghs_fixturetokenvalue" \
     "the fixture never quoted the tokenized URL back, so this assertion proves nothing"
   assert_not_contains "$out" "ghs_fixturetokenvalue" "the job token reached the step's output"
-  assert_contains "$out" "owner/repo" "the failure did not name the head repository it could not read"
-  assert_contains "$out" "would not serve it" \
-    "a target that advertised the ref but would not serve it was not reported as such"
+  assert_contains "$out" "owner/repo" "the step did not name the repositories it addressed"
 
-  # The matched positive control: the same call, differing only in that this
-  # fetch succeeds, must say nothing about a failure and must not fail the job.
-  FM_FAKE_GIT_FETCH_RC=0
-  : > "$log"
-  out=$(run_fetch_step)
+  # And the head repository that cannot be addressed at all: a name that is not
+  # a repository path stops the job rather than being interpolated into a URL.
+  out=$(cd "$dir" && PATH="$dir/bin:$PATH" HEAD_REPO='owner/repo/../evil' BASE_REPO=owner/repo \
+    GH_TOKEN=ghs_fixturetokenvalue bash "$script" 2>&1)
   rc=$?
-  [ "$rc" -eq 0 ] || fail "a fetch that succeeded failed the step: $out"
-  assert_not_contains "$out" "would not serve it" "a successful fetch was reported as a failure"
+  [ "$rc" -ne 0 ] || fail "an unusable head repository name was addressed anyway"
   assert_not_contains "$out" "ghs_fixturetokenvalue" "the job token reached the step's output"
-
-  # And the arm that must stay untouched: an absent ref is a fact about that
-  # repository, so it is left absent for the verifier to name in its own words
-  # rather than fetched or failed here.
-  FM_FAKE_GIT_LS_RC=2
-  export FM_FAKE_GIT_LS_RC
-  : > "$log"
-  out=$(run_fetch_step)
-  rc=$?
-  [ "$rc" -eq 0 ] || fail "an absent attestation ref stopped the job instead of being left absent: $out"
-  assert_contains "$out" "No refs/notes/no-mistakes on owner/repo" \
-    "an absent ref was not reported as absent"
-  [ ! -s "$log" ] || fail "a ref the head repository does not advertise was fetched anyway"
-  unset FM_FAKE_GIT_LS_RC FM_FAKE_GIT_FETCH_RC
-  unset -f run_fetch_step
-  pass "no-mistakes-required.yml: a failed fetch is named by repository rather than by its tokenized URL"
+  pass "no-mistakes-required.yml: both repositories are addressed by name, and the job token is not logged"
 }
 
 # ---------------------------------------------------------------------------
@@ -2444,7 +2785,7 @@ test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
   workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
   [ -s "$script" ] || fail "the verify step could not be lifted out of the workflow"
   out=$(cd "$dir" && HEAD_SHA=0123456789012345678901234567890123456789 \
-    PR_AUTHOR=someone bash "$script" 2>&1)
+    PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "the refusal branch did not fail"
   assert_not_contains "$out" "close and reopen" \
@@ -2494,7 +2835,7 @@ test_write_withholds_a_url_carrying_a_query_or_fragment
 test_write_makes_the_pipeline_tools_own_streams_safe_to_print
 test_write_rejects_a_zero_bound_rather_than_running_the_read_unbounded
 test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run
-test_check_step_reads_the_head_repository_without_logging_its_token
+test_check_step_addresses_both_repositories_without_logging_its_token
 test_write_outside_a_repository_fails_as_such
 test_write_without_the_pipeline_tool_fails_as_such
 test_write_on_an_unborn_head_fails_as_such
@@ -2537,6 +2878,14 @@ test_recheck_reports_a_refused_rerun_without_claiming_one
 test_write_re_evaluates_the_head_it_published
 test_write_no_recheck_publishes_without_asking_the_forge
 test_check_step_no_longer_sends_a_contributor_to_edit_the_request
+test_reconcile_converges_on_an_attestation_published_during_the_window
+test_reconcile_refuses_a_head_no_attestation_arrives_for
+test_reconcile_does_not_grace_evidence_already_seen_to_be_invalid
+test_reconcile_waits_only_for_absence
+test_reconcile_stops_when_the_pull_request_head_moves
+test_reconcile_reports_an_unreadable_repository_as_no_verdict
+test_reconcile_repeats_without_compounding
+test_supports_answers_for_capabilities_this_program_has
 '
 
 missing_invoked=

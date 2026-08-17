@@ -45,11 +45,17 @@ jobs:
           fetch-depth: 1
 
       # Git notes do not travel with refs/pull/*, so the attestation ref is read
-      # from the repository the branch was pushed to. A read that fails for any
-      # reason other than "the ref is not there" stops the job, so an
-      # unreachable head repository is never silently treated as an absent
-      # attestation and never as a present one.
-      - name: Fetch the attestation ref from the head repository
+      # from the repository the branch was pushed to. This step addresses the two
+      # repositories that read needs and does not perform it: the verifier reads
+      # them itself, once before its verdict and again for as long as it is
+      # boundedly waiting for an attestation that has not arrived yet, and one
+      # program doing all of that is what keeps the first read and the re-reads
+      # from disagreeing about what an unreachable repository means.
+      #
+      # What stays here is what must not be decided by a pull request's own copy
+      # of anything: which repositories are addressed, and how the job's token is
+      # put into a URL. Only a remote name crosses into the verifier.
+      - name: Address the repositories the attestation is read from
         env:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
@@ -76,49 +82,58 @@ jobs:
           # read through its plain https URL, which still carries the job's token
           # because actions/checkout persists it in this workspace's git config,
           # so neither read is anonymous. Both are read-only and both go to the
-          # host the token was issued for.
+          # host the token was issued for, and the token is written into this
+          # workspace's git config, which is where actions/checkout has already
+          # put it.
           if [ "$HEAD_REPO" = "$BASE_REPO" ]; then
             url="https://x-access-token:${GH_TOKEN}@github.com/${HEAD_REPO}.git"
           else
             url="https://github.com/${HEAD_REPO}.git"
           fi
 
-          # Both calls are made with their output suppressed and are reported by
-          # the head repository's name instead. When the head repository is the
-          # base repository the URL embeds the job token, and git quotes the
-          # whole remote URL back in its own http errors, so a stream left
-          # attached writes that token into the job log. Actions redacts the
-          # token from logs, which makes this defence in depth rather than the
-          # only thing standing between the token and the log; it is exactly the
-          # reason to keep the two calls consistent rather than to let one of
-          # them rely on that.
-          status=0
-          git ls-remote --exit-code "$url" refs/notes/no-mistakes >/dev/null 2>&1 || status=$?
-          case "$status" in
-            0)
-              if ! git fetch --quiet --no-tags --force "$url" \
-                  'refs/notes/no-mistakes:refs/notes/no-mistakes' >/dev/null 2>&1; then
-                echo "::error::${HEAD_REPO} advertises refs/notes/no-mistakes but would not serve it." >&2
-                exit 1
-              fi
-              ;;
-            2)
-              # No such ref. Leave it absent and let the verifier name that state
-              # in its own words rather than deciding the outcome here.
-              echo "No refs/notes/no-mistakes on ${HEAD_REPO}."
-              ;;
-            *)
-              echo "::error::Could not read refs/notes/no-mistakes from ${HEAD_REPO} (git exit ${status})." >&2
-              exit 1
-              ;;
-          esac
+          # The attestation is published to the head repository; refs/pull/*
+          # lives in the base repository, which is why these are two remotes even
+          # when they are one repository.
+          git remote add attestation-source "$url" >/dev/null 2>&1 \
+            || git remote set-url attestation-source "$url" >/dev/null 2>&1
+          git remote add pullrequest-source \
+            "https://x-access-token:${GH_TOKEN}@github.com/${BASE_REPO}.git" >/dev/null 2>&1 \
+            || git remote set-url pullrequest-source \
+              "https://x-access-token:${GH_TOKEN}@github.com/${BASE_REPO}.git" >/dev/null 2>&1
+
+          # Every call above is made with its output suppressed, because a URL
+          # embedding the job token is quoted back by git in its own errors and a
+          # stream left attached writes that token into the job log. Actions
+          # redacts it from logs, which makes this defence in depth rather than
+          # the only thing between the token and the log.
+          echo "Reading the attestation from ${HEAD_REPO} and the pull request head from ${BASE_REPO}."
 
       - name: Verify the head-bound no-mistakes attestation
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
           set -eu
+          # A genuinely pipeline-raised head is pushed before its attestation
+          # exists, so this check's first look at one can be a near miss rather
+          # than anything about the change. `reconcile` re-reads the ref for a
+          # short bounded window while - and only while - no attestation for this
+          # head has arrived, and then reaches its verdict through `verify`,
+          # which is the only thing here that can reach one at all. The window is
+          # for absence: evidence already seen to be invalid, unbound or
+          # unreadable is refused on the first look, and a head nobody has
+          # attested is still refused, at the end of the window.
+          #
+          # The verifier runs from the pull request's own head, so a head raised
+          # before `reconcile` existed does not carry it. Such a head is verified
+          # without a window, exactly as it was before, rather than being failed
+          # for the age of its checkout. This fallback can go once no open pull
+          # request predates the subcommand.
+          verifier=verify
+          if bin/fm-attest.sh --supports reconcile >/dev/null 2>&1; then
+            verifier=reconcile
+          fi
           # The verifier's two non-zero exits are two different statements and
           # this check must not collapse them, because collapsing evidence it
           # never examined into "no evidence" is the defect this whole check
@@ -131,7 +146,14 @@ jobs:
           # that could not look must never report a pass. What differs is what
           # the contributor is told to go and repair.
           verify_rc=0
-          bin/fm-attest.sh verify --head "$HEAD_SHA" || verify_rc=$?
+          case "$verifier" in
+            reconcile)
+              bin/fm-attest.sh reconcile --head "$HEAD_SHA" \
+                --remote attestation-source \
+                --pr "$PR_NUMBER" --pr-remote pullrequest-source || verify_rc=$?
+              ;;
+            *) bin/fm-attest.sh verify --head "$HEAD_SHA" || verify_rc=$? ;;
+          esac
           if [ "$verify_rc" -eq 0 ]; then
             exit 0
           fi
@@ -144,10 +166,13 @@ jobs:
               echo "an attestation: it says the check was unable to look. Do not read it as an"
               echo "absent attestation, and do not publish one expecting it to clear this."
               echo
-              echo "The verifier runs from this pull request's own head, so the usual causes are"
-              echo "that bin/fm-attest.sh is missing at this head, has lost its executable bit,"
-              echo "or that this head predates the check entirely. Rebase onto the base branch so"
-              echo "the head carries the verifier, then re-run this check."
+              echo "The lines above name the cause in the verifier's own words. Two families"
+              echo "reach here. One is a repository or a ref this job could not read, which is"
+              echo "a question that went unanswered rather than an answer, and re-running this"
+              echo "run is the repair. The other is the verifier itself: it runs from this pull"
+              echo "request's own head, so bin/fm-attest.sh may be missing at this head, have"
+              echo "lost its executable bit, or the head may predate the check entirely. Rebase"
+              echo "onto the base branch so the head carries the verifier, then re-run this check."
               echo
               echo "The check fails, because a check that could not look must not report a pass."
               echo

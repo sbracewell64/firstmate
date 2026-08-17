@@ -363,6 +363,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/verification/attestation-publication-latency.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/decision-surface.md",
       "audience": "maintainer-verification"
     },
