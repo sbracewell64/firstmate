@@ -576,16 +576,15 @@ cmd_prove() {
     [ -f "$arg" ] || cno "substitution bytes file is missing: $arg"
   done
 
-  # The record directory is claimed BEFORE anything runs, and an occupied one is
-  # refused rather than reused.
-  if [ -e "$out" ]; then
-    [ -d "$out" ] || cno "output path exists and is not a directory: $out"
-    [ -z "$(ls -A "$out" 2>/dev/null)" ] || cno "output directory is not empty, and a record is written once: $out"
-  fi
-  mkdir -p "$out" 2>/dev/null || cno "output directory cannot be created: $out"
-  out=$(cd "$out" && pwd) || cno "output directory cannot be resolved: $out"
-
-  # --- source isolation ------------------------------------------------------
+  # --- source isolation, BEFORE anything is created --------------------------
+  #
+  # The source is judged first, and every refusal that concerns it is reached
+  # before this process creates a single directory. Claiming the output first
+  # would mean a caller who names a primary checkout as the source, with an
+  # output path inside it, gets a directory written into the very checkout the
+  # next line refuses - the control mutating the artifact it protects, while
+  # printing a correct refusal. A refusal that leaves a trace in what it refused
+  # is not a refusal.
   [ -d "$source" ] || cno "source is not a directory: $source"
   source=$(cd "$source" && pwd) || cno "source cannot be resolved"
   [ "$(git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
@@ -597,6 +596,32 @@ cmd_prove() {
     || cno "source git common directory is unreadable"
   [ "$git_dir" != "$common_dir" ] \
     || cno "mutation proof refuses a primary checkout as its source: $source"
+
+  # The output path is canonicalized WITHOUT being created, by resolving the
+  # nearest existing ancestor: a path has to be judged against the source before
+  # anything brings it into existence.
+  local out_parent out_leaf out_resolved
+  out_parent=$(dirname -- "$out")
+  out_leaf=$(basename -- "$out")
+  while [ ! -d "$out_parent" ] && [ "$out_parent" != / ] && [ "$out_parent" != . ]; do
+    out_leaf=$(basename -- "$out_parent")/$out_leaf
+    out_parent=$(dirname -- "$out_parent")
+  done
+  [ -d "$out_parent" ] || cno "output directory has no existing ancestor: $out"
+  out_parent=$(cd "$out_parent" && pwd) || cno "output directory cannot be resolved: $out"
+  out_resolved=$out_parent/$out_leaf
+  case "$out_resolved" in
+    "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
+  esac
+
+  # Only now is the record directory claimed, and an occupied one is refused
+  # rather than reused.
+  if [ -e "$out" ]; then
+    [ -d "$out" ] || cno "output path exists and is not a directory: $out"
+    [ -z "$(ls -A "$out" 2>/dev/null)" ] || cno "output directory is not empty, and a record is written once: $out"
+  fi
+  mkdir -p "$out" 2>/dev/null || cno "output directory cannot be created: $out"
+  out=$(cd "$out" && pwd) || cno "output directory cannot be resolved: $out"
   case "$out" in
     "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
   esac
@@ -950,12 +975,31 @@ cmd_catalogue() {
   command -v jq >/dev/null 2>&1 || cno "jq is unavailable, so no catalogue could be read"
   [ -f "$catalogue" ] || cno "catalogue file is missing: $catalogue"
 
+  # The source is judged here too, before anything is created, for the same
+  # reason it is in prove: a catalogue naming a primary checkout must not leave
+  # a directory inside the checkout it is about to refuse. prove re-checks the
+  # source per case; this is the copy that runs before the first mkdir.
+  [ -d "$source" ] || cno "source is not a directory: $source"
+  source=$(cd "$source" && pwd) || cno "source cannot be resolved"
+  [ "$(git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
+    || cno "source is not a git checkout: $source"
+  local cat_git_dir cat_common_dir
+  cat_git_dir=$(git -C "$source" rev-parse --absolute-git-dir 2>/dev/null) \
+    || cno "source git directory is unreadable"
+  cat_common_dir=$(git -C "$source" rev-parse --path-format=absolute --git-common-dir 2>/dev/null) \
+    || cno "source git common directory is unreadable"
+  [ "$cat_git_dir" != "$cat_common_dir" ] \
+    || cno "mutation proof refuses a primary checkout as its source: $source"
+
   if [ -e "$out" ]; then
     [ -d "$out" ] || cno "output path exists and is not a directory: $out"
     [ -z "$(ls -A "$out" 2>/dev/null)" ] || cno "output directory is not empty, and a catalogue is written once: $out"
   fi
   mkdir -p "$out" 2>/dev/null || cno "output directory cannot be created: $out"
   out=$(cd "$out" && pwd) || cno "output directory cannot be resolved: $out"
+  case "$out" in
+    "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
+  esac
 
   local count ids
   count=$(jq -r 'if (type == "object" and (.cases | type) == "array") then (.cases | length) else -1 end' \
