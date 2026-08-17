@@ -4,7 +4,7 @@ Maintainer-verification record for [`bin/fm-review-mutation.sh`](../../bin/fm-re
 The guarantee measured here is narrow and exact: no label, marker, or caller-supplied name can establish that a named assertion executed.
 An earlier version of this record described only the pinned `43b78b12` subject and its 32-control, 30-defect inventory, but that scope was superseded by the measurement at `fe9efa50`.
 The `fe9efa50` scope covered a 35-control, 33-defect inventory, including the three source-adjacent output guards added after the earlier measurement, but it was itself superseded when catalogue argv decoding was corrected.
-That gap has since been closed by re-measurement: the watched-red evidence below describes the pinned `015301ea` subject and its 35-control, 33-defect inventory, measured after the argv correction.
+That gap has since been closed by re-measurement: the watched-red evidence below describes the pinned `015301ea` subject and its 35-control, 33-single-defect inventory, measured after the argv correction.
 Each supersession is recorded rather than overwritten, because a record that shows when its own evidence stopped applying is more credible than one that only ever states its latest figures.
 
 The script's own header owns the law, the fold, the twenty-two bound dimensions, and the mechanics.
