@@ -1238,6 +1238,61 @@ test_reconcile_does_not_grace_evidence_already_seen_to_be_invalid() {
   pass "fm-attest.sh: reconcile refuses invalid evidence on sight rather than waiting it out"
 }
 
+test_reconcile_ignores_local_evidence_when_the_authoritative_ref_is_absent() {
+  local dir head out rc
+  dir="$TMP_ROOT/reconcile-authoritative-absence"
+  head=$(new_reconcile_fixture "$dir")
+  add_note "$dir/work" "$head" "$(good_note "$head")"
+
+  out=$(run_reconcile "$dir" --head "$head" --window 0 --poll 1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a local note passed while the authoritative ref was absent (exit $rc): $out"
+  assert_contains "$out" "no-attestation-ref" "authoritative absence was not the state verify read"
+  pass "fm-attest.sh: authoritative ref absence clears stale local evidence"
+}
+
+test_reconcile_consults_the_clock_only_after_absence_applies() {
+  local dir head out rc stub
+  dir="$TMP_ROOT/reconcile-clock-order"
+  head=$(new_reconcile_fixture "$dir")
+  publish_to_source "$dir" "$head" "malformed"
+  stub="$dir/stub"
+  mkdir -p "$stub"
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$stub/date"
+  chmod +x "$stub/date"
+
+  out=$(PATH="$stub:$PATH" run_reconcile "$dir" --head "$head" --window 20 --poll 1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "invalid evidence consulted an unreadable clock before verify (exit $rc): $out"
+  assert_contains "$out" "attestation-malformed" "invalid evidence did not reach the canonical verifier"
+  assert_not_contains "$out" "clock-unreadable" "the clock was consulted before absence made waiting applicable"
+  pass "fm-attest.sh: reconciliation establishes applicability before reading the clock"
+}
+
+test_reconcile_validates_the_initial_observation_before_sleeping() {
+  local dir head moved out rc stub marker
+  dir="$TMP_ROOT/reconcile-initial-head-order"
+  head=$(new_reconcile_fixture "$dir")
+  printf 'moved\n' > "$dir/work/moved.txt"
+  git -C "$dir/work" add moved.txt
+  git -C "$dir/work" commit -qm moved
+  moved=$(git -C "$dir/work" rev-parse HEAD)
+  git -C "$dir/work" push -q -f pullrequest-source "$moved:refs/pull/1/head"
+  git -C "$dir/work" checkout -q "$head"
+  stub="$dir/stub"
+  marker="$dir/slept"
+  mkdir -p "$stub"
+  printf '#!/usr/bin/env bash\nprintf slept > %q\n' "$marker" > "$stub/sleep"
+  chmod +x "$stub/sleep"
+
+  out=$(PATH="$stub:$PATH" run_reconcile "$dir" --head "$head" --window 30 --poll 20)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a moved initial head did not reach verify (exit $rc): $out"
+  assert_contains "$out" "now proposes $moved" "the initial observation did not detect head movement"
+  [ ! -e "$marker" ] || fail "the initial absent observation slept before revalidating the pull request head"
+  pass "fm-attest.sh: initial absence revalidates the pull request head before sleep"
+}
+
 test_reconcile_waits_only_for_absence() {
   local dir head out rc started waited blob neighbour
   # The correspondence this window rests on, asserted rather than assumed: the
@@ -1288,6 +1343,7 @@ test_reconcile_waits_only_for_absence() {
   git -C "$dir/work" update-ref "$NOTES_REF" "$blob"
   git -C "$dir/work" remote set-url attestation-source "$dir/empty.git"
   git init -q --bare "$dir/empty.git"
+  git -C "$dir/work" push -q -f attestation-source "$NOTES_REF:$NOTES_REF"
   started=$(date +%s)
   out=$(run_reconcile "$dir" --head "$head" --window 20 --poll 1)
   rc=$?
@@ -2881,6 +2937,9 @@ test_check_step_no_longer_sends_a_contributor_to_edit_the_request
 test_reconcile_converges_on_an_attestation_published_during_the_window
 test_reconcile_refuses_a_head_no_attestation_arrives_for
 test_reconcile_does_not_grace_evidence_already_seen_to_be_invalid
+test_reconcile_ignores_local_evidence_when_the_authoritative_ref_is_absent
+test_reconcile_consults_the_clock_only_after_absence_applies
+test_reconcile_validates_the_initial_observation_before_sleeping
 test_reconcile_waits_only_for_absence
 test_reconcile_stops_when_the_pull_request_head_moves
 test_reconcile_reports_an_unreadable_repository_as_no_verdict

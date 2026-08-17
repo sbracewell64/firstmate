@@ -758,7 +758,12 @@ reconcile_read_source() {
           "$reconcile_source advertises $reconcile_notes_ref but would not serve it." \
           "Not reading a repository is not reading an absence: this says nothing about whether $reconcile_head carries an attestation."
       ;;
-    2) ;;
+    2)
+      git update-ref -d "$reconcile_notes_ref" >/dev/null 2>&1 \
+        || fail attestation-source-unfetchable \
+          "$reconcile_source serves no $reconcile_notes_ref, but the local copy could not be cleared." \
+          "The authoritative absence could not be reconciled with the evidence verify would read."
+      ;;
     *)
       fail attestation-source-unreadable \
         "$reconcile_notes_ref could not be read from $reconcile_source (git exited $reconcile_ls_rc)." \
@@ -902,6 +907,21 @@ cmd_reconcile() {
   reconcile_pr_source=$(reconcile_repository_name "$reconcile_pr_remote")
 
   reconcile_read_source
+
+  if ! reconcile_absent "$reconcile_head" "$reconcile_notes_ref"; then
+    cmd_verify --head "$reconcile_head" --notes-ref "$reconcile_notes_ref"
+    return $?
+  fi
+
+  reconcile_revalidate_head || {
+    {
+      emit "fm-attest: pull request $reconcile_pr now proposes $reconcile_current, so waiting for an attestation on $reconcile_head stopped here."
+      emit "The verdict below is about $reconcile_head, which is the commit this check was raised for."
+    } >&2
+    cmd_verify --head "$reconcile_head" --notes-ref "$reconcile_notes_ref"
+    return $?
+  }
+
   reconcile_clock
   reconcile_deadline=$((reconcile_epoch + reconcile_window))
 
@@ -910,7 +930,7 @@ cmd_reconcile() {
   # what remains, so the total waited is at most --window and never the window
   # plus one more poll.
   reconcile_exhausted=0
-  while reconcile_absent "$reconcile_head" "$reconcile_notes_ref"; do
+  while :; do
     reconcile_clock
     reconcile_left=$((reconcile_deadline - reconcile_epoch))
     if [ "$reconcile_left" -le 0 ]; then
@@ -921,6 +941,8 @@ cmd_reconcile() {
       reconcile_left=$reconcile_poll
     fi
     sleep "$reconcile_left"
+    reconcile_read_source
+    reconcile_absent "$reconcile_head" "$reconcile_notes_ref" || break
     reconcile_revalidate_head || {
       {
         emit "fm-attest: pull request $reconcile_pr now proposes $reconcile_current, so waiting for an attestation on $reconcile_head stopped here."
@@ -928,7 +950,6 @@ cmd_reconcile() {
       } >&2
       break
     }
-    reconcile_read_source
   done
 
   # The bound, said out loud at the only moment it decided anything. A reader
