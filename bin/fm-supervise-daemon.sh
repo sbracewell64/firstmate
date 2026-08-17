@@ -124,8 +124,9 @@
 #          FM_STALE_ESCALATE_SECS   idle seconds before a stale pane escalates
 #                                   as a possible wedge (default 240)
 #          FM_PAUSE_RESURFACE_SECS  idle seconds before a declared external wait
-#                                   re-surfaces as a recheck (default 3600); a
-#                                   captain-gated wait is never re-surfaced on it
+#                                   is inspected (default 3600); generic waits
+#                                   notify each window, capacity waits only on a
+#                                   delta, and captain-gated waits never recheck
 #          FM_STALE_WORKING_GATE_READS
 #                                   max provably-working crew-state reads one
 #                                   housekeeping pass may make; markers past the
@@ -582,6 +583,7 @@ clear_pause_tracking() {  # <window> <state>
   rm -f "$state/.subsuper-paused-$key" "$state/.subsuper-stale-$key" \
     "$state/.paused-$watcher_key" "$state/.paused-rechecked-$watcher_key" "$state/.paused-resurfaced-$watcher_key" \
     "$state/.stale-$watcher_key" "$state/.stale-since-$watcher_key" "$state/.wedge-escalations-$watcher_key"
+  pause_notification_clear "$state" "$task"
 }
 
 reconcile_pause_tracking() {  # <window> <state> <last-status-line>
@@ -1253,10 +1255,10 @@ stale_gate_read_budget() {  # sets STALE_GATE_READ_BUDGET; call directly, never 
 #     Never silently defer forever.
 #  2) stale recheck: for each pending stale marker past STALE_ESCALATE_SECS,
 #     re-peek the pane; still idle -> escalate (wedge); resumed -> clear marker.
-#  2b) pause re-surface: for each declared-pause marker past PAUSE_RESURFACE_SECS,
-#     re-peek; busy/gone -> clear; still idle + still paused -> escalate a recheck
-#     digest and reset the window (repeating bounded re-surface, never a wedge),
-#     except for a captain-gated wait, which resets its window without escalating.
+#  2b) pause cadence: for each declared-pause marker past PAUSE_RESURFACE_SECS,
+#     re-peek; busy/gone -> clear; still idle + still paused -> reset the window.
+#     Generic waits notify each window, capacity waits only for a first or changed
+#     durable event, and captain-gated waits reset without notifying; never a wedge.
 #  3) heartbeat scan: every HEARTBEAT_SCAN_SECS, grep state/*.status for a
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
@@ -1406,12 +1408,12 @@ housekeeping() {  # <state>
     esac
   done
 
-  # (2b) pause re-surface recheck. A DECLARED external-wait pause idles by design,
-  # so it is rechecked on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS)
-  # and never escalated as one - but it MUST re-surface, so a forgotten pause cannot
-  # rot invisibly. Past the window: busy (resumed) or gone -> drop; still idle and
-  # still declaring the pause -> escalate a recheck digest and reset the marker so
-  # the window repeats.
+  # (2b) pause cadence. A DECLARED external-wait pause idles by design, so it is
+  # inspected on a much longer cadence than a wedge (PAUSE_RESURFACE_SECS) and
+  # never escalated as one. Past the window: busy (resumed) or gone -> drop; still
+  # idle and still declaring the pause -> reset the marker. Generic waits notify
+  # each window; capacity waits notify only when their durable event is first seen
+  # or has changed because their separate owner keeps observing capacity.
   #
   # A CAPTAIN-GATED wait is the one exception, and it is a cadence exception only.
   # It cannot clear without the captain, and the captain acting is already the
@@ -1441,19 +1443,24 @@ housekeeping() {  # <state>
     [ "$age" -ge "$pause_secs" ] || continue
     stale_window_is_busy "$win" "$state"
     case "$?" in
-      0) rm -f "$marker" ;;
-      2) rm -f "$marker" ;;
+      0) clear_pause_tracking "$win" "$state" ;;
+      2) clear_pause_tracking "$win" "$state" ;;
       *)
         last=$(last_status_line "$state/$task.status")
         if [ -n "$last" ] && status_is_paused "$last"; then
           if pause_is_captain_gated "$task"; then
             log "pause recheck suppressed for $win: captain-gated wait, only the captain can clear it"
+          elif ! capacity_pause_uses_no_delta "$state" "$task" "$last"; then
+            escalate_add "$state" "paused ${age}s (awaiting external, scheduled recheck): $win"
+          elif pause_notification_pending "$state" "$task" "$last"; then
+            escalate_add "$state" "paused ${age}s (awaiting external, capacity observation changed or has not been surfaced): $win"
+            pause_notification_record "$state" "$task" "$last"
           else
-            escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
+            log "capacity-pause recheck absorbed for $win: unchanged durable observation, no notification"
           fi
           _now > "$marker"
         else
-          rm -f "$marker"
+          clear_pause_tracking "$win" "$state"
         fi
         ;;
     esac

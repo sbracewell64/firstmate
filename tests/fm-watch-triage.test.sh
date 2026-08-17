@@ -1814,7 +1814,8 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   statusf="$state/held.status"
   # A DECLARED pause (not captain-relevant), .seen-* primed so the signal scan does
   # not pre-empt the stale path.
-  printf 'paused: holding for the upstream tool release\n' > "$statusf"
+  printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture summary=holding for provider capacity\n' > "$statusf"
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:00:00Z\n' > "$state/held.capacity"
   sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
   key=$(printf '%s' "$window" | tr ':/.' '___')
   pane_hash=$(hash_text "idle, holding for upstream")
@@ -1862,7 +1863,98 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   [ ! -e "$state/.stale-since-$key" ] || fail "a paused re-surface must not use the wedge timer"
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" 2>/dev/null || fail "drain after the paused re-surface failed"
   grep "$(printf '\tstale\t')" "$drain_out" | grep -F "$window" >/dev/null || fail "paused re-surface was not queued"
-  pass "a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
+
+  # Phase C: advance the cadence with the SAME durable pause event. It must stay
+  # quiet rather than buying another firstmate turn and captain notification.
+  : > "$state/.paused-resurfaced-$key"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.paused-resurfaced-$key"
+  else touch -m -d "@$back" "$state/.paused-resurfaced-$key"; fi
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "an unchanged pause event produced another wake: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; fail "an unchanged pause event printed another wake: $(cat "$out")"; }
+  reap "$pid"
+
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:05:00Z\n' > "$state/held.capacity"
+  : > "$state/.paused-resurfaced-$key"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.paused-resurfaced-$key"
+  else touch -m -d "@$back" "$state/.paused-resurfaced-$key"; fi
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "a refresh-only capacity observation produced another wake: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || { reap "$pid"; fail "a refresh-only capacity observation printed another wake: $(cat "$out")"; }
+  reap "$pid"
+
+  printf 'provider=codex remaining=95 observed_at=2030-01-01T00:05:00Z\n' > "$state/held.capacity"
+  : > "$state/.paused-resurfaced-$key"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.paused-resurfaced-$key"
+  else touch -m -d "@$back" "$state/.paused-resurfaced-$key"; fi
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "changed active capacity evidence did not surface"
+  grep -F "awaiting external" "$out" >/dev/null || fail "changed active capacity evidence omitted its external-wait reason"
+
+  # Phase D: changing the event is a real delta and must surface even though the
+  # task and pane are otherwise identical.
+  printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture-v2 summary=provider capacity changed but still blocks\n' >> "$statusf"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$statusf"
+  else touch -m -d "@$back" "$statusf"; fi
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held_status"
+  : > "$state/.paused-resurfaced-$key"
+  if [ "$(uname)" = Darwin ]; then touch -mt "$(date -r "$back" '+%Y%m%d%H%M.%S')" "$state/.paused-resurfaced-$key"
+  else touch -m -d "@$back" "$state/.paused-resurfaced-$key"; fi
+  printf 'idle, holding for upstream (token 3)' > "$capture_file"
+  : > "$out"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$capture_file" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a changed pause event did not surface"
+  grep -F "awaiting external" "$out" >/dev/null || fail "changed pause event omitted its external-wait reason"
+  pass "a declared capacity pause keeps its bounded cadence but only a new durable observation re-notifies"
+}
+
+test_capacity_pause_notification_identity_and_json_normalization() {
+  local dir state status dotted underscored
+  dir=$(make_case capacity-pause-notification-value)
+  state="$dir/state"
+  status='fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture summary=holding for provider capacity'
+  dotted=$(pause_notification_marker "$state" maker.review)
+  underscored=$(pause_notification_marker "$state" maker_review)
+  [ "$dotted" != "$underscored" ] || fail "distinct task IDs shared a capacity notification marker"
+
+  printf '%s\n' '{"schemaVersion":3,"generatedAt":"2030-01-01T00:00:00Z","providers":[{"provider":"codex","state":{"refreshedAt":"2030-01-01T00:00:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"all_models","effectivePercentRemaining":0}]}}]}' > "$state/maker.review.capacity"
+  pause_notification_record "$state" maker.review "$status"
+  printf '%s\n' '{"providers":[{"quotaSemantics":{"effectiveAvailability":[{"effectivePercentRemaining":0,"scope":"all_models"}]},"state":{"refreshed_at":"2030-01-01T00:05:00Z"},"provider":"codex"}],"observed_at":"2030-01-01T00:05:00Z","schemaVersion":3}' > "$state/maker.review.capacity"
+  pause_notification_pending "$state" maker.review "$status" \
+    && fail "refresh-only JSON capacity evidence produced another notification"
+
+  printf '%s\n' '{"schemaVersion":3,"generated_at":"2030-01-01T00:10:00Z","providers":[{"provider":"codex","state":{"observedAt":"2030-01-01T00:10:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"all_models","effectivePercentRemaining":95}]}}]}' > "$state/maker.review.capacity"
+  pause_notification_pending "$state" maker.review "$status" \
+    || fail "a genuine JSON capacity delta was suppressed"
+
+  pause_notification_record "$state" maker.review "$status"
+  printf '%s\n' '{"schemaVersion":3,"generatedAt":"2030-01-01T00:15:00Z","providers":[{"provider":"claude","entitlement":"max","credentialSurface":"reviewer","quotaPool":"luna","route":"review","role":"reviewer","state":{"observedAt":"2030-01-01T00:15:00Z"},"quotaSemantics":{"effectiveAvailability":[{"scope":"claude-opus","effectivePercentRemaining":95}]}}]}' > "$state/maker.review.capacity"
+  pause_notification_pending "$state" maker.review "$status" \
+    || fail "changed provider-bound quota identity was suppressed as a refresh-only update"
+  pass "capacity notification markers are injective and JSON refresh timestamps are non-semantic"
 }
 
 # A captain-held crew can leave a stable backend endpoint after its agent exits.
@@ -3041,6 +3133,7 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection
 test_busy_pane_default_turn_age_bound_is_3600s
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
+test_capacity_pause_notification_identity_and_json_normalization
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed

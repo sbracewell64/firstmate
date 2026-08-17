@@ -230,6 +230,19 @@ Observed output:
 FM_TEST_SUMMARY total=8 failed=0 skipped_gate=0 duration_ms=617507
 ```
 
+The shared capacity-pause classifier boundary was reverified on 2026-08-13 in normal and away supervision.
+The suites cover first and changed capacity events, unchanged-event notification suppression across supervision modes, and the continuing scheduled rechecks for generic external waits.
+
+```sh
+bin/fm-test-run.sh tests/fm-watch-triage.test.sh tests/fm-daemon.test.sh
+```
+
+Observed output:
+
+```text
+FM_TEST_SUMMARY total=2 failed=0 skipped_gate=0 duration_ms=236590
+```
+
 The actionable-close ordering correction was reverified on 2026-08-02 against an identity-matched live successor.
 
 ```sh

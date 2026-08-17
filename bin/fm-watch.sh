@@ -8,8 +8,9 @@
 # that advanced since the previous poll), and surfaced otherwise, so a crew that
 # finishes (or stops and waits) without a current working signal is never
 # silently swallowed. A declared external-wait pause is the separate idle absorb
-# case and re-surfaces only on its long bounded cadence, although its initial
-# no-verb status signal still surfaces in normal mode.
+# case; its long bounded cadence still rechecks generic waits, while a capacity
+# pause wakes only for a first or changed durable event. Its initial no-verb status
+# signal still surfaces in normal mode.
 # While state/.afk exists, the daemon owns triage and this watcher queues and exits
 # on every wake. Printed reason lines:
 #   signal: <file>...      status/turn-end signals, surfaced when a listed status
@@ -188,8 +189,9 @@ BUSY_TURN_MAX_SECS=${FM_BUSY_TURN_MAX_SECS:-3600}
 # pane is absorbed rather than wedge-escalated.
 # A captain-held or paused crew whose agent has confidently exited uses the same
 # bounded cadence, while a live or ambiguously read agent still surfaces once.
-# These cases re-surface once for a recheck every PAUSE_RESURFACE_SECS - far
-# longer than the wedge threshold, but finite so a forgotten hold cannot rot invisibly.
+# These cases are inspected every PAUSE_RESURFACE_SECS - far longer than the wedge
+# threshold. Generic waits still wake for their scheduled recheck; capacity waits
+# wake only for a first or changed durable event because their owner re-observes.
 PAUSE_RESURFACE_SECS=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
 # A monitored pull request the forge reports as conflicting wakes once per
 # conflict episode, keyed by the head commit the poll reports alongside it, so
@@ -361,17 +363,19 @@ busy_turn_over_age() {  # <task>
 }
 
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
-# dead-agent captain-held transfer, and re-surface it once every
-# PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
-# stale poll once pause_state_class permits the bounded cadence, so it must be
-# cheap: it NEVER re-reads crew state. The re-surface age is anchored on the
-# status file mtime, not a per-hash marker, so a churny idle pane (a ticking
-# clock, a token counter) cannot keep resetting the cadence the way a hash-tied
-# timer would. A .paused-resurfaced-<key> throttle marker records the last
-# re-surface epoch so, once past the window, it fires once per window rather than
-# every poll. Advances the stale suppressor to <hash> and flags the key paused.
+# dead-agent captain-held transfer, and inspect it every PAUSE_RESURFACE_SECS.
+# A generic wait wakes for each scheduled recheck. A capacity wait's separate owner
+# re-observes it, so only a first or changed durable capacity event wakes firstmate
+# and an unchanged event advances the cadence silently. Called on any stale poll
+# once pause_state_class permits the bounded cadence, so it must be cheap: it NEVER
+# re-reads crew state.
+# The cadence age is anchored on the status file mtime, not a per-hash marker, so
+# a churny idle pane (a ticking clock, a token counter) cannot keep resetting it.
+# A .paused-resurfaced-<key> throttle marker records the last cadence pass so it
+# runs once per window rather than every poll. Advances the stale suppressor to
+# <hash> and flags the key paused.
 handle_paused_stale() {  # <window> <task> <hash>
-  local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason
+  local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason last
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
@@ -383,10 +387,19 @@ handle_paused_stale() {  # <window> <task> <hash>
   rf="$STATE/.paused-resurfaced-$key"
   rf_age=$(age_of "$rf")   # 999999 when no prior re-surface
   if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ]; then
-    reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)"
-    fm_wake_append stale "$win" "$reason" || exit 1
-    date +%s > "$rf"
-    wake "$reason"
+    last=$(last_status_line "$statusf")
+    if ! capacity_pause_uses_no_delta "$STATE" "$task" "$last" \
+       || pause_notification_pending "$STATE" "$task" "$last"; then
+      reason="stale: $win (paused ${age}s, awaiting external - declared pause changed or has not been surfaced; confirm the wait still holds)"
+      fm_wake_append stale "$win" "$reason" || exit 1
+      capacity_pause_uses_no_delta "$STATE" "$task" "$last" \
+        && pause_notification_record "$STATE" "$task" "$last"
+      date +%s > "$rf"
+      wake "$reason"
+    else
+      date +%s > "$rf"
+      triage_log "absorbed capacity-pause recheck (unchanged durable observation, no notification): $win"
+    fi
   fi
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
 }
@@ -415,11 +428,13 @@ absorb_settled_stale() {  # <window> <hash>
 }
 
 clear_pause_state() {  # <window>
-  local win=$1 key
+  local win=$1 key task
   key=${win//:/_}
   key=${key//\//_}
   key=${key//./_}
+  task=$(window_to_task "$win" "$STATE")
   rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
+  pause_notification_clear "$STATE" "$task"
 }
 
 clear_pause_tracking() {  # <window>
@@ -506,6 +521,8 @@ surface_nonterminal_stale() {  # <window> <hash> [note]
     : > "$STATE/.paused-$key"
     date +%s > "$STATE/.paused-rechecked-$key"
     date +%s > "$STATE/.paused-resurfaced-$key"
+    capacity_pause_uses_no_delta "$STATE" "$task" "$last" \
+      && pause_notification_record "$STATE" "$task" "$last"
   else
     rm -f "$STATE/.paused-$key" "$STATE/.paused-rechecked-$key" "$STATE/.paused-resurfaced-$key"
   fi

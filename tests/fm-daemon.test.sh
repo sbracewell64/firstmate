@@ -1298,26 +1298,58 @@ test_housekeeping_seeds_pause_marker_from_status() {
   pass "housekeeping seeds pause tracking from status without a watcher marker"
 }
 
-# housekeeping re-surfaces a stale declared pause only past PAUSE_RESURFACE_SECS,
-# as an awaiting-external recheck (never a wedge), and RESETS the marker so the
-# window repeats rather than firing once.
-test_housekeeping_paused_resurfaces_and_resets() {
+# housekeeping surfaces a declared pause once, keeps checking it on the bounded
+# cadence without notifying on the same status event, and surfaces a changed event.
+# This is the no-delta control for the repeated capacity interruption incident.
+test_housekeeping_paused_resurfaces_only_on_delta() {
   local dir state fakebin win pane key age
   dir=$(make_supercase paused-resurface)
   state="$dir/state"; fakebin="$dir/fakebin"
   win="sess:fm-held-w11"; pane="$dir/pane.txt"
-  printf 'paused: holding for the upstream tool release\n' > "$state/held-w11.status"
+  printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture summary=holding for provider capacity\n' > "$state/held-w11.status"
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:00:00Z\n' > "$state/held-w11.capacity"
   printf 'idle prompt $\n' > "$pane"
   key=$(printf '%s' "held-w11" | tr ':/.' '___')
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
-  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 || fail "declared pause was not re-surfaced as an awaiting-external recheck"
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 || fail "declared pause was not surfaced as an awaiting-external observation"
   grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null 2>&1 && fail "declared pause was mislabeled a possible wedge"
-  [ -e "$state/.subsuper-paused-$key" ] || fail "pause marker cleared instead of reset for the next window"
+  [ -e "$state/.subsuper-paused-$key" ] || fail "pause marker cleared instead of reset for the next check"
   age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
-  [ "$age" -lt 60 ] || fail "pause marker was not reset to now on re-surface (age ${age}s)"
-  pass "housekeeping re-surfaces a stale declared pause on the long cadence and resets its window"
+  [ "$age" -lt 60 ] || fail "pause marker was not reset to now after surfacing (age ${age}s)"
+
+  : > "$state/.subsuper-escalations"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "an unchanged pause produced another notification: $(cat "$state/.subsuper-escalations")"
+  age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
+  [ "$age" -lt 60 ] || fail "an absorbed no-delta check did not reset the cadence (age ${age}s)"
+
+  printf 'provider=codex remaining=0 observed_at=2030-01-01T00:05:00Z\n' > "$state/held-w11.capacity"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a refresh-only capacity observation produced another notification: $(cat "$state/.subsuper-escalations")"
+
+  printf 'provider=codex remaining=95 observed_at=2030-01-01T00:05:00Z\n' > "$state/held-w11.capacity"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "changed active capacity evidence was suppressed with the prior observation"
+
+  : > "$state/.subsuper-escalations"
+  printf 'fm-status-event.v1 verb=paused phase=capacity-wait key=provider-capacity evidence=capacity:provider-bound-fixture-v2 summary=provider capacity changed but still blocks\n' >> "$state/held-w11.status"
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a changed pause event was suppressed with the prior observation"
+  pass "housekeeping keeps the capacity-pause cadence but notifies only on a new durable observation"
 }
 
 # --- pause kind and the re-surface cadence ----------------------------------
@@ -1397,6 +1429,7 @@ test_housekeeping_external_pause_still_resurfaces() {
   printf 'idle prompt $\n' > "$pane"
   seed_pause_backlog "$home" held-ext1 external
   key=$(printf '%s' "held-ext1" | tr ':/.' '___')
+  pause_notification_record "$state" held-ext1 "$(last_status_line "$state/held-ext1.status")"
   echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
   PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
     FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
@@ -3091,7 +3124,7 @@ test_stale_gate_read_budget_reports_invalid_and_floors_zero
 test_housekeeping_spends_the_sanitized_budget
 test_stale_gate_read_budget_report_is_throttled
 test_housekeeping_resumed_stale_cleared
-test_housekeeping_paused_resurfaces_and_resets
+test_housekeeping_paused_resurfaces_only_on_delta
 test_housekeeping_captain_gated_pause_is_not_resurfaced
 test_housekeeping_external_pause_still_resurfaces
 test_housekeeping_indeterminate_pause_kind_still_resurfaces
