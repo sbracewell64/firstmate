@@ -97,13 +97,13 @@ KNOWN_KEYS="$ATTESTATION_KEY head run gates tool"
 # ---------------------------------------------------------------------------
 #
 # The note can only exist after the push it attests, and that push is what
-# started the check, so the first evaluation of a genuinely pipeline-raised head
-# runs before its evidence exists and correctly refuses. Publishing the note
-# repairs the evidence but not the verdict: refs/notes/no-mistakes is not a pull
-# request head, so pushing it fires no pull_request event and nothing re-reads
-# the head. recheck is what re-reads it, so that publishing an attestation
-# converges on its own instead of waiting for someone to close and reopen a pull
-# request.
+# started the check, so a genuinely pipeline-raised head can still reach a first
+# refusal when its evidence lands after reconcile's bounded window. Publishing
+# the note repairs the evidence but not that verdict: refs/notes/no-mistakes is
+# not a pull request head, so pushing it fires no pull_request event and nothing
+# re-reads the head. recheck is what re-reads it, so that publishing an
+# attestation converges on its own instead of waiting for someone to close and
+# reopen a pull request.
 #
 # It re-runs the workflow run that already evaluated this exact head. That is
 # GitHub's own supported mechanism and it keeps GitHub the single authority: the

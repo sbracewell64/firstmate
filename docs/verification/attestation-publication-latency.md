@@ -21,7 +21,7 @@ git init -q notesprobe && cd notesprobe
 git remote add origin https://github.com/sbracewell64/firstmate.git
 git fetch -q --no-tags origin 'refs/notes/no-mistakes:refs/notes/no-mistakes'
 git log --format='%H %cI' refs/notes/no-mistakes | while read -r c t; do
-  for h in $(git diff-tree -r --no-commit-id --name-only "$c" | tr -d '/'); do
+  for h in $(git diff-tree --root -r --no-commit-id --name-only "$c" | tr -d '/'); do
     printf '%s\t%s\n' "$h" "$(date -u -d "$t" +%Y-%m-%dT%H:%M:%SZ)"
   done
 done | sort -u > notes-pub.tsv
@@ -29,9 +29,35 @@ done | sort -u > notes-pub.tsv
 gh api --paginate \
   'repos/sbracewell64/firstmate/actions/workflows/no-mistakes-required.yml/runs?per_page=100' \
   --jq '.workflow_runs[] | [.head_sha, .created_at] | @tsv' > runs.tsv
+
+awk -F '\t' '!seen[$1]++ || $2 < earliest[$1] { earliest[$1]=$2 }
+  END { for (head in earliest) print head "\t" earliest[head] }' notes-pub.tsv \
+  | sort > notes-earliest.tsv
+awk -F '\t' '!seen[$1]++ || $2 < earliest[$1] { earliest[$1]=$2 }
+  END { for (head in earliest) print head "\t" earliest[head] }' runs.tsv \
+  | sort > runs-earliest.tsv
+join -t "$(printf '\t')" notes-earliest.tsv runs-earliest.tsv \
+  | while IFS="$(printf '\t')" read -r head published started; do
+      printf '%s\t%s\n' "$head" \
+        "$(( $(date -u -d "$published" +%s) - $(date -u -d "$started" +%s) ))"
+    done \
+  | sort -t "$(printf '\t')" -k2,2n > publication-latency.tsv
+
+awk -F '\t' '
+  { value[NR]=$2 }
+  END {
+    printf "n=%d  min=%d  median=%d  max=%d\n", NR, value[1], value[(NR+1)/2], value[NR]
+    split("30 45 60 90 120 180", bound, " ")
+    for (i=1; i<=6; i++) {
+      count=0
+      for (j=1; j<=NR; j++) if (value[j] <= bound[i]) count++
+      printf "<=%ds: %2d/%d\n", bound[i], count, NR
+    }
+  }
+' publication-latency.tsv
 ```
 
-Joining the earliest publication per head to the earliest run per head gave 45 heads carrying both.
+The join of the earliest publication per head to the earliest run per head gave 45 heads carrying both.
 
 Observed distribution, in seconds:
 

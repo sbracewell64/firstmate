@@ -26,7 +26,7 @@ The verifier names the repository it could not read by resolving the remote's UR
 
 The workflow reads the verifier's exit status rather than only its success, because `bin/fm-attest.sh` separates a refusal from a failure and collapsing the two would have the check report evidence it never examined as absent evidence.
 Exit 1 is a verdict and is reported as no attestation for this head.
-Any other non-zero exit reached no verdict, and is reported as the check being unable to evaluate this head, naming the status and the causes that reach it: a head that predates this check, or one where `bin/fm-attest.sh` is missing or has lost its executable bit.
+Any other non-zero exit reached no verdict, and is reported as the check being unable to evaluate this head, naming the status and the two families of causes that reach it: repository or ref state the verifier could not read, or a verifier unavailable because the head predates this check, `bin/fm-attest.sh` is missing, or it has lost its executable bit.
 Both outcomes fail the check, because a check that could not look must never report a pass; what differs is what the contributor is sent to repair.
 
 ## The format
