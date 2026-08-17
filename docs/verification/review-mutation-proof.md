@@ -14,7 +14,7 @@ It ran an entire suite and treated an exact textual `ok - <case>` / `not ok - <c
 Fifteen correction rounds did not fix it, which is why it was retired rather than repaired a sixteenth time.
 
 A control that has only ever been seen green is indistinguishable from that defect.
-Every control in [`tests/fm-review-mutation.test.sh`](../../tests/fm-review-mutation.test.sh) was therefore run against every single-defect build, individually, and the full unmodified suite was trusted passing only after that.
+Every control then present in [`tests/fm-review-mutation.test.sh`](../../tests/fm-review-mutation.test.sh) was therefore run against every single-defect build, individually, and the full unmodified suite was trusted passing only after that.
 The defect builds are scratch copies outside the repository; no tracked source was mutated to produce them.
 
 The controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
@@ -75,8 +75,32 @@ That confirmation matters because a build that fails to parse fails every contro
 
 ## Observed red and green
 
-The green pass ran all twenty-eight controls against the shipped script and exited 0.
-Twenty-three single-defect builds were then measured, each control run separately against each build: **every control has at least one red witness, and no control is left unwitnessed**.
+### Coverage not yet measured at this head
+
+The matrix below was measured against the bytes committed at `fab6b69f` and covers exactly the controls that existed there.
+The suite's `FM_CONTROLS` array now contains three controls with no matrix row: `test_an_execution_from_the_wrong_variant_is_could_not_observe`, `test_preserved_mutation_bytes_are_rederived`, and `test_verification_record_inventory_matches_executed_controls`.
+Each of those controls is GREEN in the suite but has NOT been watched red.
+Each therefore has watched-red status COULD-NOT-OBSERVE, explicitly not an omission, not a pass, and not a claim that no defect would redden it.
+This record therefore does NOT currently claim complete watched-red coverage.
+
+### Inventory claim
+
+The suite executes 31 controls, and the current measured-file inventory is:
+
+```
+inventory_control_count: 31
+inventory_sha256: bin/fm-review-mutation.sh fcc9998483e554db47311a3b54bbcc4d219f79ffbdc472a1019654e78d0ed36e
+inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
+inventory_sha256: tests/fm-review-mutation.test.sh 484bcd2f7ccb6a17b5bc9d85dbb96e3728c7cfe16897353b014a5403bb9c32a2
+```
+
+This is an inventory claim only: these files and control count agree with the suite that passes on the current bytes.
+Passing this inventory claim is NOT evidence for the separate measurement claim that specific matrix rows were observed red at the head named in each row, because a green inventory sitting on top of unmeasured rows is the collapse this separation exists to prevent.
+
+### Measurement claim
+
+The green pass measured at `fab6b69f` ran all twenty-eight controls then present against the shipped script and exited 0.
+Twenty-three single-defect builds were then measured, each control run separately against each build, and every one of those twenty-eight controls had at least one red witness.
 
 The measurement pinned the digests of `bin/fm-review-mutation.sh`, `bin/fm-verify.sh`, and `tests/fm-review-mutation.test.sh` before and after, and they were identical, so all of it describes one build rather than a moving one.
 
@@ -119,36 +143,36 @@ Several defects redden more than one control, which is expected and is why the m
 
 Each row is one control, every defect build that reddened it, and the exact failing line the first of those produced.
 
-| Control | Reddened by | Observed red |
-| --- | --- | --- |
-| a matching success line cannot establish that the target ran | D01 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` |
-| the proof owner's own success literal cannot reach a verdict | D19 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 1` |
-| a target that executed and passed is a pass | D01 | `the basis must say the target executed and concluded pass` |
-| a target that executed and failed is a fail | D20 | `an executed target that concluded fail is FAIL: expected exit 1, got 0` |
-| an unattributable substitution is could not observe | D01 D02 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` |
-| a target occurring more than once is refused | D03 | `a target with more than one occurrence has no single site: expected exit 2, got 1` |
-| a target occurring zero times is refused | D21 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` |
-| overlapping occurrences are counted separately | D03 | `overlapping occurrences must not collapse into one site: expected exit 2, got 1` |
-| the identity substitution reproduces the candidate tree | D05 | `the identity substitution must reproduce the candidate tree exactly` |
-| a substitution identical to the target is refused | D22 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` |
-| the source is never mutated | D12 | `the source file must be unmutated at every moment an execution was live` |
-| the disposable clone shares no object storage | D04 | `the disposable clone must share no object storage with the source` |
-| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` |
-| refuses to overwrite an existing record | D07 | `a second generation must not be written over the first: expected exit 2, got 0` |
-| a record whose mutants are gone is could not observe | D23 | `a record whose mutation evidence is gone must be could-not-observe` |
-| an edited record cannot be read into a verdict | D01 D06 D23 | `the label case must fail before editing` |
-| a missing dimension outranks a clean fold | D10 | `one unobserved dimension outranks three clean executions: expected exit 2, got 0` |
-| a record pointing at another path is could not observe | D06 D23 | `a record whose named path is not where the mutants differ must not pass` |
-| a caller declaration cannot change the verdict | D01 D11 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` |
-| the probe argv is recorded exactly | D15 | `probe_argv must record every argument, including an empty one` |
-| one failing case makes the catalogue fail | D01 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` |
-| a failing case outranks an unobservable one | D01 D02 D09 | `an observation gap must never mask a real finding: expected exit 1, got 0` |
-| an unobservable case outranks a passing one | D01 D02 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` |
-| an empty catalogue is could not observe | D13 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` |
-| a catalogue with duplicate identities is refused | D14 | `the refusal must name the collision (missing: 'duplicate case identities')` |
-| fm verify transports the result | D01 D18 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` |
-| a symlinked target path is refused | D16 | `the refusal must name what it saw (missing: 'not a regular file')` |
-| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` |
+| Control | Reddened by | Observed red | Measured at |
+| --- | --- | --- | --- |
+| a matching success line cannot establish that the target ran | D01 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `fab6b69f` |
+| the proof owner's own success literal cannot reach a verdict | D19 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 1` | `fab6b69f` |
+| a target that executed and passed is a pass | D01 | `the basis must say the target executed and concluded pass` | `fab6b69f` |
+| a target that executed and failed is a fail | D20 | `an executed target that concluded fail is FAIL: expected exit 1, got 0` | `fab6b69f` |
+| an unattributable substitution is could not observe | D01 D02 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `fab6b69f` |
+| a target occurring more than once is refused | D03 | `a target with more than one occurrence has no single site: expected exit 2, got 1` | `fab6b69f` |
+| a target occurring zero times is refused | D21 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` | `fab6b69f` |
+| overlapping occurrences are counted separately | D03 | `overlapping occurrences must not collapse into one site: expected exit 2, got 1` | `fab6b69f` |
+| the identity substitution reproduces the candidate tree | D05 | `the identity substitution must reproduce the candidate tree exactly` | `fab6b69f` |
+| a substitution identical to the target is refused | D22 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` | `fab6b69f` |
+| the source is never mutated | D12 | `the source file must be unmutated at every moment an execution was live` | `fab6b69f` |
+| the disposable clone shares no object storage | D04 | `the disposable clone must share no object storage with the source` | `fab6b69f` |
+| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` | `fab6b69f` |
+| refuses to overwrite an existing record | D07 | `a second generation must not be written over the first: expected exit 2, got 0` | `fab6b69f` |
+| a record whose mutants are gone is could not observe | D23 | `a record whose mutation evidence is gone must be could-not-observe` | `fab6b69f` |
+| an edited record cannot be read into a verdict | D01 D06 D23 | `the label case must fail before editing` | `fab6b69f` |
+| a missing dimension outranks a clean fold | D10 | `one unobserved dimension outranks three clean executions: expected exit 2, got 0` | `fab6b69f` |
+| a record pointing at another path is could not observe | D06 D23 | `a record whose named path is not where the mutants differ must not pass` | `fab6b69f` |
+| a caller declaration cannot change the verdict | D01 D11 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` | `fab6b69f` |
+| the probe argv is recorded exactly | D15 | `probe_argv must record every argument, including an empty one` | `fab6b69f` |
+| one failing case makes the catalogue fail | D01 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` | `fab6b69f` |
+| a failing case outranks an unobservable one | D01 D02 D09 | `an observation gap must never mask a real finding: expected exit 1, got 0` | `fab6b69f` |
+| an unobservable case outranks a passing one | D01 D02 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` | `fab6b69f` |
+| an empty catalogue is could not observe | D13 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` | `fab6b69f` |
+| a catalogue with duplicate identities is refused | D14 | `the refusal must name the collision (missing: 'duplicate case identities')` | `fab6b69f` |
+| fm verify transports the result | D01 D18 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `fab6b69f` |
+| a symlinked target path is refused | D16 | `the refusal must name what it saw (missing: 'not a regular file')` | `fab6b69f` |
+| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `fab6b69f` |
 
 ## What is not covered
 
