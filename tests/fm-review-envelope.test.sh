@@ -2503,6 +2503,43 @@ PYEOF
   capture check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-corrupt"
   assert_contains "$CAPTURED" 'replay patch could not rebuild its variant' \
     "a correctly digested patch that cannot rebuild its variant must fail the deep replay"
+
+  python3 - "$artifact" "$mutant" <<'PYEOF'
+import json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+artifact["control_order"] = ["matching-control", "test_array_classifications_are_exercised_in_isolation"]
+for item in artifact["mutations"]:
+    item["captured_output"] = "not ok - synthetic\n"
+    item["output_sha256"] = "sha256:" + __import__("hashlib").sha256(item["captured_output"].encode()).hexdigest()
+    item["observed_control"] = item["target_control"] = "matching-control"
+entry = next(item for item in artifact["mutations"] if item["id"] == "exact-head-association-lost")
+entry["captured_output"] = "ok - earlier control\nnot ok - real mismatched control\n"
+entry["output_sha256"] = "sha256:" + __import__("hashlib").sha256(entry["captured_output"].encode()).hexdigest()
+entry["observed_control"] = "test_array_classifications_are_exercised_in_isolation"
+entry["target_control"] = "test_wrong_head_ci_refuses"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-wrong-control"
+  assert_contains "$CAPTURED" 'targeted test_wrong_head_ci_refuses but observed test_array_classifications_are_exercised_in_isolation' \
+    "a real campaign mismatch must fail instead of counting as property coverage"
+
+  python3 - "$artifact" "$mutant" <<'PYEOF'
+import json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+artifact["control_order"] = ["matching-control"]
+for entry in artifact["mutations"]:
+    entry["captured_output"] = "not ok - matching control\n"
+    entry["output_sha256"] = "sha256:" + __import__("hashlib").sha256(entry["captured_output"].encode()).hexdigest()
+    entry["target_control"] = entry["observed_control"] = "matching-control"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  FM_REVIEW_ENVELOPE_SKIP_CAMPAIGN_REPLAY=1 \
+    check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-matching" \
+    || fail "an agreeing target and observed control must pass"
   pass "the measurement record's claims are backed by the campaign artifact"
 }
 
@@ -2552,6 +2589,11 @@ if int(built.group(1)) != len(mutations):
         "record states %s mutations, artifact holds %d\n"
         % (built.group(1), len(mutations)))
     sys.exit(1)
+control_order = artifact.get("control_order")
+if not isinstance(control_order, list) or not control_order or any(
+        not isinstance(control, str) or not control for control in control_order):
+    sys.stderr.write("the campaign artifact carries no usable control invocation order\n")
+    sys.exit(1)
 
 # Each entry records the head it was measured at, so relabelling the artifact's
 # single head cannot silently re-attribute entries measured somewhere else. That
@@ -2566,7 +2608,7 @@ for entry in mutations:
     # Material that cannot be produced without executing, and that an
     # independent party can replay: the patch that rebuilds the variant, and a
     # digest of the whole captured run to compare against.
-    for field in ("observed", "output_sha256", "replay_patch", "replay_patch_sha256"):
+    for field in ("observed", "captured_output", "output_sha256", "replay_patch", "replay_patch_sha256"):
         if not entry.get(field):
             sys.stderr.write(
                 "mutation %s carries no %s, so its result is self-attested\n"
@@ -2581,8 +2623,46 @@ for entry in mutations:
             % (entry.get("id"), entry["replay_patch_sha256"], replay_patch_sha256)
         )
         sys.exit(1)
+    target_control = entry.get("target_control")
+    observed_control = entry.get("observed_control")
+    if not target_control or not observed_control:
+        sys.stderr.write(
+            "mutation %s does not bind its target control to its observed control\n"
+            % entry.get("id")
+        )
+        sys.exit(1)
+    captured_output_sha256 = "sha256:" + hashlib.sha256(
+        entry["captured_output"].encode("utf-8")
+    ).hexdigest()
+    if captured_output_sha256 != entry["output_sha256"]:
+        sys.stderr.write(
+            "mutation %s captured output digest does not match\n" % entry.get("id")
+        )
+        sys.exit(1)
+    success_count = sum(
+        line.startswith("ok - ") for line in entry["captured_output"].splitlines()
+    )
+    if success_count >= len(control_order):
+        sys.stderr.write(
+            "mutation %s captured output does not identify a failing control\n" % entry.get("id")
+        )
+        sys.exit(1)
+    derived_control = control_order[success_count]
+    if observed_control != derived_control:
+        sys.stderr.write(
+            "mutation %s records observed control %s but captured output identifies %s\n"
+            % (entry.get("id"), observed_control, derived_control)
+        )
+        sys.exit(1)
+    if target_control != observed_control:
+        sys.stderr.write(
+            "mutation %s targeted %s but observed %s\n"
+            % (entry.get("id"), target_control, observed_control)
+        )
+        sys.exit(1)
 
-if os.environ.get("FM_REVIEW_ENVELOPE_CAMPAIGN_REPLAY_CHILD") == "1":
+if (os.environ.get("FM_REVIEW_ENVELOPE_CAMPAIGN_REPLAY_CHILD") == "1"
+        or os.environ.get("FM_REVIEW_ENVELOPE_SKIP_CAMPAIGN_REPLAY") == "1"):
     sys.exit(0)
 
 # An artifact with no entries records no measurements, which is a clean refusal
