@@ -36,6 +36,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    bin/fm-attest.sh write
    ```
 
+   If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
    It publishes to the push target of `origin`, which step 3 pointed at your fork, and prints the repository it reached.
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
    If your `origin` pushes to the parent rather than your fork, name the fork explicitly: `bin/fm-attest.sh write --remote <your-fork-remote>`.
