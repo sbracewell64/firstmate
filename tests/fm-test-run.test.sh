@@ -906,13 +906,60 @@ test_serial_budget_control_checks_the_partition_it_measured() {
 # The workflow's hang tripwire cannot be read from inside its own job, so it is
 # passed in and checked. Silent disagreement would leave the derived bounds
 # describing a timeout that is no longer set.
+fm_check_ci_serial_timeout_link() {
+  python3 - "$1" <<'PY'
+import sys
+
+import yaml
+
+workflow = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
+serial_job = workflow["jobs"]["tests-portable-serial"]
+aggregate_job = workflow["jobs"]["tests-timing-aggregate"]
+timeout = serial_job["timeout-minutes"]
+budget_steps = [
+    step for step in aggregate_job["steps"]
+    if step.get("name") == "Check serial lane against its declared budget"
+]
+if len(budget_steps) != 1:
+    raise SystemExit("tests-timing-aggregate must have exactly one serial budget check")
+copied_timeout = budget_steps[0].get("env", {}).get("FM_SERIAL_TIMEOUT_MINUTES")
+if timeout != copied_timeout:
+    raise SystemExit(
+        "tests-portable-serial timeout-minutes %r disagrees with "
+        "FM_SERIAL_TIMEOUT_MINUTES %r" % (timeout, copied_timeout)
+    )
+print(timeout)
+PY
+}
+
 test_serial_budget_control_refuses_a_foreign_timeout_literal() {
-  local tmp rc declared
+  local tmp rc declared fixture
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-timeout.XXXXXX")
   fm_write_serial_fixture "$tmp/ok" 1000
 
-  declared=$(grep -E '^ *FM_SERIAL_TIMEOUT_MINUTES:' "$ROOT/.github/workflows/ci.yml" | head -1 | tr -dc '0-9')
-  [ -n "$declared" ] || fail "ci.yml must pass FM_SERIAL_TIMEOUT_MINUTES to the budget check"
+  fixture="$tmp/ci.yml"
+  cp "$ROOT/.github/workflows/ci.yml" "$fixture"
+  python3 - "$fixture" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+old = "          FM_SERIAL_TIMEOUT_MINUTES: 15\n"
+if text.count(old) != 1:
+    raise SystemExit("fixture must contain exactly one serial timeout copy")
+path.write_text(text.replace(old, "          FM_SERIAL_TIMEOUT_MINUTES: 20\n"), encoding="utf-8")
+PY
+  set +e
+  fm_check_ci_serial_timeout_link "$fixture" >/dev/null 2>"$tmp/link.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse divergent values"
+  assert_grep 'disagrees with FM_SERIAL_TIMEOUT_MINUTES' "$tmp/link.err" \
+    "the workflow timeout link refusal must name both linked values"
+
+  declared=$(fm_check_ci_serial_timeout_link "$ROOT/.github/workflows/ci.yml") \
+    || fail "tests-portable-serial must pass its actual timeout to the budget check"
 
   set +e
   FM_SERIAL_TIMEOUT_MINUTES=$((declared + 5)) \
