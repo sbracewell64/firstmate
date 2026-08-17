@@ -166,6 +166,7 @@ The dead-predicate control catches the first two shapes and explicitly does not 
 ```sh
 $ bash tests/fm-outbound-artifact.test.sh
 $ bash tests/fm-dead-predicate-check.test.sh
+$ bash tests/fm-bootstrap.test.sh
 $ bin/fm-lint.sh
 $ FM_HOME=<home> FM_OUTBOUND_DIR=<scratch> bin/fm-outbound-artifact.sh check
 ```
