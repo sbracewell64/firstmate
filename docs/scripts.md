@@ -130,7 +130,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |
 | `fm-reflag.sh`           | Reflag a scout task in place as a protected ship task with an explicit delivery mode |
 | `fm-attempt.sh`          | Own the durable per-task attempt count and its retry budget                          |
-| `fm-teardown.sh`         | Fail-closed teardown: return landed ship worktrees, require completed scout deliverables, retire secondmate homes |
+| `fm-teardown.sh`         | Fail-closed teardown: return ship worktrees whose work is published or landed, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                      |
 | `fm-x-lib.sh`            | Shared X-mode config, relay, and reply-threading helpers                             |

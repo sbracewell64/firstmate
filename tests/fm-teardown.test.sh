@@ -344,6 +344,7 @@ SH
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
+      *"--json url"*) printf '%s\n' 'https://github.com/example/repo/pull/7' ; exit 0 ;;
       *"state,headRefOid"*) printf '%s\t%s\n' 'MERGED' '$head' ; exit 0 ;;
       *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
     esac
@@ -373,6 +374,7 @@ SH
 case "\${1:-} \${2:-}" in
   "pr view")
     case " \$* " in
+      *"--json url"*) printf '%s\n' 'https://github.com/example/repo/pull/7' ; exit 0 ;;
       *"state,headRefOid"*) printf '%s\t%s\n' 'OPEN' '$head' ; exit 0 ;;
       *"headRefOid"*) printf '%s\n' '$head' ; exit 0 ;;
     esac
@@ -881,6 +883,107 @@ test_release_with_merged_pr_leaves_no_landing_record() {
   assert_no_grep 'Pending landing:' "$case_dir/stdout" \
     "release-merged-pr: an already-landed PR was reported as pending"
   pass "releasing a task whose PR already merged leaves no landing record"
+}
+
+# The publication controls. The pipeline pushes the branch from its OWN gate
+# worktree, so the task worktree's remote-tracking refs never learn about the
+# push that made the work recoverable. Reachability is therefore a true
+# observation about the wrong subject, and only the forge can answer whether the
+# work is safe. These four cases pin the repair AND the three holes it must not
+# open; the last three matter more than the first.
+test_open_pr_at_local_head_is_published_and_allows() {
+  local case_dir rc head
+  case_dir=$(make_case published-open-pr)
+  write_meta "$case_dir" no-mistakes ship
+  # Real content on no remote-tracking ref and not in origin/main: exactly the
+  # stuck lane's shape, where the only proof of safety is the forge's own head.
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  append_pr_meta_for_current_head "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  [ -z "$(git -C "$case_dir/wt" branch -r --contains "$head" 2>/dev/null)" ] \
+    || fail "published-open-pr: fixture head is reachable from a remote, so it proves nothing"
+  add_gh_pr_open_for_head "$case_dir" "$head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 0 "$rc" "published-open-pr: teardown should succeed when the forge holds this exact head"
+  ! grep -q REFUSED "$case_dir/stderr" || fail "published-open-pr: teardown printed a REFUSED line"
+  pass "work the forge reports at the local head is torn down though no remote ref sees it"
+}
+
+test_open_pr_behind_local_head_still_refuses() {
+  local case_dir rc pr_head
+  case_dir=$(make_case published-open-pr-behind)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  pr_head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  # A second local commit the forge never received. The request is open and its
+  # head is resolvable, so this is observed-BAD rather than could-not-observe:
+  # the forge answered, and its answer does not cover this work.
+  wt_commit_file "$case_dir" later.txt world "local work the forge never saw"
+  append_pr_meta_url "$case_dir"
+  add_gh_pr_open_for_head "$case_dir" "$pr_head"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "published-open-pr-behind: teardown should refuse work the forge never received"
+  grep -q REFUSED "$case_dir/stderr" || fail "published-open-pr-behind: no REFUSED line in stderr"
+  assert_grep 'local work the forge never saw' "$case_dir/stderr" \
+    "published-open-pr-behind: the refusal did not name the unpublished commit"
+  pass "an open PR behind the local head does not launder the commits it never received"
+}
+
+test_no_pr_and_no_remote_reports_could_not_observe_and_refuses() {
+  local case_dir rc
+  case_dir=$(make_case published-unobservable)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  # No pr= recorded, no remote to discover one through, and the default gh mocks
+  # report no pull request: publication is could-not-observe, which is a real
+  # result and never a pass.
+  git -C "$case_dir/project" remote remove origin
+  [ -z "$(git -C "$case_dir/wt" remote 2>/dev/null)" ] \
+    || fail "published-unobservable: fixture still has a remote"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "published-unobservable: teardown should refuse when publication cannot be observed"
+  grep -q REFUSED "$case_dir/stderr" || fail "published-unobservable: no REFUSED line in stderr"
+  assert_grep 'could-not-observe' "$case_dir/stderr" \
+    "published-unobservable: the refusal did not report publication as could-not-observe"
+  pass "unobservable publication is reported as could-not-observe and still refuses"
+}
+
+test_dirty_worktree_refuses_even_when_published() {
+  local case_dir rc head
+  case_dir=$(make_case published-open-pr-dirty)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  append_pr_meta_for_current_head "$case_dir"
+  head=$(git -C "$case_dir/wt" rev-parse HEAD)
+  add_gh_pr_open_for_head "$case_dir" "$head"
+  # Every committed byte is published; this uncommitted edit is not, and the
+  # dirty axis is decided before publication is ever consulted.
+  printf '%s\n' 'uncommitted' > "$case_dir/wt/scratch.txt"
+
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "published-open-pr-dirty: teardown should refuse a dirty worktree"
+  assert_grep 'uncommitted changes' "$case_dir/stderr" \
+    "published-open-pr-dirty: the refusal was not the uncommitted-changes one"
+  pass "a dirty worktree is refused even when every committed byte is published"
 }
 
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head() {
@@ -3290,6 +3393,10 @@ test_herdr_projection_teardown_retains_journal_when_close_unconfirmed
 test_squash_merged_branch_deleted_allows
 test_release_with_open_pr_leaves_landing_record
 test_release_with_merged_pr_leaves_no_landing_record
+test_open_pr_at_local_head_is_published_and_allows
+test_open_pr_behind_local_head_still_refuses
+test_no_pr_and_no_remote_reports_could_not_observe_and_refuses
+test_dirty_worktree_refuses_even_when_published
 test_squash_merged_pr_allows_when_head_ancestor_of_pr_head
 test_no_pr_recorded_discovers_merged_pr_by_branch_allows
 test_squash_merged_pr_allows_replayed_unpushed_patch

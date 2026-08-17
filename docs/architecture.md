@@ -65,7 +65,7 @@ Each set of accepted owner semantics is a **Reference contract**, while its impl
 The **Project-internal** released-baseline evidence records 48 completed Engineering Intelligence sessions and the `v1.5.0` release, establishing a populated project implementation rather than a dormant target placeholder.
 That supporting evidence is neither a committed runtime owner nor a maintained verification surface, and the absent Firstmate discovery, invocation, observation, and recovery path for `platform reconcile` is a **Target gap** rather than an active operator capability.
 The scope split is deliberate: the platform owners retain their distinct execution semantics, and [`bin/fm-watch.sh`](../bin/fm-watch.sh), [`bin/fm-supervise-daemon.sh`](../bin/fm-supervise-daemon.sh), [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh), [`bin/fm-wake-lib.sh`](../bin/fm-wake-lib.sh), and [`bin/fm-teardown.sh`](../bin/fm-teardown.sh) own fleet operator execution.
-The fleet operator loop and its refusal to discard unlanded work are **Current**.
+The fleet operator loop and its refusal to discard unrecoverable work are **Current**.
 Explicit deadline wakes, bounded fix rounds, wind-down reserve, and distinct exhausted, complete, and failed outcomes remain **Target gaps** unless their executable owners establish them.
 Fractal terminology is a **Reference contract**, not a component or a new owner.
 
@@ -462,8 +462,8 @@ Exhaustion is a named stop rather than a silent one: the spawn refuses, records 
 The count outlives the task metadata deliberately - an ordinary teardown retires it because that release means the task reached a sanctioned completion (including a parked release whose pull request is still open), so a re-dispatch of that id starts a fresh budget, while a `--force` release keeps it because discarded work makes a re-dispatch of that id a genuine retry.
 Secondmate relaunches are exempt, since their relaunch is unattended liveness recovery rather than a retry.
 
-Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be landed before the worktree is returned.
-[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the landed-work proofs, landing-record rule, PR-discovery fallback, and stale-lock recovery procedure.
+Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be published at the forge or landed before the worktree is returned.
+[`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the recoverable-work proofs, publication observation, landing-record rule, PR-discovery fallback, and stale-lock recovery procedure.
 
 ## Optional X mode
 

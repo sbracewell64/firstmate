@@ -255,7 +255,7 @@ Only a mismatched identity with none of those present reads dead.
 ## Boundaries this guard does not cross
 
 The guard never resets, cleans, forces, discards, or releases a slot; it only names one to allocate, or refuses the spawn.
-`bin/fm-teardown.sh` remains the sole releaser of a slot holding work and the owner of the complete landed-work test.
+`bin/fm-teardown.sh` remains the sole releaser of a slot holding work and the owner of the complete recoverable-work test.
 The guard deliberately asks the strictly weaker, offline question "is this slot demonstrably empty?", so it neither restates nor weakens that contract.
 It shares only the containment instrument with teardown, never teardown's policy: teardown refreshes the remote first and measures against it, which the guard must not do because it inspects every available slot before every spawn.
 Every git read uses `--no-optional-locks` so inspecting another lane's worktree never writes its index, and the single dangling tree object recorded above is the only thing it adds.

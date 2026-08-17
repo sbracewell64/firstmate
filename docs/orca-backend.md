@@ -30,7 +30,7 @@ Enter and Ctrl-C are supported; Escape is not.
 
 Each task has one Orca-managed git worktree and one Orca terminal.
 `fm-spawn.sh` does not call Treehouse for Orca tasks.
-The normal isolation and unlanded-work refusal rules still apply.
+The normal isolation and unrecoverable-work refusal rules still apply.
 
 ```text
 backend=orca
@@ -56,7 +56,7 @@ Grok alone retains its isolated rendered-tail fallback.
 
 Cleanup keeps all shared Firstmate safety checks.
 A scout still requires its report and completed decision inventory.
-A ship still refuses dirty or unlanded work.
+A ship still refuses dirty work and committed work that is neither published at the forge nor landed.
 Before release, cleanup resolves the recorded Orca worktree id and verifies its path matches the recorded worktree path.
 A missing, unreadable, or mismatched identity preserves metadata and stops rather than deleting anything.
 After those checks, Firstmate closes the exact terminal and releases the exact worktree with Orca's worktree command.
