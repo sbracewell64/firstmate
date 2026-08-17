@@ -125,7 +125,7 @@ state/               volatile runtime signals; gitignored
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
   model-health.json  narrow mode-0600 record of which models and providers the fleet currently cannot reach, written only by bin/fm-route-lib.sh through bin/fm-route.sh; availability only, never a demotion, and an absent file means no remembered cooldown rather than a healthy model
   loopspec/          persistent per-loop iteration state written only by bin/fm-loopspec.sh, plus the executions.log record of what actually ran written only by bin/fm-loop-actuate.sh; never hand-edited (section 13)
-  qualification/     durable bounded-qualification workflow records, one per (capability contract, binding) pair, written only by bin/fm-qualification.sh; bounded by bin/fm-attempt.sh on the workflow's OWN identity and never on the identity it would unblock
+  qualification/     inert parameters for durable bounded-qualification workflow incarnations, written only by bin/fm-qualification.sh; workflow liveness remains owned by the backlog, and each workflow is bounded by bin/fm-attempt.sh on its OWN identity and never on the identity it would unblock
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (section 13)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line

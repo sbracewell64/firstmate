@@ -15,7 +15,7 @@ The procedure for one question: **has this binding been OBSERVED to do the job t
 `qualifications/schema.json` owns the field contract, the five-value vocabulary and the state computation.
 `bin/fm-qualification-lib.sh` and `bin/fm-qualification.sh --help` own the mechanics.
 [`docs/configuration.md`](../../../docs/configuration.md) "Role qualification register" owns the register and the `requires_capabilities` floor axis.
-This skill owns the decision.
+This skill owns Firstmate's operating response to the computed decision.
 
 ## The mistake this exists to prevent
 
