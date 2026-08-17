@@ -234,6 +234,7 @@ correlation_read() {  # <request-id>
 # whole point of observing it.
 observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
   local out
+  # fm-retrieval-audit: not-a-collection - this reads one pull request named by repository and number.
   out=$(gh api "repos/$1/pulls/$2" --jq '.head.sha' 2>/dev/null) || return 1
   fm_auth_head_shape_valid "$out" || return 1
   printf '%s\n' "$out"

@@ -298,6 +298,7 @@ pr_head() {  # <pr-url> -> sha or empty
   num=$(printf '%s' "$url" | sed -n 's#.*/pull/\([0-9][0-9]*\).*#\1#p')
   [ -n "$slug" ] && [ -n "$num" ] || return 0
   probe_budget || return 0
+  # fm-retrieval-audit: not-a-collection - this reads one pull request named by repository and number.
   obs gh api "repos/$slug/pulls/$num" --jq '.head.sha' || true
 }
 
@@ -360,6 +361,7 @@ sol_artifact_present() {  # <request-id> <record-json> -> comment id
   local rid=$1 rec=$2 comments row id body
   read_sol_config || return 3
   probe_budget || return 2
+  # fm-retrieval-audit: complete-source - --paginate traverses every issue-comment page before absence is concluded.
   comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" \
     --paginate --jq '.[] | [.id, .body] | @base64') || return 2
   while IFS= read -r row; do
@@ -379,7 +381,9 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
   [ -n "$venue" ] || return 3
   [ -n "$sha" ] || return 2
   probe_budget || return 2
+  # fm-retrieval-audit: complete-source - --paginate traverses every commit-pull page before exact-head absence is concluded.
   out=$(obs gh api "repos/$venue/commits/$sha/pulls" \
+    --paginate \
     --jq ".[] | select(.state == \"open\" and .head.sha == \"$sha\") | .number") || return 2
   [ -n "$out" ] || return 1
   count=$(printf '%s\n' "$out" | grep -c . || true)
@@ -799,6 +803,7 @@ cmd_emit() {
     record=$(printf '%s' "$record" | jq --argjson a "$attempt" --arg n "$(now_iso)" \
       '.attempts = $a | .updated = $n')
     record_write "$rid" "$record" || die "could not write the correlation record" 4
+    # fm-retrieval-audit: write - this creates a comment and draws no conclusion from a collection read.
     if jq -n --arg b "$body" '{body:$b}' | obs gh api \
       "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --input - >/dev/null; then
       record=$(printf '%s' "$record" | jq --arg n "$(now_iso)" '.state = "emitted" | .updated = $n')
@@ -937,6 +942,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
   read_sol_config || die "the configured ruling venue could not be observed" 4
   [ "$SOL_REPO" = "$venue_repo" ] && [ "$SOL_ISSUE" = "$venue_issue" ] \
     || die "the configured ruling venue no longer matches request $rid" 4
+  # fm-retrieval-audit: not-a-collection - this reads one comment named by its durable correlation identity.
   artifact=$(obs gh api "repos/$venue_repo/issues/comments/$comment") \
     || die "ruling comment $comment could not be observed" 4
   printf '%s' "$artifact" | jq -e --arg c "$comment" --arg i "$issue" \
@@ -965,17 +971,13 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
   # is never resolved into a confident answer nobody chose.
   verdict_count=$(printf '%s\n' "$body" | grep -c '^verdict: ' || true)
   case $verdict_count in ''|*[!0-9]*) verdict_count=0 ;; esac
-  if [ "$verdict_count" -gt 1 ]; then
-    printf '%s: comment %s carries %s verdict lines, so which one it rules is ambiguous\n' \
+  if [ "$verdict_count" -ne 1 ]; then
+    printf '%s: comment %s carries %s verdict lines; exactly one is required\n' \
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$verdict_count" >&2
     printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own verdict once.\n' >&2
     exit 3
   fi
   verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p')
-  [ -n "$verdict" ] || {
-    printf '%s: comment %s has no ruling verdict\n' "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
-    exit 3
-  }
   rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg v "$verdict" --arg n "$(now_iso)" \
     '.ruling = {comment_id:$c, verdict:$v, observed:$n} | .state = "ruled" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
@@ -986,6 +988,7 @@ cmd_poll() {
   local comments row body rid marker_count comment rc failed=0 poll_record poll_state out
   read_sol_config || return 0
   probe_budget || die "the ruling poll probe budget is exhausted" 4
+  # fm-retrieval-audit: complete-source - --paginate traverses every issue-comment page before absence is concluded.
   comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --paginate \
     --jq '.[] | [.id, .body] | @base64') || die "ruling comments could not be observed" 4
   while IFS= read -r row; do
