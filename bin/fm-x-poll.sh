@@ -99,7 +99,7 @@ clear_claim_error() {
   rm -f "$CLAIM_ERROR_FILE" 2>/dev/null || true
 }
 
-command -v curl >/dev/null 2>&1 || { emit_error_once "missing curl"; exit 0; }
+command -v curl >/dev/null 2>&1 || { emit_error_once "missing curl"; exit 0; }  # fm-retrieval-audit: not-a-read - a tool-presence probe
 command -v jq   >/dev/null 2>&1 || { emit_error_once "missing jq"; exit 0; }
 
 fmx_context_registry_prune "$STATE"
@@ -112,6 +112,7 @@ AUTH_HEADER_FILE=$(fmx_auth_header_file) || { emit_error_once "invalid token"; e
 # Short, bounded poll: a failure or timeout simply means "no wake this cycle";
 # the next check cycle retries. -m 5 keeps this well inside the watcher's
 # per-check timeout so the supervision loop is never starved.
+# fm-retrieval-audit: not-a-collection - the relay hands back one pending request or a 204 and re-offers it, so nothing-pending is the relay's own answer and not an inference over a listing
 code=$(curl -m 5 -s -o "$BODY_FILE" -w '%{http_code}' \
   -H "@$AUTH_HEADER_FILE" \
   -H 'Accept: application/json' \

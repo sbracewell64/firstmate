@@ -352,7 +352,7 @@ code=$(fmx_post_json "$ENDPOINT" "$PAYLOAD_FILE" "$RESPONSE_BODY_FILE")
 post_rc=$?
 case "$post_rc" in
   0) : ;;
-  127) echo "fm-x-reply: curl not found" >&2; exit 1 ;;
+  127) echo "fm-x-reply: curl not found" >&2; exit 1 ;;  # fm-retrieval-audit: not-a-read - a diagnostic for an absent tool
   3) echo "fm-x-reply: invalid FMX_PAIRING_TOKEN" >&2; exit 1 ;;
   *) echo "fm-x-reply: request to relay failed" >&2; exit 1 ;;
 esac

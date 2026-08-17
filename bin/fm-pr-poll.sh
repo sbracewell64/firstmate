@@ -74,6 +74,7 @@ case "$provider" in
     # this poll runs the answer is normally settled; the transient UNKNOWN it can
     # return meanwhile is silence here and resolves on the next poll rather than
     # costing this static program a retry and a timing dependency.
+    # fm-retrieval-audit: not-a-collection - one pull request object's state, mergeability, and head oid
     raw=$(gh pr view "$url" --json state,mergeable,headRefOid \
       -q '[.state,.mergeable,.headRefOid]|@tsv' 2>/dev/null) || exit 0
     tab=$(printf '\t')
@@ -142,7 +143,7 @@ case "$provider" in
     # because plain glab has no field selector and firstmate does not require a
     # JSON processor; only an exact "merged" wakes, so a changed format or an
     # unreadable merge request stays silent instead of reporting a merge.
-    raw=$(glab mr view "$number" -R "https://$host/$path" 2>/dev/null) || exit 0
+    raw=$(glab mr view "$number" -R "https://$host/$path" 2>/dev/null) || exit 0  # fm-retrieval-audit: not-a-collection - one merge request object
     state=$(printf '%s\n' "$raw" | sed -n 's/^state:[[:space:]]*//p' | head -1) || exit 0
     [ "$state" = merged ] && printf '%s\n' merged
     ;;

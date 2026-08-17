@@ -45,6 +45,24 @@
 #                 a could-not-observe.
 #   pending       checks exist but at least one has not completed. No verdict
 #                 yet, and one may still arrive.
+#   truncated     the member set fills the page GitHub serves, so its extent was
+#                 never established. `gh pr view --json statusCheckRollup` asks
+#                 for contexts(first:100) - verified against gh 2.96.0's own
+#                 request body - and flattens away both totalCount and pageInfo,
+#                 so a head with more than 100 members returns the OLDEST 100 and
+#                 silently drops the newest. "No member is non-SUCCESS" is a
+#                 negative claim, and over a truncated set it is a negative claim
+#                 about records nothing read: a check re-run after 100 earlier
+#                 executions is exactly the member that would be missing. At
+#                 exactly 100 members a full set and a truncated one are
+#                 indistinguishable in this response, so both refuse. That costs
+#                 a re-read on a head with exactly 100 checks and prevents a false
+#                 green on every head above it.
+#
+#                 The label sits BELOW failing and pending on purpose:
+#                 incompleteness kills negatives, not positives, so a failure
+#                 actually observed in the returned part is still a failure about
+#                 this head whatever else went unread.
 #   inconclusive  every check completed, none failed, and at least one ended
 #                 without earning a verdict - TIMED_OUT, CANCELLED,
 #                 ACTION_REQUIRED, SKIPPED, STALE, NEUTRAL, an absent
@@ -66,10 +84,10 @@
 #
 # It lives here rather than inside either caller because it is a contract, and
 # two copies of a contract drift the moment only one is edited. Consumers map
-# these five labels onto their own vocabulary and must never collapse "none",
-# "pending", or "inconclusive" into a pass:
-#   - bin/fm-verify.sh maps none/pending/inconclusive to NO_VERIFIER_RAN and
-#     passing to PASS.
+# these six labels onto their own vocabulary and must never collapse "none",
+# "pending", "truncated", or "inconclusive" into a pass:
+#   - bin/fm-verify.sh maps none/pending/truncated/inconclusive to
+#     NO_VERIFIER_RAN and passing to PASS.
 #   - bin/fm-bearings-snapshot.sh renders them as a per-pull-request label.
 #
 # The expression takes no jq arguments, so a caller splices it into a larger
@@ -83,6 +101,7 @@ FM_VERIFY_CHECK_ROLLUP_EXPR='
   | if ($c|length) == 0 then "none"
     elif any($c[]; (.conclusion // .state // "") as $s | ($s=="FAILURE" or $s=="STARTUP_FAILURE" or $s=="ERROR")) then "failing"
     elif any($c[]; ((.status // "") != "COMPLETED") and ((.state // "") != "SUCCESS")) then "pending"
+    elif ($c|length) >= 100 then "truncated"
     elif all($c[]; (.conclusion // .state // "") == "SUCCESS") then "passing"
     else "inconclusive" end'
 

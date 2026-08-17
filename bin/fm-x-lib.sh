@@ -374,7 +374,7 @@ fmx_request_inbox_context() {
 fmx_request_relay_context() {
   local rid=$1 payload_file body_file code rc ctx empty='{"platform":"","reply_max_chars":""}'
   [ -n "${FMX_TOKEN:-}" ] || { printf '%s\n' "$empty"; return 1; }
-  command -v curl >/dev/null 2>&1 || { printf '%s\n' "$empty"; return 1; }
+  command -v curl >/dev/null 2>&1 || { printf '%s\n' "$empty"; return 1; }  # fm-retrieval-audit: not-a-read - a tool-presence probe
   command -v jq >/dev/null 2>&1 || { printf '%s\n' "$empty"; return 1; }
   payload_file=$(mktemp "${TMPDIR:-/tmp}/fm-x-reqctx.XXXXXX") || { printf '%s\n' "$empty"; return 1; }
   body_file=$(mktemp "${TMPDIR:-/tmp}/fm-x-reqctx-body.XXXXXX") || { rm -f "$payload_file"; printf '%s\n' "$empty"; return 1; }
@@ -876,11 +876,12 @@ fmx_reply_outbox_json() {
 
 fmx_post_json() (
   local endpoint=$1 payload_file=$2 body_file=${3:-/dev/null} auth_header_file code rc
-  command -v curl >/dev/null 2>&1 || return 127
+  command -v curl >/dev/null 2>&1 || return 127  # fm-retrieval-audit: not-a-read - a tool-presence probe
   [ -r "$payload_file" ] || return 2
   auth_header_file=$(fmx_auth_header_file) || return 3
   trap 'rm -f "$auth_header_file"' EXIT
   trap 'rm -f "$auth_header_file"; exit 143' HUP INT TERM
+  # fm-retrieval-audit: not-a-collection - one request's reply context, posted and read back as one object
   code=$(curl -m 10 -s -o "$body_file" -w '%{http_code}' \
     -X POST \
     -H "@$auth_header_file" \

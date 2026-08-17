@@ -192,6 +192,7 @@ jobs:
           set -eu
           command -v jq >/dev/null || { echo "::error::jq is required"; exit 1; }
           command -v python3 >/dev/null || { echo "::error::python3 is required"; exit 1; }
+          # fm-retrieval-audit: not-a-read - tool-presence probe only
           command -v curl >/dev/null || { echo "::error::curl is required"; exit 1; }
           command -v tar >/dev/null || { echo "::error::tar is required"; exit 1; }
           jq --version
@@ -389,6 +390,10 @@ jobs:
       # the grep here.
       - name: Tracked files must carry no unresolved conflict markers
         run: bin/fm-conflict-marker-check.sh
+      # Single owner of the read-site pattern and the classification vocabulary;
+      # do not re-spell either here.
+      - name: Every load-bearing remote collection read must be classified
+        run: bin/fm-retrieval-check.sh --check
       - name: Personal fleet paths must not be tracked
         run: |
           set -eu

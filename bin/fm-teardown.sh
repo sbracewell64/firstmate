@@ -779,7 +779,7 @@ remove_pr_poll_artifacts() {
 pr_number_from_branch() {
   local branch=$1 out n
   [ -n "$branch" ] && [ "$branch" != HEAD ] || return 1
-  out=$( cd "$WT" && gh-axi pr list --state all --head "$branch" --limit 1 2>/dev/null ) || return 1
+  out=$( cd "$WT" && gh-axi pr list --state all --head "$branch" --limit 1 2>/dev/null ) || return 1  # fm-retrieval-audit: conservative-negative - a miss makes the publication observation could-not-observe, which returns non-zero and refuses at every call site, so it can never authorize discarding unlanded work
   n=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\),.*/\1/p' | head -1)
   [ -n "$n" ] || return 1
   printf '%s' "$n"
@@ -802,7 +802,7 @@ pr_url_for_task() {  # <branch>
     return 0
   fi
   n=$(pr_number_from_branch "$branch") || return 1
-  url=$( cd "$WT" && gh pr view "$n" --json url -q .url 2>/dev/null ) || return 1
+  url=$( cd "$WT" && gh pr view "$n" --json url -q .url 2>/dev/null ) || return 1  # fm-retrieval-audit: not-a-collection - one pull request object's url field, and a miss returns non-zero which the caller treats as could-not-observe rather than as evidence about the work
   [ -n "$url" ] || return 1
   printf '%s' "$url"
 }
@@ -1013,7 +1013,7 @@ backlog_refresh_reminder() {
         fi
         ;;
     esac
-    printf '%s\n' "Backlog: $ID just finished. Run $done_cmd, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."
+    printf '%s\n' "Backlog: $ID just finished. Run $done_cmd, then run tasks-axi ready for dependency-cleared candidates, check date gates, and dispatch only work whose blockers are gone and date is due."  # fm-retrieval-audit: not-a-read - the backlog command this prints for firstmate to run
   else
     printf '%s\n' "Backlog: $ID just finished. Update data/backlog.md - move $ID to Done, keep Done to the 10 most recent, then re-scan Queued and dispatch only work whose blockers are gone and date is due."
   fi

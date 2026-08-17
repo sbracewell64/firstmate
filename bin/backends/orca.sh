@@ -199,7 +199,7 @@ fm_backend_orca_worktree_path() {
 fm_backend_orca_capture() {  # <terminal-id> <lines>
   local terminal=$1 lines=${2:-40} out
   fm_backend_orca_tool_check || return 1
-  out=$(orca terminal read --terminal "$terminal" --limit "$lines" --json) || return 1
+  out=$(orca terminal read --terminal "$terminal" --limit "$lines" --json) || return 1  # fm-retrieval-audit: window-is-the-subject - the claim is what this pane shows now, so the bounded capture window is the universe the claim ranges over
   fm_backend_orca_json_text "$out"
 }
 
@@ -248,13 +248,13 @@ process.stdout.write(v);
 fm_backend_orca_read_text_paged() {  # <terminal-id> <limit>
   local terminal=$1 limit=${2:-200} out limited oldest cursor_out text older_text
   fm_backend_orca_tool_check || return 1
-  out=$(orca terminal read --terminal "$terminal" --limit "$limit" --json) || return 1
+  out=$(orca terminal read --terminal "$terminal" --limit "$limit" --json) || return 1  # fm-retrieval-audit: window-is-the-subject - composer classification asks about the pane's recent text, and the source's own limited flag is honored below
   printf '%s' "$out" | fm_backend_orca_json_ok || return 1
   text=$(fm_backend_orca_json_text "$out") || return 1
   limited=$(fm_backend_orca_json_field limited "$out" 2>/dev/null || true)
   oldest=$(fm_backend_orca_json_field oldestCursor "$out" 2>/dev/null || true)
   if [ "$limited" = true ] && [ -n "$oldest" ]; then
-    cursor_out=$(orca terminal read --terminal "$terminal" --cursor "$oldest" --limit "$limit" --json) || return 1
+    cursor_out=$(orca terminal read --terminal "$terminal" --cursor "$oldest" --limit "$limit" --json) || return 1  # fm-retrieval-audit: window-is-the-subject - the one cursor extension the source's limited flag asks for; nothing outside the window is concluded about
     printf '%s' "$cursor_out" | fm_backend_orca_json_ok || return 1
     older_text=$(fm_backend_orca_json_text "$cursor_out") || return 1
     text="${older_text}"$'\n'"${text}"

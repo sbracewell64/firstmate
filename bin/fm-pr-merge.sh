@@ -344,6 +344,7 @@ VERIFIED_HEAD=
 empty_rollup_evidence() {
   local head=$1 counts total held extra
   command -v gh >/dev/null 2>&1 || return 0
+  # fm-retrieval-audit: no-negative - enriches an already-decided refusal only and reports nothing when it cannot read the suites, so it can never turn a refusal into a merge
   counts=$(gh api "repos/$PR_OWNER/$PR_REPO/commits/$head/check-suites" \
     -q '"\(.total_count // 0) \([.check_suites[]? | select(((.conclusion // "") | ascii_downcase) == "action_required")] | length)"' \
     2>/dev/null) || return 0
@@ -380,6 +381,7 @@ verify_current_head() {
     echo "error: refusing to merge: the pull request could not be verified because gh is not on PATH" >&2
     return 1
   }
+  # fm-retrieval-audit: complete-source - refuses when the rollup returned fewer members than its own totalCount reported, so what was not read is never read as green
   output=$(gh api graphql -f query="$PR_VERIFY_GRAPHQL" \
     -f owner="$PR_OWNER" -f repo="$PR_REPO" -F number="$PR_NUMBER" \
     -q "$PR_VERIFY_QUERY" 2>/dev/null) || {
@@ -674,7 +676,7 @@ if ! caller_has_merge_method "$@"; then
   merge_args=(--squash)
 fi
 
-gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "${merge_args[@]+"${merge_args[@]}"}" "$@"
+gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "${merge_args[@]+"${merge_args[@]}"}" "$@"  # fm-retrieval-audit: write - the merge itself, which is an action and has no observation type
 
 # The landing record exists only so a released task's pull request can still be
 # landed here, so it is spent once that merge succeeds. It is retained while a

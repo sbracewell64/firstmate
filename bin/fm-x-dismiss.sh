@@ -88,13 +88,14 @@ if [ -z "$FMX_TOKEN" ]; then
   echo "fm-x-dismiss: X mode not configured (no FMX_PAIRING_TOKEN)" >&2
   exit 1
 fi
-command -v curl >/dev/null 2>&1 || { echo "fm-x-dismiss: curl not found" >&2; exit 1; }
+command -v curl >/dev/null 2>&1 || { echo "fm-x-dismiss: curl not found" >&2; exit 1; }  # fm-retrieval-audit: not-a-read - a tool-presence probe
 AUTH_HEADER_FILE=$(fmx_auth_header_file) || {
   echo "fm-x-dismiss: invalid FMX_PAIRING_TOKEN" >&2
   exit 1
 }
 trap 'rm -f "$AUTH_HEADER_FILE"' EXIT
 
+# fm-retrieval-audit: write - a dismissal, which is an action and has no observation type
 code=$(curl -m 10 -s -o /dev/null -w '%{http_code}' \
   -X POST \
   -H "@$AUTH_HEADER_FILE" \

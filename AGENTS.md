@@ -274,6 +274,8 @@ An unevaluable verdict means the fact may not be asserted at all, not that the c
 Its `owners` ledger names the deterministic work with no landed owner yet; that work remains firstmate's, and the instructions compensating for it stay in force until its owner lands.
 Load `decision-surface` before asserting any of those facts, before dispatching work that may already exist, and whenever a check returns contradicted or unevaluable.
 
+Before making a negative control-plane claim from a remote collection, use `bin/fm-control-read.sh`; its header owns the retrieval and conclusion contract.
+
 ### Intake and authority
 
 Resolve the project independently for every request.

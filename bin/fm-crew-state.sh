@@ -553,7 +553,7 @@ nm_run_broke_without_verdict() {  # <error-text>
 # newest row cannot be bound to this worktree.
 nm_runs_status_for_branch() {  # <branch>
   local branch=$1 out row st rest br sha verdict
-  out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")
+  out=$(nm_run runs --limit "$FM_CREW_STATE_RUNS_LIMIT")  # fm-retrieval-audit: window-is-the-subject - the question is whether a run for this branch is active now and the listing is newest-first, so an active run sits inside the newest rows
   [ -n "$out" ] || return 0
   while IFS= read -r row; do
     row=$(trim "$row")

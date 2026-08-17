@@ -35,6 +35,10 @@
 # lines become the loop's recorded evidence.
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-retrieval-lib.sh
+. "$SCRIPT_DIR/fm-retrieval-lib.sh"
+
 REPO="${FM_FORK_REPO:-sbracewell64/firstmate}"
 EVENT_KEY=""
 
@@ -56,26 +60,79 @@ if ! command -v gh-axi >/dev/null 2>&1; then
   exit 2
 fi
 
-# The forge is the authority on whether the pull request exists. An unreadable
-# forge is unavailable, never "no pull request": absence of evidence must not be
-# read as evidence of absence.
-listing=$(gh-axi pr list --repo "$REPO" --state open --head "$EVENT_KEY" 2>&1)
-status=$?
-if [ "$status" -ne 0 ]; then
-  printf 'unavailable: could not list pull requests on %s for head %s\n' "$REPO" "$EVENT_KEY"
+# Both readers are required now: gh-axi for the check summary, and gh for the
+# enumerated pull request read below, because the continuation lives in the
+# response headers that the agent-ergonomic wrapper does not expose.
+if ! command -v gh >/dev/null 2>&1; then
+  printf 'unavailable: gh is not installed, so the open pull requests cannot be enumerated\n'
   exit 2
 fi
 
-number=$(printf '%s\n' "$listing" | sed -n 's/^[[:space:]]*\([0-9][0-9]*\),".*/\1/p' | head -1)
-if [ -z "$number" ]; then
-  printf 'fail: no open pull request on %s with head %s\n' "$REPO" "$EVENT_KEY"
-  printf 'evidence: the contribution has not been carried to the fork yet\n'
-  exit 1
+# The forge is the authority on whether the pull request exists, and this used to
+# ask it with `gh-axi pr list --head` and take the first number the listing
+# happened to print. That is two mistakes in one line: the listing was never
+# enumerated, so "no open pull request" was a negative over an unread universe,
+# and the first row is the SOURCE's choice of which pull request this is, not
+# this verifier's. bin/fm-control-read.sh enumerates the whole open set, proves
+# it did, and matches head.ref by equality rather than by token, because
+# "feature/x" occurs as a whole token inside "feature/x/y".
+#
+# Ambiguity is refused rather than resolved: two open pull requests carrying this
+# head are two candidate subjects, and picking either would be a sound reading of
+# the wrong one.
+# There is no classification annotation here on purpose: routing the read through
+# the contract means this line is no longer a direct read for
+# bin/fm-retrieval-check.sh to classify, and leaving a stale annotation behind
+# would satisfy that check for a future line that went back to calling gh here.
+record=$("$SCRIPT_DIR/fm-control-read.sh" \
+  endpoint "repos/$REPO/pulls?state=open" \
+  --id-field number --text-field head.ref --time-field created_at \
+  --identity "$EVENT_KEY" --identity-mode exact --claim latest 2>&1)
+status=$?
+
+if ! fm_retrieval_parse "$record"; then
+  printf 'unavailable: retrieval returned an unreadable result for %s at head %s\n' \
+    "$REPO" "$EVENT_KEY"
+  printf 'evidence: %s\n' "$(printf '%s\n' "$record" | tr '\n' ' ')"
+  exit 2
 fi
+retrieval=$FM_RETRIEVAL_COMPLETENESS
+matches=$FM_RETRIEVAL_MATCHES
+number=$FM_RETRIEVAL_SELECTED_ID
 
-printf 'evidence: fork pull request %s exists on %s for head %s\n' "$number" "$REPO" "$EVENT_KEY"
+case "$status" in
+  0) ;;
+  1)
+    printf 'fail: no open pull request on %s with head %s (the whole open set was read: %s)\n' \
+      "$REPO" "$EVENT_KEY" "$retrieval"
+    printf 'evidence: the contribution has not been carried to the fork yet\n'
+    exit 1
+    ;;
+  *)
+    printf 'unavailable: could not establish the open pull requests on %s for head %s (retrieval=%s)\n' \
+      "$REPO" "$EVENT_KEY" "${retrieval:-unreadable}"
+    printf 'evidence: %s\n' "$(printf '%s\n' "$record" | tr '\n' ' ')"
+    exit 2
+    ;;
+esac
 
-checks=$(gh-axi pr checks "$number" --repo "$REPO" 2>&1)
+if [ "${matches:-0}" != 1 ]; then
+  printf 'unavailable: %s open pull requests on %s carry head %s, so the subject is ambiguous\n' \
+    "$matches" "$REPO" "$EVENT_KEY"
+  exit 2
+fi
+case "${number:-}" in
+  ''|*[!0-9]*)
+    printf 'unavailable: the matching pull request on %s for head %s has no usable number\n' \
+      "$REPO" "$EVENT_KEY"
+    exit 2
+    ;;
+esac
+
+printf 'evidence: fork pull request %s exists on %s for head %s (open set read completely: %s)\n' \
+  "$number" "$REPO" "$EVENT_KEY" "$retrieval"
+
+checks=$(gh-axi pr checks "$number" --repo "$REPO" 2>&1)  # fm-retrieval-audit: complete-source - reconciles the summary's own clauses against its total and refuses when they do not add up, so a partly-read check set is unavailable rather than resolved
 status=$?
 # `pr checks` exits non-zero when checks are failing, which is a real verdict and
 # not an inability to read one. Only an empty read is unavailable.
