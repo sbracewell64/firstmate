@@ -26,7 +26,7 @@ Everything that needed the captain before still needs the captain:
 
 - A PR merge needs the captain's explicit word, unless the project carries a standing `yolo` posture.
   This repository's posture is autonomy off.
-- Teardown of unlanded work is refused; no force, no discard.
+- Teardown of unrecoverable work is refused; no force, no discard.
 - An ask-user finding is decided under `ask-user-authority` exactly as it would be in a captain-started session, which with autonomy off means it belongs to the captain.
 - A destructive, irreversible, or security-sensitive action needs the captain naming the concrete action.
 
