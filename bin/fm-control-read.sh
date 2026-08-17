@@ -88,7 +88,7 @@
 #
 # Output is exactly one record on stdout, in every case:
 #
-#   retrieval[1]{source,retrieval,reason,pages,records,duplicates,reported,candidates,matches,quoted_only,prefix_rejected,claim,conclusion,selected,evidence_ref}:
+#   retrieval[2]{source,retrieval,reason,pages,records,duplicates,reported,candidates,matches,quoted_only,prefix_rejected,claim,conclusion,selected,evidence_ref}:
 #     issue-comments:o/r#12,complete,enumerated,3,137,0,unknown,4,1,0,2,latest,PRESENT,984,/tmp/x.jsonl.meta
 #
 # retrieval is one of complete, incomplete, or unobserved, and conclusion is one

@@ -865,7 +865,7 @@ fm_retrieval_decode_field() {  # <value>
 
 # fm_retrieval_emit <source> <claim>: the one record shape, on stdout.
 fm_retrieval_emit() {  # <source> <claim>
-  printf 'retrieval[1]{%s}:\n' "$FM_RETRIEVAL_FIELDS"
+  printf 'retrieval[2]{%s}:\n' "$FM_RETRIEVAL_FIELDS"
   printf '  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$(fm_retrieval_encode_field "${1:--}")" \
     "$(fm_retrieval_encode_field "${FM_RETRIEVAL_COMPLETENESS:-unobserved}")" \
@@ -889,12 +889,18 @@ fm_retrieval_emit() {  # <source> <claim>
 # because an unparseable record is itself a could-not-observe and a consumer
 # reading half of one would be looking at a result this function refused.
 fm_retrieval_parse() {  # <record>
-  local record=$1 row n i name value
+  local record=$1 header version row n i name value
   local -a names=() values=()
   FM_RETRIEVAL_COMPLETENESS=
   FM_RETRIEVAL_REASON=
   FM_RETRIEVAL_CONCLUSION=
   FM_RETRIEVAL_SOURCE=
+  header=$(printf '%s\n' "$record" | head -1)
+  case "$header" in
+    "retrieval[1]{$FM_RETRIEVAL_FIELDS}:") version=1 ;;
+    "retrieval[2]{$FM_RETRIEVAL_FIELDS}:") version=2 ;;
+    *) return 1 ;;
+  esac
   row=$(printf '%s\n' "$record" | sed -n 's/^  //p' | head -1)
   [ -n "$row" ] || return 1
   IFS=, read -r -a names <<< "$FM_RETRIEVAL_FIELDS"
@@ -904,9 +910,12 @@ fm_retrieval_parse() {  # <record>
   i=0
   while [ "$i" -lt "$n" ]; do
     name=${names[$i]}
-    fm_retrieval_decode_field "${values[$i]}"
-    value=$FM_RETRIEVAL_DECODED
-    values[$i]=$FM_RETRIEVAL_DECODED
+    value=${values[$i]}
+    if [ "$version" = 2 ]; then
+      fm_retrieval_decode_field "$value"
+      value=$FM_RETRIEVAL_DECODED
+      values[$i]=$FM_RETRIEVAL_DECODED
+    fi
     case "$name" in
       retrieval)
         case "$value" in complete|incomplete|unobserved) ;; *) return 1 ;; esac

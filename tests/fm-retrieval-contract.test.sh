@@ -139,9 +139,9 @@ run_read() {  # <fixture-root> <args...>
 # One field of the emitted record, by column name.
 field() {  # <record> <name>
   printf '%s\n' "$1" | awk -v want="$2" '
-    /^[a-z_]+\[1\]\{/ {
+    /^[a-z_]+\[[0-9]+\]\{/ {
       hdr = $0
-      sub(/^[a-z_]+\[1\]\{/, "", hdr)
+      sub(/^[a-z_]+\[[0-9]+\]\{/, "", hdr)
       sub(/\}:.*$/, "", hdr)
       n = split(hdr, names, ",")
       next
@@ -713,6 +713,35 @@ test_comma_paths_round_trip_through_the_public_contract() {
   pass "comma-bearing endpoint, replay, and evidence paths remain consumable"
 }
 
+test_record_versions_preserve_legacy_literals_and_decode_new_fields() {
+  local legacy modern parsed
+  legacy="retrieval[1]{source,retrieval,reason,pages,records,duplicates,reported,candidates,matches,quoted_only,prefix_rejected,claim,conclusion,selected,evidence_ref}:
+  endpoint:labels=%2C%0A%0D%25,complete,enumerated,1,1,0,unknown,1,1,0,0,exists,PRESENT,21,evidence=%25"
+  [ "$(parsed_field "$legacy" source)" = 'endpoint:labels=%2C%0A%0D%25' ] \
+    || fail "record versions: legacy escape-like source bytes changed"
+  [ "$(parsed_field "$legacy" evidence_ref)" = 'evidence=%25' ] \
+    || fail "record versions: legacy escape-like evidence bytes changed"
+  modern=$(FM_RETRIEVAL_TEST_LIB=$LIB \
+    FM_RETRIEVAL_TEST_SOURCE=$'endpoint:line1,line2\nline3' \
+    FM_RETRIEVAL_TEST_EVIDENCE=$'/tmp/evidence,line1\nline2' bash -c '
+    . "$FM_RETRIEVAL_TEST_LIB"
+    fm_retrieval_reset
+    fm_retrieval_set_reason enumerated
+    FM_RETRIEVAL_CONCLUSION=PRESENT
+    FM_RETRIEVAL_PROVENANCE=$FM_RETRIEVAL_TEST_EVIDENCE
+    fm_retrieval_emit "$FM_RETRIEVAL_TEST_SOURCE" exists
+  ')
+  parsed=$(parsed_field "$modern" source) \
+    || fail "record versions: the v2 source did not parse"
+  [ "$parsed" = "endpoint:line1,line2
+line3" ] || fail "record versions: v2 source did not round trip"
+  parsed=$(parsed_field "$modern" evidence_ref) \
+    || fail "record versions: the v2 evidence did not parse"
+  [ "$parsed" = "/tmp/evidence,line1
+line2" ] || fail "record versions: v2 evidence did not round trip"
+  pass "v1 literals remain literal while v2 comma and newline fields decode"
+}
+
 test_replay_without_text_field_fails_closed() {
   local fix records staged
   fix=$(fixture_new replay-notext)
@@ -1242,6 +1271,7 @@ run test_unreadable_subject_is_could_not_observe
 run test_records_and_provenance_are_written_and_committed_last
 run test_replay_of_a_committed_read_reaches_the_same_conclusion
 run test_comma_paths_round_trip_through_the_public_contract
+run test_record_versions_preserve_legacy_literals_and_decode_new_fields
 run test_replay_without_text_field_fails_closed
 run test_replay_without_time_field_fails_closed
 run test_replay_with_deleted_records_fails_closed
