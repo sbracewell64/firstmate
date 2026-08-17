@@ -157,6 +157,19 @@ test_check_refuses_a_block_whose_derived_line_was_edited() {
   pass "check refuses a derived line that was softened or dropped"
 }
 
+test_check_refuses_duplicate_singleton_fields() {
+  local file out rc
+  file="$TMP_ROOT/duplicate-examined.txt"
+  render_valid | sed '/^  examined:/a\  examined:    a second claim silently replacing the first' >"$file"
+
+  out=$("$WS" check "$file" 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "a block with two examined claims passed the form check"
+  assert_contains "$out" 'duplicate=examined' \
+    "check did not name the duplicate singleton field"
+
+  pass "check refuses an ambiguous duplicate singleton field"
+}
+
 test_check_is_three_valued_with_distinct_exit_codes() {
   local complete incomplete unreadable directory permission_denied out rc
   complete="$TMP_ROOT/three-complete.txt"
@@ -261,6 +274,8 @@ test_help_states_the_limit_of_a_complete_form() {
     "--help does not name what a complete form leaves unestablished"
   assert_contains "$out" 'nothing here tries to decide it' \
     "--help does not state that class membership is not decided mechanically"
+  assert_contains "$out" 'Every field except repeatable `evidence` is a singleton' \
+    "--help does not state how duplicate fields affect form completeness"
   pass "--help states what a complete form does and does not establish"
 }
 
@@ -281,6 +296,7 @@ test_refusals_that_protect_the_finding_form
 test_every_axis_is_renderable_and_documented
 test_check_reports_form_complete_only_for_a_well_formed_block
 test_check_refuses_a_block_whose_derived_line_was_edited
+test_check_refuses_duplicate_singleton_fields
 test_check_is_three_valued_with_distinct_exit_codes
 test_check_validates_findings_embedded_in_a_report
 test_check_reads_stdin

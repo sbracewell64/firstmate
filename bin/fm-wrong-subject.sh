@@ -82,6 +82,8 @@
 #   FORM_UNREADABLE  (exit 3) the input could not be read, or holds no finding
 #                    block at all. Zero blocks is could-not-observe and never a
 #                    pass: a file with nothing to check has not been checked.
+# Every field except repeatable `evidence` is a singleton; duplicates are an
+# ambiguous form rather than an instruction to trust the last value.
 #
 # Those are three distinct exit codes on purpose. One status covering both a
 # negative verdict and a failure to reach one is the defect fm-verify.sh exists
@@ -264,8 +266,8 @@ EOF
 CHECK_BLOCKS=0
 CHECK_BAD=0
 
-report_block() {  # <line-no> <axis> <fields...>
-  local line_no=$1 axis=$2 seen=$3 examined=$4 credited=$5 credited_as=$6 want
+report_block() {  # <line-no> <axis> <seen> <duplicates> <claims...>
+  local line_no=$1 axis=$2 seen=$3 duplicates=$4 examined=$5 credited=$6 credited_as=$7 want
   local missing='' key note=''
 
   for key in check examined credited credited-as gap therefore; do
@@ -275,7 +277,9 @@ report_block() {  # <line-no> <axis> <fields...>
     esac
   done
 
-  if [ -n "$missing" ]; then
+  if [ -n "$duplicates" ]; then
+    note="duplicate=${duplicates#,}"
+  elif [ -n "$missing" ]; then
     note="missing=${missing#,}"
   elif ! axis_known "$axis"; then
     note="bad=axis:$axis"
@@ -308,7 +312,7 @@ report_block() {  # <line-no> <axis> <fields...>
 
 cmd_check() {
   local src=${1:-} line n=0 in_block=0 block_line=0
-  local axis='' seen='' examined='' credited='' credited_as='' key val
+  local axis='' seen='' duplicates='' examined='' credited='' credited_as='' key val
 
   [ -n "$src" ] || die "check needs a path or - (see --help)"
   if [ "$src" = '-' ]; then
@@ -328,13 +332,14 @@ cmd_check() {
     case "$line" in
       'wrong-subject finding (axis: '*')')
         if [ "$in_block" -eq 1 ]; then
-          report_block "$block_line" "$axis" "$seen" "$examined" "$credited" "$credited_as"
+          report_block "$block_line" "$axis" "$seen" "$duplicates" "$examined" "$credited" "$credited_as"
         fi
         axis=${line#wrong-subject finding (axis: }
         axis=${axis%)}
         in_block=1
         block_line=$n
         seen=''
+        duplicates=''
         examined=''
         credited=''
         credited_as=''
@@ -352,6 +357,11 @@ cmd_check() {
         # with a space, so this cannot eat one.
         while [ "${val# }" != "$val" ]; do val=${val# }; done
         if [ -n "$val" ]; then
+          case " $seen " in
+            *" $key "*)
+              [ "$key" = evidence ] || duplicates="$duplicates,$key"
+              ;;
+          esac
           seen="$seen $key"
           case "$key" in
             examined) examined=$val ;;
@@ -362,13 +372,13 @@ cmd_check() {
         fi
         ;;
       *)
-        report_block "$block_line" "$axis" "$seen" "$examined" "$credited" "$credited_as"
+        report_block "$block_line" "$axis" "$seen" "$duplicates" "$examined" "$credited" "$credited_as"
         in_block=0
         ;;
     esac
   done <"$src"
   [ "$in_block" -eq 0 ] ||
-    report_block "$block_line" "$axis" "$seen" "$examined" "$credited" "$credited_as"
+    report_block "$block_line" "$axis" "$seen" "$duplicates" "$examined" "$credited" "$credited_as"
 
   # Zero blocks is could-not-observe, not a clean file. A run that examined
   # nothing has established nothing, and reporting it as complete would be the
