@@ -1044,6 +1044,23 @@ SH
   pass "the check accepts a read carrying an exact classification and reason"
 }
 
+test_check_accepts_a_named_pull_request_object_read() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-named-pull-request"
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/fm-new-reader.sh" <<'SH'
+#!/usr/bin/env bash
+set -u
+# fm-retrieval-audit: not-a-collection - one pull request selected by repository and number
+out=$(gh api "repos/$1/pulls/$2" --jq '.head.sha')
+printf '%s\n' "$out"
+SH
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 0 "$rc" "a named pull request object read passes"
+  assert_contains "$out" "coverage=complete" "the named-object classification preserves complete coverage"
+  pass "a pull request selected by repository and number is classified as one object"
+}
+
 test_check_does_not_inherit_a_neighboring_classification() {
   local dir out rc=0
   dir="$TMP_ROOT/check-neighbor"
@@ -1288,6 +1305,7 @@ run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
 run test_check_accepts_a_classified_read
+run test_check_accepts_a_named_pull_request_object_read
 run test_check_does_not_inherit_a_neighboring_classification
 run test_check_requires_language_comment_syntax
 run test_check_rejects_an_unchecked_non_shell_file
