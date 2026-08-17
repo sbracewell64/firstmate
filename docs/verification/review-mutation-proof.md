@@ -1,8 +1,9 @@
 # Recurrence and mutation proof
 
 Maintainer-verification record for [`bin/fm-review-mutation.sh`](../../bin/fm-review-mutation.sh), the proof owner that answers whether a named target assertion ran and what it concluded.
-The guarantee it records is narrow and exact: no label, marker, or caller-supplied name can establish that a named assertion executed.
-Watched-red evidence is recorded only when it describes the current measured subject.
+The guarantee measured here is narrow and exact: no label, marker, or caller-supplied name can establish that a named assertion executed.
+The watched-red evidence below describes only the pinned `43b78b12` subject and the 32-control, 30-defect inventory recorded for that execution.
+Later source-adjacent output guards in the checked-out subject add three controls and three defect builds, so they require a fresh watched-red measurement before this record can describe the checked-out subject as fully witnessed.
 
 The script's own header owns the law, the fold, the twenty-two bound dimensions, and the mechanics.
 This file records only what was measured, and when.
@@ -119,7 +120,7 @@ That confirmation matters because a build that fails to parse fails every contro
 
 ### Inventory claim
 
-The suite executes 32 controls, and the current measured-file inventory is:
+The measured suite executed 32 controls, and its pinned file inventory was:
 
 ```
 inventory_control_count: 32
@@ -129,11 +130,9 @@ inventory_sha256: tests/fm-review-mutation.test.sh 87b6b5375af0c2a1e2e5fe7ece0bf
 inventory_sha256: tests/review-mutation-red-matrix.py 4396e4bf5ba5b2927b022c1958f13bcbd3f87b27967a6cd728a2f57e8506477f
 ```
 
-This is an inventory claim only: it says these files and this control count agree with the
-suite that runs today. `tests/fm-review-mutation.test.sh` enforces it and fails when they
-drift, counting from the suite's own declared control array - which needs no execution, so it
-cannot credit another control's failure by construction. A full run separately binds those
-declared controls to the identities that actually executed, via `fm_test_contract`.
+This is an inventory claim only: it says those measured files and that control count agreed at `43b78b12`.
+The measured `tests/fm-review-mutation.test.sh` enforced it and failed when they drifted, counting from the suite's own declared control array - which needed no execution, so it could not credit another control's failure by construction.
+A full run separately bound those declared controls to the identities that actually executed, via `fm_test_contract`.
 
 **Passing this inventory claim is NOT evidence for the measurement claim below.** A green
 inventory sitting on top of unmeasured rows is the collapse this separation exists to
@@ -155,7 +154,7 @@ that was never made.
 
 ### Replaying an entry
 
-Every row is reproducible from the tracked catalogue in
+Every row is reproducible from the catalogue bytes pinned by the inventory above in
 [`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py):
 
 ```
