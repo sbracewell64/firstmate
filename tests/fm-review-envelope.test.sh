@@ -254,7 +254,7 @@ capture() {
   CAPTURED_CODE=$?
 }
 
-check_array_registry() {  # <envelope> <registry> <current|extra|stale|contradict-summary>
+check_array_registry() {  # <envelope> <registry> <current|extra|stale|contradict-summary|attempt-exemption>
   python3 - "$@" <<'PY'
 import copy, json, sys
 
@@ -283,6 +283,11 @@ elif mode == "stale":
     })
 elif mode == "contradict-summary":
     registry["summary"] = {"exempt_paths": ["candidate.changed_files"]}
+elif mode == "attempt-exemption":
+    entries[0]["experiment"] = {
+        "kind": "exempt",
+        "condition": "contract-max-items-at-most-one",
+    }
 elif mode != "current":
     sys.stderr.write("unknown array-registry check mode: " + mode + "\n")
     sys.exit(1)
@@ -331,15 +336,6 @@ for entry in entries:
         if experiment.get("sort_key") not in ("id", "mismatch", "path", "scalar"):
             sys.stderr.write("array canonical experiment has no stable sort key: " + path + "\n")
             sys.exit(1)
-    elif kind == "exempt":
-        if experiment.get("condition") != "contract-max-items-at-most-one":
-            sys.stderr.write("array exemption uses an unknown condition: " + path + "\n")
-            sys.exit(1)
-        exempt_paths.add(path)
-        maximum = experiment.get("contract_max_items")
-        if not isinstance(maximum, int) or maximum > 1 or maximum < 0:
-            sys.stderr.write("array exemption has no structural maximum: " + path + "\n")
-            sys.exit(1)
     else:
         sys.stderr.write("array registry has an invalid experiment: " + path + "\n")
         sys.exit(1)
@@ -380,18 +376,6 @@ elif mode == "meaningful-as-canonical":
                  if item["order"] == "order-meaningful"
                  and item["experiment"]["kind"] == "input-recompile")
     entry["order"] = "canonicalized"
-elif mode == "schema-short":
-    baseline["envelope"]["schema_singleton"] = ["only"]
-    entries = [{
-        "path": "schema_singleton",
-        "order": "canonicalized",
-        "reason": "Synthetic structural-cardinality control.",
-        "experiment": {
-            "kind": "exempt",
-            "condition": "contract-max-items-at-most-one",
-            "contract_max_items": 1,
-        },
-    }]
 elif mode == "fixture-short":
     baseline["envelope"]["ci"]["wrong_head_attempts"] = baseline["envelope"]["ci"]["wrong_head_attempts"][:1]
 elif mode != "current":
@@ -456,8 +440,6 @@ def canonicalize(array, sort_key):
 
 baseline_identity = identity(baseline["envelope"])
 for entry in entries:
-    if entry["experiment"]["kind"] == "exempt":
-        continue
     arrays = arrays_at(baseline["envelope"], entry["path"])
     supplied = max((distinct_count(array) for array in arrays), default=0)
     if supplied < 2:
@@ -472,20 +454,6 @@ for entry in entries:
 for index, entry in enumerate(entries):
     path = entry["path"]
     experiment = entry["experiment"]
-    if experiment["kind"] == "exempt":
-        condition = experiment.get("condition")
-        if condition != "contract-max-items-at-most-one":
-            sys.stderr.write("exemption for " + path + " uses unknown condition " + str(condition) + "\n")
-            sys.exit(1)
-        maximum = experiment.get("contract_max_items")
-        if not isinstance(maximum, int) or maximum > 1 or maximum < 0:
-            sys.stderr.write(
-                "exemption for " + path + " failed contract-max-items-at-most-one"
-                + " with structural maximum " + str(maximum) + "\n"
-            )
-            sys.exit(1)
-        print("exempt " + path + ": contract maximum " + str(maximum))
-        continue
     if experiment["kind"] in ("body-recompute", "body-canonical"):
         body = copy.deepcopy(baseline["envelope"])
         candidates = arrays_at(body, path)
@@ -995,6 +963,11 @@ test_array_classification_registry_is_total() {
   expect_code 1 "$CAPTURED_CODE" "a registry summary that contradicts its entries fails"
   assert_contains "$CAPTURED" 'array registry summary contradicts its classifications' \
     "the registry summary must be derived from its classifications"
+
+  capture check_array_registry "$case_dir/env/envelope.json" "$registry" attempt-exemption
+  expect_code 1 "$CAPTURED_CODE" "a path without a contract cardinality anchor cannot be exempted"
+  assert_contains "$CAPTURED" 'array registry has an invalid experiment: candidate.changed_files' \
+    "an attempted unanchored exemption must fail by path"
   pass "the recursive array registry is total in both directions"
 }
 
@@ -1023,12 +996,6 @@ test_array_classifications_are_exercised_in_isolation() {
   assert_contains "$CAPTURED" \
     'fixture defect ci.wrong_head_attempts: contract permits at least 2 distinct elements; fixture supplied 1' \
     "the fixture defect must name its contract capacity and supplied cardinality"
-
-  capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
-    "$registry" "$BIN" schema-short
-  expect_code 0 "$CAPTURED_CODE" "a structural single-element maximum admits the schema exemption"
-  assert_contains "$CAPTURED" 'exempt schema_singleton: contract maximum 1' \
-    "the synthetic schema-short branch must report its structural maximum"
 
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
     "$registry" "$BIN" canonical-as-meaningful
