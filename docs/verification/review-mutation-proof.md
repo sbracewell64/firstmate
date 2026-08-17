@@ -202,7 +202,7 @@ global label would let a single relabelling silently re-attribute every row.
 | Control | Reddened by | Observed red | Measured at |
 | --- | --- | --- | --- |
 | a matching success line cannot establish that the target ran | D01 D05 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `d0a92a82` |
-| the proof owners own success literal cannot reach a verdict | D05 D19 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `d0a92a82` |
+| the proof owner's own success literal cannot reach a verdict | D05 D19 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `d0a92a82` |
 | a target that executed and passed is a pass | D01 D05 | `the basis must say the target executed and concluded pass` | `d0a92a82` |
 | a target that executed and failed is a fail | D05 D20 | `an executed target that concluded fail is FAIL: expected exit 1, got 2` | `d0a92a82` |
 | an unattributable substitution is could not observe | D01 D02 D05 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `d0a92a82` |
