@@ -1,0 +1,5 @@
+no-mistakes-attestation: v1
+head: 34e81f68fea0c39b4ee70b13a6335f82b35ebdbc
+run: 01M086WD1256ZQ98EJKAHAPJ5B
+gates: intent,rebase,review,test,document,lint,push,pr
+tool: no-mistakes/v1.40.3
