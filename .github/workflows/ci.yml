@@ -122,20 +122,9 @@ jobs:
   tests-portable-serial:
     name: Behavior portable serial ${{ matrix.shard }}
     runs-on: ubuntu-latest
-    # 15 minutes is unchanged, and is a hang tripwire rather than the expected
-    # healthy end of the lane. What changed underneath it is the shard count.
-    #
-    # The remainder measured ~19 min of serial work when this cap was set, so
-    # four shards ran ~4.8 min each and the cap was ~3x margin. The remainder is
-    # now ~39.4 min, which put four shards at ~9.9 min and only ~1.5x margin, and
-    # the heaviest shard reached this cap and cancelled whole runs. Eight shards
-    # restore the ~4.9 min balanced wall and the ~3x margin the cap was chosen
-    # for, so the tripwire keeps the meaning it had instead of being raised.
-    #
-    # bin/fm-test-run.sh owns the measured basis for all of those numbers and
-    # refuses a lane whose "ofN" disagrees with its shard count; the budget check
-    # in tests-timing-aggregate refuses a timeout literal that disagrees with the
-    # one those bounds were derived against.
+    # This remains a hang tripwire rather than the expected healthy lane end.
+    # bin/fm-test-run.sh owns the measured budget basis, shard count, margins,
+    # and checks that link this literal and matrix to those declarations.
     timeout-minutes: 15
     strategy:
       # Every shard reports so one failure never hides another shard's result.
