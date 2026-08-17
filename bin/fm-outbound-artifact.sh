@@ -891,7 +891,7 @@ require_record_applicable_now() {  # <request-id> <record-json>
 }
 
 cmd_ruling() {  # <request-id> <comment-id> <issue>
-  local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict
+  local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict verdict_count
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -933,7 +933,26 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
       exit 3
   fi
-  verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p' | head -1)
+  # EXACTLY ONE verdict line, or refuse. Not the first, and not the last: both
+  # resolve ambiguity by POSITION, which is a guess wearing the clothes of a
+  # policy. Rulings on this control plane quote prior rulings as a matter of
+  # course, so a body carrying two verdict lines is the ORDINARY shape rather
+  # than an attack, and reading the first would silently adopt whatever the
+  # ruling was quoting instead of what it decided.
+  #
+  # Same rule as a duplicate disposition refusing rather than resolving by array
+  # order, and as an unparseable construct reporting could-not-observe rather
+  # than being skipped: an ambiguous input is refused loudly and then fixed, and
+  # is never resolved into a confident answer nobody chose.
+  verdict_count=$(printf '%s\n' "$body" | grep -c '^verdict: ' || true)
+  case $verdict_count in ''|*[!0-9]*) verdict_count=0 ;; esac
+  if [ "$verdict_count" -gt 1 ]; then
+    printf '%s: comment %s carries %s verdict lines, so which one it rules is ambiguous\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$verdict_count" >&2
+    printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own verdict once.\n' >&2
+    exit 3
+  fi
+  verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p')
   [ -n "$verdict" ] || {
     printf '%s: comment %s has no ruling verdict\n' "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
     exit 3

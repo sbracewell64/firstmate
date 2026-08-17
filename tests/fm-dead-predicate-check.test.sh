@@ -44,11 +44,64 @@ add_plain_consumer() {  # <dir> <body>
 # A consumer this control cannot parse. Its presence must be REPORTED, must not
 # turn the control red on its own, and must turn an otherwise-dead predicate into
 # could-not-observe rather than dead.
-add_unparseable_consumer() {  # <dir>
-  printf '#!/usr/bin/env bash\ncat <<EOF\npayload\nEOF\n' > "$1/bin/unparseable.sh"
+add_unparseable_consumer() {  # <dir> [<payload>]
+  # The payload matters: completeness is PROPERTY-SCOPED, so an unparseable file
+  # blocks a predicate only if it could possibly call it. A generic payload
+  # leaves every predicate's universe complete.
+  printf '#!/usr/bin/env bash\ncat <<EOF\n%s\nEOF\n' "${2:-payload}" > "$1/bin/unparseable.sh"
 }
 
 run_check() { FM_ROOT_OVERRIDE="$1" "$CHECK" "${@:2}"; }
+
+test_unparsed_file_that_never_mentions_it_leaves_the_universe_complete() {
+  local dir out rc
+  # Property-scoped completeness. The candidate universe for a predicate is its
+  # POSSIBLE CALLERS, so a file that never references the name cannot hold a call
+  # to it and must not block a DEAD verdict for it. A global rule made 215
+  # unparsed files block every predicate, including ones none of them mentions.
+  dir=$(fixture universe-complete 'live_one() { return 0; }
+dead_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  printf '#!/usr/bin/env bash\ncat <<EOF\nnothing relevant here\nEOF\n' > "$dir/bin/unparseable.sh"
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "universe: DEAD was not issuable despite a complete caller universe, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'DEAD .*dead_one' \
+    || fail "universe: dead_one was not reported: $out"
+  pass "an unparsed file that never mentions a predicate does not block its DEAD verdict"
+}
+
+test_unparsed_file_that_mentions_it_makes_the_universe_incomplete() {
+  local dir out rc
+  dir=$(fixture universe-incomplete 'live_one() { return 0; }
+dead_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  printf '#!/usr/bin/env bash\ncat <<EOF\nmaybe dead_one appears here\nEOF\n' > "$dir/bin/unparseable.sh"
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "universe: a possible caller did not yield could-not-observe, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'CNO .*dead_one' \
+    || fail "universe: not reported as could-not-observe: $out"
+  printf '%s' "$out" | grep -q 'DEAD .*dead_one' \
+    && fail "universe: reported DEAD while a possible caller was unreadable: $out"
+  pass "an unparsed file that mentions a predicate makes its universe incomplete, so could-not-observe"
+}
+
+test_loose_exclusion_never_confirms_a_call() {
+  local dir out rc
+  # The asymmetry that makes loose matching sound. A mention inside an unparsed
+  # file may EXCLUDE that file from a predicate's universe - costing at worst a
+  # could-not-observe - but must never be read as evidence that a call exists.
+  # If it were, this predicate would report ALIVE and the control would be
+  # confirming a call from a substring, which is discovery mistaken for identity.
+  dir=$(fixture loose-never-confirms 'live_one() { return 0; }
+dead_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  printf '#!/usr/bin/env bash\ncat <<EOF\ndead_one\nEOF\n' > "$dir/bin/unparseable.sh"
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "asymmetry: expected could-not-observe, got $rc: $out"
+  printf '%s' "$out" | grep -q 'alive=2' \
+    && fail "asymmetry: a mention in an unparsed file was counted as a call: $out"
+  pass "a mention in an unparsed file excludes but never confirms, so it can only yield could-not-observe"
+}
 
 test_dead_function_is_refused() {
   local dir out rc
@@ -311,7 +364,10 @@ test_unresolvable_predicate_is_could_not_observe_not_dead() {
   dir=$(fixture cno-not-dead 'live_one() { return 0; }
 maybe_used() { return 0; }')
   add_plain_consumer "$dir" 'live_one'
-  add_unparseable_consumer "$dir"
+  # It must MENTION the predicate, or its universe is complete and DEAD is the
+  # correct answer. This case previously passed under a global completeness rule
+  # that Browser Sol superseded.
+  add_unparseable_consumer "$dir" 'maybe_used'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 4 ] || fail "cno: expected could-not-observe exit 4, got $rc: $out"
   printf '%s' "$out" | grep -q 'CNO .*maybe_used' \
@@ -323,6 +379,9 @@ maybe_used() { return 0; }')
 
 test_dead_function_is_refused
 test_consulted_function_passes
+test_unparsed_file_that_never_mentions_it_leaves_the_universe_complete
+test_unparsed_file_that_mentions_it_makes_the_universe_incomplete
+test_loose_exclusion_never_confirms_a_call
 test_call_from_unenrolled_consumer_counts
 test_single_quoted_substitution_is_not_a_call
 test_quoted_prose_describing_a_call_is_not_a_call

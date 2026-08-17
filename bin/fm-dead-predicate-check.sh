@@ -223,6 +223,32 @@ consumer_files() {
   done | sort -u
 }
 
+# Could an UNPARSED consumer still hold a call to this predicate?
+#
+# The completeness predicate is PROPERTY-SCOPED: the candidate universe for one
+# predicate is its POSSIBLE CALLERS, not every file in the repository. A file
+# that never mentions the name at all cannot hold a call to it, so it is
+# irrelevant to that predicate's claim and must not block a DEAD verdict for it.
+# A global rule - any unparsed file anywhere blocks every DEAD verdict - made the
+# control answer could-not-observe about predicates whose supposed blockers never
+# referenced them.
+#
+# THE MATCHING HERE IS DELIBERATELY LOOSE, AND THAT IS ONLY LEGITIMATE IN THIS
+# DIRECTION. It is used to EXCLUDE a file from a predicate's universe, where a
+# false positive costs a COULD_NOT_OBSERVE and nothing worse. The identical
+# looseness used to CONFIRM that a call exists would be discovery mistaken for
+# identity - the defect this whole surface has been closing - and is forbidden.
+# Nothing may route a call-site CONFIRMATION through this function.
+unparsed_consumer_may_call() {  # <function>
+  local fn=$1 entry f
+  for entry in ${UNCHECKED_CONSUMERS[@]+"${UNCHECKED_CONSUMERS[@]}"}; do
+    f=${entry%%:*}
+    [ -r "$f" ] || return 0
+    grep -Eq "\\b$fn\\b" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 enrolled_files() {
   if [ "${#TARGETS[@]}" -gt 0 ]; then
     printf '%s\n' "${TARGETS[@]}"
@@ -328,7 +354,8 @@ for f in "${FILES[@]}"; do
     # consumer outstanding, the call site may be in a file nobody looked at, and
     # asserting DEAD there would licence deleting live code. Missing a dead
     # predicate wastes an opportunity; deleting a live one is an outage.
-    if [ "${#UNCHECKED_CONSUMERS[@]}" -gt 0 ]; then
+    # Complete universe or not, asked per predicate rather than globally.
+    if unparsed_consumer_may_call "$fn"; then
       cno_json=$(printf '%s' "$cno_json" | jq --arg f "$f" --arg fn "$fn" --argjson l "$lineno" \
         '. + [{file:$f,function:$fn,line:$l}]')
       CNO=$((CNO + 1))

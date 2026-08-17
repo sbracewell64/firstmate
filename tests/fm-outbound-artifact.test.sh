@@ -524,6 +524,49 @@ emitted_request_id() {  # <case-dir>
   jq -r '.request_id' "$(find "$1/home/data/outbound-artifacts" -maxdepth 1 -type f -name '*.json' -print -quit)"
 }
 
+test_quoted_prior_verdict_makes_the_ruling_ambiguous() {
+  local dir rid out rc
+  dir=$(new_case cverdict)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "verdict: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 561 approved
+  # A ruling that QUOTES a prior ruling before stating its own. On this control
+  # plane that is the ordinary shape, not an attack: rulings cite rulings. Taking
+  # the first verdict line would adopt the quoted one silently.
+  printf 'verdict: rejected\n' >> "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 561 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "verdict: an ambiguous body was resolved rather than refused, exit $rc: $out"
+  printf '%s' "$out" | grep -q '2 verdict lines' \
+    || fail "verdict: the refusal did not name the count: $out"
+  [ "$(run_ob "$dir" show "$rid" | jq -r '.state')" = "emitted" ] \
+    || fail "verdict: an ambiguous ruling advanced the request anyway"
+  pass "verdict: two verdict lines refuse and name the count, rather than resolving by position"
+}
+
+test_single_verdict_is_read_and_no_verdict_refuses() {
+  local dir rid out rc
+  # The non-vacuity half. Without this, the ambiguity control would pass on a
+  # command that refused every ruling.
+  dir=$(new_case cverdict1)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "verdict: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 562 approved
+  run_ob "$dir" ruling --request "$rid" --comment 562 --issue 2 >/dev/null 2>&1 \
+    || fail "verdict: a single verdict line was refused"
+  [ "$(run_ob "$dir" show "$rid" | jq -r '.ruling.verdict')" = "approved" ] \
+    || fail "verdict: the single verdict was not recorded"
+
+  dir=$(new_case cverdict0)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "verdict: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 563 approved
+  grep -v '^verdict: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.x"
+  mv "$dir/forge/ruling_body.x" "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "verdict: a body with no verdict was accepted, exit $rc: $out"
+  pass "verdict: exactly one verdict is read, and none still refuses"
+}
+
 test_ruling_wakes_the_exact_item() {
   local dir rid out
   dir=$(new_case c5)
@@ -1118,6 +1161,8 @@ test_ambiguous_post_is_observed_before_retry
 test_dedupe_observation_failure_refuses_to_post
 test_reconcile_emits_sol_control_only
 test_ruling_wakes_the_exact_item
+test_quoted_prior_verdict_makes_the_ruling_ambiguous
+test_single_verdict_is_read_and_no_verdict_refuses
 test_unrelated_ruling_cannot_wake_the_item
 test_inbound_poll_advances_only_matching_ruling
 test_stale_ruling_is_invalidated_before_fresh_emission
