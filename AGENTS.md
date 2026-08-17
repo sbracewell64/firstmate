@@ -557,7 +557,6 @@ These skills are not captain-invocable; load them only at their precise triggers
 - `decision-surface` - load before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact, before dispatching work that may already exist, and whenever a `bin/fm-decision-surface.sh check` returns contradicted or unevaluable.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `wrong-subject` - load before crediting any check, control, guard, or verifier with a property, whenever a green control or a refusing guard is surprising, and before writing or acting on a finding that a verdict established something it never examined.
-  A check whose reasoning is sound can still answer a question nobody asked, and that gap is a nameable review finding rather than something to re-derive each time.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi output.
 - `model-onboarding` - load before adding or changing a model in routing config, before probing a model, before acting on an entitlement or price-drift alarm, and before deciding a model promotion or demotion.
