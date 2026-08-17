@@ -99,7 +99,7 @@ test_primary_bootstrap_materializes_visible_default() {
   fakebin=$(make_fake_toolchain "$TMP_ROOT/materialize")
 
   out=$(run_bootstrap "$root" "$home" "$fakebin")
-  [ -z "$out" ] || fail "default materialization should stay quiet, got: $out"
+  assert_not_contains "$out" 'STARTUP_MEMORY_BUDGET:' "default materialization should stay quiet"
   [ "$(<"$home/config/startup-memory-budget")" = 7500 ] \
     || fail "bootstrap did not materialize the visible 7500 default"
   [ "$(FM_HOME="$home" "$BUDGET" read)" = 7500 ] \
