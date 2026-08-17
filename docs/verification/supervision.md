@@ -17,10 +17,10 @@ bin/fm-test-run.sh tests/fm-blocker-lib.test.sh tests/fm-daemon.test.sh tests/fm
 Observed bounded output:
 
 ```text
-FM_TEST_END 2026-08-17T13:45:58Z tests/fm-blocker-lib.test.sh exit=0 duration_ms=7025 gate_skip=false
-FM_TEST_END 2026-08-17T13:46:37Z tests/fm-daemon.test.sh exit=0 duration_ms=39362 gate_skip=false
-FM_TEST_END 2026-08-17T13:50:13Z tests/fm-watch-triage.test.sh exit=0 duration_ms=216215 gate_skip=false
-FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=262693
+FM_TEST_END 2026-08-17T14:11:02Z tests/fm-blocker-lib.test.sh exit=0 duration_ms=7029 gate_skip=false
+FM_TEST_END 2026-08-17T14:11:41Z tests/fm-daemon.test.sh exit=0 duration_ms=38422 gate_skip=false
+FM_TEST_END 2026-08-17T14:15:14Z tests/fm-watch-triage.test.sh exit=0 duration_ms=213003 gate_skip=false
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0 duration_ms=258539
 ```
 
 The cases distinguish an unchanged exact blocker from a moved blocker, preserve could-not-observe as a surfacing verdict, retain timer behavior when no blocker is recorded, refuse cycles and traversal-bound exhaustion, and reconstruct the committed baseline after a consumer restart.
