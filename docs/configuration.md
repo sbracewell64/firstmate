@@ -746,7 +746,7 @@ A candidate is promising only when its ONLY blocker is missing or stale qualific
 Promising candidates are ordered by recorded price ascending and then by pool position, and a candidate whose price cannot be observed sorts LAST rather than first - unmeasured cost is never read as cheap.
 
 `bin/fm-qualification.sh activate --route <id> --blocks <work-id>` creates or reuses ONE bounded workflow for that candidate.
-It refuses every classification other than `QUALIFICATION_REQUIRED`, derives a deterministic identity from the whole record key so two distinct tuples can never collide, and composes `bin/fm-decision-surface.sh check duplicate-dispatch` rather than re-deriving whether the work is already running.
+It refuses every classification other than `QUALIFICATION_REQUIRED`, derives a deterministic tuple identity from the whole record key so two distinct tuples can never collide, suppresses activation while any incarnation for that tuple remains open, and allocates the next numeric incarnation after a prior workflow is Done so stale or materially changed evidence can be qualified again.
 
 **The workflow is a backlog task, and that is the whole design.**
 A bounded qualification run is a work item, so it is registered as one through the existing backlog owner - which is what makes `tasks-axi block --by` meet its documented precondition that the blocker must already exist, rather than working around it.
@@ -766,7 +766,7 @@ The CANDIDATE is the worker, dispatched on a bootstrap route it already qualifie
 `QUALIFIED` is verified against the register before it is accepted and then closes the workflow item - and closing it is what returns the same work identity to normal eligibility, with its identity, custody and budget unchanged and no unblock call that could fail afterwards.
 `FAILED` preserves the exclusion, activates the next promising candidate FIRST so the successor already holds the dependency, and only then closes this item.
 `COULD_NOT_OBSERVE` is nonterminal: it spends one attempt, records nothing against the binding, and leaves the item open.
-`loopspecs/terminal-states.json` carries these outcomes as source `role-qualification`, and deliberately gives could-not-observe no row, because an unmade observation is not an ending.
+`loopspecs/terminal-states.json` carries these outcomes as source `role-qualification`, and deliberately gives could-not-observe no row, because an unmade observation is not an ending; an exhausted qualification bound leaves the workflow open under a `parked` backlog hold whose reason assigns Firstmate the operational decision to raise the bound or abandon the qualification.
 
 Every ship and scout dispatch through a floor that declares a capability records `qualification_contracts=` and `qualification_observed=` in `state/<id>.meta`.
 An absent pair means no floor in this home declared a requirement, which is a different fact from a requirement that went unchecked.

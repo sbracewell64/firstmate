@@ -57,6 +57,7 @@ qualification_activation_id() {
 AID_ALPHA=$(qualification_activation_id runtime-job-maker alpha/one pi high)
 AID_BETA=$(qualification_activation_id runtime-job-maker beta/two pi high)
 AID_ALPHA_XHIGH=$(qualification_activation_id runtime-job-maker alpha/one pi xhigh)
+AID_ALPHA_SECOND="$AID_ALPHA-2"
 
 CDIR="$TMP_ROOT/contracts"
 RDIR="$TMP_ROOT/records"
@@ -724,6 +725,24 @@ test_duplicate_qualification_workflows_are_suppressed() {
   pass "duplicate qualification workflows are suppressed"
 }
 
+test_a_completed_tuple_can_activate_a_new_incarnation() {
+  local rec out
+  rec=$(make_home reactivate); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "the first activation failed"
+  PATH="$FAKEBIN:$PATH" tasks-axi done "$AID_ALPHA" >/dev/null 2>&1 \
+    || fail "the fixture could not complete the first incarnation"
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work)
+  assert_contains "$out" "activated $AID_ALPHA_SECOND" \
+    "a completed tuple could not activate a later qualification incarnation"
+  assert_present "$HOME_DIR/state/qualification/$AID_ALPHA_SECOND.activation" \
+    "the later incarnation was not recorded"
+  assert_grep "add $AID_ALPHA_SECOND" "$TASKS_LOG" \
+    "the later incarnation did not become a distinct backlog task"
+  pass "a completed tuple can activate a new incarnation"
+}
+
 test_work_already_in_flight_under_the_workflow_identity_suppresses_activation() {
   local rec
   rec=$(make_home inflight); read_home "$rec"
@@ -997,9 +1016,13 @@ test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded() {
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE) || rc=$?
   expect_code 4 "$rc" "a spent bound must stop rather than pass"
   assert_contains "$out" "stops rather than retrying without a bound" "the stop was not explained"
-  assert_grep "done $AID_ALPHA" "$TASKS_LOG" \
-    "the spent bound left the workflow item open, so every later read would resume it"
-  pass "a spent workflow bound stops rather than retrying unbounded"
+  assert_no_grep "done $AID_ALPHA" "$TASKS_LOG" \
+    "the spent bound resolved the blocked dependency without a qualification outcome"
+  assert_grep "hold $AID_ALPHA --reason Qualification attempt budget is spent and Firstmate must decide whether to raise the bound or abandon this qualification --kind parked" "$TASKS_LOG" \
+    "the spent workflow was not parked with the operational decision it needs"
+  [ "$(PATH="$FAKEBIN:$PATH" tasks-axi show "$AID_ALPHA" --json | jq -r '.hold_kind')" = parked ] \
+    || fail "the spent workflow is not parked under the backlog owner"
+  pass "a spent workflow stays open and parked for Firstmate"
 }
 
 # --- 6. two review capabilities on one route --------------------------------
@@ -1095,6 +1118,7 @@ test_availability_of_one_vendor_is_not_runtime_engineering_availability
 test_a_malformed_capability_requirement_is_refused_by_name
 test_the_cheapest_promising_candidate_is_chosen_and_unmeasured_cost_sorts_last
 test_duplicate_qualification_workflows_are_suppressed
+test_a_completed_tuple_can_activate_a_new_incarnation
 test_work_already_in_flight_under_the_workflow_identity_suppresses_activation
 test_a_could_not_observe_result_spends_one_attempt_and_stays_active
 test_a_failed_result_is_terminal_and_preserves_the_exclusion

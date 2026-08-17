@@ -614,10 +614,12 @@ JSON
 fm_fake_tasks_axi() {  # <fakebin> <log>
   local store="${2%.log}.store"
   : > "$store"
+  : > "$store.holds"
   cat > "$1/tasks-axi" <<SH
 #!/bin/sh
 printf '%s\n' "\$*" >> "$2"
 store="$store"
+holds="$store.holds"
 cmd=\$1; shift
 case "\$cmd" in
   add)
@@ -642,6 +644,27 @@ case "\$cmd" in
       exit 1; }
     printf 'ok: block %s -> blocked-by %s\n' "\$id" "\$by"
     ;;
+  hold)
+    id=\$1; kind=; reason=
+    while [ \$# -gt 0 ]; do
+      case "\$1" in
+        --kind) shift; kind=\$1 ;;
+        --reason) shift; reason=\$1 ;;
+      esac
+      shift
+    done
+    grep -q "^\$id " "\$store" 2>/dev/null || {
+      printf 'error: "task %s not found"\ncode: VALIDATION_ERROR\n' "\$id" >&2; exit 1; }
+    [ "\$kind" = parked ] || {
+      printf 'error: "invalid hold kind"\ncode: VALIDATION_ERROR\n' >&2; exit 1; }
+    [ -n "\$reason" ] || {
+      printf 'error: "hold reason required"\ncode: VALIDATION_ERROR\n' >&2; exit 1; }
+    tmp=\$(mktemp)
+    awk -v i="\$id" '\$1 != i { print }' "\$holds" > "\$tmp"
+    printf '%s\t%s\t%s\n' "\$id" "\$kind" "\$reason" >> "\$tmp"
+    mv "\$tmp" "\$holds"
+    printf 'ok: hold %s parked\n' "\$id"
+    ;;
   unblock)
     printf 'ok: unblock\n'
     ;;
@@ -656,9 +679,11 @@ case "\$cmd" in
   show)
     id=\$1
     state=\$(awk -v i="\$id" '\$1 == i { print \$2; exit }' "\$store" 2>/dev/null)
+    hold_kind=\$(awk -F '\t' -v i="\$id" '\$1 == i { print \$2; exit }' "\$holds" 2>/dev/null)
+    hold_reason=\$(awk -F '\t' -v i="\$id" '\$1 == i { print \$3; exit }' "\$holds" 2>/dev/null)
     [ -n "\$state" ] || { printf 'error: "task %s not found"\ncode: VALIDATION_ERROR\n' "\$id" >&2; exit 1; }
     case " \$* " in
-      *" --json "*) printf '{"id":"%s","state":"%s"}\n' "\$id" "\$state" ;;
+      *" --json "*) printf '{"id":"%s","state":"%s","hold_kind":"%s","hold_reason":"%s"}\n' "\$id" "\$state" "\$hold_kind" "\$hold_reason" ;;
       *) printf 'task: %s state: %s\n' "\$id" "\$state" ;;
     esac
     ;;

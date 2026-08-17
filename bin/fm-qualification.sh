@@ -336,10 +336,6 @@ cmd_reviewer() {
 # The bounded workflow
 # ---------------------------------------------------------------------------
 
-# One deterministic identity per observed tuple, so a second activation
-# for the same pair is RECOGNISABLE as a duplicate rather than created beside the
-# first. Derived rather than allocated: an allocated id would make every duplicate
-# check a search for something that looks similar.
 activation_id() {  # <contract> <model> <harness> <effort>
   local digest
   if command -v sha256sum >/dev/null 2>&1; then
@@ -350,6 +346,16 @@ activation_id() {  # <contract> <model> <harness> <effort>
     return 1
   fi
   printf 'qualify-%s\n' "$digest"
+}
+
+activation_next_id() {  # <tuple-id>
+  local tuple=$1 n=2 id
+  [ -f "$(activation_file "$tuple")" ] || { printf '%s\n' "$tuple"; return 0; }
+  while :; do
+    id="$tuple-$n"
+    [ -f "$(activation_file "$id")" ] || { printf '%s\n' "$id"; return 0; }
+    n=$((n + 1))
+  done
 }
 
 activation_file() {  # <activation-id>
@@ -411,6 +417,13 @@ qualification_backlog_close() {  # <activation-id>
   tasks-axi "done" "$1" >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
 }
 
+qualification_backlog_park() {  # <activation-id>
+  qualification_backlog_available || return "$EXIT_UNOBSERVED"
+  tasks-axi hold "$1" \
+    --reason "Qualification attempt budget is spent and Firstmate must decide whether to raise the bound or abandon this qualification" \
+    --kind parked >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
+}
+
 # Is this workflow still live, according to the one fact that owns it?
 # 0 = live, 1 = finished or absent, EXIT_UNOBSERVED = the owner could not answer.
 qualification_backlog_live() {  # <activation-id>
@@ -435,20 +448,27 @@ activation_field() {  # <file> <key>
 # exists to replace. The activation file is deliberately NOT consulted: it carries
 # the workflow's inert parameters and no state, so a stale one on disk can never
 # make a finished workflow look live.
-activation_already_active() {  # <activation-id>
-  local id=$1 out rc=0
-  qualification_backlog_live "$id" || rc=$?
-  case "$rc" in
-    0) printf 'the backlog owner still holds an open work item for this pair: %s\n' "$id"; return 0 ;;
-    "$EXIT_UNOBSERVED")
-      printf 'whether a workflow for this pair is already open COULD NOT BE OBSERVED (the backlog owner did not answer for %s), and an unread duplicate check is not an absent one\n' "$id"
-      return 0 ;;
-  esac
-  if [ -x "$SCRIPT_DIR/fm-decision-surface.sh" ] && fm_task_id_path_safe "$id" 2>/dev/null; then
-    out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-decision-surface.sh" check duplicate-dispatch "$id" 2>/dev/null)
+activation_already_active() {  # <tuple-id>
+  local tuple=$1 id file out rc candidate
+  for file in "$(activation_file "$tuple")" "$ACTIVATION_DIR/$tuple"-*.activation; do
+    [ -f "$file" ] || continue
+    id=$(activation_field "$file" activation || true)
+    [ -n "$id" ] || continue
+    rc=0
+    qualification_backlog_live "$id" || rc=$?
+    case "$rc" in
+      0) printf '%s\037the backlog owner still holds an open work item for this tuple: %s\n' "$id" "$id"; return 0 ;;
+      "$EXIT_UNOBSERVED")
+        printf '%s\037whether a workflow for this tuple is already open COULD NOT BE OBSERVED because the backlog owner did not answer\n' "$id"
+        return 0 ;;
+    esac
+  done
+  candidate=$(activation_next_id "$tuple")
+  if [ -x "$SCRIPT_DIR/fm-decision-surface.sh" ] && fm_task_id_path_safe "$candidate" 2>/dev/null; then
+    out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-decision-surface.sh" check duplicate-dispatch "$candidate" 2>/dev/null)
     case "$out" in
       *"verdict: contradicted"*)
-        printf 'the fleet already holds work under this identity: %s\n' "$out"
+        printf '%s\037the fleet already holds work under this identity: %s\n' "$candidate" "$out"
         return 0 ;;
     esac
   fi
@@ -486,7 +506,7 @@ EOF
 }
 
 cmd_activate() {
-  local zero rc=0 class model contracts cost id file out harness effort bootstrap
+  local zero rc=0 class model contracts cost id tuple_id file out harness effort bootstrap
   local execution_route execution_model execution_harness execution_effort
   [ -n "$ROUTE" ] || die "activate needs --route"
   local -a zero_args=(zero-route --route "$ROUTE" --json)
@@ -548,12 +568,11 @@ EOF
     printf 'fm-qualification: the harness and native effort for %s could not be observed, so no tuple-bound workflow may start\n' "$model" >&2
     return "$EXIT_UNOBSERVED"
   }
-  id=$(activation_id "$contract" "$model" "$harness" "$effort") || {
+  tuple_id=$(activation_id "$contract" "$model" "$harness" "$effort") || {
     printf 'fm-qualification: sha256 is required to derive an unambiguous tuple identity\n' >&2
     return "$EXIT_UNOBSERVED"
   }
-  fm_task_id_path_safe "$id" || die "derived activation id is not path-safe: $id"
-  file=$(activation_file "$id")
+  fm_task_id_path_safe "$tuple_id" || die "derived activation id is not path-safe: $tuple_id"
 
   local target_floor
   target_floor=$(printf '%s' "$zero" | jq -r '.floor // empty')
@@ -570,18 +589,26 @@ EOF
 $bootstrap
 EOF
 
-  if out=$(activation_already_active "$id"); then
-    if [ -n "$BLOCKS" ] && [[ "$out" == "the backlog owner still holds"* ]] &&
-       qualification_backlog_open "$id" "$contract" "$model" "$BLOCKS"; then
+  if out=$(activation_already_active "$tuple_id"); then
+    local active_id active_reason
+    IFS=$'\x1f' read -r active_id active_reason <<EOF2
+$out
+EOF2
+    if [ -n "$BLOCKS" ] && [[ "$active_reason" == "the backlog owner still holds"* ]] &&
+       qualification_backlog_open "$active_id" "$contract" "$model" "$BLOCKS"; then
       :
-    elif [ -n "$BLOCKS" ] && [[ "$out" == "the backlog owner still holds"* ]]; then
+    elif [ -n "$BLOCKS" ] && [[ "$active_reason" == "the backlog owner still holds"* ]]; then
       printf 'fm-qualification: the live workflow exists but its blocker edge could not be confirmed\n' >&2
       return "$EXIT_UNOBSERVED"
     fi
-    printf '%s: %s\n' "$FM_QUAL_TOKEN_DUPLICATE" "$out"
-    [ "$JSON" -eq 0 ] || printf '{"schema":"fm-qualification-activation.v1","activation":"%s","created":false,"already_active":true}\n' "$id"
+    printf '%s: %s\n' "$FM_QUAL_TOKEN_DUPLICATE" "$active_reason"
+    [ "$JSON" -eq 0 ] || printf '{"schema":"fm-qualification-activation.v1","activation":"%s","created":false,"already_active":true}\n' "$active_id"
     return "$EXIT_OK"
   fi
+
+  id=$(activation_next_id "$tuple_id")
+  fm_task_id_path_safe "$id" || die "derived activation incarnation is not path-safe: $id"
+  file=$(activation_file "$id")
 
   case "$BUDGET" in ''|*[!0-9]*) die "--budget must be a whole number" ;; esac
   [ "$BUDGET" -gt 0 ] || die "--budget must be at least 1"
@@ -641,6 +668,7 @@ EOF
   {
     printf 'schema=fm-qualification-activation.v1\n'
     printf 'activation=%s\n' "$id"
+    printf 'tuple=%s\n' "$tuple_id"
     printf 'contract=%s\n' "$contract"
     printf 'model=%s\n' "$model"
     printf 'harness=%s\n' "$harness"
@@ -842,8 +870,8 @@ cmd_resolve() {
     attempt_out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-attempt.sh" open "$id" --budget "$budget" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
       printf 'fm-qualification: the bound on %s is spent or unrecordable (%s), so this workflow stops rather than retrying without a bound\n' "$id" "$attempt_out" >&2
-      qualification_backlog_close "$id" \
-        || printf 'fm-qualification: the backlog owner did not confirm closing %s; it stays open and re-runnable rather than reported finished\n' "$id" >&2
+      qualification_backlog_park "$id" \
+        || printf 'fm-qualification: the backlog owner did not confirm parking %s; it remains open and no release is claimed\n' "$id" >&2
       return "$EXIT_UNOBSERVED"
     fi
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-attempt.sh" end "$id" >/dev/null 2>&1 || true
