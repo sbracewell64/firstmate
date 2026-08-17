@@ -73,6 +73,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
 | `fm-review-diff.sh`      | Review a crewmate branch or resolved PR head against the authoritative base          |
 | `fm-review-exec.sh`      | Launch and capture a reviewer in a disposable pinned clone, and own that review's execution evidence ([verification](verification/review-execution-evidence.md)) |
+| `fm-review-mutation.sh`  | Prove from execution, not from a label, that a named target assertion ran and what it concluded ([verification](verification/review-mutation-proof.md)) |
 | `fm-research-scan.sh`    | Model-free prefilter over `data/**/report.md` plus the separate approval, implementation, and delivery evidence provers |
 | `fm-attribution-sweep.sh` | Read-only sweep listing GitHub writes under the captain's account that lack the model-write attribution token ([convention](model-write-attribution.md)) |
 | `fm-marker-lib.sh`       | Compatibility entry point for the from-firstmate carrier owned by `fm-operational-input.sh` |
