@@ -380,13 +380,23 @@ def d29(s, v, r):
                "except (AttributeError, OSError, KeyError, TypeError, ValueError, subprocess.SubprocessError):\n    sys.exit(0)"), v, r
 
 
+def d30(s, v, r):
+    """The output directory is claimed before the source is judged, so a caller
+    naming a primary checkout with an output path inside it gets a directory
+    written into the very checkout the next line refuses. The refusal text stays
+    correct; the refusal leaves a trace in what it refused."""
+    return sub(s, "  [ -d \"$source\" ] || cno \"source is not a directory: $source\"",
+               "  mkdir -p \"$out\" 2>/dev/null\n"
+               "  [ -d \"$source\" ] || cno \"source is not a directory: $source\""), v, r
+
+
 DEFECTS = [
     ("D01", d01), ("D02", d02), ("D03", d03), ("D04", d04), ("D05", d05),
     ("D06", d06), ("D07", d07), ("D08", d08), ("D09", d09), ("D10", d10),
     ("D11", d11), ("D12", d12), ("D13", d13), ("D14", d14), ("D15", d15),
     ("D16", d16), ("D17", d17), ("D18", d18), ("D19", d19), ("D20", d20),
     ("D21", d21), ("D22", d22), ("D23", d23), ("D24", d24), ("D25", d25),
-    ("D26", d26), ("D27", d27), ("D28", d28), ("D29", d29),
+    ("D26", d26), ("D27", d27), ("D28", d28), ("D29", d29), ("D30", d30),
 ]
 BY_NAME = dict(DEFECTS)
 
