@@ -7,7 +7,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 
 Verified on 2026-08-17 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
-The current green suites were re-run at pre-refresh implementation head `667f71b75cc6c36dc58523993f4b12290dc2340b` after the dead-predicate control became repository-wide, identity-bound retrieval was revalidated, and the bootstrap integration joined the refresh recipe.
+The current focused green suites were re-run at exact implementation head `425d0056ca0f6a9990b24e482d0e654b7428d825` after the dead-predicate control became repository-wide and identity-bound retrieval was revalidated.
 
 ## Why this record exists
 
@@ -29,10 +29,10 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 37 outbound-artifact cases, 30 dead-predicate cases, and the bootstrap integration cases pass.
+The 45 outbound-artifact cases, 33 dead-predicate cases, and the bootstrap integration cases pass.
 What follows is why that sentence is worth anything.
 
-The dead-predicate and bootstrap suites were re-run on 2026-08-17 at exact implementation head `667f71b75cc6c36dc58523993f4b12290dc2340b` with `bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
+The focused suites were re-run on 2026-08-17 at exact implementation head `425d0056ca0f6a9990b24e482d0e654b7428d825` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh`; the command exited 0.
 
 ## Watched-red evidence, one mutation per control
 
