@@ -254,7 +254,7 @@ capture() {
   CAPTURED_CODE=$?
 }
 
-check_array_registry() {  # <envelope> <registry> <current|extra|stale>
+check_array_registry() {  # <envelope> <registry> <current|extra|stale|contradict-summary>
   python3 - "$@" <<'PY'
 import copy, json, sys
 
@@ -277,10 +277,12 @@ elif mode == "stale":
         "order": "canonicalized",
         "reason": "deliberately stale test entry",
         "experiment": {
-            "kind": "exempt",
-            "condition": "fewer-than-two-distinct-elements",
+            "kind": "body-canonical",
+            "sort_key": "scalar",
         },
     })
+elif mode == "contradict-summary":
+    registry["summary"] = {"exempt_paths": ["candidate.changed_files"]}
 elif mode != "current":
     sys.stderr.write("unknown array-registry check mode: " + mode + "\n")
     sys.exit(1)
@@ -300,6 +302,7 @@ def walk(node, path=""):
 
 walk(body)
 declared = set()
+exempt_paths = set()
 for entry in entries:
     path = entry.get("path")
     order = entry.get("order")
@@ -324,14 +327,28 @@ for entry in entries:
             sys.exit(1)
     elif kind == "body-recompute":
         pass
+    elif kind == "body-canonical":
+        if experiment.get("sort_key") not in ("id", "mismatch", "path", "scalar"):
+            sys.stderr.write("array canonical experiment has no stable sort key: " + path + "\n")
+            sys.exit(1)
     elif kind == "exempt":
-        if experiment.get("condition") != "fewer-than-two-distinct-elements":
+        if experiment.get("condition") != "contract-max-items-at-most-one":
             sys.stderr.write("array exemption uses an unknown condition: " + path + "\n")
+            sys.exit(1)
+        exempt_paths.add(path)
+        maximum = experiment.get("contract_max_items")
+        if not isinstance(maximum, int) or maximum > 1 or maximum < 0:
+            sys.stderr.write("array exemption has no structural maximum: " + path + "\n")
             sys.exit(1)
     else:
         sys.stderr.write("array registry has an invalid experiment: " + path + "\n")
         sys.exit(1)
     declared.add(path)
+
+summary = registry.get("summary")
+if not isinstance(summary, dict) or summary.get("exempt_paths") != sorted(exempt_paths):
+    sys.stderr.write("array registry summary contradicts its classifications\n")
+    sys.exit(1)
 
 missing = sorted(observed - declared)
 stale = sorted(declared - observed)
@@ -350,7 +367,6 @@ import copy, hashlib, json, os, subprocess, sys
 
 case_dir, envelope_path, registry_path, binary, mode = sys.argv[1:]
 baseline = json.load(open(envelope_path))
-baseline_identity = baseline["request_identity"]
 registry = json.load(open(registry_path))
 entries = copy.deepcopy(registry["classifications"])
 
@@ -364,15 +380,20 @@ elif mode == "meaningful-as-canonical":
                  if item["order"] == "order-meaningful"
                  and item["experiment"]["kind"] == "input-recompile")
     entry["order"] = "canonicalized"
-elif mode == "unknown-exemption":
-    entry = next(item for item in entries if item["experiment"]["kind"] == "exempt")
-    entry["experiment"]["condition"] = "free-text-exemption"
-elif mode == "false-exemption":
-    entry = next(item for item in entries if item["experiment"]["kind"] == "body-recompute")
-    entry["experiment"] = {
-        "kind": "exempt",
-        "condition": "fewer-than-two-distinct-elements",
-    }
+elif mode == "schema-short":
+    baseline["envelope"]["schema_singleton"] = ["only"]
+    entries = [{
+        "path": "schema_singleton",
+        "order": "canonicalized",
+        "reason": "Synthetic structural-cardinality control.",
+        "experiment": {
+            "kind": "exempt",
+            "condition": "contract-max-items-at-most-one",
+            "contract_max_items": 1,
+        },
+    }]
+elif mode == "fixture-short":
+    baseline["envelope"]["ci"]["wrong_head_attempts"] = baseline["envelope"]["ci"]["wrong_head_attempts"][:1]
 elif mode != "current":
     sys.stderr.write("unknown array exercise mode: " + mode + "\n")
     sys.exit(1)
@@ -419,39 +440,70 @@ def identity(body):
     })
 
 
+def distinct_count(array):
+    return len({json.dumps(item, sort_keys=True) for item in array})
+
+
+def canonicalize(array, sort_key):
+    if sort_key == "scalar":
+        return sorted(array)
+    if sort_key == "mismatch":
+        ranks = {name: index for index, name in enumerate(
+            ("work_id", "head", "tree", "envelope_digest"))}
+        return sorted(array, key=lambda item: ranks[item])
+    return sorted(array, key=lambda item: item[sort_key])
+
+
+baseline_identity = identity(baseline["envelope"])
+for entry in entries:
+    if entry["experiment"]["kind"] == "exempt":
+        continue
+    arrays = arrays_at(baseline["envelope"], entry["path"])
+    supplied = max((distinct_count(array) for array in arrays), default=0)
+    if supplied < 2:
+        sys.stderr.write(
+            "fixture defect " + entry["path"]
+            + ": contract permits at least 2 distinct elements; fixture supplied "
+            + str(supplied) + "\n"
+        )
+        sys.exit(1)
+
+
 for index, entry in enumerate(entries):
     path = entry["path"]
     experiment = entry["experiment"]
     if experiment["kind"] == "exempt":
         condition = experiment.get("condition")
-        if condition != "fewer-than-two-distinct-elements":
+        if condition != "contract-max-items-at-most-one":
             sys.stderr.write("exemption for " + path + " uses unknown condition " + str(condition) + "\n")
             sys.exit(1)
-        arrays = arrays_at(baseline["envelope"], path)
-        measured = max(
-            (len({json.dumps(item, sort_keys=True) for item in array}) for array in arrays),
-            default=0,
-        )
-        if measured >= 2:
+        maximum = experiment.get("contract_max_items")
+        if not isinstance(maximum, int) or maximum > 1 or maximum < 0:
             sys.stderr.write(
-                "exemption for " + path
-                + " claimed fewer-than-two-distinct-elements but measured " + str(measured) + "\n"
+                "exemption for " + path + " failed contract-max-items-at-most-one"
+                + " with structural maximum " + str(maximum) + "\n"
             )
             sys.exit(1)
-        print("exempt " + path + ": fewer-than-two-distinct-elements measured " + str(measured))
+        print("exempt " + path + ": contract maximum " + str(maximum))
         continue
-    if experiment["kind"] == "body-recompute":
+    if experiment["kind"] in ("body-recompute", "body-canonical"):
         body = copy.deepcopy(baseline["envelope"])
         candidates = arrays_at(body, path)
         target = next(
             (array for array in candidates
-             if len({json.dumps(item, sort_keys=True) for item in array}) >= 2),
+             if distinct_count(array) >= 2),
             None,
         )
         if target is None:
-            sys.stderr.write("body reorder fixture has fewer than two distinct entries: " + path + "\n")
-            sys.exit(2)
+            supplied = max((distinct_count(array) for array in candidates), default=0)
+            sys.stderr.write(
+                "fixture defect " + path + ": contract permits at least 2 distinct elements;"
+                + " fixture supplied " + str(supplied) + "\n"
+            )
+            sys.exit(1)
         target.reverse()
+        if experiment["kind"] == "body-canonical":
+            target[:] = canonicalize(target, experiment["sort_key"])
         observed_identity = identity(body)
         changed = observed_identity != baseline_identity
         expected_changed = entry["order"] == "order-meaningful"
@@ -459,7 +511,7 @@ for index, entry in enumerate(entries):
             expectation = "change" if expected_changed else "remain stable"
             sys.stderr.write("isolated reorder of " + path + " expected identity to " + expectation + "\n")
             sys.exit(1)
-        print("exercised " + path + ": identity changed")
+        print("exercised " + path + ": identity " + ("changed" if changed else "stable"))
         continue
     inputs = json.load(open(os.path.join(case_dir, "inputs.json")))
     candidates = arrays_at(inputs, experiment["input_path"])
@@ -470,8 +522,12 @@ for index, entry in enumerate(entries):
         None,
     )
     if target is None:
-        sys.stderr.write("could-not-observe " + path + ": fixture has fewer than two distinct entries\n")
-        sys.exit(2)
+        supplied = max((distinct_count(array) for array in candidates), default=0)
+        sys.stderr.write(
+            "fixture defect " + path + ": contract permits at least 2 distinct elements;"
+            + " fixture supplied " + str(supplied) + "\n"
+        )
+        sys.exit(1)
     target.reverse()
     input_path = os.path.join(case_dir, "array-input-%s-%d.json" % (mode, index))
     output_path = os.path.join(case_dir, "array-output-%s-%d" % (mode, index))
@@ -479,10 +535,14 @@ for index, entry in enumerate(entries):
         json.dump(inputs, handle, indent=2)
     environment = os.environ.copy()
     environment["PATH"] = os.path.join(case_dir, "fakebin") + os.pathsep + environment["PATH"]
+    command = [binary, "prepare", "--repo", os.path.join(case_dir, "repo"),
+               "--inputs", input_path, "--evidence-root", os.path.join(case_dir, "evidence"),
+               "--out", output_path]
+    predecessor = os.path.join(case_dir, "prior")
+    if os.path.isfile(os.path.join(predecessor, "envelope.json")):
+        command.extend(["--predecessor", predecessor])
     completed = subprocess.run(
-        [binary, "prepare", "--repo", os.path.join(case_dir, "repo"),
-         "--inputs", input_path, "--evidence-root", os.path.join(case_dir, "evidence"),
-         "--out", output_path],
+        command,
         env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     )
     envelope_file = os.path.join(output_path, "envelope.json")
@@ -501,16 +561,30 @@ PY
 }
 
 write_array_registry_inputs() {  # <case-dir>
-  local case_dir=$1
+  local case_dir=$1 prior
+  prior=$(seed_predecessor "$case_dir")
   git -C "$case_dir/repo" checkout -q candidate
-  git -C "$case_dir/repo" rm -q bin/tool.sh
-  git -C "$case_dir/repo" commit -qm 'narrow registry fixture'
+  mkdir -p "$case_dir/repo/src" "$case_dir/repo/generated"
+  printf '%s\n' 'registry source' >"$case_dir/repo/src/registry.txt"
+  printf '%s\n' 'registry output' >"$case_dir/repo/generated/registry.txt"
+  git -C "$case_dir/repo" add src/registry.txt generated/registry.txt
+  git -C "$case_dir/repo" commit -qm 'populate registry scope'
+  git -C "$case_dir/repo" checkout -q --orphan registry-second-root
+  git -C "$case_dir/repo" rm -qrf .
+  printf '%s\n' 'second root' >"$case_dir/repo/second-root.txt"
+  git -C "$case_dir/repo" add second-root.txt
+  git -C "$case_dir/repo" commit -qm 'create second project root'
+  git -C "$case_dir/repo" checkout -q candidate
+  git -C "$case_dir/repo" merge -q --allow-unrelated-histories registry-second-root -m 'merge second project root'
   git -C "$case_dir/repo" checkout -q main
   write_probe "$case_dir/fakebin/fm-probe-beta" 'fm-probe-beta 2.0.0'
   write_inputs "$case_dir" '{
     "scope": {"excluded": [
       {"id": "docs-first", "type": "prefix", "value": "docs/", "reason": "docs"},
-      {"id": "docs-second", "type": "glob", "value": "docs/*", "reason": "docs fallback"}]},
+      {"id": "docs-second", "type": "glob", "value": "docs/*", "reason": "docs fallback"},
+      {"id": "generated", "type": "prefix", "value": "generated/", "reason": "generated"},
+      {"id": "unused-a", "type": "exact", "value": "absent-a", "reason": "unused"},
+      {"id": "unused-b", "type": "exact", "value": "absent-b", "reason": "unused"}]},
     "verification": {"applicability_rules": [
       {"contract_id": "repo-baseline", "mandatory": true},
       {"contract_id": "shell-surface", "paths": [
@@ -526,13 +600,16 @@ write_array_registry_inputs() {  # <case-dir>
       "unproven": [{"id": "U-2", "required": false}, {"id": "U-1", "required": false}]},
     "rulings": [
       {"id": "R-2", "source": "captain", "relied_upon": false, "applies_to": {
-        "work_id": "other-work"}},
+        "work_id": "other-work", "head": "0000000000000000000000000000000000000000",
+        "tree": "1111111111111111111111111111111111111111",
+        "envelope_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
       {"id": "R-1", "source": "captain", "relied_upon": false, "applies_to": {}}],
     "obligations": {
+      "predecessor": {"envelope_digest": "'"$prior"'"},
       "active": [{"id": "OBL-2"}, {"id": "OBL-1"}],
       "dispositions": [
-        {"id": "OLD-2", "disposition": "PRESERVED"},
-        {"id": "OLD-1", "disposition": "PRESERVED"}]}}'
+        {"id": "OBL-2", "disposition": "PRESERVED"},
+        {"id": "OBL-1", "disposition": "PRESERVED"}]}}'
   python3 - "$case_dir/inputs.json" <<'PY'
 import copy, json, sys
 path = sys.argv[1]
@@ -540,14 +617,18 @@ document = json.load(open(path))
 document["ci"]["required_platforms"] = ["linux", "windows"]
 linux = document["ci"]["attempts"][0]
 windows = copy.deepcopy(linux)
-windows.update({"name": "windows-test", "platform": "windows", "order": 90})
+windows.update({"platform": "windows"})
+lint = copy.deepcopy(linux)
+lint.update({"name": "lint", "order": 93})
 headless_a = copy.deepcopy(linux)
 headless_a.update({"name": "headless-a", "head": None, "order": 91})
 headless_b = copy.deepcopy(linux)
 headless_b.update({"name": "headless-b", "head": None, "order": 92})
 wrong = copy.deepcopy(linux)
 wrong.update({"name": "wrong-head", "head": "8" * 40, "order": 80})
-document["ci"]["attempts"].extend([windows, headless_a, headless_b, wrong])
+wrong_two = copy.deepcopy(wrong)
+wrong_two.update({"name": "wrong-head-two", "order": 81})
+document["ci"]["attempts"].extend([windows, lint, headless_a, headless_b, wrong, wrong_two])
 additional = []
 for contract in document["verification"]["contracts"]:
     contract["execution_worlds"] = ["offline-ci", "portable-ci"]
@@ -893,8 +974,8 @@ test_array_classification_registry_is_total() {
   case_dir=$(make_case array-registry)
   registry=$ROOT/docs/verification/review-envelope-array-classifications.json
   write_array_registry_inputs "$case_dir"
-  capture run_prepare "$case_dir" env
-  expect_code 1 "$CAPTURED_CODE" "the populated registry fixture compiles to a classified envelope"
+  capture run_prepare "$case_dir" env --predecessor "$case_dir/prior"
+  expect_code 0 "$CAPTURED_CODE" "the populated registry fixture compiles to a classified envelope"
   assert_present "$case_dir/env/envelope.json" "the populated registry fixture must emit an envelope"
 
   capture check_array_registry "$case_dir/env/envelope.json" "$registry" current
@@ -909,6 +990,11 @@ test_array_classification_registry_is_total() {
   expect_code 1 "$CAPTURED_CODE" "a stale registry path fails"
   assert_contains "$CAPTURED" 'stale array classifications: retired_array' \
     "the stale classification must name the path no longer observed"
+
+  capture check_array_registry "$case_dir/env/envelope.json" "$registry" contradict-summary
+  expect_code 1 "$CAPTURED_CODE" "a registry summary that contradicts its entries fails"
+  assert_contains "$CAPTURED" 'array registry summary contradicts its classifications' \
+    "the registry summary must be derived from its classifications"
   pass "the recursive array registry is total in both directions"
 }
 
@@ -917,33 +1003,32 @@ test_array_classifications_are_exercised_in_isolation() {
   case_dir=$(make_case array-registry-exercises)
   registry=$ROOT/docs/verification/review-envelope-array-classifications.json
   write_array_registry_inputs "$case_dir"
-  capture run_prepare "$case_dir" baseline
-  expect_code 1 "$CAPTURED_CODE" "the array experiment baseline emits a classified envelope"
+  capture run_prepare "$case_dir" baseline --predecessor "$case_dir/prior"
+  expect_code 0 "$CAPTURED_CODE" "the array experiment baseline emits a classified envelope"
   assert_present "$case_dir/baseline/envelope.json" "the array experiment baseline must emit an envelope"
 
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
     "$registry" "$BIN" current
   expect_code 0 "$CAPTURED_CODE" "every observable registry path has the declared isolated outcome"
-  assert_contains "$CAPTURED" \
-    'exempt candidate.changed_files: fewer-than-two-distinct-elements measured 1' \
-    "a genuinely short array must pass the mechanically checked vacuity guard"
+  assert_contains "$CAPTURED" 'exercised candidate.changed_files: identity stable' \
+    "changed-file order must be exercised with a populated fixture"
   assert_contains "$CAPTURED" 'exercised capabilities[].probes: identity changed' \
     "probe order must be exercised alone in the compiled body"
   assert_contains "$CAPTURED" 'exercised capabilities[].selected.identity_argv: identity changed' \
     "selected identity arguments must be exercised alone in the compiled body"
 
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
-    "$registry" "$BIN" unknown-exemption
-  expect_code 1 "$CAPTURED_CODE" "an exemption outside the closed vocabulary fails"
-  assert_contains "$CAPTURED" 'uses unknown condition free-text-exemption' \
-    "the unknown exemption must name its rejected condition"
+    "$registry" "$BIN" fixture-short
+  expect_code 1 "$CAPTURED_CODE" "a contract-reorderable path cannot be exempted by thinning its fixture"
+  assert_contains "$CAPTURED" \
+    'fixture defect ci.wrong_head_attempts: contract permits at least 2 distinct elements; fixture supplied 1' \
+    "the fixture defect must name its contract capacity and supplied cardinality"
 
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
-    "$registry" "$BIN" false-exemption
-  expect_code 1 "$CAPTURED_CODE" "an exemption whose measured condition is false fails"
-  assert_contains "$CAPTURED" \
-    'exemption for capabilities[].probes claimed fewer-than-two-distinct-elements but measured 2' \
-    "the false exemption must name its path, claimed condition and measured cardinality"
+    "$registry" "$BIN" schema-short
+  expect_code 0 "$CAPTURED_CODE" "a structural single-element maximum admits the schema exemption"
+  assert_contains "$CAPTURED" 'exempt schema_singleton: contract maximum 1' \
+    "the synthetic schema-short branch must report its structural maximum"
 
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
     "$registry" "$BIN" canonical-as-meaningful
