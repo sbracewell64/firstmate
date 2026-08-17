@@ -908,6 +908,23 @@ PY
   [ "$rc" -eq 3 ] || fail "a boolean duration must be could-not-observe (exit 3), got $rc"
   assert_contains "$out" "verdict=could-not-observe" "a boolean duration must report could-not-observe"
 
+  # Valid JSON can still be structurally invalid. It must reach the same third
+  # value instead of crashing into CI's lane-drift branch.
+  fm_write_serial_fixture "$tmp/invalid-path" 1000
+  python3 - "$tmp/invalid-path/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["scripts"][0]["path"] = None
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/invalid-path"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "an invalid script path must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an invalid script path must report could-not-observe"
+
   rm -rf "$tmp"
   pass "serial budget control reports could-not-observe instead of passing on absent or invalid evidence"
 }
