@@ -251,6 +251,21 @@ run_guard() {  # <proj> <json> [state-dir]
     "$GUARD" check "$proj" 2>&1
 }
 
+# Run the guard exactly as run_guard does, with every git invocation matching
+# <match-ere> failing the way git fails when it cannot read. Used to drive the
+# guard's own could-not-observe path, which no fixture can produce: a fixture can
+# only build a repository where a thing is genuinely absent, and the distinction
+# under test is between that and a read that did not happen.
+run_guard_git_fault() {  # <proj> <json> <match-ere>
+  local proj=$1 json=$2 match=$3 fakebin
+  fakebin=$(fm_fakebin "$(dirname "$proj")")
+  install_fake_treehouse "$fakebin" "$json"
+  fm_fake_git_fault "$fakebin"
+  PATH="$fakebin:$PATH" FM_FAULT_MATCH="$match" \
+    FM_STATE_OVERRIDE="$(dirname "$proj")/state" \
+    "$GUARD" check "$proj" 2>&1
+}
+
 # Run the guard for <proj> against a no-json treehouse serving <table>.
 run_guard_plain() {  # <proj> <table> [state-dir]
   local proj=$1 table=$2 state=${3:-} fakebin
@@ -712,6 +727,35 @@ assert_contains "$out" "slot 1: $slot" "(o8) names the slot with unlanded work"
 assert_contains "$out" "branch fm/fork-extra with 2 commits not on" \
   "(o8) reports the unlanded work rather than passing it off the landing ref"
 pass "(o8) a landing ref does not launder work the fork trunk never received"
+
+# --- (o9) an unreadable landing target is reported as unread, not as unlanded --
+#
+# THE DIRECTION THIS CONSUMER FALLS. When the candidate set is incomplete the
+# guard becomes strictly MORE conservative - a candidate it cannot see cannot
+# report containment - so it refuses, which is the safe act. What was not safe
+# was the REASON it gave: it worded the refusal as a definite count of commits
+# "not on" the trunk, a claim over a universe it never enumerated. That wording
+# is what an operator reads before deciding whether to authorize a reclaim with
+# FM_WORKTREE_RECLAIM_OK, so a confident wrong reason is the exposure here even
+# though the act is conservative.
+#
+# Paired against (o6): same fixture, same call, and the ONLY difference is that
+# the one read naming the push target fails.
+
+proj=$(make_pool_fork_split fork-split-unreadable populate)
+slot=$(slot_path "$proj" 1)
+out=$(run_guard "$proj" "$(slot_json 1 available "$slot")") \
+  || fail "(o9) pairing is broken: the unperturbed fixture must pass as landed, got: $out"
+[ -z "$out" ] || fail "(o9) pairing is broken: the unperturbed guard was not silent: $out"
+
+out=$(run_guard_git_fault "$proj" "$(slot_json 1 available "$slot")" 'remote get-url --push') \
+  && fail "(o9) guard handed out a slot whose landing target it could not read"
+assert_contains "$out" "slot 1: $slot" "(o9) names the slot it could not clear"
+assert_contains "$out" "could not be fully enumerated" \
+  "(o9) reports the landing targets as unread"
+assert_not_contains "$out" "commits not on" \
+  "(o9) does not word the refusal as a definite count of unlanded commits"
+pass "(o9) an unreadable landing target refuses as unread rather than as proven unlanded"
 
 # --- (p) content, not commit reachability: the squash case -------------------
 #
