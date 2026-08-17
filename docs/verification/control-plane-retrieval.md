@@ -112,13 +112,13 @@ This round converged because the remaining classifier item is a measured coverag
 The replay proof now carries a SHA-256 digest of the exact JSONL record bytes.
 Replay recomputes that digest before schema validation or selection, and a missing digest, unavailable digest tool, or byte mismatch is unobserved state that forces `INDETERMINATE`.
 Publication computes and validates the digest over a private per-attempt staging directory before replacing the record set and proof in order, proof last.
-Both live retrieval and replay copy the published record and proof pair into a private snapshot, then hash, validate, select, conclude, and print evidence only from that immutable snapshot.
+Live retrieval retains this attempt's private assembled records and proof through validation, selection, conclusion, and evidence printing, while replay certifies a private copy of the published pair.
 Concurrent or crashed publishers can therefore leave a mismatch that reads as unobserved, but no lock or abandoned coordination state can block the next reader or publisher.
 
 ### Value, not location
 
 The complete post-retrieval path sweep found only `fm_retrieval_validate_records`, `fm_retrieval_select`, the CLI `RECORDS` variable, and the JSON and `evidence_ref` proof readers as phases that reopen a path after retrieval.
-The live and replay call sites now hand every one of those phases the same private certified snapshot.
+The live call site hands every one of those phases this fetch attempt's retained private value, and replay hands them its certified private snapshot.
 Publication is already value-bound because it digests private staged bytes, and load is already value-bound because it certifies its private snapshot.
 The remaining named follow-up is structural hardening: these functions still accept paths, so safety is enforced by current call sites rather than made impossible by their types.
 That is a generator of future risk rather than an open defect in the current verdict.

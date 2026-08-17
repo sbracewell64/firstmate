@@ -415,13 +415,14 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
   FM_RETRIEVAL_PAGES=$pages
   FM_RETRIEVAL_RECORDS=$total
   FM_RETRIEVAL_DUPLICATES=$dups
-  FM_RETRIEVAL_RECORDS_FILE=$records
   [ -n "$FM_RETRIEVAL_REASON" ] || fm_retrieval_set_reason page_unreadable \
     "the traversal ended without a reason, which is itself unobserved"
 
-  fm_retrieval_publish "$records" "$out_file" "$tmp/pages.json"
+  fm_retrieval_publish "$records" "$out_file" "$tmp/pages.json" "$tmp/proof.json"
   rc=$?
-  rm -rf "$tmp"
+  FM_RETRIEVAL_RECORDS_FILE=$out_file
+  FM_RETRIEVAL_SNAPSHOT_DIR=$tmp
+  [ -f "$tmp/proof.json" ] && FM_RETRIEVAL_PROVENANCE=$tmp/proof.json
   return "$rc"
 }
 
@@ -443,8 +444,9 @@ fm_retrieval_validate_records() {  # <jsonl-records> <id-field> <text-field> <ti
 # Publish the record set and then its proof, proof last. Called by fetch; split
 # out so the ordering is stated in one place and cannot be reordered by editing
 # the traversal.
-fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
-  local records=$1 staged=$2 pages_file=$3 dir meta observed digest publish_dir
+fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages> [retained-proof]
+  local records=$1 staged=$2 pages_file=$3 retained_proof=${4:-}
+  local dir meta observed digest publish_dir
   dir=$(dirname "$records")
   [ -d "$dir" ] || mkdir -p "$dir" || {
     fm_retrieval_set_reason usage_error "cannot write to $dir"
@@ -487,6 +489,13 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     rm -rf "$publish_dir"
     return 1
   }
+  if [ -n "$retained_proof" ]; then
+    cp "$publish_dir/meta" "$retained_proof" || {
+      fm_retrieval_set_reason state_uncommitted "cannot retain this attempt's proof"
+      rm -rf "$publish_dir"
+      return 1
+    }
+  fi
   rm -f "$meta"
   mv -f "$publish_dir/records" "$records" || {
     rm -rf "$publish_dir"
@@ -502,7 +511,7 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     return 1
   }
   rm -rf "$publish_dir"
-  FM_RETRIEVAL_PROVENANCE=$meta
+  FM_RETRIEVAL_PROVENANCE=${retained_proof:-$meta}
   return 0
 }
 

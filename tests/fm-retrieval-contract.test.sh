@@ -783,6 +783,26 @@ test_live_fetch_selects_only_from_certified_snapshot() {
   pass "live selection uses only its immutable certified snapshot"
 }
 
+test_failed_live_fetch_cannot_adopt_stale_publication() {
+  local good bad records fakebin record rc=0
+  good=$(fixture_new stale-live-good)
+  bad=$(fixture_new stale-live-bad)
+  records="$TMP_ROOT/stale-live.jsonl"
+  fixture_page "$good" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'unrelated')")"
+  run_read "$good" --identity req-7 --applicable APPROVE --claim exists --records "$records"
+  assert_field "$RECORD" conclusion ABSENT "stale live setup"
+  fixture_page "$bad" 1 - 500 '[]'
+  fakebin=$(install_fake_gh "$bad")
+  record=$(PATH="$fakebin:$PATH" FM_RETRIEVAL_SLEEP=: \
+    "$READ" endpoint 'fixture?fm_page=1' --identity req-7 --applicable APPROVE \
+    --claim exists --records "$records" 2>&1) || rc=$?
+  assert_field "$record" retrieval unobserved "failed live fetch with stale publication"
+  assert_field "$record" conclusion INDETERMINATE "failed live fetch with stale publication"
+  expect_code 2 "$rc" "failed live fetch cannot adopt stale records"
+  pass "a failed live fetch cannot adopt an older published verdict"
+}
+
 test_crashed_publisher_cannot_block_reader_or_retry() {
   local fix records fakebin rc=0
   fix=$(fixture_new publisher-crash)
@@ -1074,6 +1094,7 @@ run test_digest_command_failure_cannot_certify
 run test_concurrent_publishers_cannot_mix_proof_and_records
 run test_replay_selects_only_from_certified_snapshot
 run test_live_fetch_selects_only_from_certified_snapshot
+run test_failed_live_fetch_cannot_adopt_stale_publication
 run test_crashed_publisher_cannot_block_reader_or_retry
 run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
