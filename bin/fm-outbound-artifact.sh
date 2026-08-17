@@ -345,13 +345,32 @@ observe_head() {  # <item> <pr-url> <project> -> sha or empty
 # Return 0 found (prints the forge identity), 1 provably absent, 2 could not
 # observe, 3 the channel's venue is not configured at all.
 
-sol_artifact_present() {  # <request-id> -> comment id
-  local rid=$1 out
+artifact_body_matches_identity() {  # <body> <record-json> <marker>
+  local body=$1 rec=$2 marker=$3
+  printf '%s\n' "$body" | grep -Fqx "$marker $(printf '%s' "$rec" | jq -r '.request_id')" \
+    && printf '%s\n' "$body" | grep -Fqx "gate: $(printf '%s' "$rec" | jq -r '.identity.gate')" \
+    && printf '%s\n' "$body" | grep -Fqx "project: $(printf '%s' "$rec" | jq -r '.identity.project')" \
+    && printf '%s\n' "$body" | grep -Fqx "repo: $(printf '%s' "$rec" | jq -r '.identity.repo')" \
+    && printf '%s\n' "$body" | grep -Fqx "item: $(printf '%s' "$rec" | jq -r '.identity.item')" \
+    && printf '%s\n' "$body" | grep -Fqx "pull-request: $(printf '%s' "$rec" | jq -r '.identity.pr // "-"')" \
+    && printf '%s\n' "$body" | grep -Fqx "exact-head: $(printf '%s' "$rec" | jq -r '.identity.head')"
+}
+
+sol_artifact_present() {  # <request-id> <record-json> -> comment id
+  local rid=$1 rec=$2 comments row id body
   read_sol_config || return 3
   probe_budget || return 2
-  out=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" \
-    --paginate --jq ".[] | select(.body | contains(\"$rid\")) | .id") || return 2
-  if [ -n "$out" ]; then printf '%s\n' "$out" | head -1; return 0; fi
+  comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" \
+    --paginate --jq '.[] | [.id, .body] | @base64') || return 2
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    id=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0] | tostring') || return 2
+    body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') || return 2
+    printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_BODY_MARKER $rid" || continue
+    artifact_body_matches_identity "$body" "$rec" "$FM_OUTBOUND_BODY_MARKER" || continue
+    printf '%s\n' "$id"
+    return 0
+  done <<< "$comments"
   return 1
 }
 
@@ -474,7 +493,9 @@ sweep() {
     if [ "$channel" = "pull-request" ]; then
       present=$(pr_artifact_present "$venue" "$head"); rc=$?
     else
-      present=$(sol_artifact_present "$rid"); rc=$?
+      existing=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$repo" \
+        "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+      present=$(sol_artifact_present "$rid" "$existing"); rc=$?
       if [ "$rc" -eq 0 ]; then
         if existing=$(record_read "$rid"); then
           record_state=$(printf '%s' "$existing" | jq -r '.state')
@@ -708,7 +729,9 @@ cmd_emit() {
   # Dedupe against the forge FIRST. This is both ordinary duplicate suppression
   # and the crash-recovery path, because they are the same question: does an
   # artifact carrying this id already exist?
-  found=$(sol_artifact_present "$rid"); dedupe_rc=$?
+  record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
+    "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+  found=$(sol_artifact_present "$rid" "$record"); dedupe_rc=$?
   if [ "$dedupe_rc" -eq 0 ]; then
     existing=$(record_read "$rid"); record_rc=$?
     if [ "$record_rc" -eq 0 ]; then
@@ -717,8 +740,6 @@ cmd_emit() {
     else
       case $record_rc in
         1)
-          record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-            "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
           record=$(printf '%s' "$record" | jq --arg c "$found" '.comment_id = $c | .state = "emitted"')
           ;;
         5) die "$FM_OUTBOUND_TOKEN_IDENTITY: correlation record $rid belongs to another request" 3 ;;
@@ -761,14 +782,14 @@ cmd_emit() {
     if jq -n --arg b "$body" '{body:$b}' | obs gh api \
       "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --input - >/dev/null; then
       record=$(printf '%s' "$record" | jq --arg n "$(now_iso)" '.state = "emitted" | .updated = $n')
-      if found=$(sol_artifact_present "$rid"); then
+      if found=$(sol_artifact_present "$rid" "$record"); then
         record=$(printf '%s' "$record" | jq --arg c "$found" '.comment_id = $c')
       fi
       record_write "$rid" "$record" || die "could not write the correlation record" 4
       printf 'requested: %s on %s#%s\n' "$rid" "$SOL_REPO" "$SOL_ISSUE"
       return 0
     fi
-    found=$(sol_artifact_present "$rid"); retry_rc=$?
+    found=$(sol_artifact_present "$rid" "$record"); retry_rc=$?
     if [ "$retry_rc" -eq 0 ]; then
       record=$(printf '%s' "$record" | jq --arg c "$found" --arg n "$(now_iso)" \
         '.comment_id = $c | .state = "emitted" | .updated = $n')
@@ -907,13 +928,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
       exit 3
     }
   body=$(printf '%s' "$artifact" | jq -r '.body')
-  if ! printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_RULING_MARKER $rid" \
-    || ! printf '%s\n' "$body" | grep -Fqx "gate: $(printf '%s' "$rec" | jq -r '.identity.gate')" \
-    || ! printf '%s\n' "$body" | grep -Fqx "project: $(printf '%s' "$rec" | jq -r '.identity.project')" \
-    || ! printf '%s\n' "$body" | grep -Fqx "repo: $(printf '%s' "$rec" | jq -r '.identity.repo')" \
-    || ! printf '%s\n' "$body" | grep -Fqx "item: $(printf '%s' "$rec" | jq -r '.identity.item')" \
-    || ! printf '%s\n' "$body" | grep -Fqx "pull-request: $(printf '%s' "$rec" | jq -r '.identity.pr // "-"')" \
-    || ! printf '%s\n' "$body" | grep -Fqx "exact-head: $(printf '%s' "$rec" | jq -r '.identity.head')"; then
+  if ! artifact_body_matches_identity "$body" "$rec" "$FM_OUTBOUND_RULING_MARKER"; then
       printf '%s: comment %s does not carry the exact request identity\n' \
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
       exit 3
