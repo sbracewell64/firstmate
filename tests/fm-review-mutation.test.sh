@@ -93,10 +93,10 @@ source_snapshot() {  # <directory>
   while IFS= read -r path; do
     relative=${path#"$root"/}
     if [ -f "$path" ]; then
-      kind=file
+      kind="file"
       digest=$(inventory_digest_file "$path") || return 1
     elif [ -L "$path" ]; then
-      kind=link
+      kind="link"
       digest=$(readlink "$path") || return 1
     else
       kind=directory
