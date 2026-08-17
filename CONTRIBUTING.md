@@ -36,6 +36,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    bin/fm-attest.sh write
    ```
 
+   Wait until `no-mistakes axi` reports `checks-passed` before publishing, because a review or lint fix round can advance the validated head.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
    It publishes to the push target of `origin`, which step 3 pointed at your fork, and prints the repository it reached.
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
