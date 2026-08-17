@@ -692,6 +692,54 @@ test_replay_without_record_digest_fails_closed() {
   pass "a replay proof without a record digest fails closed"
 }
 
+test_digest_command_failure_cannot_certify() {
+  local fix fakebin records record rc=0
+  fix=$(fixture_new digest-failure)
+  records="$TMP_ROOT/digest-failure.jsonl"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')")"
+  fakebin=$(install_fake_gh "$fix")
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 1' > "$fakebin/shasum"
+  chmod +x "$fakebin/shasum"
+  record=$(PATH="$fakebin:$PATH" FM_RETRIEVAL_SLEEP=: \
+    "$READ" endpoint 'fixture?fm_page=1' --identity req-7 --applicable APPROVE \
+    --claim exists --records "$records" 2>&1) || rc=$?
+  assert_field "$record" retrieval unobserved "failed digest command"
+  assert_field "$record" conclusion INDETERMINATE "failed digest command"
+  expect_code 2 "$rc" "a failed digest command cannot certify records"
+  pass "a failing digest command yields unobserved state"
+}
+
+test_concurrent_publishers_cannot_mix_proof_and_records() {
+  local records pages_a pages_b staged_a staged_b pid_a pid_b count proof_count
+  records="$TMP_ROOT/concurrent.jsonl"
+  pages_a="$TMP_ROOT/pages-a.json"
+  pages_b="$TMP_ROOT/pages-b.json"
+  staged_a="$TMP_ROOT/staged-a.jsonl"
+  staged_b="$TMP_ROOT/staged-b.jsonl"
+  comment 11 2026-08-01T00:00:00Z 'APPROVE req-7' > "$staged_a"
+  page_body "$(comment 21 2026-08-02T00:00:00Z x)" \
+    "$(comment 22 2026-08-03T00:00:00Z y)" | jq -c '.[]' > "$staged_b"
+  printf '%s\n' '{"url":"a","records":1,"attempts":1,"status":200}' > "$pages_a"
+  printf '%s\n' '{"url":"b","records":2,"attempts":1,"status":200}' > "$pages_b"
+  FM_RETRIEVAL_TEST_LIB="$LIB" RECORDS="$records" STAGED="$staged_a" PAGES="$pages_a" \
+    EXPECTED=1 bash -c '. "$FM_RETRIEVAL_TEST_LIB"; fm_retrieval_reset; FM_RETRIEVAL_RECORDS=$EXPECTED; FM_RETRIEVAL_REASON=enumerated; FM_RETRIEVAL_COMPLETENESS=complete; fm_retrieval_publish "$RECORDS" "$STAGED" "$PAGES"' &
+  pid_a=$!
+  fm_test_reap "$pid_a"
+  FM_RETRIEVAL_TEST_LIB="$LIB" RECORDS="$records" STAGED="$staged_b" PAGES="$pages_b" \
+    EXPECTED=2 bash -c '. "$FM_RETRIEVAL_TEST_LIB"; fm_retrieval_reset; FM_RETRIEVAL_RECORDS=$EXPECTED; FM_RETRIEVAL_REASON=enumerated; FM_RETRIEVAL_COMPLETENESS=complete; fm_retrieval_publish "$RECORDS" "$STAGED" "$PAGES"' &
+  pid_b=$!
+  fm_test_reap "$pid_b"
+  wait "$pid_a" || fail "first concurrent publisher failed"
+  wait "$pid_b" || fail "second concurrent publisher failed"
+  count=$(awk 'NF { n++ } END { print n + 0 }' "$records")
+  proof_count=$(jq -r '.records' "$records.meta")
+  [ "$count" = "$proof_count" ] || fail "concurrent proof count $proof_count certifies $count records"
+  RECORD=$("$READ" --replay "$records" --identity req-7 --claim exists 2>&1) && RC=0 || RC=$?
+  assert_field "$RECORD" retrieval complete "concurrent publication"
+  pass "concurrent publishers cannot mix record and proof generations"
+}
+
 # --- the consumer type ------------------------------------------------------
 
 test_consumer_must_handle_all_three_conclusions() {
@@ -959,6 +1007,8 @@ run test_replay_with_deleted_records_fails_closed
 run test_replay_with_appended_records_fails_closed
 run test_replay_with_reordered_records_fails_closed
 run test_replay_without_record_digest_fails_closed
+run test_digest_command_failure_cannot_certify
+run test_concurrent_publishers_cannot_mix_proof_and_records
 run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read

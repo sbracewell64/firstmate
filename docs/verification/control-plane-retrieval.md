@@ -111,6 +111,8 @@ This round converged because the remaining classifier item is a measured coverag
 
 The replay proof now carries a SHA-256 digest of the exact JSONL record bytes.
 Replay recomputes that digest before schema validation or selection, and a missing digest, unavailable digest tool, or byte mismatch is unobserved state that forces `INDETERMINATE`.
+Publication computes and validates the digest over a private per-attempt staging directory before taking the target lock and replacing the record set and proof in order.
+Concurrent publishers therefore serialize the final pair, and a digest command failure or malformed digest leaves unobserved state rather than certifying an empty binding.
 
 One coverage emitter owns the computed verdict and named `UNCHECKED` list for census, violation, coverage-refusal, and passing exits.
 An unclassified site can therefore no longer conceal that the file universe was also incomplete.
@@ -181,7 +183,7 @@ bash tests/fm-retrieval-contract.test.sh
 
 Controls covering the commissioned list: an applicable ruling only on page 2 or later; multiple pages with the oldest record on page 1; the latest applicable ruling not on the first page; page 1 carrying a ruling a later page supersedes; pagination stopping early; one page that cannot be read; duplicate identifiers across pages; an irrelevant later comment after the applicable ruling; an identifier present only in quoted or reply prose; prefix collision, `X` versus `X` plus a suffix; complete retrieval with a genuinely absent ruling, the negative that must stay assertable; and complete retrieval with exactly one applicable ruling, the non-vacuity anchor.
 
-Beyond that list: an absent reader tool, a moved response schema, live and replayed records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, digest refusal after record deletion, append, reorder, or a missing digest, valid replay anchors for both `PRESENT` and `ABSENT`, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, per-language gate coverage including native reads and its `UNCHECKED` class, coverage emission beside violations, and the three rollup-cap behaviors.
+Beyond that list: an absent reader tool, a moved response schema, live and replayed records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, digest refusal after record deletion, append, reorder, a missing digest, or digest-command failure, serialized concurrent publication, valid replay anchors for both `PRESENT` and `ABSENT`, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, per-language gate coverage including native reads and its `UNCHECKED` class, coverage emission beside violations, and the three rollup-cap behaviors.
 
 ### Negative controls: each guard watched failing
 

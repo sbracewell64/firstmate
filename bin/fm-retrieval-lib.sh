@@ -442,7 +442,7 @@ fm_retrieval_validate_records() {  # <jsonl-records> <id-field> <text-field> <ti
 # out so the ordering is stated in one place and cannot be reordered by editing
 # the traversal.
 fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
-  local records=$1 staged=$2 pages_file=$3 dir meta observed digest
+  local records=$1 staged=$2 pages_file=$3 dir meta observed digest publish_dir lock
   dir=$(dirname "$records")
   [ -d "$dir" ] || mkdir -p "$dir" || {
     fm_retrieval_set_reason usage_error "cannot write to $dir"
@@ -450,19 +450,21 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
   }
   observed=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
   meta=$records.meta
+  publish_dir=$(mktemp -d "$dir/.fm-retrieval-publish.XXXXXX") || {
+    fm_retrieval_set_reason state_uncommitted "cannot create private publication staging"
+    return 1
+  }
+  lock=$records.publish.lock
 
-  cp "$staged" "$records.staging" || {
+  cp "$staged" "$publish_dir/records" || {
     fm_retrieval_set_reason usage_error "cannot stage the record set at $records"
+    rm -rf "$publish_dir"
     return 1
   }
-  rm -f "$meta"
-  mv -f "$records.staging" "$records" || {
-    fm_retrieval_set_reason usage_error "cannot publish the record set at $records"
-    return 1
-  }
-  digest=$(fm_retrieval_sha256 "$records") || {
+  digest=$(fm_retrieval_sha256 "$publish_dir/records") || {
     fm_retrieval_set_reason state_uncommitted \
-      "the published record set could not be bound to a SHA-256 digest"
+      "the staged record set could not be bound to a SHA-256 digest"
+    rm -rf "$publish_dir"
     return 1
   }
 
@@ -479,26 +481,56 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     --slurpfile pages "$pages_file" \
     '{schema: $schema, retrieval: $retrieval, reason: $reason, detail: $detail,
       observed_at: $observed, reader: $reader, record_digest: $digest, records: $records,
-      duplicates: $duplicates, pages: $pages}' > "$meta.staging" || {
+      duplicates: $duplicates, pages: $pages}' > "$publish_dir/meta" || {
     fm_retrieval_set_reason usage_error "cannot stage the completeness proof"
+    rm -rf "$publish_dir"
     return 1
   }
-  mv -f "$meta.staging" "$meta" || {
+  if ! fm_retrieval_publish_lock "$lock"; then
+    fm_retrieval_set_reason state_uncommitted "another publisher owns $records"
+    rm -rf "$publish_dir"
+    return 1
+  fi
+  rm -f "$meta"
+  mv -f "$publish_dir/records" "$records" || {
+    rmdir "$lock" 2>/dev/null || :
+    rm -rf "$publish_dir"
+    fm_retrieval_set_reason state_uncommitted "cannot publish the record set at $records"
+    return 1
+  }
+  mv -f "$publish_dir/meta" "$meta" || {
+    rmdir "$lock" 2>/dev/null || :
+    rm -rf "$publish_dir"
     fm_retrieval_set_reason usage_error "cannot publish the completeness proof"
     return 1
   }
+  rmdir "$lock" 2>/dev/null || :
+  rm -rf "$publish_dir"
   FM_RETRIEVAL_PROVENANCE=$meta
   return 0
 }
 
+fm_retrieval_publish_lock() {  # <lock-dir>
+  local lock=$1 attempt=0
+  while ! mkdir "$lock" 2>/dev/null; do
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 200 ] || return 1
+    ${FM_RETRIEVAL_SLEEP:-sleep} 0.01
+  done
+}
+
 fm_retrieval_sha256() {  # <file>
+  local output digest
   if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 "$1" 2>/dev/null | awk 'NF { print $1; exit }'
+    output=$(shasum -a 256 "$1" 2>/dev/null) || return 1
   elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum "$1" 2>/dev/null | awk 'NF { print $1; exit }'
+    output=$(sha256sum "$1" 2>/dev/null) || return 1
   else
     return 1
   fi
+  digest=${output%%[[:space:]]*}
+  printf '%s\n' "$digest" | grep -Eq '^[0-9a-fA-F]{64}$' || return 1
+  printf '%s\n' "$digest"
 }
 
 # fm_retrieval_load <records-file>: adopt a previously published read. The proof
@@ -523,13 +555,19 @@ fm_retrieval_load() {  # <records-file>
   fi
   expected_digest=$(jq -r '.record_digest // empty' "$meta" 2>/dev/null)
   case "$expected_digest" in
-    sha256:*) ;;
+    sha256:????????????????????????????????????????????????????????????????) ;;
     *)
       fm_retrieval_set_reason state_uncommitted \
         "$meta carries no usable record digest"
       return 1
       ;;
   esac
+  printf '%s\n' "${expected_digest#sha256:}" \
+    | grep -Eq '^[0-9a-fA-F]{64}$' || {
+      fm_retrieval_set_reason state_uncommitted \
+        "$meta carries a malformed record digest"
+      return 1
+    }
   actual_digest=$(fm_retrieval_sha256 "$records") || {
     fm_retrieval_set_reason state_uncommitted \
       "$records could not be checked against its record digest"
