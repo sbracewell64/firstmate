@@ -893,6 +893,22 @@ PY
   assert_contains "$out" "verdict=could-not-observe" "an out-of-range shard index must report could-not-observe"
   assert_not_contains "$out" "verdict=drifted" "an out-of-range shard index must not report drifted"
 
+  fm_write_serial_fixture "$tmp/unconvertible" 1000
+  python3 - "$tmp/unconvertible/shard-1.json" "$count" <<'PY'
+import json, sys
+p, count = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = "lane=portable-serial-%sof%d" % ("9" * 5000, count)
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/unconvertible"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "unconvertible numeric shard metadata must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "unconvertible numeric shard metadata must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "unconvertible numeric shard metadata must not report drifted"
+
   # A malformed negative timing can shrink the total enough to manufacture an
   # apparently healthy lane, so it is unreadable evidence rather than a pass.
   fm_write_serial_fixture "$tmp/negative" 1000
