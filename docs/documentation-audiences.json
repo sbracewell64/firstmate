@@ -395,6 +395,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/review-mutation-proof.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/runtime-backends.md",
       "audience": "maintainer-verification"
     },
