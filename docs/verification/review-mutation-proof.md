@@ -163,7 +163,7 @@ happened - what it removes is the need to take this record's word for it.
 
 | Build | sha256 | Defect injected |
 | --- | --- | --- |
-| D01 | `56447e9625371066aa8a34ea7b2f919aa6d2fb8d6a053ba3d443775dc7d735cb` | The retired defect, restored: the verdict is read from an `ok - ` line in |
+| D01 | `56447e9625371066aa8a34ea7b2f919aa6d2fb8d6a053ba3d443775dc7d735cb` | The retired defect, restored: the verdict is read from an `ok - ` line in the probe's captured output instead of from the differential. |
 | D02 | `9cc773554f4b1ba929196db59ea8f582cccd37af13b4fa230ce23c0bf00e0b84` | Control is established by the falsifying direction alone. |
 | D03 | `1a0698bf24a4effab5f421b511392aad551faa53b4071bec43f510a49a1f9228` | The occurrence guard accepts more than one site and uses the first. |
 | D04 | `b26d604201b5c257ff751e74d3c43f01fe358b83c078e4642088fb7515139215` | The clone is made locally and its isolation assumed rather than measured. |
@@ -174,24 +174,24 @@ happened - what it removes is the need to take this record's word for it.
 | D09 | `896a5a1292a2e4ef14987e55978c97038126c1b85ce1624d9137e04efd417c58` | The catalogue fold reports a gap ahead of a failure. |
 | D10 | `09a0f961b28a5be18e2f089878cdd4b8d0537da4df16949d5ff553341961dde1` | An unobserved dimension no longer outranks the fold. |
 | D11 | `fc0592c97ae4f15592ac1a34afd88098a96c9dae7066f95a435f958cfd9fb040` | A caller declaration is read and reaches the verdict. |
-| D12 | `210faeb34b7f526e6610082f524fa1db19ac7a2ff4f94358f628014e52aa1c08` | The source is mutated in place and restored in a finally - every |
+| D12 | `210faeb34b7f526e6610082f524fa1db19ac7a2ff4f94358f628014e52aa1c08` | The source is mutated in place and restored in a finally - every after-the-fact check is satisfied, a reader during the run is not. |
 | D13 | `46644ff4020691779d0433255cc90eb9c86de201f9eeac7b9f81dd2af943e940` | An empty catalogue is folded as clean. |
 | D14 | `0a22dc31ba30c8481e7e8530311f7e104884b59f87094945cf3d348b3f819e1f` | Duplicate case identities are accepted. |
 | D15 | `3eb77ffd484cbecd9abb137a1c2300f7b2e8dcd409b65dd6ab2eed70a53413f6` | The probe argv is recorded as a space-joined rendering of itself. |
 | D16 | `1e95e6fe7ffc7a61340905f5a386582e2d3fbb92f5fad180dc6ad4b854467f2e` | The regular-file guard on the target path is dropped. |
-| D17 | `565e88f46b07ddcd17e1f58e15ba7e6adf3dead717927cda53d0772e60710b6a` | With no execution substrate the build reports PASS itself rather than |
+| D17 | `565e88f46b07ddcd17e1f58e15ba7e6adf3dead717927cda53d0772e60710b6a` | With no execution substrate the build reports PASS itself rather than refusing - the exact fallback the law forbids. |
 | D18 | `c9c437ef1c1ceed9bdaca7d8932f98731497229ae1d0102917fe251888b89635` | The wrapper narrows any transported result to PASS. |
-| D19 | `979d39b8dafa3ad4353121b2b394e068fd886adf349e5d5b9cc331bb65c1acb1` | The label defect in its other direction: a FAILURE literal in the probe's |
+| D19 | `979d39b8dafa3ad4353121b2b394e068fd886adf349e5d5b9cc331bb65c1acb1` | The label defect in its other direction: a FAILURE literal in the probe's own output is read as a failure. |
 | D20 | `5a67bec0df0e0206df3e0795d9e16e326beb7cbd76078ba8004a50ccbb2a294f` | The unmutated baseline is ignored once control is established. |
-| D21 | `1c28bfddf48e6be44c22dcbc5bd261af16ade0262da062fbcb3ddaf20d3e5f1f` | A target that is not present is spliced in at the start of the file |
+| D21 | `1c28bfddf48e6be44c22dcbc5bd261af16ade0262da062fbcb3ddaf20d3e5f1f` | A target that is not present is spliced in at the start of the file instead of refused - discovery failing open. |
 | D22 | `10539cee12fd06e8a5481540db7cd6e327d2092a1ef8ef426bde33aebb4c2cc4` | The identical-substitution refusals are dropped. |
 | D23 | `b963b4bfbf6e337d9e6abd9f15ea1ae3116ce03504c9393ec38a6a1cf47d1eee` | The record is believed even when the clone it names is gone. |
-| D24 | `bbc2b35d2ed66cc25be4a711f89dbe07ab328c99384c4c20eedb3f2f1d3181c3` | Every execution record is accepted for every variant, so an execution |
-| D25 | `30fdce18c2ef5fbea2e78e43aba5b9c220ca2f6b5cf28427f1a2480ecfe97379` | The mutation bytes are not re-derived: any mismatch is swallowed, so a |
+| D24 | `bbc2b35d2ed66cc25be4a711f89dbe07ab328c99384c4c20eedb3f2f1d3181c3` | Every execution record is accepted for every variant, so an execution belonging to another mutation can manufacture control. |
+| D25 | `30fdce18c2ef5fbea2e78e43aba5b9c220ca2f6b5cf28427f1a2480ecfe97379` | The mutation bytes are not re-derived: any mismatch is swallowed, so a record can describe arbitrary commits as the three exact-byte mutations. |
 | D26 | `ecb8bd344c6ac61f5f2bfc7c63abb9b62ecaa7f22725a999a2cbc79f278a5de0` | The record's documented control count disagrees with the suite. |
 | D27 | `e19a2262d235bdecdb51c0da9194035bc6a659097f020d62a8c77f993f5e5833` | A documented file digest disagrees with the bytes it names. |
 | D28 | `8a095e9c9c44b2ac018360c4b2c734ad9b342eb99805c12c30e77a475f2fe1bf` | The record carries no parseable inventory count at all. |
-| D29 | `11dc1d0b5d71e180dec1c6409917b12614117c558c7e10c502fa18cbc32e2a2e` | The record's declared target path is never bound to where the mutants |
+| D29 | `11dc1d0b5d71e180dec1c6409917b12614117c558c7e10c502fa18cbc32e2a2e` | The record's declared target path is never bound to where the mutants actually differ, so a record can name one file while its commits changed another. The binding lives in two places - the name-only diff and the re-derivation's path lookup - so defeating it takes both, which is one defect and not two. |
 
 ### The matrix
 
