@@ -322,15 +322,13 @@ test_a_different_harness_or_effort_is_a_near_miss_not_a_match() {
   pass "a different harness or effort is a near miss not a match"
 }
 
-test_a_different_harness_version_is_a_distinct_observation() {
+test_harness_version_is_context_on_the_same_binding() {
   reset_register
   write_record alpha-one-job
-  write_record alpha-one-new-version '.binding.harness_version = "10.0.0"'
-  [ "$(qual state --contract job-maker --model alpha/one --harness pi --harness-version 9.9.9 --effort high --json 2>/dev/null | jq -r '.record')" = alpha-one-job ] \
-    || fail "the exact harness-version tuple did not select its own observation"
-  [ "$(qual state --contract job-maker --model alpha/one --harness pi --harness-version 10.0.0 --effort high --json 2>/dev/null | jq -r '.record')" = alpha-one-new-version ] \
-    || fail "records differing only in harness version collapsed into one observation"
-  pass "a different harness version is a distinct observation"
+  write_record alpha-one-new-version '.binding.harness_version = "10.0.0" | .supersedes = "alpha-one-job"'
+  [ "$(qual state --contract job-maker --model alpha/one --harness pi --effort high --json 2>/dev/null | jq -r '.record')" = alpha-one-new-version ] \
+    || fail "a later harness version was treated as a distinct binding instead of a superseding observation"
+  pass "harness version is context on the same binding"
 }
 
 test_two_records_for_one_tuple_are_could_not_observe() {
@@ -351,7 +349,7 @@ test_a_declared_supersession_selects_the_retained_successor() {
   write_record alpha-one-old '.result = "FAILED" | .result_evidence = "the earlier observation failed"'
   write_record alpha-one-new '.supersedes = "alpha-one-old"'
   local out
-  out=$(qual state --contract job-maker --model alpha/one --harness pi --harness-version 9.9.9 --effort high --json 2>/dev/null)
+  out=$(qual state --contract job-maker --model alpha/one --harness pi --effort high --json 2>/dev/null)
   [ "$(printf '%s' "$out" | jq -r '.record')" = alpha-one-new ] \
     || fail "the declared successor did not supersede the retained earlier evidence"
   [ "$(printf '%s' "$out" | jq -r '.state')" = QUALIFIED ] \
@@ -397,6 +395,7 @@ test_record_admissibility_refuses_stored_state_synonyms_and_estimates() {
               'estimate:.measured_context = "about 200k"' \
               'no-limitations:.known_limitations = []' \
               'no-dependencies:.freshness_dependencies = []' \
+              'key-claim:.key = ["contract","model","harness","harness_version","native_effort"]' \
               'score:.score = 7'; do
     write_record probe "${case#*:}"
     rc=0
@@ -626,7 +625,7 @@ test_a_failed_record_reopens_only_on_a_material_change
 test_a_predicate_pass_without_adjudication_is_qualification_required
 test_an_unqualified_adjudicator_pass_is_not_consumed
 test_a_different_harness_or_effort_is_a_near_miss_not_a_match
-test_a_different_harness_version_is_a_distinct_observation
+test_harness_version_is_context_on_the_same_binding
 test_two_records_for_one_tuple_are_could_not_observe
 test_a_declared_supersession_selects_the_retained_successor
 test_an_absent_contract_is_could_not_observe_and_never_a_pass

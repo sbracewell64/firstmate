@@ -47,9 +47,9 @@ command -v jq >/dev/null 2>&1 || fail "fm-route-qualification: jq is required"
 qualification_activation_id() {
   local digest
   if command -v sha256sum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s\0%s' "$1" "$2" "$3" 9.9.9 "$4" | sha256sum | awk '{print substr($1,1,40)}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print substr($1,1,40)}')
   else
-    digest=$(printf '%s\0%s\0%s\0%s\0%s' "$1" "$2" "$3" 9.9.9 "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
   fi
   printf 'qualify-%s\n' "$digest"
 }
@@ -313,7 +313,6 @@ run_qual() {  # <home> <args...>
     FM_DECISION_SURFACE_SNAPSHOT="${SNAPSHOT:-}" \
     FM_QUALIFICATION_CONTRACT_DIR="$CDIR" FM_QUALIFICATION_RECORD_DIR="$RDIR" \
     FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
-    FM_QUALIFICATION_HARNESS_VERSION=9.9.9 \
     FM_BACKEND=tmux HERDR_ENV='' \
     PATH="${FAKEBIN:-}:$PATH" \
     "$QUAL" "$@" 2>&1
@@ -328,7 +327,6 @@ run_spawn() {  # <home> <fakebin> <args...>
     FM_DECISION_SURFACE_SNAPSHOT="${SNAPSHOT:-}" \
     FM_QUALIFICATION_CONTRACT_DIR="$CDIR" FM_QUALIFICATION_RECORD_DIR="$RDIR" \
     FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
-    FM_QUALIFICATION_HARNESS_VERSION=9.9.9 \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' PATH="$fakebin:$PATH" \
     "$SPAWN" "$@" 2>&1
 }

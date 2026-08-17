@@ -110,7 +110,6 @@ CMD=
 ROUTE=
 MODEL=
 HARNESS=
-HARNESS_VERSION=
 EFFORT=
 MAKER=
 REVIEWER=
@@ -131,8 +130,6 @@ while [ $# -gt 0 ]; do
     --model=*) MODEL=${1#--model=} ;;
     --harness) shift; [ $# -gt 0 ] || die "--harness needs a value"; HARNESS=$1 ;;
     --harness=*) HARNESS=${1#--harness=} ;;
-    --harness-version) shift; [ $# -gt 0 ] || die "--harness-version needs a value"; HARNESS_VERSION=$1 ;;
-    --harness-version=*) HARNESS_VERSION=${1#--harness-version=} ;;
     --effort) shift; [ $# -gt 0 ] || die "--effort needs a value"; EFFORT=$1 ;;
     --effort=*) EFFORT=${1#--effort=} ;;
     --contract) shift; [ $# -gt 0 ] || die "--contract needs a value"; CONTRACTS+=("$1") ;;
@@ -227,7 +224,7 @@ cmd_records() {
     IFS=$'\x1f' read -r id contract model harness harness_version effort <<EOF2
 $(jq -r '[ (.id // ""), (.contract // ""), (.binding.model // ""), (.binding.harness // ""), (.binding.harness_version // ""), (.binding.native_effort // "") ] | join("\u001f")' "$f" 2>/dev/null)
 EOF2
-    state=$(fm_qualification_state "$contract" "$model" "$harness" "$harness_version" "$effort")
+    state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
     if [ "$JSON" -eq 1 ]; then
       out=$(printf '%s' "$out" | jq -c --slurpfile r "$f" --argjson s "$state" \
         '. + [{record: $r[0], state: $s}]')
@@ -257,7 +254,7 @@ cmd_state() {
   local record state
   [ -n "${CONTRACTS[0]:-}" ] || die "state needs --contract"
   [ -n "$MODEL" ] || die "state needs --model"
-  record=$(fm_qualification_state "${CONTRACTS[0]}" "$MODEL" "$HARNESS" "$HARNESS_VERSION" "$EFFORT")
+  record=$(fm_qualification_state "${CONTRACTS[0]}" "$MODEL" "$HARNESS" "$EFFORT")
   state=$(printf '%s' "$record" | jq -r '.state')
   if [ "$JSON" -eq 1 ]; then
     printf '%s\n' "$record"
@@ -343,12 +340,12 @@ cmd_reviewer() {
 # for the same pair is RECOGNISABLE as a duplicate rather than created beside the
 # first. Derived rather than allocated: an allocated id would make every duplicate
 # check a search for something that looks similar.
-activation_id() {  # <contract> <model> <harness> <harness-version> <effort>
+activation_id() {  # <contract> <model> <harness> <effort>
   local digest
   if command -v sha256sum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" "$5" | sha256sum | awk '{print substr($1,1,40)}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print substr($1,1,40)}')
   elif command -v shasum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" "$5" | shasum -a 256 | awk '{print substr($1,1,40)}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
   else
     return 1
   fi
@@ -537,19 +534,11 @@ $(jq -r --arg route "$ROUTE" --arg model "$model" '
 EOF
   [ -z "$HARNESS" ] || harness=$HARNESS
   [ -z "$EFFORT" ] || effort=$EFFORT
-  local harness_version=${HARNESS_VERSION:-${FM_QUALIFICATION_HARNESS_VERSION:-}}
-  if [ -z "$harness_version" ] && command -v "$harness" >/dev/null 2>&1; then
-    harness_version=$("$harness" --version 2>/dev/null | sed -n '1{s/^[[:space:]]*//;s/[[:space:]]*$//;p;}')
-  fi
   if [ -z "$model" ]; then
     printf 'fm-qualification: %s: route %s classified %s but named no promising candidate\n' \
       "$FM_QUAL_TOKEN_NO_PROMISING" "$ROUTE" "$class" >&2
     return "$EXIT_UNOBSERVED"
   fi
-  [ -n "$harness_version" ] || {
-    printf 'fm-qualification: the harness version for %s could not be observed, so no tuple-bound workflow may start\n' "$harness" >&2
-    return "$EXIT_UNOBSERVED"
-  }
   # ONE contract per workflow. A candidate short of two contracts needs two
   # bounded runs, because a single run that claimed both would be one observation
   # standing in for two, which is the aggregation the adjudicator contract
@@ -559,7 +548,7 @@ EOF
     printf 'fm-qualification: the harness and native effort for %s could not be observed, so no tuple-bound workflow may start\n' "$model" >&2
     return "$EXIT_UNOBSERVED"
   }
-  id=$(activation_id "$contract" "$model" "$harness" "$harness_version" "$effort") || {
+  id=$(activation_id "$contract" "$model" "$harness" "$effort") || {
     printf 'fm-qualification: sha256 is required to derive an unambiguous tuple identity\n' >&2
     return "$EXIT_UNOBSERVED"
   }
@@ -655,7 +644,6 @@ EOF
     printf 'contract=%s\n' "$contract"
     printf 'model=%s\n' "$model"
     printf 'harness=%s\n' "$harness"
-    printf 'harness_version=%s\n' "$harness_version"
     printf 'native_effort=%s\n' "$effort"
     printf 'execution_route=%s\n' "$execution_route"
     printf 'execution_model=%s\n' "$execution_model"
@@ -796,7 +784,7 @@ cmd_dispatch() {
 }
 
 cmd_resolve() {
-  local id=${POS[0]:-} file contract model blocks tmp harness harness_version effort
+  local id=${POS[0]:-} file contract model blocks tmp harness effort
   [ -n "$id" ] || die "resolve needs an activation id"
   fm_task_id_path_safe "$id" || die "unsafe activation id: $id"
   [ -n "$RESULT" ] || die "resolve needs --result QUALIFIED|FAILED|COULD_NOT_OBSERVE"
@@ -810,7 +798,6 @@ cmd_resolve() {
   model=$(activation_field "$file" model || true)
   blocks=$(activation_field "$file" blocks || true)
   harness=$(activation_field "$file" harness || true)
-  harness_version=$(activation_field "$file" harness_version || true)
   effort=$(activation_field "$file" native_effort || true)
 
   local terminal=
@@ -830,7 +817,7 @@ cmd_resolve() {
   # need no such check, because neither one grants anything.
   if [ "$RESULT" = QUALIFIED ] || [ "$RESULT" = FAILED ]; then
     local computed computed_state
-    computed=$(fm_qualification_state "$contract" "$model" "$harness" "$harness_version" "$effort")
+    computed=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
     computed_state=$(printf '%s' "$computed" | jq -r '.state' 2>/dev/null)
     if [ "$computed_state" != "$RESULT" ]; then
       printf 'fm-qualification: refusing to close %s as %s. The register computes %s for %s against %s: %s. Write the record first; this command records what the register can observe, never what a caller asserts\n' \

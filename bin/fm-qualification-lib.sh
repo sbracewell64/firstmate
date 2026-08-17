@@ -153,6 +153,8 @@ FM_QUALIFICATION_REFUSED_RECORD_KEYS='state
 current_state
 derived_state
 qualification_state
+key
+tuple_key
 fresh
 stale
 eligible
@@ -610,12 +612,12 @@ fm_qualification_freshness_verdict() {  # <observations-json>
 # The state decision
 # ---------------------------------------------------------------------------
 
-# fm_qualification_state <contract-id> <model> [<harness>] [<harness-version>] [<native-effort>]
+# fm_qualification_state <contract-id> <model> [<harness>] [<native-effort>]
 # Print one fm-qualification-state.v1 record. Always exits 0 with a record: the
 # ANSWER is the state field, and there is no failure mode that prints nothing,
 # because a caller reading an empty result would have to invent a value.
 fm_qualification_state() {
-  local contract_id=$1 model=$2 harness=${3:-} harness_version=${4:-} effort=${5:-}
+  local contract_id=$1 model=$2 harness=${3:-} effort=${4:-}
   local contract rc=0 files record='' record_id='' near='[]' problems
   local state reason obs='[]' verdict recorded='' excluded=null
 
@@ -650,11 +652,9 @@ fm_qualification_state() {
 
   local chain chain_status chain_tip
   chain=$(printf '%s\n' "$files" | xargs -r jq -s -r \
-    --arg contract "$contract_id" --arg model "$model" --arg harness "$harness" \
-    --arg harness_version "$harness_version" --arg effort "$effort" '
+    --arg contract "$contract_id" --arg model "$model" --arg harness "$harness" --arg effort "$effort" '
       [ .[] | select(.contract == $contract and .binding.model == $model)
         | select(($harness == "") or (.binding.harness == $harness))
-        | select(($harness_version == "") or (.binding.harness_version == $harness_version))
         | select(($effort == "") or (.binding.native_effort == $effort)) ] as $records
       | ($records | map(.id)) as $ids
       | ($records | map(select((.supersedes? // "") != ""))) as $edges
@@ -692,7 +692,6 @@ EOF2
     [ "$rcontract" = "$contract_id" ] || continue
     [ "$rmodel" = "$model" ] || continue
     if { [ -z "$harness" ] || [ "$rharness" = "$harness" ]; } &&
-       { [ -z "$harness_version" ] || [ "$rharness_version" = "$harness_version" ]; } &&
        { [ -z "$effort" ] || [ "$reffort" = "$effort" ]; }; then
       [ "$rid" = "$chain_tip" ] || continue
       # A later record for the same tuple wins only when it declares that it
@@ -795,7 +794,7 @@ EOF
   esac
 
   fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
-    "$state" "$reason" "$record_id" "$recorded" "$obs" "$near" "$excluded" "$harness_version"
+    "$state" "$reason" "$record_id" "$recorded" "$obs" "$near" "$excluded"
 }
 
 # The one renderer, so every caller reads the same shape.
@@ -803,7 +802,7 @@ fm_qualification_state_record() {
   # <contract> <model> <harness> <effort> <state> <reason> <record-id>
   # <recorded-result> <observations-json> <near-json> [<excluded-json>]
   local contract=$1 model=$2 harness=$3 effort=$4 state=$5 reason=$6
-  local record=$7 recorded=$8 obs=${9:-'[]'} near=${10:-'[]'} excluded=${11:-null} harness_version=${12:-}
+  local record=$7 recorded=$8 obs=${9:-'[]'} near=${10:-'[]'} excluded=${11:-null}
   if ! command -v jq >/dev/null 2>&1; then
     printf '{"schema":"%s","state":"COULD_NOT_OBSERVE"}\n' "$FM_QUALIFICATION_STATE_SCHEMA"
     return 0
@@ -811,14 +810,13 @@ fm_qualification_state_record() {
   jq -n -c \
     --arg schema "$FM_QUALIFICATION_STATE_SCHEMA" \
     --arg contract "$contract" --arg model "$model" \
-    --arg harness "$harness" --arg harness_version "$harness_version" --arg effort "$effort" \
+    --arg harness "$harness" --arg effort "$effort" \
     --arg state "$state" --arg reason "$reason" \
     --arg record "$record" --arg recorded "$recorded" \
     --argjson obs "${obs:-[]}" --argjson near "${near:-[]}" \
     --argjson excluded "${excluded:-null}" \
     '{schema:$schema, contract:$contract, model:$model,
       harness:(if $harness == "" then null else $harness end),
-      harness_version:(if $harness_version == "" then null else $harness_version end),
       native_effort:(if $effort == "" then null else $effort end),
       state:$state, reason:$reason,
       record:(if $record == "" then null else $record end),
@@ -1035,7 +1033,7 @@ EOF2
     evidence=
     while IFS= read -r contract; do
       [ -n "$contract" ] || continue
-      state=$(fm_qualification_state "$contract" "$model" "$harness" "" "$effort")
+      state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
       st=$(printf '%s' "$state" | jq -r '.state' 2>/dev/null)
       case "$st" in
         QUALIFIED) rank=0 ;;

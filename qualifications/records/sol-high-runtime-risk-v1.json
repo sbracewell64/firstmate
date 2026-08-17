@@ -66,6 +66,7 @@
     "The effective effort actually in force on the maker invocation was not observed, and neither a requested flag, a reasoning-token count, answer correctness, nor a separate preflight invocation was accepted as a substitute for it.",
     "One correction-runner source failed to parse before executing any statement or writing either candidate file; it is retained as observed-bad evidence rather than hidden.",
     "The bounded run establishes nothing about future provider availability or sustained concurrency.",
+    "Harness version is recorded context rather than part of this record's key; harness-semantic drift cannot be probed on read and is bounded only by the declared time_bound.",
     "No fleet-declared verifier exists for local qualification semantics, so the deterministic fixture oracle is the evidence owner and the result is classified by hand under the three-valued rule."
   ],
   "evidence": [
