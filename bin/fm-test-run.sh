@@ -153,7 +153,7 @@ family_for_basename() {
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
       printf '%s\n' pure-contract-unit
       ;;
-    fm-classify.test.sh|\
+    fm-blocker-lib.test.sh|fm-classify.test.sh|\
     fm-daemon.test.sh|fm-guard-stale-banner.test.sh|fm-pi-watch-extension.test.sh|\
     fm-session-lock-ancestry.test.sh|\
     fm-supervision-events.test.sh|fm-turnend-guard.test.sh|fm-wake-daemon-lifecycle-e2e.test.sh|\
@@ -891,6 +891,11 @@ families_for_changed_path() {
       ;;
     bin/fm-watch*|bin/fm-wake*|\
     bin/fm-daemon*|bin/fm-turnend-guard*|bin/fm-guard.sh)
+      printf '%s\n' watcher-wake-lock
+      ;;
+    bin/fm-blocker-lib.sh)
+      # The dependency-driven pause re-surface has one library and two consumers
+      # (the watcher and the away-mode daemon), and both live in this family.
       printf '%s\n' watcher-wake-lock
       ;;
     bin/fm-afk*)

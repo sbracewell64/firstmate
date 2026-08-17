@@ -1455,6 +1455,242 @@ SH
   pass "an indeterminate pause kind keeps being re-surfaced, never silently suppressed"
 }
 
+# --- the dependency edge and the re-surface cadence -------------------------
+#
+# The cadence exists to recheck a wait that CAN change on its own. Where the
+# backlog records an exact upstream blocker, the wait cannot change until that
+# blocker changes, so the recheck's answer is fixed and the digest line only
+# costs a turn to read "still waiting". The four cases below pin every direction
+# at once, because a change that suppressed every blocked pause would pass the
+# first one on its own while silencing the rechecks that do pay off.
+#
+# Seed a real backlog home with a real dependency edge, so the blocker identity
+# and its movement are read through the tool that owns them.
+seed_blocked_pause_backlog() {  # <home> <task-id> <blocker-id>
+  local home=$1 task=$2 blocker=$3
+  mkdir -p "$home/data"
+  cat > "$home/.tasks.toml" <<'TOML'
+backend = "markdown"
+
+[markdown]
+path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
+TOML
+  ( cd "$home" \
+    && tasks-axi add "$blocker" --title "dependency cadence fixture blocker" \
+    && tasks-axi add "$task" --title "dependency cadence fixture" \
+    && tasks-axi block "$task" --by "$blocker" \
+    && tasks-axi hold "$task" --reason "waiting on the recorded blocker" --kind external ) >/dev/null 2>&1 \
+    || fail "could not seed a blocked backlog hold for $task"
+}
+
+# Run one housekeeping pass past the pause window for <task>, with the marker
+# backdated so the window is always expired.
+run_blocked_pause_pass() {  # <dir> <state> <fakebin> <home> <win> <pane> <task>
+  local dir=$1 state=$2 fakebin=$3 home=$4 win=$5 pane=$6 task=$7 key
+  key=$(printf '%s' "$task" | tr ':/.' '___')
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 housekeeping "$state"
+}
+
+# CONTROL 1, watched red against the previous behavior: a hold whose recorded
+# blocker has not moved stops being re-surfaced on the hour. The first pass has
+# no baseline to compare against, which is could-not-observe and correctly
+# surfaces; the second pass is the one that must go quiet.
+test_housekeeping_unmoved_blocker_is_not_resurfaced() {
+  local dir state fakebin home win pane key age
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip - unmoved blocker cadence (tasks-axi not installed)\n'
+    return 0
+  fi
+  dir=$(make_supercase paused-blocker-unmoved)
+  state="$dir/state"; fakebin="$dir/fakebin"; home="$dir/home"
+  win="sess:fm-held-dep1"; pane="$dir/pane.txt"
+  printf 'paused: holding until the recorded upstream item moves\n' > "$state/held-dep1.status"
+  printf 'idle prompt $\n' > "$pane"
+  seed_blocked_pause_backlog "$home" held-dep1 dep1-upstream
+  key=$(printf '%s' "held-dep1" | tr ':/.' '___')
+
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep1
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "the first pass, which had no prior blocker observation, did not surface"
+  : > "$state/.subsuper-escalations"
+
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep1
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a hold whose recorded blocker had not moved was re-surfaced anyway: $(cat "$state/.subsuper-escalations")"
+  [ -e "$state/.subsuper-paused-$key" ] \
+    || fail "suppressing the recheck also dropped the pause marker, so the wait stopped being tracked"
+  age=$(( $(date +%s) - $(cat "$state/.subsuper-paused-$key" 2>/dev/null || echo 0) ))
+  [ "$age" -lt 60 ] || fail "the pause window was not reset (age ${age}s), so it re-evaluates every tick"
+  pass "housekeeping stops re-surfacing a hold whose recorded blocker has not moved"
+}
+
+# CONTROL 2, the non-vacuity anchor. A change that simply dropped the wake would
+# pass control 1 and fail here.
+test_housekeeping_moved_blocker_is_resurfaced() {
+  local dir state fakebin home win pane
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip - moved blocker cadence (tasks-axi not installed)\n'
+    return 0
+  fi
+  dir=$(make_supercase paused-blocker-moved)
+  state="$dir/state"; fakebin="$dir/fakebin"; home="$dir/home"
+  win="sess:fm-held-dep2"; pane="$dir/pane.txt"
+  printf 'paused: holding until the recorded upstream item moves\n' > "$state/held-dep2.status"
+  printf 'idle prompt $\n' > "$pane"
+  seed_blocked_pause_backlog "$home" held-dep2 dep2-upstream
+
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep2
+  : > "$state/.subsuper-escalations"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep2
+  [ ! -s "$state/.subsuper-escalations" ] || fail "the baseline did not settle before the blocker was moved"
+  : > "$state/.subsuper-escalations"
+
+  ( cd "$home" && tasks-axi "done" dep2-upstream ) >/dev/null 2>&1 \
+    || fail "could not move the recorded blocker"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep2
+  grep -F "awaiting external" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a hold whose recorded blocker moved was not re-evaluated: $(cat "$state/.subsuper-escalations")"
+  grep -F "dep2-upstream" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "the re-evaluation did not name the blocker that moved: $(cat "$state/.subsuper-escalations")"
+  grep -F "possible wedge" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    && fail "a dependency re-evaluation was mislabeled a possible wedge"
+  pass "housekeeping re-surfaces a hold as soon as its recorded blocker moves"
+}
+
+# CONTROL 3. An unreadable blocker is could-not-observe, which is never a pass:
+# it keeps surfacing rather than being absorbed into "nothing changed".
+#
+# The real backlog tool refuses to build this state - it will not remove a task
+# that still blocks another, and it will not record an edge to an id that does
+# not exist - but production reaches it anyway whenever a blocker's record stops
+# being readable while the edge naming it survives. So the reader is scripted
+# here, and phase A drives the SAME scripted reader to a genuine suppression
+# first: without that, a phase B that surfaces would prove nothing, because a
+# reader that fails everything surfaces for reasons that have nothing to do with
+# the blocker.
+test_housekeeping_unreadable_blocker_still_resurfaces() {
+  local dir state fakebin home win pane
+  dir=$(make_supercase paused-blocker-unreadable)
+  state="$dir/state"; fakebin="$dir/fakebin"; home="$dir/home"
+  win="sess:fm-held-dep3"; pane="$dir/pane.txt"
+  mkdir -p "$home" "$dir/fixtures"
+  printf 'paused: holding until the recorded upstream item moves\n' > "$state/held-dep3.status"
+  printf 'idle prompt $\n' > "$pane"
+  cat > "$fakebin/tasks-axi" <<'SH'
+#!/usr/bin/env bash
+set -u
+[ "${1:-}" = show ] || { printf 'error: unsupported command\n' >&2; exit 2; }
+f="$FM_FAKE_TASKS_DIR/${2:-}"
+if [ ! -f "$f" ]; then
+  printf 'error: "Task \\"%s\\" not found in this backlog"\ncode: NOT_FOUND\n' "${2:-}"
+  exit 1
+fi
+cat "$f"
+SH
+  chmod +x "$fakebin/tasks-axi"
+  cat > "$dir/fixtures/held-dep3" <<'OUT'
+task:
+  id: held-dep3
+  state: in_flight
+  blocked: yes
+  blocked_by: dep3-upstream
+  held: yes
+  hold_reason: "waiting on the recorded blocker"
+  hold_kind: external
+  closed: "-"
+OUT
+  cat > "$dir/fixtures/dep3-upstream" <<'OUT'
+task:
+  id: dep3-upstream
+  state: in_flight
+  blocked: no
+  blocked_by: none
+  held: no
+  hold_reason: "-"
+  hold_kind: "-"
+  closed: "-"
+OUT
+
+  export FM_FAKE_TASKS_DIR="$dir/fixtures"
+
+  # Phase A: the same scripted reader CAN reach a suppression, so phase B's
+  # surfacing is attributable to the unreadable blocker rather than to the shim.
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep3
+  : > "$state/.subsuper-escalations"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep3
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "the scripted reader never reached a suppression, so this case proves nothing: $(cat "$state/.subsuper-escalations")"
+
+  # Phase B: the blocker's record stops being readable while the edge naming it
+  # survives. Twice, because could-not-observe must not settle into silence.
+  rm -f "$dir/fixtures/dep3-upstream"
+  : > "$state/.subsuper-escalations"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep3
+  grep -F "dep3-upstream" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "a hold whose blocker could not be read went quiet instead of surfacing: $(cat "$state/.subsuper-escalations")"
+  : > "$state/.subsuper-escalations"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep3
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "a repeatedly unreadable blocker settled into silence, so could-not-observe became a pass"
+  unset FM_FAKE_TASKS_DIR
+  pass "housekeeping keeps surfacing a hold whose recorded blocker cannot be read"
+}
+
+# The dependency is durable. This constructs the restart rather than reasoning
+# about it: the second daemon runs in a fresh interpreter that loads the daemon
+# from scratch and inherits no shell state, so only the record on disk can carry
+# the baseline across.
+test_housekeeping_blocker_baseline_survives_a_restart() {
+  local dir state fakebin home win pane key out
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip - blocker baseline restart (tasks-axi not installed)\n'
+    return 0
+  fi
+  dir=$(make_supercase paused-blocker-restart)
+  state="$dir/state"; fakebin="$dir/fakebin"; home="$dir/home"
+  win="sess:fm-held-dep4"; pane="$dir/pane.txt"
+  printf 'paused: holding until the recorded upstream item moves\n' > "$state/held-dep4.status"
+  printf 'idle prompt $\n' > "$pane"
+  seed_blocked_pause_backlog "$home" held-dep4 dep4-upstream
+  key=$(printf '%s' "held-dep4" | tr ':/.' '___')
+
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep4
+  [ -f "$state/held-dep4.blockers" ] \
+    || fail "no durable blocker baseline was written, so nothing could survive a restart"
+  : > "$state/.subsuper-escalations"
+
+  # A wholly separate process: fresh shell, fresh source of the daemon, no
+  # inherited variables or function state.
+  echo $(( $(date +%s) - 5000 )) > "$state/.subsuper-paused-$key"
+  # shellcheck disable=SC2016 # The child script body must reach the fresh
+  # interpreter unexpanded; its $1 and $2 are that interpreter's own arguments.
+  out=$(PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$win" FM_FAKE_TMUX_CAPTURE="$pane" \
+    FM_HOME="$home" FM_STATE_OVERRIDE="$state" FM_PAUSE_RESURFACE_SECS=240 \
+    FM_CREW_STATE_BIN="$FM_DAEMON_SUITE_CREW_STATE_BIN" \
+    "$BASH" -c '
+      set -u
+      # shellcheck disable=SC1090
+      . "$1"
+      housekeeping "$2"
+    ' _ "$DAEMON" "$state" 2>&1) \
+    || fail "the restarted daemon pass failed: $out"
+  [ ! -s "$state/.subsuper-escalations" ] \
+    || fail "a restarted daemon lost the recorded dependency and re-surfaced anyway: $(cat "$state/.subsuper-escalations")"
+
+  # Disconfirming half: the recovered baseline is a real comparison, not a file
+  # whose mere presence answers "unchanged".
+  ( cd "$home" && tasks-axi "done" dep4-upstream ) >/dev/null 2>&1 \
+    || fail "could not move the recorded blocker after the restart"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep4
+  [ -s "$state/.subsuper-escalations" ] \
+    || fail "the recovered baseline answered unchanged regardless of the blocker"
+  pass "the blocker baseline survives a daemon restart and still discriminates"
+}
+
 # A pause whose pane became busy again (the crew resumed) drops its marker without
 # escalating, exactly like a resumed wedge.
 test_housekeeping_paused_resumed_cleared() {
@@ -3095,6 +3331,10 @@ test_housekeeping_paused_resurfaces_and_resets
 test_housekeeping_captain_gated_pause_is_not_resurfaced
 test_housekeeping_external_pause_still_resurfaces
 test_housekeeping_indeterminate_pause_kind_still_resurfaces
+test_housekeeping_unmoved_blocker_is_not_resurfaced
+test_housekeeping_moved_blocker_is_resurfaced
+test_housekeeping_unreadable_blocker_still_resurfaces
+test_housekeeping_blocker_baseline_survives_a_restart
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared
 test_housekeeping_stale_marker_transitions_to_pause

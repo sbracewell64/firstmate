@@ -1865,6 +1865,105 @@ test_nonterminal_stale_paused_absorbed_then_resurfaced() {
   pass "a declared pause is absorbed on first sight, then re-surfaced as a recheck past the threshold, never wedge-escalated"
 }
 
+# The same declared pause, but with an exact upstream blocker recorded in the
+# backlog. Past the window the wake is DEPENDENCY-driven: an unmoved blocker is
+# absorbed, and the blocker moving is what re-surfaces it. Three rounds, because
+# the first two on their own are each satisfiable by a broken implementation -
+# round 2 alone by one that deleted the wake, round 3 alone by one that never
+# suppressed anything.
+test_paused_stale_wakes_on_blocker_movement_not_on_the_clock() {
+  local dir state fakebin home out statusf window key pane_hash sig pid back throttle
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip - dependency-driven pause re-surface (tasks-axi not installed)\n'
+    return 0
+  fi
+  dir=$(make_case paused-blocker-movement); state="$dir/state"; fakebin="$dir/fakebin"
+  home="$dir/home"; out="$dir/watch.out"
+  window="test:fm-held-dep"
+  mkdir -p "$home/data"
+  cat > "$home/.tasks.toml" <<'TOML'
+backend = "markdown"
+
+[markdown]
+path = "data/backlog.md"
+archive = "data/done-archive.md"
+done_keep = 10
+TOML
+  ( cd "$home" \
+    && tasks-axi add wdep-upstream --title "watcher dependency fixture blocker" \
+    && tasks-axi add held-dep --title "watcher dependency fixture" \
+    && tasks-axi block held-dep --by wdep-upstream \
+    && tasks-axi hold held-dep --reason "waiting on the recorded blocker" --kind external ) >/dev/null 2>&1 \
+    || fail "could not seed a blocked backlog hold for the watcher case"
+
+  printf 'idle, holding for the recorded blocker' > "$dir/pane.txt"
+  printf 'window=%s\nkind=ship\n' "$window" > "$state/held-dep.meta"
+  statusf="$state/held-dep.status"
+  printf 'paused: holding until the recorded upstream item moves\n' > "$statusf"
+  back=$(( $(date +%s) - 500 ))
+  set_mtime "$back" "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held-dep_status"
+  key=$(printf '%s' "$window" | tr ':/.' '___')
+  pane_hash=$(hash_text "idle, holding for the recorded blocker")
+  printf '%s' "$pane_hash" > "$state/.hash-$key"
+  printf '1\n' > "$state/.count-$key"
+  export FM_FAKE_CREW_STATE='state: paused · source: status-log · holding until the recorded upstream item moves'
+  throttle="$state/.paused-resurfaced-$key"
+
+  # Round 1: no prior observation of the blocker, which is could-not-observe and
+  # must surface. It also records the baseline the next rounds compare against.
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a first observation of the blocker did not surface"
+  grep -F "awaiting external" "$out" >/dev/null || fail "round 1 was not a paused recheck: $(cat "$out")"
+  [ -f "$state/held-dep.blockers" ] || fail "round 1 recorded no durable blocker baseline"
+
+  # Round 2: the blocker has not moved, so the wake stops. The watcher stays
+  # alive because it absorbed rather than surfaced.
+  set_mtime "$back" "$throttle"
+  set_mtime "$back" "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held-dep_status"
+  : > "$out"
+  printf 'idle, holding for the recorded blocker (token 2)' > "$dir/pane.txt"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  if ! wait_live "$pid" 30; then
+    reap "$pid"; fail "an unmoved blocker still woke the watcher on the clock: $(cat "$out")"
+  fi
+  [ ! -s "$out" ] || fail "an unmoved blocker printed a wake reason: $(cat "$out")"
+  reap "$pid"
+
+  # Round 3, the non-vacuity anchor: the blocker moves and the wait is
+  # re-evaluated at once.
+  ( cd "$home" && tasks-axi "done" wdep-upstream ) >/dev/null 2>&1 \
+    || fail "could not move the recorded blocker"
+  set_mtime "$back" "$throttle"
+  set_mtime "$back" "$statusf"
+  sig=$(seen_sig "$statusf"); printf '%s' "$sig" > "$state/.seen-held-dep_status"
+  : > "$out"
+  printf 'idle, holding for the recorded blocker (token 3)' > "$dir/pane.txt"
+  PATH="$fakebin:$PATH" FM_FAKE_TMUX_WINDOW="$window" FM_FAKE_TMUX_CAPTURE="$dir/pane.txt" \
+    FM_FAKE_TMUX_CURRENT_COMMAND=zsh FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$state" FM_CREW_STATE_BIN="$fakebin/fm-crew-state.sh" \
+    FM_PAUSE_RESURFACE_SECS=240 FM_POLL=1 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
+  pid=$!
+  wait_for_exit "$pid" 40 || fail "a blocker that moved did not re-surface the wait: $(cat "$out")"
+  grep -F "wdep-upstream" "$out" >/dev/null \
+    || fail "the re-surface did not name the blocker that moved: $(cat "$out")"
+  grep -F "possible wedge" "$out" >/dev/null && fail "a dependency re-evaluation was mislabeled a possible wedge"
+  unset FM_FAKE_CREW_STATE
+  pass "a declared pause with a recorded blocker wakes on that blocker's movement, not on the clock"
+}
+
 # A captain-held crew can leave a stable backend endpoint after its agent exits.
 # fm-crew-state then authoritatively reports stopped rather than paused, but the
 # confirmed-dead agent plus the declared wait or captain-held transfer must retain
@@ -3041,6 +3140,7 @@ test_busy_pane_repeated_escalation_reaches_demand_deep_inspection
 test_busy_pane_default_turn_age_bound_is_3600s
 test_nonterminal_stale_not_working_surfaced
 test_nonterminal_stale_paused_absorbed_then_resurfaced
+test_paused_stale_wakes_on_blocker_movement_not_on_the_clock
 test_exited_declared_pause_is_bounded_but_live_gate_surfaces
 test_secondmate_paused_resurfaces_in_normal_mode
 test_secondmate_nonpaused_stale_remains_suppressed
