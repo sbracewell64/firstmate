@@ -764,6 +764,25 @@ test_replay_selects_only_from_certified_snapshot() {
   pass "replay replacement cannot authorize a verdict over changed bytes"
 }
 
+test_live_fetch_selects_only_from_certified_snapshot() {
+  local fix records replacement fakebin record rc=0
+  fix=$(fixture_new live-snapshot-race)
+  records="$TMP_ROOT/live-snapshot-race.jsonl"
+  replacement="$TMP_ROOT/live-snapshot-replacement.jsonl"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')")"
+  comment 21 2026-08-02T00:00:00Z 'unrelated' > "$replacement"
+  fakebin=$(install_fake_gh "$fix")
+  record=$(PATH="$fakebin:$PATH" FM_RETRIEVAL_SLEEP=: \
+    FM_RETRIEVAL_TEST_REPLACE_FETCH_WITH="$replacement" \
+    "$READ" endpoint 'fixture?fm_page=1' --identity req-7 --applicable APPROVE \
+    --claim exists --records "$records" 2>&1) || rc=$?
+  assert_field "$record" retrieval complete "live snapshot selection race"
+  assert_field "$record" conclusion PRESENT "live snapshot selection race"
+  expect_code 0 "$rc" "live selection must use the certified snapshot"
+  pass "live selection uses only its immutable certified snapshot"
+}
+
 test_crashed_publisher_cannot_block_reader_or_retry() {
   local fix records fakebin rc=0
   fix=$(fixture_new publisher-crash)
@@ -1054,6 +1073,7 @@ run test_replay_without_record_digest_fails_closed
 run test_digest_command_failure_cannot_certify
 run test_concurrent_publishers_cannot_mix_proof_and_records
 run test_replay_selects_only_from_certified_snapshot
+run test_live_fetch_selects_only_from_certified_snapshot
 run test_crashed_publisher_cannot_block_reader_or_retry
 run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer

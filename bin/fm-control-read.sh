@@ -282,9 +282,17 @@ if [ -n "$REPLAY" ]; then
       "$TIME_FIELD" "replayed record set" && RETRIEVED=1
   fi
 else
-  fm_retrieval_fetch "$FIRST_URL" "$RECORDS" "$ID_FIELD" "$MAX_PAGES" "$MAX_RECORDS" \
-    "$TEXT_FIELD" "$TIME_FIELD" \
-    && RETRIEVED=1
+  PUBLISHED_RECORDS=$RECORDS
+  fm_retrieval_fetch "$FIRST_URL" "$PUBLISHED_RECORDS" "$ID_FIELD" "$MAX_PAGES" \
+    "$MAX_RECORDS" "$TEXT_FIELD" "$TIME_FIELD" || :
+  if fm_retrieval_load "$PUBLISHED_RECORDS"; then
+    if [ -n "${FM_RETRIEVAL_TEST_REPLACE_FETCH_WITH:-}" ]; then
+      cp "$FM_RETRIEVAL_TEST_REPLACE_FETCH_WITH" "$PUBLISHED_RECORDS"
+    fi
+    RECORDS=$FM_RETRIEVAL_RECORDS_FILE
+    fm_retrieval_validate_records "$RECORDS" "$ID_FIELD" "$TEXT_FIELD" \
+      "$TIME_FIELD" "retrieved record set" && RETRIEVED=1
+  fi
 fi
 
 # Selection runs over whatever WAS retrieved even when retrieval did not

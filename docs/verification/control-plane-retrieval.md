@@ -112,8 +112,18 @@ This round converged because the remaining classifier item is a measured coverag
 The replay proof now carries a SHA-256 digest of the exact JSONL record bytes.
 Replay recomputes that digest before schema validation or selection, and a missing digest, unavailable digest tool, or byte mismatch is unobserved state that forces `INDETERMINATE`.
 Publication computes and validates the digest over a private per-attempt staging directory before replacing the record set and proof in order, proof last.
-Replay first copies both shared files into a private snapshot, then hashes, validates, selects, and concludes only over that immutable snapshot.
+Both live retrieval and replay copy the published record and proof pair into a private snapshot, then hash, validate, select, conclude, and print evidence only from that immutable snapshot.
 Concurrent or crashed publishers can therefore leave a mismatch that reads as unobserved, but no lock or abandoned coordination state can block the next reader or publisher.
+
+### Value, not location
+
+The complete post-retrieval path sweep found only `fm_retrieval_validate_records`, `fm_retrieval_select`, the CLI `RECORDS` variable, and the JSON and `evidence_ref` proof readers as phases that reopen a path after retrieval.
+The live and replay call sites now hand every one of those phases the same private certified snapshot.
+Publication is already value-bound because it digests private staged bytes, and load is already value-bound because it certifies its private snapshot.
+The remaining named follow-up is structural hardening: these functions still accept paths, so safety is enforced by current call sites rather than made impossible by their types.
+That is a generator of future risk rather than an open defect in the current verdict.
+Inside this repository only `bin/fm-verify-fork-landing.sh` calls the CLI and it does not pass `--records`.
+Whether callers outside this repository pass `--records` is unobserved rather than zero.
 
 One coverage emitter owns the computed verdict and named `UNCHECKED` list for census, violation, coverage-refusal, and passing exits.
 An unclassified site can therefore no longer conceal that the file universe was also incomplete.
