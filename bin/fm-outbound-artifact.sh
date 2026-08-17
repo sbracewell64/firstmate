@@ -93,6 +93,8 @@ PROBE_TIMEOUT="${FM_OUTBOUND_TIMEOUT:-15}"
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-landed-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-landed-lib.sh"
 
 die() { printf 'fm-outbound-artifact: %s\n' "$1" >&2; exit "${2:-2}"; }
 
@@ -415,6 +417,91 @@ project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
 # policy and nothing here mutates: `check` reads these rows and turns them into
 # an exit status.
 
+# --- branch inventory -------------------------------------------------------
+#
+# WHY THIS EXISTS, and why the backlog sweep alone is not the invariant.
+#
+# The backlog sweep can only report what a durable row already SAYS. For the
+# sol-control channel that is enough, because an item waiting on a review is
+# recorded as waiting. For the pull-request channel it is not: a finished branch
+# nobody ever submitted produces no annotation at all, so the sweep sees nothing
+# and reports nothing. The three never-submitted items this invariant was
+# commissioned from were found in a live run ONLY because a person had already
+# found them and written it into the hold text - strip that sentence and the
+# mechanism goes silent on exactly the population it exists for.
+#
+# Under the completeness law that claim is not even assertable: with no
+# enumeration the sweep can say "nothing is ANNOTATED as unsubmitted", which is a
+# statement about the backlog rather than about the fleet. This pass enumerates
+# the candidate universe so the negative claim has something to be true of.
+#
+# BOUNDED DELIBERATELY. Strictly read-only - it writes to no clone and mutates no
+# ref. It enumerates only the fm/<item> pattern, only in registered projects
+# whose posture is not local-only, and it reuses the exact-head existence check
+# the rest of this command already uses rather than adding a second one. A clone
+# it cannot read, or a venue it cannot reach, is COULD_NOT_OBSERVE for that item
+# BY NAME - never folded into a no-unsubmitted-work conclusion, which would be
+# the completeness defect this pass exists to remove.
+registered_pr_projects() {
+  local reg="$DATA/projects.md" name mode
+  [ -r "$reg" ] || return 0
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$name" 2>/dev/null | awk '{print $1}')
+    [ "$mode" = "local-only" ] && continue
+    printf '%s\n' "$name"
+  done < <(sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg")
+}
+
+# Is this head already contained in what the project lands onto? Landed work is
+# not unsubmitted work, so it is excluded before anything is reported.
+head_already_landed() {  # <clone-dir> <sha>
+  local dir=$1 sha=$2 name ref
+  name=$(fm_landed_default_branch_name "$dir" 2>/dev/null) || return 1
+  [ -n "$name" ] || return 1
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    git --no-optional-locks -C "$dir" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null && return 0
+  done < <(fm_landed_candidate_refs "$dir" "$name" 2>/dev/null)
+  return 1
+}
+
+branch_inventory_rows() {  # appends row_json lines to $1
+  local out=$1 project dir venue ref sha item present rc
+  while IFS= read -r project; do
+    [ -n "$project" ] || continue
+    dir="$PROJECTS/$project"
+    if [ ! -d "$dir/.git" ]; then
+      row_json "$project" "" inventory pull-request "$project" "" "" "" \
+        unevaluable "$FM_OUTBOUND_TOKEN_CLONE_UNREADABLE" "" "" 0 >> "$out"
+      continue
+    fi
+    venue=$(project_venue "$project")
+    while IFS= read -r ref; do
+      [ -n "$ref" ] || continue
+      item=${ref##*/fm/}
+      [ -n "$item" ] || continue
+      sha=$(obs git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$ref") || sha=
+      fm_outbound_is_sha "$sha" "$(fm_outbound_object_width "$dir")" || continue
+      head_already_landed "$dir" "$sha" && continue
+      if [ -z "$venue" ]; then
+        row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" "" \
+          "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_VENUE_UNRESOLVED" "" "" 0 >> "$out"
+        continue
+      fi
+      present=$(pr_artifact_present "$venue" "$sha"); rc=$?
+      case $rc in
+        0) : ;;
+        1) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" defect "$FM_OUTBOUND_TOKEN_NO_ARTIFACT" "" "" 0 >> "$out" ;;
+        *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED" "" "" 0 >> "$out" ;;
+      esac
+    done < <(git --no-optional-locks -C "$dir" for-each-ref --format='%(refname)' \
+               'refs/remotes/*/fm/*' 'refs/heads/fm/*' 2>/dev/null)
+  done < <(registered_pr_projects)
+}
+
 SWEEP=
 row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <verdict> <token> <missing> <artifact> <stale>
   jq -n --arg item "$1" --arg gate "$2" --arg tier "$3" --arg channel "$4" \
@@ -563,7 +650,12 @@ sweep() {
     esac
   done
 
-  row=$(jq -s '.' < "$rows")
+  # Enumerate branches too, so a negative claim has a candidate universe rather
+  # than only the rows somebody already annotated. A backlog row wins on a
+  # collision: it carries gate and correlation context the ref alone does not.
+  branch_inventory_rows "$rows"
+  row=$(jq -s 'reduce .[] as $r ([]; if any(.[]; .item == $r.item and .tier != "inventory")
+                 and $r.tier == "inventory" then . else . + [$r] end)' < "$rows")
   if probes_capped; then capped=true; else capped=false; fi
   SWEEP=$(jq -n --argjson rows "$row" --argjson capped "$capped" \
     '{schema:"fm-outbound-sweep.v1",readable:true,capped:$capped,rows:$rows,reason:null}')

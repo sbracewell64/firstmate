@@ -259,6 +259,67 @@ set_head() { printf '%s\n' "$2" > "$1/forge/head"; }
 
 # --- control 1: waiting with no request goes RED ----------------------------
 
+test_branch_inventory_finds_an_unannotated_unsubmitted_branch() {
+  local dir repo out rc
+  # THE ANCHOR CONTROL. This is the experiment that exposed the vacuity, so it is
+  # the one that proves the fix: a branch carrying real unsubmitted work whose
+  # backlog row says NOTHING about it. Before the inventory the sweep reported
+  # 0 defects and exit 0 here, because it could only ever report what a person
+  # had already annotated - a statement about the backlog rather than the fleet.
+  dir=$(new_case cinventory)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  rm -rf "$repo"; mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email fixture@example.com
+  git -C "$repo" config user.name Fixture
+  printf 'base\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm base
+  git -C "$repo" branch -M main
+  git -C "$repo" remote add origin https://github.com/o/demo.git
+  git -C "$repo" checkout -q -b fm/never-submitted
+  printf 'work\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm 'finished work nobody submitted'
+  git -C "$repo" checkout -q main
+  # A row with no hold, no annotation, nothing to recognise from prose.
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[
+    {order:1,state:"queued",structured:true,id:"never-submitted",title:"ordinary queued work",
+     hold_kind:null,hold_reason:null,repo:"demo",pr_url:null,body_excerpt:null,
+     raw:"- [ ] never-submitted - ordinary queued work (repo: demo)"}]}}' > "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "inventory: an unannotated unsubmitted branch was not found, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'never-submitted' \
+    || fail "inventory: the branch was not named: $out"
+  printf '%s' "$out" | grep -q 'recognised: inventory' \
+    || fail "inventory: found by annotation rather than by enumeration: $out"
+  pass "inventory: a branch nobody annotated is found by enumeration, not by prose"
+}
+
+test_branch_inventory_excludes_landed_work() {
+  local dir repo out rc
+  # The negative control. Landed work is not unsubmitted work, and without this
+  # the inventory would report every merged branch forever and be switched off.
+  dir=$(new_case cinvlanded)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  rm -rf "$repo"; mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email fixture@example.com
+  git -C "$repo" config user.name Fixture
+  printf 'base\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm base
+  git -C "$repo" branch -M main
+  git -C "$repo" remote add origin https://github.com/o/demo.git
+  # the branch points at a commit main already contains
+  git -C "$repo" branch fm/already-landed main
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  printf '%s' "$out" | grep -q 'already-landed' \
+    && fail "inventory: landed work was reported as unsubmitted: $out"
+  [ "$rc" -eq 0 ] || fail "inventory: a clean landed-only clone did not pass, exit $rc: $out"
+  pass "inventory: a branch already contained in the landing target is not unsubmitted work"
+}
+
 test_no_request_is_red() {
   local dir out rc
   dir=$(new_case c1)
@@ -1256,6 +1317,8 @@ test_binding_refuses_a_vague_head() {
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
+test_branch_inventory_finds_an_unannotated_unsubmitted_branch
+test_branch_inventory_excludes_landed_work
 test_request_present_is_green
 test_request_presence_requires_exact_validated_identity
 test_head_change_invalidates
