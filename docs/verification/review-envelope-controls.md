@@ -30,9 +30,11 @@ The replacement controls compile the suite's baseline fixture augmented across c
 The sweep universe covers sibling breadth across every object key, nesting depth across every object and array element, and populated shape variants supplied by the fixture; walking the artifact makes those axes properties of the real body rather than assumptions inferred from its builder.
 [`review-envelope-array-classifications.json`](review-envelope-array-classifications.json) is the single registry of every observed array path, its canonicalized or order-meaningful classification, and the reason for that classification.
 The control compares the recursive walk and registry in both directions, so a new unclassified path and a stale classification both fail by name.
-Every registry entry also owns its experiment: an input path that the control reorders alone before recompiling, or an explicit could-not-observe reason where the compiler derives the output path from another array and isolation is impossible.
-Every observable path carries at least two distinct fixture entries, and the registry-driven control requires canonicalized paths to retain one identity and order-meaningful paths to change identity.
+Every registry entry also owns its experiment: an input path reordered alone before recompiling, a compiled-body path reordered alone before digest and identity recomputation, or the closed `fewer-than-two-distinct-elements` exemption.
+The exemption is accepted only when the control measures fewer than two distinct elements at that path; unknown conditions and false cardinality claims fail by path, condition and measured count.
+Every non-exempt path carries at least two distinct fixture entries, and the registry-driven control requires canonicalized paths to retain one identity and order-meaningful paths to change identity.
 The control also reverses each classification in turn and requires the observed outcome to reject the false label, so relabelling cannot substitute for canonicalization.
+Every path is therefore either exercised in isolation or exempted by one mechanically verified condition from a closed vocabulary, leaving no third state for an unchecked assertion.
 
 ## Environment
 

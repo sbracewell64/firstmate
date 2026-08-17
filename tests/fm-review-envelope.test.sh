@@ -277,8 +277,8 @@ elif mode == "stale":
         "order": "canonicalized",
         "reason": "deliberately stale test entry",
         "experiment": {
-            "kind": "could-not-observe",
-            "reason": "deliberately stale test entry",
+            "kind": "exempt",
+            "condition": "fewer-than-two-distinct-elements",
         },
     })
 elif mode != "current":
@@ -322,9 +322,11 @@ for entry in entries:
         if not isinstance(experiment.get("input_path"), str) or not experiment["input_path"]:
             sys.stderr.write("array input experiment has no input path: " + path + "\n")
             sys.exit(1)
-    elif kind == "could-not-observe":
-        if not isinstance(experiment.get("reason"), str) or not experiment["reason"].strip():
-            sys.stderr.write("unobservable array experiment has no reason: " + path + "\n")
+    elif kind == "body-recompute":
+        pass
+    elif kind == "exempt":
+        if experiment.get("condition") != "fewer-than-two-distinct-elements":
+            sys.stderr.write("array exemption uses an unknown condition: " + path + "\n")
             sys.exit(1)
     else:
         sys.stderr.write("array registry has an invalid experiment: " + path + "\n")
@@ -344,7 +346,7 @@ PY
 
 exercise_array_registry() {  # <case-dir> <envelope> <registry> <binary> <mode>
   python3 - "$@" <<'PY'
-import copy, json, os, subprocess, sys
+import copy, hashlib, json, os, subprocess, sys
 
 case_dir, envelope_path, registry_path, binary, mode = sys.argv[1:]
 baseline = json.load(open(envelope_path))
@@ -362,6 +364,15 @@ elif mode == "meaningful-as-canonical":
                  if item["order"] == "order-meaningful"
                  and item["experiment"]["kind"] == "input-recompile")
     entry["order"] = "canonicalized"
+elif mode == "unknown-exemption":
+    entry = next(item for item in entries if item["experiment"]["kind"] == "exempt")
+    entry["experiment"]["condition"] = "free-text-exemption"
+elif mode == "false-exemption":
+    entry = next(item for item in entries if item["experiment"]["kind"] == "body-recompute")
+    entry["experiment"] = {
+        "kind": "exempt",
+        "condition": "fewer-than-two-distinct-elements",
+    }
 elif mode != "current":
     sys.stderr.write("unknown array exercise mode: " + mode + "\n")
     sys.exit(1)
@@ -389,11 +400,66 @@ def arrays_at(document, path):
     return [node for node in nodes if isinstance(node, list)]
 
 
+def digest(value):
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+def identity(body):
+    project = body["identity"]["project"]
+    work = body["identity"]["work"]
+    return digest({
+        "project": {"id": project["id"], "root_commits": project["root_commits"]},
+        "work": {"id": work["id"], "forge_request": work.get("request")},
+        "candidate_head_commit": body["candidate"]["head_commit"],
+        "envelope_digest": digest(body),
+        "policy_version": body["identity"]["policy"]["version"],
+    })
+
+
 for index, entry in enumerate(entries):
     path = entry["path"]
     experiment = entry["experiment"]
-    if experiment["kind"] == "could-not-observe":
-        print("could-not-observe " + path + ": " + experiment["reason"])
+    if experiment["kind"] == "exempt":
+        condition = experiment.get("condition")
+        if condition != "fewer-than-two-distinct-elements":
+            sys.stderr.write("exemption for " + path + " uses unknown condition " + str(condition) + "\n")
+            sys.exit(1)
+        arrays = arrays_at(baseline["envelope"], path)
+        measured = max(
+            (len({json.dumps(item, sort_keys=True) for item in array}) for array in arrays),
+            default=0,
+        )
+        if measured >= 2:
+            sys.stderr.write(
+                "exemption for " + path
+                + " claimed fewer-than-two-distinct-elements but measured " + str(measured) + "\n"
+            )
+            sys.exit(1)
+        print("exempt " + path + ": fewer-than-two-distinct-elements measured " + str(measured))
+        continue
+    if experiment["kind"] == "body-recompute":
+        body = copy.deepcopy(baseline["envelope"])
+        candidates = arrays_at(body, path)
+        target = next(
+            (array for array in candidates
+             if len({json.dumps(item, sort_keys=True) for item in array}) >= 2),
+            None,
+        )
+        if target is None:
+            sys.stderr.write("body reorder fixture has fewer than two distinct entries: " + path + "\n")
+            sys.exit(2)
+        target.reverse()
+        observed_identity = identity(body)
+        changed = observed_identity != baseline_identity
+        expected_changed = entry["order"] == "order-meaningful"
+        if changed != expected_changed:
+            expectation = "change" if expected_changed else "remain stable"
+            sys.stderr.write("isolated reorder of " + path + " expected identity to " + expectation + "\n")
+            sys.exit(1)
+        print("exercised " + path + ": identity changed")
         continue
     inputs = json.load(open(os.path.join(case_dir, "inputs.json")))
     candidates = arrays_at(inputs, experiment["input_path"])
@@ -430,11 +496,16 @@ for index, entry in enumerate(entries):
         expectation = "change" if expected_changed else "remain stable"
         sys.stderr.write("isolated reorder of " + path + " expected identity to " + expectation + "\n")
         sys.exit(1)
+    print("exercised " + path + ": identity " + ("changed" if changed else "stable"))
 PY
 }
 
 write_array_registry_inputs() {  # <case-dir>
   local case_dir=$1
+  git -C "$case_dir/repo" checkout -q candidate
+  git -C "$case_dir/repo" rm -q bin/tool.sh
+  git -C "$case_dir/repo" commit -qm 'narrow registry fixture'
+  git -C "$case_dir/repo" checkout -q main
   write_probe "$case_dir/fakebin/fm-probe-beta" 'fm-probe-beta 2.0.0'
   write_inputs "$case_dir" '{
     "scope": {"excluded": [
@@ -444,7 +515,7 @@ write_array_registry_inputs() {  # <case-dir>
       {"contract_id": "repo-baseline", "mandatory": true},
       {"contract_id": "shell-surface", "paths": [
         {"type": "glob", "value": "bin/*"},
-        {"type": "glob", "value": "docs/*"}]}]},
+        {"type": "glob", "value": "src/*"}]}]},
     "capabilities": [
       {"id": "probe-a", "mandatory": true, "candidates": ["fm-probe-alpha", "fm-probe-beta"],
        "identity_argv": ["--version", "--verbose"]},
@@ -455,9 +526,7 @@ write_array_registry_inputs() {  # <case-dir>
       "unproven": [{"id": "U-2", "required": false}, {"id": "U-1", "required": false}]},
     "rulings": [
       {"id": "R-2", "source": "captain", "relied_upon": false, "applies_to": {
-        "work_id": "other-work", "head": "1111111111111111111111111111111111111111",
-        "tree": "2222222222222222222222222222222222222222",
-        "envelope_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}},
+        "work_id": "other-work"}},
       {"id": "R-1", "source": "captain", "relied_upon": false, "applies_to": {}}],
     "obligations": {
       "active": [{"id": "OBL-2"}, {"id": "OBL-1"}],
@@ -470,17 +539,9 @@ path = sys.argv[1]
 document = json.load(open(path))
 document["ci"]["required_platforms"] = ["linux", "windows"]
 linux = document["ci"]["attempts"][0]
-windows = copy.deepcopy(linux)
-windows.update({"name": "test-windows", "platform": "windows", "order": 101})
-document["ci"]["attempts"].append(windows)
-for order, name in ((90, "headless-a"), (91, "headless-b")):
-    attempt = copy.deepcopy(linux)
-    attempt.update({"name": name, "head": "", "order": order})
-    document["ci"]["attempts"].append(attempt)
-for order, name in ((80, "wrong-a"), (81, "wrong-b")):
-    attempt = copy.deepcopy(linux)
-    attempt.update({"name": name, "head": str(order) * 40, "order": order})
-    document["ci"]["attempts"].append(attempt)
+wrong = copy.deepcopy(linux)
+wrong.update({"name": "wrong-head", "head": "8" * 40, "order": 80})
+document["ci"]["attempts"].append(wrong)
 additional = []
 for contract in document["verification"]["contracts"]:
     contract["execution_worlds"] = ["offline-ci", "portable-ci"]
@@ -857,8 +918,26 @@ test_array_classifications_are_exercised_in_isolation() {
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
     "$registry" "$BIN" current
   expect_code 0 "$CAPTURED_CODE" "every observable registry path has the declared isolated outcome"
-  assert_contains "$CAPTURED" 'could-not-observe capabilities[].probes:' \
-    "an output path coupled to its source must be named as unobservable"
+  assert_contains "$CAPTURED" \
+    'exempt candidate.changed_files: fewer-than-two-distinct-elements measured 1' \
+    "a genuinely short array must pass the mechanically checked vacuity guard"
+  assert_contains "$CAPTURED" 'exercised capabilities[].probes: identity changed' \
+    "probe order must be exercised alone in the compiled body"
+  assert_contains "$CAPTURED" 'exercised capabilities[].selected.identity_argv: identity changed' \
+    "selected identity arguments must be exercised alone in the compiled body"
+
+  capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
+    "$registry" "$BIN" unknown-exemption
+  expect_code 1 "$CAPTURED_CODE" "an exemption outside the closed vocabulary fails"
+  assert_contains "$CAPTURED" 'uses unknown condition free-text-exemption' \
+    "the unknown exemption must name its rejected condition"
+
+  capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
+    "$registry" "$BIN" false-exemption
+  expect_code 1 "$CAPTURED_CODE" "an exemption whose measured condition is false fails"
+  assert_contains "$CAPTURED" \
+    'exemption for capabilities[].probes claimed fewer-than-two-distinct-elements but measured 2' \
+    "the false exemption must name its path, claimed condition and measured cardinality"
 
   capture exercise_array_registry "$case_dir" "$case_dir/baseline/envelope.json" \
     "$registry" "$BIN" canonical-as-meaningful
