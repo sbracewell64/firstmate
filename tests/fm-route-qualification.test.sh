@@ -66,6 +66,8 @@ write_config() {  # <home>
                    "requires_capabilities": ["runtime-job-maker"] },
     "F-REVIEW":  { "effort_floor": "high", "context_ceiling": 140000, "tool_loop": "verified-agentic",
                    "requires_capabilities": ["runtime-job-design", "runtime-job-change"] },
+    "F-QUAL":    { "effort_floor": "high", "context_ceiling": 140000, "tool_loop": "verified-agentic",
+                   "requires_capabilities": ["runtime-job-adjudicator"] },
     "F-BROKEN":  { "effort_floor": "high", "context_ceiling": 140000, "tool_loop": "verified-agentic",
                    "requires_capabilities": "runtime-job-maker" }
   },
@@ -86,6 +88,9 @@ write_config() {  # <home>
       "use": { "harness": "pi", "model": "alpha/one", "effort": "high" },
       "pool": ["alpha/one", "beta/two", "delta/four"] },
     { "when": "runtime review", "route": "R-REVIEW", "floor": "F-REVIEW",
+      "use": { "harness": "pi", "model": "beta/two", "effort": "high" },
+      "pool": ["beta/two"] },
+    { "when": "qualification adjudication", "route": "R-QUAL", "floor": "F-QUAL",
       "use": { "harness": "pi", "model": "beta/two", "effort": "high" },
       "pool": ["beta/two"] },
     { "when": "a floor whose requirement cannot be interpreted", "route": "R-BROKEN", "floor": "F-BROKEN",
@@ -308,6 +313,7 @@ reset_register() {
   write_contract runtime-job-design RUNTIME_JOB_DESIGNER design_challenge
   write_contract runtime-job-change RUNTIME_JOB_CHANGE_REVIEWER exact_change_review
   write_contract runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR exact_change_review
+  write_record beta-two-adjudicator runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR beta/two beta QUALIFIED
 }
 
 zero() {  # <home> <route>
@@ -695,6 +701,66 @@ test_a_failed_result_is_terminal_and_preserves_the_exclusion() {
   pass "a failed result is terminal and preserves the exclusion"
 }
 
+test_an_asserted_failure_without_a_matching_record_is_refused() {
+  local rec out rc=0
+  rec=$(make_home failedclaim); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result FAILED) || rc=$?
+  expect_code 3 "$rc" "an unestablished failure did not remain qualification-required"
+  assert_contains "$out" "refusing to close" "the asserted failure was accepted without register evidence"
+  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+    "an unestablished failure closed the workflow"
+  pass "an asserted failure without a matching record is refused"
+}
+
+test_failure_automatically_advances_to_the_next_candidate() {
+  local rec out rc=0
+  rec=$(make_home failedadvance); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
+  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-beta-two --result FAILED) || rc=$?
+  expect_code 1 "$rc" "a recorded failure did not remain distinguishable"
+  assert_present "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+    "failure printed advice instead of activating the next promising candidate"
+  assert_contains "$out" "evaluating the next promising candidate now" \
+    "failure did not perform the route-owned transition"
+  pass "failure automatically advances to the next candidate"
+}
+
+test_qualification_dispatch_uses_an_already_qualified_adjudicator_route() {
+  local rec out
+  rec=$(make_home bootstrap); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  out=$(run_qual "$HOME_DIR" dispatch qualify-runtime-job-maker-alpha-one --dry-run)
+  assert_contains "$out" "--route R-QUAL" "the qualifying run reused the blocked target route"
+  assert_contains "$out" "--model beta/two" "the qualifying run was not assigned to the qualified adjudicator"
+  assert_not_contains "$out" "--route R-RUNTIME" "the target route received a self-qualification exemption"
+  pass "qualification dispatch uses an already-qualified adjudicator route"
+}
+
+test_qualification_is_enforced_on_the_full_binding_tuple() {
+  local rec out rc=0
+  rec=$(make_home tuple); read_home "$rec"
+  reset_register
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
+  mkdir -p "$HOME_DIR/data/runtime-task"
+  printf 'You are a crewmate.\n\n# Definition of done\n' > "$HOME_DIR/data/runtime-task/brief.md"
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" runtime-task "$PROJ_DIR" --scout \
+        --reason-code NOVEL_DECOMPOSITION --route R-RUNTIME --model alpha/one --effort xhigh --harness pi) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a record at native effort high admitted native effort xhigh"
+  assert_contains "$out" "FM_ROUTE_QUALIFICATION_REQUIRED" \
+    "the route gate treated distinct native-effort tuples as identical"
+  assert_present "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one-pi-xhigh.activation" \
+    "the workflow identity omitted the differing tuple axes"
+  pass "qualification is enforced on the full binding tuple"
+}
+
 test_the_workflow_bound_never_touches_the_blocked_work_accounting() {
   local rec
   rec=$(make_home accounting); read_home "$rec"
@@ -827,6 +893,10 @@ test_duplicate_qualification_workflows_are_suppressed
 test_work_already_in_flight_under_the_workflow_identity_suppresses_activation
 test_a_could_not_observe_result_spends_one_attempt_and_stays_active
 test_a_failed_result_is_terminal_and_preserves_the_exclusion
+test_an_asserted_failure_without_a_matching_record_is_refused
+test_failure_automatically_advances_to_the_next_candidate
+test_qualification_dispatch_uses_an_already_qualified_adjudicator_route
+test_qualification_is_enforced_on_the_full_binding_tuple
 test_the_workflow_bound_never_touches_the_blocked_work_accounting
 test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded
 test_a_route_requiring_two_capabilities_needs_both_records

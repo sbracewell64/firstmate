@@ -123,6 +123,7 @@ JSON=0
 ROUTE=
 MODEL=
 EFFORT=
+HARNESS=
 AFTER=
 HOLD_STATE=
 HOLD_SECONDS=
@@ -140,6 +141,8 @@ while [ $# -gt 0 ]; do
     --model=*) MODEL=${1#--model=} ;;
     --effort) shift; [ $# -gt 0 ] || die "--effort needs a value"; EFFORT=$1 ;;
     --effort=*) EFFORT=${1#--effort=} ;;
+    --harness) shift; [ $# -gt 0 ] || die "--harness needs a value"; HARNESS=$1 ;;
+    --harness=*) HARNESS=${1#--harness=} ;;
     --after) shift; [ $# -gt 0 ] || die "--after needs a value"; AFTER=$1 ;;
     --after=*) AFTER=${1#--after=} ;;
     --state) shift; [ $# -gt 0 ] || die "--state needs a value"; HOLD_STATE=$1 ;;
@@ -220,7 +223,11 @@ enrich_qualification() {  # <decision-json>
 $(printf '%s' "$decision" | jq -r '.candidates[]?.model, (.subject.resolved // empty)' 2>/dev/null | sort -u)
 EOF
   [ "${#models[@]}" -gt 0 ] || { printf '%s' "$decision"; return 0; }
-  lines=$(fm_qualification_route_lines "$CONFIG_FILE" "$floor" "${models[@]}") || rc=$?
+  lines=$(fm_qualification_route_lines "$CONFIG_FILE" "$floor" \
+    "$(printf '%s' "$decision" | jq -r '.route // ""')" \
+    "$(printf '%s' "$decision" | jq -r '.harness_effective // ""')" \
+    "$(printf '%s' "$decision" | jq -r '.effort_effective // ""')" \
+    "${models[@]}") || rc=$?
   [ "$rc" -eq 0 ] || { printf '%s' "$decision"; return 0; }
   fm_route_decision_with_qualification "$decision" "$lines"
 }
@@ -340,7 +347,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "check needs --route"
     [ -n "$MODEL" ] || die "check needs --model"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE" "$HARNESS") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf '%s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -397,7 +404,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "$CMD needs --route"
     [ "$CMD" != next ] || [ -n "$AFTER" ] || die "next needs --after <model>"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -455,7 +462,7 @@ case "$CMD" in
     # operator sees the same answer the automatic path acts on.
     [ -n "$ROUTE" ] || die "zero-route needs --route"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -513,7 +520,7 @@ case "$CMD" in
       || die "the routed pools could not be read from $CONFIG_FILE"
     if [ -n "$ROUTE" ]; then
       DECISION_RC=0
-      DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE") || DECISION_RC=$?
+      DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE" "$HARNESS") || DECISION_RC=$?
       [ "$DECISION_RC" -eq 0 ] \
         || die "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")"
       [ "$(printf '%s' "$DECISION" | jq -r '.route_known')" = true ] \

@@ -938,7 +938,7 @@ fm_qualification_cost_rank() {  # <model>
   esac
 }
 
-# fm_qualification_route_lines <config-file> <floor-id> <models...>
+# fm_qualification_route_lines <config-file> <floor-id> <route-id> <harness> <native-effort> <models...>
 # The merge lines bin/fm-route-lib.sh consumes, one per model:
 #
 #   <model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><evidence>
@@ -952,21 +952,33 @@ fm_qualification_cost_rank() {  # <model>
 # beats QUALIFICATION_STALE beats QUALIFICATION_REQUIRED beats QUALIFIED. A
 # candidate qualified as maker and unqualified as reviewer is not half eligible.
 fm_qualification_route_lines() {
-  local file=$1 floor=$2
-  shift 2
+  local file=$1 floor=$2 route=$3 dispatch_harness=$4 dispatch_effort=$5
+  shift 5
   local contracts rc=0
   contracts=$(fm_qualification_floor_contracts "$file" "$floor") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
-  local model contract state st worst worst_rank rank evidence names
+  local model contract state st worst worst_rank rank evidence names harness effort
   names=$(printf '%s' "$contracts" | tr '\n' ',' | sed 's/,$//')
   for model in "$@"; do
     [ -n "$model" ] || continue
+    IFS=$'\x1f' read -r harness effort <<EOF2
+$(jq -r --arg route "$route" --arg model "$model" --arg h "$dispatch_harness" --arg e "$dispatch_effort" '
+  ([((.rules // [])[]? | select(.route == $route)),
+     (.default // empty | select(.route == $route))] | first) as $r
+  | (if ($r.use | type) == "array"
+     then ([$r.use[] | select((.model // "") == $model)] | first // {})
+     elif ($r.use | type) == "object" then $r.use
+     else {} end) as $p
+  | [if ($h | length) > 0 then $h else ($p.harness // "") end,
+     if ($e | length) > 0 then $e else ($p.effort // "") end]
+  | join("\u001f")' "$file" 2>/dev/null)
+EOF2
     worst=QUALIFIED
     worst_rank=0
     evidence=
     while IFS= read -r contract; do
       [ -n "$contract" ] || continue
-      state=$(fm_qualification_state "$contract" "$model")
+      state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
       st=$(printf '%s' "$state" | jq -r '.state' 2>/dev/null)
       case "$st" in
         QUALIFIED) rank=0 ;;

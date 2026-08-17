@@ -1555,7 +1555,7 @@ spawn_qualification_activate() {
   local out rc=0
   [ -x "$FM_ROOT/bin/fm-qualification.sh" ] || return 0
   out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-qualification.sh" activate \
-        --route "$ROUTE" --blocks "$ID" 2>&1) || rc=$?
+    --route "$ROUTE" --blocks "$ID" --harness "$HARNESS" --effort "$EFFORT" 2>&1) || rc=$?
   case "$rc" in
     0) printf '%s\n' "$out" >&2
        echo "$ID is held until that qualification lands, and its identity, custody bases, attempt count and retry budget are untouched; the qualification workflow is bounded on its own identity" >&2 ;;
@@ -1715,7 +1715,7 @@ $(printf '%s' "$ROUTE_DECISION" | jq -r '.candidates[]?.model, (.subject.resolve
 EOF
     if [ -n "$ROUTE_FLOOR_ID" ] && [ "${#QUALIFICATION_MODELS[@]}" -gt 0 ]; then
       QUALIFICATION_LINES=$(fm_qualification_route_lines \
-        "$(fm_route_config_path "$CONFIG")" "$ROUTE_FLOOR_ID" \
+        "$(fm_route_config_path "$CONFIG")" "$ROUTE_FLOOR_ID" "$ROUTE" "$HARNESS" "$EFFORT" \
         "${QUALIFICATION_MODELS[@]}") || QUALIFICATION_RC=$?
     else
       QUALIFICATION_RC=1

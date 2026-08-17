@@ -523,6 +523,7 @@ def effective_route_profile($rule; $path; $model; $harness):
                                           observed:"no model named on this dispatch, so pool membership and every floor axis are unverifiable"}]
                                    else [] end)} ),
      effort_effective:$eeff,
+     harness_effective:$harness,
      candidates:[ $pool | to_entries[]
                   | .value as $c
                   | (effective_route_profile($rule; $route_path; $c; "")) as $candidate_profile
