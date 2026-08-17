@@ -230,6 +230,25 @@ digest_file() {  # <path> -> sha256 hex, or non-zero
   fi
 }
 
+guard_output_outside_source() {  # <resolved-source> <raw-output>
+  local source=$1 out=$2 out_parent out_leaf out_resolved
+  case "$out" in
+    */../*|*/..|../*|..) cno "output path must not contain a .. component: $out" ;;
+  esac
+  out_parent=$(dirname -- "$out")
+  out_leaf=$(basename -- "$out")
+  while [ ! -d "$out_parent" ] && [ "$out_parent" != / ] && [ "$out_parent" != . ]; do
+    out_leaf=$(basename -- "$out_parent")/$out_leaf
+    out_parent=$(dirname -- "$out_parent")
+  done
+  [ -d "$out_parent" ] || cno "output directory has no existing ancestor: $out"
+  out_parent=$(cd "$out_parent" && pwd) || cno "output directory cannot be resolved: $out"
+  out_resolved=$out_parent/$out_leaf
+  case "$out_resolved" in
+    "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
+  esac
+}
+
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # --- reading one execution's result ------------------------------------------
@@ -597,22 +616,7 @@ cmd_prove() {
   [ "$git_dir" != "$common_dir" ] \
     || cno "mutation proof refuses a primary checkout as its source: $source"
 
-  # The output path is canonicalized WITHOUT being created, by resolving the
-  # nearest existing ancestor: a path has to be judged against the source before
-  # anything brings it into existence.
-  local out_parent out_leaf out_resolved
-  out_parent=$(dirname -- "$out")
-  out_leaf=$(basename -- "$out")
-  while [ ! -d "$out_parent" ] && [ "$out_parent" != / ] && [ "$out_parent" != . ]; do
-    out_leaf=$(basename -- "$out_parent")/$out_leaf
-    out_parent=$(dirname -- "$out_parent")
-  done
-  [ -d "$out_parent" ] || cno "output directory has no existing ancestor: $out"
-  out_parent=$(cd "$out_parent" && pwd) || cno "output directory cannot be resolved: $out"
-  out_resolved=$out_parent/$out_leaf
-  case "$out_resolved" in
-    "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
-  esac
+  guard_output_outside_source "$source" "$out"
 
   # Only now is the record directory claimed, and an occupied one is refused
   # rather than reused.
@@ -990,6 +994,8 @@ cmd_catalogue() {
     || cno "source git common directory is unreadable"
   [ "$cat_git_dir" != "$cat_common_dir" ] \
     || cno "mutation proof refuses a primary checkout as its source: $source"
+
+  guard_output_outside_source "$source" "$out"
 
   if [ -e "$out" ]; then
     [ -d "$out" ] || cno "output path exists and is not a directory: $out"
