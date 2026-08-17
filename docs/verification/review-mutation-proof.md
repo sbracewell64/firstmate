@@ -91,7 +91,7 @@ The suite executes 31 controls, and the current measured-file inventory is:
 inventory_control_count: 31
 inventory_sha256: bin/fm-review-mutation.sh fcc9998483e554db47311a3b54bbcc4d219f79ffbdc472a1019654e78d0ed36e
 inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
-inventory_sha256: tests/fm-review-mutation.test.sh 484bcd2f7ccb6a17b5bc9d85dbb96e3728c7cfe16897353b014a5403bb9c32a2
+inventory_sha256: tests/fm-review-mutation.test.sh 6a54dfa2ff57dac367fa280d12031c9ca635df601e4ee62d3f687d4175542354
 ```
 
 This is an inventory claim only: these files and control count agree with the suite that passes on the current bytes.
