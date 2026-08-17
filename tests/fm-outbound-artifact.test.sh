@@ -565,7 +565,9 @@ test_single_verdict_is_read_and_no_verdict_refuses() {
   mv "$dir/forge/ruling_body.x" "$dir/forge/ruling_body"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "verdict: a body with no verdict was accepted, exit $rc: $out"
-  pass "verdict: exactly one verdict is read, and none still refuses"
+  printf '%s' "$out" | grep -q '0 verdict lines' \
+    || fail "verdict: the zero-verdict refusal did not name the count: $out"
+  pass "verdict: exactly one verdict is read, and zero refuses while naming the count"
 }
 
 test_ruling_wakes_the_exact_item() {
