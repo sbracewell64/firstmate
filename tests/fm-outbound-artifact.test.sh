@@ -644,6 +644,60 @@ test_inbound_poll_advances_only_matching_ruling() {
   pass "poll: inbound path records exact rulings without claiming work resumed"
 }
 
+test_poll_requires_exactly_one_ruling_marker() {
+  local dir rid out rc state
+  dir=$(new_case poll-marker-count)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 570 accepted
+  printf 'FM-SOL-RULING fm-ob-deadbeefcafe\n' >> "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "poll marker count: two markers returned $rc: $out"
+  printf '%s' "$out" | grep -q '2 ruling marker lines' \
+    || fail "poll marker count: refusal did not name the count: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "emitted" ] || fail "poll marker count: ambiguous marker advanced state to $state"
+
+  write_ruling "$dir" "$rid" 570 accepted
+  run_ob "$dir" poll >/dev/null 2>&1 \
+    || fail "poll marker count: exactly one marker was refused"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "ruled" ] || fail "poll marker count: one marker left state $state"
+
+  dir=$(new_case poll-marker-none)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: second emit failed"
+  rid=$(emitted_request_id "$dir")
+  printf 'unrelated comment\n' > "$dir/forge/ruling_body"
+  printf '571\n' > "$dir/forge/ruling_id"
+  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll marker count: no marker was not ignored"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "emitted" ] || fail "poll marker count: no marker advanced state to $state"
+  pass "poll: exactly one ruling marker is required and ambiguity names its count"
+}
+
+test_duplicate_backlog_ids_refuse_identity_joins() {
+  local dir rid out rc
+  dir=$(new_case duplicate-emit-id)
+  jq '.backlog.records += [.backlog.records[0]]' "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "duplicate id emit: duplicate records returned $rc: $out"
+  printf '%s' "$out" | grep -q "matched 2 records" \
+    || fail "duplicate id emit: refusal did not name the count: $out"
+
+  dir=$(new_case duplicate-ruling-id)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "duplicate id ruling: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 572 accepted
+  jq '.backlog.records += [.backlog.records[0]]' "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 572 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "duplicate id ruling: duplicate records returned $rc: $out"
+  printf '%s' "$out" | grep -q "matched 2 records" \
+    || fail "duplicate id ruling: refusal did not name the count: $out"
+  pass "backlog identity joins refuse duplicate ids and name the count"
+}
+
 test_stale_ruling_is_invalidated_before_fresh_emission() {
   local dir rid out rc old_state posts
   dir=$(new_case stale-ruling)
@@ -948,6 +1002,19 @@ test_pull_request_must_match_exact_head() {
   pass "PR detection requires the pull request head to equal the waiting head"
 }
 
+test_pull_request_probe_refuses_multiple_exact_head_matches() {
+  local dir out rc
+  dir=$(new_case pr-duplicate-head)
+  write_snapshot "$dir/snap.json" external "never submitted - no pull request exists for this branch"
+  printf '101\n102\n' > "$dir/forge/pr_number"
+  printf '%s\n' "$HEAD_A" > "$dir/forge/pr_head"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "PR duplicate head: multiple exact-head PRs returned $rc: $out"
+  printf '%s' "$out" | grep -q 'has 2 open pull requests' \
+    || fail "PR duplicate head: ambiguity did not name the count: $out"
+  pass "PR detection refuses multiple exact-head matches and names the count"
+}
+
 test_never_submitted_branch_is_recognised() {
   local dir out rc
   dir=$(new_case c11)
@@ -1165,6 +1232,8 @@ test_quoted_prior_verdict_makes_the_ruling_ambiguous
 test_single_verdict_is_read_and_no_verdict_refuses
 test_unrelated_ruling_cannot_wake_the_item
 test_inbound_poll_advances_only_matching_ruling
+test_poll_requires_exactly_one_ruling_marker
+test_duplicate_backlog_ids_refuse_identity_joins
 test_stale_ruling_is_invalidated_before_fresh_emission
 test_complete_identity_is_rechecked_at_ruling_and_resume
 test_poll_aggregate_preserves_unevaluable_precedence
@@ -1179,6 +1248,7 @@ test_typed_gate_uses_declaration_over_prose
 test_typed_gate_requires_valid_declaration
 test_pull_request_probe_prefers_contribution_target
 test_pull_request_must_match_exact_head
+test_pull_request_probe_refuses_multiple_exact_head_matches
 test_never_submitted_branch_is_recognised
 test_done_rows_are_not_waiting
 test_unstructured_row_is_not_silently_clear

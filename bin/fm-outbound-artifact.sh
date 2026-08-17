@@ -375,14 +375,20 @@ sol_artifact_present() {  # <request-id> <record-json> -> comment id
 }
 
 pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
-  local venue=$1 sha=$2 out
+  local venue=$1 sha=$2 out count
   [ -n "$venue" ] || return 3
   [ -n "$sha" ] || return 2
   probe_budget || return 2
   out=$(obs gh api "repos/$venue/commits/$sha/pulls" \
     --jq ".[] | select(.state == \"open\" and .head.sha == \"$sha\") | .number") || return 2
-  if [ -n "$out" ]; then printf '%s\n' "$out" | head -1; return 0; fi
-  return 1
+  [ -n "$out" ] || return 1
+  count=$(printf '%s\n' "$out" | grep -c . || true)
+  if [ "$count" -ne 1 ]; then
+    printf 'exact head %s has %s open pull requests in %s\n' "$sha" "$count" "$venue" >&2
+    return 2
+  fi
+  printf '%s\n' "$out"
+  return 0
 }
 
 # The venue a project's contributions are offered to. Read from the clone's own
@@ -653,15 +659,29 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head>
   done
 }
 
+BACKLOG_RECORD=
+require_unique_backlog_record() {  # <item>
+  local item=$1 matches count
+  matches=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
+    '[.backlog.records[] | select(.structured == true and .id == $i)]') \
+    || die "durable backlog records for '$item' could not be read" 4
+  count=$(printf '%s' "$matches" | jq 'length') \
+    || die "durable backlog records for '$item' could not be counted" 4
+  if [ "$count" -ne 1 ]; then
+    die "durable backlog id '$item' matched $count records; refusing to choose by position" 4
+  fi
+  BACKLOG_RECORD=$(printf '%s' "$matches" | jq -c '.[0]') \
+    || die "durable backlog record for '$item' could not be read" 4
+}
+
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
   local rec gate channel project pr_url pr_ref head venue missing rid record
   local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc
 
   read_snapshot || die "fleet backlog could not be read" 4
-  rec=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
-    '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
-  [ -n "$rec" ] || die "no durable backlog record for '$item'" 4
+  require_unique_backlog_record "$item"
+  rec=$BACKLOG_RECORD
 
   gate=$(classify_record "$rec" | cut -f2)
   channel=$(fm_outbound_gate_channel "$gate")
@@ -854,9 +874,8 @@ require_record_applicable_now() {  # <request-id> <record-json>
   local stored_identity current_identity stored_venue current_venue
   item=$(printf '%s' "$rec" | jq -r '.identity.item')
   read_snapshot || die "fleet backlog could not be read while validating $rid" 4
-  current=$(printf '%s' "$SNAPSHOT" | jq -c --arg i "$item" \
-    '.backlog.records[] | select(.structured == true and .id == $i)' | head -1)
-  [ -n "$current" ] || die "waiting item $item could not be observed while validating $rid" 4
+  require_unique_backlog_record "$item"
+  current=$BACKLOG_RECORD
   gate=$(classify_record "$current" | cut -f2)
   channel=$(fm_outbound_gate_channel "$gate")
   [ -n "$channel" ] || die "$FM_OUTBOUND_TOKEN_INCOMPLETE: the current gate for $item is incomplete" 3
@@ -964,7 +983,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
 }
 
 cmd_poll() {
-  local comments row rid comment rc failed=0 poll_record poll_state out
+  local comments row body rid marker_count comment rc failed=0 poll_record poll_state out
   read_sol_config || return 0
   probe_budget || die "the ruling poll probe budget is exhausted" 4
   comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --paginate \
@@ -973,9 +992,19 @@ cmd_poll() {
     [ -n "$row" ] || continue
     comment=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0] | tostring') \
       || { failed=4; continue; }
-    rid=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]' \
-      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \(fm-ob-[0-9a-f]*\)$/\1/p" | head -1)
-    [ -n "$rid" ] || continue
+    body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') \
+      || { failed=4; continue; }
+    rid=$(printf '%s\n' "$body" \
+      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \(fm-ob-[0-9a-f]*\)$/\1/p")
+    marker_count=$(printf '%s\n' "$rid" | grep -c . || true)
+    [ "$marker_count" -ne 0 ] || continue
+    if [ "$marker_count" -gt 1 ]; then
+      printf '%s: comment %s carries %s ruling marker lines, so which request it rules is ambiguous\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$marker_count" >&2
+      printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own request once.\n' >&2
+      [ "$failed" -ne 0 ] || failed=3
+      continue
+    fi
     poll_record=$(record_read "$rid") || poll_record=
     if [ -n "$poll_record" ]; then
       poll_state=$(printf '%s' "$poll_record" | jq -r '.state')
