@@ -950,6 +950,8 @@ for raw in sys.argv[7:]:
     idx, of = int(m.group(1)), int(m.group(2))
     if of != shards:
         unobserved(f"{p} reports {of} shards but this runner is configured for {shards}")
+    if idx < 1 or idx > shards:
+        unobserved(f"{p} reports shard {idx} outside the configured range 1..{shards}")
     if idx in seen:
         unobserved(f"shard {idx} appears in more than one timing artifact")
     rows = doc.get("scripts")
