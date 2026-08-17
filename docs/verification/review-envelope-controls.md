@@ -34,8 +34,8 @@ Each entry also carries a digest of its whole captured run and the patch that re
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `6a3d36929c8bedeb25348b85a18ed2fcbcf0f6ad`.
-Mutations built: 72.
+Campaign head: `0000000`.
+Mutations built: 0.
 
 ## Commands
 

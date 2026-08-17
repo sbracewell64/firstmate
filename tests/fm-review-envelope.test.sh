@@ -1988,6 +1988,13 @@ for entry in mutations:
 if os.environ.get("FM_REVIEW_ENVELOPE_CAMPAIGN_REPLAY_CHILD") == "1":
     sys.exit(0)
 
+# An artifact with no entries records no measurements, which is a clean refusal
+# rather than a crash: raising here would report a broken control where the real
+# fact is an empty campaign, and the two must not be confused.
+if not mutations:
+    sys.stderr.write("the campaign artifact records no measurements, so nothing is backed by it\n")
+    sys.exit(1)
+
 # Replay the lexically first mutation id, so every verifier exercises the same
 # deep proof and its result never depends on chance or artifact ordering.
 entry = min(mutations, key=lambda item: item["id"])
