@@ -795,10 +795,48 @@ test_qualified_resolution_requires_confirmed_unblock() {
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
   expect_code 4 "$rc" "an unconfirmed unblock was reported as successful resolution"
   assert_contains "$out" "no return to eligibility is claimed" "unblock uncertainty was reduced to a warning"
-  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
-    "the workflow became terminal before the backlog owner confirmed release"
+  assert_grep "terminal=qualified_pending_unblock" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the recoverable terminal transition was not persisted before backlog release"
   assert_not_contains "$out" "returns to normal eligibility" "resolution claimed a transition the backlog owner rejected"
   pass "qualified resolution requires confirmed unblock"
+}
+
+test_unconfirmed_transition_steps_never_report_success() {
+  local rec tmp out rc=0
+  rec=$(make_home blockwrite); read_home "$rec"
+  reset_register
+  printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/tasks-axi"
+  chmod +x "$FAKEBIN/tasks-axi"
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
+  expect_code 4 "$rc" "a rejected blocker registration was reported as activation"
+  assert_not_contains "$out" "activated $AID_ALPHA" "activation was claimed without backlog confirmation"
+  assert_grep "terminal=block_unobserved" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the unconfirmed blocker transition was left looking active"
+
+  rec=$(make_home bootstrapread); read_home "$rec"
+  reset_register
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '._floors["F-GENHARD"].requires_capabilities = ["missing-bootstrap-contract"]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  rc=0
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
+  expect_code 4 "$rc" "an unreadable bootstrap qualification was reported as merely missing"
+  assert_contains "$out" "could not be observed" "bootstrap read uncertainty was collapsed into QUALIFICATION_REQUIRED"
+  assert_not_contains "$out" "no route where" "an unevaluable route was reported as established ineligible"
+
+  rec=$(make_home terminalwrite); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
+  printf '#!/bin/sh\ncase "$1" in *.activation.*) exit 1 ;; esac\nexec /usr/bin/mktemp "$@"\n' > "$FAKEBIN/mktemp"
+  chmod +x "$FAKEBIN/mktemp"
+  rc=0
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
+  expect_code 4 "$rc" "failed terminal persistence was reported as successful resolution"
+  assert_no_grep "unblock some-work" "$TASKS_LOG" "backlog release ran before terminal persistence"
+  assert_not_contains "$out" "returns to normal eligibility" "a failed terminal write was reported as a completed transition"
+  pass "unconfirmed transition steps never report success"
 }
 
 test_qualification_is_enforced_on_the_full_binding_tuple() {
@@ -1010,6 +1048,7 @@ test_failure_automatically_advances_to_the_next_candidate
 test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route
 test_bootstrap_dispatch_refuses_a_substituted_worker
 test_qualified_resolution_requires_confirmed_unblock
+test_unconfirmed_transition_steps_never_report_success
 test_qualification_is_enforced_on_the_full_binding_tuple
 test_tuple_identity_distinguishes_a_colliding_slug_pair
 test_failed_advancement_error_remains_observable_and_nonterminal

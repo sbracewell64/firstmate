@@ -354,6 +354,20 @@ activation_file() {  # <activation-id>
   printf '%s/%s.activation\n' "$ACTIVATION_DIR" "$1"
 }
 
+activation_write_field() {  # <activation-file> <key> <value>
+  local file=$1 key=$2 value=$3 tmp
+  tmp=$(mktemp "$file.XXXXXX") || return 1
+  { awk -F= -v k="$key" '$1 != k' "$file"; printf '%s=%s\n' "$key" "$value"; } > "$tmp" \
+    || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; return 1; }
+}
+
+qualification_backlog_transition() {  # <block|unblock> <work-id> <activation-id>
+  command -v tasks-axi >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
+  tasks-axi "$1" "$2" --by "$3" >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
+}
+
 activation_field() {  # <file> <key>
   [ -f "$1" ] || return 1
   awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1"
@@ -383,13 +397,17 @@ activation_already_active() {  # <activation-id>
 }
 
 qualification_bootstrap() {  # <target-route> <target-floor> <model> <harness> <effort>
-  local target_route=$1 target_floor=$2 model=$3 harness=$4 effort=$5 route checked rc
+  local target_route=$1 target_floor=$2 model=$3 harness=$4 effort=$5 route checked rc state
   while IFS= read -r route; do
     [ -n "$route" ] || continue
     rc=0
     checked=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-route.sh" check --route "$route" \
       --model "$model" --harness "$harness" --effort "$effort" --json 2>/dev/null) || rc=$?
-    [ "$rc" -eq 0 ] || continue
+    if [ "$rc" -ne 0 ]; then
+      state=$(printf '%s' "$checked" | jq -r '.subject.qualification.state // empty' 2>/dev/null)
+      [ "$rc" -eq 1 ] && [ "$state" != COULD_NOT_OBSERVE ] && continue
+      return 2
+    fi
     [ "$(printf '%s' "$checked" | jq -r '.subject.resolved // empty')" = "$model" ] || continue
     printf '%s\037%s\037%s\037%s\n' "$route" "$model" "$harness" "$effort"
     return 0
@@ -483,7 +501,12 @@ EOF
 
   local target_floor
   target_floor=$(printf '%s' "$zero" | jq -r '.floor // empty')
-  if ! bootstrap=$(qualification_bootstrap "$ROUTE" "$target_floor" "$model" "$harness" "$effort"); then
+  local bootstrap_rc=0
+  bootstrap=$(qualification_bootstrap "$ROUTE" "$target_floor" "$model" "$harness" "$effort") || bootstrap_rc=$?
+  if [ "$bootstrap_rc" -eq 2 ]; then
+    printf 'fm-qualification: bootstrap eligibility for %s could not be observed, so missing qualification is not inferred\n' "$model" >&2
+    return "$EXIT_UNOBSERVED"
+  elif [ "$bootstrap_rc" -ne 0 ]; then
     printf 'fm-qualification: no route where %s is already eligible also meets target floor %s, so qualification stops without an exemption\n' "$model" "$target_floor" >&2
     return "$EXIT_REQUIRED"
   fi
@@ -565,6 +588,7 @@ EOF
     printf 'cost_rank=%s\n' "$cost"
     printf 'blocks=%s\n' "$BLOCKS"
     printf 'attempt_budget=%s\n' "$BUDGET"
+    printf 'transition=block_pending\n'
     printf 'created=%s\n' "$(date -u +%s)"
     printf 'created_date=%s\n' "$(fm_qualification_today)"
   } > "$tmp" || { rm -f -- "$tmp"; printf 'fm-qualification: could not record the workflow\n' >&2; return "$EXIT_UNOBSERVED"; }
@@ -576,9 +600,16 @@ EOF
   # backlog owner, so the dependency-driven re-evaluation already in the fleet
   # returns it to normal eligibility when this clears - no second scheduler
   # watches it.
-  if [ -n "$BLOCKS" ] && command -v tasks-axi >/dev/null 2>&1; then
-    tasks-axi block "$BLOCKS" --by "$id" >/dev/null 2>&1 \
-      || printf 'fm-qualification: could not record the backlog blocker on %s; the durable activation record still governs this workflow\n' "$BLOCKS" >&2
+  if [ -n "$BLOCKS" ]; then
+    if ! qualification_backlog_transition block "$BLOCKS" "$id"; then
+      record_terminal "$file" block_unobserved || true
+      printf 'fm-qualification: the backlog owner did not confirm blocking %s, so activation of %s could not be observed\n' "$BLOCKS" "$id" >&2
+      return "$EXIT_UNOBSERVED"
+    fi
+  fi
+  if ! activation_write_field "$file" transition active; then
+    printf 'fm-qualification: the activation transition for %s could not be persisted, so success is not reported\n' "$id" >&2
+    return "$EXIT_UNOBSERVED"
   fi
 
   if [ "$JSON" -eq 1 ]; then
@@ -769,13 +800,13 @@ cmd_resolve() {
     return "$EXIT_REFUSED"
   fi
 
+  record_terminal "$file" qualified_pending_unblock || {
+    printf 'fm-qualification: could not persist the terminal transition for %s, so the blocked work remains untouched\n' "$id" >&2
+    return "$EXIT_UNOBSERVED"
+  }
   if [ -n "$blocks" ]; then
-    if ! command -v tasks-axi >/dev/null 2>&1; then
-      printf 'fm-qualification: the backlog owner needed to unblock %s could not be observed, so %s remains active and no return to eligibility is claimed\n' "$blocks" "$id" >&2
-      return "$EXIT_UNOBSERVED"
-    fi
-    if ! tasks-axi unblock "$blocks" --by "$id" >/dev/null 2>&1; then
-      printf 'fm-qualification: the backlog owner did not confirm unblocking %s, so %s remains active and no return to eligibility is claimed\n' "$blocks" "$id" >&2
+    if ! qualification_backlog_transition unblock "$blocks" "$id"; then
+      printf 'fm-qualification: the backlog owner did not confirm unblocking %s, so %s remains pending and no return to eligibility is claimed\n' "$blocks" "$id" >&2
       return "$EXIT_UNOBSERVED"
     fi
   fi
@@ -789,12 +820,7 @@ cmd_resolve() {
 }
 
 record_terminal() {  # <activation-file> <terminal>
-  local file=$1 terminal=$2 tmp
-  tmp=$(mktemp "$file.XXXXXX") || return 1
-  { grep -v '^terminal=' "$file"; printf 'terminal=%s\n' "$terminal"; } > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" 2>/dev/null || true
-  mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; return 1; }
-  return 0
+  activation_write_field "$1" terminal "$2"
 }
 
 : "${DATA:?}"
