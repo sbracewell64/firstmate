@@ -205,7 +205,7 @@ cmd_contracts() {
 }
 
 cmd_records() {
-  local files f rc=0 id contract model harness harness_version effort state
+  local files f rc=0 id contract model harness effort state
   files=$(fm_qualification_record_files) || rc=$?
   if [ "$rc" -eq 2 ]; then
     printf 'fm-qualification: %s: a record directory exists and could not be listed\n' \
@@ -221,8 +221,8 @@ cmd_records() {
     [ -n "$f" ] || continue
     # U+001F, not a tab: bash collapses runs of IFS WHITESPACE, so an empty
     # middle field would shift every later field left.
-    IFS=$'\x1f' read -r id contract model harness harness_version effort <<EOF2
-$(jq -r '[ (.id // ""), (.contract // ""), (.binding.model // ""), (.binding.harness // ""), (.binding.harness_version // ""), (.binding.native_effort // "") ] | join("\u001f")' "$f" 2>/dev/null)
+    IFS=$'\x1f' read -r id contract model harness effort <<EOF2
+$(jq -r '[ (.id // ""), (.contract // ""), (.binding.model // ""), (.binding.harness // ""), (.binding.native_effort // "") ] | join("\u001f")' "$f" 2>/dev/null)
 EOF2
     state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
     if [ "$JSON" -eq 1 ]; then

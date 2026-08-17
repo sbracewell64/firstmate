@@ -651,6 +651,7 @@ fm_qualification_state() {
   fi
 
   local chain chain_status chain_tip
+  # shellcheck disable=SC2016 # The dollar-prefixed names belong to jq and must reach it unexpanded.
   chain=$(printf '%s\n' "$files" | xargs -r jq -s -r \
     --arg contract "$contract_id" --arg model "$model" --arg harness "$harness" --arg effort "$effort" '
       [ .[] | select(.contract == $contract and .binding.model == $model)

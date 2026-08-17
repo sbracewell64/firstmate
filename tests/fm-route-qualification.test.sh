@@ -391,7 +391,7 @@ test_the_fixture_refuses_what_the_real_tool_refuses() {
     && fail "the fixture accepted show --json even though the real tool rejects that flag"
   PATH="$FAKEBIN:$PATH" tasks-axi hold a-real-blocker --reason "Firstmate decision required" --kind parked >/dev/null 2>&1 \
     || fail "the fixture refused the parked hold used by qualification"
-  PATH="$FAKEBIN:$PATH" tasks-axi done a-real-blocker >/dev/null 2>&1 \
+  PATH="$FAKEBIN:$PATH" tasks-axi "done" a-real-blocker >/dev/null 2>&1 \
     || fail "the fixture refused the done invocation used by qualification"
 
   # 3. DIFFERENTIAL against the real binary where it is installed. The fake's
@@ -405,7 +405,7 @@ test_the_fixture_refuses_what_the_real_tool_refuses() {
       && tasks-axi show a-real-blocker >/dev/null 2>&1 \
       && tasks-axi block real-work --by a-real-blocker >/dev/null 2>&1 \
       && tasks-axi hold a-real-blocker --reason "Firstmate decision required" --kind parked >/dev/null 2>&1 \
-      && tasks-axi done a-real-blocker >/dev/null 2>&1 ) || real_rc=$?
+      && tasks-axi "done" a-real-blocker >/dev/null 2>&1 ) || real_rc=$?
     [ "$real_rc" -eq 0 ] || fail "the real tasks-axi refused a qualification invocation the fixture accepts"
     ( cd "$real_dir" && tasks-axi show real-work --json >/dev/null 2>&1 ) || real_invalid_rc=$?
     [ "$real_invalid_rc" -ne 0 ] || fail "the real tasks-axi unexpectedly accepted show --json"
@@ -779,7 +779,7 @@ test_a_completed_tuple_can_activate_a_new_incarnation() {
   reset_register
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
     || fail "the first activation failed"
-  PATH="$FAKEBIN:$PATH" tasks-axi done "$AID_ALPHA" >/dev/null 2>&1 \
+  PATH="$FAKEBIN:$PATH" tasks-axi "done" "$AID_ALPHA" >/dev/null 2>&1 \
     || fail "the fixture could not complete the first incarnation"
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work)
   assert_contains "$out" "activated $AID_ALPHA_SECOND" \
