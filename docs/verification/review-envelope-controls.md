@@ -26,20 +26,16 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-THE MEASUREMENT CLAIM BELOW IS CURRENTLY UNSOUND, AND THIS IS A HOLD ON LANDING.
-A later commit relabelled the campaign head from `39d4ad4e` to `61cdb47b` and rewrote the recorded subject digests, without re-running the 69 measurements that had been taken at `39d4ad4e`.
-Those 69 therefore describe subject bytes that have since changed, and they are NOT current for the code shipped here.
-Three further entries were added by that same commit for the three controls added alongside it; whether they were genuinely measured is COULD-NOT-OBSERVE, because a campaign leaves no trace outside these two files and nothing distinguishes a real run from a written one.
-That uncertainty is recorded rather than resolved in either direction.
-The pull request is not ready while this stands, and it is discharged only by re-measuring every mutation at the final head.
+Every measurement below was taken against head `6a3d3692`, and EACH ENTRY in the campaign artifact records that head individually rather than relying on one head written once.
+Each entry also carries a digest of its whole captured run and the patch that rebuilds its variant, so an independent party can replay any entry and compare rather than taking this record's word for it.
 
 ## Campaign artifact
 
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `0000000`.
-Mutations built: 0.
+Campaign head: `6a3d36929c8bedeb25348b85a18ed2fcbcf0f6ad`.
+Mutations built: 72.
 
 ## Commands
 
@@ -64,9 +60,7 @@ Both files are copied because the entrypoint sources its library from its own di
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
-Mutation-measurement claim: SUSPENDED, see the hold above.
-69 entries were measured at head `39d4ad4e` against subject bytes that have since changed; 3 entries are of could-not-observe provenance.
-No claim is made here that any of them is current for this head.
+Mutation-measurement claim: 72 mutations were built against the subjects recorded in the campaign artifact, and 71 turned the suite red.
 Coverage is counted per property rather than per test function, because a named property whose mutation leaves the suite green is uncovered however many controls exist.
 
 One mutation deliberately did not turn the suite red.
@@ -82,9 +76,6 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | --- | --- | --- |
 | a complete candidate is review-ready | the envelope binds the base commit where the head belongs | `not ok - a complete candidate is review-ready: expected exit 0, got 1` |
 | required contracts are computed from the changed files | a mandatory applicability rule stops being honoured | `not ok - a mandatory contract and a contract whose paths changed are both required` |
-| verification applicability must be declared explicitly | absent and empty applicability declarations are accepted | `not ok - absent applicability rules are could-not-observe: expected exit 2, got 0` |
-| an explicit no-contracts declaration is accepted | an explicit declaration with a reason is rejected | `not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2` |
-| requested decisions accept only uppercase tokens | malformed requested-decision tokens are no longer refused | `not ok - a malformed requested decision refuses: expected exit 1, got 0` |
 | identical facts produce an identical digest | the compile time is moved inside the digested body | `not ok - nothing time-varying may sit inside the digested body` |
 | a stale envelope refuses | the candidate reference is no longer compared with the bound head | `not ok - a stale envelope refuses: expected exit 1, got 0` |
 | a base that falls behind the trunk refuses | the base-to-trunk distance is no longer compared with policy | `not ok - the refusal must name the policy bound it exceeded (missing: 'refusal base_behind_main_exceeds_policy')` |
@@ -152,6 +143,9 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a verifier result without a tree refuses | a verifier result's tree is no longer compared | `not ok - a result without a tree refuses: expected exit 1, got 0` |
 | order-insensitive facts produce an identical identity | order-insensitive facts stop being canonicalised before digesting | `not ok - order-insensitive facts must have one envelope digest` |
 | a structurally malformed envelope is could-not-observe | the malformed-body handler catches a narrower exception class | `not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')` |
+| verification applicability must be declared explicitly | the applicability declaration becomes optional again | `not ok - the absent applicability declaration must be named (missing: 'unobserved verification_applicability_undeclared')` |
+| an explicit no-contracts declaration is accepted | an explicit no-contracts declaration stops being accepted | `not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2` |
+| requested decisions accept only uppercase tokens | the requested-decision token format stops being enforced | `not ok - a malformed requested decision refuses: expected exit 1, got 0` |
 
 ## The one mutation that stayed green, and why it is not a gap
 
@@ -188,6 +182,27 @@ They were measured on scratch copies of the tree, by making the change each one 
 
 Each was green on the untouched copy first, so none of those reds comes from a copy that never worked.
 The second reading for the artifact control is the more valuable one: it catches drift nobody tried to hide, which is more common than deliberate relabelling.
+
+## The relabelling attack, and what now catches it
+
+A commit on this branch relabelled the campaign's single head and rewrote the recorded subject digests, silently re-attributing 69 measurements taken elsewhere.
+Every check passed at the time, correctly: only one head was written down, and the same commit updated everything that referred to it.
+That is the documented limit of a content digest - it detects a PARTIAL edit, and a rewrite that updates every copy consistently is not partial.
+
+Two changes answer it, and both are measured here rather than argued.
+
+Each entry now records the head it was measured at. Relabelling the artifact head and the record head TOGETHER - the exact move that previously passed - now fails, because the entries still name the head they were actually measured at.
+
+Each entry also carries a digest of its whole captured run and the patch that rebuilds its variant. Stripping that material from a single entry fails, so a result cannot be reduced to a field someone wrote.
+
+| Change made to a real artifact | Observed |
+| --- | --- |
+| baseline, untouched | green, 67 controls |
+| artifact head and record head relabelled consistently, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
+| one entry stripped of its captured-output digest | `not ok - the measurement record is not backed by the campaign artifact` |
+
+Neither closes a whole-artifact rewrite, and neither is meant to; signing is deliberately out of scope.
+What they change is the cost and the checkability: the remaining attack must fabricate consistent execution evidence for every entry, and anyone who did not produce this record can rebuild one variant from its patch, re-run it, and compare the digest.
 
 ## Only one control in this suite asserted acceptance alone
 
