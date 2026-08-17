@@ -30,7 +30,8 @@
 #       May this reviewer take this assignment? Refuses self-review first, then
 #       an unqualified reviewer, then a failed independence dimension.
 #   fm-qualification.sh activate --route <id> [--blocks <work-id>]
-#                               [--budget <n>] [--json]
+#                               [--budget <n>] [--subject-model <name>]
+#                               [--harness <name>] [--effort <band>] [--json]
 #       Create or reuse ONE bounded qualification workflow for the cheapest
 #       promising candidate on a zero route. Refuses any classification other
 #       than QUALIFICATION_REQUIRED.
@@ -109,6 +110,7 @@ JSON=0
 CMD=
 ROUTE=
 MODEL=
+SUBJECT_MODEL=
 HARNESS=
 EFFORT=
 MAKER=
@@ -128,6 +130,8 @@ while [ $# -gt 0 ]; do
     --route=*) ROUTE=${1#--route=} ;;
     --model) shift; [ $# -gt 0 ] || die "--model needs a value"; MODEL=$1 ;;
     --model=*) MODEL=${1#--model=} ;;
+    --subject-model) shift; [ $# -gt 0 ] || die "--subject-model needs a value"; SUBJECT_MODEL=$1 ;;
+    --subject-model=*) SUBJECT_MODEL=${1#--subject-model=} ;;
     --harness) shift; [ $# -gt 0 ] || die "--harness needs a value"; HARNESS=$1 ;;
     --harness=*) HARNESS=${1#--harness=} ;;
     --effort) shift; [ $# -gt 0 ] || die "--effort needs a value"; EFFORT=$1 ;;
@@ -500,12 +504,18 @@ activation_already_active() {  # <tuple-id>
   return 1
 }
 
-qualification_bootstrap() {  # <target-route> <target-floor> <model> <harness> <effort>
-  local target_route=$1 target_floor=$2 model=$3 harness=$4 effort=$5 route checked rc state
-  while IFS= read -r route; do
+qualification_route_entries() {
+  local owner=${FM_ROUTE_OWNER_COMMAND:-$SCRIPT_DIR/fm-route.sh}
+  FM_HOME="$FM_HOME" "$owner" routes --json
+}
+
+qualification_bootstrap() {  # <target-route> <target-floor> <model> <harness> <effort> <route-entries>
+  local target_route=$1 target_floor=$2 model=$3 harness=$4 effort=$5 entries=$6 row route bootstrap_floor checked rc state
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    route=$(printf '%s' "$row" | jq -r '.id')
     [ -n "$route" ] || continue
-    local bootstrap_floor
-    bootstrap_floor=$(jq -r --arg route "$route" 'first((.rules // [])[]? | select(.route == $route) | .floor) // empty' "$CONFIG/crew-dispatch.json" 2>/dev/null)
+    bootstrap_floor=$(printf '%s' "$row" | jq -r '.rule.floor // empty')
     fm_route_floor_meets "$CONFIG/crew-dispatch.json" "$bootstrap_floor" "$target_floor" || continue
     rc=0
     checked=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-route.sh" check --route "$route" \
@@ -519,19 +529,14 @@ qualification_bootstrap() {  # <target-route> <target-floor> <model> <harness> <
     printf '%s\037%s\037%s\037%s\n' "$route" "$model" "$harness" "$effort"
     return 0
   done <<EOF
-$(jq -r --arg target_route "$target_route" --arg model "$model" '
-  . as $root
-  | (.rules // [])[]?
-  | . as $r
-  | select(.route != $target_route)
-  | select((.pool // []) | index($model))
-  | .route' "$CONFIG/crew-dispatch.json" 2>/dev/null)
+$(printf '%s' "$entries" | jq -c --arg target_route "$target_route" --arg model "$model" '
+  .[] | select(.id != $target_route) | select((.rule.pool // []) | index($model))')
 EOF
   return 1
 }
 
 cmd_activate() {
-  local zero rc=0 class model contracts cost id tuple_id file out harness effort bootstrap
+  local zero rc=0 class model contracts cost id tuple_id file out harness effort bootstrap route_entries route_entry
   local execution_route execution_model execution_harness execution_effort
   [ -n "$ROUTE" ] || die "activate needs --route"
   local -a zero_args=(zero-route --route "$ROUTE" --json)
@@ -568,17 +573,27 @@ cmd_activate() {
   model=$(printf '%s' "$zero" | jq -r '.promising[0].model // empty')
   contracts=$(printf '%s' "$zero" | jq -r '(.promising[0].contracts // []) | join(",")')
   cost=$(printf '%s' "$zero" | jq -r '.promising[0].cost_rank // "unobserved"')
+  route_entries=$(qualification_route_entries 2>/dev/null) || {
+    printf 'fm-qualification: the route owner could not project the configured routes, so no workflow may start\n' >&2
+    return "$EXIT_UNOBSERVED"
+  }
+  route_entry=$(printf '%s' "$route_entries" | jq -c --arg route "$ROUTE" '[.[] | select(.id == $route)] | first // empty')
+  [ -n "$route_entry" ] || {
+    printf 'fm-qualification: the route owner projection omitted target route %s, so no tuple-bound workflow may start\n' "$ROUTE" >&2
+    return "$EXIT_UNOBSERVED"
+  }
   IFS=$'\x1f' read -r harness effort <<EOF
-$(jq -r --arg route "$ROUTE" --arg model "$model" '
-  ([((.rules // [])[]? | select(.route == $route)),
-     (.default // empty | select(.route == $route))] | first) as $r
+$(printf '%s' "$route_entry" | jq -r --arg model "$model" '
+  .rule as $r
   | (if ($r.use | type) == "array"
      then ([$r.use[] | select((.model // "") == $model)] | first // {})
      else ($r.use // {}) end) as $p
-  | [$p.harness // "", $p.effort // ""] | join("\u001f")' "$CONFIG/crew-dispatch.json" 2>/dev/null)
+  | [$p.harness // "", $p.effort // ""] | join("\u001f")' 2>/dev/null)
 EOF
-  [ -z "$HARNESS" ] || harness=$HARNESS
-  [ -z "$EFFORT" ] || effort=$EFFORT
+  if [ -n "$SUBJECT_MODEL" ] && [ "$SUBJECT_MODEL" = "$model" ]; then
+    [ -z "$HARNESS" ] || harness=$HARNESS
+    [ -z "$EFFORT" ] || effort=$EFFORT
+  fi
   if [ -z "$model" ]; then
     printf 'fm-qualification: %s: route %s classified %s but named no promising candidate\n' \
       "$FM_QUAL_TOKEN_NO_PROMISING" "$ROUTE" "$class" >&2
@@ -602,7 +617,7 @@ EOF
   local target_floor
   target_floor=$(printf '%s' "$zero" | jq -r '.floor // empty')
   local bootstrap_rc=0
-  bootstrap=$(qualification_bootstrap "$ROUTE" "$target_floor" "$model" "$harness" "$effort") || bootstrap_rc=$?
+  bootstrap=$(qualification_bootstrap "$ROUTE" "$target_floor" "$model" "$harness" "$effort" "$route_entries") || bootstrap_rc=$?
   if [ "$bootstrap_rc" -eq 2 ]; then
     printf 'fm-qualification: bootstrap eligibility for %s could not be observed, so missing qualification is not inferred\n' "$model" >&2
     return "$EXIT_UNOBSERVED"

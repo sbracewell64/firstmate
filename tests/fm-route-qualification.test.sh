@@ -32,6 +32,11 @@
 # Refusal cases stop before any endpoint exists, and a fake `tmux` that exits
 # non-zero backstops them, so a case that wrongly proceeded would fail rather than
 # quietly create a worker.
+#
+# The differential and owner-shim controls below cover only the qualification
+# paths they drive. They do not prove that no unreached branch privately reads
+# routing configuration. A source scan could prove that broader property, but
+# this repository deliberately forbids tests that assert implementation bytes.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -936,6 +941,77 @@ test_bootstrap_dispatch_refuses_a_substituted_worker() {
   pass "bootstrap dispatch refuses a substituted worker"
 }
 
+test_bootstrap_uses_the_route_owner_projection() {
+  local rec tmp out rc=0
+  rec=$(make_home ownerprojection); read_home "$rec"
+  reset_register
+
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq 'del(.rules[] | select(.route == "R-GENHARD"))
+      | .default = {when:"default bootstrap", route:"R-DEFAULT-BOOT", floor:"F-GENHARD",
+                    harness:"pi", model:"alpha/one", effort:"high", pool:["alpha/one"]}' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
+  expect_code 0 "$rc" "a bootstrap route defined only by default was omitted"
+  assert_grep 'execution_route=R-DEFAULT-BOOT' "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the default-only owner route was not selected"
+
+  rec=$(make_home ownerbands); read_home "$rec"
+  reset_register
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '.rules |= map(select(.route == "R-GENHARD" or .route == "R-RUNTIME"))
+      | .default = null
+      | ._floors["F-RUNTIME"].effort_floor = "ultra"
+      | ._models["alpha/one"].effort_expressible += ["ultra"]
+      | (.rules[] | select(.route == "R-RUNTIME") | .use.effort) = "ultra"' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  rc=0
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
+  expect_code 3 "$rc" "a lower effort band satisfied the owner's ultra floor"
+  assert_contains "$out" "no route where" "the ultra-band differential did not reach bootstrap selection"
+
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '._floors["F-RUNTIME"].effort_floor = "high"
+      | ._floors["F-RUNTIME"].tool_loop = "required"
+      | ._floors["F-GENHARD"].tool_loop = "not-required"
+      | (.rules[] | select(.route == "R-RUNTIME") | .use.effort) = "high"' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  rc=0
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
+  expect_code 3 "$rc" "the canonical tool-loop vocabulary was ordered incorrectly"
+
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '.rules += [.rules[] | select(.route == "R-GENHARD")]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  rc=0
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a duplicate bootstrap route accepted a qualification activation"
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the owner-refused duplicate route produced a workflow"
+  pass "bootstrap follows the route owner's differential answers"
+}
+
+test_bootstrap_follows_a_route_owner_shim() {
+  local rec shim
+  rec=$(make_home ownershim); read_home "$rec"
+  reset_register
+  shim="$FAKEBIN/fm-route.sh"
+  printf '%s\n' '#!/bin/sh' \
+    'case "$1" in' \
+    '  routes) printf '\''%s\n'\'' '\''[{"id":"R-RUNTIME","path":"/shim/target","source":"rule","rule":{"route":"R-RUNTIME","floor":"F-RUNTIME","pool":["alpha/one"],"use":{"harness":"pi","model":"alpha/one","effort":"xhigh"}}},{"id":"R-GENHARD","path":"/shim/bootstrap","source":"rule","rule":{"route":"R-GENHARD","floor":"F-GENHARD","pool":["alpha/one"],"use":{"harness":"pi","model":"alpha/one","effort":"xhigh"}}}]'\'' ;;' \
+    '  *) exit 97 ;;' \
+    'esac' > "$shim"
+  chmod +x "$shim"
+  FM_ROUTE_OWNER_COMMAND=fm-route.sh \
+    run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "the owner-shim answer did not activate"
+  assert_present "$HOME_DIR/state/qualification/$AID_ALPHA_XHIGH.activation" \
+    "qualification followed the conflicting disk tuple instead of the owner shim"
+  assert_grep 'execution_effort=xhigh' "$HOME_DIR/state/qualification/$AID_ALPHA_XHIGH.activation" \
+    "the distinctive owner-shim tuple was not recorded"
+  pass "bootstrap follows the route owner shim over conflicting disk routes"
+}
+
 test_qualified_resolution_requires_a_confirmed_close() {
   # A pass releases the work by closing the workflow item, so an owner that will
   # not confirm the close must not produce a claim that the work is available.
@@ -985,7 +1061,7 @@ test_an_unconfirmed_step_never_reports_success_and_promises_nothing() {
 }
 
 
-test_qualification_is_enforced_on_the_full_binding_tuple() {
+test_automatic_activation_preserves_the_selected_candidate_tuple() {
   local rec out rc=0
   rec=$(make_home tuple); read_home "$rec"
   reset_register
@@ -998,8 +1074,30 @@ test_qualification_is_enforced_on_the_full_binding_tuple() {
   assert_contains "$out" "FM_ROUTE_QUALIFICATION_REQUIRED" \
     "the route gate treated distinct native-effort tuples as identical"
   assert_present "$HOME_DIR/state/qualification/$AID_ALPHA_XHIGH.activation" \
-    "the workflow identity omitted the differing tuple axes"
-  pass "qualification is enforced on the full binding tuple"
+    "automatic activation lost the selected subject's exact tuple"
+
+  rec=$(make_home differentcandidate); read_home "$rec"
+  reset_register
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha FAILED
+  local tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '(.rules[] | select(.route == "R-RUNTIME-WIDE") | .use) =
+        [{harness:"pi", model:"alpha/one", effort:"high"},
+         {harness:"codex", model:"beta/two", effort:"high"}]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  mkdir -p "$HOME_DIR/data/runtime-task"
+  printf 'You are a crewmate.\n\n# Definition of done\n' > "$HOME_DIR/data/runtime-task/brief.md"
+  rc=0
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" runtime-task "$PROJ_DIR" --scout \
+        --reason-code NOVEL_DECOMPOSITION --route R-RUNTIME-WIDE --model alpha/one \
+        --effort xhigh --harness pi) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a failed subject binding was admitted"
+  local activation
+  activation=$(find "$HOME_DIR/state/qualification" -name '*.activation' -type f -print -quit)
+  [ -n "$activation" ] || fail "the different promising candidate was not activated"
+  assert_grep 'model=beta/two' "$activation" "the next promising candidate was not selected"
+  assert_grep 'harness=codex' "$activation" "the rejected subject harness overwrote the selected candidate profile"
+  assert_grep 'native_effort=high' "$activation" "the rejected subject effort overwrote the selected candidate profile"
+  pass "automatic activation preserves the selected candidate tuple"
 }
 
 test_tuple_identity_distinguishes_a_colliding_slug_pair() {
@@ -1215,9 +1313,11 @@ test_failure_automatically_advances_to_the_next_candidate
 test_failure_advances_every_derived_dependent
 test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route
 test_bootstrap_dispatch_refuses_a_substituted_worker
+test_bootstrap_uses_the_route_owner_projection
+test_bootstrap_follows_a_route_owner_shim
 test_qualified_resolution_requires_a_confirmed_close
 test_an_unconfirmed_step_never_reports_success_and_promises_nothing
-test_qualification_is_enforced_on_the_full_binding_tuple
+test_automatic_activation_preserves_the_selected_candidate_tuple
 test_tuple_identity_distinguishes_a_colliding_slug_pair
 test_failed_advancement_error_remains_observable_and_nonterminal
 test_the_workflow_bound_never_touches_the_blocked_work_accounting

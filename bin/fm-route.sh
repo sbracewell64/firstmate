@@ -10,7 +10,7 @@
 # bin/fm-route-lib.sh owns the decision itself; this file is its interface.
 #
 # Usage:
-#   fm-route.sh routes                       every route, its floor and its pool
+#   fm-route.sh routes [--json]              every route, its floor and its pool
 #   fm-route.sh check --route <id> --model <name> [--effort <band>]
 #                                            is this exact dispatch allowed?
 #   fm-route.sh eligible --route <id>        the route's pool filtered by the
@@ -324,6 +324,16 @@ case "$CMD" in
     # Every route this home defines, from the one place bin/fm-route-lib.sh says
     # a route may be defined. A listing that omits a route `check` enforces and
     # `fm-spawn.sh` demands is what makes a route look like a typo.
+    if [ "$JSON" -eq 1 ]; then
+      jq -c "$FM_ROUTE_ENTRIES_JQ"'
+        [ route_entries[] ] as $all
+        | ([ $all[] | select(.source == "rule") ]) as $rules
+        | ([ $rules[] | .id ]) as $rule_ids
+        | $rules + [ $all[] | select(.source == "default")
+                     | . as $e | select(($rule_ids | index($e.id)) == null) ]
+      ' "$(fm_route_config_path "$CONFIG")" 2>/dev/null || exit 2
+      exit 0
+    fi
     jq -r "$FM_ROUTE_ENTRIES_JQ"'
       def profiles($v): if ($v|type) == "array" then $v elif ($v|type) == "object" then [$v] else [] end;
       [ route_entries[] ] as $all
