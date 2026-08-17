@@ -389,6 +389,7 @@ case "$CMD" in
     # a candidate of its own route, so its verdict is recorded on the record and
     # read back from there rather than computed a second time.
     resolved=$(printf '%s' "$DECISION" | jq -r '.subject.resolved // empty')
+    SUBJECT_MODEL=$resolved
     refusal=
     if [ -n "$resolved" ]; then
       DECISION=$(enrich "$DECISION" "$resolved")

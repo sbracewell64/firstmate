@@ -1135,6 +1135,48 @@ test_tuple_overrides_require_a_subject_model() {
   pass "tuple overrides refuse loudly without a subject model"
 }
 
+test_route_check_enforces_the_explicit_subject_tuple() {
+  local rec out rc=0
+  rec=$(make_home checktuple); read_home "$rec"
+  reset_register
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
+  out=$(run_route "$HOME_DIR" check --route R-RUNTIME --model alpha/one \
+        --harness pi --effort xhigh --json) || rc=$?
+  expect_code 1 "$rc" "route check admitted an explicit tuple using configured-tuple evidence"
+  assert_contains "$out" "QUALIFICATION_REQUIRED" "the explicit tuple refusal did not name missing qualification"
+  write_record alpha-one-runtime-xhigh runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED \
+    '.binding.native_effort = "xhigh"'
+  rc=0
+  out=$(run_route "$HOME_DIR" check --route R-RUNTIME --model alpha/one \
+        --harness pi --effort xhigh --json) || rc=$?
+  expect_code 0 "$rc" "route check refused qualification for the matching explicit tuple"
+  pass "route check enforces and admits the exact explicit tuple"
+}
+
+test_capacity_substitution_preserves_the_subject_band() {
+  local rec tmp z
+  rec=$(make_home subjectband); read_home "$rec"
+  reset_register
+  write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta QUALIFIED
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '._models["beta/two"].effort_expressible = ["high"]
+      | (.rules[] | select(.route == "R-RUNTIME-WIDE") | .use) =
+        [{harness:"pi", model:"alpha/one", effort:"xhigh"},
+         {harness:"pi", model:"beta/two", effort:"high"}]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  z=$(run_route "$HOME_DIR" zero-route --route R-RUNTIME-WIDE --subject-model alpha/one \
+      --harness pi --effort xhigh --json | tail -1)
+  [ "$(printf '%s' "$z" | jq -r '[.excluded[] | select(.model == "beta/two") | .blockers[]] | index("band") != null')" = true ] \
+    || fail "an xhigh subject offered a high-only substitute"
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '._models["beta/two"].effort_expressible += ["xhigh"]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  z=$(run_route "$HOME_DIR" zero-route --route R-RUNTIME-WIDE --subject-model alpha/one \
+      --harness pi --effort xhigh --json | tail -1)
+  assert_contains "$z" '"eligible":["beta/two"]' "a legitimate same-band substitute was not eligible"
+  pass "capacity substitution preserves the subject band"
+}
+
 test_tuple_identity_distinguishes_a_colliding_slug_pair() {
   local rec one two tmp first second
   rec=$(make_home collision-one); read_home "$rec"
@@ -1355,6 +1397,8 @@ test_an_unconfirmed_step_never_reports_success_and_promises_nothing
 test_automatic_activation_preserves_the_selected_candidate_tuple
 test_subject_tuple_is_scoped_during_zero_route_classification
 test_tuple_overrides_require_a_subject_model
+test_route_check_enforces_the_explicit_subject_tuple
+test_capacity_substitution_preserves_the_subject_band
 test_tuple_identity_distinguishes_a_colliding_slug_pair
 test_failed_advancement_error_remains_observable_and_nonterminal
 test_the_workflow_bound_never_touches_the_blocked_work_accounting

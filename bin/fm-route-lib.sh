@@ -674,10 +674,9 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
         # leaves the task waiting, which the governing ruling names as lawful;
         # substituting on unverified band evidence is the failure itself. This
         # can only ever SUBTRACT from the offered set.
-        ($row.effort_effective // $band) as $candidate_band
-        | if ($candidate_band | length) == 0 then true
+        if ($band | length) == 0 then true
         elif (($row.effort_expressible | type) != "array") then false
-        else (($row.effort_expressible | index($candidate_band)) != null) end;
+        else (($row.effort_expressible | index($band)) != null) end;
       def with_cap($row):
         (first($cap[] | select(.model == $row.model)) // null) as $c
         | $row + {capacity: $c, capacity_checked: ($c != null),
