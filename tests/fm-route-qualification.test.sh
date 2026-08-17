@@ -1100,6 +1100,41 @@ test_automatic_activation_preserves_the_selected_candidate_tuple() {
   pass "automatic activation preserves the selected candidate tuple"
 }
 
+test_subject_tuple_is_scoped_during_zero_route_classification() {
+  local rec tmp out rc=0
+  rec=$(make_home subjectscope); read_home "$rec"
+  reset_register
+  write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta QUALIFIED \
+    '.binding.harness = "codex"'
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '(.rules[] | select(.route == "R-RUNTIME-WIDE") | .use) =
+        [{harness:"pi", model:"alpha/one", effort:"xhigh"},
+         {harness:"codex", model:"beta/two", effort:"high"}]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --subject-model alpha/one \
+        --harness pi --effort xhigh) || rc=$?
+  expect_code 0 "$rc" "a qualified alternate candidate was evaluated under the subject tuple"
+  assert_contains "$out" "already has an eligible candidate (beta/two)" \
+    "zero-route did not preserve the alternate candidate's configured tuple"
+  assert_absent "$HOME_DIR/state/qualification" \
+    "a workflow was spent on a candidate already qualified under its configured tuple"
+  pass "subject tuple overrides stay scoped to the subject during classification"
+}
+
+test_tuple_overrides_require_a_subject_model() {
+  local rec out rc=0
+  rec=$(make_home overrideclaim); read_home "$rec"
+  reset_register
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --harness pi) || rc=$?
+  expect_code 2 "$rc" "a harness override without a subject model was silently accepted"
+  assert_contains "$out" "requires --subject-model" "the harness refusal did not name the missing subject"
+  rc=0
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --effort xhigh) || rc=$?
+  expect_code 2 "$rc" "an effort override without a subject model was silently accepted"
+  assert_contains "$out" "requires --subject-model" "the effort refusal did not name the missing subject"
+  pass "tuple overrides refuse loudly without a subject model"
+}
+
 test_tuple_identity_distinguishes_a_colliding_slug_pair() {
   local rec one two tmp first second
   rec=$(make_home collision-one); read_home "$rec"
@@ -1318,6 +1353,8 @@ test_bootstrap_follows_a_route_owner_shim
 test_qualified_resolution_requires_a_confirmed_close
 test_an_unconfirmed_step_never_reports_success_and_promises_nothing
 test_automatic_activation_preserves_the_selected_candidate_tuple
+test_subject_tuple_is_scoped_during_zero_route_classification
+test_tuple_overrides_require_a_subject_model
 test_tuple_identity_distinguishes_a_colliding_slug_pair
 test_failed_advancement_error_remains_observable_and_nonterminal
 test_the_workflow_bound_never_touches_the_blocked_work_accounting

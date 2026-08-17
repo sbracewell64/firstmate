@@ -532,9 +532,16 @@ def effective_route_profile($rule; $path; $model; $harness):
      candidates:[ $pool | to_entries[]
                   | .value as $c
                   | (effective_route_profile($rule; $route_path; $c; "")) as $candidate_profile
+                  | (if (($subject_model | length) > 0)
+                       then (if $c == $subject_model and ($effort | length) > 0
+                             then $effort else ($candidate_profile.profile.effort? // "") end)
+                       else (if ($eeff | length) > 0 then $eeff else ($ef // "") end) end) as $candidate_effort
+                  | (if (($subject_model | length) > 0) and $c == $subject_model and ($harness | length) > 0
+                     then $harness else ($candidate_profile.profile.harness? // "") end) as $candidate_harness
                   | (held($c)) as $h
-                  | (violations($c; (if ($eeff | length) > 0 then $eeff else ($ef // "") end); $candidate_profile)) as $v
+                  | (violations($c; $candidate_effort; $candidate_profile)) as $v
                   | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
+                     harness_effective:$candidate_harness, effort_effective:$candidate_effort,
                      held:$h, violations:$v,
                      effort_expressible:($models[$c].effort_expressible? // null),
                      floor_met:(($v | length) == 0),
@@ -558,7 +565,7 @@ fm_route_floor_meets() {  # <config-file> <candidate-floor> <target-floor>
   ' "$file" >/dev/null 2>&1
 }
 
-# fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>] [<harness>]
+# fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>] [<harness>] [<subject-model>]
 # Print the decision record for one route. Return non-zero when the decision
 # could not be made at all, so a caller can tell "no policy" from "policy says
 # no" - and WHICH input it could not read, because the two live in different
@@ -571,13 +578,14 @@ fm_route_floor_meets() {  # <config-file> <candidate-floor> <target-floor>
 # parses perfectly while the truncated model-health.json goes unmentioned, which
 # is the same misdirection class as naming a substitute nothing checked.
 fm_route_decision() {
-  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} harness=${6:-} file holds now
+  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} harness=${6:-} subject_model=${7:-} file holds now
   file=$(fm_route_config_path "$cfg")
   [ -f "$file" ] || return 2
   command -v jq >/dev/null 2>&1 || return 2
   now=$(date -u +%s)
   holds=$(fm_route_health_active "$state" "$now") || return 3
   jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" --arg harness "$harness" \
+     --arg subject_model "$subject_model" \
      --argjson holds "$holds" \
      "$FM_ROUTE_DECISION_JQ" "$file" 2>/dev/null || return 2
 }
@@ -666,9 +674,10 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
         # leaves the task waiting, which the governing ruling names as lawful;
         # substituting on unverified band evidence is the failure itself. This
         # can only ever SUBTRACT from the offered set.
-        if ($band | length) == 0 then true
+        ($row.effort_effective // $band) as $candidate_band
+        | if ($candidate_band | length) == 0 then true
         elif (($row.effort_expressible | type) != "array") then false
-        else (($row.effort_expressible | index($band)) != null) end;
+        else (($row.effort_expressible | index($candidate_band)) != null) end;
       def with_cap($row):
         (first($cap[] | select(.model == $row.model)) // null) as $c
         | $row + {capacity: $c, capacity_checked: ($c != null),

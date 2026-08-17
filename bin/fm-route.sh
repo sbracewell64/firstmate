@@ -30,6 +30,8 @@
 #                                            one that escalates). Prints ELIGIBLE
 #                                            and exits 0 when the route is not a
 #                                            zero route at all
+#                         [--subject-model <name>] [--harness <name>]
+#                         [--effort <band>]  apply this tuple only to the subject
 #   fm-route.sh next --route <id> --after <model>
 #                                            the failover substitute: the next
 #                                            eligible candidate INSIDE the same
@@ -122,6 +124,7 @@ die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 JSON=0
 ROUTE=
 MODEL=
+SUBJECT_MODEL=
 EFFORT=
 HARNESS=
 AFTER=
@@ -139,6 +142,8 @@ while [ $# -gt 0 ]; do
     --route=*) ROUTE=${1#--route=} ;;
     --model) shift; [ $# -gt 0 ] || die "--model needs a value"; MODEL=$1 ;;
     --model=*) MODEL=${1#--model=} ;;
+    --subject-model) shift; [ $# -gt 0 ] || die "--subject-model needs a value"; SUBJECT_MODEL=$1 ;;
+    --subject-model=*) SUBJECT_MODEL=${1#--subject-model=} ;;
     --effort) shift; [ $# -gt 0 ] || die "--effort needs a value"; EFFORT=$1 ;;
     --effort=*) EFFORT=${1#--effort=} ;;
     --harness) shift; [ $# -gt 0 ] || die "--harness needs a value"; HARNESS=$1 ;;
@@ -227,6 +232,7 @@ EOF
     "$(printf '%s' "$decision" | jq -r '.route // ""')" \
     "$(printf '%s' "$decision" | jq -r '.harness_effective // ""')" \
     "$(printf '%s' "$decision" | jq -r '.effort_effective // ""')" \
+    "$SUBJECT_MODEL" \
     "${models[@]}") || rc=$?
   [ "$rc" -eq 0 ] || { printf '%s' "$decision"; return 0; }
   fm_route_decision_with_qualification "$decision" "$lines"
@@ -414,7 +420,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "$CMD needs --route"
     [ "$CMD" != next ] || [ -n "$AFTER" ] || die "next needs --after <model>"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS" "$SUBJECT_MODEL") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -471,8 +477,11 @@ case "$CMD" in
     # workflow on anything but QUALIFICATION_REQUIRED, and printed here so an
     # operator sees the same answer the automatic path acts on.
     [ -n "$ROUTE" ] || die "zero-route needs --route"
+    if { [ -n "$HARNESS" ] || [ -n "$EFFORT" ]; } && [ -z "$SUBJECT_MODEL" ]; then
+      die "zero-route requires --subject-model when --harness or --effort names a subject tuple"
+    fi
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS" "$SUBJECT_MODEL") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2

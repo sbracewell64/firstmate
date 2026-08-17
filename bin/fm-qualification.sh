@@ -539,7 +539,11 @@ cmd_activate() {
   local zero rc=0 class model contracts cost id tuple_id file out harness effort bootstrap route_entries route_entry
   local execution_route execution_model execution_harness execution_effort
   [ -n "$ROUTE" ] || die "activate needs --route"
+  if { [ -n "$HARNESS" ] || [ -n "$EFFORT" ]; } && [ -z "$SUBJECT_MODEL" ]; then
+    die "activate requires --subject-model when --harness or --effort names a subject tuple; tuple overrides must never be applied to every route candidate"
+  fi
   local -a zero_args=(zero-route --route "$ROUTE" --json)
+  [ -z "$SUBJECT_MODEL" ] || zero_args+=(--subject-model "$SUBJECT_MODEL")
   [ -z "$HARNESS" ] || zero_args+=(--harness "$HARNESS")
   [ -z "$EFFORT" ] || zero_args+=(--effort "$EFFORT")
   zero=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-route.sh" "${zero_args[@]}" 2>/dev/null) || rc=$?

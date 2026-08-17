@@ -1717,6 +1717,7 @@ EOF
     if [ -n "$ROUTE_FLOOR_ID" ] && [ "${#QUALIFICATION_MODELS[@]}" -gt 0 ]; then
       QUALIFICATION_LINES=$(fm_qualification_route_lines \
         "$(fm_route_config_path "$CONFIG")" "$ROUTE_FLOOR_ID" "$ROUTE" "$HARNESS" "$EFFORT" \
+        "$MODEL" \
         "${QUALIFICATION_MODELS[@]}") || QUALIFICATION_RC=$?
     else
       QUALIFICATION_RC=1

@@ -994,7 +994,7 @@ fm_qualification_cost_rank() {  # <model>
   esac
 }
 
-# fm_qualification_route_lines <config-file> <floor-id> <route-id> <harness> <native-effort> <models...>
+# fm_qualification_route_lines <config-file> <floor-id> <route-id> <harness> <native-effort> <subject-model> <models...>
 # The merge lines bin/fm-route-lib.sh consumes, one per model:
 #
 #   <model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><evidence>
@@ -1008,8 +1008,8 @@ fm_qualification_cost_rank() {  # <model>
 # beats QUALIFICATION_STALE beats QUALIFICATION_REQUIRED beats QUALIFIED. A
 # candidate qualified as maker and unqualified as reviewer is not half eligible.
 fm_qualification_route_lines() {
-  local file=$1 floor=$2 route=$3 dispatch_harness=$4 dispatch_effort=$5
-  shift 5
+  local file=$1 floor=$2 route=$3 dispatch_harness=$4 dispatch_effort=$5 subject_model=$6
+  shift 6
   local contracts rc=0
   contracts=$(fm_qualification_floor_contracts "$file" "$floor") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
@@ -1018,15 +1018,15 @@ fm_qualification_route_lines() {
   for model in "$@"; do
     [ -n "$model" ] || continue
     IFS=$'\x1f' read -r harness effort <<EOF2
-$(jq -r --arg route "$route" --arg model "$model" --arg h "$dispatch_harness" --arg e "$dispatch_effort" '
+$(jq -r --arg route "$route" --arg model "$model" --arg h "$dispatch_harness" --arg e "$dispatch_effort" --arg subject "$subject_model" '
   ([((.rules // [])[]? | select(.route == $route)),
      (.default // empty | select(.route == $route))] | first) as $r
   | (if ($r.use | type) == "array"
      then ([$r.use[] | select((.model // "") == $model)] | first // {})
      elif ($r.use | type) == "object" then $r.use
      else {} end) as $p
-  | [if ($h | length) > 0 then $h else ($p.harness // "") end,
-     if ($e | length) > 0 then $e else ($p.effort // "") end]
+  | [if $model == $subject and ($h | length) > 0 then $h else ($p.harness // "") end,
+     if $model == $subject and ($e | length) > 0 then $e else ($p.effort // "") end]
   | join("\u001f")' "$file" 2>/dev/null)
 EOF2
     worst=QUALIFIED
