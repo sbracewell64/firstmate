@@ -876,6 +876,23 @@ PY
   set -e
   [ "$rc" -eq 3 ] || fail "a foreign shard count must be could-not-observe (exit 3), got $rc"
 
+  fm_write_serial_fixture "$tmp/out-of-range" 1000
+  cp "$tmp/out-of-range/shard-1.json" "$tmp/out-of-range/shard-0.json"
+  python3 - "$tmp/out-of-range/shard-0.json" "$count" <<'PY'
+import json, sys
+p, count = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = "lane=portable-serial-0of%d" % count
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/out-of-range"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "an out-of-range shard index must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an out-of-range shard index must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "an out-of-range shard index must not report drifted"
+
   # A malformed negative timing can shrink the total enough to manufacture an
   # apparently healthy lane, so it is unreadable evidence rather than a pass.
   fm_write_serial_fixture "$tmp/negative" 1000
