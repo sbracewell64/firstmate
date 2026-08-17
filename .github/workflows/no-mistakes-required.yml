@@ -5,13 +5,17 @@ on:
   pull_request:
     # This check reads evidence bound to the head commit, so editing the pull
     # request text can neither satisfy nor invalidate it. `edited` is subscribed
-    # for two reasons that have nothing to do with the body, and removing it as
-    # "just the body trigger" breaks both. It is the cheap way to re-evaluate an
-    # unchanged head after the attestation is published, since pushing
-    # refs/notes/no-mistakes fires no pull request event of its own. And it is
-    # the activity type GitHub fires when a pull request's base branch changes,
-    # so without it a pull request retargeted onto main never runs this check at
-    # all and sits waiting for a status that can no longer be reported.
+    # for a reason that has nothing to do with the body: it is the activity type
+    # GitHub fires when a pull request's base branch changes, so without it a
+    # pull request retargeted onto main never runs this check at all and sits
+    # waiting for a status that can no longer be reported.
+    #
+    # It is NOT how an unchanged head is re-evaluated after its attestation is
+    # published. `bin/fm-attest.sh write` re-runs the run that judged that head,
+    # which replays this same event against the same head.sha and re-derives the
+    # verdict from the evidence now present. Editing a pull request to nudge a
+    # check is the manual step that mechanism exists to remove; do not restore
+    # it here or in what this check tells a contributor.
     types: [opened, synchronize, reopened, edited]
     branches:
       - main
@@ -171,11 +175,19 @@ jobs:
             echo "a new head and needs its own attestation."
             echo
             echo "Publishing the note does not re-run this check by itself. refs/notes/no-mistakes"
-            echo "is not a pull request head, so pushing it fires no pull request event and this"
-            echo "verdict stands until something re-evaluates the head. Once the note is published,"
-            echo "close and reopen this pull request, or edit its title or body; both re-run the"
-            echo "check, and because the verdict is bound to the head commit an unchanged head"
-            echo "simply re-derives its result from the evidence now present."
+            echo "is not a pull request head, so pushing it fires no pull request event of its own."
+            echo "That gap is why 'bin/fm-attest.sh write' re-runs the run that judged this head as"
+            echo "its last step: the same event replays against the same head commit, and because"
+            echo "the verdict is bound to that commit an unchanged head simply re-derives its"
+            echo "result from the evidence now present. Publishing an attestation converges here"
+            echo "on its own, and nothing about this pull request needs editing to make it."
+            echo
+            echo "If that step reported that it could not reach GitHub Actions, nothing has re-read"
+            echo "this head yet. It says so in its own words, and the two causes are gh missing or"
+            echo "unauthenticated, and no write access to this repository's Actions - which the"
+            echo "author of a pull request raised from a fork does not hold on the parent. In that"
+            echo "case re-run this workflow run from the Actions tab, or ask someone who holds that"
+            echo "access to. Do not publish the attestation again: it names this commit already."
             echo
             echo "See CONTRIBUTING.md for setup and docs/no-mistakes-attestation.md for what"
             echo "this check does and does not establish."

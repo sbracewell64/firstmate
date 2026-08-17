@@ -57,6 +57,13 @@ The evidence was examined and found absent, unbound or invalid, so this is a ver
 A **failure** exits 2 and prints `cannot attest (<reason>)`.
 No verdict was reached, so it says nothing about the evidence either way: `not-a-git-repository`, `pipeline-tool-missing`, `head-unresolvable`, `head-detached`, `scratch-file-unavailable`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-not-reconciled`, `attestation-not-recorded`, `attestation-not-published`, or `commit-unknown` for `show`.
 
+`recheck` is about a different subject and uses its own headline after its shared repository and scratch-file preflight, because a head can carry perfect evidence and still not be re-evaluated, and reporting that as `not attested` would send a reader to republish a note that is already correct.
+The shared preflight failures remain `cannot attest (not-a-git-repository)` and `cannot attest (scratch-file-unavailable)`.
+It prints `not re-evaluated (<reason>)` and exits 1 for a fact about this head, this pull request or this repository: `attestation-not-published`, `attestation-not-published-for-head`, `pull-request-not-open`, `pull-request-head-moved`, `pull-request-head-repository-mismatch`, `pull-request-ambiguous`, `no-applicable-run`, `run-in-progress` or `recheck-budget-spent`.
+It prints `cannot re-evaluate (<reason>)` and exits 2 when the re-evaluation could not be carried out or judged, so nothing it says bears on whether the check would now pass: `forge-tool-missing`, `forge-unreadable`, `forge-read-truncated`, `pull-request-list-truncated`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-ref-unreadable`, `pull-request-head-repository-absent`, `pull-request-head-repository-unreadable`, `rerun-not-requested`, `ledger-unreadable`, `ledger-unwritable`, `ledger-unlocatable`, `ledger-lock-unavailable` or `repository-unresolved`.
+Published evidence that is present but invalid is **not** one of these: it exits through `verify`'s own refusals above, because that is a verdict on the evidence rather than a step that did not happen.
+When `recheck` runs as `write`'s last step, every non-zero exit also says that the note was recorded and pushed before it ran, so the repair is never to publish it again.
+
 A **usage error** exits 2 and names the argument in plain words, because there is no state to describe.
 
 No condition borrows another's reason or another's words.
@@ -88,8 +95,9 @@ It is why the check's verdict is visible in the diff and why required-check conf
 
 ## Producing one
 
-`bin/fm-attest.sh write` reads the pipeline's own run record through `no-mistakes axi status`, refuses unless that run covers this branch and completed every required step, then records and pushes the note on the head that run validated.
+`bin/fm-attest.sh write` reads the pipeline's own run record through `no-mistakes axi status`, refuses unless that run covers this branch and completed every required step, then records and pushes the note on the head that run validated, and finally re-evaluates that head as described below.
 It re-verifies its own payload with the same code path the gate uses, so a malformed note cannot reach the forge and be discovered only in CI.
+`--no-recheck` publishes without asking GitHub anything, and is for the case where the note is wanted but the check is not the point.
 
 The head it attests is not always `HEAD`.
 The pipeline commits its own fixes and advances the run tip past the local checkout, so a run tip ahead of `HEAD` on the same history is the normal state, it is the head the pull request is opened on, and it is what gets attested.
@@ -115,7 +123,7 @@ That output is quoted through the same scrubbing as git's, because `no-mistakes`
 Only what the tool writes to stdout decides which of them it is, because unrelated notices such as its version-upgrade banner go to stderr and must never stand in for a run record; stderr is quoted alongside stdout purely as diagnostic detail.
 Every call to the tool is time-bounded, so one blocked on a lock or a network read refuses as `run-record-unreadable` rather than hanging at a contributor's terminal.
 `bin/fm-timeout-lib.sh` owns imposing that bound, and `bin/fm-nm-run-lib.sh` delegates to it rather than carrying a second copy of the mechanism.
-`docs/configuration.md` owns the `FM_ATTEST_NM_TIMEOUT` knob, including why a non-positive value falls back to the default rather than shortening the bound.
+`docs/configuration.md` owns the `FM_ATTEST_NM_TIMEOUT`, `FM_ATTEST_RECHECK_WAIT`, `FM_ATTEST_RECHECK_POLL` and `FM_ATTEST_RECHECK_LOCK_WAIT` knobs, including why a non-positive `FM_ATTEST_NM_TIMEOUT` falls back to the default rather than shortening the bound while zero is a real value for the wait and lock bounds.
 
 When `no-mistakes` publishes this note itself, the helper becomes redundant and nothing about the check changes: the note format is the contract, and which program writes it is not.
 
@@ -123,12 +131,56 @@ When `no-mistakes` publishes this note itself, the helper becomes redundant and 
 
 The note can only exist after the push it attests, and that push is what started the check, so the first evaluation of a genuinely pipeline-raised head runs before its evidence exists and correctly refuses.
 
-Publishing the note does not by itself repair that verdict.
+Publishing the note repairs the evidence but not the verdict.
 `refs/notes/no-mistakes` is not a pull request head, so pushing it fires no `pull_request` event and nothing re-reads the head.
-Close and reopen the pull request, or edit its title or body: `reopened` and `edited` are both subscribed for exactly this, and because the verdict is bound to the head commit, re-running against an unchanged head simply re-derives it from the evidence now present.
+`bin/fm-attest.sh recheck` is what re-reads it, and `write` runs it on the head it just published, so a successful delivery converges on a green check with nobody closing, reopening or editing a pull request.
 
-This is why `edited` is subscribed even though the verdict no longer depends on any pull request text.
-It is also the only event GitHub fires when a pull request's base branch changes, so without it a pull request retargeted onto `main` would never run this check at all.
+It re-runs the workflow run that already judged that exact head.
+That is GitHub's own supported mechanism, and it keeps GitHub the only place a verdict comes from: the same event payload replays, so the job checks out the same `head.sha`, fetches the ref afresh, and re-derives its verdict from the evidence now present.
+There is no second check, no second truth store, and nothing that could report a head as green without the workflow itself saying so.
+Nothing about the pull request is mutated; automating a title or body edit would restore the manual step with a different actor rather than remove it.
+
+What it establishes before asking GitHub for anything:
+
+- The repository the check reads - the push target of the named remote, not the local ref - now serves an attestation for **this exact head**, and that attestation passes the same `verify_note_payload` the gate runs.
+  A note that is absent there, bound to another commit, or malformed is refused as **evidence**, in the evidence's own words, and no re-run is requested: re-running a check that must refuse again would spend a job to be told what is already known.
+- The pull request is open and its head is still this commit.
+  Its head repository must also be the resolved push-target repository the attestation was read from, on both paths: the explicit lookup reads `head.repo.full_name` and the resolved one reads `headRepository.nameWithOwner`.
+  Those are compared as identities rather than as text, because GitHub repository names are case-insensitive and the two sides are spelled by different authorities - the push side lowercased out of a remote URL, the forge side in GitHub's own canonical casing.
+  Comparing them raw refused a match that was really a match, which fails closed and so never reports a head green on unseen evidence, but puts the manual re-trigger back for every contributor whose repository name carries a capital.
+  Every message keeps the spelling its reader used; only the comparison is normalized.
+  A mismatch refuses before the POST: it cannot produce a false green, but proceeding would report evidence as published where the check does not look and spend a re-run that cannot converge.
+  An absent head repository, including a deleted fork, and an unreadable head repository are separate could-not-observe outcomes and are never assumed to match.
+  Named explicitly, a request that has moved on is refused as `pull-request-head-moved`, because evidence for a head nobody is proposing does not cover the head under review.
+  Resolved from this checkout's own github.com remotes instead, only a request open **on** this commit counts: GitHub associates a request with every commit that was ever in its history, so a request whose head has moved past this one still comes back and is not it.
+  A commit a candidate repository does not carry is a fact about that repository and is passed over; a candidate that could not be read at all stops the command, because not reading a repository is not reading an absence.
+  One head on two open requests is refused rather than chosen between, and naming the request with `--repo` and `--pr` is the way past both that and an unreadable candidate.
+- The applicable run is a `no-mistakes-required.yml` run for this head, on this pull request.
+  The run that started last is the one re-run, which is the same "latest attempt speaks for the check" ordering `bin/fm-pr-merge.sh` reduces a rollup by, so a re-run can never leave a newer failure still speaking.
+- Nothing has already been done about it.
+  One re-run per run attempt, and at most three per repository, pull request and head, counted from a durable record.
+
+Every re-run request is appended to `fm-attest-recheck.log` in the repository's common git directory before it is made, binding repository, pull request, head, note object, run and attempt to the action taken and why.
+The log also records later request outcomes and the ordinary skip states that are reached after its prerequisites have been established.
+It is never committed and the check never reads it: it is an audit record of what this program did, not a second place a verdict could come from.
+The count and pre-request append are serialized through a bounded atomic lock shared by every worktree of the clone.
+The lock records its host and process, reclaims a holder only when that process is demonstrably gone on this host, and fails closed for live or unobservable holders.
+The record is keyed on the repository rather than on how one invocation spelled it, because keying on the spelling let a spent per-head bound be reset by retyping the same name in another case.
+The record is written **before** the request and consumes that run attempt, because after a crash the program cannot distinguish a request that never happened from one GitHub accepted before the requested record was appended.
+The bound counts attempts rather than successes so that a forge swallowing every request cannot buy unlimited ones.
+
+Three outcomes are ordinary rather than faults, and each says so: the run already passed, this attempt was already re-triggered, and no open pull request is on this head at all - the last being the landing-branch shape below.
+
+### What still needs a hand, and only this
+
+Re-running a workflow run needs write access to that repository's Actions.
+The author of a pull request raised **from a fork against a parent repository** does not hold that on the parent, and `gh` may be absent or unauthenticated.
+In those cases `recheck` reports `forge-tool-missing`, `forge-unreadable` or `rerun-not-requested`, says that nothing has re-read the head, and names the fallback: re-run that workflow run from the repository's Actions tab, or ask someone who holds the access to.
+The attestation is already published and correct in that case and must not be published again.
+
+That is the whole residual manual case.
+Closing and reopening a pull request is no longer part of this procedure, and `edited` is no longer subscribed for it.
+`edited` remains subscribed because it is the only event GitHub fires when a pull request's base branch changes, so without it a pull request retargeted onto `main` would never run this check at all.
 
 ## Landing an already-validated change on a fork
 
@@ -138,9 +190,19 @@ Because the attestation is bound to a commit rather than written into a pull req
 Run the pipeline against the landing branch with the pull request and CI steps skipped, then attest the head it validated.
 That is what separates the signature from upstream submission: previously the only way to obtain the marker was to open an upstream pull request, so a landing branch could not be signed without duplicating a live contribution.
 
+A head proposed nowhere has no check to re-evaluate, and `write` reports exactly that and exits cleanly rather than treating it as a fault.
+
 ## Verification
 
 `tests/fm-attest.test.sh` pins every refusal and its matched positive control through the executable interface, for `bin/fm-attest.sh` and for the workflow's own step scripts, which it lifts out of the workflow by step name and runs as the workflow runs them.
 The two live in one suite because what the check tells a contributor is decided jointly by the verifier's exit status and the step's reading of it, and splitting them lets the two drift apart.
 Each negative fixture differs from the passing one by exactly one property, because a verifier that refused everything would satisfy red-only assertions and would be a worse defect than the honour-system check it replaces.
-The suite was refreshed on 2026-08-13 with `bash tests/fm-attest.test.sh`, which completed successfully with 35 passing cases.
+
+The re-evaluation cases assert on the **action taken against the forge**, read out of a log of every call, and never on a message this program prints about it.
+Every negative case there additionally asserts that no re-run was requested, and the converging cases assert that nothing altered the pull request itself.
+The stub applies the real `--jq` filters to real fixture JSON, so the selection rules - this head only, this pull request, the run that started last - are exercised rather than assumed.
+
+The suite proves that the ledger lock is taken before the count and that a holder stops the request.
+It does not directly prove that two invocations racing for the last budget slot cannot both take it; mutual exclusion between holders is inherited from the atomicity of POSIX `mkdir`.
+It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
+The stale-attempt merge reduction is separately owned and proved by `bin/fm-pr-merge.sh` and `tests/fm-pr-merge.test.sh`.

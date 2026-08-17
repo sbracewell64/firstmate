@@ -125,6 +125,7 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 - `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, and pinned shellcheck version) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other shellcheck version.
 - After the pipeline pushes the branch, publish the head-bound attestation with `bin/fm-attest.sh write`, because the `Require no-mistakes` check reads that and not the pull request body, and every new head needs its own ([`docs/no-mistakes-attestation.md`](../../../docs/no-mistakes-attestation.md)).
+- That one command also re-runs the check for the head it published, so the check converges on its own; never close, reopen, or edit a pull request to nudge it, and act on what that command reports when it says it could not reach GitHub Actions.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
 - Tests must exercise behavior through an executable or public interface and must never assert implementation-source bytes, including through parsers, regexes, snapshots, or indirect wrappers.
 - Hand every background process a test launches to `fm_test_reap` as soon as its pid is known, because a case that only kills on its happy path orphans that process on every failing or signalled path.
