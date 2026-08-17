@@ -239,15 +239,20 @@ guard_output_outside_source() {  # <resolved-source> <raw-output>
   case "$out" in
     */../*|*/..|../*|..) cno "output path must not contain a .. component: $out" ;;
   esac
-  out_parent=$(dirname -- "$out")
-  out_leaf=$(basename -- "$out")
+  out_parent=$out
+  out_leaf=
   while [ ! -d "$out_parent" ] && [ "$out_parent" != / ] && [ "$out_parent" != . ]; do
-    out_leaf=$(basename -- "$out_parent")/$out_leaf
+    if [ -n "$out_leaf" ]; then
+      out_leaf=$(basename -- "$out_parent")/$out_leaf
+    else
+      out_leaf=$(basename -- "$out_parent")
+    fi
     out_parent=$(dirname -- "$out_parent")
   done
   [ -d "$out_parent" ] || cno "output directory has no existing ancestor: $out"
   out_parent=$(cd "$out_parent" && pwd -P) || cno "output directory cannot be resolved: $out"
-  out_resolved=$out_parent/$out_leaf
+  out_resolved=$out_parent
+  [ -z "$out_leaf" ] || out_resolved=$out_resolved/$out_leaf
   case "$out_resolved" in
     "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
   esac
@@ -632,9 +637,9 @@ cmd_prove() {
     [ -z "$(ls -A "$out" 2>/dev/null)" ] || cno "output directory is not empty, and a record is written once: $out"
   fi
   mkdir -p "$out" 2>/dev/null || cno "output directory cannot be created: $out"
-  out=$(cd "$out" && pwd) || cno "output directory cannot be resolved: $out"
+  out=$(cd "$out" && pwd -P) || cno "output directory cannot be resolved: $out"
   case "$out" in
-    "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
+    "$source_root"|"$source_root"/*) cno "output directory is inside the source checkout: $out" ;;
   esac
 
   local candidate_commit candidate_tree
@@ -1012,9 +1017,9 @@ cmd_catalogue() {
     [ -z "$(ls -A "$out" 2>/dev/null)" ] || cno "output directory is not empty, and a catalogue is written once: $out"
   fi
   mkdir -p "$out" 2>/dev/null || cno "output directory cannot be created: $out"
-  out=$(cd "$out" && pwd) || cno "output directory cannot be resolved: $out"
+  out=$(cd "$out" && pwd -P) || cno "output directory cannot be resolved: $out"
   case "$out" in
-    "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
+    "$source_root"|"$source_root"/*) cno "output directory is inside the source checkout: $out" ;;
   esac
 
   local count ids

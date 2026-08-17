@@ -525,12 +525,14 @@ test_prove_refuses_output_through_a_symlinked_source_ancestor() {
 test_prove_protects_the_checkout_when_source_is_a_subdirectory() {
   local case_dir before after out code
   case_dir=$(make_case prove_subdirectory_source)
+  mkdir "$case_dir/src/evidence-target"
+  ln -s "$case_dir/src/evidence-target" "$case_dir/evidence-link"
   before=$(source_snapshot "$case_dir/src")
   set +e
   out=$("$BIN" prove --case subdirectory-source --source "$case_dir/src/tests" \
     --candidate HEAD --path tests/honest.sh --target "$case_dir/target.bytes" \
     --falsify "$case_dir/falsify.bytes" --satisfy "$case_dir/satisfy.bytes" \
-    --out "$case_dir/src/evidence" -- bash tests/honest.sh 2>&1)
+    --out "$case_dir/evidence-link" -- bash tests/honest.sh 2>&1)
   code=$?
   set -e
   after=$(source_snapshot "$case_dir/src")
@@ -538,8 +540,8 @@ test_prove_protects_the_checkout_when_source_is_a_subdirectory() {
   expect_code 2 "$code" "prove protects the checkout root for a subdirectory source"
   assert_contains "$out" 'output directory is inside the source checkout' \
     "the prove refusal must name checkout-root containment"
-  [ ! -e "$case_dir/src/evidence" ] \
-    || fail "prove must refuse the checkout-root output before creating it"
+  [ -z "$(ls -A "$case_dir/src/evidence-target")" ] \
+    || fail "prove must refuse an output-leaf symlink before writing through it"
   [ "$before" = "$after" ] \
     || fail "prove with a subdirectory source must leave the checkout byte-identical"
   pass "source-custody: prove protects the checkout root for a subdirectory source"
@@ -775,10 +777,12 @@ test_catalogue_protects_the_checkout_when_source_is_a_subdirectory() {
   local case_dir before after out code
   case_dir=$(make_case catalogue_subdirectory_source)
   printf '%s\n' '{"cases": []}' >"$case_dir/catalogue.json"
+  mkdir "$case_dir/src/evidence-target"
+  ln -s "$case_dir/src/evidence-target" "$case_dir/evidence-link"
   before=$(source_snapshot "$case_dir/src")
   set +e
   out=$("$BIN" catalogue --catalogue "$case_dir/catalogue.json" \
-    --source "$case_dir/src/tests" --candidate HEAD --out "$case_dir/src/evidence" 2>&1)
+    --source "$case_dir/src/tests" --candidate HEAD --out "$case_dir/evidence-link" 2>&1)
   code=$?
   set -e
   after=$(source_snapshot "$case_dir/src")
@@ -786,8 +790,8 @@ test_catalogue_protects_the_checkout_when_source_is_a_subdirectory() {
   expect_code 2 "$code" "catalogue protects the checkout root for a subdirectory source"
   assert_contains "$out" 'output directory is inside the source checkout' \
     "the catalogue refusal must name checkout-root containment"
-  [ ! -e "$case_dir/src/evidence" ] \
-    || fail "catalogue must refuse the checkout-root output before creating it"
+  [ -z "$(ls -A "$case_dir/src/evidence-target")" ] \
+    || fail "catalogue must refuse an output-leaf symlink before writing through it"
   [ "$before" = "$after" ] \
     || fail "catalogue with a subdirectory source must leave the checkout byte-identical"
   pass "source-custody: catalogue protects the checkout root for a subdirectory source"

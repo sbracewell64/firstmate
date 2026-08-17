@@ -138,9 +138,9 @@ The suite executes 39 controls, and the current measured-file inventory is:
 
 ```
 inventory_control_count: 39
-inventory_sha256: bin/fm-review-mutation.sh 356906d81bf941b06b05fa1bd36d92d6a4085740ec3a1fa927422a59b6a529d6
+inventory_sha256: bin/fm-review-mutation.sh 6961e3bbee3bf13b876982b32ebb42a92c94e2ec64a066a05e46e968c4f88993
 inventory_sha256: bin/fm-verify.sh a187ed0765a1d17b419c83cbc55c9e98fd5f380701f0a50f8cdcd909e7c1bd37
-inventory_sha256: tests/fm-review-mutation.test.sh 1c9c5684ad02bb64192013ffe44e5770079a1678c2f5d931b169d37687e4cb24
+inventory_sha256: tests/fm-review-mutation.test.sh a34ef7a6bb49b6e9e575e9ffc49da672a4f28c4e9a21d703907e0fb75555c0c4
 inventory_sha256: tests/review-mutation-red-matrix.py ad788b1e8e0c0789ccfb29eaf9299dcfd23c1fb44c6c42bc9171cec86c7416cd
 ```
 
