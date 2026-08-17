@@ -176,11 +176,16 @@ FM_OUTBOUND_TOKEN_IDENTITY=FM_OUTBOUND_IDENTITY_REFUSED
 
 # --- digest ------------------------------------------------------------------
 
-fm_outbound_digest() {  # reads stdin, prints 12 lowercase hex
+FM_OUTBOUND_REQUEST_ID_PREFIX='fm-ob-'
+FM_OUTBOUND_REQUEST_ID_HEX_WIDTH=12
+FM_OUTBOUND_REQUEST_ID_PATTERN="${FM_OUTBOUND_REQUEST_ID_PREFIX}[0-9a-f]\\{${FM_OUTBOUND_REQUEST_ID_HEX_WIDTH}\\}"
+export FM_OUTBOUND_REQUEST_ID_PATTERN
+
+fm_outbound_digest() {  # reads stdin, prints a lowercase hex request digest
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk '{print substr($1,1,12)}'
+    sha256sum | awk -v width="$FM_OUTBOUND_REQUEST_ID_HEX_WIDTH" '{print substr($1,1,width)}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk '{print substr($1,1,12)}'
+    shasum -a 256 | awk -v width="$FM_OUTBOUND_REQUEST_ID_HEX_WIDTH" '{print substr($1,1,width)}'
   else
     return 1
   fi
@@ -228,7 +233,7 @@ fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
   local sum
   sum=$(fm_outbound_identity_canonical "$@" | fm_outbound_digest) || return 1
   [ -n "$sum" ] || return 1
-  printf 'fm-ob-%s\n' "$sum"
+  printf '%s%s\n' "$FM_OUTBOUND_REQUEST_ID_PREFIX" "$sum"
 }
 
 # --- binding completeness ----------------------------------------------------

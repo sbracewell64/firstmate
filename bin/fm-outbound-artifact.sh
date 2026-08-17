@@ -995,7 +995,7 @@ cmd_poll() {
     body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') \
       || { failed=4; continue; }
     rid=$(printf '%s\n' "$body" \
-      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \(fm-ob-[0-9a-f]*\)$/\1/p")
+      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \($FM_OUTBOUND_REQUEST_ID_PATTERN\)$/\1/p")
     marker_count=$(printf '%s\n' "$rid" | grep -c . || true)
     [ "$marker_count" -ne 0 ] || continue
     if [ "$marker_count" -gt 1 ]; then

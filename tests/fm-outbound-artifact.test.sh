@@ -664,15 +664,25 @@ test_poll_requires_exactly_one_ruling_marker() {
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
   [ "$state" = "ruled" ] || fail "poll marker count: one marker left state $state"
 
+  dir=$(new_case poll-marker-malformed-and-valid)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: malformed companion emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 573 accepted
+  printf 'FM-SOL-RULING fm-ob-\nFM-SOL-RULING fm-ob-deadbeef\n' >> "$dir/forge/ruling_body"
+  run_ob "$dir" poll >/dev/null 2>&1 \
+    || fail "poll marker count: malformed markers blocked one complete identity"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "ruled" ] || fail "poll marker count: malformed companions left state $state"
+
   dir=$(new_case poll-marker-none)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: second emit failed"
   rid=$(emitted_request_id "$dir")
-  printf 'unrelated comment\n' > "$dir/forge/ruling_body"
+  printf 'FM-SOL-RULING fm-ob-\nFM-SOL-RULING fm-ob-deadbeef\n' > "$dir/forge/ruling_body"
   printf '571\n' > "$dir/forge/ruling_id"
-  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll marker count: no marker was not ignored"
+  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll marker count: malformed-only markers were not ignored"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "emitted" ] || fail "poll marker count: no marker advanced state to $state"
-  pass "poll: exactly one ruling marker is required and ambiguity names its count"
+  [ "$state" = "emitted" ] || fail "poll marker count: malformed marker advanced state to $state"
+  pass "poll: exactly one complete ruling identity is required and ambiguity names its count"
 }
 
 test_duplicate_backlog_ids_refuse_identity_joins() {
