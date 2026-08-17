@@ -555,10 +555,12 @@ branch_inventory_rows() {  # appends row_json lines to $1
 
 SWEEP=
 row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <verdict> <token> <missing> <artifact> <stale>
+  local identity
+  identity=$(fm_outbound_identity_canonical "$2" "$5" "$6" "$1" "-" "$7")
   jq -n --arg item "$1" --arg gate "$2" --arg tier "$3" --arg channel "$4" \
     --arg project "$5" --arg repo "$6" --arg head "$7" --arg rid "$8" \
     --arg verdict "$9" --arg token "${10}" --arg missing "${11}" \
-    --arg artifact "${12}" --argjson stale "${13:-0}" \
+    --arg artifact "${12}" --argjson stale "${13:-0}" --arg identity "$identity" \
     '{item:$item,
       gate:(if $gate == "" then null else $gate end),
       tier:$tier,
@@ -571,7 +573,8 @@ row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <ve
       token:$token,
       missing:(if $missing == "" then null else $missing end),
       artifact:(if $artifact == "" then null else $artifact end),
-      superseded_records:$stale}'
+      superseded_records:$stale,
+      _identity:$identity}'
 }
 
 sweep() {
@@ -612,6 +615,7 @@ sweep() {
     item=$(printf '%s' "$rec" | jq -r '.id // ""')
     project=$(printf '%s' "$rec" | jq -r '.repo // ""')
     pr_url=$(printf '%s' "$rec" | jq -r '.pr_url // ""')
+    pr_ref=$(printf '%s' "$rec" | jq -r '.pr_url // "-"')
     channel=$(fm_outbound_gate_channel "$gate")
     head=$(observe_head "$item" "$pr_url" "$project")
 
@@ -635,7 +639,6 @@ sweep() {
       continue
     fi
 
-    pr_ref=$(printf '%s' "$rec" | jq -r '.pr_url // "-"')
     rid=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr_ref" "$head") || rid=
 
     if [ "$channel" = "pull-request" ]; then
@@ -705,8 +708,10 @@ sweep() {
   # than only the rows somebody already annotated. A backlog row wins on a
   # collision: it carries gate and correlation context the ref alone does not.
   branch_inventory_rows "$rows"
-  row=$(jq -s 'reduce .[] as $r ([]; if any(.[]; .item == $r.item and .tier != "inventory")
-                 and $r.tier == "inventory" then . else . + [$r] end)' < "$rows")
+  row=$(jq -s 'reduce .[] as $r ([];
+                 if $r.tier == "inventory" and $r.verdict != "unevaluable"
+                    and any(.[]; ._identity == $r._identity and .tier != "inventory")
+                 then . else . + [$r] end) | map(del(._identity))' < "$rows")
   if probes_capped; then capped=true; else capped=false; fi
   SWEEP=$(jq -n --argjson rows "$row" --argjson capped "$capped" \
     '{schema:"fm-outbound-sweep.v1",readable:true,capped:$capped,rows:$rows,reason:null}')

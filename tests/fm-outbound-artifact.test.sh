@@ -328,6 +328,44 @@ test_branch_inventory_finds_an_unannotated_unsubmitted_branch() {
   pass "inventory: a branch nobody annotated is found by enumeration, not by prose"
 }
 
+test_branch_inventory_dedupes_only_complete_identity() {
+  local dir project repo sha out rc
+  dir=$(new_case cinventory-identity)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n- other [no-mistakes] - other project (added 2026-08-16)\n' \
+    > "$dir/home/data/projects.md"
+  for project in demo other; do
+    repo="$dir/home/projects/$project"
+    if [ "$project" = other ]; then
+      git clone -q --no-hardlinks "$HEAD_REPO" "$repo" 2>/dev/null
+    fi
+    git -C "$repo" config user.email fixture@example.com
+    git -C "$repo" config user.name Fixture
+    git -C "$repo" remote set-url origin "https://github.com/o/$project.git"
+    git -C "$repo" checkout -q -b fm/shared-item
+    printf '%s work\n' "$project" > "$repo/$project"
+    git -C "$repo" add "$project"
+    git -C "$repo" -c commit.gpgsign=false commit -qm "$project work"
+    sha=$(git -C "$repo" rev-parse HEAD)
+    git -C "$repo" checkout -q master
+    if [ "$project" = demo ]; then
+      printf '%s\n' "$sha" > "$dir/forge/head"
+      printf '%s\n' "$sha" > "$dir/forge/pr_head"
+      printf '101\n' > "$dir/forge/pr_number"
+    fi
+  done
+  write_snapshot "$dir/snap.json" external \
+    "never submitted - no pull request exists for this branch"
+  jq '.backlog.records[0].id = "shared-item"
+      | .backlog.records[0].repo = "demo"' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "inventory identity: other project's unsubmitted branch was hidden, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'recognised: inventory' \
+    || fail "inventory identity: the cross-project inventory defect was suppressed: $out"
+  pass "inventory identity: a shared branch name cannot suppress another project"
+}
+
 test_branch_inventory_excludes_landed_work() {
   local dir repo out rc
   # The negative control. Landed work is not unsubmitted work, and without this
@@ -1491,6 +1529,7 @@ test_binding_refuses_a_vague_head() {
 
 test_no_request_is_red
 test_branch_inventory_finds_an_unannotated_unsubmitted_branch
+test_branch_inventory_dedupes_only_complete_identity
 test_branch_inventory_excludes_landed_work
 test_branch_inventory_excludes_squash_landed_work
 test_branch_inventory_unresolvable_landing_target_is_unevaluable
