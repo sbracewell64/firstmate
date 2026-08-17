@@ -555,12 +555,79 @@ REVIEWER
 }
 test_review_exec_transports_all_three_values
 
+# --- review-mutation ---------------------------------------------------------
+#
+# The adapter transports bin/fm-review-mutation.sh's result rather than forming
+# one, so its unobservable case is the one that matters here: a mutation proof
+# whose evidence is absent or no longer reachable must be could-not-observe,
+# never a retained pass. tests/fm-review-mutation.test.sh owns the proof owner's
+# own controls, including the decisive one.
+test_review_mutation_transports_all_three_values() {
+  local case_dir target
+  case_dir=$TMP/review-mutation
+  mkdir -p "$case_dir/empty" "$case_dir/primary/tests"
+  git init -q "$case_dir/primary"
+  printf 'expected\n' > "$case_dir/primary/subject.txt"
+  # Bytes of shell source, not shell to run here, so the single quotes are the
+  # point.
+  # shellcheck disable=SC2016
+  target='[ "$(cat subject.txt)" = "expected" ]'
+  cat > "$case_dir/primary/tests/honest.sh" <<EOF
+#!/usr/bin/env bash
+$target || exit 1
+EOF
+  # The retired defect as a probe: it prints the success line and never
+  # evaluates the assertion.
+  cat > "$case_dir/primary/tests/liar.sh" <<'EOF'
+#!/usr/bin/env bash
+printf 'ok - assertion-A\n'
+EOF
+  git -C "$case_dir/primary" add -A
+  git -C "$case_dir/primary" commit -qm candidate
+  git -C "$case_dir/primary" worktree add -q "$case_dir/src" HEAD
+  printf '%s' "$target" > "$case_dir/target.bytes"
+  # shellcheck disable=SC2016
+  printf '%s' '[ "$(cat subject.txt)" = "no" ]' > "$case_dir/falsify.bytes"
+  printf '%s' 'true' > "$case_dir/satisfy.bytes"
+
+  # No record at all: the empty set, which is the case a two-valued adapter
+  # would report as nothing-wrong.
+  expect_verify NO_VERIFIER_RAN empty_result_set \
+    "review-mutation with no proof record" -- review-mutation "$case_dir/empty"
+  expect_verify NO_VERIFIER_RAN usage_error \
+    "review-mutation with no record directory" -- review-mutation
+
+  prove_case() {  # <out> <probe-script>
+    "$ROOT/bin/fm-review-mutation.sh" prove --case "$1" --source "$case_dir/src" \
+      --candidate HEAD --path tests/honest.sh --target "$case_dir/target.bytes" \
+      --falsify "$case_dir/falsify.bytes" --satisfy "$case_dir/satisfy.bytes" \
+      --out "$case_dir/$1" -- bash "$2" >/dev/null 2>&1
+  }
+
+  prove_case good tests/honest.sh
+  expect_verify PASS verified \
+    "review-mutation with a target that executed and passed" -- review-mutation "$case_dir/good"
+
+  prove_case liar tests/liar.sh
+  expect_verify FAIL verifier_reported_failure \
+    "review-mutation with a target that never executed" -- review-mutation "$case_dir/liar"
+
+  # A proved case whose mutation evidence stopped being reachable is
+  # could-not-observe again, not a retained pass.
+  rm -rf "$case_dir/good/staging"
+  expect_verify NO_VERIFIER_RAN verification_unreachable \
+    "review-mutation whose mutants are gone" -- review-mutation "$case_dir/good"
+
+  pass "review-mutation transports all three values and cannot retain a stale pass"
+}
+test_review_mutation_transports_all_three_values
+
 # --- the conformance obligation ---------------------------------------------
 #
 # Every declared verifier ships with a control proving its unobservable case is
 # distinct. Adding one without such a control fails here rather than shipping a
 # verifier that cannot say "I could not look".
-COVERED='browser merge-clean pr-checks review-exec'
+COVERED='browser merge-clean pr-checks review-exec review-mutation'
 declared=$("$VERIFY" --list | LC_ALL=C sort | tr '\n' ' ')
 declared=${declared% }
 [ "$declared" = "$COVERED" ] ||
