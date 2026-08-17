@@ -57,6 +57,11 @@
 # bin/fm-classify-lib.sh's task_hold_kind reads. Consumers call this only once a
 # declared pause has already aged past its window, never on every wake.
 
+FM_BLOCKER_LIB_DIR=${BASH_SOURCE[0]%/*}
+[ "$FM_BLOCKER_LIB_DIR" != "${BASH_SOURCE[0]}" ] || FM_BLOCKER_LIB_DIR=.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$FM_BLOCKER_LIB_DIR/fm-pr-lib.sh"
+
 # The COMPLETE movement vocabulary. Every consumer must handle all five; a
 # consumer that silently defaults an unlisted verdict is how a correct reader
 # still produces a wrong supervision outcome, so the conformance case in
@@ -146,7 +151,7 @@ _fm_blocker_safe() {  # <value>
 # is a claim about whether a wait still holds and none of them supports one.
 _fm_blocker_show() {  # <id> [home] -> show output on stdout; rc 2 = could-not-observe
   local id=${1:-} home=${2:-${FM_HOME:-}} out
-  case "$id" in ''|*[!A-Za-z0-9._-]*) return 2 ;; esac
+  fm_task_id_path_safe "$id" || return 2
   _fm_blocker_reader || return 2
   if [ -n "$home" ] && [ -d "$home" ]; then
     out=$(cd "$home" && tasks-axi show "$id" --full 2>/dev/null) || return 2
@@ -180,7 +185,7 @@ fm_blocker_set() {  # <task-id> [home] -> one blocker id per line; rc 2 = could-
     b=${b#"${b%%[![:space:]]*}"}
     b=${b%"${b##*[![:space:]]}"}
     [ -n "$b" ] || continue
-    case "$b" in *[!A-Za-z0-9._-]*) return 2 ;; esac
+    fm_task_id_path_safe "$b" || return 2
     printf '%s\n' "$b"
   done
   return 0
@@ -291,33 +296,29 @@ EOF
 # Path of the baseline record, and of the staging file a pending observation
 # waits in until its consumer commits it.
 fm_blocker_record_path() {  # <state-dir> <task-id>
+  fm_task_id_path_safe "${2:-}" || return 1
   printf '%s/%s.blockers' "${1:-}" "${2:-}"
 }
 fm_blocker_pending_path() {  # <state-dir> <task-id>
+  fm_task_id_path_safe "${2:-}" || return 1
   printf '%s/%s.blockers.pending' "${1:-}" "${2:-}"
 }
 
 _fm_blocker_discard_pending() {  # <state-dir> <task-id>
   local state=${1:-} task=${2:-}
   [ -d "$state" ] || return 0
-  case "$task" in ''|*/*) return 0 ;; esac
+  fm_task_id_path_safe "$task" || return 0
   rm -f "$(fm_blocker_pending_path "$state" "$task")" 2>/dev/null || return 1
 }
 
 _fm_blocker_stage() {  # <pending-path> <record-bytes>
-  local pend=$1 bytes=$2 tmpdir tmp
-  tmpdir="$pend.tmp.$$"
-  tmp="$tmpdir/record"
-  rmdir "$tmpdir" 2>/dev/null || [ ! -e "$tmpdir" ] || return 1
-  rm -f "$pend" 2>/dev/null || return 1
-  mkdir -m 0700 "$tmpdir" 2>/dev/null || return 1
-  if ! printf '%s' "$bytes" > "$tmp" 2>/dev/null \
+  local pend=$1 bytes=$2 tmp
+  tmp="$pend.tmp.$$"
+  if ! (umask 077; printf '%s' "$bytes" > "$tmp") 2>/dev/null \
     || ! mv -f "$tmp" "$pend" 2>/dev/null; then
     rm -f "$tmp" "$pend" 2>/dev/null || true
-    rmdir "$tmpdir" 2>/dev/null || true
     return 1
   fi
-  rmdir "$tmpdir" 2>/dev/null || true
   return 0
 }
 
@@ -359,13 +360,16 @@ _fm_blocker_recorded_ids() {  # <record-file>
 # repeats the wake instead of losing it. A no-op when nothing was staged, which
 # is exactly what a refused cycle leaves behind.
 fm_blocker_commit() {  # <state-dir> <task-id> <stage-token>
-  local pend token=${3:-} staged
+  local state=${1:-} task=${2:-} pend record token=${3:-} staged
   [ -n "$token" ] || return 0
-  pend=$(fm_blocker_pending_path "${1:-}" "${2:-}")
+  [ -d "$state" ] || return 0
+  fm_task_id_path_safe "$task" || return 0
+  pend=$(fm_blocker_pending_path "$state" "$task") || return 0
+  record=$(fm_blocker_record_path "$state" "$task") || return 0
   [ -f "$pend" ] || return 0
   staged=$(sed -n 's/^stage=//p' "$pend" 2>/dev/null | head -1)
   [ "$staged" = "$token" ] || return 0
-  mv -f "$pend" "$(fm_blocker_record_path "$1" "$2")" 2>/dev/null || return 1
+  mv -f "$pend" "$record" 2>/dev/null || return 1
   return 0
 }
 
@@ -403,12 +407,10 @@ fm_blocker_movement() {  # <task-id> <state-dir> [home]
   local moved='' cno='' gone='' first=0 walk_cno=''
 
   _fm_blocker_discard_pending "$state" "$task" || true
-  case "$task" in
-    ''|*[!A-Za-z0-9._-]*)
-      printf 'unobserved\tthe task id is not usable, so its blocker set could not be read'
-      return 0
-      ;;
-  esac
+  if ! fm_task_id_path_safe "$task"; then
+    printf 'unobserved\tthe task id is not usable, so its blocker set could not be read'
+    return 0
+  fi
   if [ -z "$state" ] || [ ! -d "$state" ]; then
     printf 'unobserved\tthere is no durable record directory, so no prior blocker observation could be read'
     return 0

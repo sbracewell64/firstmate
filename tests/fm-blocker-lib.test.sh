@@ -527,9 +527,6 @@ assert_nonstaging_discards_stale_pending() {  # <case-dir> <task> <verdict> [env
 test_nonstaging_verdicts_discard_stale_pending() {
   local dir r
 
-  dir=$(make_case stale-pending-invalid-task)
-  assert_nonstaging_discards_stale_pending "$dir" 'bad task' unobserved
-
   dir=$(make_case stale-pending-unreadable)
   assert_nonstaging_discards_stale_pending "$dir" missing unobserved
 
@@ -585,6 +582,52 @@ test_staging_failure_is_could_not_observe_and_leaves_no_pending() {
   [ ! -f "$(fm_blocker_pending_path "$dir/state" held)" ] \
     || fail "a staging failure left a committable pending observation"
   pass "a staging failure is could-not-observe and leaves nothing committable"
+}
+
+test_canonical_task_ids_guard_blocker_state_paths() {
+  local dir id before after r
+  dir=$(make_case canonical-task-ids)
+  printf 'keep\n' > "$dir/state/.hidden.blockers.pending"
+  printf 'keep\n' > "$dir/state/...blockers.pending"
+  before=$(find "$dir/state" -type f -print | LC_ALL=C sort)
+  for id in .hidden ..; do
+    r=$(movement "$dir" "$id")
+    [ "$(verdict_of "$r")" = unobserved ] \
+      || fail "the canonical task-id rejection did not surface for $id: $r"
+    [ -z "$(fm_blocker_record_path "$dir/state" "$id" 2>/dev/null)" ] \
+      || fail "the public record path accepted canonical-invalid id $id"
+    [ -z "$(fm_blocker_pending_path "$dir/state" "$id" 2>/dev/null)" ] \
+      || fail "the public pending path accepted canonical-invalid id $id"
+    fm_blocker_commit "$dir/state" "$id" bogus-token \
+      || fail "commit did not safely ignore canonical-invalid id $id"
+  done
+  after=$(find "$dir/state" -type f -print | LC_ALL=C sort)
+  [ "$after" = "$before" ] \
+    || fail "canonical-invalid task ids created or removed blocker state"
+  pass "canonical task-id validation guards every blocker state path"
+}
+
+test_stale_staging_temp_is_reclaimed() {
+  local dir r pend
+  dir=$(make_case stale-staging-temp)
+  put_task "$dir" upstream state=in_flight
+  put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
+  seed_baseline "$dir" held
+  pend=$(fm_blocker_pending_path "$dir/state" held)
+  r=$(PATH="$dir/fakebin:$PATH" FM_FAKE_TASKS_DIR="$dir/fixtures" bash -c '
+    set -u
+    . "$1"
+    pend=$(fm_blocker_pending_path "$2" "$3")
+    printf "crash residue\n" > "$pend.tmp.$$"
+    fm_blocker_movement "$3" "$2"
+  ' _ "$LIB" "$dir/state" held)
+  [ "$(verdict_of "$r")" = unchanged ] \
+    || fail "a stale staging temp prevented the true unchanged verdict: $r"
+  if find "$dir/state" -name 'held.blockers.pending.tmp.*' -print | grep . >/dev/null 2>&1; then
+    fail "a reclaimed staging temp survived the successful observation"
+  fi
+  [ -f "$pend" ] || fail "reclaiming the stale temp did not atomically stage the current observation"
+  pass "a stale staging temp is overwritten and reclaimed"
 }
 
 # A blocker id outside the id grammar makes the SET unenumerable rather than
@@ -727,6 +770,8 @@ test_dependency_survives_a_restart
 test_uncommitted_observation_repeats_the_wake
 test_nonstaging_verdicts_discard_stale_pending
 test_staging_failure_is_could_not_observe_and_leaves_no_pending
+test_canonical_task_ids_guard_blocker_state_paths
+test_stale_staging_temp_is_reclaimed
 test_malformed_blocker_id_is_could_not_observe
 test_movement_vocabulary_is_total
 test_real_backlog_grammar_is_parsed
