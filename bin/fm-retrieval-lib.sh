@@ -914,7 +914,7 @@ fm_retrieval_parse() {  # <record>
     if [ "$version" = 2 ]; then
       fm_retrieval_decode_field "$value"
       value=$FM_RETRIEVAL_DECODED
-      values[$i]=$FM_RETRIEVAL_DECODED
+      values[i]=$FM_RETRIEVAL_DECODED
     fi
     case "$name" in
       retrieval)
