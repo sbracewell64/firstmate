@@ -444,7 +444,7 @@ project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
 # the completeness defect this pass exists to remove.
 registered_pr_projects() {
   local reg="$DATA/projects.md" name mode
-  [ -r "$reg" ] || return 0
+  [ -r "$reg" ] || return 1
   while IFS= read -r name; do
     [ -n "$name" ] || continue
     mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$name" 2>/dev/null | awk '{print $1}')
@@ -456,18 +456,37 @@ registered_pr_projects() {
 # Is this head already contained in what the project lands onto? Landed work is
 # not unsubmitted work, so it is excluded before anything is reported.
 head_already_landed() {  # <clone-dir> <sha>
-  local dir=$1 sha=$2 name ref
-  name=$(fm_landed_default_branch_name "$dir" 2>/dev/null) || return 1
-  [ -n "$name" ] || return 1
+  local dir=$1 sha=$2 name refs ref ref_tree merged rc uncertain=0
+  name=$(fm_landed_default_branch_name "$dir" 2>/dev/null) || return 2
+  [ -n "$name" ] || return 2
+  refs=$(fm_landed_candidate_refs "$dir" "$name" 2>/dev/null) || return 2
+  [ -n "$refs" ] || return 2
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
-    git --no-optional-locks -C "$dir" merge-base --is-ancestor "$sha" "$ref" 2>/dev/null && return 0
-  done < <(fm_landed_candidate_refs "$dir" "$name" 2>/dev/null)
+    ref_tree=$(git --no-optional-locks -C "$dir" rev-parse --quiet --verify "$ref^{tree}" 2>/dev/null) || {
+      uncertain=1
+      continue
+    }
+    merged=$(git --no-optional-locks -C "$dir" merge-tree --write-tree "$ref" "$sha" 2>/dev/null)
+    rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$merged" ]; then
+      uncertain=1
+      continue
+    fi
+    merged=$(printf '%s\n' "$merged" | head -1)
+    [ "$merged" = "$ref_tree" ] && return 0
+  done <<< "$refs"
+  [ "$uncertain" -eq 0 ] || return 2
   return 1
 }
 
 branch_inventory_rows() {  # appends row_json lines to $1
-  local out=$1 project dir venue ref sha item present rc
+  local out=$1 project dir venue ref sha item present rc projects
+  if ! projects=$(registered_pr_projects); then
+    row_json project-registry "" inventory pull-request "" "" "" "" \
+      unevaluable "$FM_OUTBOUND_TOKEN_REGISTRY_UNREADABLE" "" "" 0 >> "$out"
+    return
+  fi
   while IFS= read -r project; do
     [ -n "$project" ] || continue
     dir="$PROJECTS/$project"
@@ -483,7 +502,14 @@ branch_inventory_rows() {  # appends row_json lines to $1
       [ -n "$item" ] || continue
       sha=$(obs git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$ref") || sha=
       fm_outbound_is_sha "$sha" "$(fm_outbound_object_width "$dir")" || continue
-      head_already_landed "$dir" "$sha" && continue
+      head_already_landed "$dir" "$sha"; rc=$?
+      case $rc in
+        0) continue ;;
+        1) : ;;
+        *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_LANDING_UNOBSERVED" "" "" 0 >> "$out"
+           continue ;;
+      esac
       if [ -z "$venue" ]; then
         row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" "" \
           "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_VENUE_UNRESOLVED" "" "" 0 >> "$out"
@@ -499,7 +525,7 @@ branch_inventory_rows() {  # appends row_json lines to $1
       esac
     done < <(git --no-optional-locks -C "$dir" for-each-ref --format='%(refname)' \
                'refs/remotes/*/fm/*' 'refs/heads/fm/*' 2>/dev/null)
-  done < <(registered_pr_projects)
+  done <<< "$projects"
 }
 
 SWEEP=

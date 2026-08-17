@@ -65,6 +65,7 @@ seed_head_repo
 make_home() {  # <name> -> prints home path
   local home="$TMP_ROOT/$1"
   mkdir -p "$home/data" "$home/config" "$home/state" "$home/projects"
+  : > "$home/data/projects.md"
   printf '%s\n' "$home"
 }
 
@@ -318,6 +319,66 @@ test_branch_inventory_excludes_landed_work() {
     && fail "inventory: landed work was reported as unsubmitted: $out"
   [ "$rc" -eq 0 ] || fail "inventory: a clean landed-only clone did not pass, exit $rc: $out"
   pass "inventory: a branch already contained in the landing target is not unsubmitted work"
+}
+
+test_branch_inventory_excludes_squash_landed_work() {
+  local dir repo out rc
+  dir=$(new_case cinvsquash)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  rm -rf "$repo"; mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email fixture@example.com
+  git -C "$repo" config user.name Fixture
+  printf 'base\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm base
+  git -C "$repo" branch -M main
+  git -C "$repo" remote add origin https://github.com/o/demo.git
+  git -C "$repo" checkout -q -b fm/squash-landed
+  printf 'landed content\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm work
+  git -C "$repo" checkout -q main
+  git -C "$repo" merge -q --squash fm/squash-landed
+  git -C "$repo" -c commit.gpgsign=false commit -qm 'squash landed work'
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  printf '%s' "$out" | grep -q 'squash-landed' \
+    && fail "inventory squash landing: landed content was reported: $out"
+  [ "$rc" -eq 0 ] || fail "inventory squash landing: expected clean exit, got $rc: $out"
+  pass "inventory squash landing: content containment excludes a squash-merged branch"
+}
+
+test_branch_inventory_unresolvable_landing_target_is_unevaluable() {
+  local dir repo out rc
+  dir=$(new_case cinvtarget)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  rm -rf "$repo"; mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email fixture@example.com
+  git -C "$repo" config user.name Fixture
+  printf 'work\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm work
+  git -C "$repo" branch -M fm/no-landing-target
+  git -C "$repo" remote add origin https://github.com/o/demo.git
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory landing target: expected unevaluable, got $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_LANDING_TARGET_UNOBSERVED' \
+    || fail "inventory landing target: observation gap was collapsed: $out"
+  pass "inventory landing target: an unresolvable target is could-not-observe"
+}
+
+test_branch_inventory_absent_registry_is_unevaluable() {
+  local dir out rc
+  dir=$(new_case cinvregistry)
+  rm "$dir/home/data/projects.md"
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory registry: expected unevaluable, got $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_PROJECT_REGISTRY_UNREADABLE' \
+    || fail "inventory registry: absent inventory looked empty: $out"
+  pass "inventory registry: an absent registry is not an empty inventory"
 }
 
 test_no_request_is_red() {
@@ -1319,6 +1380,9 @@ test_binding_refuses_a_vague_head() {
 test_no_request_is_red
 test_branch_inventory_finds_an_unannotated_unsubmitted_branch
 test_branch_inventory_excludes_landed_work
+test_branch_inventory_excludes_squash_landed_work
+test_branch_inventory_unresolvable_landing_target_is_unevaluable
+test_branch_inventory_absent_registry_is_unevaluable
 test_request_present_is_green
 test_request_presence_requires_exact_validated_identity
 test_head_change_invalidates
