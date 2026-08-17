@@ -123,11 +123,11 @@ That confirmation matters because a build that fails to parse fails every contro
 The measured suite executed 32 controls, and its pinned file inventory was:
 
 ```
-inventory_control_count: 32
-inventory_sha256: bin/fm-review-mutation.sh 8673819cbb853d25a862cfb90bd0ed149587e9e71c8b93c167a043ddeb85db63
+inventory_control_count: 35
+inventory_sha256: bin/fm-review-mutation.sh f08aa8b4d6f3a9d74a6b82f81e716d863f33f5f3ba9da8cc4769e36b0e303b04
 inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
-inventory_sha256: tests/fm-review-mutation.test.sh 87b6b5375af0c2a1e2e5fe7ece0bfdf8bc3a8fd38c9841366503b311fc58be0d
-inventory_sha256: tests/review-mutation-red-matrix.py 4396e4bf5ba5b2927b022c1958f13bcbd3f87b27967a6cd728a2f57e8506477f
+inventory_sha256: tests/fm-review-mutation.test.sh 1825e89611322421a2078cea86503a89fcc4386a4e4da1880cb5898fb50f0967
+inventory_sha256: tests/review-mutation-red-matrix.py ad788b1e8e0c0789ccfb29eaf9299dcfd23c1fb44c6c42bc9171cec86c7416cd
 ```
 
 This is an inventory claim only: it says those measured files and that control count agreed at `43b78b12`.
