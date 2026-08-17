@@ -86,7 +86,7 @@ Established per consumer rather than assumed, because the safe direction is not 
 | [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_venue` | refuse | an unread push url cannot be replaced with the fetch url without potentially naming the wrong forge |
 | [`../../bin/fm-decision-surface.sh`](../../bin/fm-decision-surface.sh) | delegate to the landing owner | the surface names the library as owner and does not call it directly |
 
-The `bin/fm-outbound-artifact.sh` pass named alongside these consumers is not present in this tree; that is a could-not-observe on this checkout, not a finding that it does not consume the library.
+The `bin/fm-outbound-artifact.sh` pass named alongside these consumers was never renamed, has never existed in this branch's history, and exists only on the unlanded sibling branch `fm/control-plane-outbound-transport-invariant`.
 
 ## The class control, and what it does not cover
 
