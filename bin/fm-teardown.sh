@@ -962,7 +962,9 @@ forge_publication_observe() {  # <branch>
 content_in_default() {
   local name ref push_ref status
   name=$(default_branch) || return 1
-  if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
+  fm_landed_remote_listed "$WT" origin
+  status=$?
+  if [ "$status" -eq 0 ]; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
     # When origin FETCHES an upstream but PUSHES a fork, the ref just refreshed
     # is the upstream trunk - a trunk this fleet never lands on - so measuring
@@ -981,7 +983,8 @@ content_in_default() {
       *) return 1 ;;
     esac
     ref="refs/remotes/origin/$name"
-  elif git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
+  elif [ "$status" -eq 1 ] \
+    && git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
     ref="refs/heads/$name"
   else
     return 1

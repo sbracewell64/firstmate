@@ -48,6 +48,7 @@
 #   (v) fetch/push split + work landed nowhere                  -> REFUSE (safety preserved)
 #   (w) fetch/push split + push url unreadable                  -> REFUSE (unresolvable target)
 #   (w2) fetch/push split + push url READ fails                 -> REFUSE (target went unread)
+#   (w3) origin enumeration fails with content on local main   -> REFUSE (origin unknown)
 #   (x) fetch/push split + content only on upstream trunk       -> ALLOW  (fallback intact)
 #   (y) single remote (no push split)                           -> ALLOW  (identical path)
 #   (z) spawn-written turn-end artifacts, no info/exclude       -> ALLOW  (firstmate's own)
@@ -1320,6 +1321,27 @@ test_fork_split_unread_push_url_refuses() {
   grep -q REFUSED "$case_dir/stderr" || fail "fork-split-unread-pushurl: no REFUSED line in stderr"
   [ -d "$case_dir/wt" ] || fail "fork-split-unread-pushurl: the refused worktree was removed anyway"
   pass "a push url that could not be read refuses teardown instead of accepting the upstream answer"
+}
+
+test_unread_origin_enumeration_refuses_local_fallback() {
+  local case_dir rc
+  case_dir=$(make_case unread-origin-enumeration)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  git -C "$case_dir/project" switch -q main
+  git -C "$case_dir/project" cherry-pick "$(git -C "$case_dir/wt" rev-parse HEAD)" >/dev/null
+  fm_fake_git_fault "$case_dir/fakebin"
+
+  set +e
+  FM_FAULT_MATCH=' remote$' \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unread-origin-enumeration: teardown must refuse when origin presence cannot be read"
+  grep -q REFUSED "$case_dir/stderr" || fail "unread-origin-enumeration: no REFUSED line in stderr"
+  [ -d "$case_dir/wt" ] || fail "unread-origin-enumeration: the refused worktree was removed anyway"
+  pass "an unread origin enumeration refuses instead of using the local fallback"
 }
 
 # (y) An ordinary single-remote repository must take the identical path: no
@@ -3458,6 +3480,7 @@ test_fork_split_unlanded_work_still_refuses
 test_fork_split_unreadable_push_url_refuses
 test_fork_split_content_only_on_upstream_allows
 test_fork_split_unread_push_url_refuses
+test_unread_origin_enumeration_refuses_local_fallback
 test_single_remote_repo_names_no_landing_ref
 test_dirty_worktree_refuses
 test_spawn_turnend_artifacts_are_not_dirty_work

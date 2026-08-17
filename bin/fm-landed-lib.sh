@@ -212,10 +212,10 @@ fm_landed_push_target_ref() {  # <dir> <name>
 # Refresh the push remote's trunk into that private ref. TOUCHES THE NETWORK, so
 # only a caller that already refreshes remotes should call it.
 # 0 when there provably was nothing to refresh (no distinct push url) or the
-# refresh succeeded; 1 when the landing target went unread - because a distinct
+# refresh succeeded; 2 when the landing target went unread - because a distinct
 # push url exists but its trunk could not be fetched, OR because whether there is
 # a distinct push url could not be read at all.
-# A caller must treat that 1 as unverifiable and refuse: the landing target is
+# A caller must treat that 2 as unverifiable and refuse: the landing target is
 # precisely the ref it could not read, so nothing it can still reach is evidence
 # that the work landed.
 fm_landed_refresh_push_target() {  # <dir> <name>
@@ -223,9 +223,9 @@ fm_landed_refresh_push_target() {  # <dir> <name>
   url=$(fm_landed_push_url "$dir")
   status=$?
   [ "$status" -eq 1 ] && return 0
-  [ "$status" -eq 0 ] || return 1
-  ref=$(fm_landed_push_target_ref "$dir" "$name") || return 1
-  git -C "$dir" fetch --quiet "$url" "+refs/heads/$name:$ref" >/dev/null 2>&1 || return 1
+  [ "$status" -eq 0 ] || return 2
+  ref=$(fm_landed_push_target_ref "$dir" "$name") || return 2
+  git -C "$dir" fetch --quiet "$url" "+refs/heads/$name:$ref" >/dev/null 2>&1 || return 2
   return 0
 }
 

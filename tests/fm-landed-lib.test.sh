@@ -235,7 +235,7 @@ test_unreadable_push_target_is_not_reported_as_absent() {
 
   drive_faulted 'remote get-url --push' fm_landed_refresh_push_target "$proj" main >/dev/null 2>&1
   status=$?
-  expect_code 1 "$status" "a refresh whose target could not even be named reports the target unread, not 'nothing to refresh'"
+  expect_code 2 "$status" "a refresh whose target could not even be named reports the target unread, not 'nothing to refresh'"
 
   pass "an unreadable push target is never reported as 'no distinct push target'"
 }
@@ -349,13 +349,11 @@ test_no_read_failure_anywhere_can_produce_a_definite_answer() {
   sweep_entry_point 0 2 "candidate_refs (no split)" fm_landed_candidate_refs "$plain" main
   sweep_entry_point 0 2 "candidate_refs (split)" fm_landed_candidate_refs "$split" main
   sweep_entry_point 1 2 "candidate_refs (proven empty)" fm_landed_candidate_refs "$plain" no-such-trunk
-  # fm_landed_refresh_push_target is two-valued by construction: its 1 already
-  # means "the landing target went unread", so that is its could-not-observe.
-  # Both shapes are swept: with provably nothing to refresh, and with a real
+  # Both refresh shapes are swept: with provably nothing to refresh, and with a real
   # fetch of the fork trunk, which is the only read in this library that leaves
   # the repository.
-  sweep_entry_point 0 1 "refresh_push_target (nothing to refresh)" fm_landed_refresh_push_target "$plain" main
-  sweep_entry_point 0 1 "refresh_push_target (fetches the fork trunk)" fm_landed_refresh_push_target "$split" main
+  sweep_entry_point 0 2 "refresh_push_target (nothing to refresh)" fm_landed_refresh_push_target "$plain" main
+  sweep_entry_point 0 2 "refresh_push_target (fetches the fork trunk)" fm_landed_refresh_push_target "$split" main
 
   # tree_contains measures a ref against the worktree's own HEAD, so it is swept
   # from inside a worktree in both of its definite directions.

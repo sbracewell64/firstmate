@@ -129,12 +129,12 @@ $ git show <pre-fix-rev>:bin/fm-landed-lib.sh > /tmp/old-landed-lib.sh
 # with the suite's fault-injecting git shim on PATH, against the fetch/push split fixture:
   fm_landed_push_url            -> 1 (want 2)
   fm_landed_push_target_ref     -> 1 (want 2)
-  fm_landed_refresh_push_target -> 0 (want 1)
+  fm_landed_refresh_push_target -> 0 (want 2)
   candidate_refs status         -> 0 (want 2), list non-empty: yes, landing ref present: no
   failing read #1..#5           -> status 0 (want 2)
 ```
 
-Post-fix, the same measurements return 2, 2, 1, 2 and 2 for every read index, with the list still non-empty and still missing the landing ref - the list is unchanged and only the completeness claim moved, which is the whole correction.
+Post-fix, the same measurements return 2, 2, 2, 2 and 2 for every read index, with the list still non-empty and still missing the landing ref - the list is unchanged and only the completeness claim moved, which is the whole correction.
 
 Run the controls:
 
