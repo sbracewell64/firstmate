@@ -199,6 +199,17 @@ case "$PER_PAGE" in ''|*[!0-9]*|0) refuse_usage "--per-page must be a positive w
 [ -z "$MAX_PAGES" ] || case "$MAX_PAGES" in ''|*[!0-9]*|0) refuse_usage "--max-pages must be a positive whole number" ;; esac
 case "$MAX_RECORDS" in ''|*[!0-9]*) refuse_usage "--max-records must be a whole number" ;; esac
 
+validate_ere() {  # <option> <expression>
+  local option=$1 expression=$2 status
+  [ -n "$expression" ] || return 0
+  printf '' | grep -qE -- "$expression"
+  status=$?
+  [ "$status" -le 1 ] || refuse_usage "$option expression is unevaluable"
+}
+
+validate_ere --discover "$DISCOVER"
+validate_ere --applicable "$APPLICABLE"
+
 # --- resolve the source ------------------------------------------------------
 
 FIRST_URL=

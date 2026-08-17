@@ -405,6 +405,53 @@ test_complete_retrieval_with_exactly_one_ruling() {
   pass "exactly one applicable ruling is found and identified, so the suite is not vacuous"
 }
 
+test_unevaluable_discovery_expression_fails_closed() {
+  local fix
+  fix=$(fixture_new invalid-discover)
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7 ship it')")"
+  run_read "$fix" --discover '[' --identity req-7 --applicable APPROVE --claim exists
+  assert_field "$RECORD" retrieval unobserved "unevaluable discovery expression"
+  assert_field "$RECORD" reason usage_error "unevaluable discovery expression"
+  assert_field "$RECORD" conclusion INDETERMINATE "unevaluable discovery expression"
+  assert_contains "$RECORD" "--discover expression is unevaluable" \
+    "the refusal did not identify the discovery expression"
+  expect_code 2 "$RC" "an unevaluable discovery expression cannot report presence or absence"
+  pass "an unevaluable discovery expression is could-not-observe"
+}
+
+test_unevaluable_applicability_expression_fails_closed() {
+  local fix
+  fix=$(fixture_new invalid-applicable)
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7 ship it')")"
+  run_read "$fix" --discover req-7 --identity req-7 --applicable '[' --claim exists
+  assert_field "$RECORD" retrieval unobserved "unevaluable applicability expression"
+  assert_field "$RECORD" reason usage_error "unevaluable applicability expression"
+  assert_field "$RECORD" conclusion INDETERMINATE "unevaluable applicability expression"
+  assert_contains "$RECORD" "--applicable expression is unevaluable" \
+    "the refusal did not identify the applicability expression"
+  expect_code 2 "$RC" "an unevaluable applicability expression cannot report presence or absence"
+  pass "an unevaluable applicability expression is could-not-observe"
+}
+
+test_valid_selection_expressions_remain_non_vacuous() {
+  local fix
+  fix=$(fixture_new valid-expressions)
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7 ship it')")"
+  run_read "$fix" --discover 'req-[0-9]+' --identity req-7 \
+    --applicable 'APPROVE|REJECT' --claim exists
+  assert_field "$RECORD" conclusion PRESENT "valid selection expression match"
+  expect_code 0 "$RC" "valid selection expressions still find a genuine match"
+  run_read "$fix" --discover 'req-[0-9]+' --identity req-8 \
+    --applicable 'APPROVE|REJECT' --claim exists
+  assert_field "$RECORD" retrieval complete "valid selection expression absence"
+  assert_field "$RECORD" conclusion ABSENT "valid selection expression absence"
+  expect_code 1 "$RC" "valid selection expressions still prove a genuine absence"
+  pass "valid discovery and applicability expressions still reach present and absent"
+}
+
 # --- retrieval-layer failures ------------------------------------------------
 
 test_absent_reader_tool_is_could_not_observe() {
@@ -1074,6 +1121,9 @@ run test_identity_followed_by_sentence_punctuation_matches
 run test_prefix_collision_is_not_a_match
 run test_complete_retrieval_with_genuine_absence
 run test_complete_retrieval_with_exactly_one_ruling
+run test_unevaluable_discovery_expression_fails_closed
+run test_unevaluable_applicability_expression_fails_closed
+run test_valid_selection_expressions_remain_non_vacuous
 run test_absent_reader_tool_is_could_not_observe
 run test_schema_movement_fails_closed
 run test_record_without_identity_field_fails_closed
