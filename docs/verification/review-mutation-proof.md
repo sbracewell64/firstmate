@@ -231,7 +231,7 @@ global label would let a single relabelling silently re-attribute every row.
 | fm verify transports the result | D01 D05 D18 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `d0a92a82` |
 | a symlinked target path is refused | D16 | `the refusal must name what it saw (missing: 'not a regular file')` | `d0a92a82` |
 | a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `d0a92a82` |
-| verification record inventory matches executed controls | D26 D27 D28 | `the documented control count (1) must equal the suite's declared control count (31)` | `d0a92a82` |
+| verification record inventory matches declared controls | D26 D27 D28 | `the documented control count (1) must equal the suite's declared control count (31)` | `d0a92a82` |
 
 ## What is not covered
 
