@@ -138,6 +138,30 @@ FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 
 The trailing `FM_TEST_CONTRACT` line is the suite's own guard against a declared case silently not running: it fails unless every `test_*` function defined in the file also reported a pass.
 
+The delivery revalidation on 2026-08-17 also checked the maintained documentation inventory and the repository's pinned shell lint definition:
+
+```sh
+$ bash tests/fm-landing-authorization.test.sh && bin/fm-doc-audience-check.sh && bin/fm-lint.sh
+ok - a fresh, correctly bound, unspent authorization is consumed successfully
+ok - a second spend is refused and performs no act
+ok - a head other than the approved one is refused
+ok - a moved forge head is refused even when the caller states the approved head
+ok - a restart inside the spend window leaves a determinable state
+ok - an authorization for a superseded request is refused
+ok - minting requires a ruled request and an authorizing verdict
+ok - minting the same ruling twice grants one authorization
+ok - a correlation record filed under another id is refused
+ok - an unobservable head stops the spend without destroying the authorization
+ok - a spend already in flight is refused
+ok - a partial enumeration is could-not-observe rather than a short list
+ok - reconciliation cannot reclaim a live spender's authorization
+ok - malformed authorization ids cannot address the store
+ok - malformed or misbound authorization records are unreadable
+FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
+fm-doc-audience-check: ok surfaces=83 local_links=291
+fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
+```
+
 ## The restart window, stated precisely
 
 The spend writes its intent before the act and its outcome after, so a process killed between them leaves a durable record that says a spend began and does not say how it ended.
