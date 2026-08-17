@@ -119,6 +119,16 @@ A detector for it would emit confident false positives - which is this exact fai
 It does not establish that the established claim is true, that the two claims differ in meaning, that the gap condition is real, or that the named check has this defect.
 Crediting it with any of those would be a `wrong-subject` finding against this tool, and the axis would be `property`.
 
+## The instance this tool committed
+
+`bin/fm-wrong-subject.sh check` tested whether its input was readable, and credited that with whether its input could be consumed.
+A directory passes a readability test, and the read then died at exit 1 - the code reserved for a form that was examined and found wanting.
+So a could-not-observe was reported as a definite negative, on the `property` axis, inside the tool built to name that failure, and a reviewer found it rather than its author.
+
+Take it as the measure of how hard this class is to see from inside.
+The surrounding reasoning was sound, the suite was green, and all three of its own values were documented and deliberately chosen.
+None of that was evidence against the class, which is exactly why a reviewer needs to be able to name it rather than argue it into existence each time.
+
 ## What this is not
 
 It is not a gate.

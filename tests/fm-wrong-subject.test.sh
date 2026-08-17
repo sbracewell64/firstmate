@@ -158,19 +158,32 @@ test_check_refuses_a_block_whose_derived_line_was_edited() {
 }
 
 test_check_is_three_valued_with_distinct_exit_codes() {
-  local complete incomplete unreadable out rc
+  local complete incomplete unreadable directory permission_denied out rc
   complete="$TMP_ROOT/three-complete.txt"
   incomplete="$TMP_ROOT/three-incomplete.txt"
   unreadable="$TMP_ROOT/three-prose.txt"
+  directory="$TMP_ROOT/three-directory"
+  permission_denied="$TMP_ROOT/three-permission-denied.txt"
   render_valid >"$complete"
   render_valid | grep -v '^  gap:' >"$incomplete"
   printf 'a report with no finding block in it at all\n' >"$unreadable"
+  mkdir "$directory"
+  render_valid >"$permission_denied"
+  chmod 000 "$permission_denied"
 
   "$WS" check "$complete" >/dev/null 2>&1 && rc=0 || rc=$?
   expect_code 0 "$rc" "FORM_COMPLETE did not exit 0"
 
   "$WS" check "$incomplete" >/dev/null 2>&1 && rc=0 || rc=$?
   expect_code 1 "$rc" "FORM_INCOMPLETE did not exit 1"
+
+  out=$("$WS" check "$directory" 2>&1) && rc=0 || rc=$?
+  expect_code 3 "$rc" "a directory passed as input did not report could-not-observe"
+  assert_contains "$out" 'FORM_UNREADABLE' "a directory was not reported unreadable"
+
+  out=$("$WS" check "$permission_denied" 2>&1) && rc=0 || rc=$?
+  expect_code 3 "$rc" "an unreadable present file did not report could-not-observe"
+  assert_contains "$out" 'FORM_UNREADABLE' "an unreadable present file was not reported unreadable"
 
   # An input holding no block is could-not-observe, never a clean file: a run
   # that examined nothing has established nothing. This is the case an exit

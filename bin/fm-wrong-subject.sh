@@ -311,7 +311,7 @@ cmd_check() {
   local axis='' seen='' examined='' credited='' credited_as='' key val
 
   [ -n "$src" ] || die "check needs a path or - (see --help)"
-  if [ "$src" != '-' ] && [ ! -r "$src" ]; then
+  if [ "$src" != '-' ] && { [ ! -f "$src" ] || [ ! -r "$src" ]; }; then
     printf 'FORM_UNREADABLE input=%s reason=not-readable\n' "$src"
     return 3
   fi
