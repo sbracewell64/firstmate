@@ -61,7 +61,7 @@ TMP_ROOT=$(fm_test_tmproot fm-landing-auth) || exit 1
 # would couple the two exactly where they are meant to be separable.
 new_case() {  # <name> [<request-id>] [<state>] [<verdict>] [<head>]
   local name=$1 rid=${2:-fm-ob-abcdef123456} state=${3:-ruled} verdict=${4:-accepted}
-  local head=${5:-$HEAD_A} dir real_ps
+  local head=${5:-$HEAD_A} dir real_perl
   dir="$TMP_ROOT/$name"
   mkdir -p "$dir/home/data/outbound-artifacts" "$dir/fakebin" || return 1
   printf '%s\n' "$head" > "$dir/forge_head"
@@ -103,18 +103,20 @@ case $value in
 esac
 SH
   chmod +x "$dir/fakebin/gh" || return 1
-  real_ps=$(command -v ps) || return 1
-  cat > "$dir/fakebin/ps" <<SH
+  real_perl=$(command -v perl) || return 1
+  cat > "$dir/fakebin/perl" <<SH
 #!/usr/bin/env bash
-if [ "\${1:-}" = -e ] && [ "\${2:-}" = -o ] && [ "\${3:-}" = pgid= ]; then
-  case \$(cat '$dir/ps_mode' 2>/dev/null) in
-    EMPTY) exit 0 ;;
-    TRUNCATED) printf '999999\\n'; exit 0 ;;
+if [ "\${1:-}" = -e ] && [[ "\${2:-}" = *FM_AUTH_GROUP_PROBE* ]]; then
+  case \$(cat '$dir/group_probe_mode' 2>/dev/null) in
+    ALIVE) exit 0 ;;
+    ESRCH) exit 3 ;;
+    EPERM) exit 5 ;;
+    OTHER) exit 4 ;;
   esac
 fi
-exec '$real_ps' "\$@"
+exec '$real_perl' "\$@"
 SH
-  chmod +x "$dir/fakebin/ps" || return 1
+  chmod +x "$dir/fakebin/perl" || return 1
   printf '%s\n' "$dir"
 }
 
@@ -157,7 +159,7 @@ mint_id() {  # <dir> [<request-id>]
 
 set_forge_head() { printf '%s\n' "$2" > "$1/forge_head"; }
 
-set_ps_mode() { printf '%s\n' "$2" > "$1/ps_mode"; }
+set_group_probe_mode() { printf '%s\n' "$2" > "$1/group_probe_mode"; }
 
 fm_auth_id_shape() {  # <candidate>
   printf '%s' "${1:-}" | grep -Eq '^fm-auth-[0-9a-f]{32}$'
@@ -356,13 +358,11 @@ test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   expect_code 4 "$rc" "restart: reconciliation reclaimed while the act child lived: $out"
   : > "$dir/act-release"
   wait_for_group_exit "$CRASH_GROUP" || fail "restart: blocking act group did not exit"
-  set_ps_mode "$dir" EMPTY
+  set_group_probe_mode "$dir" EPERM
   out=$(run_auth "$dir" reconcile "$id" --observed not-applied --evidence 'pr 7 shows no merge commit' 2>&1); rc=$?
-  expect_code 4 "$rc" "restart: empty group snapshot reclaimed the authorization: $out"
-  set_ps_mode "$dir" TRUNCATED
-  out=$(run_auth "$dir" reconcile "$id" --observed not-applied --evidence 'pr 7 shows no merge commit' 2>&1); rc=$?
-  expect_code 4 "$rc" "restart: truncated group snapshot reclaimed the authorization: $out"
-  set_ps_mode "$dir" NORMAL
+  expect_code 4 "$rc" "restart: permission-denied group probe reclaimed the authorization: $out"
+  assert_contains "$out" "still exists" "restart: permission denial did not establish group existence"
+  set_group_probe_mode "$dir" ESRCH
   out=$(run_auth "$dir" reconcile "$id" --observed not-applied --evidence 'pr 7 shows no merge commit' 2>&1)
   assert_contains "$out" "granted" "restart: reconciling not-applied did not restore the authority"
   act=$(act_script "$dir")

@@ -275,8 +275,25 @@ claim_release() {
   CLAIM=
 }
 
+claim_group_state() {  # <process-group>
+  local rc
+  perl -e '
+    my $marker = "FM_AUTH_GROUP_PROBE";
+    my $group = shift;
+    exit 0 if kill 0, -$group;
+    exit 3 if $!{ESRCH};
+    exit 5 if $!{EPERM};
+    exit 4;' "$1"
+  rc=$?
+  case $rc in
+    0|5) printf 'live\n' ;;
+    3) printf 'gone\n' ;;
+    *) printf 'unobserved\n' ;;
+  esac
+}
+
 claim_owner_state() {  # <auth-id>
-  local dir pid identity group current current_group proc_root groups self_group snapshot_state
+  local dir pid identity group current current_group proc_root
   dir=$(auth_claim_path "$1") || { printf 'unobserved\n'; return; }
   pid=$(cat "$dir/owner-pid" 2>/dev/null) \
     && identity=$(cat "$dir/owner-identity" 2>/dev/null) \
@@ -299,33 +316,14 @@ claim_owner_state() {  # <auth-id>
       return
     fi
   fi
-  groups=$(LC_ALL=C ps -e -o pgid= 2>/dev/null) \
-    || { printf 'unobserved\n'; return; }
-  self_group=$(ps -o pgid= -p "${BASHPID:-$$}" 2>/dev/null | tr -d '[:space:]') \
-    || { printf 'unobserved\n'; return; }
-  case $self_group in ''|*[!0-9]*) printf 'unobserved\n'; return ;; esac
-  printf '%s\n' "$groups" | awk -v wanted="$group" -v self="$self_group" '
-    BEGIN { valid=1 }
-    NF != 1 || $1 !~ /^[0-9]+$/ { valid=0; next }
-    { seen=1 }
-    $1 == self { self_seen=1 }
-    $1 == wanted { wanted_seen=1 }
-    END {
-      if (!seen || !valid || !self_seen) exit 2
-      if (wanted_seen) exit 0
-      exit 1
-    }'
-  snapshot_state=$?
-  case $snapshot_state in
-    0) printf 'live\n' ;;
-    1) printf 'gone\n' ;;
-    *) printf 'unobserved\n' ;;
-  esac
+  claim_group_state "$group"
 }
 
+CLAIM_OWNER_STATE=
 claim_reclaim_gone() {  # <auth-id>
   local dir
-  [ "$(claim_owner_state "$1")" = gone ] || return 1
+  CLAIM_OWNER_STATE=$(claim_owner_state "$1")
+  [ "$CLAIM_OWNER_STATE" = gone ] || return 1
   dir=$(auth_claim_path "$1") || return 1
   rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group" || return 1
   rmdir "$dir" 2>/dev/null || return 1
@@ -624,9 +622,14 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   [ -n "$evidence" ] || die "reconcile needs --evidence naming what was observed" 2
 
   if ! claim_acquire "$id"; then
-    claim_reclaim_gone "$id" \
-      || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
-        "the spender claim for $id is live or could not be observed as gone"
+    if ! claim_reclaim_gone "$id"; then
+      if [ "$CLAIM_OWNER_STATE" = live ]; then
+        unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "the spender process group for $id still exists"
+      fi
+      unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "the spender process group for $id could not be observed as gone"
+    fi
   fi
 
   auth_read "$id"; rc=$?
