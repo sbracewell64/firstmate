@@ -427,12 +427,35 @@ qualification_backlog_park() {  # <activation-id>
 # Is this workflow still live, according to the one fact that owns it?
 # 0 = live, 1 = finished or absent, EXIT_UNOBSERVED = the owner could not answer.
 qualification_backlog_live() {  # <activation-id>
-  local state
+  local state out rc=0
   qualification_backlog_available || return "$EXIT_UNOBSERVED"
-  state=$(tasks-axi show "$1" --json 2>/dev/null | jq -r '.state // .task.state // empty' 2>/dev/null) || return "$EXIT_UNOBSERVED"
+  out=$(tasks-axi show "$1" 2>&1) || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    case "$out" in *NOT_FOUND*) return 1 ;; *) return "$EXIT_UNOBSERVED" ;; esac
+  fi
+  state=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*state:[[:space:]]*//p' | head -1)
   [ -n "$state" ] || return 1
   [ "$state" != "done" ] || return 1
   return 0
+}
+
+qualification_dependents() {  # <activation-id>
+  local id=$1 snapshot rows
+  if [ -n "${FM_DECISION_SURFACE_SNAPSHOT:-}" ]; then
+    [ -f "$FM_DECISION_SURFACE_SNAPSHOT" ] || return "$EXIT_UNOBSERVED"
+    snapshot=$(cat "$FM_DECISION_SURFACE_SNAPSHOT" 2>/dev/null) || return "$EXIT_UNOBSERVED"
+  else
+    snapshot=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-fleet-snapshot.sh" --json 2>/dev/null) \
+      || return "$EXIT_UNOBSERVED"
+  fi
+  rows=$(printf '%s\n' "$snapshot" | jq -ec --arg id "$id" '
+    if (.backlog.records | type) != "array" then error("backlog records unavailable")
+    else [.backlog.records[]?
+          | select((.blocked_by_ids // []) | index($id))
+          | .id]
+    end
+  ' 2>/dev/null) || return "$EXIT_UNOBSERVED"
+  printf '%s\n' "$rows" | jq -r '.[]' 2>/dev/null || return "$EXIT_UNOBSERVED"
 }
 
 activation_field() {  # <file> <key>
@@ -888,21 +911,29 @@ cmd_resolve() {
   # this way the worst case is that the work is briefly blocked on both, which is
   # safe and clears itself on the next close.
   if [ "$RESULT" = FAILED ]; then
-    local advance_out advance_rc=0
+    local advance_out advance_rc=0 dependents dependent advanced=0
     ROUTE=$(activation_field "$file" route || true)
-    BLOCKS=$blocks
+    dependents=$(qualification_dependents "$id") || {
+      printf 'fm-qualification: the dependents of %s COULD NOT BE OBSERVED from the fleet snapshot, so it stays open and none can be released\n' "$id" >&2
+      return "$EXIT_UNOBSERVED"
+    }
     printf 'fm-qualification: %s is observed FAILED. The exclusion evidence for %s against %s is PRESERVED; evaluating the next promising candidate now\n' \
       "$id" "$model" "$contract" >&2
-    advance_out=$(cmd_activate 2>&1) || advance_rc=$?
-    printf '%s\n' "$advance_out" >&2
-    if [ "$advance_rc" -ne 0 ] \
-       && ! { [ "$advance_rc" -eq "$EXIT_REFUSED" ] && printf '%s' "$advance_out" | grep -qF "$FM_QUAL_TOKEN_NO_PROMISING"; }; then
-      # Advancement neither succeeded nor established that there is nothing left
-      # to try. That is could-not-observe, and this workflow stays OPEN so the
-      # work is not released on an unfinished search.
-      printf 'fm-qualification: advancement from %s COULD NOT BE OBSERVED, so it stays open and the blocked work is neither released nor stranded\n' "$id" >&2
-      return "$EXIT_UNOBSERVED"
-    fi
+    while IFS= read -r dependent; do
+      [ -n "$dependent" ] || [ "$advanced" -eq 0 ] || continue
+      BLOCKS=$dependent
+      advance_rc=0
+      advance_out=$(cmd_activate 2>&1) || advance_rc=$?
+      printf '%s\n' "$advance_out" >&2
+      if [ "$advance_rc" -ne 0 ] \
+         && ! { [ "$advance_rc" -eq "$EXIT_REFUSED" ] && printf '%s' "$advance_out" | grep -qF "$FM_QUAL_TOKEN_NO_PROMISING"; }; then
+        printf 'fm-qualification: advancement from %s COULD NOT BE OBSERVED, so it stays open and the blocked work is neither released nor stranded\n' "$id" >&2
+        return "$EXIT_UNOBSERVED"
+      fi
+      advanced=1
+    done <<EOF
+${dependents:-}
+EOF
     if ! qualification_backlog_close "$id"; then
       printf 'fm-qualification: the backlog owner did not confirm closing %s, so it stays open and re-runnable; the successor already holds the dependency and nothing is stranded\n' "$id" >&2
       return "$EXIT_UNOBSERVED"

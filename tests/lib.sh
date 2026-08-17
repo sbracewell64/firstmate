@@ -677,17 +677,15 @@ case "\$cmd" in
     printf 'ok: done %s\n' "\$id"
     ;;
   show)
-    id=\$1
+    id=\$1; shift
+    case "\${1:-}" in ''|--full) ;; *) printf 'error: "unknown flag %s"\ncode: VALIDATION_ERROR\n' "\$1" >&2; exit 1 ;; esac
     state=\$(awk -v i="\$id" '\$1 == i { print \$2; exit }' "\$store" 2>/dev/null)
     hold_kind=\$(awk -F '\t' -v i="\$id" '\$1 == i { print \$2; exit }' "\$holds" 2>/dev/null)
     hold_reason=\$(awk -F '\t' -v i="\$id" '\$1 == i { print \$3; exit }' "\$holds" 2>/dev/null)
-    [ -n "\$state" ] || { printf 'error: "task %s not found"\ncode: VALIDATION_ERROR\n' "\$id" >&2; exit 1; }
-    case " \$* " in
-      *" --json "*) printf '{"id":"%s","state":"%s","hold_kind":"%s","hold_reason":"%s"}\n' "\$id" "\$state" "\$hold_kind" "\$hold_reason" ;;
-      *) printf 'task: %s state: %s\n' "\$id" "\$state" ;;
-    esac
+    [ -n "\$state" ] || { printf 'error: "task %s not found"\ncode: NOT_FOUND\n' "\$id" >&2; exit 1; }
+    printf 'task: %s\n state: %s\n hold-kind: %s\n hold-reason: %s\n' "\$id" "\$state" "\$hold_kind" "\$hold_reason"
     ;;
-  *) printf 'ok\n' ;;
+  *) printf 'error: "unknown command %s"\ncode: VALIDATION_ERROR\n' "\$cmd" >&2; exit 1 ;;
 esac
 exit 0
 SH

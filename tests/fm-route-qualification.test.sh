@@ -258,6 +258,17 @@ write_snapshot() {  # <path> [live-task-id]
   fi
 }
 
+write_snapshot_dependents() {  # <path> <blocker> <dependent>...
+  local path=$1 blocker=$2 dependent rows='[]'
+  shift 2
+  for dependent in "$@"; do
+    rows=$(printf '%s' "$rows" | jq -c --arg id "$dependent" --arg blocker "$blocker" \
+      '. + [{id:$id, structured:true, blocked_by_ids:[$blocker]}]')
+  done
+  jq -n --argjson rows "$rows" '{tasks: [], main_inventory: {valid: true, reason: null, orphan_in_flight: []},
+    backlog: {records: $rows}, generated: "2026-08-17T00:00:00Z"}' > "$path"
+}
+
 make_home() {  # <name> [plain]
   local name=$1 shape=${2:-requiring} home fakebin
   home="$TMP_ROOT/$name/home"
@@ -373,15 +384,33 @@ test_the_fixture_refuses_what_the_real_tool_refuses() {
     || fail "the fixture could not create a task"
   PATH="$FAKEBIN:$PATH" tasks-axi block real-work --by a-real-blocker >/dev/null 2>&1 \
     || fail "the fixture refused a block whose blocker exists; it now refuses everything, which is the opposite vacuity"
+  out=$(PATH="$FAKEBIN:$PATH" tasks-axi show a-real-blocker 2>&1) \
+    || fail "the fixture refused the flag-free show invocation used by qualification"
+  assert_contains "$out" "state: queued" "the fixture show output does not expose the TOON state line"
+  PATH="$FAKEBIN:$PATH" tasks-axi show a-real-blocker --json >/dev/null 2>&1 \
+    && fail "the fixture accepted show --json even though the real tool rejects that flag"
+  PATH="$FAKEBIN:$PATH" tasks-axi hold a-real-blocker --reason "Firstmate decision required" --kind parked >/dev/null 2>&1 \
+    || fail "the fixture refused the parked hold used by qualification"
+  PATH="$FAKEBIN:$PATH" tasks-axi done a-real-blocker >/dev/null 2>&1 \
+    || fail "the fixture refused the done invocation used by qualification"
 
   # 3. DIFFERENTIAL against the real binary where it is installed. The fake's
   #    verdict must match the real tool's on the same call.
   if command -v tasks-axi >/dev/null 2>&1 && [ "$(command -v tasks-axi)" != "$FAKEBIN/tasks-axi" ]; then
-    local real_dir real_rc=0
+    local real_dir real_rc=0 real_invalid_rc=0
     real_dir=$(mktemp -d "$TMP_ROOT/realaxi.XXXXXX")
     printf 'backend = "markdown"\n\n[markdown]\npath = "backlog.md"\narchive = "done-archive.md"\ndone_keep = 10\n' > "$real_dir/.tasks.toml"
     ( cd "$real_dir" && tasks-axi add real-work "the blocked work" >/dev/null 2>&1 \
-      && tasks-axi block real-work --by not-a-task >/dev/null 2>&1 ) || real_rc=$?
+      && tasks-axi add a-real-blocker "workflow" >/dev/null 2>&1 \
+      && tasks-axi show a-real-blocker >/dev/null 2>&1 \
+      && tasks-axi block real-work --by a-real-blocker >/dev/null 2>&1 \
+      && tasks-axi hold a-real-blocker --reason "Firstmate decision required" --kind parked >/dev/null 2>&1 \
+      && tasks-axi done a-real-blocker >/dev/null 2>&1 ) || real_rc=$?
+    [ "$real_rc" -eq 0 ] || fail "the real tasks-axi refused a qualification invocation the fixture accepts"
+    ( cd "$real_dir" && tasks-axi show real-work --json >/dev/null 2>&1 ) || real_invalid_rc=$?
+    [ "$real_invalid_rc" -ne 0 ] || fail "the real tasks-axi unexpectedly accepted show --json"
+    real_rc=0
+    ( cd "$real_dir" && tasks-axi block real-work --by not-a-task >/dev/null 2>&1 ) || real_rc=$?
     [ "$real_rc" -ne 0 ] \
       || fail "the REAL tasks-axi accepted a block with a non-existent blocker, so this fleet's blocker contract is not what the fixture models"
   else
@@ -817,6 +846,7 @@ test_failure_automatically_advances_to_the_next_candidate() {
   run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks some-work >/dev/null 2>&1 \
     || fail "activation failed"
   write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
+  write_snapshot_dependents "$SNAPSHOT" "$AID_BETA" some-work
   out=$(run_qual "$HOME_DIR" resolve "$AID_BETA" --result FAILED) || rc=$?
   expect_code 1 "$rc" "a recorded failure did not remain distinguishable"
   assert_present "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
@@ -824,6 +854,30 @@ test_failure_automatically_advances_to_the_next_candidate() {
   assert_contains "$out" "evaluating the next promising candidate now" \
     "failure did not perform the route-owned transition"
   pass "failure automatically advances to the next candidate"
+}
+
+test_failure_advances_every_derived_dependent() {
+  local rec out rc=0 first_block second_block predecessor_done
+  rec=$(make_home faileddependents); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks some-work >/dev/null 2>&1 \
+    || fail "first activation failed"
+  run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks runtime-task >/dev/null 2>&1 \
+    || fail "duplicate activation failed"
+  write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
+  write_snapshot_dependents "$SNAPSHOT" "$AID_BETA" some-work runtime-task
+  out=$(run_qual "$HOME_DIR" resolve "$AID_BETA" --result FAILED) || rc=$?
+  expect_code 1 "$rc" "a recorded failure did not remain distinguishable"
+  assert_grep "block some-work --by $AID_ALPHA" "$TASKS_LOG" \
+    "the first derived dependent was not attached to the successor"
+  assert_grep "block runtime-task --by $AID_ALPHA" "$TASKS_LOG" \
+    "the duplicate derived dependent was released without qualification"
+  first_block=$(grep -nF "block some-work --by $AID_ALPHA" "$TASKS_LOG" | tail -1 | cut -d: -f1)
+  second_block=$(grep -nF "block runtime-task --by $AID_ALPHA" "$TASKS_LOG" | tail -1 | cut -d: -f1)
+  predecessor_done=$(grep -nF "done $AID_BETA" "$TASKS_LOG" | tail -1 | cut -d: -f1)
+  [ "$first_block" -lt "$predecessor_done" ] && [ "$second_block" -lt "$predecessor_done" ] \
+    || fail "the predecessor closed before every dependent was attached to its successor"
+  pass "failure advances every fleet-derived dependent before closing"
 }
 
 test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route() {
@@ -973,6 +1027,7 @@ test_failed_advancement_error_remains_observable_and_nonterminal() {
   run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks some-work >/dev/null 2>&1 \
     || fail "activation failed"
   write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
+  write_snapshot_dependents "$SNAPSHOT" "$AID_BETA" some-work
   tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
   jq '.rules = [.rules[] | select(.route != "R-GENHARD")]' "$HOME_DIR/config/crew-dispatch.json" > "$tmp" \
     && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
@@ -1020,7 +1075,7 @@ test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded() {
     "the spent bound resolved the blocked dependency without a qualification outcome"
   assert_grep "hold $AID_ALPHA --reason Qualification attempt budget is spent and Firstmate must decide whether to raise the bound or abandon this qualification --kind parked" "$TASKS_LOG" \
     "the spent workflow was not parked with the operational decision it needs"
-  [ "$(PATH="$FAKEBIN:$PATH" tasks-axi show "$AID_ALPHA" --json | jq -r '.hold_kind')" = parked ] \
+  [ "$(PATH="$FAKEBIN:$PATH" tasks-axi show "$AID_ALPHA" | awk -F ': ' '$1 ~ /hold-kind/ { print $2; exit }')" = parked ] \
     || fail "the spent workflow is not parked under the backlog owner"
   pass "a spent workflow stays open and parked for Firstmate"
 }
@@ -1124,6 +1179,7 @@ test_a_could_not_observe_result_spends_one_attempt_and_stays_active
 test_a_failed_result_is_terminal_and_preserves_the_exclusion
 test_an_asserted_failure_without_a_matching_record_is_refused
 test_failure_automatically_advances_to_the_next_candidate
+test_failure_advances_every_derived_dependent
 test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route
 test_bootstrap_dispatch_refuses_a_substituted_worker
 test_qualified_resolution_requires_a_confirmed_close

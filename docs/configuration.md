@@ -764,7 +764,7 @@ The CANDIDATE is the worker, dispatched on a bootstrap route it already qualifie
 
 `bin/fm-qualification.sh resolve <activation-id> --result <RESULT>` closes it.
 `QUALIFIED` is verified against the register before it is accepted and then closes the workflow item - and closing it is what returns the same work identity to normal eligibility, with its identity, custody and budget unchanged and no unblock call that could fail afterwards.
-`FAILED` preserves the exclusion, activates the next promising candidate FIRST so the successor already holds the dependency, and only then closes this item.
+`FAILED` preserves the exclusion, derives every dependent identity from the fleet snapshot's backlog edges, activates the next promising candidate FIRST for each dependent so the successor already holds every dependency, and only then closes this item.
 `COULD_NOT_OBSERVE` is nonterminal: it spends one attempt, records nothing against the binding, and leaves the item open.
 `loopspecs/terminal-states.json` carries these outcomes as source `role-qualification`, and deliberately gives could-not-observe no row, because an unmade observation is not an ending; an exhausted qualification bound leaves the workflow open under a `parked` backlog hold whose reason assigns Firstmate the operational decision to raise the bound or abandon the qualification.
 
