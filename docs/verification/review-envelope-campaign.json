@@ -1,733 +1,733 @@
 {
   "environment": "Linux 6.18.33.2-microsoft-standard-WSL2",
-  "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+  "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
   "mutations": [
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "green-baseline",
       "observed": "not ok - a complete candidate is review-ready: expected exit 0, got 1",
       "output_bytes": 70,
       "output_sha256": "sha256:fc41d0d3a226bdee516323d274ed966865bf6f1cec05506bf3be8893d2a35baf",
       "property": "a complete candidate is review-ready",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.gu3078wg/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:46.748205872 -0400\n@@ -1139,7 +1139,7 @@\n             \"base_commit\": base_commit,\n             \"declared_base_commit\": candidate_in.get(\"base_commit\"),\n             \"head_ref\": head_ref,\n-            \"head_commit\": head_commit,\n+            \"head_commit\": base_commit,\n             \"declared_head_commit\": candidate_in.get(\"head_commit\"),\n             \"head_tree\": head_tree,\n             \"merge_base\": merge_base,\n",
-      "replay_patch_sha256": "sha256:2ec88f77fce19f0eded77d3dc6d40333f9e49519ccee32a70ae9b2e4bfc228b2"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.t4lyqh1t/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:18.937527487 -0400\n@@ -1194,7 +1194,7 @@\n             \"base_commit\": base_commit,\n             \"declared_base_commit\": candidate_in.get(\"base_commit\"),\n             \"head_ref\": head_ref,\n-            \"head_commit\": head_commit,\n+            \"head_commit\": base_commit,\n             \"declared_head_commit\": candidate_in.get(\"head_commit\"),\n             \"head_tree\": head_tree,\n             \"merge_base\": merge_base,\n",
+      "replay_patch_sha256": "sha256:6bd5e0a782da8be698f61b30fca56738ca86886f9395faa03cb44cbb1a361f16"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "mandatory-rule-ignored",
       "observed": "not ok - a mandatory contract and a contract whose paths changed are both required",
       "output_bytes": 259,
       "output_sha256": "sha256:88afb53ddf813b0d5531da3008b1c151fa36829a70f3ab619178e7c5073b5a7a",
       "property": "required contracts are computed from the changed files",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.0se96tos/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:47.019438241 -0400\n@@ -1016,7 +1016,7 @@\n         contract_id = rule.get(\"contract_id\")\n         if not contract_id:\n             raise Unobservable(\"inputs_malformed\", \"an applicability rule names no contract\")\n-        if rule.get(\"mandatory\"):\n+        if False:\n             required_ids.add(contract_id)\n             continue\n         for path_rule in as_list(rule, \"paths\"):\n",
-      "replay_patch_sha256": "sha256:e701967da7378b7b94203bece62cafefe532ecc3463783e362ec8dce74865f73"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.1cgr83on/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:19.219698903 -0400\n@@ -1054,7 +1054,7 @@\n         contract_id = rule.get(\"contract_id\")\n         if not contract_id:\n             raise Unobservable(\"inputs_malformed\", \"an applicability rule names no contract\")\n-        if rule.get(\"mandatory\"):\n+        if False:\n             required_ids.add(contract_id)\n             continue\n         for path_rule in as_list(rule, \"paths\"):\n",
+      "replay_patch_sha256": "sha256:de38a9ad16db66ad74189f13ff535852a188bd30a986bf2b643cf1fec9bfb97d"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "timestamp-in-body",
       "observed": "not ok - nothing time-varying may sit inside the digested body",
       "output_bytes": 535,
       "output_sha256": "sha256:fae7d6c7031cbd4301b5e46a61577ae8ef04f6b9e469cf59b340550f3d02074b",
       "property": "identical facts produce an identical digest",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.68dg8ott/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:47.463992089 -0400\n@@ -1133,6 +1133,7 @@\n             },\n             \"policy\": {\"version\": policy[\"version\"], \"max_base_behind_main\": bound},\n             \"requested_decision\": requested_decision,\n+            \"compiled_at\": now_utc(),\n         },\n         \"candidate\": {\n             \"base_ref\": base_ref,\n",
-      "replay_patch_sha256": "sha256:7f278ab1e230784deceb5af52d946f5195f37b5cf165aade3beeb38d305d9c97"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.gwnhi0qh/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:19.676446424 -0400\n@@ -1188,6 +1188,7 @@\n             },\n             \"policy\": {\"version\": policy[\"version\"], \"max_base_behind_main\": bound},\n             \"requested_decision\": requested_decision,\n+            \"compiled_at\": now_utc(),\n         },\n         \"candidate\": {\n             \"base_ref\": base_ref,\n",
+      "replay_patch_sha256": "sha256:f2f5e280e0b56aacd05f76ff9a9aca62630828669f77cdc73a175bf667483776"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "head-move-unchecked",
       "observed": "not ok - a stale envelope refuses: expected exit 1, got 0",
-      "output_bytes": 694,
-      "output_sha256": "sha256:bde558a09efc9e0f09bb62549137f33fa93fcff18b2d1410808e3df02f0ffb97",
+      "output_bytes": 1039,
+      "output_sha256": "sha256:c0193a6def2299d84270293be04fe34f6d4f55127f32da6886204b2f19daa078",
       "property": "a stale envelope refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.dbkl8p0e/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:49.201940087 -0400\n@@ -1277,7 +1277,7 @@\n         problems.unobserve(\n             \"candidate_unresolvable\", candidate[\"head_ref\"], \"the candidate reference is gone\"\n         )\n-    elif head_now != candidate[\"head_commit\"]:\n+    elif False:\n         problems.refuse(\n             \"candidate_head_moved\",\n             candidate[\"head_ref\"],\n",
-      "replay_patch_sha256": "sha256:52bfd2d471030158a39c3acd3dcf12840b03dda63acf67e91ab2cc8b51d3f651"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.8ub28j0m/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:21.462651016 -0400\n@@ -1349,7 +1349,7 @@\n         problems.unobserve(\n             \"candidate_unresolvable\", candidate[\"head_ref\"], \"the candidate reference is gone\"\n         )\n-    elif head_now != candidate[\"head_commit\"]:\n+    elif False:\n         problems.refuse(\n             \"candidate_head_moved\",\n             candidate[\"head_ref\"],\n",
+      "replay_patch_sha256": "sha256:a32b3c040c6b1b1195959d6a01124a81576323b1f56c404bc5f935c25300dfc6"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "trunk-distance-unchecked",
       "observed": "not ok - the refusal must name the policy bound it exceeded (missing: 'refusal base_behind_main_exceeds_policy')",
-      "output_bytes": 1229,
-      "output_sha256": "sha256:8dfae1069d08f94a48dd259e77699ad3b8425c1ecea8c91c6bd82556291cd95c",
+      "output_bytes": 1574,
+      "output_sha256": "sha256:1c010e14f54dcb5c8f7ea5e57d848b9316cecfcd8c1c52adee02c02ba08ff003",
       "property": "a base that falls behind the trunk refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.8h3cu6vp/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:51.890385208 -0400\n@@ -1317,7 +1317,7 @@\n         problems.unobserve(\n             \"repository_unreadable\", \"base_behind_main\", \"the trunk distance is unreadable\"\n         )\n-    elif behind > allowed:\n+    elif False:\n         problems.refuse(\n             \"base_behind_main_exceeds_policy\",\n             candidate[\"base_ref\"],\n",
-      "replay_patch_sha256": "sha256:91e6a26d26cf48f0b1b4697ea6f3c4d752e5fe2e52daeaf15fd5a41f1982e967"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.brw4khi8/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:27.936815036 -0400\n@@ -1389,7 +1389,7 @@\n         problems.unobserve(\n             \"repository_unreadable\", \"base_behind_main\", \"the trunk distance is unreadable\"\n         )\n-    elif behind > allowed:\n+    elif False:\n         problems.refuse(\n             \"base_behind_main_exceeds_policy\",\n             candidate[\"base_ref\"],\n",
+      "replay_patch_sha256": "sha256:37a8f91941977082350e0a2c301206864b6cb747bfeb941ec5ce18ebc5e80f02"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "asserted-head-believed",
       "observed": "not ok - a head asserted in prose that the repository contradicts refuses: expected exit 1, got 0",
-      "output_bytes": 889,
-      "output_sha256": "sha256:5009bc51b9af79ce794f6f0a445b65584b7825906000207d264b5bf77ef699a9",
+      "output_bytes": 1234,
+      "output_sha256": "sha256:3eb3b52154b261b97ec9473b864b326b5cde9f7a28a511513c3ad2f35ff952f0",
       "property": "an asserted head the repository contradicts refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.ja6bf67z/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:54.804673264 -0400\n@@ -1362,7 +1362,7 @@\n         )\n \n     declared_head = candidate.get(\"declared_head_commit\")\n-    if declared_head and declared_head != candidate[\"head_commit\"]:\n+    if False:\n         problems.refuse(\n             \"declared_head_mismatch\",\n             candidate[\"head_ref\"],\n",
-      "replay_patch_sha256": "sha256:4b1bc0bcf12a902db6f55043e7aaca7045416538cb96b3c8c4e8c75fb45443da"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.2kibriih/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:34.653405364 -0400\n@@ -1434,7 +1434,7 @@\n         )\n \n     declared_head = candidate.get(\"declared_head_commit\")\n-    if declared_head and declared_head != candidate[\"head_commit\"]:\n+    if False:\n         problems.refuse(\n             \"declared_head_mismatch\",\n             candidate[\"head_ref\"],\n",
+      "replay_patch_sha256": "sha256:df67a7d8a2ad4a28b07b1cd86ef78e9a1a4fea0a2028777457347f53b7deaccf"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "body-digest-untrusted",
       "observed": "not ok - the refusal must name the broken content address (missing: 'refusal envelope_digest_mismatch')",
-      "output_bytes": 1526,
-      "output_sha256": "sha256:ee1abd03fd76015a75d309110601e6457e598aea38a9b48d6f9a609c42dc02e1",
+      "output_bytes": 1871,
+      "output_sha256": "sha256:0ab865bb3cd43f2a12cf26672118e3e96da7fa04b1844d6301f564121a3366aa",
       "property": "a tampered envelope body refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.l8ububox/bin/fm-review-envelope-lib.sh\t2026-08-17 00:13:57.901014883 -0400\n@@ -2007,7 +2007,7 @@\n         )\n     document, body, stored, path = read_envelope(args.envelope, \"envelope_unreadable\")\n     recomputed = digest_of(body)\n-    if recomputed != stored:\n+    if False:\n         return refused(\n             \"envelope_digest_mismatch\",\n             str(path),\n",
-      "replay_patch_sha256": "sha256:b22b4a5d3b3da27bfd366ede1037ce6584bb501e0cfba6517926ba3b12948c97"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.fq5044ra/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:41.570816369 -0400\n@@ -2079,7 +2079,7 @@\n         )\n     document, body, stored, path = read_envelope(args.envelope, \"envelope_unreadable\")\n     recomputed = digest_of(body)\n-    if recomputed != stored:\n+    if False:\n         return refused(\n             \"envelope_digest_mismatch\",\n             str(path),\n",
+      "replay_patch_sha256": "sha256:760b7fc9ea494627723cd3f7110c3d87f10be9de1f9a00d920844eec8fcf7289"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "overwrite-allowed",
       "observed": "not ok - overwriting an envelope is could-not-observe: expected exit 2, got 0",
-      "output_bytes": 1039,
-      "output_sha256": "sha256:632ab99417d9c276307bba8c85210fee9967512e9b39ab7c9e6f4d787eb20529",
+      "output_bytes": 1384,
+      "output_sha256": "sha256:0edd9b92570cc29a988270028d85d3e5810e519cf22c0f2c4fec4e825a37fa38",
       "property": "an envelope is written once",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.mpzn9evc/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:01.259518173 -0400\n@@ -1945,7 +1945,7 @@\n         if not getattr(args, name):\n             raise Unobservable(\"usage_error\", \"prepare requires --\" + name.replace(\"_\", \"-\"))\n     target = os.path.join(args.out, \"envelope.json\")\n-    if os.path.exists(target):\n+    if False:\n         raise Unobservable(\n             \"envelope_exists\",\n             \"an envelope is written once; supersede a generation, never overwrite one\",\n",
-      "replay_patch_sha256": "sha256:d5140ac32f3901a2ed5a92c92aad0851a961e21fb5a43f10aadbbd0c75d025c8"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.uolz0qbp/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:48.712134915 -0400\n@@ -2017,7 +2017,7 @@\n         if not getattr(args, name):\n             raise Unobservable(\"usage_error\", \"prepare requires --\" + name.replace(\"_\", \"-\"))\n     target = os.path.join(args.out, \"envelope.json\")\n-    if os.path.exists(target):\n+    if False:\n         raise Unobservable(\n             \"envelope_exists\",\n             \"an envelope is written once; supersede a generation, never overwrite one\",\n",
+      "replay_patch_sha256": "sha256:50a1da8851a26d5c4eb96b1cfe647aa5985ae5ad36b94c350ce40ebc6d02abe8"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "missing-contract-ignored",
       "observed": "not ok - a required contract with no reference refuses: expected exit 1, got 0",
-      "output_bytes": 1140,
-      "output_sha256": "sha256:224ae73b1c4be34adbce9bc7131eb128aba2d16a1184cd740b53ef55fba8d15a",
+      "output_bytes": 1485,
+      "output_sha256": "sha256:ad4db3a4e1672f129a7e26a845ad6d9570aad690ad86cd7e9590e501bfec0786",
       "property": "a missing required contract refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.gnw8e3bq/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:04.828192070 -0400\n@@ -1499,11 +1499,6 @@\n     for contract_id in envelope[\"verification\"][\"required_contract_ids\"]:\n         contract = contracts.get(str(contract_id))\n         if contract is None:\n-            problems.refuse(\n-                \"missing_required_verification_contract\",\n-                contract_id,\n-                \"this candidate requires a contract with no reference in the envelope\",\n-            )\n             continue\n         if not contract.get(\"digest\"):\n             problems.refuse(\n",
-      "replay_patch_sha256": "sha256:d8eb8164eb464faa28e8f134bf918d67c8aa1cb1be2c278ebf32368ad87e1441"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.3y9gukz3/bin/fm-review-envelope-lib.sh\t2026-08-17 02:47:55.985351297 -0400\n@@ -1571,11 +1571,6 @@\n     for contract_id in envelope[\"verification\"][\"required_contract_ids\"]:\n         contract = contracts.get(str(contract_id))\n         if contract is None:\n-            problems.refuse(\n-                \"missing_required_verification_contract\",\n-                contract_id,\n-                \"this candidate requires a contract with no reference in the envelope\",\n-            )\n             continue\n         if not contract.get(\"digest\"):\n             problems.refuse(\n",
+      "replay_patch_sha256": "sha256:cc34d71052cfc137410fdd4a53095c89bfbaad11845f4ad52aa19f3c9301ed93"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "missing-result-ignored",
       "observed": "not ok - a required contract with no result refuses: expected exit 1, got 0",
-      "output_bytes": 1223,
-      "output_sha256": "sha256:e0d4311295b90c1898ec7f0920a8fb12e0b67e1b155595a78ec243f4d7d5d3df",
+      "output_bytes": 1568,
+      "output_sha256": "sha256:ed9417d50e95daba23d38c6c732936e7cbf6b42b86336504296cd84bca3acc17",
       "property": "a missing required verifier result refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.so8z7r_c/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:08.545502664 -0400\n@@ -1520,9 +1520,6 @@\n                 if world is None or result.get(\"world\") == world\n             ]\n             if not matching:\n-                problems.refuse(\n-                    \"missing_required_verifier_result\", label, \"no verifier result covers this world\"\n-                )\n                 continue\n             for result in matching:\n                 if result.get(\"contract_digest\") != contract.get(\"digest\"):\n",
-      "replay_patch_sha256": "sha256:bf87f0c5d2eafb810fdde3657e843a93b4c805878505f39f2a2ed219f6c8c953"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.koqtjog6/bin/fm-review-envelope-lib.sh\t2026-08-17 02:48:03.632056594 -0400\n@@ -1592,9 +1592,6 @@\n                 if world is None or result.get(\"world\") == world\n             ]\n             if not matching:\n-                problems.refuse(\n-                    \"missing_required_verifier_result\", label, \"no verifier result covers this world\"\n-                )\n                 continue\n             for result in matching:\n                 if result.get(\"contract_digest\") != contract.get(\"digest\"):\n",
+      "replay_patch_sha256": "sha256:f8cc0c0c3f206cfd8cba39bdc526d3b0703d5555bea93403f0b3ea730ba38bff"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "result-head-unchecked",
       "observed": "not ok - a result bound to another head refuses: expected exit 1, got 0",
-      "output_bytes": 1510,
-      "output_sha256": "sha256:1f38f7a98a99ec9a64ef5f1532206ede6d2d3938f8e52edd0a89d8b05d4f68dd",
+      "output_bytes": 1855,
+      "output_sha256": "sha256:ba90429d2b4fa45548ef1bdaf302042739ada6644b6d77f79ece18da45fa7f2d",
       "property": "a verifier result bound to another head refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.9rh0ekv0/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:12.361096069 -0400\n@@ -1545,7 +1545,7 @@\n             label,\n             \"the result names no verifier id and digest, so what produced it is not identified\",\n         )\n-    if result.get(\"head\") != candidate[\"head_commit\"]:\n+    if False:\n         problems.refuse(\n             \"required_verifier_wrong_head\",\n             label,\n",
-      "replay_patch_sha256": "sha256:aed21e3eb6e065f05c8c20d024f51b6e24a0b36567cede22bad731fdf0d2fa12"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.6uyjwu4k/bin/fm-review-envelope-lib.sh\t2026-08-17 02:48:11.216764789 -0400\n@@ -1617,7 +1617,7 @@\n             label,\n             \"the result names no verifier id and digest, so what produced it is not identified\",\n         )\n-    if result.get(\"head\") != candidate[\"head_commit\"]:\n+    if False:\n         problems.refuse(\n             \"required_verifier_wrong_head\",\n             label,\n",
+      "replay_patch_sha256": "sha256:6274ca2892e0df43613dd3d56f2096956e4acbd9c176ccf0b52bd2dfa3adb1df"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "calibration-not-required",
       "observed": "not ok - a passing verifier never observed failing refuses: expected exit 1, got 0",
-      "output_bytes": 1653,
-      "output_sha256": "sha256:d2822468ebb1bf7e741f1cbf35c05161f58e9265f6911fe85042eacbfed20d75",
+      "output_bytes": 1998,
+      "output_sha256": "sha256:95e6d49f559334a857e506418053150c406349e50431ac73dcdabdc570d23cd1",
       "property": "a missing red calibration refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.1s77ev3s/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:18.273985088 -0400\n@@ -1571,11 +1571,6 @@\n     check_evidence(problems, label, result.get(\"evidence\"), evidence_root, recheck_evidence)\n     calibration = result.get(\"red_calibration\")\n     if not isinstance(calibration, dict):\n-        problems.refuse(\n-            \"missing_red_calibration\",\n-            label,\n-            \"a passing required verifier that was never observed failing proves nothing\",\n-        )\n         return\n     if str(calibration.get(\"observed_result\") or \"\").upper() != \"FAIL\":\n         problems.refuse(\n",
-      "replay_patch_sha256": "sha256:46da757d10e8cb0712cbe75a2e37e49c472021f4ed1410d791cdb53cb3e72707"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.shlmr3q4/bin/fm-review-envelope-lib.sh\t2026-08-17 02:48:20.973405490 -0400\n@@ -1643,11 +1643,6 @@\n     check_evidence(problems, label, result.get(\"evidence\"), evidence_root, recheck_evidence)\n     calibration = result.get(\"red_calibration\")\n     if not isinstance(calibration, dict):\n-        problems.refuse(\n-            \"missing_red_calibration\",\n-            label,\n-            \"a passing required verifier that was never observed failing proves nothing\",\n-        )\n         return\n     if str(calibration.get(\"observed_result\") or \"\").upper() != \"FAIL\":\n         problems.refuse(\n",
+      "replay_patch_sha256": "sha256:2f317798eafce5444681ca7149e08311f4df1e3ca66814ea7795a49d881342d3"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "calibration-outcome-unchecked",
       "observed": "not ok - a calibration that never went red refuses: expected exit 1, got 0",
-      "output_bytes": 1716,
-      "output_sha256": "sha256:da5cb316540bd82986e47458ca8c47caf1f325d994feea70f5066f328f784908",
+      "output_bytes": 2061,
+      "output_sha256": "sha256:8084a06a6fb260eb3295e50e9dd93e43a847201d22ae0fc5e3d7b8aa0a453ba2",
       "property": "a red calibration that records a pass refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.zzv8c4cz/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:24.547631185 -0400\n@@ -1577,7 +1577,7 @@\n             \"a passing required verifier that was never observed failing proves nothing\",\n         )\n         return\n-    if str(calibration.get(\"observed_result\") or \"\").upper() != \"FAIL\":\n+    if False:\n         problems.refuse(\n             \"red_calibration_not_adverse\",\n             label,\n",
-      "replay_patch_sha256": "sha256:f9f97945f333a874a1311ea3c088e521dab1ec5cf0449efabb2f244d62327c12"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.whqc45lh/bin/fm-review-envelope-lib.sh\t2026-08-17 02:48:31.135382528 -0400\n@@ -1649,7 +1649,7 @@\n             \"a passing required verifier that was never observed failing proves nothing\",\n         )\n         return\n-    if str(calibration.get(\"observed_result\") or \"\").upper() != \"FAIL\":\n+    if False:\n         problems.refuse(\n             \"red_calibration_not_adverse\",\n             label,\n",
+      "replay_patch_sha256": "sha256:0d8d520aa9a6504c45871e7b21ed965df0be9eb322762c8dd1399aa1c2125238"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "cno-laundered",
       "observed": "not ok - a could-not-observe verifier is not a pass: expected exit 2, got 0",
-      "output_bytes": 1794,
-      "output_sha256": "sha256:c7746f1e1bacd0c9cb40510bccf40fb5fcd72d61ae9eee8e72f7d898c7fd1cc1",
+      "output_bytes": 2139,
+      "output_sha256": "sha256:39aa607a0e3556ecb6c21e392035d2ee922c4562bcd588e26392c063d9d47993",
       "property": "a could-not-observe verifier cannot become review-ready",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.d99ithp4/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:30.930182802 -0400\n@@ -1564,10 +1564,7 @@\n         problems.refuse(\"required_verifier_failed\", label, str(result.get(\"detail\") or \"\"))\n         return\n     if outcome != \"PASS\":\n-        problems.unobserve(\n-            \"required_verifier_unproven\", label, \"the verifier returned \" + (outcome or \"no result\")\n-        )\n-        return\n+        pass\n     check_evidence(problems, label, result.get(\"evidence\"), evidence_root, recheck_evidence)\n     calibration = result.get(\"red_calibration\")\n     if not isinstance(calibration, dict):\n",
-      "replay_patch_sha256": "sha256:e8de321b3a8076b2e5be2f9e95cee567c16a65b2e14774e6a38ab585bd65db05"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.887dl48w/bin/fm-review-envelope-lib.sh\t2026-08-17 02:48:41.355268605 -0400\n@@ -1636,10 +1636,7 @@\n         problems.refuse(\"required_verifier_failed\", label, str(result.get(\"detail\") or \"\"))\n         return\n     if outcome != \"PASS\":\n-        problems.unobserve(\n-            \"required_verifier_unproven\", label, \"the verifier returned \" + (outcome or \"no result\")\n-        )\n-        return\n+        pass\n     check_evidence(problems, label, result.get(\"evidence\"), evidence_root, recheck_evidence)\n     calibration = result.get(\"red_calibration\")\n     if not isinstance(calibration, dict):\n",
+      "replay_patch_sha256": "sha256:2585a68e9c0896a8ad8e1fc054fb225fcbb4cda69bf5413f039e256810df2cb1"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "evidence-unchecked",
       "observed": "not ok - evidence that no longer matches its digest refuses: expected exit 1, got 0",
-      "output_bytes": 1876,
-      "output_sha256": "sha256:9dd924d2d3c92238ec78f8267e66f608c04613a74e354189dd2644eef95477a7",
+      "output_bytes": 2221,
+      "output_sha256": "sha256:a3d3342710e82757b332fcaddadd262e14840e8b00f606916d2c93e5f25e5bde",
       "property": "a broken evidence digest refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.53676o9k/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:37.583976128 -0400\n@@ -1591,6 +1591,7 @@\n \n \n def check_evidence(problems, label, block, evidence_root, recheck_evidence):\n+    return\n     if not isinstance(block, dict) or not block.get(\"locator\") or not block.get(\"sha256\"):\n         problems.refuse(\"evidence_locator_broken\", label, \"no evidence locator and digest are bound\")\n         return\n",
-      "replay_patch_sha256": "sha256:ccb86a5d11267101733da9058ec47c6823c7c3365eb62a0d6d738fe91159aadf"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.1reg1lkd/bin/fm-review-envelope-lib.sh\t2026-08-17 02:48:51.824373786 -0400\n@@ -1663,6 +1663,7 @@\n \n \n def check_evidence(problems, label, block, evidence_root, recheck_evidence):\n+    return\n     if not isinstance(block, dict) or not block.get(\"locator\") or not block.get(\"sha256\"):\n         problems.refuse(\"evidence_locator_broken\", label, \"no evidence locator and digest are bound\")\n         return\n",
+      "replay_patch_sha256": "sha256:ea74614aeae0552933b50d0bfbf9bf7aa1a94e1f01d617aa39e1aaaae9f0ec5c"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "locator-traversal-allowed",
       "observed": "not ok - a locator escaping its evidence root refuses: expected exit 1, got 0",
-      "output_bytes": 1945,
-      "output_sha256": "sha256:0c348958eccb55176f1a19679fc471828f571ba018ba6dbaebcb3357c6d0ae03",
+      "output_bytes": 2290,
+      "output_sha256": "sha256:361bcd1fa3ffb666f33d635d6ad04e13528b7662961579bed4628c19eed703b4",
       "property": "an evidence locator that escapes its root refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.lgw0vi5e/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:44.354177082 -0400\n@@ -822,7 +822,7 @@\n         return None, \"locator is empty\"\n     if os.path.isabs(locator):\n         return None, \"locator is absolute\"\n-    if any(part in (\"\", \".\", \"..\") for part in locator.split(\"/\")):\n+    if False:\n         return None, \"locator escapes its root\"\n     if root is None:\n         return None, \"no evidence root was supplied\"\n",
-      "replay_patch_sha256": "sha256:e27cf76914d3514cf70b71dd9a12dddf6d38b9840815a2b68441ae70193c9f2a"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.yt8lauoo/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:02.514718436 -0400\n@@ -860,7 +860,7 @@\n         return None, \"locator is empty\"\n     if os.path.isabs(locator):\n         return None, \"locator is absolute\"\n-    if any(part in (\"\", \".\", \"..\") for part in locator.split(\"/\")):\n+    if False:\n         return None, \"locator escapes its root\"\n     if root is None:\n         return None, \"no evidence root was supplied\"\n",
+      "replay_patch_sha256": "sha256:7fa6621df83060995e0bef2d7ab6f9ad8febd684d047abeb0c9f3965f7096caa"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "verifier-identity-unchecked",
       "observed": "not ok - a result that does not identify what produced it refuses: expected exit 1, got 0",
-      "output_bytes": 2119,
-      "output_sha256": "sha256:4ca6d89f24b9e93908b5852c4a2b1ad280376764f09142a96e47e58880acd7ea",
+      "output_bytes": 2464,
+      "output_sha256": "sha256:331278f29314b300c0bf4966d5049d785907f6d516799682f0e206579c385d2b",
       "property": "a result that does not identify its verifier refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.rm4tzq6n/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:51.265812184 -0400\n@@ -1539,7 +1539,7 @@\n \n \n def classify_result(problems, label, result, candidate, evidence_root, recheck_evidence):\n-    if not result.get(\"verifier_id\") or not result.get(\"verifier_digest\"):\n+    if False:\n         problems.refuse(\n             \"verifier_identity_unpinned\",\n             label,\n",
-      "replay_patch_sha256": "sha256:d48514e8773ca1facb0fb96afebcf1f52965c741fa038451c262095b0bde9e70"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.o9n5jbu7/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:13.091980027 -0400\n@@ -1611,7 +1611,7 @@\n \n \n def classify_result(problems, label, result, candidate, evidence_root, recheck_evidence):\n-    if not result.get(\"verifier_id\") or not result.get(\"verifier_digest\"):\n+    if False:\n         problems.refuse(\n             \"verifier_identity_unpinned\",\n             label,\n",
+      "replay_patch_sha256": "sha256:c40444736040fb0e189968e90f0f007aad4fd66510411bc6b0ddcf946c9c7037"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "exact-head-association-lost",
-      "observed": "not ok - a required platform covered only by another head's run refuses: expected exit 1, got 0",
-      "output_bytes": 2189,
-      "output_sha256": "sha256:9fd30a9c69b84f3051e5ccb56694c3019ce182fbe5192f9349be8e8446afeabd",
+      "observed": "not ok - every observable registry path has the declared isolated outcome: expected exit 0, got 1",
+      "output_bytes": 791,
+      "output_sha256": "sha256:e7147ceadd12c75046e7834e4aa324b0799c99010bcb2acc46ab9b1253963612",
       "property": "wrong head ci refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.fwxuhtgk/bin/fm-review-envelope-lib.sh\t2026-08-17 00:14:58.798482266 -0400\n@@ -1063,7 +1063,7 @@\n         }\n         if not attempt_head:\n             head_unknown.append(summary)\n-        elif attempt_head == head_commit:\n+        elif True:\n             exact.append(attempt)\n         else:\n             summary[\"head\"] = str(attempt_head)\n",
-      "replay_patch_sha256": "sha256:f1b6fe71f6a1e5d7b414ef3fe69151dbfad2bbf0f9b71913b7e92f466c959197"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.puu3urch/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:24.450696874 -0400\n@@ -1118,7 +1118,7 @@\n         }\n         if not attempt_head:\n             head_unknown.append(summary)\n-        elif attempt_head == head_commit:\n+        elif True:\n             exact.append(attempt)\n         else:\n             summary[\"head\"] = str(attempt_head)\n",
+      "replay_patch_sha256": "sha256:9e938ebeafbec9989bf7e44b3b284e5607c4aed6cf38fc3fecec9b2d78ca66c0"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "skip-reads-clean",
-      "observed": "not ok - a skipped required check refuses: expected exit 1, got 0",
-      "output_bytes": 2247,
-      "output_sha256": "sha256:301269349005f7cb98a09ebb898a464f98b447a706b922d2155ef6c896b23175",
+      "observed": "not ok - the meaningfully different CI attempt refuses: expected exit 1, got 0",
+      "output_bytes": 862,
+      "output_sha256": "sha256:8282d228fc1f0c12d386ba5db6f6260ff3486cac7cc7c3cb8f3be4f6e7eecb84",
       "property": "a skipped required check refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.us5co197/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:06.557276104 -0400\n@@ -1675,7 +1675,7 @@\n         verdict = worst([check[\"verdict\"] for check in members])\n         if verdict == \"FAILING\":\n             problems.refuse(\"ci_required_check_failing\", platform, \"the current check failed\")\n-        elif verdict == \"SKIPPED\":\n+        elif False:\n             problems.refuse(\"ci_required_check_skipped\", platform, \"the current check was skipped\")\n         elif verdict == \"NO_VERDICT\":\n             problems.refuse(\n",
-      "replay_patch_sha256": "sha256:a1dbc6c5911bbc646aa58e0d418a0c7648b35f79942253dc9015c1b1b08a00ae"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.3wfk1spj/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:27.593671206 -0400\n@@ -1747,7 +1747,7 @@\n         verdict = worst([check[\"verdict\"] for check in members])\n         if verdict == \"FAILING\":\n             problems.refuse(\"ci_required_check_failing\", platform, \"the current check failed\")\n-        elif verdict == \"SKIPPED\":\n+        elif False:\n             problems.refuse(\"ci_required_check_skipped\", platform, \"the current check was skipped\")\n         elif verdict == \"NO_VERDICT\":\n             problems.refuse(\n",
+      "replay_patch_sha256": "sha256:37e55fc4c17a952054da2579ad1e2b37fe574413e2c3218ba42c3f709242b1ad"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "empty-check-set-reads-clean",
       "observed": "not ok - a required platform with no check at all refuses: expected exit 1, got 0",
-      "output_bytes": 2339,
-      "output_sha256": "sha256:a6670cd7fd5a8bd589ce67a822e7cc14045292adca777adf4511263f953cf15f",
+      "output_bytes": 2684,
+      "output_sha256": "sha256:b7624c336db5190c959b05bc901913ebb88eed6651333241404ec30c3cb3f248",
       "property": "an absent required platform refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.d10wmrq8/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:14.312367014 -0400\n@@ -1668,9 +1668,7 @@\n                     \"the only checks for this platform ran against \" + wrong_head_platforms[platform][\"head\"],\n                 )\n             else:\n-                problems.refuse(\n-                    \"ci_required_platform_uncovered\", platform, \"no check at the candidate head covers it\"\n-                )\n+                pass\n             continue\n         verdict = worst([check[\"verdict\"] for check in members])\n         if verdict == \"FAILING\":\n",
-      "replay_patch_sha256": "sha256:46239060e1f92844d9ac20b2ef058f65c1e29919187723f49fce9dff84107dcb"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.jle0x8px/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:33.049641574 -0400\n@@ -1740,9 +1740,7 @@\n                     \"the only checks for this platform ran against \" + wrong_head_platforms[platform][\"head\"],\n                 )\n             else:\n-                problems.refuse(\n-                    \"ci_required_platform_uncovered\", platform, \"no check at the candidate head covers it\"\n-                )\n+                pass\n             continue\n         verdict = worst([check[\"verdict\"] for check in members])\n         if verdict == \"FAILING\":\n",
+      "replay_patch_sha256": "sha256:5d258fae99b8e337e24e29a567f48a8a9a786cb23f52d00f85f9d4783f778bbd"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "pending-reads-clean",
       "observed": "not ok - a check still running has reached no verdict: expected exit 2, got 0",
-      "output_bytes": 2423,
-      "output_sha256": "sha256:1d45ae895ee72f208085b764f6022d6ac697c6bcecd79d8ca10fc2d7783d3086",
+      "output_bytes": 2768,
+      "output_sha256": "sha256:790ae21e4eb8a295a7f8017b2a2205dbdfb5b54be5162f3019f8dbfd8eae696a",
       "property": "a pending required check is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.1po2tbyg/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:22.390050714 -0400\n@@ -1682,9 +1682,7 @@\n                 \"ci_required_check_no_verdict\", platform, \"the current check completed without a verdict\"\n             )\n         elif verdict == \"PENDING\":\n-            problems.unobserve(\n-                \"ci_required_check_pending\", platform, \"the current check has not completed\"\n-            )\n+            pass\n \n \n def classify_obligations(problems, envelope, ruling_index, evidence_root, recheck_evidence):\n",
-      "replay_patch_sha256": "sha256:68ecf6d81af2e0f0f7c5ffc5ce2ad9f7157370e2130586d06df89ee209f8d11c"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.1xdgp0oe/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:45.054511084 -0400\n@@ -1754,9 +1754,7 @@\n                 \"ci_required_check_no_verdict\", platform, \"the current check completed without a verdict\"\n             )\n         elif verdict == \"PENDING\":\n-            problems.unobserve(\n-                \"ci_required_check_pending\", platform, \"the current check has not completed\"\n-            )\n+            pass\n \n \n def classify_obligations(problems, envelope, ruling_index, evidence_root, recheck_evidence):\n",
+      "replay_patch_sha256": "sha256:96749029ba80264042702bb67f4238516a5dca5ca0f9b8707127a2da53a9b1fd"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "undecidable-resolved-anyway",
       "observed": "not ok - the refusal must name the check whose current attempt is undecidable (missing: 'refusal ci_duplicate_attempt_undecidable')",
-      "output_bytes": 2935,
-      "output_sha256": "sha256:7d5f63e6ded77436993592d050d12f042cf4b47b0e5253506cd69eb643666e03",
+      "output_bytes": 3280,
+      "output_sha256": "sha256:47ab8ed21c9f7d85c01c40f7497821ae07a71d67e8fe883758116aa43152f33a",
       "property": "duplicate attempts with no ordering refuse",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.hr7ku0nr/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:30.506384274 -0400\n@@ -758,7 +758,7 @@\n         members = groups[key]\n         orders = [member.get(\"order\") for member in members]\n         usable = all(isinstance(order, int) for order in orders)\n-        if len(members) > 1 and not usable:\n+        if False:\n             checks.append(\n                 {\n                     \"workflow\": key[0],\n",
-      "replay_patch_sha256": "sha256:a051a2e907c6752dd29d2aeb59aa6ae199ed3e2911046d5a60a30998f372263b"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.k5eyic72/bin/fm-review-envelope-lib.sh\t2026-08-17 02:49:56.955797978 -0400\n@@ -796,7 +796,7 @@\n         members = groups[key]\n         orders = [member.get(\"order\") for member in members]\n         usable = all(isinstance(order, int) for order in orders)\n-        if len(members) > 1 and not usable:\n+        if False:\n             checks.append(\n                 {\n                     \"workflow\": key[0],\n",
+      "replay_patch_sha256": "sha256:bf234bffd7a90055354518c45cf065dacb9e407f4c5de57b549696c1e81a3496"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "check-keyed-by-name-alone",
       "observed": "not ok - one workflow's pass must not mask another workflow's failure: expected exit 1, got 0",
-      "output_bytes": 2708,
-      "output_sha256": "sha256:859da6717005dc37338d3277d940ef1f0731ccac1b621ad800763f776d806375",
+      "output_bytes": 3053,
+      "output_sha256": "sha256:a9ec671ba8707e0f27cbce7d7b01c61e65a4db90c1b0fe5bd55eef10de3c3f12",
       "property": "two workflows sharing a check name stay two checks",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.uzbjgrx3/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:38.851390612 -0400\n@@ -751,7 +751,7 @@\n     for index, attempt in enumerate(attempts):\n         name = str(attempt.get(\"name\") or \"\")\n         workflow = str(attempt.get(\"workflow\") or \"\")\n-        key = (workflow, name) if name else (\"\", \"#\" + str(index))\n+        key = (\"\", name) if name else (\"\", \"#\" + str(index))\n         groups.setdefault(key, []).append(attempt)\n     checks = []\n     for key in sorted(groups):\n",
-      "replay_patch_sha256": "sha256:14c38c4c8d26b96a51a4d19d8d5fe20e61e41f6a9737a3e3585946c199c44dba"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.5obuegfb/bin/fm-review-envelope-lib.sh\t2026-08-17 02:50:09.266914954 -0400\n@@ -789,7 +789,7 @@\n     for index, attempt in enumerate(attempts):\n         name = str(attempt.get(\"name\") or \"\")\n         workflow = str(attempt.get(\"workflow\") or \"\")\n-        key = (workflow, name) if name else (\"\", \"#\" + str(index))\n+        key = (\"\", name) if name else (\"\", \"#\" + str(index))\n         groups.setdefault(key, []).append(attempt)\n     checks = []\n     for key in sorted(groups):\n",
+      "replay_patch_sha256": "sha256:85221137416ee804e2c51890da277d5adc27f08da0bdcfa23d3e0f5e1ccbb6d4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "rerun-not-superseded",
-      "observed": "not ok - a superseded failure must not block its own successful rerun: expected exit 0, got 1",
-      "output_bytes": 2623,
-      "output_sha256": "sha256:107e04eba9d57722df461d8ebc39b283ab9c3fe3c50c7201539595490f021523",
+      "observed": "not ok - the first fact order compiles: expected exit 0, got 1",
+      "output_bytes": 558,
+      "output_sha256": "sha256:bcb6545ecda6c9091f1f3f2ff642e283a55037c75b2e8d70600180c35d955184",
       "property": "a superseded failure is replaced by its later rerun",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.knx9dkjl/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:47.494268348 -0400\n@@ -772,7 +772,7 @@\n                 }\n             )\n             continue\n-        current = [m for m in members if m.get(\"order\") == max(orders)] if usable else members\n+        current = members\n         checks.append(\n             {\n                 \"workflow\": key[0],\n",
-      "replay_patch_sha256": "sha256:504d50af8e13da31146ce9b0dd8c6c6d58bac3a9b01b22dc5c7ee1da96414ba1"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.s9yrokv_/bin/fm-review-envelope-lib.sh\t2026-08-17 02:50:21.878563954 -0400\n@@ -810,7 +810,7 @@\n                 }\n             )\n             continue\n-        current = [m for m in members if m.get(\"order\") == max(orders)] if usable else members\n+        current = members\n         checks.append(\n             {\n                 \"workflow\": key[0],\n",
+      "replay_patch_sha256": "sha256:01782fc27c529a69a38c4c305df314da31db67c2a6d29bd69d4fede5d5401da3"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "first-alias-only",
-      "observed": "not ok - a capability whose first alias is absent and whose second is present is observed, not could-not-observe: expected exit 0, got 2",
-      "output_bytes": 2835,
-      "output_sha256": "sha256:ac664cb669a7cdc96ccec979cf803cb44cb47639458310deab56862f7e03983a",
+      "observed": "not ok - every observable registry path has the declared isolated outcome: expected exit 0, got 1",
+      "output_bytes": 791,
+      "output_sha256": "sha256:e7147ceadd12c75046e7834e4aa324b0799c99010bcb2acc46ab9b1253963612",
       "property": "alias fallback resolves a later declared candidate",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.b84nrp6f/bin/fm-review-envelope-lib.sh\t2026-08-17 00:15:56.064514286 -0400\n@@ -669,7 +669,7 @@\n     probes = []\n     selected = None\n     malformed = None\n-    for candidate in candidates:\n+    for candidate in candidates[:1]:\n         if not isinstance(candidate, str) or not candidate:\n             malformed = str(candidate)\n             probes.append({\"candidate\": str(candidate), \"outcome\": \"malformed\"})\n",
-      "replay_patch_sha256": "sha256:b5ae69d0536efd3393292a47113ce09ca4e9c7c8bdbd2e239233936631c40a33"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.0u09_an_/bin/fm-review-envelope-lib.sh\t2026-08-17 02:50:23.794228999 -0400\n@@ -707,7 +707,7 @@\n     probes = []\n     selected = None\n     malformed = None\n-    for candidate in candidates:\n+    for candidate in candidates[:1]:\n         if not isinstance(candidate, str) or not candidate:\n             malformed = str(candidate)\n             probes.append({\"candidate\": str(candidate), \"outcome\": \"malformed\"})\n",
+      "replay_patch_sha256": "sha256:e03d7b53deed97aef8f049325bf85c0ce3fcc155c046fb839c49bb803d272fad"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "exhaustion-reads-clean",
       "observed": "not ok - an exhausted candidate set is could-not-observe: expected exit 2, got 0",
-      "output_bytes": 2876,
-      "output_sha256": "sha256:9a4dbcdcf755c0009a19ad1533e43fdc69edff0c09d56183925b6b75bc6b69d7",
+      "output_bytes": 3221,
+      "output_sha256": "sha256:d6c9c21002af644bbe88b225d41a025ef26a516378232bebf30ed13e9737f848",
       "property": "an exhausted candidate set is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.lbym6y0r/bin/fm-review-envelope-lib.sh\t2026-08-17 00:16:04.946352032 -0400\n@@ -1630,7 +1630,7 @@\n                 + str(capability[\"malformed_candidate\"])\n                 + \" is neither a bare name nor an absolute path\",\n             )\n-        if capability.get(\"required\") and capability.get(\"selected\") is None:\n+        if False:\n             problems.unobserve(\n                 \"capability_unresolved\",\n                 capability[\"id\"],\n",
-      "replay_patch_sha256": "sha256:77e6ef655956b8eb10f370bc07500588bf610263d3e2c385473df35d0e48dc22"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ufdec0v_/bin/fm-review-envelope-lib.sh\t2026-08-17 02:50:27.005814959 -0400\n@@ -1702,7 +1702,7 @@\n                 + str(capability[\"malformed_candidate\"])\n                 + \" is neither a bare name nor an absolute path\",\n             )\n-        if capability.get(\"required\") and capability.get(\"selected\") is None:\n+        if False:\n             problems.unobserve(\n                 \"capability_unresolved\",\n                 capability[\"id\"],\n",
+      "replay_patch_sha256": "sha256:d91504141aadba2aaef12fa42e69ae58ddb3c0250cbf8955019dc5446aa8ab79"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "presence-is-identity",
       "observed": "not ok - the unusable candidate must be recorded as identity_failed, not as absent",
-      "output_bytes": 2979,
-      "output_sha256": "sha256:7b9a46779de217fc028aee7e5ff0fabc477f880fad10556d60ff2fd7b3615034",
+      "output_bytes": 3324,
+      "output_sha256": "sha256:fb6d0e5e883b07a51e0ded308d307fbf27039ccb38151109a08d8649b3b1f9b8",
       "property": "a candidate that will not state its identity is not a selection",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.91l_1ynf/bin/fm-review-envelope-lib.sh\t2026-08-17 00:16:14.132002857 -0400\n@@ -704,7 +704,7 @@\n             )\n             continue\n         identity = (completed.stdout + completed.stderr).strip()\n-        if completed.returncode != 0 or not identity:\n+        if False:\n             probes.append(\n                 {\n                     \"candidate\": candidate,\n",
-      "replay_patch_sha256": "sha256:846f360a82ef86248634ac7807e2660ea485c37e9c7c4795cd7acab70302fa8f"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.egxppjyd/bin/fm-review-envelope-lib.sh\t2026-08-17 02:50:40.125796559 -0400\n@@ -742,7 +742,7 @@\n             )\n             continue\n         identity = (completed.stdout + completed.stderr).strip()\n-        if completed.returncode != 0 or not identity:\n+        if False:\n             probes.append(\n                 {\n                     \"candidate\": candidate,\n",
+      "replay_patch_sha256": "sha256:4352ac26a8c7edaf09a715c308b8886a597e0227c34595ffd6527865bc1881e7"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "dropped-obligation-ignored",
       "observed": "not ok - an obligation that simply disappears refuses: expected exit 1, got 0",
-      "output_bytes": 3056,
-      "output_sha256": "sha256:6d6a0163395315901f4c07b3c33dcf25e5044d58b6e3b9a4f42b05063ff66d09",
+      "output_bytes": 3401,
+      "output_sha256": "sha256:fea4e6c7ba240839f649f7ee0b53011bec4a49b87cbabfc9425f386e7e00879b",
       "property": "a silently dropped obligation refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.r0zrzfv6/bin/fm-review-envelope-lib.sh\t2026-08-17 00:16:23.551163061 -0400\n@@ -1727,11 +1727,6 @@\n     for obligation_id in sorted(prior):\n         disposition = dispositions.get(obligation_id)\n         if disposition is None:\n-            problems.refuse(\n-                \"obligation_dropped\",\n-                obligation_id,\n-                \"a predecessor obligation is unaccounted for; disappearance is not a disposition\",\n-            )\n             continue\n         kind = str(disposition.get(\"disposition\") or \"\").upper()\n         if kind not in DISPOSITIONS:\n",
-      "replay_patch_sha256": "sha256:140afefa15bfa64b823f33b4185048f0b7f123245a9408232afc06a92a30e7d9"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.9zghx8yi/bin/fm-review-envelope-lib.sh\t2026-08-17 02:50:53.341020195 -0400\n@@ -1799,11 +1799,6 @@\n     for obligation_id in sorted(prior):\n         disposition = dispositions.get(obligation_id)\n         if disposition is None:\n-            problems.refuse(\n-                \"obligation_dropped\",\n-                obligation_id,\n-                \"a predecessor obligation is unaccounted for; disappearance is not a disposition\",\n-            )\n             continue\n         kind = str(disposition.get(\"disposition\") or \"\").upper()\n         if kind not in DISPOSITIONS:\n",
+      "replay_patch_sha256": "sha256:61d7816de2a11efd89d23007716a9dc7bb3e0dcbe484106224dad875bbe97a5b"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "obligation-chain-reset",
-      "observed": "not ok - the refusal must name the unaccounted obligation (missing: 'refusal obligation_dropped')",
-      "output_bytes": 3474,
-      "output_sha256": "sha256:91094d85cccc9e447a957b6ec8b5c2094ce6690afa2fd4b20a5bce39afdab8c8",
+      "observed": "not ok - the populated registry fixture compiles to a classified envelope: expected exit 0, got 1",
+      "output_bytes": 729,
+      "output_sha256": "sha256:6bd020f7cc58a46677876ca274e41070f9de68f5b23f85a5a4323b74aadd41db",
       "property": "a silently dropped obligation refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.5c5fw1e2/bin/fm-review-envelope-lib.sh\t2026-08-17 00:16:33.206958922 -0400\n@@ -1111,10 +1111,7 @@\n                 \"the supplied predecessor is \" + recomputed + \", the inputs declare \" + str(predecessor_digest),\n                 str(prior_path),\n             )\n-        predecessor_active = sorted(\n-            str(entry.get(\"id\"))\n-            for entry in as_list(as_dict(prior_body, \"obligations\"), \"active\")\n-        )\n+        predecessor_active = []\n \n     envelope = {\n         \"identity\": {\n",
-      "replay_patch_sha256": "sha256:eae12a79ac7e58470dcdb6e856095e2220a9e4a4e07162862e6e99d8f5f2b49c"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.vkjgido7/bin/fm-review-envelope-lib.sh\t2026-08-17 02:51:06.966197521 -0400\n@@ -1166,10 +1166,7 @@\n                 \"the supplied predecessor is \" + recomputed + \", the inputs declare \" + str(predecessor_digest),\n                 str(prior_path),\n             )\n-        predecessor_active = sorted(\n-            str(entry.get(\"id\"))\n-            for entry in as_list(as_dict(prior_body, \"obligations\"), \"active\")\n-        )\n+        predecessor_active = []\n \n     envelope = {\n         \"identity\": {\n",
+      "replay_patch_sha256": "sha256:93159eba814b223b52bc81912323b3c049b00c8727aedd9437bca8b6df31d0b4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "discharge-still-active",
       "observed": "not ok - explicit accounting for every prior obligation advances: expected exit 0, got 1",
-      "output_bytes": 3143,
-      "output_sha256": "sha256:7f256ecef13e4a4b144ba609e5e0f5e943129e49a8d6b5312361eab484dbc108",
+      "output_bytes": 3488,
+      "output_sha256": "sha256:191d885fed28ef91cdccae2daa73acfe8bd08a27e02a5e2c513fbe234c407558",
       "property": "every prior obligation may be accounted for explicitly",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.aqdoih83/bin/fm-review-envelope-lib.sh\t2026-08-17 00:16:42.820127167 -0400\n@@ -1749,7 +1749,7 @@\n                     \"called preserved but absent from the active set\",\n                 )\n             continue\n-        if obligation_id in active:\n+        if True:\n             problems.refuse(\n                 \"obligation_disposition_contradicts_active_set\",\n                 obligation_id,\n",
-      "replay_patch_sha256": "sha256:42def2ebf49f7073bb1dbccbf8c55863595d8ee8058130836ffcac8f9feacd11"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.q_5ryk39/bin/fm-review-envelope-lib.sh\t2026-08-17 02:51:09.733027539 -0400\n@@ -1821,7 +1821,7 @@\n                     \"called preserved but absent from the active set\",\n                 )\n             continue\n-        if obligation_id in active:\n+        if True:\n             problems.refuse(\n                 \"obligation_disposition_contradicts_active_set\",\n                 obligation_id,\n",
+      "replay_patch_sha256": "sha256:6cb72fbaf9edd61320580e76ce88128efaeda0fd33aca5a7f041c41817bc8203"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "satisfaction-unevidenced",
       "observed": "not ok - satisfaction asserted without evidence refuses: expected exit 1, got 0",
-      "output_bytes": 3217,
-      "output_sha256": "sha256:e23cf88b0d11659962dd867158ed0fa3cbdf1a27287c9a5945aeef501b8431cf",
+      "output_bytes": 3562,
+      "output_sha256": "sha256:b562edb86ef9530c25ccbabd0c606ba1afceb485d8f51d3f8ae7f9265f2b9656",
       "property": "a satisfied obligation without evidence refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.gjx22r6k/bin/fm-review-envelope-lib.sh\t2026-08-17 00:16:52.827209465 -0400\n@@ -1758,11 +1758,7 @@\n         if kind == \"SATISFIED\":\n             block = disposition.get(\"evidence\")\n             if not isinstance(block, dict) or not block.get(\"locator\") or not block.get(\"sha256\"):\n-                problems.refuse(\n-                    \"obligation_satisfied_without_evidence\",\n-                    obligation_id,\n-                    \"satisfaction must name evidence by locator and digest\",\n-                )\n+                pass\n             else:\n                 check_evidence(\n                     problems, \"obligation \" + obligation_id, block, evidence_root, recheck_evidence\n",
-      "replay_patch_sha256": "sha256:9491ff71830d8acac0767094a8f89f6db5755654ac61c248a645ea4b1f6f9cc5"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ioiy2tej/bin/fm-review-envelope-lib.sh\t2026-08-17 02:51:23.452280272 -0400\n@@ -1830,11 +1830,7 @@\n         if kind == \"SATISFIED\":\n             block = disposition.get(\"evidence\")\n             if not isinstance(block, dict) or not block.get(\"locator\") or not block.get(\"sha256\"):\n-                problems.refuse(\n-                    \"obligation_satisfied_without_evidence\",\n-                    obligation_id,\n-                    \"satisfaction must name evidence by locator and digest\",\n-                )\n+                pass\n             else:\n                 check_evidence(\n                     problems, \"obligation \" + obligation_id, block, evidence_root, recheck_evidence\n",
+      "replay_patch_sha256": "sha256:171bd8baa5fce75740f7b5eb9481e662db824e0dc6aceccde0b0de81178526e9"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "preservation-unchecked",
       "observed": "not ok - an obligation called preserved but absent refuses: expected exit 1, got 0",
-      "output_bytes": 3287,
-      "output_sha256": "sha256:fde644d30386fbe1892e247c3e99fe6c54c2544a36529231dc929062711d7026",
+      "output_bytes": 3632,
+      "output_sha256": "sha256:2dae1f5fb4a344d99bb745c63200e7fa3e79bd923149ec6bfd912aaeae8658ef",
       "property": "a preserved obligation missing from the active set refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.9i6h2d3y/bin/fm-review-envelope-lib.sh\t2026-08-17 00:17:02.985449589 -0400\n@@ -1743,11 +1743,7 @@\n             continue\n         if kind == \"PRESERVED\":\n             if obligation_id not in active:\n-                problems.refuse(\n-                    \"obligation_preserved_but_absent\",\n-                    obligation_id,\n-                    \"called preserved but absent from the active set\",\n-                )\n+                pass\n             continue\n         if obligation_id in active:\n             problems.refuse(\n",
-      "replay_patch_sha256": "sha256:2188adc66e287ebf335619a50270509b42789981a8e9e401c08743b1ac1b4eba"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.25iv9le5/bin/fm-review-envelope-lib.sh\t2026-08-17 02:51:37.639727340 -0400\n@@ -1815,11 +1815,7 @@\n             continue\n         if kind == \"PRESERVED\":\n             if obligation_id not in active:\n-                problems.refuse(\n-                    \"obligation_preserved_but_absent\",\n-                    obligation_id,\n-                    \"called preserved but absent from the active set\",\n-                )\n+                pass\n             continue\n         if obligation_id in active:\n             problems.refuse(\n",
+      "replay_patch_sha256": "sha256:a1329deb495f8c7f67755597e631757b3335002ca8672848796d1afe0c4200ba"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "supersession-unchecked",
       "observed": "not ok - supersession pointing at nothing refuses: expected exit 1, got 0",
-      "output_bytes": 3355,
-      "output_sha256": "sha256:a97c4909897e6037efcc1f013258a263465948ac31e316a38f76cc212feb922e",
+      "output_bytes": 3700,
+      "output_sha256": "sha256:896b21f155397cbb4d926b80f0481a8abf7da6533306ab00cf30d98b7c2819bc",
       "property": "a superseded obligation without a replacement refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red._kw9vesz/bin/fm-review-envelope-lib.sh\t2026-08-17 00:17:13.565782044 -0400\n@@ -1784,11 +1784,7 @@\n         elif kind == \"SUPERSEDED\":\n             replacement = str(disposition.get(\"replaced_by\") or \"\")\n             if not replacement or replacement not in active:\n-                problems.refuse(\n-                    \"obligation_superseded_without_replacement\",\n-                    obligation_id,\n-                    \"supersession must name a replacement that is active in this envelope\",\n-                )\n+                pass\n \n \n # --- documentation generation -----------------------------------------------\n",
-      "replay_patch_sha256": "sha256:c9b70f84e593009c1fdb4c8ae0bc515330999202e46fbcb3fdd9fa52a76af5fd"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.n_h7c36l/bin/fm-review-envelope-lib.sh\t2026-08-17 02:51:52.114412524 -0400\n@@ -1856,11 +1856,7 @@\n         elif kind == \"SUPERSEDED\":\n             replacement = str(disposition.get(\"replaced_by\") or \"\")\n             if not replacement or replacement not in active:\n-                problems.refuse(\n-                    \"obligation_superseded_without_replacement\",\n-                    obligation_id,\n-                    \"supersession must name a replacement that is active in this envelope\",\n-                )\n+                pass\n \n \n # --- documentation generation -----------------------------------------------\n",
+      "replay_patch_sha256": "sha256:3ba0d8bec246f81c9673bd6d94fd31c22eab20533ab0540cdef953bcd8bd7b37"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "resolution-unauthorized",
       "observed": "not ok - a resolution with no authority refuses: expected exit 1, got 0",
-      "output_bytes": 3427,
-      "output_sha256": "sha256:92bbe06a6f7bd5b1ddd09c099af4a35452bde8510fa2f55d5c2c85fb92a99470",
+      "output_bytes": 3772,
+      "output_sha256": "sha256:cef5d4990a927a97e57ae5c2b60d5af01d4d75da4de3bddb2cef6b3ab70b13ac",
       "property": "a resolution without an authority refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.esbu_u3k/bin/fm-review-envelope-lib.sh\t2026-08-17 00:17:24.338078076 -0400\n@@ -1770,11 +1770,7 @@\n         elif kind == \"RESOLVED\":\n             authority = disposition.get(\"authority\")\n             if not authority or not disposition.get(\"reason\"):\n-                problems.refuse(\n-                    \"obligation_resolved_without_authority\",\n-                    obligation_id,\n-                    \"resolution must name an explicit authority and reason\",\n-                )\n+                pass\n             elif str(authority) in ruling_index and not ruling_index[str(authority)].get(\"applicable\"):\n                 problems.refuse(\n                     \"ruling_applicability_mismatch\",\n",
-      "replay_patch_sha256": "sha256:c69c0b37c05c2098e9b0b0116eda93b1020c183a62e8602b6f77cbdff176323c"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.xlji8rs6/bin/fm-review-envelope-lib.sh\t2026-08-17 02:52:06.667716109 -0400\n@@ -1842,11 +1842,7 @@\n         elif kind == \"RESOLVED\":\n             authority = disposition.get(\"authority\")\n             if not authority or not disposition.get(\"reason\"):\n-                problems.refuse(\n-                    \"obligation_resolved_without_authority\",\n-                    obligation_id,\n-                    \"resolution must name an explicit authority and reason\",\n-                )\n+                pass\n             elif str(authority) in ruling_index and not ruling_index[str(authority)].get(\"applicable\"):\n                 problems.refuse(\n                     \"ruling_applicability_mismatch\",\n",
+      "replay_patch_sha256": "sha256:92749bd8187f2e81a03dc9f98e524fdf110b12a5e7ac77e62a04f4f4507c09d4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "predecessor-assumed",
       "observed": "not ok - an undeclared predecessor is could-not-observe: expected exit 2, got 0",
-      "output_bytes": 3495,
-      "output_sha256": "sha256:547856722ed0df06909c1a5ef947cece1a6fac19c46869bd0cf8ddd73768581d",
+      "output_bytes": 3840,
+      "output_sha256": "sha256:6cb126a367ed0dd21e7e4897fd0bf95fa9c73c3d9fa477bbc80d15fbcb34cf56",
       "property": "a successor that declares no predecessor is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.9vlkzwi4/bin/fm-review-envelope-lib.sh\t2026-08-17 00:17:35.387389812 -0400\n@@ -1070,12 +1070,7 @@\n             wrong_head.append(summary)\n \n     obligations_in = as_dict(inputs, \"obligations\")\n-    if \"predecessor\" not in obligations_in:\n-        raise Unobservable(\n-            \"predecessor_undeclared\",\n-            \"obligations must declare a predecessor, or an explicit none with a reason\",\n-        )\n-    predecessor = obligations_in[\"predecessor\"]\n+    predecessor = obligations_in.get(\"predecessor\", {\"none\": True, \"reason\": \"assumed\"})\n     if not isinstance(predecessor, dict):\n         raise Unobservable(\"inputs_malformed\", \"obligations.predecessor must be an object\")\n     predecessor_active = []\n",
-      "replay_patch_sha256": "sha256:5fc1f65f97b1da42197213a3e1a963beb140a031bf95ca6ecd7f521dfa41ae82"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.djdgbv_l/bin/fm-review-envelope-lib.sh\t2026-08-17 02:52:21.550936527 -0400\n@@ -1125,12 +1125,7 @@\n             wrong_head.append(summary)\n \n     obligations_in = as_dict(inputs, \"obligations\")\n-    if \"predecessor\" not in obligations_in:\n-        raise Unobservable(\n-            \"predecessor_undeclared\",\n-            \"obligations must declare a predecessor, or an explicit none with a reason\",\n-        )\n-    predecessor = obligations_in[\"predecessor\"]\n+    predecessor = obligations_in.get(\"predecessor\", {\"none\": True, \"reason\": \"assumed\"})\n     if not isinstance(predecessor, dict):\n         raise Unobservable(\"inputs_malformed\", \"obligations.predecessor must be an object\")\n     predecessor_active = []\n",
+      "replay_patch_sha256": "sha256:0c54acac620ea2b93c98b7842c6dba69762f4bdb2406d5adc466877402ab258b"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "invented-disposition-accepted",
       "observed": "not ok - a disposition for an obligation nobody held refuses: expected exit 1, got 0",
-      "output_bytes": 3600,
-      "output_sha256": "sha256:c970c53f2ae4e219073a7a338e315b8413b1aae49a23ebc0fc3ecce726c6e81b",
+      "output_bytes": 3945,
+      "output_sha256": "sha256:bb765826ffe46fe42483a0ee7ba97666aa956cda060c96eaf8342ea94bcf4400",
       "property": "a disposition for an obligation the predecessor never held refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.37xp9avj/bin/fm-review-envelope-lib.sh\t2026-08-17 00:17:46.635084833 -0400\n@@ -1711,9 +1711,6 @@\n     for disposition in obligations[\"dispositions\"]:\n         target = str(disposition.get(\"id\") or \"\") if isinstance(disposition, dict) else \"\"\n         if target not in prior:\n-            problems.refuse(\n-                \"obligation_disposition_unknown\", target, \"the predecessor never held this obligation\"\n-            )\n             continue\n         if target in dispositions:\n             problems.refuse(\n",
-      "replay_patch_sha256": "sha256:9e9b3bf6a0a70025bc66db2729702bc28baa1ac64db6233cfef8f262d2d0f7d6"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.1if71qoe/bin/fm-review-envelope-lib.sh\t2026-08-17 02:52:36.716198457 -0400\n@@ -1783,9 +1783,6 @@\n     for disposition in obligations[\"dispositions\"]:\n         target = str(disposition.get(\"id\") or \"\") if isinstance(disposition, dict) else \"\"\n         if target not in prior:\n-            problems.refuse(\n-                \"obligation_disposition_unknown\", target, \"the predecessor never held this obligation\"\n-            )\n             continue\n         if target in dispositions:\n             problems.refuse(\n",
+      "replay_patch_sha256": "sha256:d0060906c981a6cca85da3e33b050f989202212d875525d01e862c0ed6a3c84d"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "predecessor-identity-unchecked",
       "observed": "not ok - a predecessor that is not the declared one is could-not-observe: expected exit 2, got 1",
-      "output_bytes": 3847,
-      "output_sha256": "sha256:d8851509e765736b35c15db34ce42fa5b628342f0e4e85199f494b2279c055b7",
+      "output_bytes": 4192,
+      "output_sha256": "sha256:47423ad4caeac6de416e05421d62e7a5a25ce885957ac6bcefeb05915d238379",
       "property": "a predecessor that is not the declared one is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.mp4v2xc6/bin/fm-review-envelope-lib.sh\t2026-08-17 00:17:58.159582189 -0400\n@@ -1105,7 +1105,7 @@\n                 \"the predecessor envelope does not match its own digest\",\n                 str(prior_path),\n             )\n-        if recomputed != predecessor_digest:\n+        if False:\n             raise Unobservable(\n                 \"predecessor_unreadable\",\n                 \"the supplied predecessor is \" + recomputed + \", the inputs declare \" + str(predecessor_digest),\n",
-      "replay_patch_sha256": "sha256:27d74ac516ec2664a6f7d0928c661f31e2363ddb7337c0142c7ba149ee1a4dfd"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ts83g5hd/bin/fm-review-envelope-lib.sh\t2026-08-17 02:52:52.098238248 -0400\n@@ -1160,7 +1160,7 @@\n                 \"the predecessor envelope does not match its own digest\",\n                 str(prior_path),\n             )\n-        if recomputed != predecessor_digest:\n+        if False:\n             raise Unobservable(\n                 \"predecessor_unreadable\",\n                 \"the supplied predecessor is \" + recomputed + \", the inputs declare \" + str(predecessor_digest),\n",
+      "replay_patch_sha256": "sha256:c58ebf1f9bbef131669b3e15b03ac3df9f302b2eb35d94e4b9c60f9ef2bc676f"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "ruling-head-unchecked-classify-site",
       "observed": "not ok - a ruling issued against another head cannot authorize anything here: expected exit 1, got 0",
-      "output_bytes": 3929,
-      "output_sha256": "sha256:ec36a4af55d0981ce32e30f929632631f1ec06280f58f9f91aa95231e7636201",
+      "output_bytes": 4274,
+      "output_sha256": "sha256:8d3f0ce49eac8c207422ee6b292c7b62a82bc9bdd2f694f3cdf849ecaf57fa37",
       "property": "a ruling that does not apply cannot authorize a resolution",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.897zklqb/bin/fm-review-envelope-lib.sh\t2026-08-17 00:18:11.738940831 -0400\n@@ -1440,7 +1440,7 @@\n         mismatches = []\n         if applies_to.get(\"work_id\") and applies_to[\"work_id\"] != envelope[\"identity\"][\"work\"][\"id\"]:\n             mismatches.append(\"work_id\")\n-        if applies_to.get(\"head\") and applies_to[\"head\"] != envelope[\"candidate\"][\"head_commit\"]:\n+        if False:\n             mismatches.append(\"head\")\n         if applies_to.get(\"tree\") and applies_to[\"tree\"] != envelope[\"candidate\"][\"head_tree\"]:\n             mismatches.append(\"tree\")\n",
-      "replay_patch_sha256": "sha256:326a571427f81daa2ee3bbac62e590cbb97e347c07533d35db603529f075e4dc"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.mp7r1m_1/bin/fm-review-envelope-lib.sh\t2026-08-17 02:53:09.461736105 -0400\n@@ -1512,7 +1512,7 @@\n         mismatches = []\n         if applies_to.get(\"work_id\") and applies_to[\"work_id\"] != envelope[\"identity\"][\"work\"][\"id\"]:\n             mismatches.append(\"work_id\")\n-        if applies_to.get(\"head\") and applies_to[\"head\"] != envelope[\"candidate\"][\"head_commit\"]:\n+        if False:\n             mismatches.append(\"head\")\n         if applies_to.get(\"tree\") and applies_to[\"tree\"] != envelope[\"candidate\"][\"head_tree\"]:\n             mismatches.append(\"tree\")\n",
+      "replay_patch_sha256": "sha256:8a9afb9e19f461b2d54d7b6b2613b0f6c00b9de1dbbf182235477bdf6c19eb48"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "blocking-finding-ignored",
       "observed": "not ok - a blocking adverse finding refuses: expected exit 1, got 0",
-      "output_bytes": 4205,
-      "output_sha256": "sha256:64e0c70e35e2329cef553e94e61845e37348b8a35ebc1772714e66602ce92365",
+      "output_bytes": 4550,
+      "output_sha256": "sha256:cdba5b4d3db17bb7ecb4c3dbf149758d8b5c20c786cc0ea915d1a6cdf728c2fd",
       "property": "a blocking adverse finding refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.1cn79i5t/bin/fm-review-envelope-lib.sh\t2026-08-17 00:18:25.593275039 -0400\n@@ -1405,9 +1405,7 @@\n \n     for finding in envelope[\"findings\"][\"adverse\"]:\n         if isinstance(finding, dict) and finding.get(\"blocking\"):\n-            problems.refuse(\n-                \"adverse_finding_blocking\", finding.get(\"id\"), str(finding.get(\"statement\") or \"\")\n-            )\n+            pass\n     for finding in envelope[\"findings\"][\"unproven\"]:\n         if isinstance(finding, dict) and finding.get(\"required\"):\n             problems.unobserve(\n",
-      "replay_patch_sha256": "sha256:afdf295ee95b709bef096d2faf66427ac517aadfa8f849507dd8c5160a535b9f"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.v1bbe_ao/bin/fm-review-envelope-lib.sh\t2026-08-17 02:53:27.046424982 -0400\n@@ -1477,9 +1477,7 @@\n \n     for finding in envelope[\"findings\"][\"adverse\"]:\n         if isinstance(finding, dict) and finding.get(\"blocking\"):\n-            problems.refuse(\n-                \"adverse_finding_blocking\", finding.get(\"id\"), str(finding.get(\"statement\") or \"\")\n-            )\n+            pass\n     for finding in envelope[\"findings\"][\"unproven\"]:\n         if isinstance(finding, dict) and finding.get(\"required\"):\n             problems.unobserve(\n",
+      "replay_patch_sha256": "sha256:3e573c2b3af33384a288e08b574019908179fc32783ba6df24650053ab9c98c1"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "unproven-dimension-ignored",
       "observed": "not ok - a required unproven dimension is could-not-observe: expected exit 2, got 0",
-      "output_bytes": 4267,
-      "output_sha256": "sha256:0cec52b5062fdfba63eb61cc80a70f1e445b42e6a7963be42b1b655d3ff5572e",
+      "output_bytes": 4612,
+      "output_sha256": "sha256:fce7052bd41f2af1e6d4a075f5c1e42ebab7891b18aa8c5a3d43a930b5f23356",
       "property": "a required unproven dimension is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.1ti5otqs/bin/fm-review-envelope-lib.sh\t2026-08-17 00:18:41.392154961 -0400\n@@ -1410,9 +1410,7 @@\n             )\n     for finding in envelope[\"findings\"][\"unproven\"]:\n         if isinstance(finding, dict) and finding.get(\"required\"):\n-            problems.unobserve(\n-                \"unproven_dimension_required\", finding.get(\"id\"), str(finding.get(\"statement\") or \"\")\n-            )\n+            pass\n \n     current_envelope_digest = ruling_target_digest(envelope)\n     ruling_ids = [str(ruling.get(\"id\") or \"\") for ruling in envelope[\"rulings\"]]\n",
-      "replay_patch_sha256": "sha256:261bfe945f3bb70790c3469f6129f0a208e91c46e03df9eae17f0e13fd425c9f"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.lo5sz12x/bin/fm-review-envelope-lib.sh\t2026-08-17 02:53:46.543404143 -0400\n@@ -1482,9 +1482,7 @@\n             )\n     for finding in envelope[\"findings\"][\"unproven\"]:\n         if isinstance(finding, dict) and finding.get(\"required\"):\n-            problems.unobserve(\n-                \"unproven_dimension_required\", finding.get(\"id\"), str(finding.get(\"statement\") or \"\")\n-            )\n+            pass\n \n     current_envelope_digest = ruling_target_digest(envelope)\n     ruling_ids = [str(ruling.get(\"id\") or \"\") for ruling in envelope[\"rulings\"]]\n",
+      "replay_patch_sha256": "sha256:c6dec90c03cc9d730c4a71eb6aeec146e0f08628267fb9c64d738906e9259482"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "full-exclusion-allowed",
-      "observed": "not ok - excluding everything refuses: expected exit 1, got 0",
-      "output_bytes": 4325,
-      "output_sha256": "sha256:cfc5b26e8662fd2adbc4b1ed2606fa58884a037398a2f3322c617dcb37396fb1",
+      "observed": "not ok - the first exclusion order compiles to a refusal: expected exit 1, got 0",
+      "output_bytes": 930,
+      "output_sha256": "sha256:78d7d0705ad98250d4fa270e5f3b048146e590785246531935411da53a8ccff4",
       "property": "a fully excluded scope refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.ll5b250o/bin/fm-review-envelope-lib.sh\t2026-08-17 00:18:57.304827657 -0400\n@@ -1394,7 +1394,7 @@\n         problems.refuse(\n             \"changed_file_set_empty\", candidate[\"head_ref\"], \"the contribution changes nothing\"\n         )\n-    elif not envelope[\"scope\"][\"in_scope_paths\"]:\n+    elif False:\n         problems.refuse(\n             \"scope_fully_excluded\", candidate[\"head_ref\"], \"every changed path is excluded from review\"\n         )\n",
-      "replay_patch_sha256": "sha256:768a2a5782e8c234b59ef912d64433f0c33445e48f8d221852b2a3b899c91fd4"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.hyi8j_jp/bin/fm-review-envelope-lib.sh\t2026-08-17 02:54:06.328206730 -0400\n@@ -1466,7 +1466,7 @@\n         problems.refuse(\n             \"changed_file_set_empty\", candidate[\"head_ref\"], \"the contribution changes nothing\"\n         )\n-    elif not envelope[\"scope\"][\"in_scope_paths\"]:\n+    elif False:\n         problems.refuse(\n             \"scope_fully_excluded\", candidate[\"head_ref\"], \"every changed path is excluded from review\"\n         )\n",
+      "replay_patch_sha256": "sha256:a6f7e35da503b44a4d4bcfeb45689fceacc9a92fe7703729b80a2f4322f03e0f"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "exclusion-rule-unnamed",
-      "observed": "not ok - the envelope must name which rule excluded each path",
-      "output_bytes": 4408,
-      "output_sha256": "sha256:748dcd20dad949ff2782233aaae96772063a8e202bce64f5f1e424146f78f42b",
+      "observed": "not ok - the first matching exclusion rule must receive credit",
+      "output_bytes": 912,
+      "output_sha256": "sha256:e3998693656e04ee17d5418fa7bcdb500b2ed3ebad0af75eb73a231310a09f27",
       "property": "excluded scope is bound explicitly",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.0r1dwzoq/bin/fm-review-envelope-lib.sh\t2026-08-17 00:19:13.355324092 -0400\n@@ -973,7 +973,7 @@\n         for rule in exclusions:\n             if path_matches(rule, row[\"path\"]):\n                 row[\"in_scope\"] = False\n-                row[\"excluded_by\"] = rule_id(rule)\n+                row[\"excluded_by\"] = None\n                 matched_rules.add(row[\"excluded_by\"])\n                 break\n \n",
-      "replay_patch_sha256": "sha256:f2af1e211cba97a56207e2ffad99a748f855c4293a0feca724896a716a408ed9"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.909xdb0j/bin/fm-review-envelope-lib.sh\t2026-08-17 02:54:11.905071144 -0400\n@@ -1011,7 +1011,7 @@\n         for rule in exclusions:\n             if path_matches(rule, row[\"path\"]):\n                 row[\"in_scope\"] = False\n-                row[\"excluded_by\"] = rule_id(rule)\n+                row[\"excluded_by\"] = None\n                 matched_rules.add(row[\"excluded_by\"])\n                 break\n \n",
+      "replay_patch_sha256": "sha256:e78eca164a0eec1bde89cbb1f3f2af748994118183f1b166497556a56ad65cff"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "empty-contribution-allowed",
       "observed": "not ok - the refusal must say the contribution changes nothing (missing: 'refusal changed_file_set_empty')",
-      "output_bytes": 5011,
-      "output_sha256": "sha256:aa58f38148ca7f807e22b2d0badd5a371261dca8c0ca5fb3432a2a7fed668546",
+      "output_bytes": 5356,
+      "output_sha256": "sha256:63921354c507918f39d0fb979bfddd61ca839e0e6acd979b8df5e5f530dfe0c3",
       "property": "a contribution that changes nothing refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.yutwbcz7/bin/fm-review-envelope-lib.sh\t2026-08-17 00:19:29.453332716 -0400\n@@ -1390,7 +1390,7 @@\n             \"the candidate does not descend from its base\",\n         )\n \n-    if candidate[\"changed_file_count\"] == 0:\n+    if False:\n         problems.refuse(\n             \"changed_file_set_empty\", candidate[\"head_ref\"], \"the contribution changes nothing\"\n         )\n",
-      "replay_patch_sha256": "sha256:68cb2bb49a9d267ef1c1be994806928c46032f629e43971057d3e7483d96c690"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.y1hccrvw/bin/fm-review-envelope-lib.sh\t2026-08-17 02:54:17.679115642 -0400\n@@ -1462,7 +1462,7 @@\n             \"the candidate does not descend from its base\",\n         )\n \n-    if candidate[\"changed_file_count\"] == 0:\n+    if False:\n         problems.refuse(\n             \"changed_file_set_empty\", candidate[\"head_ref\"], \"the contribution changes nothing\"\n         )\n",
+      "replay_patch_sha256": "sha256:41ffe58573b3e72ef007265088888e5eec77b45e5c133d2f2ebc54f8be5d8f7d"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "foreign-base-allowed",
       "observed": "not ok - the refusal must name the base the candidate does not descend from (missing: 'refusal base_not_ancestor_of_candidate')",
-      "output_bytes": 5097,
-      "output_sha256": "sha256:0551006d342348780b2bb2a7307ca2cfbe5abd382e664709264b79306c3b645c",
+      "output_bytes": 5442,
+      "output_sha256": "sha256:3f21e18e79a48de1f26d7c248133c97a74317625198dcbd6982df0a185f0a9f3",
       "property": "a base the candidate does not descend from refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.ju5mrkzr/bin/fm-review-envelope-lib.sh\t2026-08-17 00:19:45.721173553 -0400\n@@ -1383,7 +1383,7 @@\n             \"the declared root commit is not one of this repository's\",\n         )\n \n-    if envelope[\"applicability\"].get(\"base_is_ancestor_of_head\") is False:\n+    if False:\n         problems.refuse(\n             \"base_not_ancestor_of_candidate\",\n             candidate[\"base_ref\"],\n",
-      "replay_patch_sha256": "sha256:15c4df0fcf12bbfebe4916cfc8c52889e31ef66d1414e068bed6e2bc662e7596"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.1h4ay8d7/bin/fm-review-envelope-lib.sh\t2026-08-17 02:54:38.003372490 -0400\n@@ -1455,7 +1455,7 @@\n             \"the declared root commit is not one of this repository's\",\n         )\n \n-    if envelope[\"applicability\"].get(\"base_is_ancestor_of_head\") is False:\n+    if False:\n         problems.refuse(\n             \"base_not_ancestor_of_candidate\",\n             candidate[\"base_ref\"],\n",
+      "replay_patch_sha256": "sha256:0a96590810f5a3dc56ba1df794a367b43375eec01747704c8cee1fa948fd105b"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "repository-identity-unchecked",
       "observed": "not ok - compiling against the wrong repository refuses: expected exit 1, got 0",
-      "output_bytes": 4650,
-      "output_sha256": "sha256:1ed78575cf6e829a11e6a0a96236c9fe214f32cfad5da1959169fb0220161eaf",
+      "output_bytes": 4995,
+      "output_sha256": "sha256:a84f198b89e8de218c7b0cf05377172256786ab0956adff2565a4ea6df7168fa",
       "property": "a declared repository identity this is not refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.jtsfaqe3/bin/fm-review-envelope-lib.sh\t2026-08-17 00:20:01.979559221 -0400\n@@ -1376,7 +1376,7 @@\n             \"inputs asserted \" + str(declared_base) + \", the repository resolved \" + candidate[\"base_commit\"],\n         )\n     project = envelope[\"identity\"][\"project\"]\n-    if project.get(\"declared_root_commit\") and project[\"declared_root_commit\"] not in project[\"root_commits\"]:\n+    if False:\n         problems.refuse(\n             \"project_identity_mismatch\",\n             project.get(\"id\"),\n",
-      "replay_patch_sha256": "sha256:6b312720385fdf22ed07efdc72fbd61d088af82c8891e9ba828789fb8427d528"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.kq6o6ru9/bin/fm-review-envelope-lib.sh\t2026-08-17 02:54:58.631113143 -0400\n@@ -1448,7 +1448,7 @@\n             \"inputs asserted \" + str(declared_base) + \", the repository resolved \" + candidate[\"base_commit\"],\n         )\n     project = envelope[\"identity\"][\"project\"]\n-    if project.get(\"declared_root_commit\") and project[\"declared_root_commit\"] not in project[\"root_commits\"]:\n+    if False:\n         problems.refuse(\n             \"project_identity_mismatch\",\n             project.get(\"id\"),\n",
+      "replay_patch_sha256": "sha256:24fc004d384450535f85706caa84cda04f1724d98a9b0455c590848d8f49d1f8"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "headless-attempt-counted",
-      "observed": "not ok - the refusal must say the platform has no exact-head check (missing: 'refusal ci_required_platform_uncovered')",
-      "output_bytes": 5149,
-      "output_sha256": "sha256:e22c87b022d637e6cfccb80b73d5ff14bfedd2d0b8c5b1e966345daca1f75a67",
+      "observed": "not ok - every observable registry path has the declared isolated outcome: expected exit 0, got 1",
+      "output_bytes": 791,
+      "output_sha256": "sha256:e7147ceadd12c75046e7834e4aa324b0799c99010bcb2acc46ab9b1253963612",
       "property": "a check that names no head cannot cover a required platform",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.jgbx87ac/bin/fm-review-envelope-lib.sh\t2026-08-17 00:20:18.335920570 -0400\n@@ -1061,7 +1061,7 @@\n             \"platform\": str(attempt.get(\"platform\") or \"\"),\n             \"verdict\": verdict_of(attempt),\n         }\n-        if not attempt_head:\n+        if False:\n             head_unknown.append(summary)\n         elif attempt_head == head_commit:\n             exact.append(attempt)\n",
-      "replay_patch_sha256": "sha256:353e5bad45230b3f396d038b27b4a4ec2007112e02255a40e5c5a14da73305dc"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ays2o00i/bin/fm-review-envelope-lib.sh\t2026-08-17 02:55:19.359075598 -0400\n@@ -1116,7 +1116,7 @@\n             \"platform\": str(attempt.get(\"platform\") or \"\"),\n             \"verdict\": verdict_of(attempt),\n         }\n-        if not attempt_head:\n+        if False:\n             head_unknown.append(summary)\n         elif attempt_head == head_commit:\n             exact.append(attempt)\n",
+      "replay_patch_sha256": "sha256:a10d1b9128c0dbe651ca22532f867ac3f542a14db34c3f007c6eabd9ecabbc01"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "evidence-decision-guessed",
       "observed": "not ok - validation with no evidence decision is could-not-observe: expected exit 2, got 1",
-      "output_bytes": 4813,
-      "output_sha256": "sha256:41a3a616c66477f87008f0f98a2cd43c2b4e5d0d46b7cbbd4046d1932db5eb9e",
+      "output_bytes": 5158,
+      "output_sha256": "sha256:967c1062c609325902bc1b0a12beea1319ce60a2294444411b78b2cf560945a8",
       "property": "validate refuses to guess about evidence",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.3ety89ae/bin/fm-review-envelope-lib.sh\t2026-08-17 00:20:35.018935519 -0400\n@@ -1996,7 +1996,7 @@\n def command_validate(args):\n     if not args.repo:\n         raise Unobservable(\"usage_error\", \"validate requires --repo\")\n-    if not args.evidence_root and not args.no_recheck:\n+    if False:\n         raise Unobservable(\n             \"usage_error\",\n             \"validate requires --evidence-root, or an explicit --no-evidence-recheck\",\n",
-      "replay_patch_sha256": "sha256:07550e5f8870ec4c7e0c0275fb8f472e1532f802f798d3c5f6452095d2aa877d"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.0hfllai5/bin/fm-review-envelope-lib.sh\t2026-08-17 02:55:22.557587165 -0400\n@@ -2068,7 +2068,7 @@\n def command_validate(args):\n     if not args.repo:\n         raise Unobservable(\"usage_error\", \"validate requires --repo\")\n-    if not args.evidence_root and not args.no_recheck:\n+    if False:\n         raise Unobservable(\n             \"usage_error\",\n             \"validate requires --evidence-root, or an explicit --no-evidence-recheck\",\n",
+      "replay_patch_sha256": "sha256:afcf75f5a72583a94b06f2ed0734f9fe334a1fe6dd4eb3da388e32e63ffd41aa"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "declination-not-recorded",
       "observed": "not ok - a declined evidence recheck cannot pass: expected exit 2, got 0",
-      "output_bytes": 4878,
-      "output_sha256": "sha256:e558a59e10e6352ace889234c94e34bdd81e6e6c141f4d0ca83af40db2ab34e9",
+      "output_bytes": 5223,
+      "output_sha256": "sha256:d3bb4aa2dfa834b9b9db0a1be0ebded41aa3fd692c4890cdc42a0b4d575315d6",
       "property": "declining the evidence recheck cannot reach review ready",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.6j8y31nk/bin/fm-review-envelope-lib.sh\t2026-08-17 00:20:51.899279970 -0400\n@@ -2087,7 +2087,7 @@\n                 \"detail\": \"validation was told not to re-read the evidence bytes\",\n             }\n         )\n-        if classification[\"readiness\"] == \"REVIEW_READY\":\n+        if False:\n             classification[\"readiness\"] = \"COULD_NOT_OBSERVE\"\n             classification[\"result\"] = \"NO_VERIFIER_RAN\"\n             classification[\"reason\"] = \"verification_incomplete\"\n",
-      "replay_patch_sha256": "sha256:89884be4e4058db0636457fe7c30205c043181c69c8fd4cf29c3b5ba8178ed1e"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.04hk5ioq/bin/fm-review-envelope-lib.sh\t2026-08-17 02:55:43.474414982 -0400\n@@ -2159,7 +2159,7 @@\n                 \"detail\": \"validation was told not to re-read the evidence bytes\",\n             }\n         )\n-        if classification[\"readiness\"] == \"REVIEW_READY\":\n+        if False:\n             classification[\"readiness\"] = \"COULD_NOT_OBSERVE\"\n             classification[\"result\"] = \"NO_VERIFIER_RAN\"\n             classification[\"reason\"] = \"verification_incomplete\"\n",
+      "replay_patch_sha256": "sha256:7f9d3559d1c54f1c7cfe198eec40943fa1df0876d17199c523ac1810c32bb433"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "validate-skips-evidence",
       "observed": "not ok - evidence replaced after compilation refuses at validation: expected exit 1, got 0",
-      "output_bytes": 4977,
-      "output_sha256": "sha256:19d7f01f7c1b6bdd5791185cd558945a2b8e4e8845a68d980f8b2ce7b5059d65",
+      "output_bytes": 5322,
+      "output_sha256": "sha256:6083d7a580647c3a1268d740d8da6678dd4466fbe3386fbe77a5e044f4365744",
       "property": "validate rechecks evidence bytes",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.6qq3bor4/bin/fm-review-envelope-lib.sh\t2026-08-17 00:21:09.191750287 -0400\n@@ -1604,7 +1604,7 @@\n             \"bound \" + str(block.get(\"sha256\")) + \", observed \" + str(block.get(\"observed_sha256\")),\n         )\n         return\n-    if not recheck_evidence:\n+    if True:\n         return\n     handle, problem = open_evidence(evidence_root, block.get(\"locator\"))\n     if problem is not None:\n",
-      "replay_patch_sha256": "sha256:879e75c2d8eb7fe403ab2765d8422363eef171d91fc5760db3440176c45ab888"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.5p2a31lx/bin/fm-review-envelope-lib.sh\t2026-08-17 02:56:05.015259661 -0400\n@@ -1676,7 +1676,7 @@\n             \"bound \" + str(block.get(\"sha256\")) + \", observed \" + str(block.get(\"observed_sha256\")),\n         )\n         return\n-    if not recheck_evidence:\n+    if True:\n         return\n     handle, problem = open_evidence(evidence_root, block.get(\"locator\"))\n     if problem is not None:\n",
+      "replay_patch_sha256": "sha256:446bc2d928c54971986fb74b29f321c295432fc765658db2b9f1a202dd70fc4e"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "catalog-drift",
       "observed": "not ok - docs/contracts/review-envelope.md is stale; regenerate it with bin/fm-review-envelope.sh docs",
-      "output_bytes": 5762,
-      "output_sha256": "sha256:a6375d49bcec20ed5de809f49f0c9db73ac0d3b6c24361d88d33ccf806dff7e1",
+      "output_bytes": 6107,
+      "output_sha256": "sha256:905c3166d7bd06af236d04f6cf362fa2aed35c183d816bec537517d76bebffb9",
       "property": "the generated contract page matches the catalog",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.dg4hsgsx/bin/fm-review-envelope-lib.sh\t2026-08-17 00:21:26.694480655 -0400\n@@ -1856,7 +1856,7 @@\n                 + \" |\"\n             )\n         add(\"\")\n-    add(\"## Refusals\")\n+    add(\"## Refusal codes\")\n     add(\"\")\n     add(\"Each of these is an observed contradiction of readiness, and reports `FAIL`.\")\n     add(\"\")\n",
-      "replay_patch_sha256": "sha256:99a2e707a0457cd2e845736fa66a011b0f8a6411dfb7e130bf548a55801b79b4"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ohmdbp_9/bin/fm-review-envelope-lib.sh\t2026-08-17 02:56:26.549200620 -0400\n@@ -1928,7 +1928,7 @@\n                 + \" |\"\n             )\n         add(\"\")\n-    add(\"## Refusals\")\n+    add(\"## Refusal codes\")\n     add(\"\")\n     add(\"Each of these is an observed contradiction of readiness, and reports `FAIL`.\")\n     add(\"\")\n",
+      "replay_patch_sha256": "sha256:ad2b05971ba266dcc7be20b092bdc03b3db14f049b03ed18271f47411848d22f"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "crash-reads-as-pass",
       "observed": "not ok - a compiler that produced no result is could-not-observe: expected exit 2, got 0",
-      "output_bytes": 5057,
-      "output_sha256": "sha256:caea483093dd942bce0e0c9e6b5b186ac0cf3a97ba49c4a7f4fb5fa1dafafa56",
+      "output_bytes": 5402,
+      "output_sha256": "sha256:7b95ac0a95973a2a43a1d7788bf1385dfd8f550c963b422b0ca2903fa3bc7563",
       "property": "a crashed compiler cannot reach a verdict",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope.sh\t2026-08-16 11:49:18.171690502 -0400\n+++ /tmp/fm-review-envelope-red.n9g0grko/bin/fm-review-envelope.sh\t2026-08-17 00:21:44.475862400 -0400\n@@ -148,7 +148,7 @@\n case \"$RESULT\" in\n   PASS|FAIL|NO_VERIFIER_RAN) ;;\n   *)\n-    RESULT=NO_VERIFIER_RAN\n+    RESULT=PASS\n     REASON=no_evidence\n     ;;\n esac\n",
-      "replay_patch_sha256": "sha256:d81a2ea9c985ea7386e70d63adfc96c88f1f95507185ca5df5405f564185c4ba"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope.sh\t2026-08-16 11:49:18.171690502 -0400\n+++ /tmp/fm-review-envelope-red.h2yhkzwy/bin/fm-review-envelope.sh\t2026-08-17 02:56:48.414193135 -0400\n@@ -148,7 +148,7 @@\n case \"$RESULT\" in\n   PASS|FAIL|NO_VERIFIER_RAN) ;;\n   *)\n-    RESULT=NO_VERIFIER_RAN\n+    RESULT=PASS\n     REASON=no_evidence\n     ;;\n esac\n",
+      "replay_patch_sha256": "sha256:a7a04cb444c8435f168a0cbd09cac3737928316bb8cf15edf7fb626ec0552f50"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "symlink-containment-removed",
       "observed": "not ok - a symlink outside the evidence root refuses: expected exit 1, got 0",
-      "output_bytes": 2034,
-      "output_sha256": "sha256:fb8bb443622e278cbe5ad62fd993cf320659ee6b3a88ef8ae01ae5e7ffff9feb",
+      "output_bytes": 2379,
+      "output_sha256": "sha256:4851d310ad376e61313870daa2d5a8f0bd841c155825de9fd7d7035e0343d89e",
       "property": "symlink out of root refused before any byte is read or digested",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red._nis_dzp/bin/fm-review-envelope-lib.sh\t2026-08-17 00:22:02.259777800 -0400\n@@ -844,7 +844,7 @@\n             os.close(directory_fd)\n             directory_fd = next_fd\n         file_fd = os.open(\n-            parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd\n+            parts[-1], os.O_RDONLY, dir_fd=directory_fd\n         )\n         if not stat.S_ISREG(os.fstat(file_fd).st_mode):\n             os.close(file_fd)\n",
-      "replay_patch_sha256": "sha256:58147a56917b29a66157594fe2ea1cadfc847f47d020d0034dffe0ed566a2d08"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.n30v_07b/bin/fm-review-envelope-lib.sh\t2026-08-17 02:57:10.097326476 -0400\n@@ -882,7 +882,7 @@\n             os.close(directory_fd)\n             directory_fd = next_fd\n         file_fd = os.open(\n-            parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd\n+            parts[-1], os.O_RDONLY, dir_fd=directory_fd\n         )\n         if not stat.S_ISREG(os.fstat(file_fd).st_mode):\n             os.close(file_fd)\n",
+      "replay_patch_sha256": "sha256:dd371a4b2dc482f09ea7bd7a0476902ddc0cd3ca8bb0ea3b210755dbff7e9743"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "duplicate-dispositions-last-wins",
       "observed": "not ok - duplicate dispositions refuse in preserved-first order: expected exit 1, got 0",
-      "output_bytes": 3678,
-      "output_sha256": "sha256:ea57919777c28283c0efffbc0df433b29dde383ff2a67934c9bf103998f3a9fe",
+      "output_bytes": 4023,
+      "output_sha256": "sha256:42c252f30cc562686fb66096f3aa766d7b4cf7c730460e2a40747631cc28b7fe",
       "property": "duplicate disposition refused, order A (later duplicate wins)",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red._dqwn3xb/bin/fm-review-envelope-lib.sh\t2026-08-17 00:22:09.487424289 -0400\n@@ -1715,13 +1715,6 @@\n                 \"obligation_disposition_unknown\", target, \"the predecessor never held this obligation\"\n             )\n             continue\n-        if target in dispositions:\n-            problems.refuse(\n-                \"obligation_disposition_duplicate\",\n-                target,\n-                \"one predecessor obligation has more than one disposition\",\n-            )\n-            continue\n         dispositions[target] = disposition\n \n     for obligation_id in sorted(prior):\n",
-      "replay_patch_sha256": "sha256:723f1c56acfbcdc4f99473d2f55aa0a8cbd0fb2624300f30469e40cf6ff82dad"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.24qb7bso/bin/fm-review-envelope-lib.sh\t2026-08-17 02:57:21.065305336 -0400\n@@ -1787,13 +1787,6 @@\n                 \"obligation_disposition_unknown\", target, \"the predecessor never held this obligation\"\n             )\n             continue\n-        if target in dispositions:\n-            problems.refuse(\n-                \"obligation_disposition_duplicate\",\n-                target,\n-                \"one predecessor obligation has more than one disposition\",\n-            )\n-            continue\n         dispositions[target] = disposition\n \n     for obligation_id in sorted(prior):\n",
+      "replay_patch_sha256": "sha256:cf0964e1620764a7954687b04b3ead1606135883fe944a4ee4853c2c6ec34967"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "duplicate-dispositions-first-wins",
       "observed": "not ok - the duplicate refusal must not depend on disposition order (missing: 'refusal obligation_disposition_duplicate')",
-      "output_bytes": 4142,
-      "output_sha256": "sha256:03dd3679a073c5e3fa840ebe921ec03f4d546115da5e2299662e2cf80a4e2594",
+      "output_bytes": 4487,
+      "output_sha256": "sha256:100cb5d9ec87966bfb7ba6b358742a1db90b3b3ec93941fee4e10c0d0456a4d2",
       "property": "duplicate disposition refused, order B (earlier duplicate wins)",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.6d1eefdj/bin/fm-review-envelope-lib.sh\t2026-08-17 00:22:21.300089125 -0400\n@@ -1715,14 +1715,7 @@\n                 \"obligation_disposition_unknown\", target, \"the predecessor never held this obligation\"\n             )\n             continue\n-        if target in dispositions:\n-            problems.refuse(\n-                \"obligation_disposition_duplicate\",\n-                target,\n-                \"one predecessor obligation has more than one disposition\",\n-            )\n-            continue\n-        dispositions[target] = disposition\n+        dispositions.setdefault(target, disposition)\n \n     for obligation_id in sorted(prior):\n         disposition = dispositions.get(obligation_id)\n",
-      "replay_patch_sha256": "sha256:9f4deaf633fcf71697b3fd72468c48270b4622b2c93a80623632bc1266dfef44"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ea4j7g1l/bin/fm-review-envelope-lib.sh\t2026-08-17 02:57:36.799252346 -0400\n@@ -1787,14 +1787,7 @@\n                 \"obligation_disposition_unknown\", target, \"the predecessor never held this obligation\"\n             )\n             continue\n-        if target in dispositions:\n-            problems.refuse(\n-                \"obligation_disposition_duplicate\",\n-                target,\n-                \"one predecessor obligation has more than one disposition\",\n-            )\n-            continue\n-        dispositions[target] = disposition\n+        dispositions.setdefault(target, disposition)\n \n     for obligation_id in sorted(prior):\n         disposition = dispositions.get(obligation_id)\n",
+      "replay_patch_sha256": "sha256:93b5be504cfadd61bf8803fc09cf1b0d9edbc26bb2e53a824f3906ffd6a578a4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "claimed-identity-mismatch-ignored",
       "observed": "not ok - a mismatched claimed request identity refuses: expected exit 1, got 0",
-      "output_bytes": 3744,
-      "output_sha256": "sha256:89dbcd962093821c3dca3d93e2f29fc9739e37c1b307e73e46b06a03bd772e4f",
+      "output_bytes": 4089,
+      "output_sha256": "sha256:613c9d8f61cc2141c1292d58e39806948fb877781afbfcdc0ff0b4b047847a20",
       "property": "claimed identity mismatching a recomputation refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.f_8p_9be/bin/fm-review-envelope-lib.sh\t2026-08-17 00:22:33.105014582 -0400\n@@ -1979,7 +1979,7 @@\n         json.dump(document, handle, indent=2, sort_keys=True)\n         handle.write(\"\\n\")\n     classification = classify(envelope, args.repo, args.evidence_root, True)\n-    if \"identity\" in request_input and request_input[\"identity\"] != computed_request_identity:\n+    if False:\n         classification[\"refusals\"].append(\n             {\n                 \"code\": \"request_identity_mismatch\",\n",
-      "replay_patch_sha256": "sha256:4768e48987a364756de0c88d1a61d90c9d07e5a6ed4d121e76c898a593fc44bd"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.t2o3okpp/bin/fm-review-envelope-lib.sh\t2026-08-17 02:57:52.340830860 -0400\n@@ -2051,7 +2051,7 @@\n         json.dump(document, handle, indent=2, sort_keys=True)\n         handle.write(\"\\n\")\n     classification = classify(envelope, args.repo, args.evidence_root, True)\n-    if \"identity\" in request_input and request_input[\"identity\"] != computed_request_identity:\n+    if False:\n         classification[\"refusals\"].append(\n             {\n                 \"code\": \"request_identity_mismatch\",\n",
+      "replay_patch_sha256": "sha256:3ccd6b3e9aff1e35db564fc9858c820850f73384c6f4ea41bae2672a2d9caab4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "matching-claim-rejected-inverted",
       "observed": "not ok - a correctly recomputed request identity is accepted: expected exit 0, got 1",
-      "output_bytes": 3750,
-      "output_sha256": "sha256:4fea49621adc01a4804474f14471c3f78771e506d3d2ff2722346b5d4aa67e78",
+      "output_bytes": 4095,
+      "output_sha256": "sha256:04f8b2529ca95eb4eb3d751b8bab9dc003ddde1c8ce009faf234f576cf56c918",
       "property": "a matching recomputation is accepted (non-vacuity, inverted)",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.q04i0fwn/bin/fm-review-envelope-lib.sh\t2026-08-17 00:22:45.708039320 -0400\n@@ -1979,7 +1979,7 @@\n         json.dump(document, handle, indent=2, sort_keys=True)\n         handle.write(\"\\n\")\n     classification = classify(envelope, args.repo, args.evidence_root, True)\n-    if \"identity\" in request_input and request_input[\"identity\"] != computed_request_identity:\n+    if \"identity\" in request_input and request_input[\"identity\"] == computed_request_identity:\n         classification[\"refusals\"].append(\n             {\n                 \"code\": \"request_identity_mismatch\",\n",
-      "replay_patch_sha256": "sha256:989e00b7854aaa1d386915aa50d660b4e873c9f32a6655c9b27d9433cd382617"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.gwsjeuts/bin/fm-review-envelope-lib.sh\t2026-08-17 02:58:08.707399779 -0400\n@@ -2051,7 +2051,7 @@\n         json.dump(document, handle, indent=2, sort_keys=True)\n         handle.write(\"\\n\")\n     classification = classify(envelope, args.repo, args.evidence_root, True)\n-    if \"identity\" in request_input and request_input[\"identity\"] != computed_request_identity:\n+    if \"identity\" in request_input and request_input[\"identity\"] == computed_request_identity:\n         classification[\"refusals\"].append(\n             {\n                 \"code\": \"request_identity_mismatch\",\n",
+      "replay_patch_sha256": "sha256:4f7975ed64e56a7a1b07e5a38a4137b6baab71a30451977b6ea89d56d5d87bc0"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "outer-digest-unchecked",
       "observed": "not ok - deleting a declared claim breaks outer integrity: expected exit 1, got 2",
-      "output_bytes": 3747,
-      "output_sha256": "sha256:3b72609cf58872618ab6949c00946568824ada31c7c81503d53b2f9c524dd210",
+      "output_bytes": 4092,
+      "output_sha256": "sha256:a37a230a0a41215de42088c7673a0e7822832ac1834d2e92b0505516faecfeb1",
       "property": "deleting the claim refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.fvwd2mwx/bin/fm-review-envelope-lib.sh\t2026-08-17 00:22:58.064580325 -0400\n@@ -2023,7 +2023,7 @@\n             str(path),\n         )\n     recomputed_outer_digest = digest_of(outer_integrity_payload(document))\n-    if outer_digest[\"value\"] != recomputed_outer_digest:\n+    if False:\n         return refused(\n             \"outer_integrity_digest_mismatch\",\n             str(path),\n",
-      "replay_patch_sha256": "sha256:fb74992db770d996b5965c162ad4c03d7662f7083d5484615e5644481a47262b"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.4dhjfgmx/bin/fm-review-envelope-lib.sh\t2026-08-17 02:58:24.833306843 -0400\n@@ -2095,7 +2095,7 @@\n             str(path),\n         )\n     recomputed_outer_digest = digest_of(outer_integrity_payload(document))\n-    if outer_digest[\"value\"] != recomputed_outer_digest:\n+    if False:\n         return refused(\n             \"outer_integrity_digest_mismatch\",\n             str(path),\n",
+      "replay_patch_sha256": "sha256:d5b69c0207e90dec3d3c147badc5cc17acba2264d65e6480ce1f33d6251ec930"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "claim-outside-integrity-payload",
       "observed": "not ok - deleting a declared claim breaks outer integrity: expected exit 1, got 2",
-      "output_bytes": 3747,
-      "output_sha256": "sha256:3b72609cf58872618ab6949c00946568824ada31c7c81503d53b2f9c524dd210",
+      "output_bytes": 4092,
+      "output_sha256": "sha256:a37a230a0a41215de42088c7673a0e7822832ac1834d2e92b0505516faecfeb1",
       "property": "replacing the claim with the computed value refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.qm4uyf0r/bin/fm-review-envelope-lib.sh\t2026-08-17 00:23:10.845299942 -0400\n@@ -888,7 +888,7 @@\n         \"compiler\": document.get(\"compiler\"),\n         \"body_digest\": (document.get(\"digest\") or {}).get(\"value\"),\n         \"request_identity\": document.get(\"request_identity\"),\n-        \"declared_request_identity\": document.get(\"declared_request_identity\"),\n+        \"declared_request_identity\": None,\n     }\n \n \n",
-      "replay_patch_sha256": "sha256:abf73ce3fef1a1734fdecd558b82980b4a1044df563f609bae2076ebad0cd146"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.eivgoxa6/bin/fm-review-envelope-lib.sh\t2026-08-17 02:58:41.501550731 -0400\n@@ -926,7 +926,7 @@\n         \"compiler\": document.get(\"compiler\"),\n         \"body_digest\": (document.get(\"digest\") or {}).get(\"value\"),\n         \"request_identity\": document.get(\"request_identity\"),\n-        \"declared_request_identity\": document.get(\"declared_request_identity\"),\n+        \"declared_request_identity\": None,\n     }\n \n \n",
+      "replay_patch_sha256": "sha256:a53ae98f4112dfe7e4f9d4c0d71d0cb10fb9f1dddeadf9f3f392144f49b43a07"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "absent-claim-reads-as-null",
       "observed": "not ok - an absent claim state is could-not-observe: expected exit 2, got 0",
-      "output_bytes": 3741,
-      "output_sha256": "sha256:1ac57a828be263a5691b77a4b84cefe62c58c317bf52a3e8eb9368795a08319d",
+      "output_bytes": 4086,
+      "output_sha256": "sha256:8f4c31da2e378e344e69f1909448222b9e1ce8e82ff50a79fd64da8e5ee22773",
       "property": "absent claim field is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.crwnmuqe/bin/fm-review-envelope-lib.sh\t2026-08-17 00:23:23.670668024 -0400\n@@ -2031,12 +2031,7 @@\n             recomputed,\n             args,\n         )\n-    if \"declared_request_identity\" not in document:\n-        raise Unobservable(\n-            \"request_identity_claim_unobserved\",\n-            \"the declared request identity state is absent\",\n-            str(path),\n-        )\n+    document.setdefault(\"declared_request_identity\", None)\n     try:\n         recomputed_request_identity = request_identity(body, recomputed)\n     except Unobservable:\n",
-      "replay_patch_sha256": "sha256:cdf621951b265ea971a62c9cadf333f4c3be028123647ba8309eabd98feb8799"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.yts4nl98/bin/fm-review-envelope-lib.sh\t2026-08-17 02:58:58.215617310 -0400\n@@ -2103,12 +2103,7 @@\n             recomputed,\n             args,\n         )\n-    if \"declared_request_identity\" not in document:\n-        raise Unobservable(\n-            \"request_identity_claim_unobserved\",\n-            \"the declared request identity state is absent\",\n-            str(path),\n-        )\n+    document.setdefault(\"declared_request_identity\", None)\n     try:\n         recomputed_request_identity = request_identity(body, recomputed)\n     except Unobservable:\n",
+      "replay_patch_sha256": "sha256:c623367efb86d45b50819a8ace0e01603dacf66774ace8ec605a995b14ce7c8d"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "null-claim-collapsed-into-absent",
       "observed": "not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')",
-      "output_bytes": 1101,
-      "output_sha256": "sha256:dd1413a882e6c2fe99f0a15e74bbf45d6167bc96190a02c7d358579e1d9bd7c0",
+      "output_bytes": 1446,
+      "output_sha256": "sha256:ba30589b0930f6727d2eddd463f1acaa46f964ae0c2b745922f00d0534b674bd",
       "property": "explicit null claim is distinguishable from a missing field",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.islwg339/bin/fm-review-envelope-lib.sh\t2026-08-17 00:23:36.673741794 -0400\n@@ -2031,7 +2031,7 @@\n             recomputed,\n             args,\n         )\n-    if \"declared_request_identity\" not in document:\n+    if not document.get(\"declared_request_identity\"):\n         raise Unobservable(\n             \"request_identity_claim_unobserved\",\n             \"the declared request identity state is absent\",\n",
-      "replay_patch_sha256": "sha256:ba23c183595cf876855996f343c33c10e95f021612b7c501a3904c1fd5884ad2"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.9i_b_ovs/bin/fm-review-envelope-lib.sh\t2026-08-17 02:59:15.386612023 -0400\n@@ -2103,7 +2103,7 @@\n             recomputed,\n             args,\n         )\n-    if \"declared_request_identity\" not in document:\n+    if not document.get(\"declared_request_identity\"):\n         raise Unobservable(\n             \"request_identity_claim_unobserved\",\n             \"the declared request identity state is absent\",\n",
+      "replay_patch_sha256": "sha256:4f7ff838da77fdb3e8c8110b3d71ba3798b8f23d1fb7ab1c202e62f7eec8d0c4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "intact-artifact-rejected-inverted",
       "observed": "not ok - a structurally malformed body is could-not-observe: expected exit 2, got 1",
-      "output_bytes": 639,
-      "output_sha256": "sha256:818eab671c0c3028e5870f78766767ce4d1f0af5f9a04fede8e60c0fc3d4b77e",
+      "output_bytes": 984,
+      "output_sha256": "sha256:a35a47b60e7bea902b737ec55574a253648449e15ba2b0295397eca008e7be8c",
       "property": "a correct claim with intact digests validates (non-vacuity, inverted)",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.bzo1fspd/bin/fm-review-envelope-lib.sh\t2026-08-17 00:23:38.908683459 -0400\n@@ -2023,7 +2023,7 @@\n             str(path),\n         )\n     recomputed_outer_digest = digest_of(outer_integrity_payload(document))\n-    if outer_digest[\"value\"] != recomputed_outer_digest:\n+    if True:\n         return refused(\n             \"outer_integrity_digest_mismatch\",\n             str(path),\n",
-      "replay_patch_sha256": "sha256:54fe0723e0d8513e4ee80f7f099338f9f26c499584efddea59abb51e1be46681"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.a0edhjum/bin/fm-review-envelope-lib.sh\t2026-08-17 02:59:21.432040528 -0400\n@@ -2095,7 +2095,7 @@\n             str(path),\n         )\n     recomputed_outer_digest = digest_of(outer_integrity_payload(document))\n-    if outer_digest[\"value\"] != recomputed_outer_digest:\n+    if True:\n         return refused(\n             \"outer_integrity_digest_mismatch\",\n             str(path),\n",
+      "replay_patch_sha256": "sha256:269f7e5a282ee7a71157f3d1804f10a8a62e4dda3baf456c310d813c6aed8894"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "evidence-containment-removed-entirely",
       "observed": "not ok - a locator escaping its evidence root refuses: expected exit 1, got 0",
-      "output_bytes": 1945,
-      "output_sha256": "sha256:0c348958eccb55176f1a19679fc471828f571ba018ba6dbaebcb3357c6d0ae03",
+      "output_bytes": 2290,
+      "output_sha256": "sha256:361bcd1fa3ffb666f33d635d6ad04e13528b7662961579bed4628c19eed703b4",
       "property": "an evidence locator that escapes its root refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.7hgo987h/bin/fm-review-envelope-lib.sh\t2026-08-17 00:23:41.146823074 -0400\n@@ -822,7 +822,7 @@\n         return None, \"locator is empty\"\n     if os.path.isabs(locator):\n         return None, \"locator is absolute\"\n-    if any(part in (\"\", \".\", \"..\") for part in locator.split(\"/\")):\n+    if False:\n         return None, \"locator escapes its root\"\n     if root is None:\n         return None, \"no evidence root was supplied\"\n@@ -844,7 +844,7 @@\n             os.close(directory_fd)\n             directory_fd = next_fd\n         file_fd = os.open(\n-            parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd\n+            parts[-1], os.O_RDONLY, dir_fd=directory_fd\n         )\n         if not stat.S_ISREG(os.fstat(file_fd).st_mode):\n             os.close(file_fd)\n",
-      "replay_patch_sha256": "sha256:d7adfc6e77a23cd40abbd1207b059f9e454cdae8aaefa00135643bbcaa3c4351"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.fyzjlky4/bin/fm-review-envelope-lib.sh\t2026-08-17 02:59:27.461882509 -0400\n@@ -860,7 +860,7 @@\n         return None, \"locator is empty\"\n     if os.path.isabs(locator):\n         return None, \"locator is absolute\"\n-    if any(part in (\"\", \".\", \"..\") for part in locator.split(\"/\")):\n+    if False:\n         return None, \"locator escapes its root\"\n     if root is None:\n         return None, \"no evidence root was supplied\"\n@@ -882,7 +882,7 @@\n             os.close(directory_fd)\n             directory_fd = next_fd\n         file_fd = os.open(\n-            parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd\n+            parts[-1], os.O_RDONLY, dir_fd=directory_fd\n         )\n         if not stat.S_ISREG(os.fstat(file_fd).st_mode):\n             os.close(file_fd)\n",
+      "replay_patch_sha256": "sha256:50ebdf5c60a235471500c536afa0a71559e0bf56b299908e802c2bc7988c9f4f"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "ruling-id-absence-unchecked",
       "observed": "not ok - a missing ruling id refuses: expected exit 1, got 0",
-      "output_bytes": 4043,
-      "output_sha256": "sha256:a9e85881dbc1d8f66a3045009471b023c0717c3cac526d607b0bf1e5d16916d5",
+      "output_bytes": 4388,
+      "output_sha256": "sha256:d8c62685688ba979321ac7f85c891e78d66f6019ccc88f119ef8b5c6e212acb0",
       "property": "a ruling without a stable id refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.6lmfhcib/bin/fm-review-envelope-lib.sh\t2026-08-17 00:23:48.079027322 -0400\n@@ -1416,7 +1416,7 @@\n \n     current_envelope_digest = ruling_target_digest(envelope)\n     ruling_ids = [str(ruling.get(\"id\") or \"\") for ruling in envelope[\"rulings\"]]\n-    if any(not ruling_id.strip() for ruling_id in ruling_ids):\n+    if False:\n         problems.refuse(\n             \"ruling_id_absent\", \"rulings\", \"a ruling carries no non-blank stable id\"\n         )\n",
-      "replay_patch_sha256": "sha256:009d8fdd1f5b780c55206621220f1a9d1cd546c71353f1a47adf37d47d55dc77"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.sh0cosqx/bin/fm-review-envelope-lib.sh\t2026-08-17 02:59:38.388242869 -0400\n@@ -1488,7 +1488,7 @@\n \n     current_envelope_digest = ruling_target_digest(envelope)\n     ruling_ids = [str(ruling.get(\"id\") or \"\") for ruling in envelope[\"rulings\"]]\n-    if any(not ruling_id.strip() for ruling_id in ruling_ids):\n+    if False:\n         problems.refuse(\n             \"ruling_id_absent\", \"rulings\", \"a ruling carries no non-blank stable id\"\n         )\n",
+      "replay_patch_sha256": "sha256:a7dcceb200fce2ab5e3e5b9ef1df2d6c52b7a52c15aacc756f73f85dd2e78367"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "duplicate-ruling-ids-unchecked",
       "observed": "not ok - duplicate ruling ids refuse in applicable-first order: expected exit 1, got 0",
-      "output_bytes": 4007,
-      "output_sha256": "sha256:4a17fa541e04ceed77fbeb5abf325c8feb350b3d10609099d94627b19fca9be4",
+      "output_bytes": 4352,
+      "output_sha256": "sha256:a0d97a19ee4e0584713217f4ff4b4c8a95b38eb3ec021d25089aea130260be41",
       "property": "duplicate ruling ids are ambiguous, order A",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.2r7o91e2/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:02.472175591 -0400\n@@ -1420,11 +1420,7 @@\n         problems.refuse(\n             \"ruling_id_absent\", \"rulings\", \"a ruling carries no non-blank stable id\"\n         )\n-    ambiguous_ruling_ids = {\n-        ruling_id\n-        for ruling_id in ruling_ids\n-        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1\n-    }\n+    ambiguous_ruling_ids = set()\n     for ruling_id in sorted(ambiguous_ruling_ids):\n         problems.refuse(\n             \"ruling_id_ambiguous\", ruling_id, \"more than one ruling carries this stable id\"\n",
-      "replay_patch_sha256": "sha256:a9720481329a23152fc01ffe484078884b4fd6aad6b8550a6bc87450cece4da0"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.fd3kaf8w/bin/fm-review-envelope-lib.sh\t2026-08-17 02:59:56.862402733 -0400\n@@ -1492,11 +1492,7 @@\n         problems.refuse(\n             \"ruling_id_absent\", \"rulings\", \"a ruling carries no non-blank stable id\"\n         )\n-    ambiguous_ruling_ids = {\n-        ruling_id\n-        for ruling_id in ruling_ids\n-        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1\n-    }\n+    ambiguous_ruling_ids = set()\n     for ruling_id in sorted(ambiguous_ruling_ids):\n         problems.refuse(\n             \"ruling_id_ambiguous\", ruling_id, \"more than one ruling carries this stable id\"\n",
+      "replay_patch_sha256": "sha256:28c7ecd936bd343a5d3e94e8062d10a59701ac921794122a076488c63ae788f4"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "duplicate-ruling-ids-order-sensitive",
       "observed": "not ok - duplicate ruling ids refuse in applicable-first order: expected exit 1, got 0",
-      "output_bytes": 4007,
-      "output_sha256": "sha256:4a17fa541e04ceed77fbeb5abf325c8feb350b3d10609099d94627b19fca9be4",
+      "output_bytes": 4352,
+      "output_sha256": "sha256:a0d97a19ee4e0584713217f4ff4b4c8a95b38eb3ec021d25089aea130260be41",
       "property": "duplicate ruling ids are ambiguous, order B",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.z3vpumdo/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:16.473092143 -0400\n@@ -1423,7 +1423,7 @@\n     ambiguous_ruling_ids = {\n         ruling_id\n         for ruling_id in ruling_ids\n-        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1\n+        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1 and ruling_ids.index(ruling_id) > 0\n     }\n     for ruling_id in sorted(ambiguous_ruling_ids):\n         problems.refuse(\n",
-      "replay_patch_sha256": "sha256:08dc1862494ddc8d4a0931db81960ea7a8319c1545a48527e872884bd7b23be7"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.uelho36n/bin/fm-review-envelope-lib.sh\t2026-08-17 03:00:14.706906651 -0400\n@@ -1495,7 +1495,7 @@\n     ambiguous_ruling_ids = {\n         ruling_id\n         for ruling_id in ruling_ids\n-        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1\n+        if ruling_id.strip() and ruling_ids.count(ruling_id) > 1 and ruling_ids.index(ruling_id) > 0\n     }\n     for ruling_id in sorted(ambiguous_ruling_ids):\n         problems.refuse(\n",
+      "replay_patch_sha256": "sha256:3804baaa8207c523b3766bcb775b99c11e0ba76ea02865c084a56d40fac8e965"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "ruling-envelope-digest-unchecked-both-sites",
       "observed": "not ok - a relied-upon ruling bound to another envelope must refuse: expected exit 1, got 0",
-      "output_bytes": 4145,
-      "output_sha256": "sha256:4a06ed264908cbd4872046f06f4550f7d7855a77964136018e6212074809613a",
+      "output_bytes": 4490,
+      "output_sha256": "sha256:9c5e673713710cce504acdae9b469851071984570965f3723880ff50b18b880c",
       "property": "a ruling's envelope digest binds the current envelope",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.5eiu5e4b/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:30.578819061 -0400\n@@ -1233,9 +1233,6 @@\n             mismatches.append(\"head\")\n         if applies_to.get(\"tree\") and applies_to[\"tree\"] != head_tree:\n             mismatches.append(\"tree\")\n-        if (applies_to.get(\"envelope_digest\")\n-                and applies_to[\"envelope_digest\"] != current_envelope_digest):\n-            mismatches.append(\"envelope_digest\")\n         envelope[\"rulings\"].append(\n             {\n                 \"id\": \"\" if ruling.get(\"id\") is None else str(ruling.get(\"id\")),\n@@ -1444,9 +1441,6 @@\n             mismatches.append(\"head\")\n         if applies_to.get(\"tree\") and applies_to[\"tree\"] != envelope[\"candidate\"][\"head_tree\"]:\n             mismatches.append(\"tree\")\n-        if (applies_to.get(\"envelope_digest\")\n-                and applies_to[\"envelope_digest\"] != current_envelope_digest):\n-            mismatches.append(\"envelope_digest\")\n         ruling[\"applicable\"] = not mismatches\n         ruling[\"mismatches\"] = mismatches\n         if ruling.get(\"relied_upon\") and mismatches:\n",
-      "replay_patch_sha256": "sha256:610e1bb0e22210f55cf64dee9ce9ec789ec85dd346ef0dc1d6a692915b31ca0a"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.o7cggao6/bin/fm-review-envelope-lib.sh\t2026-08-17 03:00:32.631929325 -0400\n@@ -1304,9 +1304,6 @@\n             mismatches.append(\"head\")\n         if applies_to.get(\"tree\") and applies_to[\"tree\"] != head_tree:\n             mismatches.append(\"tree\")\n-        if (applies_to.get(\"envelope_digest\")\n-                and applies_to[\"envelope_digest\"] != current_envelope_digest):\n-            mismatches.append(\"envelope_digest\")\n         envelope[\"rulings\"].append(\n             {\n                 \"id\": \"\" if ruling.get(\"id\") is None else str(ruling.get(\"id\")),\n@@ -1516,9 +1513,6 @@\n             mismatches.append(\"head\")\n         if applies_to.get(\"tree\") and applies_to[\"tree\"] != envelope[\"candidate\"][\"head_tree\"]:\n             mismatches.append(\"tree\")\n-        if (applies_to.get(\"envelope_digest\")\n-                and applies_to[\"envelope_digest\"] != current_envelope_digest):\n-            mismatches.append(\"envelope_digest\")\n         ruling[\"applicable\"] = not mismatches\n         ruling[\"mismatches\"] = mismatches\n         if ruling.get(\"relied_upon\") and mismatches:\n",
+      "replay_patch_sha256": "sha256:701ac189c33c4b415bd1f90e4926c6dcb77d33f7879268ff8af18b1d04dbe1ef"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "verifier-result-tree-unchecked",
       "observed": "not ok - a result without a tree refuses: expected exit 1, got 0",
-      "output_bytes": 1574,
-      "output_sha256": "sha256:80b02590754a8979b515ff870b58bcc83679d250ad991a5410147e2ac4102049",
+      "output_bytes": 1919,
+      "output_sha256": "sha256:3533fcdd87c683030b860cb2b2f148a7ddfb7b7b4f8eab46d2742e3191557286",
       "property": "a verifier result without a tree refuses",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.v9wkm8sf/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:46.213407178 -0400\n@@ -1552,7 +1552,7 @@\n             \"the result binds head \" + str(result.get(\"head\")) + \", the candidate is \" + candidate[\"head_commit\"],\n         )\n         return\n-    if result.get(\"tree\") != candidate[\"head_tree\"]:\n+    if False:\n         problems.refuse(\n             \"required_verifier_wrong_head\",\n             label,\n",
-      "replay_patch_sha256": "sha256:5029db31faacc102dd655d362870a1349febb2e8aa146ccea8fd4c3c338a1d11"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.t36greem/bin/fm-review-envelope-lib.sh\t2026-08-17 03:00:52.303117963 -0400\n@@ -1624,7 +1624,7 @@\n             \"the result binds head \" + str(result.get(\"head\")) + \", the candidate is \" + candidate[\"head_commit\"],\n         )\n         return\n-    if result.get(\"tree\") != candidate[\"head_tree\"]:\n+    if False:\n         problems.refuse(\n             \"required_verifier_wrong_head\",\n             label,\n",
+      "replay_patch_sha256": "sha256:2350367aee4f5e8b964ddb2b2e58e7403baee9ab464120e00e29303602cdab79"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "order-insensitive-canonicalization-removed",
       "observed": "not ok - order-insensitive facts must have one envelope digest",
       "output_bytes": 558,
       "output_sha256": "sha256:b4f1ef5a7dbac849af8f2be33a9602f2a2cadc3fafde1215d12f05a8ce6dcbfc",
       "property": "order-insensitive facts produce an identical identity",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.67_hqpgw/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:52.232296680 -0400\n@@ -199,13 +199,7 @@\n     for record in records:\n         if not isinstance(record, dict):\n             raise Unobservable(\"inputs_malformed\", label + \" contains a non-object\")\n-    return sorted(\n-        records,\n-        key=lambda record: (\n-            tuple(str(record.get(field, \"\")) for field in identity_fields),\n-            canonical_bytes(record),\n-        ),\n-    )\n+    return list(records)\n \n \n def digest_handle(handle):\n",
-      "replay_patch_sha256": "sha256:d7a3c1e304ed5e0ab7302bb83fe1b42d652b83d0626017eda90a96976b6f3348"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.r1055tpo/bin/fm-review-envelope-lib.sh\t2026-08-17 03:01:02.156049276 -0400\n@@ -199,13 +199,7 @@\n     for record in records:\n         if not isinstance(record, dict):\n             raise Unobservable(\"inputs_malformed\", label + \" contains a non-object\")\n-    return sorted(\n-        records,\n-        key=lambda record: (\n-            tuple(str(record.get(field, \"\")) for field in identity_fields),\n-            canonical_bytes(record),\n-        ),\n-    )\n+    return list(records)\n \n \n def canonicalize_applicability_rules(rules):\n",
+      "replay_patch_sha256": "sha256:b540d921e601c07a672ec169546e4eb9fee3e81b766a73a2c5715a9f6ef402b2"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "malformed-body-handler-narrowed",
       "observed": "not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')",
-      "output_bytes": 1081,
-      "output_sha256": "sha256:8d28941497e849936ee848055a739aef6e046951930a597779e830267a49fee9",
+      "output_bytes": 1426,
+      "output_sha256": "sha256:2b55c735b0d688cb64a56048fb372a715e77ace88b875296515938e152ef6df7",
       "property": "a structurally malformed envelope is could-not-observe",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.lm9u6nnp/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:54.240902379 -0400\n@@ -2041,7 +2041,7 @@\n         recomputed_request_identity = request_identity(body, recomputed)\n     except Unobservable:\n         raise\n-    except Exception as error:\n+    except ZeroDivisionError as error:\n         raise Unobservable(\n             \"envelope_unreadable\",\n             \"envelope body is structurally malformed: \" + str(error),\n",
-      "replay_patch_sha256": "sha256:169132a7a914a525776149d65f6d63b7bc46b315a851392e7a08da7b2281768e"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.gzbhohmy/bin/fm-review-envelope-lib.sh\t2026-08-17 03:01:04.185627889 -0400\n@@ -2113,7 +2113,7 @@\n         recomputed_request_identity = request_identity(body, recomputed)\n     except Unobservable:\n         raise\n-    except Exception as error:\n+    except ZeroDivisionError as error:\n         raise Unobservable(\n             \"envelope_unreadable\",\n             \"envelope body is structurally malformed: \" + str(error),\n",
+      "replay_patch_sha256": "sha256:aae6fe761687b022366ad946df8040eb256d456b7b52512ef7d81d7883e0f7bc"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "applicability-declaration-optional",
       "observed": "not ok - the absent applicability declaration must be named (missing: 'unobserved verification_applicability_undeclared')",
       "output_bytes": 736,
-      "output_sha256": "sha256:a65f29e5e72c34d2e65960a620475892e90cf770db36be16655adea14a14441f",
+      "output_sha256": "sha256:c1f4e81422550de3742e19ef6c70b7916b13d2ddce1429dc21004104a0260aae",
       "property": "verification applicability must be declared explicitly",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red._wnut_19/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:56.505730597 -0400\n@@ -978,7 +978,7 @@\n                 break\n \n     verification_in = as_dict(inputs, \"verification\")\n-    if \"applicability_rules\" not in verification_in:\n+    if False:\n         raise Unobservable(\n             \"verification_applicability_undeclared\",\n             \"verification must declare non-empty applicability rules, or an explicit none with a reason\",\n",
-      "replay_patch_sha256": "sha256:e128064c72c6b43bd6bd6191577c5be6ae9a1c8b17248816c4f8fe21bc679706"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.ey0ld9o_/bin/fm-review-envelope-lib.sh\t2026-08-17 03:01:10.268008476 -0400\n@@ -1016,7 +1016,7 @@\n                 break\n \n     verification_in = as_dict(inputs, \"verification\")\n-    if \"applicability_rules\" not in verification_in:\n+    if False:\n         raise Unobservable(\n             \"verification_applicability_undeclared\",\n             \"verification must declare non-empty applicability rules, or an explicit none with a reason\",\n",
+      "replay_patch_sha256": "sha256:9d615f8ab519768daa8b7a4964ae574fe7c0b4d5ecf9595a20b84d9f192dcab5"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "explicit-no-contracts-rejected",
       "observed": "not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2",
       "output_bytes": 355,
       "output_sha256": "sha256:229ce01d233a5a61e991fe9add4fab4518927b9dc4169f008c7517d38501edf1",
       "property": "an explicit no-contracts declaration is accepted",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.xralznjq/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:57.296972866 -0400\n@@ -991,7 +991,7 @@\n                 \"verification applicability rules cannot be an empty list\",\n             )\n         rules = applicability_rules\n-    elif isinstance(applicability_rules, dict) and applicability_rules.get(\"none\") is True:\n+    elif False:\n         reason = applicability_rules.get(\"reason\")\n         if not isinstance(reason, str) or not reason.strip():\n             raise Unobservable(\n",
-      "replay_patch_sha256": "sha256:d0c2eb531e8f657eae4f39dac0cb085c4eed3bc0031520da87eb71a81f81cd39"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.jzmzim_r/bin/fm-review-envelope-lib.sh\t2026-08-17 03:01:11.073970802 -0400\n@@ -1029,7 +1029,7 @@\n                 \"verification applicability rules cannot be an empty list\",\n             )\n         rules = applicability_rules\n-    elif isinstance(applicability_rules, dict) and applicability_rules.get(\"none\") is True:\n+    elif False:\n         reason = applicability_rules.get(\"reason\")\n         if not isinstance(reason, str) or not reason.strip():\n             raise Unobservable(\n",
+      "replay_patch_sha256": "sha256:74ce13c5f33f01df89b9f847894cf764aa0ef6dba5b873cd7ecee79c73c02e5b"
     },
     {
-      "head": "836785a0dab185e9b22f79d1b8cd00476d3a82ba",
+      "head": "2714300e0ea1b495bdc2705576dbdde59367f303",
       "id": "requested-decision-token-unchecked",
       "observed": "not ok - a malformed requested decision refuses: expected exit 1, got 0",
       "output_bytes": 403,
       "output_sha256": "sha256:0d5e23225dcfe39246637c0673b3e481d78d1720f3a3830366a38474f73bcacc",
       "property": "requested decisions accept only uppercase tokens",
-      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 00:07:28.755834354 -0400\n+++ /tmp/fm-review-envelope-red.3fp6x2b9/bin/fm-review-envelope-lib.sh\t2026-08-17 00:24:58.470620461 -0400\n@@ -1352,9 +1352,7 @@\n         )\n \n     requested_decision = envelope[\"identity\"].get(\"requested_decision\")\n-    if not isinstance(requested_decision, str) or not re.fullmatch(\n-        r\"[A-Z][A-Z0-9_]*\", requested_decision\n-    ):\n+    if False:\n         problems.refuse(\n             \"requested_decision_invalid\",\n             requested_decision,\n",
-      "replay_patch_sha256": "sha256:94d1e8e9276d855780c4f8e5016ba80a288f67c23765003be8f40fc1df098f41"
+      "replay_patch": "--- /home/shane/.treehouse/kun-agent-workspace-ab4d3f/3/kun-agent-workspace/bin/fm-review-envelope-lib.sh\t2026-08-17 02:46:21.124137183 -0400\n+++ /tmp/fm-review-envelope-red.btrrg1io/bin/fm-review-envelope-lib.sh\t2026-08-17 03:01:12.237667219 -0400\n@@ -1424,9 +1424,7 @@\n         )\n \n     requested_decision = envelope[\"identity\"].get(\"requested_decision\")\n-    if not isinstance(requested_decision, str) or not re.fullmatch(\n-        r\"[A-Z][A-Z0-9_]*\", requested_decision\n-    ):\n+    if False:\n         problems.refuse(\n             \"requested_decision_invalid\",\n             requested_decision,\n",
+      "replay_patch_sha256": "sha256:0fb535f89c231fbb9ea7f1885cdc003d3ea5ee057e20fe47b2246359cebbccd3"
     }
   ],
   "note": "The binding is the subjects map: these measurements describe exactly these bytes. The head is recorded so the record's stated head can be checked against it, but the digests are what cannot be satisfied by relabelling.",
   "schema": "review-envelope-campaign/v1",
   "subjects": {
-    "bin/fm-review-envelope-lib.sh": "sha256:f1264c82973e6cfbb312a8158746c1d9206d71a8d98f3e154e3b8a8a7adbd072",
+    "bin/fm-review-envelope-lib.sh": "sha256:61b404322846793ef21156d576d42dcd6ac45908eea35f803d6f3d0d993135aa",
     "bin/fm-review-envelope.sh": "sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a",
-    "tests/fm-review-envelope.test.sh": "sha256:6405395dde2e08bb044551aac470d7264041adcd0bd03129f8001a9112b13e40"
+    "tests/fm-review-envelope.test.sh": "sha256:17de78d4dd9c5c385b646fe38f5b597b19122f5a89311a700b3ad5b20cd1644f"
   }
 }

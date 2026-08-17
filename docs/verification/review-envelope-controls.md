@@ -42,7 +42,7 @@ Every path is therefore exercised in isolation, leaving no exemption branch for 
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against head `836785a0`, and EACH ENTRY in the campaign artifact records that head individually rather than relying on one head written once.
+Every measurement below was taken against head `2714300e`, and EACH ENTRY in the campaign artifact records that head individually rather than relying on one head written once.
 Each entry also carries a digest of its whole captured run and the patch that rebuilds its variant, so an independent party can replay any entry and compare rather than taking this record's word for it.
 
 ## Campaign artifact
@@ -50,7 +50,7 @@ Each entry also carries a digest of its whole captured run and the patch that re
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `836785a0dab185e9b22f79d1b8cd00476d3a82ba`.
+Campaign head: `2714300e0ea1b495bdc2705576dbdde59367f303`.
 Mutations built: 72.
 
 ## Commands
@@ -106,18 +106,18 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a broken evidence digest refuses | the evidence check returns before it checks anything | `not ok - evidence that no longer matches its digest refuses: expected exit 1, got 0` |
 | an evidence locator that escapes its root refuses | the lexical parent-traversal guard is removed | `not ok - a locator escaping its evidence root refuses: expected exit 1, got 0` |
 | a result that does not identify its verifier refuses | a result carrying no verifier identity is accepted | `not ok - a result that does not identify what produced it refuses: expected exit 1, got 0` |
-| wrong head ci refuses | every attempt is treated as if it ran at the candidate head | `not ok - a required platform covered only by another head's run refuses: expected exit 1, got 0` |
-| a skipped required check refuses | a skipped current check stops refusing | `not ok - a skipped required check refuses: expected exit 1, got 0` |
+| wrong head ci refuses | every attempt is treated as if it ran at the candidate head | `not ok - every observable registry path has the declared isolated outcome: expected exit 0, got 1` |
+| a skipped required check refuses | a skipped current check stops refusing | `not ok - the meaningfully different CI attempt refuses: expected exit 1, got 0` |
 | an absent required platform refuses | an uncovered required platform stops refusing | `not ok - a required platform with no check at all refuses: expected exit 1, got 0` |
 | a pending required check is could-not-observe | a still-running required check stops being could-not-observe | `not ok - a check still running has reached no verdict: expected exit 2, got 0` |
 | duplicate attempts with no ordering refuse | unorderable repeated attempts are resolved anyway | `not ok - the refusal must name the check whose current attempt is undecidable (missing: 'refusal ci_duplicate_attempt_undecidable')` |
 | two workflows sharing a check name stay two checks | checks are keyed by name alone, dropping the owning workflow | `not ok - one workflow's pass must not mask another workflow's failure: expected exit 1, got 0` |
-| a superseded failure is replaced by its later rerun | every attempt is treated as current, not just the latest | `not ok - a superseded failure must not block its own successful rerun: expected exit 0, got 1` |
-| alias fallback resolves a later declared candidate | only the first declared executable candidate is evaluated | `not ok - a capability whose first alias is absent and whose second is present is observed, not could-not-observe: expected exit 0, got 2` |
+| a superseded failure is replaced by its later rerun | every attempt is treated as current, not just the latest | `not ok - the first fact order compiles: expected exit 0, got 1` |
+| alias fallback resolves a later declared candidate | only the first declared executable candidate is evaluated | `not ok - every observable registry path has the declared isolated outcome: expected exit 0, got 1` |
 | an exhausted candidate set is could-not-observe | an unresolved required capability stops being could-not-observe | `not ok - an exhausted candidate set is could-not-observe: expected exit 2, got 0` |
 | a candidate that will not state its identity is not a selection | a candidate that will not state its identity is selected anyway | `not ok - the unusable candidate must be recorded as identity_failed, not as absent` |
 | a silently dropped obligation refuses | an unaccounted predecessor obligation is skipped | `not ok - an obligation that simply disappears refuses: expected exit 1, got 0` |
-| a silently dropped obligation refuses | the predecessor's active obligations are read as an empty set | `not ok - the refusal must name the unaccounted obligation (missing: 'refusal obligation_dropped')` |
+| a silently dropped obligation refuses | the predecessor's active obligations are read as an empty set | `not ok - the populated registry fixture compiles to a classified envelope: expected exit 0, got 1` |
 | every prior obligation may be accounted for explicitly | a discharged obligation is treated as still active | `not ok - explicit accounting for every prior obligation advances: expected exit 0, got 1` |
 | a satisfied obligation without evidence refuses | satisfaction stops requiring named evidence | `not ok - satisfaction asserted without evidence refuses: expected exit 1, got 0` |
 | a preserved obligation missing from the active set refuses | preservation stops requiring presence in the active set | `not ok - an obligation called preserved but absent refuses: expected exit 1, got 0` |
@@ -129,12 +129,12 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a ruling that does not apply cannot authorize a resolution | ruling head applicability is no longer compared at the classify site | `not ok - a ruling issued against another head cannot authorize anything here: expected exit 1, got 0` |
 | a blocking adverse finding refuses | a blocking adverse finding stops refusing | `not ok - a blocking adverse finding refuses: expected exit 1, got 0` |
 | a required unproven dimension is could-not-observe | a required unproven dimension stops being could-not-observe | `not ok - a required unproven dimension is could-not-observe: expected exit 2, got 0` |
-| a fully excluded scope refuses | a scope that excludes everything stops refusing | `not ok - excluding everything refuses: expected exit 1, got 0` |
-| excluded scope is bound explicitly | the rule that excluded a path is no longer recorded | `not ok - the envelope must name which rule excluded each path` |
+| a fully excluded scope refuses | a scope that excludes everything stops refusing | `not ok - the first exclusion order compiles to a refusal: expected exit 1, got 0` |
+| excluded scope is bound explicitly | the rule that excluded a path is no longer recorded | `not ok - the first matching exclusion rule must receive credit` |
 | a contribution that changes nothing refuses | an empty changed-file set stops refusing | `not ok - the refusal must say the contribution changes nothing (missing: 'refusal changed_file_set_empty')` |
 | a base the candidate does not descend from refuses | a base outside the candidate's ancestry stops refusing | `not ok - the refusal must name the base the candidate does not descend from (missing: 'refusal base_not_ancestor_of_candidate')` |
 | a declared repository identity this is not refuses | the declared repository identity is no longer checked | `not ok - compiling against the wrong repository refuses: expected exit 1, got 0` |
-| a check that names no head cannot cover a required platform | an attempt naming no head is treated as if it named one | `not ok - the refusal must say the platform has no exact-head check (missing: 'refusal ci_required_platform_uncovered')` |
+| a check that names no head cannot cover a required platform | an attempt naming no head is treated as if it named one | `not ok - every observable registry path has the declared isolated outcome: expected exit 0, got 1` |
 | validate refuses to guess about evidence | validation guesses the evidence decision instead of refusing | `not ok - validation with no evidence decision is could-not-observe: expected exit 2, got 1` |
 | declining the evidence recheck cannot reach review ready | a declined evidence recheck no longer blocks review-ready | `not ok - a declined evidence recheck cannot pass: expected exit 2, got 0` |
 | validate rechecks evidence bytes | the evidence recheck arm never runs | `not ok - evidence replaced after compilation refuses at validation: expected exit 1, got 0` |
