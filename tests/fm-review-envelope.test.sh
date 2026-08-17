@@ -888,7 +888,7 @@ PY
 }
 
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading() {
-  local case_dir
+  local case_dir swap_pid attempt
   case_dir=$(make_case evidence-symlink-escape)
   printf 'external bytes that must not be read\n' > "$case_dir/outside.log"
   ln -s "$case_dir/outside.log" "$case_dir/evidence/linked.log"
@@ -916,6 +916,26 @@ block = json.load(open(sys.argv[1]))["envelope"]["verification"]["results"][1]["
 if block.get("resolved") or "observed_sha256" in block or "matches" in block:
     sys.exit(1)
 PY
+
+  printf 'internal bytes that do not match the declared digest\n' > "$case_dir/evidence/internal.log"
+  (
+    while :; do
+      ln -sfn "$case_dir/evidence/internal.log" "$case_dir/evidence/linked.log"
+      ln -sfn "$case_dir/outside.log" "$case_dir/evidence/linked.log"
+    done
+  ) &
+  swap_pid=$!
+  fm_test_reap "$swap_pid"
+  for attempt in $(seq 1 40); do
+    capture run_prepare "$case_dir" "race-$attempt"
+    if [ "$CAPTURED_CODE" -eq 0 ]; then
+      fail "a symlink swap bound bytes outside the evidence root"
+    fi
+    assert_not_contains "$CAPTURED" 'REVIEW_READY' \
+      "a swapped evidence name must never authorize outside bytes"
+  done
+  kill "$swap_pid" 2>/dev/null || true
+  wait "$swap_pid" 2>/dev/null || true
   pass "a symlink cannot carry evidence outside its root into the envelope"
 }
 
@@ -1791,11 +1811,62 @@ test_the_verification_record_matches_the_executed_control_count() {
 test_the_measurement_record_is_backed_by_the_campaign_artifact() {
   local artifact=$ROOT/docs/verification/review-envelope-campaign.json
   local record=$ROOT/docs/verification/review-envelope-controls.md
+  local replay_root=$TMP_ROOT/campaign-replay
   [ -f "$artifact" ] || fail "the campaign artifact is absent, so no measurement claim is checkable"
-  python3 - "$artifact" "$record" "$ROOT" <<'PYEOF' || fail "the measurement record is not backed by the campaign artifact"
-import hashlib, json, re, sys
+  check_campaign_artifact "$artifact" "$record" "$ROOT" "$replay_root" \
+    || fail "the measurement record is not backed by the campaign artifact"
 
-artifact_path, record_path, root = sys.argv[1], sys.argv[2], sys.argv[3]
+  local mutant=$TMP_ROOT/campaign-mutant.json
+  python3 - "$artifact" "$mutant" missing <<'PYEOF'
+import json, sys
+source, target, mutation = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+entry = min(artifact["mutations"], key=lambda item: item["id"])
+if mutation == "missing":
+    del entry["replay_patch"]
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-missing"
+  assert_contains "$CAPTURED" 'carries no replay_patch' \
+    "an entry with no replay patch must fail for the missing replay material"
+
+  python3 - "$artifact" "$mutant" <<'PYEOF'
+import json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+entry = min(artifact["mutations"], key=lambda item: item["id"])
+entry["replay_patch"] += "\n"
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-mismatch"
+  assert_contains "$CAPTURED" 'replay patch digest does not match' \
+    "an entry whose replay patch digest is stale must fail for that mismatch"
+
+  python3 - "$artifact" "$mutant" <<'PYEOF'
+import hashlib, json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+entry = min(artifact["mutations"], key=lambda item: item["id"])
+entry["replay_patch"] = entry["replay_patch"].replace("@@ ", "@@ broken ", 1)
+entry["replay_patch_sha256"] = "sha256:" + hashlib.sha256(
+    entry["replay_patch"].encode("utf-8")
+).hexdigest()
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-corrupt"
+  assert_contains "$CAPTURED" 'replay patch could not rebuild its variant' \
+    "a correctly digested patch that cannot rebuild its variant must fail the deep replay"
+  pass "the measurement record's claims are backed by the campaign artifact"
+}
+
+check_campaign_artifact() {
+  python3 - "$@" <<'PYEOF'
+import hashlib, json, os, re, shutil, subprocess, sys
+
+artifact_path, record_path, root, replay_root = sys.argv[1:]
 try:
     artifact = json.load(open(artifact_path, encoding="utf-8"))
 except (OSError, ValueError) as error:
@@ -1851,14 +1922,67 @@ for entry in mutations:
     # Material that cannot be produced without executing, and that an
     # independent party can replay: the patch that rebuilds the variant, and a
     # digest of the whole captured run to compare against.
-    for field in ("observed", "output_sha256", "replay_patch_sha256"):
+    for field in ("observed", "output_sha256", "replay_patch", "replay_patch_sha256"):
         if not entry.get(field):
             sys.stderr.write(
                 "mutation %s carries no %s, so its result is self-attested\n"
                 % (entry.get("id"), field))
             sys.exit(1)
+    replay_patch_sha256 = "sha256:" + hashlib.sha256(
+        entry["replay_patch"].encode("utf-8")
+    ).hexdigest()
+    if replay_patch_sha256 != entry["replay_patch_sha256"]:
+        sys.stderr.write(
+            "mutation %s replay patch digest does not match: recorded %s, observed %s\n"
+            % (entry.get("id"), entry["replay_patch_sha256"], replay_patch_sha256)
+        )
+        sys.exit(1)
+
+# Replay the lexically first mutation id, so every verifier exercises the same
+# deep proof and its result never depends on chance or artifact ordering.
+entry = min(mutations, key=lambda item: item["id"])
+shutil.rmtree(replay_root, ignore_errors=True)
+shutil.copytree(root, replay_root, symlinks=True)
+variant_root = os.path.join(replay_root, "campaign-variant")
+os.makedirs(os.path.join(variant_root, "bin"))
+for subject in ("bin/fm-review-envelope.sh", "bin/fm-review-envelope-lib.sh"):
+    shutil.copy2(os.path.join(root, subject), os.path.join(variant_root, subject))
+
+patch_lines = entry["replay_patch"].splitlines(keepends=True)
+for index, prefix in ((0, "--- "), (1, "+++ ")):
+    if index >= len(patch_lines) or not patch_lines[index].startswith(prefix):
+        sys.stderr.write("mutation %s replay patch could not rebuild its variant\n" % entry["id"])
+        sys.exit(1)
+    original = patch_lines[index][len(prefix):].split("\t", 1)[0]
+    subject = next((path for path in artifact["subjects"] if original.endswith("/" + path)), None)
+    if subject not in ("bin/fm-review-envelope.sh", "bin/fm-review-envelope-lib.sh"):
+        sys.stderr.write("mutation %s replay patch could not rebuild its variant\n" % entry["id"])
+        sys.exit(1)
+    patch_lines[index] = prefix + subject + "\n"
+applied = subprocess.run(
+    ["patch", "-p0", "--batch", "--forward"], cwd=variant_root,
+    input="".join(patch_lines).encode("utf-8"), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+)
+if applied.returncode:
+    sys.stderr.write("mutation %s replay patch could not rebuild its variant\n" % entry["id"])
+    sys.exit(1)
+
+environment = os.environ.copy()
+environment["FM_REVIEW_ENVELOPE_BIN"] = os.path.join(
+    variant_root, "bin", "fm-review-envelope.sh"
+)
+replayed = subprocess.run(
+    ["bash", os.path.join(replay_root, "tests", "fm-review-envelope.test.sh")],
+    cwd=replay_root, env=environment, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+)
+observed_output_sha256 = "sha256:" + hashlib.sha256(replayed.stdout).hexdigest()
+if observed_output_sha256 != entry["output_sha256"]:
+    sys.stderr.write(
+        "mutation %s replayed output digest does not match: recorded %s, observed %s\n"
+        % (entry["id"], entry["output_sha256"], observed_output_sha256)
+    )
+    sys.exit(1)
 PYEOF
-  pass "the measurement record's claims are backed by the campaign artifact"
 }
 
 test_a_complete_candidate_is_review_ready

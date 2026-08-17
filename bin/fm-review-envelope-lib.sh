@@ -153,6 +153,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -206,12 +207,16 @@ def sorted_records(records, identity_fields, label):
     )
 
 
-def digest_file(path):
+def digest_handle(handle):
     hasher = hashlib.sha256()
-    with open(path, "rb") as handle:
-        for chunk in iter(lambda: handle.read(65536), b""):
-            hasher.update(chunk)
+    for chunk in iter(lambda: handle.read(65536), b""):
+        hasher.update(chunk)
     return "sha256:" + hasher.hexdigest()
+
+
+def digest_file(path):
+    with open(path, "rb") as handle:
+        return digest_handle(handle)
 
 
 def now_utc():
@@ -784,7 +789,7 @@ def read_envelope(path, code):
     return document, body, stored, path
 
 
-def resolve_evidence(root, locator):
+def open_evidence(root, locator):
     """A locator is a repository-independent relative path under one root. An
     absolute path or a parent traversal is refused rather than followed, so an
     envelope cannot borrow bytes from outside the evidence it was given."""
@@ -796,18 +801,36 @@ def resolve_evidence(root, locator):
         return None, "locator escapes its root"
     if root is None:
         return None, "no evidence root was supplied"
-    candidate = os.path.join(root, locator)
-    real_root = os.path.realpath(root)
-    real_candidate = os.path.realpath(candidate)
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        return None, "this platform cannot open evidence without following symlinks"
     try:
-        contained = os.path.commonpath((real_root, real_candidate)) == real_root
-    except ValueError:
-        contained = False
-    if not contained:
-        return None, "locator escapes its root"
-    if not os.path.isfile(candidate):
+        directory_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | nofollow)
+    except OSError:
+        return None, "evidence root is unreadable"
+    try:
+        parts = locator.split("/")
+        for part in parts[:-1]:
+            next_fd = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | nofollow,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = next_fd
+        file_fd = os.open(
+            parts[-1], os.O_RDONLY | nofollow, dir_fd=directory_fd
+        )
+        if not stat.S_ISREG(os.fstat(file_fd).st_mode):
+            os.close(file_fd)
+            return None, "locator names no readable file"
+        # The containment check and the hash use this same open handle. A path
+        # is only a mutable name and must never authorize a later path lookup.
+        return os.fdopen(file_fd, "rb"), None
+    except OSError:
         return None, "locator names no readable file"
-    return candidate, None
+    finally:
+        os.close(directory_fd)
 
 
 def request_identity(envelope, envelope_digest):
@@ -850,11 +873,12 @@ def bind_evidence(block, evidence_root):
     handed."""
     if not isinstance(block, dict):
         return
-    path, problem = resolve_evidence(evidence_root, block.get("locator"))
+    handle, problem = open_evidence(evidence_root, block.get("locator"))
     block["resolved"] = problem is None
     block["resolution_detail"] = problem
-    if path is not None:
-        observed = digest_file(path)
+    if handle is not None:
+        with handle:
+            observed = digest_handle(handle)
         block["observed_sha256"] = observed
         block["matches"] = observed == block.get("sha256")
 
@@ -1557,11 +1581,12 @@ def check_evidence(problems, label, block, evidence_root, recheck_evidence):
         return
     if not recheck_evidence:
         return
-    path, problem = resolve_evidence(evidence_root, block.get("locator"))
+    handle, problem = open_evidence(evidence_root, block.get("locator"))
     if problem is not None:
         problems.refuse("evidence_locator_broken", label, problem)
         return
-    observed = digest_file(path)
+    with handle:
+        observed = digest_handle(handle)
     if observed != block.get("sha256"):
         problems.refuse(
             "evidence_digest_mismatch",
