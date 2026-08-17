@@ -432,6 +432,7 @@ fm_pr_forge_view() {
       command -v gh >/dev/null 2>&1 || return 1
       # gh resolves a full pull request URL without a repository around it, so
       # this runs from / rather than from a worktree that may already be gone.
+      # fm-retrieval-audit: not-a-collection - one pull request object's state and head oid
       out=$(cd / && gh pr view "$url" --json state,headRefOid \
         -q '.state + "\t" + .headRefOid' 2>/dev/null) || return 1
       state=${out%%$'\t'*}
@@ -451,7 +452,7 @@ fm_pr_forge_view() {
       command -v glab >/dev/null 2>&1 || return 1
       # glab cannot take a merge request URL, so the instance comes from the
       # validated record through -R, exactly as the merge poll addresses it.
-      out=$(cd / && glab mr view "$number" -R "https://$host/$path" 2>/dev/null) || return 1
+      out=$(cd / && glab mr view "$number" -R "https://$host/$path" 2>/dev/null) || return 1  # fm-retrieval-audit: not-a-collection - one merge request object
       state=$(printf '%s\n' "$out" | sed -n 's/^state:[[:space:]]*//p' | head -1)
       case "$state" in
         open|opened) state=open ;;

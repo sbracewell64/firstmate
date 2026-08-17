@@ -16,7 +16,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 DOWNLOAD_ATTEMPTS=3
 download_attempt=1
-while ! curl -fsSL "$URL" -o "$TMP/$ARCHIVE"; do
+while ! curl -fsSL "$URL" -o "$TMP/$ARCHIVE"; do  # fm-retrieval-audit: not-a-collection - one named archive to a file
   [ "$download_attempt" -lt "$DOWNLOAD_ATTEMPTS" ] || {
     printf 'fm-install-shellcheck.sh: download failed after %s attempts\n' "$DOWNLOAD_ATTEMPTS" >&2
     exit 1

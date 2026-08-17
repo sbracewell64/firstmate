@@ -389,6 +389,10 @@ jobs:
       # the grep here.
       - name: Tracked files must carry no unresolved conflict markers
         run: bin/fm-conflict-marker-check.sh
+      # Single owner of the read-site pattern and the classification vocabulary;
+      # do not re-spell either here.
+      - name: Every load-bearing remote collection read must be classified
+        run: bin/fm-retrieval-check.sh --check
       - name: Personal fleet paths must not be tracked
         run: |
           set -eu

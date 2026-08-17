@@ -94,6 +94,9 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-tangle-lib.sh`       | Shared default-branch resolution and primary-checkout tangle classification          |
 | `fm-verify.sh`           | Run one declared verifier and return `PASS`, `FAIL`, or `NO_VERIFIER_RAN`, with exit 0 reserved for `PASS` alone |
 | `fm-verify-lib.sh`       | Single owner of the three-valued observation type, its consumer and coercion rules, and the check-set classification rule |
+| `fm-control-read.sh`     | The retrieval contract for a control-plane read: enumerate the whole collection, prove it, and refuse a negative conclusion it cannot support |
+| `fm-retrieval-lib.sh`    | Single owner of the remote-collection retrieval type: page traversal, continuation, deduplication by remote identity, bounded retry, completeness state, provenance, and the conclusion algebra |
+| `fm-retrieval-check.sh`  | Reject a new load-bearing pagination-sensitive direct read, and print the classified audit census of every candidate site |
 | `fm-supervision-lib.sh`  | Shared in-flight-work-without-fresh-watcher-beacon predicate                         |
 | `fm-ff-lib.sh`           | Shared guarded fast-forward helper for origin pulls and local secondmate syncs       |
 | `fm-lock-lib.sh`         | Shared "is this git lock provably abandoned?" proof used by teardown and fleet-sync   |

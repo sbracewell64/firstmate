@@ -1226,7 +1226,7 @@ EOF
 # without having judged the other.
 recheck_gh() {
   recheck_gh_rc=0
-  RECHECK_OUT=$(gh "$@" 2>"$RECHECK_ERR_FILE") || recheck_gh_rc=$?
+  RECHECK_OUT=$(gh "$@" 2>"$RECHECK_ERR_FILE") || recheck_gh_rc=$?  # fm-retrieval-audit: chokepoint - the recheck transport wrapper carries no collection semantics; each recheck_gh api caller classifies its own read
   RECHECK_ERR=$(cat "$RECHECK_ERR_FILE" 2>/dev/null || true)
   return "$recheck_gh_rc"
 }
@@ -1442,6 +1442,7 @@ recheck_resolve_pull_request() {
   recheck_found=
   for recheck_slug in $recheck_candidates; do
     # shellcheck disable=SC2016  # $owner, $name and $oid are GraphQL variables.
+    # fm-retrieval-audit: complete-source - refuses on pageInfo.hasNextPage as pull-request-list-truncated rather than resolving from a partial association listing
     recheck_gh api graphql \
       -f query='query($owner: String!, $name: String!, $oid: GitObjectID!) {
         repository(owner: $owner, name: $name) {
@@ -1528,6 +1529,7 @@ EOF
 # same ordering bin/fm-pr-merge.sh reduces check attempts by, so the largest is
 # the one that started last.
 recheck_select_run() {
+  # fm-retrieval-audit: complete-source - reconciles total_count against the returned length and refuses forge-read-truncated, so an unread run is never an absent one
   recheck_gh api \
     "repos/$recheck_repo/actions/workflows/$RECHECK_WORKFLOW_FILE/runs?head_sha=$recheck_head&event=pull_request&per_page=100" \
     --jq '"total \(.total_count) \(.workflow_runs | length)",
@@ -1723,6 +1725,7 @@ cmd_recheck() {
 
   # ---- the pull request this head is open on -----------------------------
   if [ -n "$recheck_repo" ]; then
+    # fm-retrieval-audit: not-a-collection - one pull request object's state, head sha, and head repository; there is no extent to enumerate
     recheck_gh api "repos/$recheck_repo/pulls/$recheck_pr" --jq '"\(.state) \(.head.sha) \(.head.repo.full_name // "absent")"' \
       || recheck_fail forge-unreadable \
         "Could not read pull request $recheck_pr on $recheck_repo (gh exited $recheck_gh_rc)." \
@@ -1850,7 +1853,7 @@ EOF
       "A re-evaluation nobody can audit is worse than one that did not happen: repair that path and re-run."
   recheck_ledger_unlock
 
-  recheck_gh api --method POST "repos/$recheck_repo/actions/runs/$recheck_run/rerun" || {
+  recheck_gh api --method POST "repos/$recheck_repo/actions/runs/$recheck_run/rerun" || {  # fm-retrieval-audit: write - a re-run dispatch, which is an action and has no observation type
     recheck_ledger_append refused rerun-not-requested "$recheck_run" "$recheck_attempt"
     recheck_fail rerun-not-requested \
       "GitHub did not accept a re-run of $recheck_url (gh exited $recheck_gh_rc)." \

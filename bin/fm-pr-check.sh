@@ -179,6 +179,7 @@ if [ "$RECONSTRUCTED" = 1 ]; then
   # The rebuild above already asked the forge for this exact pull request.
   PR_HEAD=$RECONSTRUCTED_HEAD
 elif [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
+  # fm-retrieval-audit: not-a-collection - one pull request's head oid
   if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
     && fm_pr_head_valid "$REMOTE_HEAD"; then
     PR_HEAD=$REMOTE_HEAD

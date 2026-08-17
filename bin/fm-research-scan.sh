@@ -555,7 +555,7 @@ emit_landing_evidence() {  # <ident> [token...]
     # No --fields: the default listing already carries number, title, and
     # state, and a rejected field list would fail the whole call. A failed
     # listing must never be reported as an absence of delivery.
-    if ! out=$( (cd "$repo" && gh-axi pr list --state all --limit "$PR_LIMIT") 2>&1 ); then
+    if ! out=$( (cd "$repo" && gh-axi pr list --state all --limit "$PR_LIMIT") 2>&1 ); then  # fm-retrieval-audit: bound-disclosed - emits landing=no-title-match with a landing_caveat naming the bound, so the negative travels as a bounded search and not as proof nothing was delivered
       printf 'landing_error=%s\t%s\n' "$(basename "$repo")" \
         "$(printf '%s' "$out" | head -n1 | cut -c "1-$EXCERPT_CHARS")"
       failed=$((failed + 1))

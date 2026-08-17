@@ -1,0 +1,249 @@
+# Control-plane retrieval completeness verification
+
+Audience: maintainer verification.
+
+This record holds the audit and the reusable evidence for one active guarantee: no control-plane read in this tree reaches a negative conclusion over a source whose candidate universe was never enumerated.
+
+[`../../bin/fm-retrieval-lib.sh`](../../bin/fm-retrieval-lib.sh) owns the retrieval type, the traversal, and the conclusion algebra; [`../../bin/fm-control-read.sh`](../../bin/fm-control-read.sh) is the callable contract over it; [`../../bin/fm-retrieval-check.sh`](../../bin/fm-retrieval-check.sh) owns the enforced classification and the audit census; [`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh) owns the controls.
+Each header owns its own contract; this file records what was measured.
+
+Verified on 2026-08-17 with gh 2.96.0, jq 1.8.1, and ShellCheck 0.11.0 on Linux 6.18.33.2-microsoft-standard-WSL2.
+Re-run the commands below rather than trusting the recorded output.
+
+## The defect
+
+A control-plane read reported that the reviewing authority had not replied, repeatedly over several hours, while three rulings sat unread.
+One of them was an approval a worker was already parked on.
+The read asked a paginated endpoint for an issue's comments and received the first page, and the first page holds the OLDEST comments.
+
+Pagination is the mechanism, not the defect.
+The defect was making a NEGATIVE CLAIM over a source whose complete candidate universe had never been enumerated.
+An earlier version of the same miss was diagnosed as "I only read the newest comment", and the fix adopted then - scan by timestamp - still read only the first page.
+Two correct instructions, both applied to the wrong layer of one defect.
+
+## Verified mechanism facts
+
+Each fact below was observed rather than assumed, because each one decides how a guard has to be written.
+
+### gh flattens the check rollup and caps it at the OLDEST 100
+
+```sh
+$ gh --version | head -1
+gh version 2.96.0 (2026-07-02)
+$ GH_DEBUG=api gh pr view 2522 --repo sbracewell64/firstmate --json statusCheckRollup 2>&1 \
+    | grep -o 'contexts([a-z]*:[0-9]*)' | sort -u
+contexts(first:100)
+```
+
+`first:100`, not `last:100`.
+A head carrying more than 100 check members returns the oldest 100 and silently drops the newest, which are exactly the members a re-triggered check produces.
+That response also flattens away both `totalCount` and `pageInfo`, so it carries no evidence of its own truncation.
+At exactly 100 members a complete set and a truncated one are indistinguishable in it, so [`../../bin/fm-verify-lib.sh`](../../bin/fm-verify-lib.sh) refuses both: that costs a re-read on a head with exactly 100 checks and prevents a false green on every head above it.
+
+[`../../bin/fm-pr-merge.sh`](../../bin/fm-pr-merge.sh) asks for `contexts(last:100)` with `totalCount` and refuses a returned count below the reported one, which is why that path was already sound.
+
+### GitHub's continuation is an opaque cursor, so page numbers are not a traversal
+
+```sh
+$ gh api -i "repos/sbracewell64/firstmate/issues?per_page=2&page=1&state=all" | grep -i '^Link:'
+Link: <https://api.github.com/repositories/1312908036/issues?per_page=2&page=2&state=all&after=Y3Vyc29yOnYyOpLPAAABoAzeCOjPAAAAATP3vzY%3D>; rel="next"
+```
+
+The `after=` cursor is the source's own position in the collection.
+Incrementing `page=` independently is guessing at a sequence GitHub did not publish, and under insertion it skips or repeats records.
+The traversal therefore follows `rel="next"` and nothing else, and a continuation it cannot parse is could-not-observe rather than the end of the set.
+
+### tasks-axi discloses its own truncation
+
+```sh
+$ tasks-axi list --file <backlog> --limit 2
+count: 2 of 5 total
+```
+
+[`../../bin/fm-session-start.sh`](../../bin/fm-session-start.sh) passes that output through verbatim, so the startup digest carries the bound.
+Measuring this against the installed tool rather than assuming it is what moved that site from suspected defect to judged safe.
+
+## The sweep, and how the universe was determined
+
+The universe was defined by axis, not by the example that produced the incident.
+A site is in scope when it reads a collection from outside the process where the returned extent is decided by the SOURCE - a page, a cap, a limit, a window, a scrollback bound - rather than by the caller, AND its result can reach a conclusion of the form "no X exists", "nothing pending", "nothing new", "not present", or "already handled".
+
+The discovery pattern was written against that axis and deliberately over-broadened: every forge, relay, backlog, pipeline, and terminal read form in the tree, every explicit page or limit parameter, every completeness-proof token, and prose that merely mentions one.
+It was never narrowed to make violations disappear.
+Both patterns print, so the universe is reproducible rather than described:
+
+```sh
+bin/fm-retrieval-check.sh --pattern           # the enforced read forms
+bin/fm-retrieval-check.sh --pattern --audit   # the broader census pattern
+bin/fm-retrieval-check.sh --audit             # every candidate site, classified
+bin/fm-retrieval-check.sh --check             # the enforced gate
+```
+
+Two axis applications separate the enforced pattern from the census, and neither is a result-driven tune.
+
+A whole-line comment reads nothing, so it is not a read site.
+That is the axis applied rather than the pattern narrowed, and it matters here because header prose in this tree discusses gh flags and page parameters at length: before the exclusion the census reported 129 sites against the same tree, 29 of them sentences.
+
+The census additionally matches completeness-proof tokens - `total_count`, `totalCount`, `hasNextPage`, `pageInfo`, a GraphQL `first:` or `last:` - and bare forge command names, which the enforced pattern omits.
+Those tokens are evidence that a site already proves its own extent, which is what an audit wants to find, and they are not themselves reads.
+They also occur inside multi-line quoted query bodies, where the shell has no syntax for a comment, so enforcing them would demand an annotation in a position that cannot exist.
+[`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh) asserts the census stays strictly broader than the enforced set, so narrowing it back fails a control.
+
+Measured on 2026-08-17: 167 shell files, 109 census sites, 61 enforced sites.
+
+## Classification of every enforced site
+
+Each site carries an inline `# fm-retrieval-audit: <class> - <reason>` annotation at the site itself, so the reason cannot drift from the code it justifies.
+`bin/fm-retrieval-check.sh --list-classes` prints the vocabulary and that script's header defines each class.
+
+| class | sites | what it means here |
+| ----- | ----- | ------------------ |
+| `complete-source` | 16 | proves its own extent: short-page termination with a max-pages could-not-observe, `hasNextPage`, `total_count` reconciliation, an n+1 cap sentinel, or a source that discloses its own truncation |
+| `not-a-collection` | 13 | one object, one queue pop, or one named artifact to a file |
+| `not-a-read` | 12 | message text, a tool-presence probe, an install command printed for a human, or the check's own pattern text |
+| `chokepoint` | 5 | a transport wrapper with no collection semantics of its own; its callers carry the classification |
+| `window-is-the-subject` | 4 | the claim's universe IS the bounded window |
+| `contract` | 4 | the contract's own request builder, whose traversal proves its own extent |
+| `write` | 3 | an action, which has no observation type |
+| `conservative-negative` | 2 | a false negative tightens the gate it feeds |
+| `no-negative` | 1 | cannot reach a negative conclusion |
+| `bound-disclosed` | 1 | bounded, and the bound travels with the result |
+
+`bin/fm-retrieval-check.sh --check` prints that breakdown on its passing path, so the mix stays visible and re-running it is how to refresh these counts.
+The check scans its own owners, which is why `contract` has four sites and none of them is the migrated verifier: routing a read through the contract REMOVES the site rather than reclassifying it, because the line no longer calls a forge command.
+
+Five scripts had independently re-derived a correct completeness proof before this audit: [`../../bin/fm-attest.sh`](../../bin/fm-attest.sh) on `hasNextPage` and on `total_count` against the returned length, [`../../bin/fm-pr-merge.sh`](../../bin/fm-pr-merge.sh) on `totalCount` against returned members, [`../../bin/fm-attribution-sweep.sh`](../../bin/fm-attribution-sweep.sh) on short-page termination with an explicit max-pages could-not-observe, [`../../bin/fm-bearings-snapshot.sh`](../../bin/fm-bearings-snapshot.sh) on an n+1 cap sentinel reported as a minimum, and [`../../bin/fm-wake-ledger.sh`](../../bin/fm-wake-ledger.sh) escalating from a bounded tail to a full-file read on exactly the path where a false negative would be damaging.
+That is strong evidence the discipline is understood and weak evidence it will be applied next time, which is the argument for one owner and a deterministic check rather than a sixth correct instruction.
+
+## Defects found, and what was done
+
+Two sites were load-bearing negatives over an unenumerated universe.
+
+[`../../bin/fm-verify.sh`](../../bin/fm-verify.sh)'s `pr-checks` verifier classified gh's flattened rollup with no truncation detection, so "no member is non-SUCCESS" - a negative claim - was drawn over a set capped at the oldest 100.
+It is fixed in the rule's owner, `bin/fm-verify-lib.sh`, which gained a `truncated` label placed below `failing` and `pending` and above `passing`: incompleteness kills negatives and not positives, so a failure actually observed in the returned part still refuses.
+`bin/fm-verify.sh` maps that label to `NO_VERIFIER_RAN` with a new `retrieval_incomplete` reason, and `bin/fm-bearings-snapshot.sh`, the rule's other consumer, renders the label directly and needed no change.
+
+[`../../bin/fm-verify-fork-landing.sh`](../../bin/fm-verify-fork-landing.sh) asked `gh-axi pr list --head` and took the first number the listing printed.
+That is two mistakes in one line: the listing was never enumerated, so "no open pull request" was a negative over an unread universe, and the first row is the SOURCE's choice of which pull request the subject is rather than the verifier's.
+It now reads through `bin/fm-control-read.sh` with `--identity-mode exact` on `head.ref`, and refuses an ambiguous head rather than resolving it, because two open pull requests carrying one head are two candidate subjects and picking either would be a sound reading of the wrong one.
+
+### Residuals retained, named rather than resolved
+
+[`../../bin/fm-crew-state.sh`](../../bin/fm-crew-state.sh)'s cross-branch fallback reads the newest 200 pipeline rows and returns empty both when the branch has no run inside that window and when the newest row cannot be bound to the worktree.
+It is classified `window-is-the-subject` because the question is whether a run for this branch is active NOW and the listing is newest-first.
+The residual is the 200-row assumption: a fleet that started 200 newer runs could push an active run out of the window, and repairing it means changing that function's return type, which is outside this change's fence.
+
+[`../../bin/fm-teardown.sh`](../../bin/fm-teardown.sh)'s `pr_number_from_branch` asks with `--limit 1`, so which pull request a branch with several resolves to is the source's ordering rather than a choice.
+It is classified `conservative-negative`: a miss returns non-zero and the landed-work test falls back to the stricter content check, and the positive path is independently bound by an ancestry check against the merged head, so neither outcome can authorize discarding unlanded work.
+
+## Controls
+
+[`../../tests/fm-retrieval-contract.test.sh`](../../tests/fm-retrieval-contract.test.sh), 34 controls, in the portable-serial lane and therefore a required CI shard.
+Every negative case asserts the retrieval completeness value alongside the conclusion, so no case can call a result "no ruling" unless completeness is itself proven.
+
+```sh
+bash tests/fm-retrieval-contract.test.sh
+```
+
+Controls covering the commissioned list: an applicable ruling only on page 2 or later; multiple pages with the oldest record on page 1; the latest applicable ruling not on the first page; page 1 carrying a ruling a later page supersedes; pagination stopping early; one page that cannot be read; duplicate identifiers across pages; an irrelevant later comment after the applicable ruling; an identifier present only in quoted or reply prose; prefix collision, `X` versus `X` plus a suffix; complete retrieval with a genuinely absent ruling, the negative that must stay assertable; and complete retrieval with exactly one applicable ruling, the non-vacuity anchor.
+
+Beyond that list: an absent reader tool, a moved response schema, a record with no immutable identity, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, replay of a committed read, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, the four check behaviors, and the three rollup-cap behaviors.
+
+### Negative controls: each guard watched failing
+
+The whole suite was watched red before any implementation existed.
+Each guard was then deliberately broken and the controls covering it were watched red individually, because absence of failures is not evidence that a control works.
+The library was restored byte-identically afterwards, confirmed with `diff -q` against a pre-mutation copy.
+
+| mutation | controls that went red |
+| -------- | ---------------------- |
+| traversal stops after page one and calls it enumerated | 11, including every page-2 case, both bounded-out cases, dedup, and the provenance case |
+| `INDETERMINATE` folded into `ABSENT` | 5: early stop, unreadable page, schema movement, rate limit, uncommitted state |
+| `latest` no longer requires complete retrieval | the extremal-claim case |
+| identity matched as a plain substring | the quoted-prose and prefix-collision cases |
+| dedup keyed on page position instead of remote identity | the duplicate-identifier case |
+| rollup cap detection removed | the page-cap case, while the below-cap pass and below-cap failure stayed green |
+| every `fm_retrieval_case` guard removed | both consumer-type cases |
+
+Removing only the arity guard from `fm_retrieval_case` left both consumer controls green, because the handler-existence guard catches the same call independently.
+That is redundancy in the implementation rather than a gap in the controls, and removing all three guards turns both red.
+
+One control exists because the FIRST LIVE RUN failed, not because inspection found it.
+A boundary pattern strict enough to reject `req-7.1` also rejected `APPROVE req-7.` at the end of a sentence, which is a false negative on the most ordinary way a human writes a ruling.
+The rule is now extraction of identifier runs followed by equality, and the punctuation case is a control.
+
+## Live end-to-end verification
+
+Against the real GitHub API on 2026-08-17.
+`--per-page 5` forces continuation on a thread that would otherwise fit in one page.
+
+Complete enumeration of a real 29-comment thread across 6 pages, each continuation URL GitHub's own cursor, ending in an assertable absence:
+
+```sh
+$ bin/fm-control-read.sh issue-comments cli/cli 1268 \
+    --identity fm-no-such-identifier --claim exists --per-page 5
+...,complete,enumerated,6,29,0,unknown,29,0,0,0,exists,ABSENT,-,...
+exit=1
+```
+
+The same question bounded to one page, which is the original defect's read shape, refuses instead of answering:
+
+```sh
+$ bin/fm-control-read.sh issue-comments cli/cli 1268 \
+    --identity fm-no-such-identifier --claim exists --per-page 5 --max-pages 1
+...,incomplete,page_bound_reached,1,5,0,unknown,5,0,0,0,exists,INDETERMINATE,-,...
+exit=2
+```
+
+An identifier present only beyond page one: refused under the bound, found under the complete read, with the matching comment named.
+
+```sh
+$ bin/fm-control-read.sh issue-comments cli/cli 1268 \
+    --identity Alternatively --claim latest --per-page 5 --max-pages 1
+...,incomplete,page_bound_reached,1,5,...,latest,INDETERMINATE,-,...
+exit=2
+$ bin/fm-control-read.sh issue-comments cli/cli 1268 \
+    --identity Alternatively --claim latest --per-page 5
+...,complete,enumerated,6,29,0,unknown,29,1,0,0,latest,PRESENT,1520910395,...
+exit=0
+```
+
+Suffix collision against real data: `accepted` occurs in that thread only inside `hacktoberfest-accepted`, so the complete read reports the absence and counts the rejection rather than matching a different identifier.
+
+```sh
+$ bin/fm-control-read.sh issue-comments cli/cli 1268 --identity accepted --claim exists --per-page 5
+...,complete,enumerated,6,29,0,unknown,29,0,0,1,exists,ABSENT,-,...
+exit=1
+```
+
+An unreadable subject is could-not-observe, never an empty thread:
+
+```sh
+$ bin/fm-control-read.sh issue-comments cli/cli 999999999 --identity x --claim exists
+...,unobserved,subject_unreadable,0,0,0,unknown,0,0,0,0,exists,INDETERMINATE,-,...
+exit=2
+```
+
+The migrated verifier, against the live fork, on both sides of its question:
+
+```sh
+$ bin/fm-verify-fork-landing.sh --event-key fm/no-such-branch-abcdef
+fail: no open pull request on sbracewell64/firstmate with head fm/no-such-branch-abcdef (the whole open set was read: complete)
+exit=1
+$ bin/fm-verify-fork-landing.sh --event-key fm/review-recurrence-proof-owner
+evidence: fork pull request 104 exists on sbracewell64/firstmate for head fm/review-recurrence-proof-owner (open set read completely: complete)
+evidence: check summary for pull request 104: passed=8 failed=2 pending=3 total=13
+exit=1
+```
+
+## What this does not establish
+
+It does not change what any ruling means, alter hold semantics, or touch the control protocol; applicability is a pattern the caller supplies.
+
+The enforced check reads tracked shell under `bin/`, so a read added in another language, or outside that tree, is not covered by it.
+
+`complete` means the source published no further continuation at the moment of the read.
+A record created after the traversal passed its page is a later fact about the source rather than an error in this one, which is why the observation time is in the proof sidecar.
+
+The classification annotations are maintainer judgment recorded at the site.
+The check enforces that a judgment exists and names a class in the closed vocabulary with a reason; it cannot verify that the reason is true.

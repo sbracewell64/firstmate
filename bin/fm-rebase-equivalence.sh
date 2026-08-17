@@ -473,7 +473,7 @@ if [ -n "$CANDIDATE_PR" ]; then
       || cannot_observe "cannot read the base branch of request $PR_NUMBER from the forge; a GitHub request URL supplies it, otherwise name the trunk with --candidate-base"
     command -v gh >/dev/null 2>&1 \
       || cannot_observe "cannot read the base branch of $CANDIDATE_PR without gh; name the trunk with --candidate-base"
-    BASE_NAME=$(GH_PROMPT_DISABLED=1 gh pr view "$CANDIDATE_PR" --json baseRefName -q .baseRefName 2>/dev/null || true)
+    BASE_NAME=$(GH_PROMPT_DISABLED=1 gh pr view "$CANDIDATE_PR" --json baseRefName -q .baseRefName 2>/dev/null || true)  # fm-retrieval-audit: not-a-collection - one pull request's base branch name
     [ -n "$BASE_NAME" ] \
       || cannot_observe "cannot read the base branch of $CANDIDATE_PR from the forge"
     case "$BASE_NAME" in

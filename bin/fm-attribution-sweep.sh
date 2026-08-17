@@ -347,7 +347,7 @@ gh_get() {
   fi
   REQUESTS_SPENT=$((REQUESTS_SPENT + 1))
 
-  out=$(gh-axi api "$path" --jq "$jq_expr" 2>&1)
+  out=$(gh-axi api "$path" --jq "$jq_expr" 2>&1)  # fm-retrieval-audit: chokepoint - the single GET chokepoint; each sweep scope classifies its own read and carries its own could-not-observe
   rc=$?
   if [ "$rc" -ne 0 ]; then
     GH_STATUS=api-error
@@ -539,7 +539,7 @@ if ! command -v gh-axi >/dev/null 2>&1; then
 fi
 
 if [ -z "$ACCOUNT" ]; then
-  gh_get '/user' '.login'
+  gh_get '/user' '.login'  # fm-retrieval-audit: not-a-collection - the authenticated login, one object
   ACCOUNT=$GH_BODY
   if [ "$GH_STATUS" != "ok" ] || [ -z "$ACCOUNT" ]; then
     run_blocked "${GH_STATUS:-empty-result}" "could not resolve the authenticated account: ${GH_DETAIL:-empty login}"
@@ -556,6 +556,7 @@ SINCE_JQ=$(jq_str "$SINCE")
 if [ "${#REPOS[@]}" -eq 0 ]; then
   page=1
   while [ "$page" -le "$MAX_PAGES" ]; do
+    # fm-retrieval-audit: complete-source - pages until a short page and reports max-pages as could-not-observe, so a bounded-out window is never a clean sweep
     gh_get "/user/repos?affiliation=owner&per_page=$PER_PAGE&page=$page" \
       "{n: length, r: [ .[] | (.full_name|@base64) ]} $JQ_ENVELOPE"
     if [ "$GH_STATUS" != "ok" ]; then
@@ -620,7 +621,7 @@ sweep_comments() {
     | join(\"|\") ]} $JQ_ENVELOPE"
 
   while [ "$page" -le "$MAX_PAGES" ]; do
-    gh_get "/repos/$(urlq "$repo")/issues/comments?since=$(urlq "$SINCE")&per_page=$PER_PAGE&page=$page" "$jq_expr"
+    gh_get "/repos/$(urlq "$repo")/issues/comments?since=$(urlq "$SINCE")&per_page=$PER_PAGE&page=$page" "$jq_expr"  # fm-retrieval-audit: complete-source - same short-page termination and max-pages could-not-observe as every other scope in this sweep
     if [ "$GH_STATUS" != "ok" ]; then
       scope_unobserved "$repo" comments "$GH_STATUS" "$GH_DETAIL" "$declared" "$candidates"
       return
@@ -703,7 +704,7 @@ collect_prs_uncached() {
   pr_jq="{n: length, r: [ .[] | [ ((.number|tostring)|@base64), ((.updated_at // \"\")|@base64) ] | join(\"|\") ]} $JQ_ENVELOPE"
 
   while [ "$page" -le "$MAX_PAGES" ]; do
-    gh_get "/repos/$(urlq "$repo")/pulls?state=all&sort=updated&direction=desc&per_page=$PER_PAGE&page=$page" "$pr_jq"
+    gh_get "/repos/$(urlq "$repo")/pulls?state=all&sort=updated&direction=desc&per_page=$PER_PAGE&page=$page" "$pr_jq"  # fm-retrieval-audit: complete-source - same short-page termination and max-pages could-not-observe as every other scope in this sweep
     if [ "$GH_STATUS" != "ok" ]; then
       PR_STATUS=$GH_STATUS
       PR_DETAIL=$GH_DETAIL
@@ -769,7 +770,7 @@ sweep_reviews() {
   for number in ${prs[@]+"${prs[@]}"}; do
     page=1
     while [ "$page" -le "$MAX_PAGES" ]; do
-      gh_get "/repos/$(urlq "$repo")/pulls/$number/reviews?per_page=$PER_PAGE&page=$page" "$review_jq"
+      gh_get "/repos/$(urlq "$repo")/pulls/$number/reviews?per_page=$PER_PAGE&page=$page" "$review_jq"  # fm-retrieval-audit: complete-source - same short-page termination and max-pages could-not-observe as every other scope in this sweep
       if [ "$GH_STATUS" != "ok" ]; then
         scope_unobserved "$repo" reviews "$GH_STATUS" "pull request $number: $GH_DETAIL" "$declared" "$candidates"
         return
@@ -830,7 +831,7 @@ sweep_commits() {
   else
     branch_jq="{n: length, r: [ .[] | (.name|@base64) ]} $JQ_ENVELOPE"
     while [ "$page" -le "$MAX_PAGES" ]; do
-      gh_get "/repos/$(urlq "$repo")/branches?per_page=$PER_PAGE&page=$page" "$branch_jq"
+      gh_get "/repos/$(urlq "$repo")/branches?per_page=$PER_PAGE&page=$page" "$branch_jq"  # fm-retrieval-audit: complete-source - same short-page termination and max-pages could-not-observe as every other scope in this sweep
       if [ "$GH_STATUS" != "ok" ]; then
         scope_unobserved "$repo" commits "$GH_STATUS" "$GH_DETAIL" "$declared" "$candidates"
         return
@@ -856,7 +857,7 @@ sweep_commits() {
 
   for name in ${branches[@]+"${branches[@]}"}; do
     labels+=("branch=$name")
-    paths+=("/repos/$(urlq "$repo")/commits?sha=$(urlq "$name")&since=$(urlq "$SINCE")&author=$(urlq "$ACCOUNT")&per_page=$PER_PAGE")
+    paths+=("/repos/$(urlq "$repo")/commits?sha=$(urlq "$name")&since=$(urlq "$SINCE")&author=$(urlq "$ACCOUNT")&per_page=$PER_PAGE")  # fm-retrieval-audit: complete-source - builds the paged base path the traversal below walks to a short page or to a could-not-observe
   done
 
   # The pull request pass only makes sense for the whole repository; an explicit
@@ -868,7 +869,7 @@ sweep_commits() {
     fi
     for number in ${PR_NUMBERS[@]+"${PR_NUMBERS[@]}"}; do
       labels+=("pr=$number")
-      paths+=("/repos/$(urlq "$repo")/pulls/$number/commits?per_page=$PER_PAGE")
+      paths+=("/repos/$(urlq "$repo")/pulls/$number/commits?per_page=$PER_PAGE")  # fm-retrieval-audit: complete-source - builds the paged base path the traversal below walks to a short page or to a could-not-observe
     done
   fi
 
@@ -904,7 +905,7 @@ sweep_commits() {
     page=1
     source_seen=0
     while [ "$page" -le "$MAX_PAGES" ]; do
-      gh_get "$base&page=$page" "$commit_jq"
+      gh_get "$base&page=$page" "$commit_jq"  # fm-retrieval-audit: complete-source - walks the built base path page by page, stops on a short page, and reports max-pages as could-not-observe
       if [ "$GH_STATUS" != "ok" ]; then
         scope_unobserved "$repo" commits "$GH_STATUS" "$label: $GH_DETAIL" "$declared" "$candidates"
         return

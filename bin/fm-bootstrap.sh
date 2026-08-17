@@ -691,8 +691,8 @@ install_cmd() {
   case "$1" in
     tmux|node|git|gh|curl|jq|orca|zellij) echo "brew install $1  # or the platform's package manager" ;;
     cmux) echo "brew install --cask cmux  # or see https://cmux.com" ;;
-    treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;
-    no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;
+    treehouse) echo "curl -fsSL https://kunchenguid.github.io/treehouse/install.sh | sh" ;;  # fm-retrieval-audit: not-a-read - the install command this prints for a human to run; nothing is read here
+    no-mistakes) echo "curl -fsSL https://raw.githubusercontent.com/kunchenguid/no-mistakes/main/docs/install.sh | sh" ;;  # fm-retrieval-audit: not-a-read - the install command this prints for a human to run; nothing is read here
     gh-axi|chrome-devtools-axi|lavish-axi) echo "npm install -g $1 && $1 setup hooks" ;;
     tasks-axi|quota-axi) echo "npm install -g $1" ;;
     *) return 1 ;;
@@ -863,7 +863,7 @@ x_mode_setup() {
   fi
 
   missing=0
-  for tool in curl jq; do
+  for tool in curl jq; do  # fm-retrieval-audit: not-a-read - a tool-presence probe over a fixed local list
     if ! command -v "$tool" >/dev/null 2>&1; then
       echo "MISSING: $tool (install: $(install_cmd "$tool"))"
       missing=1

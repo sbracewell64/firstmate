@@ -60,6 +60,7 @@ trap 'rm -rf "$TMP"' EXIT
 
 printf 'fm-install-herdr.sh: downloading %s from %s\n' "$ASSET" "$URL" >&2
 # --fail: HTTP errors; --location: follow redirects; --max-filesize: bound.
+# fm-retrieval-audit: not-a-collection - one named release asset to a file
 curl -fsSL --max-filesize "$FM_HERDR_CI_MAX_BYTES" "$URL" -o "$TMP/$ASSET" \
   || die "download failed for $URL (bounded at $FM_HERDR_CI_MAX_BYTES bytes)"
 

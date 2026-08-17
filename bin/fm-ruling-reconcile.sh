@@ -291,6 +291,7 @@ collect_holds() {  # <out-tsv> <err-file>
   : > "$out"
   for state in queued held in_flight; do
     if ! raw=$(tasks_axi list --kind captain --state "$state" 2>"$err"); then
+      # fm-retrieval-audit: not-a-read - the unreadable command this reports back as NO_HOLD_READ; nothing is read on this line
       printf 'schema=%s\nverdict=NO_HOLD_READ\nunreadable=tasks-axi list --kind captain --state %s\nreason=%s\n' \
         "$SCHEMA_INDEX" "$state" "$(tr '\t\r\n' '   ' < "$err")" >&2
       return 3

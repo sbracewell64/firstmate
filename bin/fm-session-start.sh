@@ -219,7 +219,7 @@ print_backlog_manual_compact() {
 print_backlog_tasks_axi_compact() {
   local path=$1 out rc
   printf 'compact backlog listing (tasks-axi; max %s item(s); task bodies omitted)\n' "$BACKLOG_LIMIT"
-  out=$(tasks-axi list --file "$path" --limit "$BACKLOG_LIMIT" --fields blocked_by,hold_kind,hold_reason 2>&1)
+  out=$(tasks-axi list --file "$path" --limit "$BACKLOG_LIMIT" --fields blocked_by,hold_kind,hold_reason 2>&1)  # fm-retrieval-audit: complete-source - tasks-axi prints count as <n> of <total> total when it truncates and this passes its output through verbatim, so the digest carries the bound
   rc=$?
   if [ "$rc" -eq 0 ]; then
     printf '%s\n' "$out"

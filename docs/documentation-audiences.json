@@ -367,6 +367,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/control-plane-retrieval.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/decision-surface.md",
       "audience": "maintainer-verification"
     },

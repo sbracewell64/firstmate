@@ -65,6 +65,10 @@
 #                             (ruling D3's token for the unreachable browser)
 #   empty_result_set          the verifier returned no results at all
 #   verification_incomplete   results exist but no verdict has been reached yet
+#   retrieval_incomplete      results exist, no adverse one among them, and the
+#                             set's own extent was never established, so "none of
+#                             them failed" is a negative claim over records this
+#                             never read (bin/fm-verify-lib.sh owns the rule)
 #   no_verdict_reached        the verifier finished and reached no verdict, and
 #                             none is coming: checks that completed TIMED_OUT,
 #                             CANCELLED, ACTION_REQUIRED, SKIPPED, STALE,
@@ -294,6 +298,7 @@ verify_pr_checks() {
   [ "$#" -eq 1 ] || refuse usage_error
   require_tool gh || return 0
   require_tool jq || return 0
+  # fm-retrieval-audit: complete-source - refuses a rollup filling gh's own contexts(first:100) page, so a truncated member set is never read as green
   run_verifier gh pr view "$1" --json statusCheckRollup || {
     set_result NO_VERIFIER_RAN no_evidence
     return 0
@@ -309,6 +314,7 @@ verify_pr_checks() {
     passing) set_result PASS verified ;;
     failing) set_result FAIL verifier_reported_failure ;;
     pending) set_result NO_VERIFIER_RAN verification_incomplete ;;
+    truncated) set_result NO_VERIFIER_RAN retrieval_incomplete ;;
     inconclusive) set_result NO_VERIFIER_RAN no_verdict_reached ;;
     none) set_result NO_VERIFIER_RAN empty_result_set ;;
     *) set_result NO_VERIFIER_RAN verification_unreachable ;;
