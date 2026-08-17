@@ -7,7 +7,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 
 Verified on 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
-The current green suites were re-run at implementation head `355f7b9fb86aaed1e585a0950af97046ea1d3d09` after the dead-predicate control became repository-wide and identity-bound retrieval was revalidated.
+The current green suites were re-run at implementation head `fca72ddada2edc9c1fb8c459fbf00d1684a2d830` after the dead-predicate control became repository-wide, identity-bound retrieval was revalidated, and the bootstrap integration joined the refresh recipe.
 
 ## Why this record exists
 
