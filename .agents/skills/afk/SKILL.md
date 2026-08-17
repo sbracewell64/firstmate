@@ -2,7 +2,7 @@
 name: afk
 description: >-
   Enter away-mode supervision when the captain invokes /afk, says they are going afk, `state/.afk` exists, an incoming message starts with `FM_INJECT_MARK`, or any `state/.subsuper-*` marker is involved.
-  It sets a durable away-mode flag so the sub-supervisor daemon can self-handle routine wakes and escalate captain-relevant events plus bounded declared-external-wait rechecks as batched digests during walk-away stretches, then exits automatically when any real unmarked message returns firstmate to full per-wake responsiveness.
+  It sets a durable away-mode flag so the sub-supervisor daemon can self-handle routine wakes and escalate captain-relevant events plus bounded declared-external-wait evaluations that require attention as batched digests during walk-away stretches, then exits automatically when any real unmarked message returns firstmate to full per-wake responsiveness.
 user-invocable: true
 metadata:
   internal: true
@@ -159,9 +159,11 @@ Classify each wake this way:
   Relevance is read from the verb alone - the `verb=` field of a typed `fm-status-event.v1` event, or a prose line's leading word - so a nonterminal progress verb never escalates whatever its prose says, a bare verbless legacy line such as `PR ready` or `merged` no longer escalates, and a refused typed event escalates as malformed rather than being absorbed.
   Other signals with no captain-relevant status -> self-handle.
 - `signal` or `stale` for a declared `paused:` external wait -> self-handle and track the pause rather than a wedge.
-  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping sends one awaiting-external recheck and resets the pause window.
+  If it remains declared and idle past `FM_PAUSE_RESURFACE_SECS` (default 3600s), housekeeping re-evaluates the wait and resets the pause window.
   The recheck exists to re-ask a wait that can change without the captain, so it is skipped for a wait the backlog records as captain-gated (`hold_kind: captain`): that one clears only when the captain acts, and the captain acting is already the away-mode exit, which runs the full return catch-up.
-  Suppression is a cadence decision only - the wait is still tracked, still reset each window, and still as visible as before in the backlog digest, the fleet view, and the return catch-up - and any kind that cannot be established is rechecked normally rather than dropped.
+  Otherwise the window is a sampler rather than a reason to escalate: where the backlog records an exact upstream blocker, the digest line is sent only when [`bin/fm-blocker-lib.sh`](../../../bin/fm-blocker-lib.sh) reports that the blocker moved, could not be observed, or sits in a refused dependency cycle, and a wait with no recorded blocker keeps its plain awaiting-external recheck.
+  Suppression is a cadence decision only - the wait is still tracked, still reset each window, and still as visible as before in the backlog digest, the fleet view, and the return catch-up - and any kind or blocker state that cannot be established is rechecked normally rather than dropped.
+  Never relabel an engineering hold as captain-gated to silence a timer; recording the exact blocker with `tasks-axi block <id> --by <blocker>` is both the cheaper fix and the honest one, because it wakes within the next sampling window after that blocker moves.
 - `check` -> always escalate. Check scripts print only when firstmate should wake.
 - `stale` with a captain-relevant status -> escalate.
   Nonterminal progress remains transient even when its seen-status marker already matches, so record a marker and self-handle.

@@ -378,6 +378,12 @@ task_hold_kind() {  # <task-id> [home]
 # that can clear by itself. Consumers use it to decide CADENCE only: a captain-gated
 # wait stays exactly as visible as before in the backlog digest, the fleet view, and
 # the away-mode return catch-up - it simply stops being re-asked on a timer.
+#
+# This is not the only cadence question a declared wait raises, and it must never
+# become the answer to the other one. Where the wait names an exact upstream
+# BLOCKER, bin/fm-blocker-lib.sh answers whether that blocker moved; relabelling
+# an engineering hold as captain-gated to silence a timer would be a false
+# authority fact, which is worse than noisy polling.
 pause_is_captain_gated() {  # <task-id> [home]
   [ "$(task_hold_kind "$@")" = "${FM_CLASSIFY_CAPTAIN_HOLD_KIND:-$FM_CLASSIFY_CAPTAIN_HOLD_KIND_DEFAULT}" ]
 }

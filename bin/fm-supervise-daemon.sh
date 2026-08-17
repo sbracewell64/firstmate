@@ -214,6 +214,13 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 # classification predicates have exactly one definition.
 # shellcheck source=bin/fm-classify-lib.sh
 . "$FM_DAEMON_DIR/fm-classify-lib.sh"
+# Dependency-driven re-evaluation of a declared wait: whether the blocker the
+# backlog names for this task has actually moved since the last observation. The
+# SAME library backs the always-on watcher's pause re-surface, so the movement
+# verdict, its durable baseline, and the cycle refusal have exactly one
+# definition.
+# shellcheck source=bin/fm-blocker-lib.sh
+. "$FM_DAEMON_DIR/fm-blocker-lib.sh"
 # Canonical PR identity and poll validation. Away mode may complete the same
 # registration firstmate performs in a present session, but it must still call
 # the canonical owner rather than reproducing its validation or publication.
@@ -1261,6 +1268,7 @@ stale_gate_read_budget() {  # sets STALE_GATE_READ_BUDGET; call directly, never 
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
   local state=$1 now due f key task win marker age last max_defer oldest pause_secs pr_rc
+  local dep dep_verdict dep_detail dep_token
   local working_reads=0 working_reads_max absorb wedge_reason
   stale_gate_read_budget
   working_reads_max=$STALE_GATE_READ_BUDGET
@@ -1423,6 +1431,15 @@ housekeeping() {  # <state>
   # rechecking within one window if its recorded kind stops being captain-gated.
   # An indeterminate kind is NOT a captain-gated kind and keeps being rechecked
   # (pause_is_captain_gated in bin/fm-classify-lib.sh).
+  #
+  # Past that, the window is a SAMPLER rather than a reason to escalate. Where the
+  # backlog records an exact upstream blocker, the wait cannot change until that
+  # blocker changes, so the digest is written only when bin/fm-blocker-lib.sh
+  # reports that the blocker moved, could not be observed, or sits in a refused
+  # cycle. A wait with no recorded blocker keeps the timer exactly as it was, so
+  # nothing loses coverage by omission, and the baseline is committed only after
+  # the digest line is buffered so a killed daemon repeats a wake rather than
+  # swallowing it.
   pause_secs=${FM_PAUSE_RESURFACE_SECS:-$FM_PAUSE_RESURFACE_SECS_DEFAULT}
   for marker in "$state"/.subsuper-paused-*; do
     [ -e "$marker" ] || continue
@@ -1449,7 +1466,21 @@ housekeeping() {  # <state>
           if pause_is_captain_gated "$task"; then
             log "pause recheck suppressed for $win: captain-gated wait, only the captain can clear it"
           else
-            escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds): $win"
+            dep=$(fm_blocker_movement "$task" "$state")
+            dep_verdict=$(fm_blocker_verdict_of "$dep")
+            dep_detail=$(fm_blocker_detail_of "$dep")
+            dep_token=$(fm_blocker_token_of "$dep")
+            if [ "$dep_verdict" = unchanged ]; then
+              log "pause recheck suppressed for $win: $dep_detail"
+            else
+              # Buffer the wake durably before advancing its blocker baseline,
+              # so an append failure leaves the movement available to retry.
+              if escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds - ${dep_detail}): $win"; then
+                fm_blocker_commit "$state" "$task" "$dep_token" || true
+              else
+                log "pause recheck append failed for $win: blocker movement stays unrecorded for retry"
+              fi
+            fi
           fi
           _now > "$marker"
         else

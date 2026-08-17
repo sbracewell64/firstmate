@@ -104,6 +104,13 @@ mkdir -p "$STATE"
 . "$SCRIPT_DIR/fm-pending-reply-lib.sh"
 # shellcheck source=bin/fm-busy-lib.sh
 . "$SCRIPT_DIR/fm-busy-lib.sh"
+# Dependency-driven re-evaluation of a declared wait: whether the blocker the
+# backlog names for this task has actually moved since the last observation. The
+# SAME library backs the away-mode daemon's pause recheck, so the movement
+# verdict, its durable baseline, and the cycle refusal have exactly one
+# definition.
+# shellcheck source=bin/fm-blocker-lib.sh
+. "$SCRIPT_DIR/fm-blocker-lib.sh"
 
 WATCH_LOCK="$STATE/.watch.lock"
 WATCH_PATH="$SCRIPT_DIR/fm-watch.sh"
@@ -361,17 +368,29 @@ busy_turn_over_age() {  # <task>
 }
 
 # Absorb a stale pane under a declared external-wait pause (paused:) or a
-# dead-agent captain-held transfer, and re-surface it once every
-# PAUSE_RESURFACE_SECS for a recheck so it cannot rot invisibly. Called on any
+# dead-agent captain-held transfer, and re-evaluate it once every
+# PAUSE_RESURFACE_SECS so it cannot rot invisibly. Called on any
 # stale poll once pause_state_class permits the bounded cadence, so it must be
 # cheap: it NEVER re-reads crew state. The re-surface age is anchored on the
 # status file mtime, not a per-hash marker, so a churny idle pane (a ticking
 # clock, a token counter) cannot keep resetting the cadence the way a hash-tied
 # timer would. A .paused-resurfaced-<key> throttle marker records the last
-# re-surface epoch so, once past the window, it fires once per window rather than
-# every poll. Advances the stale suppressor to <hash> and flags the key paused.
+# re-evaluation epoch so, once past the window, it fires once per window rather
+# than every poll. Advances the stale suppressor to <hash> and flags the key
+# paused.
+#
+# Past the window the wake is DEPENDENCY-driven, not timer-driven. Where the
+# backlog names an exact upstream blocker, the wait cannot change until that
+# blocker changes, so bin/fm-blocker-lib.sh decides: only a blocker that moved,
+# one that could not be observed, or a refused cycle wakes firstmate, while an
+# unmoved blocker is logged and absorbed. A wait with NO recorded blocker keeps
+# the timer exactly as it was, so nothing loses coverage by omission. The
+# baseline is committed only after the wake is durably queued, so a watcher
+# killed mid-cycle repeats a wake rather than swallowing one - the same rule its
+# .seen-* signatures follow.
 handle_paused_stale() {  # <window> <task> <hash>
   local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason
+  local dep dep_verdict dep_detail dep_token
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
@@ -383,10 +402,25 @@ handle_paused_stale() {  # <window> <task> <hash>
   rf="$STATE/.paused-resurfaced-$key"
   rf_age=$(age_of "$rf")   # 999999 when no prior re-surface
   if [ "$age" -ge "$PAUSE_RESURFACE_SECS" ] && [ "$rf_age" -ge "$PAUSE_RESURFACE_SECS" ]; then
-    reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds)"
-    fm_wake_append stale "$win" "$reason" || exit 1
-    date +%s > "$rf"
-    wake "$reason"
+    dep=$(fm_blocker_movement "$task" "$STATE")
+    dep_verdict=$(fm_blocker_verdict_of "$dep")
+    dep_detail=$(fm_blocker_detail_of "$dep")
+    dep_token=$(fm_blocker_token_of "$dep")
+    if [ "$dep_verdict" = unchanged ]; then
+      triage_log "paused re-surface suppressed (dependency unmoved): $win - $dep_detail"
+      date +%s > "$rf"
+      fm_blocker_commit "$STATE" "$task" "$dep_token" || true
+    else
+      reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds - ${dep_detail})"
+      # The durable queue first, then the throttle and the baseline, and only
+      # then wake() - which exits this process. The wake is already queued by the
+      # time the baseline moves, so nothing that follows can lose it, and nothing
+      # after wake() would run at all.
+      fm_wake_append stale "$win" "$reason" || exit 1
+      date +%s > "$rf"
+      fm_blocker_commit "$STATE" "$task" "$dep_token" || true
+      wake "$reason"
+    fi
   fi
   triage_log "absorbed stale (paused, awaiting external, age ${age}s): $win"
 }

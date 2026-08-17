@@ -6,6 +6,28 @@ This record supports current session-start, turn-end, watcher-continuity, and we
 Operator behavior and active limits remain in the linked current guides.
 Task-specific chronology, temporary paths, run identifiers, and delivery transcripts remain in private reports or PR evidence.
 
+## Dependency-driven hold re-evaluation
+
+The blocker-movement verdict, both pause consumers, and durable restart recovery were verified on 2026-08-17 with the tracked shell test runner.
+
+```sh
+bin/fm-test-run.sh tests/fm-blocker-lib.test.sh tests/fm-daemon.test.sh tests/fm-watch-triage.test.sh tests/fm-teardown.test.sh
+```
+
+Observed bounded output:
+
+```text
+FM_TEST_END 2026-08-17T15:04:24Z tests/fm-blocker-lib.test.sh exit=0 duration_ms=8242 gate_skip=false
+FM_TEST_END 2026-08-17T15:05:09Z tests/fm-daemon.test.sh exit=0 duration_ms=45025 gate_skip=false
+FM_TEST_END 2026-08-17T15:08:38Z tests/fm-watch-triage.test.sh exit=0 duration_ms=208587 gate_skip=false
+FM_TEST_END 2026-08-17T15:11:11Z tests/fm-teardown.test.sh exit=0 duration_ms=153536 gate_skip=false
+FM_TEST_SUMMARY total=4 failed=0 skipped_gate=0 duration_ms=415514
+```
+
+The cases distinguish an unchanged exact blocker from a moved blocker, preserve could-not-observe as a surfacing verdict, retain timer behavior when no blocker is recorded, refuse cycles and traversal-bound exhaustion, and reconstruct the committed baseline after a consumer restart.
+They also prove that a failed durable wake append leaves the movement available for the next pass rather than consuming it.
+Teardown coverage proves that releasing a task removes its blocker baselines, pending records, and staging artifacts.
+
 ## Native session-start delivery
 
 The cross-harness transport pass ran on 2026-07-17 with Codex 0.144.4, Grok 0.2.103, OpenCode 1.17.18, Pi 0.80.10, and the tracked Claude hook wiring.

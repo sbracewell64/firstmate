@@ -3245,6 +3245,27 @@ test_teardown_reaps_the_commitment_probe_cache() {
   pass "teardown reaps the released task's decision-probe cache and leaves other tasks' alone"
 }
 
+test_teardown_reaps_blocker_staging_artifacts() {
+  local case_dir state
+  case_dir=$(make_case blocker-staging-artifacts)
+  write_meta "$case_dir" local-only ship
+  state="$case_dir/state"
+  printf 'baseline\n' > "$state/task-x1.blockers"
+  printf 'pending\n' > "$state/task-x1.blockers.pending"
+  printf 'staging\n' > "$state/task-x1.blockers.pending.tmp.101"
+  printf 'staging\n' > "$state/task-x1.blockers.pending.tmp.202"
+  wt_commit "$case_dir" "fix the thing"
+  add_fork_with_pushed_branch "$case_dir"
+
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" \
+    || fail "blocker-staging-artifacts: teardown should succeed"
+
+  if find "$state" -name 'task-x1.blockers*' -print | grep . >/dev/null 2>&1; then
+    fail "blocker-staging-artifacts: teardown left blocker state behind"
+  fi
+  pass "teardown reaps blocker baselines, pending records, and staging artifacts"
+}
+
 test_local_only_fork_remote_allows
 test_teardown_prompts_tasks_axi_done_when_compatible
 test_teardown_manual_backend_prompts_hand_edit_even_when_tasks_axi_present
@@ -3325,3 +3346,4 @@ test_persistent_scan_refuses_after_bounded_retries
 test_process_exit_during_identity_lookup_does_not_refuse
 test_run_abort_precedes_process_reap_precedes_worktree_removal
 test_teardown_reaps_the_commitment_probe_cache
+test_teardown_reaps_blocker_staging_artifacts
