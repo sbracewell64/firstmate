@@ -274,6 +274,7 @@ test_help_states_the_limit_of_a_complete_form() {
     "--help does not name what a complete form leaves unestablished"
   assert_contains "$out" 'nothing here tries to decide it' \
     "--help does not state that class membership is not decided mechanically"
+  # shellcheck disable=SC2016 # Backticks are literal help markup, not expansion.
   assert_contains "$out" 'Every field except repeatable `evidence` is a singleton' \
     "--help does not state how duplicate fields affect form completeness"
   pass "--help states what a complete form does and does not establish"
