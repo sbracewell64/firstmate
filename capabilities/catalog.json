@@ -153,6 +153,33 @@
       "verifier": "tests/fm-backlog-handoff.test.sh"
     },
     {
+      "name": "qualification.state.read",
+      "purpose": "Read whether a named binding has been OBSERVED to do the job a capability contract describes, and whether that observation still applies.",
+      "input_schema": { "contract": "slug", "model": "string", "harness": "slug", "effort": "string" },
+      "output_schema": { "state": "string", "record": "string", "reason": "string" },
+      "owner": "bin/fm-qualification-lib.sh",
+      "authority_class": "read-only",
+      "verifier": "tests/fm-qualification.test.sh"
+    },
+    {
+      "name": "qualification.workflow.activate",
+      "purpose": "Create or reuse one bounded qualification workflow for the cheapest promising candidate on a route blocked purely by missing or stale qualification, and block the named work identity on it.",
+      "input_schema": { "route": "slug", "blocks": "slug", "budget": "pos_int" },
+      "output_schema": { "activation": "slug", "created": "bool", "already_active": "bool" },
+      "owner": "bin/fm-qualification.sh",
+      "authority_class": "firstmate-routine",
+      "verifier": "tests/fm-route-qualification.test.sh"
+    },
+    {
+      "name": "qualification.workflow.resolve",
+      "purpose": "Close a bounded qualification workflow on its observed result, returning the same blocked work identity to normal eligibility on a pass and preserving the exclusion evidence on a failure.",
+      "input_schema": { "activation": "slug", "result": "string" },
+      "output_schema": { "activation": "slug", "terminal": "string" },
+      "owner": "bin/fm-qualification.sh",
+      "authority_class": "firstmate-routine",
+      "verifier": "tests/fm-route-qualification.test.sh"
+    },
+    {
       "name": "decision.resolve",
       "purpose": "Close a captain-gated decision hold against a recorded verdict, so an answered question stops being re-asked.",
       "input_schema": { "hold_id": "slug", "verdict": "string" },

@@ -1,0 +1,675 @@
+#!/usr/bin/env bash
+# fm-qualification.sh - read the ROLE QUALIFICATION register, and run the bounded
+# workflow that resolves a missing one.
+#
+# A route can require a capability - "was this binding ever observed to DO this
+# job?" - that nothing in this fleet could answer. When it could not, the only
+# available outcome was to ask the captain for a task-specific floor exception,
+# again, for the same missing evidence. The 2026-08-13 captain ruling separates
+# the two facts that had been one: missing qualification is an ENGINEERING STATE
+# to resolve, not a captain decision, and a candidate that may satisfy a blocked
+# route is qualified empirically through a bounded representative workflow whose
+# evidence is then reused.
+#
+# This command is that path. bin/fm-qualification-lib.sh owns the decision;
+# qualifications/schema.json owns the field contract, the state computation and
+# every closed vocabulary; this file is their interface and the activation owner.
+#
+# Usage:
+#   fm-qualification.sh contracts [--json]
+#       Every capability contract: role, risk class, version, axis, predicate.
+#   fm-qualification.sh records [--json]
+#       Every record and the state COMPUTED for it right now.
+#   fm-qualification.sh state --contract <id> --model <name>
+#                            [--harness <name>] [--effort <band>] [--json]
+#       The state for one tuple. Exit status is the answer (below).
+#   fm-qualification.sh validate [<file>...]
+#       Contract and record admissibility. Exit 1 when anything is inadmissible.
+#   fm-qualification.sh reviewer --maker <model> --reviewer <model>
+#                               --contract <id> [--contract <id>...]
+#       May this reviewer take this assignment? Refuses self-review first, then
+#       an unqualified reviewer, then a failed independence dimension.
+#   fm-qualification.sh activate --route <id> [--blocks <work-id>]
+#                               [--budget <n>] [--json]
+#       Create or reuse ONE bounded qualification workflow for the cheapest
+#       promising candidate on a zero route. Refuses any classification other
+#       than QUALIFICATION_REQUIRED.
+#   fm-qualification.sh activations [--json]
+#       Every activation record and whether it is still active.
+#   fm-qualification.sh dispatch <activation-id> [--dry-run]
+#       Launch the recorded workflow through bin/fm-spawn.sh, the one chokepoint.
+#   fm-qualification.sh resolve <activation-id> --result <RESULT>
+#       Close a workflow on its observed result: QUALIFIED unblocks the same
+#       blocked work identity, FAILED preserves the exclusion and advances,
+#       COULD_NOT_OBSERVE spends one attempt and stays active.
+#       A QUALIFIED result is VERIFIED against the register before it is
+#       accepted: it is not a word this command may take on trust.
+#   fm-qualification.sh --help
+#
+# Exit status is the answer, so a caller that ignores stdout still stops safely:
+#   0  QUALIFIED, or the operation succeeded
+#   1  FAILED, refused, or inadmissible
+#   2  usage error, or the register could not be read at all
+#   3  QUALIFICATION_REQUIRED or QUALIFICATION_STALE - an engineering state, and
+#      never an escalation
+#   4  COULD_NOT_OBSERVE - the observation did not happen. Never a pass, and never
+#      a finding against the binding
+#
+# NO SECOND SCHEDULER, ROUTER, ISSUE STORE, EVENT SYSTEM OR POLLING LOOP EXISTS
+# HERE, and that is a constraint rather than an accident. Activation records
+# durable state and blocks the named work identity through the existing backlog
+# owner; the worker is launched through bin/fm-spawn.sh so route, admission,
+# capacity, cost, entitlement and concurrency are all re-evaluated at the one
+# chokepoint; the bound is bin/fm-attempt.sh over the activation's OWN identity;
+# duplicate work is refused by composing bin/fm-decision-surface.sh.
+#
+# Environment:
+#   FM_HOME                          the home whose config/, state/ and data/ are read
+#   FM_QUALIFICATION_BUDGET          default attempt budget for a workflow (2)
+#   FM_QUALIFICATION_TODAY           override today's date (tests)
+#   FM_QUALIFICATION_CONTRACT_DIR    read contracts from this directory instead
+#   FM_QUALIFICATION_RECORD_DIR      read tracked records from this directory
+#   FM_QUALIFICATION_OVERLAY_DIR     read the private record overlay from here
+set -u
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
+FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+export STATE CONFIG
+
+# shellcheck source=bin/fm-model-registry-lib.sh
+. "$SCRIPT_DIR/fm-model-registry-lib.sh"
+# shellcheck source=bin/fm-qualification-lib.sh
+. "$SCRIPT_DIR/fm-qualification-lib.sh"
+
+EXIT_OK=0
+EXIT_REFUSED=1
+EXIT_USAGE=2
+EXIT_REQUIRED=3
+EXIT_UNOBSERVED=4
+
+ACTIVATION_DIR="$STATE/qualification"
+
+usage() {
+  awk '
+    NR == 1 { next }
+    /^#/ { sub(/^# ?/, ""); print; next }
+    { exit }
+  ' "$SCRIPT_DIR/fm-qualification.sh"
+}
+
+die() { printf 'fm-qualification: %s\n' "$1" >&2; exit "$EXIT_USAGE"; }
+
+JSON=0
+CMD=
+ROUTE=
+MODEL=
+HARNESS=
+EFFORT=
+MAKER=
+REVIEWER=
+BLOCKS=
+BUDGET=${FM_QUALIFICATION_BUDGET:-2}
+RESULT=
+DRY_RUN=0
+CONTRACTS=()
+POS=()
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) JSON=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --route) shift; [ $# -gt 0 ] || die "--route needs a value"; ROUTE=$1 ;;
+    --route=*) ROUTE=${1#--route=} ;;
+    --model) shift; [ $# -gt 0 ] || die "--model needs a value"; MODEL=$1 ;;
+    --model=*) MODEL=${1#--model=} ;;
+    --harness) shift; [ $# -gt 0 ] || die "--harness needs a value"; HARNESS=$1 ;;
+    --harness=*) HARNESS=${1#--harness=} ;;
+    --effort) shift; [ $# -gt 0 ] || die "--effort needs a value"; EFFORT=$1 ;;
+    --effort=*) EFFORT=${1#--effort=} ;;
+    --contract) shift; [ $# -gt 0 ] || die "--contract needs a value"; CONTRACTS+=("$1") ;;
+    --contract=*) CONTRACTS+=("${1#--contract=}") ;;
+    --maker) shift; [ $# -gt 0 ] || die "--maker needs a value"; MAKER=$1 ;;
+    --maker=*) MAKER=${1#--maker=} ;;
+    --reviewer) shift; [ $# -gt 0 ] || die "--reviewer needs a value"; REVIEWER=$1 ;;
+    --reviewer=*) REVIEWER=${1#--reviewer=} ;;
+    --blocks) shift; [ $# -gt 0 ] || die "--blocks needs a value"; BLOCKS=$1 ;;
+    --blocks=*) BLOCKS=${1#--blocks=} ;;
+    --budget) shift; [ $# -gt 0 ] || die "--budget needs a value"; BUDGET=$1 ;;
+    --budget=*) BUDGET=${1#--budget=} ;;
+    --result) shift; [ $# -gt 0 ] || die "--result needs a value"; RESULT=$1 ;;
+    --result=*) RESULT=${1#--result=} ;;
+    -h|--help) usage; exit "$EXIT_OK" ;;
+    -*) die "unknown option $1" ;;
+    *) if [ -z "$CMD" ]; then CMD=$1; else POS+=("$1"); fi ;;
+  esac
+  shift
+done
+
+[ -n "$CMD" ] || { usage; exit "$EXIT_USAGE"; }
+command -v jq >/dev/null 2>&1 || die "jq is required to read the qualification register"
+
+# A path-safety rule for every id this command turns into a filename. The one
+# owner of that predicate in this fleet already exists, so it is composed rather
+# than restated: an id an overlay record could supply must never build a path.
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
+
+# ---------------------------------------------------------------------------
+# Reading
+# ---------------------------------------------------------------------------
+
+# The routed model and provider names this home configures, for the contract
+# validator's vendor-neutrality layer. An absent routing config simply supplies
+# no names, which leaves the refused-key layer doing the work.
+routed_names_file() {
+  local tmp models m
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-qual-names.XXXXXX") || return 1
+  if [ -f "$CONFIG/crew-dispatch.json" ]; then
+    models=$(jq -r '
+      def route_entries:
+        [ (.rules // []) | to_entries[]? | .value ] + [ (.default // empty) ]
+        | map(select(type == "object"));
+      [ route_entries[] | .pool? | select(type == "array") | .[] | select(type == "string") ]
+      + [ (._models // {}) | keys[] ]
+      | unique | .[] | select(startswith("_") | not)' "$CONFIG/crew-dispatch.json" 2>/dev/null) || models=
+    while IFS= read -r m; do
+      [ -n "$m" ] || continue
+      printf '%s\n' "$m" >> "$tmp"
+      case "$m" in */*) printf '%s\n' "${m%%/*}" >> "$tmp" ;; esac
+    done <<EOF
+$models
+EOF
+  fi
+  printf '%s\n' "$tmp"
+}
+
+cmd_contracts() {
+  local dir f
+  dir=$(fm_qualification_contract_dir)
+  [ -d "$dir" ] || { printf 'fm-qualification: no contract register at %s\n' "$dir" >&2; return "$EXIT_UNOBSERVED"; }
+  if [ "$JSON" -eq 1 ]; then
+    jq -s -c '.' "$dir"/*.json 2>/dev/null || return "$EXIT_UNOBSERVED"
+    return "$EXIT_OK"
+  fi
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    jq -r '"\(.id)  role=\(.role)  risk=\(.risk_class)  version=\(.contract_version)  axis=\(.axis)  predicate=\(.executable_predicate.kind)  adjudication=\(if .adjudication.required then "required by " + .adjudication.adjudicator_contract else "not required" end)"' "$f"
+  done
+  return "$EXIT_OK"
+}
+
+cmd_records() {
+  local files f rc=0 id contract model harness effort state
+  files=$(fm_qualification_record_files) || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    printf 'fm-qualification: %s: a record directory exists and could not be listed\n' \
+      "$FM_QUAL_TOKEN_UNREADABLE" >&2
+    return "$EXIT_UNOBSERVED"
+  fi
+  if [ "$rc" -eq 1 ]; then
+    printf 'fm-qualification: the register holds no records\n'
+    return "$EXIT_OK"
+  fi
+  local out='[]'
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    # U+001F, not a tab: bash collapses runs of IFS WHITESPACE, so an empty
+    # middle field would shift every later field left.
+    IFS=$'\x1f' read -r id contract model harness effort <<EOF2
+$(jq -r '[ (.id // ""), (.contract // ""), (.binding.model // ""), (.binding.harness // ""), (.binding.native_effort // "") ] | join("\u001f")' "$f" 2>/dev/null)
+EOF2
+    state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
+    if [ "$JSON" -eq 1 ]; then
+      out=$(printf '%s' "$out" | jq -c --slurpfile r "$f" --argjson s "$state" \
+        '. + [{record: $r[0], state: $s}]')
+    else
+      printf '%s  contract=%s  binding=%s  harness=%s  effort=%s  recorded=%s  state=%s\n' \
+        "$id" "$contract" "$model" "$harness" "$effort" \
+        "$(printf '%s' "$state" | jq -r '.recorded_result // "-"')" \
+        "$(printf '%s' "$state" | jq -r '.state')"
+    fi
+  done <<EOF
+$files
+EOF
+  [ "$JSON" -eq 0 ] || printf '%s\n' "$out"
+  return "$EXIT_OK"
+}
+
+state_exit_code() {  # <state>
+  case "$1" in
+    QUALIFIED) printf '%s\n' "$EXIT_OK" ;;
+    FAILED) printf '%s\n' "$EXIT_REFUSED" ;;
+    QUALIFICATION_REQUIRED|QUALIFICATION_STALE) printf '%s\n' "$EXIT_REQUIRED" ;;
+    *) printf '%s\n' "$EXIT_UNOBSERVED" ;;
+  esac
+}
+
+cmd_state() {
+  local record state
+  [ -n "${CONTRACTS[0]:-}" ] || die "state needs --contract"
+  [ -n "$MODEL" ] || die "state needs --model"
+  record=$(fm_qualification_state "${CONTRACTS[0]}" "$MODEL" "$HARNESS" "$EFFORT")
+  state=$(printf '%s' "$record" | jq -r '.state')
+  if [ "$JSON" -eq 1 ]; then
+    printf '%s\n' "$record"
+  else
+    printf '%s\n' "$record" | jq -r '
+      "contract \(.contract) · binding \(.model)\(if .harness then " · harness " + .harness else "" end)\(if .native_effort then " · effort " + .native_effort else "" end)",
+      "  state:    \(.state)",
+      "  record:   \(.record // "none")",
+      "  recorded: \(.recorded_result // "-")",
+      "  reason:   \(.reason)",
+      (if (.dependencies | length) > 0
+       then "  dependencies:", (.dependencies[] | "    \(.kind): \(.observation) - \(.detail)")
+       else empty end),
+      (if (.near_miss | length) > 0
+       then "  near misses (a different tuple, not a stale version of this one):",
+            (.near_miss[] | "    \(.record) harness=\(.harness) effort=\(.native_effort) \(.result)")
+       else empty end)'
+  fi
+  return "$(state_exit_code "$state")"
+}
+
+cmd_validate() {
+  local names f rc=0 problems dir line
+  names=$(routed_names_file) || names=
+  local -a files=()
+  if [ "${#POS[@]}" -gt 0 ]; then
+    files=("${POS[@]}")
+  else
+    dir=$(fm_qualification_contract_dir)
+    for f in "$dir"/*.json; do [ -f "$f" ] && files+=("$f"); done
+    while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
+$(fm_qualification_record_files || true)
+EOF
+  fi
+  [ "${#files[@]}" -gt 0 ] || { printf 'fm-qualification: nothing to validate\n' >&2; return "$EXIT_UNOBSERVED"; }
+  for f in "${files[@]}"; do
+    [ -f "$f" ] || { printf 'inadmissible %s: not a file\n' "$f"; rc=1; continue; }
+    if jq -e 'has("executable_predicate") or has("axis")' "$f" >/dev/null 2>&1; then
+      problems=$(fm_qualification_contract_problems "$f" "$names") || problems='the validator could not run'
+    else
+      problems=$(fm_qualification_record_problems "$f") || problems='the validator could not run'
+    fi
+    if [ -n "$problems" ]; then
+      while IFS= read -r line; do
+        [ -n "$line" ] || continue
+        printf 'inadmissible %s: %s\n' "$(basename "$f")" "$line"
+      done <<EOF
+$problems
+EOF
+      rc=1
+    fi
+  done
+  [ -z "$names" ] || rm -f -- "$names"
+  [ "$rc" -eq 0 ] || return "$EXIT_REFUSED"
+  printf 'ok: %s contract and record files are admissible\n' "${#files[@]}"
+  return "$EXIT_OK"
+}
+
+cmd_reviewer() {
+  local refusal
+  [ -n "$MAKER" ] || die "reviewer needs --maker"
+  [ -n "$REVIEWER" ] || die "reviewer needs --reviewer"
+  [ "${#CONTRACTS[@]}" -gt 0 ] || die "reviewer needs at least one --contract"
+  if ! refusal=$(fm_qualification_reviewer_refusal "$MAKER" "$REVIEWER" "${CONTRACTS[@]}"); then
+    printf 'refused: %s\n' "$refusal" >&2
+    case "$refusal" in
+      *COULD_NOT_OBSERVE*) return "$EXIT_UNOBSERVED" ;;
+      *QUALIFICATION_REQUIRED*|*QUALIFICATION_STALE*) return "$EXIT_REQUIRED" ;;
+      *) return "$EXIT_REFUSED" ;;
+    esac
+  fi
+  printf 'ok: %s may review %s work for %s · %s\n' \
+    "$REVIEWER" "$MAKER" "$(printf '%s' "${CONTRACTS[*]}" | tr ' ' ',')" \
+    "$(fm_qualification_independence "$MAKER" "$REVIEWER")"
+  return "$EXIT_OK"
+}
+
+# ---------------------------------------------------------------------------
+# The bounded workflow
+# ---------------------------------------------------------------------------
+
+# One deterministic identity per (contract, binding) pair, so a second activation
+# for the same pair is RECOGNISABLE as a duplicate rather than created beside the
+# first. Derived rather than allocated: an allocated id would make every duplicate
+# check a search for something that looks similar.
+activation_id() {  # <contract> <model>
+  local slug=$2
+  slug=${slug//\//-}
+  slug=$(printf '%s' "$slug" | tr -c 'A-Za-z0-9._-' '-')
+  printf 'qualify-%s-%s\n' "$1" "$slug"
+}
+
+activation_file() {  # <activation-id>
+  printf '%s/%s.activation\n' "$ACTIVATION_DIR" "$1"
+}
+
+activation_field() {  # <file> <key>
+  [ -f "$1" ] || return 1
+  awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1"
+}
+
+# Is another workflow for this pair already live? Three independent sources, and
+# ANY of them means already-active. The first two are this command's own durable
+# record; the third composes the fleet's duplicate-dispatch owner rather than
+# re-deriving "is this already running", which is exactly the reconstruction the
+# decision surface exists to replace.
+activation_already_active() {  # <activation-id>
+  local id=$1 file terminal out
+  file=$(activation_file "$id")
+  if [ -f "$file" ]; then
+    terminal=$(activation_field "$file" terminal || true)
+    [ -n "$terminal" ] || { printf 'a workflow for this pair is already recorded at %s\n' "$file"; return 0; }
+  fi
+  if [ -x "$SCRIPT_DIR/fm-decision-surface.sh" ] && fm_task_id_path_safe "$id" 2>/dev/null; then
+    out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-decision-surface.sh" check duplicate-dispatch "$id" 2>/dev/null)
+    case "$out" in
+      *"verdict: contradicted"*)
+        printf 'the fleet already holds work under this identity: %s\n' "$out"
+        return 0 ;;
+    esac
+  fi
+  return 1
+}
+
+cmd_activate() {
+  local zero rc=0 class model contracts cost id file out
+  [ -n "$ROUTE" ] || die "activate needs --route"
+  zero=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-route.sh" zero-route --route "$ROUTE" --json 2>/dev/null) || rc=$?
+  if [ -z "$zero" ]; then
+    printf 'fm-qualification: the zero-route classification for %s could not be read, so no workflow may be activated on it\n' "$ROUTE" >&2
+    return "$EXIT_UNOBSERVED"
+  fi
+  class=$(printf '%s' "$zero" | jq -r '.classification')
+  case "$class" in
+    QUALIFICATION_REQUIRED) ;;
+    ELIGIBLE)
+      printf 'fm-qualification: route %s already has an eligible candidate (%s); a bounded workflow would qualify a binding nothing is waiting on\n' \
+        "$ROUTE" "$(printf '%s' "$zero" | jq -r '.eligible | join(", ")')" >&2
+      return "$EXIT_OK" ;;
+    QUALIFICATION_COULD_NOT_OBSERVE)
+      printf 'fm-qualification: route %s is blocked because a qualification could not be OBSERVED, not because one is missing; the repair is to the observation and spending a workflow here would record nothing. %s\n' \
+        "$ROUTE" "$(printf '%s' "$zero" | jq -r '[.unobserved[] | .model + ": " + .evidence] | join("; ")')" >&2
+      return "$EXIT_UNOBSERVED" ;;
+    AWAITING_AVAILABILITY)
+      printf 'fm-qualification: route %s is waiting on availability or capacity, which the existing availability and deferral owners handle; qualification is not what is blocking it\n' "$ROUTE" >&2
+      return "$EXIT_REQUIRED" ;;
+    *)
+      printf 'fm-qualification: %s: route %s is classified %s, so no candidate can be made eligible by qualifying it\n' \
+        "$FM_QUAL_TOKEN_NO_PROMISING" "$ROUTE" "$class" >&2
+      return "$EXIT_REFUSED" ;;
+  esac
+
+  # Cheapest first, and an unobservable cost sorts LAST. The route owner already
+  # applied that ordering; reading its first row rather than re-sorting here is
+  # what keeps one ordering authority.
+  model=$(printf '%s' "$zero" | jq -r '.promising[0].model // empty')
+  contracts=$(printf '%s' "$zero" | jq -r '(.promising[0].contracts // []) | join(",")')
+  cost=$(printf '%s' "$zero" | jq -r '.promising[0].cost_rank // "unobserved"')
+  if [ -z "$model" ]; then
+    printf 'fm-qualification: %s: route %s classified %s but named no promising candidate\n' \
+      "$FM_QUAL_TOKEN_NO_PROMISING" "$ROUTE" "$class" >&2
+    return "$EXIT_UNOBSERVED"
+  fi
+  # ONE contract per workflow. A candidate short of two contracts needs two
+  # bounded runs, because a single run that claimed both would be one observation
+  # standing in for two, which is the aggregation the adjudicator contract
+  # explicitly refuses.
+  local contract=${contracts%%,*}
+  id=$(activation_id "$contract" "$model")
+  fm_task_id_path_safe "$id" || die "derived activation id is not path-safe: $id"
+  file=$(activation_file "$id")
+
+  if out=$(activation_already_active "$id"); then
+    printf '%s: %s\n' "$FM_QUAL_TOKEN_DUPLICATE" "$out"
+    [ "$JSON" -eq 0 ] || printf '{"schema":"fm-qualification-activation.v1","activation":"%s","created":false,"already_active":true}\n' "$id"
+    return "$EXIT_OK"
+  fi
+
+  case "$BUDGET" in ''|*[!0-9]*) die "--budget must be a whole number" ;; esac
+  [ "$BUDGET" -gt 0 ] || die "--budget must be at least 1"
+
+  mkdir -p "$ACTIVATION_DIR" 2>/dev/null || {
+    printf 'fm-qualification: could not create %s, so this workflow could not be recorded and must not be started\n' "$ACTIVATION_DIR" >&2
+    return "$EXIT_UNOBSERVED"
+  }
+
+  # The bound is the ACTIVATION's own attempt record, owned by bin/fm-attempt.sh
+  # and deliberately NOT mirrored here. The blocked work identity's count, budget
+  # and custody bases are never read, spent or reset by a qualification workflow:
+  # a task that was waiting for a capability did not fail, and a workflow that
+  # fails twice must not consume the retries the real work is owed.
+  #
+  # Copying the attempt owner's own output into this record would make a second
+  # place to read a count that changes underneath it - and its `show` line
+  # literally contains `terminal=`, so a reader grepping this file for a terminal
+  # marker would find one inside another field's value.
+  local tmp
+  tmp=$(mktemp "$file.XXXXXX") || {
+    printf 'fm-qualification: could not write beside %s\n' "$file" >&2
+    return "$EXIT_UNOBSERVED"
+  }
+  {
+    printf 'schema=fm-qualification-activation.v1\n'
+    printf 'activation=%s\n' "$id"
+    printf 'contract=%s\n' "$contract"
+    printf 'model=%s\n' "$model"
+    printf 'route=%s\n' "$ROUTE"
+    printf 'floor=%s\n' "$(printf '%s' "$zero" | jq -r '.floor // ""')"
+    printf 'cost_rank=%s\n' "$cost"
+    printf 'blocks=%s\n' "$BLOCKS"
+    printf 'attempt_budget=%s\n' "$BUDGET"
+    printf 'created=%s\n' "$(date -u +%s)"
+    printf 'created_date=%s\n' "$(fm_qualification_today)"
+  } > "$tmp" || { rm -f -- "$tmp"; printf 'fm-qualification: could not record the workflow\n' >&2; return "$EXIT_UNOBSERVED"; }
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; printf 'fm-qualification: could not record the workflow\n' >&2; return "$EXIT_UNOBSERVED"; }
+
+  # The blocked work identity keeps its identity, its custody and its budget. All
+  # that changes is that it now has a named blocker, recorded through the existing
+  # backlog owner, so the dependency-driven re-evaluation already in the fleet
+  # returns it to normal eligibility when this clears - no second scheduler
+  # watches it.
+  if [ -n "$BLOCKS" ] && command -v tasks-axi >/dev/null 2>&1; then
+    tasks-axi block "$BLOCKS" --by "$id" >/dev/null 2>&1 \
+      || printf 'fm-qualification: could not record the backlog blocker on %s; the durable activation record still governs this workflow\n' "$BLOCKS" >&2
+  fi
+
+  if [ "$JSON" -eq 1 ]; then
+    jq -n -c --arg id "$id" --arg contract "$contract" --arg model "$model" \
+      --arg route "$ROUTE" --arg blocks "$BLOCKS" --argjson budget "$BUDGET" \
+      --arg cost "$cost" \
+      '{schema:"fm-qualification-activation.v1", activation:$id, created:true,
+        already_active:false, contract:$contract, model:$model, route:$route,
+        blocks:(if $blocks == "" then null else $blocks end),
+        attempt_budget:$budget, cost_rank:$cost}'
+  else
+    printf 'activated %s\n  contract: %s\n  binding:  %s (cost rank %s, cheapest promising candidate on route %s)\n  bound:    %s attempts, counted against this workflow and never against %s\n  blocks:   %s\n  next:     bin/fm-qualification.sh dispatch %s\n' \
+      "$id" "$contract" "$model" "$cost" "$ROUTE" "$BUDGET" "${BLOCKS:-the blocked work}" \
+      "${BLOCKS:-nothing recorded}" "$id"
+  fi
+  return "$EXIT_OK"
+}
+
+cmd_activations() {
+  local f id terminal
+  [ -d "$ACTIVATION_DIR" ] || { printf 'fm-qualification: no qualification workflow has been activated in this home\n'; return "$EXIT_OK"; }
+  local out='[]'
+  for f in "$ACTIVATION_DIR"/*.activation; do
+    [ -f "$f" ] || continue
+    id=$(activation_field "$f" activation || true)
+    terminal=$(activation_field "$f" terminal || true)
+    if [ "$JSON" -eq 1 ]; then
+      out=$(printf '%s' "$out" | jq -c --arg id "$id" --arg t "$terminal" \
+        --arg c "$(activation_field "$f" contract || true)" \
+        --arg m "$(activation_field "$f" model || true)" \
+        --arg r "$(activation_field "$f" route || true)" \
+        --arg b "$(activation_field "$f" blocks || true)" \
+        '. + [{activation:$id, contract:$c, model:$m, route:$r,
+               blocks:(if $b == "" then null else $b end),
+               terminal:(if $t == "" then null else $t end),
+               active:($t == "")}]')
+    else
+      printf '%s  contract=%s  binding=%s  route=%s  blocks=%s  %s\n' \
+        "$id" "$(activation_field "$f" contract || true)" \
+        "$(activation_field "$f" model || true)" \
+        "$(activation_field "$f" route || true)" \
+        "$(activation_field "$f" blocks || printf -- -)" \
+        "$( [ -n "$terminal" ] && printf 'terminal=%s' "$terminal" || printf 'active' )"
+    fi
+  done
+  [ "$JSON" -eq 0 ] || printf '%s\n' "$out"
+  return "$EXIT_OK"
+}
+
+cmd_dispatch() {
+  local id=${POS[0]:-} file contract model route floor blocks
+  [ -n "$id" ] || die "dispatch needs an activation id"
+  fm_task_id_path_safe "$id" || die "unsafe activation id: $id"
+  file=$(activation_file "$id")
+  [ -f "$file" ] || { printf 'fm-qualification: no activation record at %s\n' "$file" >&2; return "$EXIT_UNOBSERVED"; }
+  [ -z "$(activation_field "$file" terminal || true)" ] \
+    || { printf 'fm-qualification: activation %s is terminal (%s) and is not re-dispatched\n' "$id" "$(activation_field "$file" terminal)" >&2; return "$EXIT_REFUSED"; }
+  contract=$(activation_field "$file" contract || true)
+  model=$(activation_field "$file" model || true)
+  route=$(activation_field "$file" route || true)
+  floor=$(activation_field "$file" floor || true)
+  blocks=$(activation_field "$file" blocks || true)
+  [ -n "$contract" ] && [ -n "$model" ] && [ -n "$route" ] \
+    || { printf 'fm-qualification: activation %s is incomplete and is not dispatched\n' "$id" >&2; return "$EXIT_REFUSED"; }
+
+  # EVERY field is re-validated and passed as a SEPARATE argument. The record
+  # stores no command line, for the same reason the capacity deferral record
+  # stores none: a state file must never be able to name something to run.
+  local -a args=("$id" "$FM_HOME" --scout --reason-code TOOLING_GAP
+                 --route "$route" --model "$model")
+  [ -z "$floor" ] || args+=(--capability-floor "$floor")
+  if [ "$DRY_RUN" -eq 1 ]; then
+    printf 'bin/fm-spawn.sh'
+    printf ' %q' "${args[@]}"
+    printf '\n'
+    return "$EXIT_OK"
+  fi
+  printf 'fm-qualification: launching %s for contract %s on %s through the spawn chokepoint\n' \
+    "$id" "$contract" "$model"
+  : "${blocks:-}"
+  FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-spawn.sh" "${args[@]}" || return "$EXIT_REFUSED"
+  return "$EXIT_OK"
+}
+
+cmd_resolve() {
+  local id=${POS[0]:-} file contract model blocks tmp
+  [ -n "$id" ] || die "resolve needs an activation id"
+  fm_task_id_path_safe "$id" || die "unsafe activation id: $id"
+  [ -n "$RESULT" ] || die "resolve needs --result QUALIFIED|FAILED|COULD_NOT_OBSERVE"
+  case "$RESULT" in
+    QUALIFIED|FAILED|COULD_NOT_OBSERVE) ;;
+    *) die "--result must be QUALIFIED, FAILED, or COULD_NOT_OBSERVE; a synonym is refused rather than normalized" ;;
+  esac
+  file=$(activation_file "$id")
+  [ -f "$file" ] || { printf 'fm-qualification: no activation record at %s\n' "$file" >&2; return "$EXIT_UNOBSERVED"; }
+  contract=$(activation_field "$file" contract || true)
+  model=$(activation_field "$file" model || true)
+  blocks=$(activation_field "$file" blocks || true)
+
+  local terminal=
+  case "$RESULT" in
+    QUALIFIED) terminal=qualified ;;
+    FAILED) terminal=failed ;;
+    COULD_NOT_OBSERVE) terminal= ;;
+  esac
+
+  # A PASS IS VERIFIED, NEVER TAKEN ON TRUST. --result QUALIFIED is a word a
+  # caller types, and a claim anyone can write is a claim that will eventually be
+  # written wrongly - which is precisely the defect this register exists inside.
+  # So the register is re-read: unless it independently COMPUTES QUALIFIED for
+  # this binding against this contract, from an admissible record whose declared
+  # dependencies are observed unchanged and whose adjudication returned a pass,
+  # the pass is refused and the workflow stays open. FAILED and COULD_NOT_OBSERVE
+  # need no such check, because neither one grants anything.
+  if [ "$RESULT" = QUALIFIED ]; then
+    local computed computed_state
+    computed=$(fm_qualification_state "$contract" "$model")
+    computed_state=$(printf '%s' "$computed" | jq -r '.state' 2>/dev/null)
+    if [ "$computed_state" != QUALIFIED ]; then
+      printf 'fm-qualification: refusing to close %s as QUALIFIED. The register computes %s for %s against %s: %s. Write the record first; this command records what the register can observe, never what a caller asserts\n' \
+        "$id" "$computed_state" "$model" "$contract" \
+        "$(printf '%s' "$computed" | jq -r '.reason' 2>/dev/null)" >&2
+      case "$computed_state" in
+        FAILED) return "$EXIT_REFUSED" ;;
+        QUALIFICATION_REQUIRED|QUALIFICATION_STALE) return "$EXIT_REQUIRED" ;;
+        *) return "$EXIT_UNOBSERVED" ;;
+      esac
+    fi
+  fi
+
+  # COULD_NOT_OBSERVE is NONTERMINAL and spends exactly one attempt. Nothing
+  # adverse is recorded about the binding: an observation that did not happen is
+  # not a finding, and writing one would build the reputation the ruling forbids.
+  if [ -z "$terminal" ]; then
+    local budget attempt_out rc=0
+    budget=$(activation_field "$file" attempt_budget || printf '%s' "$BUDGET")
+    attempt_out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-attempt.sh" open "$id" --budget "$budget" 2>&1) || rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf 'fm-qualification: the bound on %s is spent or unrecordable (%s), so this workflow stops rather than retrying without a bound\n' "$id" "$attempt_out" >&2
+      record_terminal "$file" budget_exhausted
+      return "$EXIT_UNOBSERVED"
+    fi
+    FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-attempt.sh" end "$id" >/dev/null 2>&1 || true
+    printf 'fm-qualification: %s remains ACTIVE. The qualification of %s against %s COULD NOT BE OBSERVED, which is neither a pass nor a finding against that binding; one attempt of %s is spent and the repair is to the observation\n' \
+      "$id" "$model" "$contract" "$budget"
+    return "$EXIT_UNOBSERVED"
+  fi
+
+  record_terminal "$file" "$terminal" || {
+    printf 'fm-qualification: could not mark %s terminal, so it would resume on the next read; repair %s by hand\n' "$id" "$file" >&2
+    return "$EXIT_UNOBSERVED"
+  }
+
+  if [ "$RESULT" = FAILED ]; then
+    printf 'fm-qualification: %s is terminal FAILED. The exclusion evidence for %s against %s is PRESERVED, not removed, and the next promising candidate is evaluated by re-reading the route: bin/fm-qualification.sh activate --route %s%s\n' \
+      "$id" "$model" "$contract" "$(activation_field "$file" route || true)" \
+      "$( [ -n "$blocks" ] && printf ' --blocks %s' "$blocks" || printf '' )" >&2
+    return "$EXIT_REFUSED"
+  fi
+
+  # A pass returns the SAME blocked work identity to normal eligibility through
+  # the existing backlog owner. Its identity, custody bases, attempt count and
+  # retry budget are untouched: the work was never re-created, only unblocked.
+  if [ -n "$blocks" ] && command -v tasks-axi >/dev/null 2>&1; then
+    tasks-axi unblock "$blocks" --by "$id" >/dev/null 2>&1 \
+      || printf 'fm-qualification: could not clear the backlog blocker on %s; clear it by hand so the work returns to normal eligibility\n' "$blocks" >&2
+  fi
+  printf 'fm-qualification: %s is terminal QUALIFIED for %s against %s. The evidence is now reusable for every route requiring that contract, and %s returns to normal eligibility with its identity, custody and budget unchanged\n' \
+    "$id" "$model" "$contract" "${blocks:-the blocked work}"
+  return "$EXIT_OK"
+}
+
+record_terminal() {  # <activation-file> <terminal>
+  local file=$1 terminal=$2 tmp
+  tmp=$(mktemp "$file.XXXXXX") || return 1
+  { grep -v '^terminal=' "$file"; printf 'terminal=%s\n' "$terminal"; } > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; return 1; }
+  return 0
+}
+
+: "${DATA:?}"
+
+case "$CMD" in
+  contracts) cmd_contracts; exit $? ;;
+  records) cmd_records; exit $? ;;
+  state) cmd_state; exit $? ;;
+  validate) cmd_validate; exit $? ;;
+  reviewer) cmd_reviewer; exit $? ;;
+  activate) cmd_activate; exit $? ;;
+  activations) cmd_activations; exit $? ;;
+  dispatch) cmd_dispatch; exit $? ;;
+  resolve) cmd_resolve; exit $? ;;
+  *) die "unknown command: $CMD" ;;
+esac

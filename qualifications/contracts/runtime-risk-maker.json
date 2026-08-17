@@ -1,0 +1,58 @@
+{
+  "qualification_schema_version": 1,
+  "id": "runtime-risk-maker",
+  "role": "RUNTIME_MAKER",
+  "risk_class": "runtime-risk-v1",
+  "contract_version": "1.0.0",
+  "axis": "maker_qualification",
+  "purpose": "A QUALIFIED record means this binding was observed to make a bounded runtime repair that preserved single-owner architecture, the full acceptance list, destructive-operation safety, work identity, attempt and custody accounting, and closed both the reported instance and its recurrence - after first being rejected for an intentionally inadequate attempt and correcting once.",
+  "grants": "Eligibility as the MAKER of runtime work on a route whose floor declares this contract in requires_capabilities.",
+  "does_not_grant": [
+    "Any authority to review, challenge, or adjudicate a change, including its own.",
+    "Arbitrary production runtime competence; the predicate measures the named reusable contract and nothing wider.",
+    "Any statement about cost, entitlement, availability, capacity, or concurrency, each of which is a separate axis with its own owner.",
+    "Any statement about future capacity or sustained concurrency, which one bounded run cannot establish."
+  ],
+  "executable_predicate": {
+    "kind": "fixture_oracle",
+    "fixture": "runtime-maker-qualification-fixture-v1",
+    "fixture_version": "1.0.0",
+    "manifest_digest": "21c4b242bc6deb5cc9d69887240503cf1cdddae792d492389bfd3a1c245863cd",
+    "root": "home:data/runtime-maker-qualification-fixture-v1/fixture",
+    "integrity": "verify-integrity.sh",
+    "setup": "setup.sh runtime-maker",
+    "verify": "verify.sh runtime-maker",
+    "controls": "run-controls.sh",
+    "predicates_measured": [
+      "strict structured state",
+      "bounded attempt-1 to attempt-2 correction after an intentionally inadequate attempt",
+      "single-owner architecture, with no second declared state owner",
+      "full ordered acceptance-criteria preservation bound to the supplied source digest",
+      "destructive-operation refusal and unsafe-cleanup refusal",
+      "work identity, attempt, attempt budget and custody-base preservation",
+      "evidence bound to supplied artifacts, with fabrication refused",
+      "execution completion recorded separately from the candidate's own claims",
+      "executable instance-plus-recurrence behavior, not a described one",
+      "target-bound claim observation"
+    ],
+    "red_controls_required": [
+      "the intentionally inadequate first attempt must be observed rejected",
+      "independent mutations of architecture ownership, recurrence protection, destructive safety, acceptance preservation, evidence fabrication, and custody accounting must each be observed rejected",
+      "a setup attempt against the authoritative checkout must be observed refused without writing"
+    ]
+  },
+  "adjudication": {
+    "required": true,
+    "adjudicator_contract": "qualification-evidence-adjudicator",
+    "independence_dimensions": ["binding"]
+  },
+  "required_freshness_dependencies": [
+    "file_digest",
+    "contract_version",
+    "harness_semantics",
+    "binding_semantics",
+    "native_effort_mapping",
+    "time_bound"
+  ],
+  "note": "The predicate runs entirely in disposable state and refuses the authoritative checkout, so qualifying for this contract never assumes the production permission it establishes. Everything the fixture measures is a property of the job; nothing in this file names who might do it."
+}

@@ -64,6 +64,11 @@
 #   fm-decision-surface.sh check certified <task-id>
 #       Is "this work is certified" contradicted, or unevaluable, on the
 #       evidence bound to its own bytes? bin/fm-certify.sh is the owner.
+#   fm-decision-surface.sh check route-qualified <route-id>
+#       Is "this route has an eligible qualified binding" contradicted?
+#       bin/fm-route.sh zero-route is the owner. A route blocked purely because
+#       nobody has qualified a candidate is CONTRADICTED and names the bounded
+#       workflow, never an escalation.
 #   fm-decision-surface.sh owners [--json]
 #       The compensation ledger: owned deterministic work, and pending gaps.
 #   fm-decision-surface.sh platform-seam [--json] [--probe-platform]
@@ -129,11 +134,11 @@ while [ $# -gt 0 ]; do
       [ -z "$SUBCOMMAND" ] || die "unexpected argument '$1'"
       SUBCOMMAND=check
       shift
-      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, or certified"
+      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, certified, or route-qualified"
       CHECK_CLAIM=$1
       case "$CHECK_CLAIM" in
         capacity-blocked) ;;
-        decision-pending|duplicate-dispatch|certified)
+        decision-pending|duplicate-dispatch|certified|route-qualified)
           shift
           [ $# -gt 0 ] || die "check $CHECK_CLAIM needs an id"
           TARGET=$1
@@ -146,7 +151,7 @@ while [ $# -gt 0 ]; do
             fm_task_id_path_safe "$TARGET" || die "unsafe task id: $TARGET"
           fi
           ;;
-        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified" ;;
+        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified" ;;
       esac
       ;;
     owners)
@@ -285,6 +290,9 @@ owners_json() {
  {"compensation":"verifier_independence","status":"owned",
   "owner":"bin/fm-independence-lib.sh, refused at bin/fm-certify.sh and fm-decision-surface.sh check certified",
   "note":"independence is derived per dimension from invocation-time evidence and this fleet's declared routing config; there is no argument anywhere that can assert it, and an unobservable dimension can never read as independent"},
+ {"compensation":"role_qualification","status":"owned",
+  "owner":"bin/fm-qualification-lib.sh, refused at bin/fm-spawn.sh and reported by bin/fm-route.sh zero-route",
+  "note":"whether a binding was OBSERVED to do the job a route requires is computed from a record plus a fresh dependency observation, never remembered; missing and stale evidence are engineering states that activate one bounded workflow, and only a route no candidate can satisfy by qualifying escalates"},
  {"compensation":"certification_claim","status":"owned",
   "owner":"bin/fm-certify.sh",
   "note":"CERTIFIED is computed over the applicable predicates for those exact bytes; a route that structurally cannot produce a piece of evidence reports not-applicable with its route rather than being forced into a pass or a failure"},
@@ -669,6 +677,62 @@ check_certified() {
   esac
 }
 
+# "This route has a qualified binding to run on" is the claim that used to be
+# reconstructed as "no model can do this", and the reconstruction is what produced
+# repeated captain floor-exception requests for evidence a bounded workflow could
+# have produced. bin/fm-route.sh zero-route owns the classification; this composes
+# it so firstmate reads a machine-produced answer.
+#
+# CONTRADICTED covers every zero-route classification, including the two
+# qualification states - because in all of them the claim "there is a qualified
+# binding" is false. What the evidence line then carries is the ACTION, which is
+# the part that differs: qualify the cheapest promising candidate, repair the
+# observation, wait, or escalate. Only the last of those is a captain matter, and
+# the line says which one this is rather than leaving a reader to infer it.
+check_route_qualified() {
+  local route="$SCRIPT_DIR/fm-route.sh" out rc class escalation
+  if [ ! -x "$route" ]; then
+    verdict unevaluable "route-qualified $TARGET" \
+      "the route owner is not executable at $route; route eligibility cannot be evaluated"
+    return $?
+  fi
+  out=$(FM_HOME="$FM_HOME" run_timed "$FM_DECISION_SURFACE_PROBE_TIMEOUT" \
+        "$route" zero-route --route "$TARGET" --json 2>/dev/null | tail -1) && rc=0 || rc=$?
+  if [ "$rc" = 124 ] || [ "$rc" = 137 ] || [ -z "$out" ]; then
+    verdict unevaluable "route-qualified $TARGET" \
+      "the route owner reached no readable classification for $TARGET; a read that produced no answer is not one that produced a pass"
+    return $?
+  fi
+  class=$(printf '%s' "$out" | jq -r '.classification // ""' 2>/dev/null)
+  escalation=$(printf '%s' "$out" | jq -r '.escalation // ""' 2>/dev/null)
+  case "$class" in
+    ELIGIBLE)
+      verdict not-contradicted "route-qualified $TARGET" \
+        "eligible now: $(printf '%s' "$out" | jq -r '.eligible | join(", ")')"
+      ;;
+    QUALIFICATION_REQUIRED)
+      verdict contradicted "route-qualified $TARGET" \
+        "no candidate holds the capability this route requires yet · escalation $escalation · one bounded qualification workflow resolves it, cheapest promising candidate first: $(printf '%s' "$out" | jq -r '[.promising[].model] | join(", ")')"
+      ;;
+    QUALIFICATION_COULD_NOT_OBSERVE)
+      verdict contradicted "route-qualified $TARGET" \
+        "whether any candidate holds the required capability could not be observed · escalation $escalation · repair the observation; nothing adverse was established about any binding"
+      ;;
+    AWAITING_AVAILABILITY)
+      verdict contradicted "route-qualified $TARGET" \
+        "every remaining candidate is unreachable or out of capacity · escalation $escalation · this is a wait, owned by the availability and capacity-deferral paths"
+      ;;
+    NO_MODEL_CAN_SATISFY_ROUTE)
+      verdict contradicted "route-qualified $TARGET" \
+        "no candidate can be made eligible by qualifying it · escalation $escalation"
+      ;;
+    *)
+      verdict unevaluable "route-qualified $TARGET" \
+        "the route owner returned the unrecognised classification '$class'"
+      ;;
+  esac
+}
+
 check_duplicate_dispatch() {
   read_snapshot || {
     verdict unevaluable duplicate-dispatch "fleet census unreadable; existing work could not be enumerated"
@@ -711,6 +775,7 @@ case "$SUBCOMMAND" in
       decision-pending) check_decision_pending; exit $? ;;
       duplicate-dispatch) check_duplicate_dispatch; exit $? ;;
       certified) check_certified; exit $? ;;
+      route-qualified) check_route_qualified; exit $? ;;
     esac
     ;;
 esac

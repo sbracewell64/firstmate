@@ -1,0 +1,79 @@
+{
+  "qualification_schema_version": 1,
+  "id": "sol-high-runtime-risk-v1",
+  "contract": "runtime-risk-maker",
+  "contract_version": "1.0.0",
+  "role": "RUNTIME_MAKER",
+  "risk_class": "runtime-risk-v1",
+  "binding": {
+    "provider": "openai-codex",
+    "model": "openai-codex/gpt-5.6-sol",
+    "harness": "pi",
+    "harness_version": "0.81.1",
+    "native_effort": "high"
+  },
+  "fixture": {
+    "identity": "runtime-maker-qualification-fixture-v1",
+    "version": "1.0.0",
+    "manifest_digest": "21c4b242bc6deb5cc9d69887240503cf1cdddae792d492389bfd3a1c245863cd"
+  },
+  "result": "QUALIFICATION_REQUIRED",
+  "result_evidence": "The outside-candidate oracle returned QUALIFIED for the corrected candidate with all ten predicates observed-good, and every baseline and red control behaved as specified - but the required assignment-distinct adjudication never returned a verdict, and the effective effort actually in force on the maker invocation was not observed. Both are required by this contract, so the reusable result is missing evidence rather than a pass.",
+  "measured_context": "COULD_NOT_OBSERVE",
+  "observed_at": "2026-08-13",
+  "adjudication": {
+    "adjudicator_binding": null,
+    "adjudicator_harness": null,
+    "adjudicator_result": "COULD_NOT_OBSERVE",
+    "evidence": "data/sol-high-runtime-maker-qualification-review/ holds the assignment-distinct evaluator's instructions and no report; the evaluator binding first attempted for that role returned FAILED on qualification-evidence-v1 for emitting non-canonical result and observation values, recorded at data/luna-qualification-evidence-adjudicator/report.md."
+  },
+  "freshness_dependencies": [
+    {
+      "kind": "file_digest",
+      "path": "home:data/runtime-maker-qualification-fixture-v1/fixture/MANIFEST.json",
+      "digest": "21c4b242bc6deb5cc9d69887240503cf1cdddae792d492389bfd3a1c245863cd"
+    },
+    {
+      "kind": "contract_version",
+      "version": "1.0.0"
+    },
+    {
+      "kind": "harness_semantics",
+      "harness": "pi",
+      "version": "0.81.1"
+    },
+    {
+      "kind": "binding_semantics",
+      "model": "openai-codex/gpt-5.6-sol",
+      "observed": "COULD_NOT_OBSERVE"
+    },
+    {
+      "kind": "native_effort_mapping",
+      "effort": "high",
+      "observed": "COULD_NOT_OBSERVE"
+    },
+    {
+      "kind": "time_bound",
+      "until": "2026-09-13",
+      "justification": "Three declared dependencies are uncovered - harness semantics, provider-side binding semantics, and the native effort mapping - so this observation is bounded in time instead. The bound is one month from the observation date, which is the monthly evidence-review cadence the model-onboarding observation levels already declare for a routed model at O3: the shortest interval at which this fleet already commits to re-reading a routed model's evidence. A shorter bound would expire before the evidence could be reused at all; a longer one would outlive a harness upgrade nothing here can see."
+    }
+  ],
+  "known_limitations": [
+    "The fixture measures the named reusable runtime-maker contract, not arbitrary production runtime competence.",
+    "The oracle's QUALIFIED output on the corrected candidate is maker evidence and is not assignment-distinct adjudication; this record does not treat it as one.",
+    "Context use was not exposed by this runtime and is recorded as could-not-observe rather than estimated.",
+    "The provider exposed no server-side model snapshot identifier beyond the installed binding name.",
+    "The effective effort actually in force on the maker invocation was not observed, and neither a requested flag, a reasoning-token count, answer correctness, nor a separate preflight invocation was accepted as a substitute for it.",
+    "One correction-runner source failed to parse before executing any statement or writing either candidate file; it is retained as observed-bad evidence rather than hidden.",
+    "The bounded run establishes nothing about future provider availability or sustained concurrency.",
+    "No fleet-declared verifier exists for local qualification semantics, so the deterministic fixture oracle is the evidence owner and the result is classified by hand under the three-valued rule."
+  ],
+  "evidence": [
+    "data/sol-high-runtime-maker-qualification/report.md",
+    "data/sol-high-runtime-maker-qualification/evidence/",
+    "data/runtime-maker-qualification-fixture-v1/report.md",
+    "data/captain-rulings-2026-08-13/qualification-is-engineering-state.md",
+    "data/capability-qualification-on-zero-route/ruling-5316461192-bounded-zero-route.md"
+  ],
+  "note": "The first real record in this register, and it is deliberately not a pass. Recording the honest QUALIFICATION_REQUIRED is what makes the register worth reading: this exact tuple stays excluded from a route that requires this contract, the search for another binding is lawful engineering rather than a captain exception, and nothing about this binding is written as a failure or as a reputation. Re-running or relabelling this qualification is out of scope until a same-invocation effort observation mechanism exists; that is the governing ruling's instruction, not this file's preference."
+}

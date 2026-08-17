@@ -141,7 +141,7 @@ family_for_basename() {
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
     fm-kimi-harness.test.sh|fm-herdr-lab.test.sh|fm-landed-lib.test.sh|\
     fm-launch-lib.test.sh|fm-lint.test.sh|\
-    fm-nm-run-lib.test.sh|\
+    fm-nm-run-lib.test.sh|fm-qualification.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
@@ -194,7 +194,7 @@ family_for_basename() {
       ;;
     fm-backend-herdr.test.sh|fm-backend-tmux-smoke.test.sh|fm-backend.test.sh|\
     fm-tmux-agent-liveness.test.sh|\
-    fm-route-enforcement.test.sh|\
+    fm-route-enforcement.test.sh|fm-route-qualification.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-launch.test.sh|fm-send-strict.test.sh|\
     fm-spawn-batch.test.sh|fm-spawn-dispatch-profile.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
