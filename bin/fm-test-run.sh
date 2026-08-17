@@ -947,7 +947,10 @@ for raw in sys.argv[7:]:
     m = lane_re.match(str(doc.get("selection") or ""))
     if not m:
         continue  # another lane's artifact; this control only judges the serial lane
-    idx, of = int(m.group(1)), int(m.group(2))
+    try:
+        idx, of = int(m.group(1)), int(m.group(2))
+    except ValueError:
+        unobserved(f"{p} has invalid numeric shard metadata")
     if of != shards:
         unobserved(f"{p} reports {of} shards but this runner is configured for {shards}")
     if idx < 1 or idx > shards:
