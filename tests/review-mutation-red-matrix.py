@@ -406,7 +406,7 @@ def d32(s, v, r):
     return sub(s, '''  [ "$cat_git_dir" != "$cat_common_dir" ] \\
     || cno "mutation proof refuses a primary checkout as its source: $source"
 
-  guard_output_outside_source "$source" "$out"''', '''  [ "$cat_git_dir" != "$cat_common_dir" ] \\
+  guard_output_outside_source "$source_root" "$out"''', '''  [ "$cat_git_dir" != "$cat_common_dir" ] \\
     || cno "mutation proof refuses a primary checkout as its source: $source"'''), v, r
 
 
