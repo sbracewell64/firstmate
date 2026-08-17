@@ -26,39 +26,11 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Digested-array canonicalization sweep
 
 The first sweep read the construction site and classified only top-level arrays, so its method could not observe nesting and missed `verification.applicability_rules[].paths` and `verification.contracts[].execution_worlds`.
-The replacement method compiles the suite's baseline fixture augmented with populated findings, rulings, obligations and repeated nested verification values, then walks the resulting digested body recursively to arbitrary depth and classifies every array path it observes.
+The replacement controls compile the suite's baseline fixture augmented across cases with populated findings, rulings, obligations and repeated nested verification values, then walk the resulting digested body recursively to arbitrary depth and classify every array path they observe.
 The sweep universe covers sibling breadth across every object key, nesting depth across every object and array element, and populated shape variants supplied by the fixture; walking the artifact makes those axes properties of the real body rather than assumptions inferred from its builder.
-Every observed array is classified below by whether its order carries contract meaning.
-
-- `identity.project.root_commits` is canonicalized by commit id because root enumeration order carries no meaning.
-- `candidate.changed_files` is canonicalized by its unique path at construction because diff enumeration order carries no meaning.
-- `scope.excluded` preserves declaration order because classification is first-match-wins and records the first matching rule in `excluded_by`.
-- `scope.in_scope_paths` is canonicalized by path because membership, not order, defines the scope.
-- `scope.excluded_paths` is canonicalized by its unique path because membership and the credited rule define the exclusion.
-- `scope.unused_exclusions` is canonicalized by rule id because membership, not order, defines which rules were unused.
-- `verification.applicability_rules` is canonicalized by contract id and complete record because the rules are evaluated as a set.
-- `verification.applicability_rules[].paths` is canonicalized by path-rule type, value and complete record because matching uses set-like `any` semantics.
-- `verification.required_contract_ids` is canonicalized by contract id because it is a set.
-- `verification.contracts` is canonicalized by stable contract identity and complete record because declaration order carries no meaning.
-- `verification.contracts[].execution_worlds` is canonicalized by complete value because it is the set of worlds requiring results.
-- `verification.results` is canonicalized by stable result identity and complete record because declaration order carries no meaning.
-- `capabilities` is canonicalized by capability id and complete record because capability declaration order carries no meaning.
-- `capabilities[].candidates` preserves declaration order because the first candidate that resolves and states its identity is selected.
-- `capabilities[].identity_argv` preserves declaration order because argument order is part of the invoked identity command.
-- `capabilities[].probes` preserves evaluation order because it records the evidence that candidate resolution was exhausted in declared order.
-- `capabilities[].selected.identity_argv` preserves argument order because it records the identity command that selected the candidate.
-- `ci.required_platforms` is canonicalized by platform because it is a set.
-- `ci.attempts` is restricted to documented fields and canonicalized by stable attempt identity and complete record because provider metadata and input order carry no review meaning.
-- `ci.checks` is canonicalized by sorted check groups because check declaration order carries no meaning.
-- `ci.checks[].platforms` is canonicalized by platform because it is the set covered by the current check attempt.
-- `ci.wrong_head_attempts` is canonicalized by stable summary identity and complete record because input order carries no meaning.
-- `ci.head_unknown_attempts` is canonicalized by stable summary identity and complete record because input order carries no meaning.
-- `findings.adverse` is canonicalized by finding id and complete record because declaration order carries no meaning.
-- `findings.unproven` is canonicalized by dimension id and complete record because declaration order carries no meaning.
-- `rulings` is canonicalized by ruling id and complete record because declaration order carries no meaning.
-- `obligations.active` is canonicalized by obligation id and complete record because it is a set.
-- `obligations.dispositions` is canonicalized by obligation id and complete record because it is a set of predecessor dispositions.
-- `obligations.predecessor_active` is canonicalized by obligation id because it is the predecessor's active set.
+[`review-envelope-array-classifications.json`](review-envelope-array-classifications.json) is the single registry of every observed array path, its canonicalized or order-meaningful classification, and the reason for that classification.
+The control compares the recursive walk and registry in both directions, so a new unclassified path and a stale classification both fail by name.
+Every order-meaningful entry names an exercised scenario, and the controls require each scenario's reordering to change the derived request identity so relabelling cannot substitute for canonicalization.
 
 ## Environment
 
@@ -93,7 +65,7 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
-70 controls pass against the shipped scripts.
+72 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 

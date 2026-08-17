@@ -254,6 +254,91 @@ capture() {
   CAPTURED_CODE=$?
 }
 
+check_array_registry() {  # <envelope> <registry> <current|extra|stale>
+  python3 - "$@" <<'PY'
+import copy, json, sys
+
+envelope_path, registry_path, mode = sys.argv[1:]
+body = json.load(open(envelope_path))["envelope"]
+registry = json.load(open(registry_path))
+if registry.get("schema") != "review-envelope-array-classifications/v1":
+    sys.stderr.write("array registry has an unknown schema\n")
+    sys.exit(1)
+entries = copy.deepcopy(registry.get("classifications", []))
+if not isinstance(entries, list):
+    sys.stderr.write("array registry classifications must be a list\n")
+    sys.exit(1)
+
+if mode == "extra":
+    body["future_array"] = []
+elif mode == "stale":
+    entries.append({
+        "path": "retired_array",
+        "order": "canonicalized",
+        "reason": "deliberately stale test entry",
+    })
+elif mode != "current":
+    sys.stderr.write("unknown array-registry check mode: " + mode + "\n")
+    sys.exit(1)
+
+observed = set()
+
+
+def walk(node, path=""):
+    if isinstance(node, list):
+        observed.add(path)
+        for item in node:
+            walk(item, path + "[]")
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            walk(value, path + "." + key if path else key)
+
+
+walk(body)
+declared = set()
+meaningful = {}
+for entry in entries:
+    path = entry.get("path")
+    order = entry.get("order")
+    reason = entry.get("reason")
+    if not isinstance(path, str) or not path or path in declared:
+        sys.stderr.write("array registry contains an absent or duplicate path\n")
+        sys.exit(1)
+    if order not in ("canonicalized", "order-meaningful"):
+        sys.stderr.write("array registry has an invalid order classification: " + path + "\n")
+        sys.exit(1)
+    if not isinstance(reason, str) or not reason.strip():
+        sys.stderr.write("array registry has no reason: " + path + "\n")
+        sys.exit(1)
+    if order == "order-meaningful":
+        exercise = entry.get("exercise")
+        if not isinstance(exercise, str) or not exercise:
+            sys.stderr.write("order-meaningful array has no exercise: " + path + "\n")
+            sys.exit(1)
+        meaningful[path] = exercise
+    declared.add(path)
+
+expected_meaningful = {
+    "capabilities[].candidates": "capability-candidates",
+    "capabilities[].identity_argv": "capability-identity-argv",
+    "capabilities[].probes": "capability-candidates",
+    "capabilities[].selected.identity_argv": "capability-identity-argv",
+    "scope.excluded": "scope-exclusions",
+}
+if meaningful != expected_meaningful:
+    sys.stderr.write("order-meaningful exercise registry differs: " + repr(meaningful) + "\n")
+    sys.exit(1)
+missing = sorted(observed - declared)
+stale = sorted(declared - observed)
+if missing:
+    sys.stderr.write("unclassified array paths: " + ", ".join(missing) + "\n")
+if stale:
+    sys.stderr.write("stale array classifications: " + ", ".join(stale) + "\n")
+if missing or stale:
+    sys.exit(1)
+PY
+}
+
 # assert_required_set <envelope> <id>... <message>: the computed required set
 # must be exactly the listed ids.
 assert_required_set() {
@@ -582,6 +667,86 @@ PY
   pass "nested order-insensitive facts preserve stable, non-vacuous identities"
 }
 
+test_array_classification_registry_is_total() {
+  local case_dir registry
+  case_dir=$(make_case array-registry)
+  registry=$ROOT/docs/verification/review-envelope-array-classifications.json
+  write_inputs "$case_dir" '{"rulings": [{
+    "id": "R-all-mismatches",
+    "source": "captain",
+    "relied_upon": false,
+    "applies_to": {
+      "work_id": "other-work",
+      "head": "1111111111111111111111111111111111111111",
+      "tree": "2222222222222222222222222222222222222222",
+      "envelope_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}}]}'
+  capture run_prepare "$case_dir" env
+  expect_code 0 "$CAPTURED_CODE" "the populated registry fixture compiles"
+
+  capture check_array_registry "$case_dir/env/envelope.json" "$registry" current
+  expect_code 0 "$CAPTURED_CODE" "every current array path is classified"
+
+  capture check_array_registry "$case_dir/env/envelope.json" "$registry" extra
+  expect_code 1 "$CAPTURED_CODE" "an unclassified future array path fails"
+  assert_contains "$CAPTURED" 'unclassified array paths: future_array' \
+    "the missing classification must name the newly observed array path"
+
+  capture check_array_registry "$case_dir/env/envelope.json" "$registry" stale
+  expect_code 1 "$CAPTURED_CODE" "a stale registry path fails"
+  assert_contains "$CAPTURED" 'stale array classifications: retired_array' \
+    "the stale classification must name the path no longer observed"
+  pass "the recursive array registry is total in both directions"
+}
+
+test_capability_order_meaningful_arrays_change_identity() {
+  local case_dir first_identity second_identity
+  case_dir=$(make_case capability-candidate-order)
+  write_probe "$case_dir/fakebin/fm-probe-beta" 'fm-probe-beta 2.0.0'
+  write_inputs "$case_dir" '{"capabilities": [{
+    "id": "probe",
+    "mandatory": true,
+    "candidates": ["fm-probe-alpha", "fm-probe-beta"],
+    "identity_argv": ["--version"]}]}'
+  capture run_prepare "$case_dir" first
+  expect_code 0 "$CAPTURED_CODE" "the first capability candidate order compiles"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["capabilities"][0]["candidates"].reverse()
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" second
+  expect_code 0 "$CAPTURED_CODE" "the reversed capability candidate order compiles"
+  first_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/first/envelope.json")
+  second_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/second/envelope.json")
+  [ "$first_identity" != "$second_identity" ] \
+    || fail "reordering capability candidates and their probes must change request identity"
+
+  case_dir=$(make_case capability-identity-argv-order)
+  write_inputs "$case_dir" '{"capabilities": [{
+    "id": "probe",
+    "mandatory": true,
+    "candidates": ["fm-probe-alpha"],
+    "identity_argv": ["--version", "--verbose"]}]}'
+  capture run_prepare "$case_dir" first
+  expect_code 0 "$CAPTURED_CODE" "the first capability identity argument order compiles"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["capabilities"][0]["identity_argv"].reverse()
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" second
+  expect_code 0 "$CAPTURED_CODE" "the reversed capability identity argument order compiles"
+  first_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/first/envelope.json")
+  second_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/second/envelope.json")
+  [ "$first_identity" != "$second_identity" ] \
+    || fail "reordering capability identity arguments must change request identity"
+  pass "order-meaningful capability arrays change derived identity"
+}
+
 test_ci_canonicalization_preserves_meaningful_differences() {
   local case_dir first_digest first_identity second_digest second_identity
   case_dir=$(make_case canonical-ci-meaning)
@@ -617,7 +782,7 @@ PY
 }
 
 test_exclusion_rule_order_remains_meaningful() {
-  local case_dir first_rule second_rule
+  local case_dir first_rule second_rule first_identity second_identity
   case_dir=$(make_case meaningful-exclusion-order)
   write_inputs "$case_dir" '{"scope": {"excluded": [
     {"id": "docs-first", "type": "prefix", "value": "docs/", "reason": "docs"},
@@ -635,8 +800,12 @@ PY
   expect_code 1 "$CAPTURED_CODE" "the reversed exclusion order compiles to a refusal"
   first_rule=$(python3 -c 'import json,sys; print(next(row["excluded_by"] for row in json.load(open(sys.argv[1]))["envelope"]["candidate"]["changed_files"] if row["path"] == "docs/notes.md"))' "$case_dir/first/envelope.json")
   second_rule=$(python3 -c 'import json,sys; print(next(row["excluded_by"] for row in json.load(open(sys.argv[1]))["envelope"]["candidate"]["changed_files"] if row["path"] == "docs/notes.md"))' "$case_dir/second/envelope.json")
+  first_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/first/envelope.json")
+  second_identity=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["request_identity"])' "$case_dir/second/envelope.json")
   [ "$first_rule" = docs-first ] || fail "the first matching exclusion rule must receive credit"
   [ "$second_rule" = all-second ] || fail "reordering matching exclusions must change the credited rule"
+  [ "$first_identity" != "$second_identity" ] \
+    || fail "reordering first-match-wins exclusions must change request identity"
   pass "exclusion rules retain first-match-wins order"
 }
 
@@ -2215,6 +2384,8 @@ test_requested_decision_is_an_uppercase_token
 test_identical_facts_produce_an_identical_digest
 test_order_insensitive_facts_produce_an_identical_identity
 test_nested_order_insensitive_facts_produce_an_identical_identity
+test_array_classification_registry_is_total
+test_capability_order_meaningful_arrays_change_identity
 test_ci_canonicalization_preserves_meaningful_differences
 test_exclusion_rule_order_remains_meaningful
 test_a_structurally_malformed_envelope_is_could_not_observe
