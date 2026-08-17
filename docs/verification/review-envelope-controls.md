@@ -38,8 +38,8 @@ The pull request is not ready while this stands, and it is discharged only by re
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `61cdb47b65c1df89c308cb2edc2b54a17a55b76b`.
-Mutations built: 72.
+Campaign head: `0000000`.
+Mutations built: 0.
 
 ## Commands
 

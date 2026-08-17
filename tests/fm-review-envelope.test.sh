@@ -1831,11 +1831,32 @@ built = re.search(r"^Mutations built: ([0-9]+)\.$", record, re.M)
 if not built:
     sys.stderr.write("the record states no mutation count in the required form\n")
     sys.exit(1)
-if int(built.group(1)) != len(artifact.get("mutations", [])):
+mutations = artifact.get("mutations", [])
+if int(built.group(1)) != len(mutations):
     sys.stderr.write(
         "record states %s mutations, artifact holds %d\n"
-        % (built.group(1), len(artifact.get("mutations", []))))
+        % (built.group(1), len(mutations)))
     sys.exit(1)
+
+# Each entry records the head it was measured at, so relabelling the artifact's
+# single head cannot silently re-attribute entries measured somewhere else. That
+# is not hypothetical: a commit on this branch did exactly that to 69 entries,
+# and every check in this suite passed because only one head was written down.
+for entry in mutations:
+    if entry.get("head") != artifact.get("head"):
+        sys.stderr.write(
+            "mutation %s was measured at %s, artifact claims %s\n"
+            % (entry.get("id"), entry.get("head"), artifact.get("head")))
+        sys.exit(1)
+    # Material that cannot be produced without executing, and that an
+    # independent party can replay: the patch that rebuilds the variant, and a
+    # digest of the whole captured run to compare against.
+    for field in ("observed", "output_sha256", "replay_patch_sha256"):
+        if not entry.get(field):
+            sys.stderr.write(
+                "mutation %s carries no %s, so its result is self-attested\n"
+                % (entry.get("id"), field))
+            sys.exit(1)
 PYEOF
   pass "the measurement record's claims are backed by the campaign artifact"
 }
