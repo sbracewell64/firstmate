@@ -33,6 +33,8 @@
 set -u
 
 # shellcheck source=tests/lib.sh
+# Read by tests/lib.sh pass() to record executed test identities for the drift control.
+# shellcheck disable=SC2034
 FM_TEST_IDENTITY_CONTRACT=1
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fm_git_identity fmtest fmtest@example.invalid
