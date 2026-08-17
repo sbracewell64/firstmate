@@ -42,7 +42,7 @@ Each was produced by staging a copy of the mechanism, injecting exactly one defe
 
 Date: 2026-08-17.
 Command shape, per case: copy `bin/` and `tests/` to a scratch root, apply one patch, run `bash tests/fm-landing-authorization.test.sh`, record the first `not ok`.
-The review worker personally watched cases 5, 13, 14, and 15 fail in this worktree after the corresponding review fixes; cases 1 through 4 and 6 through 12 retain the initial worker's recorded observations.
+The review worker personally watched cases 5, 5a, 5b, 13, 14, and 15 fail in this worktree after the corresponding review fixes; cases 1 through 4 and 6 through 12 retain the initial worker's recorded observations.
 
 | # | Injected defect | Observed failure |
 | - | --------------- | ---------------- |
@@ -51,6 +51,8 @@ The review worker personally watched cases 5, 13, 14, and 15 fail in this worktr
 | 3 | the caller-stated head is not compared | `not ok - head-bound: a different head must refuse: spent: ... landed demo-item at 1111111111111111111111111111111111111111: expected exit 3, got 0` |
 | 4 | the observed head is replaced by the caller's | `not ok - moved-head: a moved forge head must refuse: spent: ... landed demo-item at 1111111111111111111111111111111111111111: expected exit 3, got 0` |
 | 5 | group liveness ignored after the wrapper leader dies | `not ok - restart: reconciliation reclaimed while the act child lived: reconciled: fm-auth-3fc7425751e637a0f3d58b0d15457f5c is now granted: expected exit 4, got 0` |
+| 5a | an empty process-group snapshot treated as proof of absence | `not ok - restart: empty group snapshot reclaimed the authorization: reconciled: fm-auth-3fc7425751e637a0f3d58b0d15457f5c is now granted: expected exit 4, got 0` |
+| 5b | a nonempty numeric snapshot trusted without observing the recovering process's group | `not ok - restart: truncated group snapshot reclaimed the authorization: reconciled: fm-auth-3fc7425751e637a0f3d58b0d15457f5c is now granted: expected exit 4, got 0` |
 | 6 | any correlation state accepted | `not ok - superseded: a superseded request must refuse: spent: ...: expected exit 3, got 0` |
 | 7 | an unrecognized verdict classed as approving | `not ok - mint-unknown: an unrecognized verdict must be could-not-observe: ...: expected exit 4, got 0` |
 | 8 | a nonce added to the mint identity | `not ok - mint-idempotent: the same ruling minted two ids, fm-auth-b0a09b1e... and fm-auth-962bc8c1...` |
@@ -83,6 +85,23 @@ The exact rerun command was:
 ```sh
 cd .red-calibration-20260817/malformed-id && bash tests/fm-landing-authorization.test.sh
 ```
+
+The exact shell commands used for cases 5a and 5b were:
+
+```sh
+cal_root=.red-calibration-snapshot-20260817
+mkdir -p "$cal_root/empty" "$cal_root/nonempty-only"
+for case_dir in "$cal_root"/*; do cp -a bin tests "$case_dir/"; done
+for defect in empty nonempty-only; do
+  printf 'DEFECT=%s\n' "$defect"
+  (cd ".red-calibration-snapshot-20260817/$defect" && bash tests/fm-landing-authorization.test.sh) 2>&1
+  printf 'EXIT=%s\n' "$?"
+done
+```
+
+The `empty` copy removed snapshot validation entirely.
+The `nonempty-only` copy required numeric nonempty rows but omitted the positive recovering-group observation.
+Both real defect runs exited 1 with the first failing lines reproduced verbatim in the table.
 
 ### The two that carry the most weight
 
@@ -126,6 +145,7 @@ That is reported as `indeterminate`, and it is neither neighbour on purpose: rep
 
 The restart control runs a blocking act in the spend wrapper's owned process group, waits until that child is running, and sends SIGKILL to the wrapper leader without cooperative cleanup.
 It proves reconciliation refuses while the child remains alive, then lets the final group member exit and proves reconciliation can reclaim the authorization rather than refusing forever.
+It also proves an empty snapshot and a nonempty snapshot missing the recovering process's own group remain unobserved, then restores the real snapshot and proves a genuinely absent old group is reclaimed.
 
 An act that exits non-zero lands in the same window by the same reasoning: a failed command has not said the irreversible operation had no effect.
 The cost is that a transient failure needs `reconcile` rather than a blind retry, and that cost is accepted because a retry that lands twice is not recoverable and a reconciliation is.
