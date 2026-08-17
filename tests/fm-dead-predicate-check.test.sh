@@ -445,6 +445,7 @@ dead_one() { return 0; }')
 test_backtick_substitution_is_unchecked() {
   local dir out rc
   dir=$(fixture backtick-substitution 'maybe_used() { return 0; }')
+  # shellcheck disable=SC2016 # The literal backticks are the fixture under test.
   add_plain_consumer "$dir" 'value=`maybe_used`'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 4 ] || fail "backtick substitution produced a definitive verdict, exit $rc: $out"
