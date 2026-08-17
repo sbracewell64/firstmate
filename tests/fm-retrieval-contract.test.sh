@@ -303,6 +303,23 @@ test_duplicate_identifiers_across_pages() {
   pass "a record re-served across a page boundary is counted once, not twice"
 }
 
+test_record_bound_stops_at_the_unique_record_limit() {
+  local fix
+  fix=$(fixture_new record-bound)
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'nothing')" \
+    "$(comment 11 2026-08-01T00:00:00Z 'duplicate')" \
+    "$(comment 12 2026-08-02T00:00:00Z 'APPROVE req-7 hidden beyond the bound')")"
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --max-records 1
+  assert_field "$RECORD" records 1 "unique record bound"
+  assert_field "$RECORD" duplicates 1 "unique record bound"
+  assert_field "$RECORD" retrieval incomplete "unique record bound"
+  assert_field "$RECORD" reason record_bound_reached "unique record bound"
+  assert_field "$RECORD" conclusion INDETERMINATE "unique record bound"
+  expect_code 2 "$RC" "a discarded unique record leaves the result incomplete"
+  pass "the record bound retains no more than its unique-record limit"
+}
+
 # Later traffic is not a later ruling. The applicability filter, not recency
 # alone, decides what the extremal claim ranges over.
 test_irrelevant_later_comment_does_not_displace_the_ruling() {
@@ -942,6 +959,37 @@ SH
   pass "the check accepts a read carrying an exact classification and reason"
 }
 
+test_check_does_not_inherit_a_neighboring_classification() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-neighbor"
+  mkdir -p "$dir/bin"
+  cat > "$dir/bin/fm-new-reader.sh" <<'SH'
+#!/usr/bin/env bash
+# fm-retrieval-audit: not-a-collection - the first request reads one object
+one=$(gh api "repos/o/r/issues/1")
+two=$(gh api "repos/o/r/issues/1/comments")
+printf '%s%s\n' "$one" "$two"
+SH
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 1 "$rc" "a neighboring read cannot inherit a classification"
+  assert_contains "$out" "bin/fm-new-reader.sh:4" "the unclassified neighbor is named"
+  pass "each retrieval annotation is consumed by exactly one read statement"
+}
+
+test_check_requires_language_comment_syntax() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-comment-syntax"
+  mkdir -p "$dir/src"
+  cat > "$dir/src/reader.js" <<'JS'
+const note = "fm-retrieval-audit: contract - text is not a JavaScript comment";
+const result = await fetch("https://api.example.test/comments");
+JS
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 1 "$rc" "annotation text outside comment syntax is rejected"
+  assert_contains "$out" "src/reader.js:2" "the native read remains unclassified"
+  pass "retrieval annotations require the applicable language comment syntax"
+}
+
 test_check_rejects_an_unchecked_non_shell_file() {
   local dir out rc=0
   dir="$TMP_ROOT/check-unchecked"
@@ -1115,6 +1163,7 @@ run test_latest_refuses_when_retrieval_is_bounded_out
 run test_pagination_stopping_early_refuses_a_negative
 run test_unreadable_page_refuses_a_negative
 run test_duplicate_identifiers_across_pages
+run test_record_bound_stops_at_the_unique_record_limit
 run test_irrelevant_later_comment_does_not_displace_the_ruling
 run test_identity_only_in_quoted_prose_is_not_a_match
 run test_identity_followed_by_sentence_punctuation_matches
@@ -1152,6 +1201,8 @@ run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
 run test_check_accepts_a_classified_read
+run test_check_does_not_inherit_a_neighboring_classification
+run test_check_requires_language_comment_syntax
 run test_check_rejects_an_unchecked_non_shell_file
 run test_check_discovers_a_native_non_shell_read
 run test_check_reports_coverage_beside_violations

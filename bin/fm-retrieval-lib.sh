@@ -317,7 +317,7 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
   local max_records=${5:-0}
   local text_field=${6:-} time_field=${7:-}
   local tmp headers body pages=0 next rc seen_file out_file
-  local page_records total=0 dups=0 attempts
+  local page_records total=0 dups=0 attempts record_bound_hit=0
 
   case "$max_pages" in ''|*[!0-9]*|0) max_pages=${FM_RETRIEVAL_MAX_PAGES:-50} ;; esac
   case "$max_records" in ''|*[!0-9]*) max_records=0 ;; esac
@@ -376,6 +376,10 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
         dups=$((dups + 1))
         continue
       fi
+      if [ "$max_records" -gt 0 ] && [ "$total" -ge "$max_records" ]; then
+        record_bound_hit=1
+        break
+      fi
       printf '%s\n' "$this_id" >> "$seen_file"
       printf '%s\n' "$line" >> "$out_file"
       total=$((total + 1))
@@ -383,6 +387,12 @@ fm_retrieval_fetch() {  # <first-url> <records-file> <id-field> [max-pages] [max
 
     jq -cn --arg url "$url" --argjson n "$page_records" --argjson a "$attempts" \
       '{url: $url, records: $n, attempts: $a, status: 200}' >> "$tmp/pages.json"
+
+    if [ "$record_bound_hit" = 1 ]; then
+      fm_retrieval_set_reason record_bound_reached \
+        "the unique-record bound of $max_records was reached during page $pages"
+      break
+    fi
 
     if [ -n "${FM_RETRIEVAL_FORCE_LINK:-}" ] && [ "$pages" = 1 ]; then
       printf 'Link: %s\n' "$FM_RETRIEVAL_FORCE_LINK" >> "$headers"

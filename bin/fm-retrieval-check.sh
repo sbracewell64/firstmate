@@ -45,8 +45,8 @@
 #
 # CLASSIFICATION
 #
-# Every enforced site carries an annotation, on the same line or on one of the
-# three lines immediately above it:
+# Every enforced site carries an annotation either as a trailing comment on the
+# site or as the whole-line comment immediately above it:
 #
 #   # fm-retrieval-audit: <class> - <reason>
 #
@@ -226,10 +226,8 @@ done <<EOF
 $UNIVERSE
 EOF
 
-# One awk pass per file. The annotation is accepted on the flagged line itself or
-# on one of the three lines above it, because a flagged line that ends a shell
-# continuation cannot carry a trailing comment and its statement's own first line
-# is the nearest place a comment is legal.
+# One awk pass per file. An annotation is accepted only in the applicable
+# language's comment syntax and is consumed by exactly one read site.
 scan_file() {  # <file> <classifier>
   local file=$1 classifier=$2 pattern=$ENFORCED_PATTERN
   [ "$MODE" = check ] || pattern=$AUDIT_PATTERN
@@ -239,7 +237,7 @@ scan_file() {  # <file> <classifier>
     config) pattern="$pattern|$NATIVE_PATTERN" ;;
     *) return 1 ;;
   esac
-  awk -v file="$file" -v pat="$pattern" -v anno="$ANNOTATION" -v classes="$CLASSES" '
+  awk -v file="$file" -v classifier="$classifier" -v pat="$pattern" -v anno="$ANNOTATION" -v classes="$CLASSES" '
     BEGIN {
       n = split(classes, c, " ")
       for (i = 1; i <= n; i++) known[c[i]] = 1
@@ -251,6 +249,12 @@ scan_file() {  # <file> <classifier>
       for (i = 1; i <= NR; i++) {
         line = lines[i]
         if (line !~ pat) continue
+        statement_start = i
+        while (statement_start > 1 && lines[statement_start - 1] ~ /\\[[:space:]]*$/) {
+          statement_start--
+        }
+        if (statement_seen[statement_start]) continue
+        statement_seen[statement_start] = 1
         # A whole-line comment reads nothing, so it is not a read site. This is
         # the axis applied, not the pattern narrowed: the axis is constructs that
         # READ a collection, and shell evaluates none of this line. Header prose
@@ -267,16 +271,33 @@ scan_file() {  # <file> <classifier>
         }
         found = ""
         reason = ""
-        for (j = i; j >= i - 3 && j >= 1; j--) {
-          at = index(lines[j], anno)
-          if (at == 0) continue
-          rest = substr(lines[j], at + length(anno))
+        annotation_line = 0
+        if (classifier == "native" && file ~ /[.](js|mjs|cjs|ts|tsx)$/) {
+          whole_comment = "^[[:space:]]*//[[:space:]]*"
+          trailing_comment = "//[[:space:]]*"
+        } else if (classifier == "native" && file ~ /[.]bat$/) {
+          whole_comment = "^[[:space:]]*(REM[[:space:]]+|::[[:space:]]*)"
+          trailing_comment = ""
+        } else {
+          whole_comment = "^[[:space:]]*#[[:space:]]*"
+          trailing_comment = "#[[:space:]]*"
+        }
+        at = index(line, anno)
+        prefix = at > 0 ? substr(line, 1, at - 1) : ""
+        if (at > 0 && trailing_comment != "" && prefix ~ trailing_comment) {
+          annotation_line = i
+        } else if (statement_start > 1 && lines[statement_start - 1] ~ whole_comment && index(lines[statement_start - 1], anno) > 0) {
+          annotation_line = statement_start - 1
+        }
+        if (annotation_line > 0 && !claimed[annotation_line]) {
+          claimed[annotation_line] = 1
+          at = index(lines[annotation_line], anno)
+          rest = substr(lines[annotation_line], at + length(anno))
           sub(/^[[:space:]]+/, "", rest)
           split(rest, w, " ")
           found = w[1]
           reason = rest
           sub(/^[^[:space:]]+[[:space:]]*-?[[:space:]]*/, "", reason)
-          break
         }
         if (found == "") {
           printf "UNCLASSIFIED\t%s:%d\t%s\n", file, i, line
@@ -352,7 +373,7 @@ the completeness proof, or carry the reason it does not need to:
 
   # $ANNOTATION <class> - <why a negative conclusion here is sound>
 
-on the same line or one of the three lines above it. Run
+as a trailing comment or the whole-line comment immediately above it. Run
 'fm-retrieval-check.sh --list-classes' for the vocabulary and this script's
 header for what each class means.
 EOF
