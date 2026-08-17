@@ -173,7 +173,8 @@ The default fetch refspec cannot reach the fork, because it points at the fetch 
 The ref is a landing target only because this fleet demonstrably pushes there; it is never inferred from a remote's name.
 Only a caller that already refreshes remotes performs that fetch, so the guard stays local and never grows a network dependency.
 A push url that exists but cannot be read leaves the landing target unread, and `bin/fm-teardown.sh` refuses rather than falling back to the upstream answer.
-`tests/fm-worktree-guard.test.sh` cases (o6) through (o8) and `tests/fm-teardown.test.sh` cases (u) through (y) pin the fix, the preserved refusals, and the unchanged single-remote path.
+So does a push url whose very existence could not be read; [`landing-resolution.md`](landing-resolution.md) owns that boundary and the evidence for it.
+`tests/fm-worktree-guard.test.sh` cases (o6) through (o9) and `tests/fm-teardown.test.sh` cases (u) through (y) pin the fix, the preserved refusals, the unread-target refusals, and the unchanged single-remote path.
 
 ## What the guard writes
 

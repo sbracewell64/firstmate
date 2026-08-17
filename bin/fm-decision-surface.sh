@@ -257,7 +257,7 @@ owners_json() {
   "note":"run-step attribution bound to branch and code identity; a claim the run's own evidence does not record reports blocked"},
  {"compensation":"work_landed","status":"owned",
   "owner":"bin/fm-landed-lib.sh and bin/fm-pr-merge.sh merge_verification=",
-  "note":"landing is re-verified against the current head, never remembered"},
+  "note":"landing is re-verified against the current head, never remembered; a landing answer that could not be read is could-not-observe, never not-landed"},
  {"compensation":"terminal_state","status":"owned",
   "owner":"bin/fm-wake-ledger.sh task --outcome landed|failed|abandoned",
   "note":"every terminal outcome is representable, so exhaustion cannot read as success"},

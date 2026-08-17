@@ -948,27 +948,43 @@ forge_publication_observe() {  # <branch>
 # the refreshed remote trunks whenever an origin exists, preferring the trunk
 # this fleet actually pushes to - while bin/fm-landed-lib.sh owns the
 # containment instrument itself and why content beats commit reachability.
-# Returns non-zero when inconclusive (no default ref, unreadable refs, or a
-# merge conflict), so the caller refuses rather than guesses.
+# Returns non-zero when inconclusive (no default ref, unreadable refs, a
+# landing target that could not even be named, or a merge conflict), so the
+# caller refuses rather than guesses.
+#
+# WHICH DIRECTION COULD-NOT-OBSERVE FALLS HERE. This predicate answers "is the
+# work safe to discard?", so an unreadable landing target must produce "not
+# safe". Every could-not-observe below therefore returns non-zero and teardown
+# refuses - the same status a proven "not landed" produces, because the ACT this
+# gates is identical for both and only the wording differs. That is the safe
+# collapse and it is deliberate; it is not the collapse this predicate must
+# avoid, which is a could-not-observe silently becoming an answer.
 content_in_default() {
-  local name ref push_ref
+  local name ref push_ref status
   name=$(default_branch) || return 1
-  if git -C "$WT" remote get-url origin >/dev/null 2>&1; then
+  fm_landed_remote_listed "$WT" origin
+  status=$?
+  if [ "$status" -eq 0 ]; then
     git -C "$WT" fetch --quiet origin "+refs/heads/$name:refs/remotes/origin/$name" >/dev/null 2>&1 || return 1
     # When origin FETCHES an upstream but PUSHES a fork, the ref just refreshed
     # is the upstream trunk - a trunk this fleet never lands on - so measuring
     # only it reports provably merged work as unlanded. Refresh the push
     # remote's trunk as well and measure that first. A push url that exists but
     # cannot be read is the landing target itself going unread, so it refuses
-    # rather than falling back to the upstream answer.
+    # rather than falling back to the upstream answer - and so is a push url
+    # whose very EXISTENCE could not be read, which reaches the same landing
+    # target through the same blind spot.
     fm_landed_refresh_push_target "$WT" "$name" || return 1
-    if push_ref=$(fm_landed_push_target_ref "$WT" "$name"); then
-      if fm_landed_tree_contains "$WT" "$push_ref"; then
-        return 0
-      fi
-    fi
+    push_ref=$(fm_landed_push_target_ref "$WT" "$name")
+    status=$?
+    case "$status" in
+      0) fm_landed_tree_contains "$WT" "$push_ref" && return 0 ;;
+      1) : ;;
+      *) return 1 ;;
+    esac
     ref="refs/remotes/origin/$name"
-  elif git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
+  elif [ "$status" -eq 1 ] \
+    && git -C "$WT" rev-parse --quiet --verify "refs/heads/$name" >/dev/null 2>&1; then
     ref="refs/heads/$name"
   else
     return 1
