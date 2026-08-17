@@ -722,6 +722,44 @@ test_the_probe_argv_is_recorded_exactly() {
   pass "the probe argv is recorded exactly, not as a rendering of itself"
 }
 
+# The coupling the inventory control does NOT provide. The inventory claim binds
+# the record's digests to the CURRENT bytes; nothing bound them to the bytes that
+# actually produced the measurement. A repin without a re-measurement therefore
+# decoupled the two silently, and did so once in this task's own history: a fix
+# changed the proof owner, a later round repinned the inventory, and the record
+# went on reporting a measurement taken against bytes that no longer existed
+# while every control stayed green.
+#
+# So the record also carries the digests AS MEASURED, and this control fails when
+# they differ from the current subject. Inventory says "these are the files";
+# measurement says "these are the bytes the matrix was taken against". Keeping
+# both and requiring them to agree is what makes staleness observable instead of
+# merely unlikely.
+test_recorded_measurement_describes_the_current_subject() {
+  local record=${FM_REVIEW_MUTATION_RECORD:-$ROOT/docs/verification/review-mutation-proof.md}
+  local path documented actual measured_any=0
+
+  [ -r "$record" ] || fail "the mutation verification record must be readable"
+  for path in bin/fm-review-mutation.sh bin/fm-verify.sh \
+    tests/fm-review-mutation.test.sh tests/review-mutation-red-matrix.py; do
+    documented=$(sed -n "s|^measured_sha256: $path \([0-9a-f][0-9a-f]*\)$|\1|p" "$record")
+    [ "${#documented}" = 64 ] \
+      || fail "the record must carry one parseable measured digest for $path"
+    [ "$(printf '%s\n' "$documented" | wc -l | tr -d ' ')" = 1 ] \
+      || fail "the record must carry exactly one measured digest for $path"
+    actual=$(inventory_digest_file "$ROOT/$path") \
+      || fail "the current digest could not be observed for $path"
+    [ "$documented" = "$actual" ] \
+      || fail "the recorded measurement describes different bytes than the current $path"
+    measured_any=1
+  done
+  # An absent measured block must not read as agreement: no digests parsed is
+  # could-not-observe, which is not a pass.
+  [ "$measured_any" = 1 ] || fail "the record carries no measured digests at all"
+
+  pass "the recorded measurement describes the bytes now present, not an earlier subject"
+}
+
 # --- the catalogue fold -----------------------------------------------------
 
 catalogue_json() {  # <path> <case-json>...
@@ -1063,6 +1101,7 @@ FM_CONTROLS=(
   test_a_symlinked_target_path_is_refused
   test_a_missing_execution_substrate_is_could_not_observe
   test_verification_record_inventory_matches_executed_controls
+  test_recorded_measurement_describes_the_current_subject
 )
 
 if [ -n "${FM_REVIEW_MUTATION_ONLY:-}" ]; then

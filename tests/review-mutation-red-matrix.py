@@ -419,6 +419,14 @@ def d33(s, v, r):
   cno "output path refused: $out"'''), v, r
 
 
+def d34(s, v, r):
+    """The record's measured digests no longer describe the current subject, so
+    the matrix reports a measurement taken against bytes that have since
+    changed."""
+    return s, v, re.sub(r"^(measured_sha256: bin/fm-review-mutation\.sh )[0-9a-f]{64}$",
+                        r"\g<1>" + "0" * 64, r, count=1, flags=re.M)
+
+
 DEFECTS = [
     ("D01", d01), ("D02", d02), ("D03", d03), ("D04", d04), ("D05", d05),
     ("D06", d06), ("D07", d07), ("D08", d08), ("D09", d09), ("D10", d10),
@@ -426,7 +434,7 @@ DEFECTS = [
     ("D16", d16), ("D17", d17), ("D18", d18), ("D19", d19), ("D20", d20),
     ("D21", d21), ("D22", d22), ("D23", d23), ("D24", d24), ("D25", d25),
     ("D26", d26), ("D27", d27), ("D28", d28), ("D29", d29), ("D30", d30),
-    ("D31", d31), ("D32", d32), ("D33", d33),
+    ("D31", d31), ("D32", d32), ("D33", d33), ("D34", d34),
 ]
 BY_NAME = dict(DEFECTS)
 
