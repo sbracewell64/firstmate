@@ -38,10 +38,11 @@ Verified-and-unwired is a real state and is recorded here rather than left for a
 ## Red calibration
 
 Every control below was observed failing for its intended reason before it was trusted.
-Each was produced by staging a copy of the mechanism, injecting exactly one defect, and running the unmodified suite.
+Each was produced by staging a copy of the mechanism, injecting exactly one defect, and running the suite.
 
 Date: 2026-08-17.
 Command shape, per case: copy `bin/` and `tests/` to a scratch root, apply one patch, run `bash tests/fm-landing-authorization.test.sh`, record the first `not ok`.
+The review worker personally watched cases 5, 13, 14, and 15 fail in this worktree after the corresponding review fixes; cases 1 through 4 and 6 through 12 retain the initial worker's recorded observations.
 
 | # | Injected defect | Observed failure |
 | - | --------------- | ---------------- |
@@ -49,7 +50,7 @@ Command shape, per case: copy `bin/` and `tests/` to a scratch root, apply one p
 | 2 | `spent` admitted for another spend | `not ok - exactly-once: the act ran 2 times across two spends` |
 | 3 | the caller-stated head is not compared | `not ok - head-bound: a different head must refuse: spent: ... landed demo-item at 1111111111111111111111111111111111111111: expected exit 3, got 0` |
 | 4 | the observed head is replaced by the caller's | `not ok - moved-head: a moved forge head must refuse: spent: ... landed demo-item at 1111111111111111111111111111111111111111: expected exit 3, got 0` |
-| 5 | the intent record is written after the act | `not ok - restart: after a crash mid-spend the status is 'granted', not indeterminate` |
+| 5 | group liveness ignored after the wrapper leader dies | `not ok - restart: reconciliation reclaimed while the act child lived: reconciled: fm-auth-3fc7425751e637a0f3d58b0d15457f5c is now granted: expected exit 4, got 0` |
 | 6 | any correlation state accepted | `not ok - superseded: a superseded request must refuse: spent: ...: expected exit 3, got 0` |
 | 7 | an unrecognized verdict classed as approving | `not ok - mint-unknown: an unrecognized verdict must be could-not-observe: ...: expected exit 4, got 0` |
 | 8 | a nonce added to the mint identity | `not ok - mint-idempotent: the same ruling minted two ids, fm-auth-b0a09b1e... and fm-auth-962bc8c1...` |
@@ -57,6 +58,31 @@ Command shape, per case: copy `bin/` and `tests/` to a scratch root, apply one p
 | 10 | `gh` exit status and head shape both ignored | `not ok - head-unobservable: a failed observation must be could-not-observe: FM_AUTH_STALE_HEAD: ... but owner/demo#7 is now at : expected exit 4, got 3` |
 | 11 | the spend claim never refuses | `not ok - in-flight: a held claim must refuse: spent: ...: expected exit 3, got 0` |
 | 12 | an unreadable member skipped during enumeration | `not ok - enumeration: an unreadable member must make the listing could-not-observe: fm-auth-000...	unreadable` |
+| 13 | a live identity-matched spender claim reclaimed | `not ok - live-reconcile: reconciliation reclaimed a live spender: reconciled: fm-auth-3fc7425751e637a0f3d58b0d15457f5c is now granted: expected exit 4, got 0` |
+| 14 | authorization-id validation removed from record path construction | `not ok - malformed-id: traversal id opened a record outside the store` |
+| 15 | authorization records trusted after schema alone | `not ok - malformed-record: skeletal record was trusted: spent: expected exit 4, got 0` |
+
+The exact shell commands used for the four review-round calibrations were:
+
+```sh
+cal_root=.red-calibration-20260817
+mkdir -p "$cal_root/group-child" "$cal_root/live-spender" "$cal_root/malformed-id" "$cal_root/record-validation"
+for case_dir in "$cal_root"/*; do cp -a bin tests "$case_dir/"; done
+for defect in group-child live-spender malformed-id record-validation; do
+  printf 'DEFECT=%s\n' "$defect"
+  (cd ".red-calibration-20260817/$defect" && bash tests/fm-landing-authorization.test.sh) 2>&1
+  printf 'EXIT=%s\n' "$?"
+done
+```
+
+Each copied mechanism received only its tabled defect before that command ran.
+The first failing line from each real run is reproduced verbatim in the table, and every defect run exited 1.
+The malformed-id defect was rerun after making the authorization-store directory present so its FIFO sentinel proved the traversal opened the outside record.
+The exact rerun command was:
+
+```sh
+cd .red-calibration-20260817/malformed-id && bash tests/fm-landing-authorization.test.sh
+```
 
 ### The two that carry the most weight
 
@@ -85,6 +111,9 @@ ok - a correlation record filed under another id is refused
 ok - an unobservable head stops the spend without destroying the authorization
 ok - a spend already in flight is refused
 ok - a partial enumeration is could-not-observe rather than a short list
+ok - reconciliation cannot reclaim a live spender's authorization
+ok - malformed authorization ids cannot address the store
+ok - malformed or misbound authorization records are unreadable
 FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 ```
 
@@ -95,8 +124,8 @@ The trailing `FM_TEST_CONTRACT` line is the suite's own guard against a declared
 The spend writes its intent before the act and its outcome after, so a process killed between them leaves a durable record that says a spend began and does not say how it ended.
 That is reported as `indeterminate`, and it is neither neighbour on purpose: reporting `granted` invites a retry that lands twice, and reporting `spent` strands work that may never have landed.
 
-`FM_AUTH_FAIL_AFTER_INTENT` exists for this and only this - it exits hard inside the window so the property can be observed rather than argued.
-Without an injected crash the window is too small to hit reliably, and a control that cannot be made to fire is not a control.
+The restart control runs a blocking act in the spend wrapper's owned process group, waits until that child is running, and sends SIGKILL to the wrapper leader without cooperative cleanup.
+It proves reconciliation refuses while the child remains alive, then lets the final group member exit and proves reconciliation can reclaim the authorization rather than refusing forever.
 
 An act that exits non-zero lands in the same window by the same reasoning: a failed command has not said the irreversible operation had no effect.
 The cost is that a transient failure needs `reconcile` rather than a blind retry, and that cost is accepted because a retry that lands twice is not recoverable and a reconciliation is.

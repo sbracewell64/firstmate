@@ -614,14 +614,21 @@ test_reconciliation_cannot_reclaim_a_live_spenders_authorization() {
 # --- 14: ids are validated at the store boundary -----------------------------
 
 test_malformed_authorization_ids_cannot_address_the_store() {
-  local dir out rc
+  local dir out rc writer
   dir=$(new_case malformed-id) || fail "malformed-id: fixture failed"
-  mkdir -p "$dir/home/data"
-  printf '%s\n' '{"schema":"fm-landing-authorization.v1","state":"spent"}' > "$dir/home/data/outside.json"
+  mkdir -p "$dir/home/data/landing-authorizations"
+  mkfifo "$dir/home/data/outside.json"
+  ( printf '%s\n' '{"schema":"fm-landing-authorization.v1","state":"spent"}' > "$dir/home/data/outside.json"
+    : > "$dir/path-reached" ) &
+  writer=$!
+  fm_test_reap "$writer"
 
   out=$(run_auth "$dir" status ../outside 2>&1); rc=$?
+  kill "$writer" 2>/dev/null || true
+  wait "$writer" 2>/dev/null || true
   expect_code 4 "$rc" "malformed-id: traversal id reached a record path: $out"
   [ "$out" = unreadable ] || fail "malformed-id: traversal id reported '$out', not unreadable"
+  [ ! -e "$dir/path-reached" ] || fail "malformed-id: traversal id opened a record outside the store"
   pass "malformed authorization ids cannot address the store"
 }
 
