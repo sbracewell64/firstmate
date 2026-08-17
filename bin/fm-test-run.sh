@@ -944,8 +944,13 @@ for raw in sys.argv[7:]:
         unobserved(f"{p} is not readable timing JSON ({exc.__class__.__name__})")
     if not isinstance(doc, dict):
         unobserved(f"{p} timing JSON is not an object")
-    m = lane_re.match(str(doc.get("selection") or ""))
+    selection = doc.get("selection")
+    if not isinstance(selection, str) or not selection:
+        unobserved(f"{p} timing JSON has an invalid selection")
+    m = lane_re.match(selection)
     if not m:
+        if selection.startswith("lane=portable-serial-"):
+            unobserved(f"{p} has malformed serial shard metadata")
         continue  # another lane's artifact; this control only judges the serial lane
     try:
         idx, of = int(m.group(1)), int(m.group(2))
