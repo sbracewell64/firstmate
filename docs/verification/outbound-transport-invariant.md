@@ -161,6 +161,20 @@ Four separate review findings in this module were the same defect, and naming th
 In each case the artifact existed, read correctly, and was not consulted - which is why reading the code proves nothing and only exercising it does.
 The dead-predicate control catches the first two shapes and explicitly does not catch the second two; that boundary is stated in its own header rather than inferred.
 
+## Two standing laws this surface now applies
+
+Browser Sol generalised the containment findings on this task into two laws, and they are recorded here because the code applies them rather than merely citing them.
+
+**Discovery is not identity.** A substring, prefix, text occurrence, API hit, path or name match discovers CANDIDATES only, and can never by itself satisfy an identity-bearing join, dedupe, applicability, wait, authorization or acceptance decision. A discovered candidate must be validated by the consumer against the complete exact identity that decision needs. Prefix relation is never equality. Three instances were found on this surface: a forge endpoint returning pull requests that merely CONTAIN a commit, quoted prose counting as a call site, and a substring of a comment body satisfying request presence. A class sweep for containment-style matching across the outbound surface found no fourth; the sweep's own near-miss is recorded below.
+
+**Negative claims require complete observation.** Absent, no caller, dead predicate, nothing waiting - each qualifies only when the candidate universe is observable enough to exclude a satisfying member. `found=0` is not `clean=true` unless the verifier also establishes its completeness predicate, which is why the dead-predicate summary always prints `alive=` and `could_not_observe=` and why the sweep reports observation gaps beside findings.
+
+The completeness predicate is PROPERTY-SCOPED, not global. The universe for one predicate is its possible callers, so an unreadable file that never references the name is irrelevant to that predicate's claim. A loose identifier pass decides that, and the asymmetry is what makes it sound: loose matching is legitimate for EXCLUDING a file from a universe, where a false positive costs only a could-not-observe, and is forbidden for CONFIRMING a call, where it would be the first law violated. Without property scoping, 215 unreadable files made every unresolved predicate could-not-observe and the control answered almost nothing.
+
+### A note for the next class sweep on this surface
+
+The sweep that found the third instance nearly missed the correct code beside it: filtering for unanchored `grep` on `-qx` skipped the `-Fqx` whole-line matches, which are the opposite of containment and are the validator the fix reuses. A class sweep has to cover flag-order and flag-combination variants rather than the canonical spelling, or it acquires a blind spot of the same kind it is hunting.
+
 ## Refreshing this record
 
 ```sh
