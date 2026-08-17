@@ -118,5 +118,5 @@ There is no deadline option, deliberately.
 Wrapping the launch in `timeout(1)` would make exit 124 mean either that the deadline killed the reviewer or that the reviewer exited 124 on its own, and one status covering both a kill and a verdict is the type error this substrate exists to refuse.
 A reviewer that never terminates is already covered, because with no terminal state observed the result is could-not-observe.
 
-The recurrence and mutation proof owner is deliberately absent.
-The exactly-one-occurrence mutation-target guard belongs to it and is not recreated here, because landing a mutation runner with no consumer would be preserved code rather than a working slice.
+The recurrence and mutation proof is owned separately by [`bin/fm-review-mutation.sh`](../../bin/fm-review-mutation.sh) and its [maintainer-verification record](review-mutation-proof.md).
+The exactly-one-occurrence mutation-target guard belongs there and is not recreated in this execution substrate.
