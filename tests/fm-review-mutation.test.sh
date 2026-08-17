@@ -27,7 +27,7 @@
 #   precedence       an observation gap masking a real finding
 #   prose            a caller declaration reaching a verdict
 #
-# Three seams exist so these controls can be re-run against deliberately
+# Four seams exist so these controls can be re-run against deliberately
 # defective builds and watched going red; docs/verification/review-mutation-proof.md
 # records those runs. Each defaults to the shipped artifact, so none of them
 # changes anything in production:
@@ -41,6 +41,8 @@
 #                              without this seam it would be the one control that
 #                              could never be watched red, which is exactly the
 #                              condition it was written to detect elsewhere.
+#   FM_REVIEW_MUTATION_ONLY    the single declared control to run, refused when
+#                              it does not name a member of FM_CONTROLS.
 set -u
 
 # shellcheck source=tests/lib.sh
