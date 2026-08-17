@@ -258,5 +258,4 @@ It does not directly prove that two invocations racing for the last budget slot 
 It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
 The stale-attempt merge reduction is separately owned and proved by `bin/fm-pr-merge.sh` and `tests/fm-pr-merge.test.sh`.
 
-The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which completed successfully with 78 invoked passing cases.
-The provenance-gate metric is 46 passing cases: the 45 registered cases through `test_show_reports_an_unknown_commit_as_such` plus `test_recheck_reruns_the_run_that_judged_a_published_head`.
+The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which completed successfully with 46 invoked passing cases.
