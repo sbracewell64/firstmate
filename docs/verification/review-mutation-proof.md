@@ -131,7 +131,7 @@ That confirmation matters because a build that fails to parse fails every contro
 
 ### Inventory claim
 
-The suite executes 35 controls, and the current measured-file inventory is:
+The suite declares 35 controls, and the current measured-file inventory is:
 
 ```
 inventory_control_count: 35
@@ -141,44 +141,36 @@ inventory_sha256: tests/fm-review-mutation.test.sh 1825e89611322421a2078cea86503
 inventory_sha256: tests/review-mutation-red-matrix.py ad788b1e8e0c0789ccfb29eaf9299dcfd23c1fb44c6c42bc9171cec86c7416cd
 ```
 
-This is an inventory claim only: it says these files and this control count agree with the
-suite that runs today. `tests/fm-review-mutation.test.sh` enforces it and fails when they
-drift, counting from the suite's own declared control array - which needs no execution, so it
-cannot credit another control's failure by construction. A full run separately binds those
-declared controls to the identities that actually executed, via `fm_test_contract`.
+This is an inventory claim only: it says these files and this declared control count agree with the suite that runs today.
+`tests/fm-review-mutation.test.sh` enforces it and fails when they drift, counting from the suite's own declared control array, which needs no execution and therefore cannot credit another control's failure by construction.
+A full run separately binds those declared controls to the identities that actually executed, via `fm_test_contract`.
 
-**Passing this inventory claim is NOT evidence for the measurement claim below.** A green
-inventory sitting on top of unmeasured rows is the collapse this separation exists to
-prevent, so the two are stated apart and never folded together.
+**Passing this inventory claim is NOT evidence for the measurement claim below.**
+A green inventory sitting on top of unmeasured rows is the collapse this separation exists to prevent, so the two are stated apart and never folded together.
 
 ### Measurement claim
 
 Measured at `fe9efa50`. The green pass ran all 35 controls against the shipped scripts and exited 0.
 33 single-defect builds were then measured, each control run separately against each build.
 **Every control has at least one red witness, and no control is left unwitnessed.**
+**Every defect build reddened at least one control, and no defect build is left unwitnessed.**
 
-The measurement pinned the inventory digests before and after the run and they were identical,
-so all of it describes one build rather than a moving one.
+The measurement pinned the inventory digests before and after the run and they were identical, so all of it describes one build rather than a moving one.
 
-Controls are run one at a time rather than as a suite, because the suite stops at its first
-failing control. A suite-at-a-time measurement reports each defect reddening exactly one
-control and says nothing about the rest, which is a coverage claim resting on an observation
-that was never made.
+Controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
+A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the rest, which is a coverage claim resting on an observation that was never made.
 
 ### Replaying an entry
 
-Every row is reproducible from the tracked catalogue in
-[`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py):
+Every row is reproducible from the tracked catalogue in [`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py):
 
 ```
 tests/review-mutation-red-matrix.py replay <defect> <control>
 ```
 
-It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256
-alongside the outcome. Compare the digest with the defect table below before comparing
-outcomes: a digest that does not reproduce means the row describes a build that is not the
-one in front of you. A replay is a new execution and cannot establish that the historical run
-happened - what it removes is the need to take this record's word for it.
+It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256 alongside the outcome.
+Compare the digest with the defect table below before comparing outcomes: a digest that does not reproduce means the row describes a build that is not the one in front of you.
+A replay is a new execution and cannot establish that the historical run happened - what it removes is the need to take this record's word for it.
 
 ### The defect builds
 
