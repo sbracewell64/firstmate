@@ -909,8 +909,8 @@ test_pi_session_transition_generation_owner() {
 printf 'watcher: started pid=%s\n' "$$"
 child_pid_tmp="${FM_CHILD_PID_FILE:?}.$$"
 printf '%s\n' "$$" > "$child_pid_tmp"
-mv "$child_pid_tmp" "$FM_CHILD_PID_FILE"
 printf 'arm pid=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+mv "$child_pid_tmp" "$FM_CHILD_PID_FILE"
 trap 'exit 0' TERM INT
 while :; do sleep 0.2; done
 SH
