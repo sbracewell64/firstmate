@@ -539,9 +539,15 @@ path = sys.argv[1]
 document = json.load(open(path))
 document["ci"]["required_platforms"] = ["linux", "windows"]
 linux = document["ci"]["attempts"][0]
+windows = copy.deepcopy(linux)
+windows.update({"name": "windows-test", "platform": "windows", "order": 90})
+headless_a = copy.deepcopy(linux)
+headless_a.update({"name": "headless-a", "head": None, "order": 91})
+headless_b = copy.deepcopy(linux)
+headless_b.update({"name": "headless-b", "head": None, "order": 92})
 wrong = copy.deepcopy(linux)
 wrong.update({"name": "wrong-head", "head": "8" * 40, "order": 80})
-document["ci"]["attempts"].append(wrong)
+document["ci"]["attempts"].extend([windows, headless_a, headless_b, wrong])
 additional = []
 for contract in document["verification"]["contracts"]:
     contract["execution_worlds"] = ["offline-ci", "portable-ci"]
