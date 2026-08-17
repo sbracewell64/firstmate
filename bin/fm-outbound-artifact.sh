@@ -470,6 +470,12 @@ head_already_landed() {  # <clone-dir> <sha>
       uncertain=1
       continue
     fi
+    # NOT a choice among candidates, which is why first-match is safe here and
+    # is written down rather than left to be re-derived. `merge-tree --write-tree`
+    # prints the resulting tree OID on its FIRST line by definition, and any
+    # conflict detail follows it; taking line one is reading a fixed field, not
+    # picking one of several answers. Every other single-value selection on this
+    # surface refuses and names its count instead.
     merged=$(printf '%s\n' "$merged" | head -1)
     [ "$merged" = "$ref_tree" ] && return 0
   done <<< "$refs"

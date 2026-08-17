@@ -373,6 +373,28 @@ for f in "${SCANNABLE[@]}"; do
 done
 SCANNABLE=("${VALIDATED_SCANNABLE[@]}")
 
+# WHAT THE COMPLETENESS CLAIM COVERS, AND WHERE IT STOPS.
+#
+# The per-predicate universe check closes the class for THIS control's own
+# enumeration path: every read it performs is three-valued, and a read that fails
+# yields could-not-observe rather than a negative answer.
+#
+# It does NOT close the class for the shared landing library this control's
+# callers use. fm_landed_candidate_refs returns success whenever ANY candidate ref
+# resolved, so a push-target read that fails inside the library leaves that ref
+# simply absent from a NON-EMPTY list. From outside, an incomplete candidate set
+# is indistinguishable from a complete one, and no check here can detect it.
+#
+# That gap is filed as landed-lib-unreadable-push-target-collapses and is
+# deliberately out of scope here: the library is shared with the worktree guard,
+# teardown, the decision surface and the task-base library, and changing its
+# landing semantics from a task about outbound transport would be an unreviewed
+# change to the guards that protect unlanded work.
+#
+# So the claim is scoped rather than class-wide, and saying so is the point: a
+# control named class-level that silently depended on someone else's unfixed
+# read would be the coverage inflation this file's other scope note refuses.
+
 # WHY THIS MATCH IS ALLOWED TO BE LOOSE, AND WHERE THAT STOPS.
 #
 # The grep below is a bare identifier match with no syntax analysis behind it. It
