@@ -208,6 +208,44 @@ def sorted_records(records, identity_fields, label):
     )
 
 
+def canonicalize_applicability_rules(rules):
+    canonical = []
+    for rule in rules:
+        if not isinstance(rule, dict):
+            raise Unobservable("inputs_malformed", "an applicability rule must be an object")
+        record = dict(rule)
+        if "paths" in record:
+            record["paths"] = sorted_records(
+                as_list(record, "paths"),
+                ("type", "value"),
+                "verification applicability paths",
+            )
+        canonical.append(record)
+    return sorted_records(
+        canonical,
+        ("contract_id",),
+        "verification applicability rules",
+    )
+
+
+def canonicalize_contracts(contracts):
+    canonical = []
+    for contract in contracts:
+        if not isinstance(contract, dict):
+            raise Unobservable("inputs_malformed", "verification contracts contains a non-object")
+        record = dict(contract)
+        if "execution_worlds" in record:
+            record["execution_worlds"] = sorted(
+                as_list(record, "execution_worlds"), key=canonical_bytes
+            )
+        canonical.append(record)
+    return sorted_records(
+        canonical,
+        ("id", "version", "digest"),
+        "verification contracts",
+    )
+
+
 def digest_handle(handle):
     hasher = hashlib.sha256()
     for chunk in iter(lambda: handle.read(65536), b""):
@@ -1191,20 +1229,12 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
         },
         "verification": {
             "applicability_rules": (
-                sorted_records(
-                    applicability_rules,
-                    ("contract_id",),
-                    "verification applicability rules",
-                )
+                canonicalize_applicability_rules(applicability_rules)
                 if isinstance(applicability_rules, list)
                 else applicability_rules
             ),
             "required_contract_ids": sorted(required_ids),
-            "contracts": sorted_records(
-                as_list(verification_in, "contracts"),
-                ("id", "version", "digest"),
-                "verification contracts",
-            ),
+            "contracts": canonicalize_contracts(as_list(verification_in, "contracts")),
             "results": sorted_records(
                 as_list(verification_in, "results"),
                 ("contract_id", "contract_digest", "world", "verifier_id", "verifier_digest"),

@@ -25,7 +25,10 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 
 ## Digested-array canonicalization sweep
 
-Every array in the digested body was classified by whether its order carries contract meaning.
+The first sweep read the construction site and classified only top-level arrays, so its method could not observe nesting and missed `verification.applicability_rules[].paths` and `verification.contracts[].execution_worlds`.
+The replacement method compiles the suite's baseline fixture augmented with populated findings, rulings, obligations and repeated nested verification values, then walks the resulting digested body recursively to arbitrary depth and classifies every array path it observes.
+The sweep universe covers sibling breadth across every object key, nesting depth across every object and array element, and populated shape variants supplied by the fixture; walking the artifact makes those axes properties of the real body rather than assumptions inferred from its builder.
+Every observed array is classified below by whether its order carries contract meaning.
 
 - `identity.project.root_commits` is canonicalized by commit id because root enumeration order carries no meaning.
 - `candidate.changed_files` is canonicalized by its unique path at construction because diff enumeration order carries no meaning.
@@ -34,16 +37,20 @@ Every array in the digested body was classified by whether its order carries con
 - `scope.excluded_paths` is canonicalized by its unique path because membership and the credited rule define the exclusion.
 - `scope.unused_exclusions` is canonicalized by rule id because membership, not order, defines which rules were unused.
 - `verification.applicability_rules` is canonicalized by contract id and complete record because the rules are evaluated as a set.
+- `verification.applicability_rules[].paths` is canonicalized by path-rule type, value and complete record because matching uses set-like `any` semantics.
 - `verification.required_contract_ids` is canonicalized by contract id because it is a set.
 - `verification.contracts` is canonicalized by stable contract identity and complete record because declaration order carries no meaning.
+- `verification.contracts[].execution_worlds` is canonicalized by complete value because it is the set of worlds requiring results.
 - `verification.results` is canonicalized by stable result identity and complete record because declaration order carries no meaning.
 - `capabilities` is canonicalized by capability id and complete record because capability declaration order carries no meaning.
 - `capabilities[].candidates` preserves declaration order because the first candidate that resolves and states its identity is selected.
 - `capabilities[].identity_argv` preserves declaration order because argument order is part of the invoked identity command.
 - `capabilities[].probes` preserves evaluation order because it records the evidence that candidate resolution was exhausted in declared order.
+- `capabilities[].selected.identity_argv` preserves argument order because it records the identity command that selected the candidate.
 - `ci.required_platforms` is canonicalized by platform because it is a set.
 - `ci.attempts` is restricted to documented fields and canonicalized by stable attempt identity and complete record because provider metadata and input order carry no review meaning.
 - `ci.checks` is canonicalized by sorted check groups because check declaration order carries no meaning.
+- `ci.checks[].platforms` is canonicalized by platform because it is the set covered by the current check attempt.
 - `ci.wrong_head_attempts` is canonicalized by stable summary identity and complete record because input order carries no meaning.
 - `ci.head_unknown_attempts` is canonicalized by stable summary identity and complete record because input order carries no meaning.
 - `findings.adverse` is canonicalized by finding id and complete record because declaration order carries no meaning.
@@ -86,7 +93,7 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
-69 controls pass against the shipped scripts.
+70 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 

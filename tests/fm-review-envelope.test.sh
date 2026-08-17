@@ -509,6 +509,79 @@ PY
   pass "order-insensitive facts have stable content identities"
 }
 
+test_nested_order_insensitive_facts_produce_an_identical_identity() {
+  local case_dir first_digest first_identity second_digest second_identity third_digest third_identity
+  case_dir=$(make_case canonical-nested-fact-order)
+  write_inputs "$case_dir" '{"verification": {"applicability_rules": [
+    {"contract_id": "repo-baseline", "mandatory": true},
+    {"contract_id": "shell-surface", "paths": [
+      {"type": "glob", "value": "bin/*"},
+      {"type": "glob", "value": "docs/*"}]}]}}'
+  python3 - "$case_dir/inputs.json" <<'PY'
+import copy, json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+additional = []
+for contract in document["verification"]["contracts"]:
+    contract["execution_worlds"] = ["offline-ci", "portable-ci"]
+for result in document["verification"]["results"]:
+    portable = copy.deepcopy(result)
+    portable["world"] = "portable-ci"
+    additional.append(portable)
+document["verification"]["results"].extend(additional)
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" first
+  expect_code 0 "$CAPTURED_CODE" "the first nested fact order compiles"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["verification"]["applicability_rules"][1]["paths"].reverse()
+for contract in document["verification"]["contracts"]:
+    contract["execution_worlds"].reverse()
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" second
+  expect_code 0 "$CAPTURED_CODE" "the reordered nested facts compile"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["verification"]["applicability_rules"][1]["paths"][0]["value"] = "src/*"
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" third
+  expect_code 0 "$CAPTURED_CODE" "the meaningfully changed nested facts compile"
+  read -r first_digest first_identity < <(python3 - "$case_dir/first/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  read -r second_digest second_identity < <(python3 - "$case_dir/second/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  read -r third_digest third_identity < <(python3 - "$case_dir/third/envelope.json" <<'PY'
+import json, sys
+document = json.load(open(sys.argv[1]))
+print(document["digest"]["value"], document["request_identity"])
+PY
+)
+  [ "$first_digest" = "$second_digest" ] \
+    || fail "nested order-insensitive facts must have one envelope digest"
+  [ "$first_identity" = "$second_identity" ] \
+    || fail "nested order-insensitive facts must have one request identity"
+  [ "$second_digest" != "$third_digest" ] \
+    || fail "a meaningful nested fact difference must change the envelope digest"
+  [ "$second_identity" != "$third_identity" ] \
+    || fail "a meaningful nested fact difference must change the request identity"
+  pass "nested order-insensitive facts preserve stable, non-vacuous identities"
+}
+
 test_ci_canonicalization_preserves_meaningful_differences() {
   local case_dir first_digest first_identity second_digest second_identity
   case_dir=$(make_case canonical-ci-meaning)
@@ -2141,6 +2214,7 @@ test_no_verification_contracts_requires_an_explicit_reason
 test_requested_decision_is_an_uppercase_token
 test_identical_facts_produce_an_identical_digest
 test_order_insensitive_facts_produce_an_identical_identity
+test_nested_order_insensitive_facts_produce_an_identical_identity
 test_ci_canonicalization_preserves_meaningful_differences
 test_exclusion_rule_order_remains_meaningful
 test_a_structurally_malformed_envelope_is_could_not_observe
