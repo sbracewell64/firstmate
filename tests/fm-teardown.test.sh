@@ -47,6 +47,8 @@
 #   (u) fetch/push split + content squash-merged on FORK trunk  -> ALLOW  (fork-landing fix)
 #   (v) fetch/push split + work landed nowhere                  -> REFUSE (safety preserved)
 #   (w) fetch/push split + push url unreadable                  -> REFUSE (unresolvable target)
+#   (w2) fetch/push split + push url READ fails                 -> REFUSE (target went unread)
+#   (w3) origin enumeration fails with content on local main   -> REFUSE (origin unknown)
 #   (x) fetch/push split + content only on upstream trunk       -> ALLOW  (fallback intact)
 #   (y) single remote (no push split)                           -> ALLOW  (identical path)
 #   (z) spawn-written turn-end artifacts, no info/exclude       -> ALLOW  (firstmate's own)
@@ -1272,6 +1274,74 @@ test_fork_split_content_only_on_upstream_allows() {
   expect_code 0 "$rc" "fork-split-upstream: teardown should still accept content landed upstream"
   ! grep -q REFUSED "$case_dir/stderr" || fail "fork-split-upstream: teardown printed a REFUSED line"
   pass "content landed on the upstream trunk is still accepted when the fork trunk is readable"
+}
+
+# (w2) The same demotion, when the landing target is unread rather than merely
+# behind. Case (w) covers a push url that EXISTS but whose trunk cannot be
+# fetched. This one covers the read that names the push url failing at all -
+# which the library used to report as "this repository has no distinct push
+# target", so teardown never learned there was a landing target to miss and
+# accepted the upstream answer on its own.
+#
+# The direction matters here in a way it does not in every consumer: the act
+# this predicate gates is the destruction of a worktree, and the fixture is
+# case (x)'s, where the upstream trunk really does carry the content. So this is
+# not a wording difference - it is the difference between refusing and releasing.
+test_fork_split_unread_push_url_refuses() {
+  local case_dir rc
+  case_dir=$(make_case fork-split-unread-pushurl)
+  add_fork_push_remote "$case_dir"
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+
+  # Pairing: unperturbed, this exact fixture is case (x) and tears down cleanly.
+  set +e
+  run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "fork-split-unread-pushurl: pairing is broken - the unperturbed fixture must tear down"
+
+  # Re-make the worktree the successful teardown just released, so the only
+  # difference between the two runs is the failing read.
+  case_dir=$(make_case fork-split-unread-pushurl-faulted)
+  add_fork_push_remote "$case_dir"
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  land_on_origin_main "$case_dir" feature.txt hello
+  fm_fake_git_fault "$case_dir/fakebin"
+
+  set +e
+  FM_FAULT_MATCH='remote get-url --push' \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "fork-split-unread-pushurl: teardown must refuse when whether a landing target exists went unread"
+  grep -q REFUSED "$case_dir/stderr" || fail "fork-split-unread-pushurl: no REFUSED line in stderr"
+  [ -d "$case_dir/wt" ] || fail "fork-split-unread-pushurl: the refused worktree was removed anyway"
+  pass "a push url that could not be read refuses teardown instead of accepting the upstream answer"
+}
+
+test_unread_origin_enumeration_refuses_local_fallback() {
+  local case_dir rc
+  case_dir=$(make_case unread-origin-enumeration)
+  write_meta "$case_dir" no-mistakes ship
+  wt_commit_file "$case_dir" feature.txt hello "add feature"
+  git -C "$case_dir/project" switch -q main
+  git -C "$case_dir/project" cherry-pick "$(git -C "$case_dir/wt" rev-parse HEAD)" >/dev/null
+  fm_fake_git_fault "$case_dir/fakebin"
+
+  set +e
+  FM_FAULT_MATCH=' remote$' \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
+  rc=$?
+  set -e
+
+  expect_code 1 "$rc" "unread-origin-enumeration: teardown must refuse when origin presence cannot be read"
+  grep -q REFUSED "$case_dir/stderr" || fail "unread-origin-enumeration: no REFUSED line in stderr"
+  [ -d "$case_dir/wt" ] || fail "unread-origin-enumeration: the refused worktree was removed anyway"
+  pass "an unread origin enumeration refuses instead of using the local fallback"
 }
 
 # (y) An ordinary single-remote repository must take the identical path: no
@@ -3409,6 +3479,8 @@ test_fork_split_content_landed_on_fork_trunk_allows
 test_fork_split_unlanded_work_still_refuses
 test_fork_split_unreadable_push_url_refuses
 test_fork_split_content_only_on_upstream_allows
+test_fork_split_unread_push_url_refuses
+test_unread_origin_enumeration_refuses_local_fallback
 test_single_remote_repo_names_no_landing_ref
 test_dirty_worktree_refuses
 test_spawn_turnend_artifacts_are_not_dirty_work

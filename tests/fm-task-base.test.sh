@@ -137,6 +137,200 @@ test_unresolved_when_the_upstream_trunk_is_unreadable() {
   pass "fm-task-base: an unreadable upstream trunk is refused, never guessed onto the slot base"
 }
 
+# Run <fn> with every git invocation matching <match-ere> failing the way git
+# fails when it cannot read, then restore the environment. The library's own
+# variables survive the call, so the caller asserts on them as usual.
+#
+# A fixture cannot produce this state: it can only build a repository where a
+# thing is genuinely absent, and the distinction under test is between that and a
+# read that never happened.
+with_git_fault() {  # <case-name> <match-ere> <fn> [args...]
+  local name=$1 match=$2 saved_path=$PATH fakebin status
+  shift 2
+  mkdir -p "$TMP_ROOT/$name"
+  fakebin=$(fm_fakebin "$TMP_ROOT/$name")
+  fm_fake_git_fault "$fakebin"
+  PATH="$fakebin:$PATH"
+  export FM_FAULT_MATCH="$match"
+  "$@"
+  status=$?
+  unset FM_FAULT_MATCH
+  PATH=$saved_path
+  return "$status"
+}
+
+# WHICH DIRECTION COULD-NOT-OBSERVE FALLS FOR THIS CONSUMER. "There is no
+# distinct upstream" is what COLLAPSES the two base references onto one commit,
+# and that collapse is the pollution this whole file exists to prevent: a branch
+# cut from the fleet trunk instead of the upstream trunk carries every fleet-only
+# commit into an upstream pull request. So a repository whose remotes went unread
+# must reach `unresolved`, never `coincident`. Unlike the worktree guard, where
+# an unread landing target only makes the answer more conservative, here the
+# collapse is the unsafe direction.
+test_unread_push_url_never_collapses_the_two_references() {
+  local repo state contrib err
+  repo=$(make_fork_repo unread-pushurl 3)
+
+  # Pairing: unperturbed, this same fixture resolves two distinct references.
+  task_base_resolve "$repo" || fail "unread-pushurl: pairing is broken: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_STATE" = distinct ] \
+    || fail "unread-pushurl: pairing is broken, expected distinct, got '$TASK_BASE_STATE'"
+
+  with_git_fault unread-pushurl-fault 'remote get-url --push' task_base_resolve "$repo"
+  state=$TASK_BASE_STATE
+  contrib=$TASK_BASE_CONTRIB
+  err=$TASK_BASE_ERROR
+  [ "$state" != coincident ] \
+    || fail "unread-pushurl: an unread push url collapsed the two references onto one commit"
+  [ "$state" = unresolved ] \
+    || fail "unread-pushurl: expected state=unresolved, got '$state'"
+  [ -z "$contrib" ] \
+    || fail "unread-pushurl: a contribution target must not be invented (got '$contrib')"
+  assert_contains "$err" "could not be read" \
+    "unread-pushurl: the reason must say the remotes went unread"
+  pass "fm-task-base: an unread push url reports unresolved instead of collapsing the two references"
+}
+
+# The same read, at the venue derivation. The venue is recorded on the task and
+# bin/fm-pr-check.sh refuses a pull request that contradicts it, so naming the
+# fetch url here because the push url went unread refuses the task's own correct
+# request later.
+test_unread_push_url_never_names_the_fetch_url_as_the_venue() {
+  local repo contrib venue err rc
+  repo=$(make_forge_fork_repo venue-unread 3)
+  contrib=$(git -C "$repo" rev-parse main)
+
+  # Pairing: unperturbed, a fork-only target resolves the FORK venue.
+  task_base_venue "$repo" "$contrib" \
+    || fail "venue-unread: pairing is broken: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-fork/venue-unread' ] \
+    || fail "venue-unread: pairing is broken, got '$TASK_BASE_VENUE'"
+
+  with_git_fault venue-unread-fault 'remote get-url --push' task_base_venue "$repo" "$contrib"
+  rc=$?
+  venue=$TASK_BASE_VENUE
+  err=$TASK_BASE_ERROR
+  expect_code 2 "$rc" "venue-unread: an unread push url leaves the venue underivable"
+  [ -z "$venue" ] \
+    || fail "venue-unread: a venue must not be named from an unread push url (got '$venue')"
+  assert_contains "$err" "could not be read" \
+    "venue-unread: the reason must say the read did not happen"
+  pass "fm-task-base: an unread push url refuses the venue instead of naming the fetch url"
+}
+
+# The candidate-set half. The fork-trunk search is a NEGATIVE conclusion over
+# every ref that could hold that trunk, so a candidate list that is merely
+# non-empty is not enough to reach it: the ref that went unread may be the one
+# holding the target.
+test_incomplete_fork_trunk_candidates_do_not_word_a_definite_negative() {
+  local repo target err rc
+  # The lagging-local-branch shape: the target is on the fork trunk at the forge
+  # and reachable ONLY through the private landing ref, so failing the read of
+  # that one ref leaves a candidate list that is still non-empty, still entirely
+  # correct, and missing exactly the ref that holds the answer.
+  repo=$(make_forge_fork_repo venue-incomplete 2)
+  target=$(git_q "$repo" commit-tree -m fork-ahead \
+    -p "$(git -C "$repo" rev-parse main)" "$(git -C "$repo" rev-parse 'main^{tree}')")
+  git -C "$repo" update-ref refs/fm-landing/origin/main "$target"
+
+  # Pairing: unperturbed, this resolves the fork venue through that ref.
+  task_base_venue "$repo" "$target" \
+    || fail "venue-incomplete: pairing is broken: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-fork/venue-incomplete' ] \
+    || fail "venue-incomplete: pairing is broken, got '$TASK_BASE_VENUE'"
+
+  with_git_fault venue-incomplete-fault 'refs/fm-landing/origin/main' \
+    task_base_venue "$repo" "$target"
+  rc=$?
+  err=$TASK_BASE_ERROR
+  expect_code 2 "$rc" "venue-incomplete: an incomplete candidate set leaves the venue underivable"
+  [ -z "$TASK_BASE_VENUE" ] \
+    || fail "venue-incomplete: a venue must not be named over a partial candidate set (got '$TASK_BASE_VENUE')"
+  assert_contains "$err" "could not be fully enumerated" \
+    "venue-incomplete: the reason must name the incomplete enumeration"
+  assert_not_contains "$err" "is on neither" \
+    "venue-incomplete: a partial universe must not word 'on neither trunk'"
+  pass "fm-task-base: an incomplete fork-trunk candidate set is reported rather than concluded over"
+}
+
+# The class control, extended from bin/fm-landed-lib.sh into the second library
+# on the same path. Rather than naming individual reads, it counts the git
+# invocations a derivation makes and then fails each one in turn.
+#
+# THE ALLOWED SET IS NOT "could-not-observe every time", and the difference is
+# the whole subtlety. Some negatives here are established by a DIFFERENT read
+# that succeeded - failing `remote get-url upstream` still leaves `git remote`
+# to prove no such remote exists - so those answers are earned and must stand.
+# What must never happen is the collapse: a read failure producing the one
+# answer that discards a reference or names a venue. `distinct` requires
+# successfully reading the upstream trunk, and a named venue requires
+# successfully reading the url it names, so neither can be reached by guessing;
+# `coincident` and a SUBSTITUTED venue can, and those are what this forbids.
+sweep_reads() {  # <case-name> <fn> [args...]
+  local name=$1 saved_path=$PATH fakebin counter total k calls fired=0
+  shift
+  mkdir -p "$TMP_ROOT/$name"
+  fakebin=$(fm_fakebin "$TMP_ROOT/$name")
+  fm_fake_git_fault "$fakebin"
+  counter="$TMP_ROOT/$name/git-calls"
+  PATH="$fakebin:$PATH"
+  export FM_FAULT_COUNTER="$counter"
+
+  : > "$counter"
+  FM_FAULT_AT=0 "$@" >/dev/null 2>&1
+  total=$(cat "$counter" 2>/dev/null || printf 0)
+  case "$total" in ''|*[!0-9]*) total=0 ;; esac
+  [ "$total" -gt 0 ] || fail "$name: the sweep observed no git invocation, so it checked nothing"
+
+  for k in $(seq 1 $((total + 4))); do
+    : > "$counter"
+    FM_FAULT_AT="$k" "$@" >/dev/null 2>&1
+    calls=$(cat "$counter" 2>/dev/null || printf 0)
+    case "$calls" in ''|*[!0-9]*) calls=0 ;; esac
+    [ "$calls" -ge "$k" ] || continue
+    fired=$((fired + 1))
+    SWEEP_STATE=$TASK_BASE_STATE
+    SWEEP_VENUE=$TASK_BASE_VENUE
+    printf '%s\n' "$k $SWEEP_STATE $SWEEP_VENUE" >> "$TMP_ROOT/$name/results"
+  done
+  unset FM_FAULT_AT FM_FAULT_COUNTER
+  PATH=$saved_path
+  [ "$fired" -ge "$total" ] || fail "$name: swept $fired of $total observed reads"
+  printf '#   %s: %s reads failed one at a time\n' "$name" "$fired"
+}
+
+test_no_read_failure_can_collapse_a_reference_or_substitute_a_venue() {
+  local repo line k state venue want_venue
+
+  repo=$(make_fork_repo sweep-resolve 3)
+  task_base_resolve "$repo" || fail "sweep-resolve: pairing is broken: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_STATE" = distinct ] \
+    || fail "sweep-resolve: pairing is broken, expected distinct, got '$TASK_BASE_STATE'"
+  sweep_reads sweep-resolve task_base_resolve "$repo"
+  while read -r k state venue; do
+    [ -n "$k" ] || continue
+    case "$state" in
+      unresolved|distinct) : ;;
+      *) fail "sweep-resolve: failing read #$k produced state '$state'; only unresolved or an earned distinct is allowed" ;;
+    esac
+  done < "$TMP_ROOT/sweep-resolve/results"
+
+  repo=$(make_forge_fork_repo sweep-venue 3)
+  want_venue='github.com/fixture-fork/sweep-venue'
+  task_base_venue "$repo" "$(git -C "$repo" rev-parse main)" \
+    || fail "sweep-venue: pairing is broken: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = "$want_venue" ] \
+    || fail "sweep-venue: pairing is broken, got '$TASK_BASE_VENUE'"
+  sweep_reads sweep-venue task_base_venue "$repo" "$(git -C "$repo" rev-parse main)"
+  while read -r k state venue; do
+    [ -n "$k" ] || continue
+    [ -z "$venue" ] || [ "$venue" = "$want_venue" ] \
+      || fail "sweep-venue: failing read #$k named venue '$venue' instead of leaving it underived"
+  done < "$TMP_ROOT/sweep-venue/results"
+
+  pass "fm-task-base: no single read failure collapses the two references or substitutes a venue"
+}
+
 # THE pollution case, constructed rather than inferred. A branch cut from the
 # slot base carries every fleet-only commit; the guard must refuse it.
 test_guard_catches_a_branch_cut_from_the_slot_base() {
@@ -864,6 +1058,10 @@ test_spawn_records_the_fork_venue_for_a_retargeted_task() {
 test_resolves_two_distinct_references_on_a_fork
 test_coincident_when_there_is_no_distinct_upstream
 test_unresolved_when_the_upstream_trunk_is_unreadable
+test_unread_push_url_never_collapses_the_two_references
+test_unread_push_url_never_names_the_fetch_url_as_the_venue
+test_incomplete_fork_trunk_candidates_do_not_word_a_definite_negative
+test_no_read_failure_can_collapse_a_reference_or_substitute_a_venue
 test_guard_catches_a_branch_cut_from_the_slot_base
 test_guard_accepts_a_branch_cut_from_the_contribution_target
 test_guard_separates_unreadable_from_clean

@@ -86,23 +86,35 @@ TASK_BASE_VENUE='' TASK_BASE_VENUE_URL=''
 # The fetch/push comparison in shape 2 is bin/fm-landed-lib.sh's
 # fm_landed_push_url, so the two libraries that care about that split read it
 # the same way: this one names the upstream side, that one the landing side.
-# Prints the ref name, or returns 1 when no distinct upstream exists.
+# Prints the ref name; 1 when no distinct upstream PROVABLY exists, and 2 when
+# that could not be read. The two are separated because "there is no distinct
+# upstream" is what collapses the two base references onto one commit, and a
+# repository whose remotes went unread has not established that.
 task_base_upstream_ref() {  # <repo-dir>
-  local dir=$1 default
+  local dir=$1 default status
   if git -C "$dir" remote get-url upstream >/dev/null 2>&1; then
     default=$(git -C "$dir" symbolic-ref --quiet --short refs/remotes/upstream/HEAD 2>/dev/null) \
       && { printf '%s\n' "$default"; return 0; }
-    default=$(default_branch "$dir") || return 1
+    default=$(default_branch "$dir") || return 2
     printf 'upstream/%s\n' "$default"
     return 0
   fi
-  fm_landed_push_url "$dir" >/dev/null || return 1
-  default=$(default_branch "$dir") || return 1
+  # That read fails both for a repository with no `upstream` remote and for one
+  # whose configuration could not be read, so shape 1 is ruled out only by an
+  # enumeration that positively does not list it.
+  fm_landed_remote_listed "$dir" upstream
+  status=$?
+  [ "$status" -eq 1 ] || return 2
+  fm_landed_push_url "$dir" >/dev/null
+  status=$?
+  [ "$status" -eq 1 ] && return 1
+  [ "$status" -eq 0 ] || return 2
+  default=$(default_branch "$dir") || return 2
   printf 'origin/%s\n' "$default"
 }
 
 task_base_resolve() {  # <repo-dir>
-  local dir=$1 upstream_ref upstream_sha
+  local dir=$1 upstream_ref upstream_sha status
   TASK_BASE_SLOT=
   TASK_BASE_SLOT_REF=
   TASK_BASE_CONTRIB=
@@ -122,11 +134,21 @@ task_base_resolve() {  # <repo-dir>
   }
 
   # No distinct upstream: the two roles collapse onto the slot base and every
-  # caller stays on today's single-reference behavior.
-  if ! upstream_ref=$(task_base_upstream_ref "$dir"); then
+  # caller stays on today's single-reference behavior. That collapse is a claim
+  # about the repository's remotes, so it is made only when they were read - a
+  # could-not-observe reports unresolved instead, exactly like an upstream trunk
+  # that was named but could not be read below.
+  upstream_ref=$(task_base_upstream_ref "$dir")
+  status=$?
+  if [ "$status" -eq 1 ]; then
     TASK_BASE_CONTRIB=$TASK_BASE_SLOT
     TASK_BASE_CONTRIB_REF=$TASK_BASE_SLOT_REF
     TASK_BASE_STATE=coincident
+    return 0
+  fi
+  if [ "$status" -ne 0 ]; then
+    TASK_BASE_STATE=unresolved
+    TASK_BASE_ERROR="whether $dir contributes somewhere other than where it pushes could not be read, so the two base references cannot be collapsed onto one"
     return 0
   fi
 
@@ -317,6 +339,7 @@ task_base_venue_identity_alias() {  # <url>
 # an underivable venue is reported so a caller can refuse rather than guess.
 task_base_venue() {  # <repo-dir> <contribution-target>
   local dir=$1 target=${2-} fetch_url push_url upstream_url upstream_ref name target_sha ref fork_seen
+  local status refs complete
   TASK_BASE_VENUE=
   TASK_BASE_VENUE_URL=
   TASK_BASE_ERROR=
@@ -331,10 +354,19 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   }
 
   # No distinct upstream: the project has one venue and every target names it.
-  if ! upstream_ref=$(task_base_upstream_ref "$dir"); then
+  # Only a PROVEN absence names it, because this branch writes a venue that
+  # bin/fm-pr-check.sh will later refuse a contradicting pull request against -
+  # so deriving it from remotes that went unread would refuse a correct request.
+  upstream_ref=$(task_base_upstream_ref "$dir")
+  status=$?
+  if [ "$status" -eq 1 ]; then
     TASK_BASE_VENUE_URL=$fetch_url
     TASK_BASE_VENUE=$(task_base_venue_identity "$fetch_url" || true)
     return 0
+  fi
+  if [ "$status" -ne 0 ]; then
+    TASK_BASE_ERROR="whether $dir contributes somewhere other than where it pushes could not be read, so the venue '$target' names cannot be derived"
+    return 2
   fi
 
   # An upstream relationship exists but its trunk was never fetched. Refused for
@@ -350,7 +382,17 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   # separate `upstream` remote names the upstream side, and otherwise origin
   # FETCHES the upstream side and PUSHES the fork.
   upstream_url=$(git --no-optional-locks -C "$dir" remote get-url upstream 2>/dev/null) || upstream_url=$fetch_url
-  push_url=$(fm_landed_push_url "$dir") || push_url=$fetch_url
+  # The fetch url stands in for the push url only when there PROVABLY is no
+  # distinct one. A push url that could not be read is a different fact, and
+  # recording the fetch url as the venue in that case names the wrong forge.
+  push_url=$(fm_landed_push_url "$dir")
+  status=$?
+  if [ "$status" -eq 1 ]; then
+    push_url=$fetch_url
+  elif [ "$status" -ne 0 ]; then
+    TASK_BASE_ERROR="the url $dir pushes to could not be read, so the venue '$target' names cannot be derived"
+    return 2
+  fi
 
   if git --no-optional-locks -C "$dir" merge-base --is-ancestor \
     "$target_sha" "$upstream_ref" 2>/dev/null; then
@@ -363,8 +405,15 @@ task_base_venue() {  # <repo-dir> <contribution-target>
     TASK_BASE_ERROR="no default branch in $dir, so the fork trunk cannot be named"
     return 2
   }
+  # Read into a variable rather than a process substitution: the completeness of
+  # this list is carried by the exit status, and a `< <(...)` redirection
+  # discards it. Both conclusions below are negatives over the whole candidate
+  # set, so a list that is merely non-empty is not enough to reach either.
+  refs=$(fm_landed_candidate_refs "$dir" "$name")
+  complete=$?
   fork_seen=0
   while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
     fork_seen=1
     if git --no-optional-locks -C "$dir" merge-base --is-ancestor \
       "$target_sha" "$ref" 2>/dev/null; then
@@ -372,7 +421,13 @@ task_base_venue() {  # <repo-dir> <contribution-target>
       TASK_BASE_VENUE=$(task_base_venue_identity "$push_url" || true)
       return 0
     fi
-  done < <(fm_landed_candidate_refs "$dir" "$name" || true)
+  done <<EOF
+$refs
+EOF
+  if [ "$complete" -eq 2 ]; then
+    TASK_BASE_ERROR="the refs that could hold the fork trunk $name could not be fully enumerated in $dir, so the venue '$target' names cannot be derived"
+    return 2
+  fi
   if [ "$fork_seen" -eq 0 ]; then
     TASK_BASE_ERROR="fork trunk $name is not held by any ref in $dir, so the venue '$target' names cannot be derived"
     return 2

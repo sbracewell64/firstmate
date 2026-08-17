@@ -40,7 +40,10 @@
 # and a single remote-tracking ref are both the wrong instrument. This guard's
 # own policy on top of it: a slot is empty when ANY ref carrying the default
 # branch's name already contains HEAD's content, because containment in any
-# trunk proves the content outlives the slot.
+# trunk proves the content outlives the slot. That policy needs the candidate
+# list to be COMPLETE before it may conclude the opposite, so a list the library
+# reports incomplete is evidence rather than an empty slot - a partial universe
+# can still prove containment, but it cannot disprove it.
 # Uncommitted content is separately protected by treehouse itself: it reports
 # such a slot "dirty", skips it, and refuses outright rather than reclaiming one
 # when every slot is dirty. The exposure this guard closes is therefore
@@ -131,7 +134,7 @@ ahead_count() {  # <worktree> <ref>
 # evidence. A false refusal is a loud, actionable stop; a false pass destroys
 # work.
 worktree_evidence() {  # <worktree>
-  local wt=$1 top dirty branch name ref ahead refs contains
+  local wt=$1 top dirty branch name ref ahead refs contains complete
   local best_ref='' best_ahead='' first_ref='' proven=1
   # A slot treehouse lists but whose directory is gone has nothing to lose:
   # treehouse recreates it on acquire.
@@ -146,8 +149,14 @@ worktree_evidence() {  # <worktree>
     printf '%s uncommitted or untracked entries\n' "$dirty"
     return 0
   fi
-  if ! name=$(fm_landed_default_branch_name "$wt") || ! refs=$(fm_landed_candidate_refs "$wt" "$name"); then
+  if ! name=$(fm_landed_default_branch_name "$wt"); then
     printf 'no resolvable default branch, so unlanded work cannot be ruled out\n'
+    return 0
+  fi
+  refs=$(fm_landed_candidate_refs "$wt" "$name")
+  complete=$?
+  if [ "$complete" -eq 1 ]; then
+    printf 'no ref carries the default branch name, so unlanded work cannot be ruled out\n'
     return 0
   fi
   # The slot is demonstrably empty when ANY ref carrying the default-branch name
@@ -157,6 +166,11 @@ worktree_evidence() {  # <worktree>
   # survives this slot, so releasing it loses nothing. It cannot pass unlanded
   # work off a stale ref either - if HEAD carries content no candidate has, no
   # candidate reports it contained.
+  #
+  # An INCOMPLETE candidate list (status 2) is still walked, because a proven
+  # containment against a ref that WAS read stands whatever went unread. What it
+  # may not do is word the negative below: with the universe unenumerated, "no
+  # landing target holds this" is a claim about refs this never saw.
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
     [ -n "$first_ref" ] || first_ref=$ref
@@ -179,6 +193,10 @@ worktree_evidence() {  # <worktree>
   done <<EOF
 $refs
 EOF
+  if [ "$complete" -eq 2 ]; then
+    printf 'the landing targets for %s could not be fully enumerated, so unlanded work cannot be ruled out\n' "$name"
+    return 0
+  fi
   if [ "$proven" != 0 ]; then
     printf 'HEAD cannot be compared against %s\n' "${first_ref#refs/}"
     return 0

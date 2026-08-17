@@ -350,6 +350,53 @@ SH
   done
 }
 
+# fm_fake_git_fault <fakebin>: install a `git` shim that forwards to the real git
+# except for the invocations a test selects, which fail the way git fails when it
+# cannot read - fatal status 128, nothing on stdout.
+#
+# WHY A FAULT INJECTOR AND NOT A FIXTURE. The distinction under test in several
+# suites is between "git successfully reported that this thing is absent" and
+# "git could not read". A fixture can only build the first; the second is a
+# failed read, and the only faithful way to produce one on demand is to make the
+# read fail. Corrupting the repository instead fails EVERY read at once, which
+# proves nothing about which read the code under test misclassified.
+#
+# The shim is inert unless the caller exports one of:
+#   FM_FAULT_MATCH    bash ERE matched against the invocation's arguments joined
+#                     by single spaces; every matching invocation fails
+#   FM_FAULT_AT       1-based index; only the invocation at that index fails
+# and, for FM_FAULT_AT, FM_FAULT_COUNTER naming a file the shim counts into. The
+# counter is readable afterwards, so a sweep can tell "this index failed a read"
+# from "this entry point never made that many reads" instead of assuming.
+fm_fake_git_fault() {  # <fakebin>
+  local fakebin=$1 real
+  real=$(command -v git) || return 1
+  cat > "$fakebin/git" <<SH
+#!/usr/bin/env bash
+FM_FAULT_REAL_GIT='$real'
+SH
+  cat >> "$fakebin/git" <<'SH'
+fm_fault_hit=0
+if [ -n "${FM_FAULT_MATCH:-}" ]; then
+  fm_fault_argv="$*"
+  [[ $fm_fault_argv =~ $FM_FAULT_MATCH ]] && fm_fault_hit=1
+fi
+if [ -n "${FM_FAULT_AT:-}" ] && [ -n "${FM_FAULT_COUNTER:-}" ]; then
+  fm_fault_n=$(cat "$FM_FAULT_COUNTER" 2>/dev/null || printf 0)
+  case "$fm_fault_n" in ''|*[!0-9]*) fm_fault_n=0 ;; esac
+  fm_fault_n=$((fm_fault_n + 1))
+  printf '%s' "$fm_fault_n" > "$FM_FAULT_COUNTER"
+  [ "$fm_fault_n" = "$FM_FAULT_AT" ] && fm_fault_hit=1
+fi
+if [ "$fm_fault_hit" = 1 ]; then
+  printf 'fatal: injected read failure\n' >&2
+  exit 128
+fi
+exec "$FM_FAULT_REAL_GIT" "$@"
+SH
+  chmod +x "$fakebin/git"
+}
+
 # fm_fake_treehouse <fakebin>: a treehouse stub that answers `status` with an
 # empty pool and exits 0 for everything else.
 #
