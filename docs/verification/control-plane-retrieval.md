@@ -138,6 +138,36 @@ This is a coverage limitation under a verdict that refuses to overclaim, rather 
 The follow-up must not be closed by widening the classifier alone, because the verdict is the guarantee and classifier breadth is only its reach.
 Fixing classifier breadth without first making the coverage verdict visible on every path would have been the unsafe ordering.
 
+### Deliberately deferred publication-gated live verdict
+
+`fm_retrieval_fetch` returns `fm_retrieval_publish`'s status and the live call site selects only when that status is zero, so a failure to write the caller's `--records` destination discards a verdict the attempt had already certified over its own private records.
+It is filed rather than fixed, and the reason it is safe to file is the part to re-verify before relying on it, so it is reproducible here rather than asserted.
+
+The measured behavior, with a fixture-served single-page collection and a destination directory the process cannot write:
+
+```sh
+$ bin/fm-control-read.sh endpoint 'fixture?x=1' --identity req-7 --claim exists --records <writable>/x.jsonl
+  endpoint:fixture?x=1,complete,enumerated,1,1,0,unknown,1,0,0,0,exists,ABSENT,-,<proof>
+exit=1
+$ chmod 555 <unwritable-dir>
+$ bin/fm-control-read.sh endpoint 'fixture?x=1' --identity req-7 --claim exists --records <unwritable-dir>/x.jsonl
+  endpoint:fixture?x=1,unobserved,state_uncommitted,1,1,0,unknown,0,0,0,0,exists,INDETERMINATE,-,-
+exit=2
+```
+
+THE SAFE-DIRECTION ARGUMENT. The suppressed outcome is `INDETERMINATE` with reason `state_uncommitted`, never a wrong `ABSENT` or `PRESENT`.
+Note that `pages=1` and `records=1` survive while `candidates=0`, which shows the traversal did read and certify its records and only the selection was skipped.
+Every other defect corrected in this increment could return an answer that was wrong while carrying a `complete` verdict; this one can only withhold an answer that was right.
+That is why it is filed and the others were not: shipping it risks availability, not soundness, and it leaves no false-absence path open.
+
+The durable fix is to separate attempt certification from optional replay publication, so only a failure to certify the private value blocks a verdict and a failure to write the replay artifact is recorded without touching the retrieval reason.
+Whoever picks it up should re-run the two commands above first: if the second one ever reports a `complete` verdict or a conclusion other than `INDETERMINATE`, the safe-direction argument has stopped holding and the item is no longer merely an availability limitation.
+
+Exposure today is bounded and measured rather than assumed.
+The default records path is a fresh `mktemp` and is therefore writable by construction, so a caller that does not pass `--records` is unaffected.
+Inside this repository only `bin/fm-verify-fork-landing.sh` calls the CLI and it does not pass `--records`.
+Whether callers outside this repository pass it remains unobserved rather than zero.
+
 ## Classification of every enforced site
 
 Each site carries an inline `# fm-retrieval-audit: <class> - <reason>` annotation at the site itself, so the reason cannot drift from the code it justifies.
@@ -294,3 +324,7 @@ A record created after the traversal passed its page is a later fact about the s
 
 The classification annotations are maintainer judgment recorded at the site.
 The check enforces that a judgment exists and names a class in the closed vocabulary with a reason; it cannot verify that the reason is true.
+
+A returned verdict is trustworthy, but a returned `INDETERMINATE` does not by itself prove the source was unreadable.
+Two filed limitations can produce one from a sound observation: a `--records` destination the process cannot write, and a language the coverage classifier cannot see reporting `UNCHECKED`.
+Read the `reason` field rather than the conclusion alone before concluding anything about the source, because `state_uncommitted` against a writable destination and `state_uncommitted` against an unwritable one are different facts about different subjects.
