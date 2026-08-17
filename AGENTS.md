@@ -274,9 +274,7 @@ An unevaluable verdict means the fact may not be asserted at all, not that the c
 Its `owners` ledger names the deterministic work with no landed owner yet; that work remains firstmate's, and the instructions compensating for it stay in force until its owner lands.
 Load `decision-surface` before asserting any of those facts, before dispatching work that may already exist, and whenever a check returns contradicted or unevaluable.
 
-A negative claim over anything outside this home - no ruling yet, no such request, nothing pending, nothing new, not present, already handled - is only assertable when the whole candidate universe was enumerated, so read it with `bin/fm-control-read.sh` rather than by hand.
-An unpaginated read of a remote collection returns one page, and the first page holds the OLDEST records; that command enumerates every page, distinguishes complete retrieval from candidate selection, and returns `INDETERMINATE` rather than an absence it cannot support.
-Never convert its `INDETERMINATE` into "nothing found", and never state a negative from a read whose completeness you cannot name.
+Before making a negative control-plane claim from a remote collection, use `bin/fm-control-read.sh`; its header owns the retrieval and conclusion contract.
 
 ### Intake and authority
 

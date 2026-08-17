@@ -143,21 +143,21 @@ Fixing classifier breadth without first making the coverage verdict visible on e
 Each site carries an inline `# fm-retrieval-audit: <class> - <reason>` annotation at the site itself, so the reason cannot drift from the code it justifies.
 `bin/fm-retrieval-check.sh --list-classes` prints the vocabulary and that script's header defines each class.
 
-| class | sites | what it means here |
-| ----- | ----- | ------------------ |
-| `complete-source` | 16 | proves its own extent: short-page termination with a max-pages could-not-observe, `hasNextPage`, `total_count` reconciliation, an n+1 cap sentinel, or a source that discloses its own truncation |
-| `not-a-collection` | 13 | one object, one queue pop, or one named artifact to a file |
-| `not-a-read` | 12 | message text, a tool-presence probe, an install command printed for a human, or the check's own pattern text |
-| `chokepoint` | 5 | a transport wrapper with no collection semantics of its own; its callers carry the classification |
-| `window-is-the-subject` | 4 | the claim's universe IS the bounded window |
-| `contract` | 4 | the contract's own request builder, whose traversal proves its own extent |
-| `write` | 3 | an action, which has no observation type |
-| `conservative-negative` | 2 | a false negative tightens the gate it feeds |
-| `no-negative` | 1 | cannot reach a negative conclusion |
-| `bound-disclosed` | 1 | bounded, and the bound travels with the result |
+| class | what it means here |
+| ----- | ------------------ |
+| `complete-source` | proves its own extent: short-page termination with a max-pages could-not-observe, `hasNextPage`, `total_count` reconciliation, an n+1 cap sentinel, or a source that discloses its own truncation |
+| `not-a-collection` | one object, one queue pop, or one named artifact to a file |
+| `not-a-read` | message text, a tool-presence probe, an install command printed for a human, or the check's own pattern text |
+| `chokepoint` | a transport wrapper with no collection semantics of its own; its callers carry the classification |
+| `window-is-the-subject` | the claim's universe IS the bounded window |
+| `contract` | the contract's own request builder, whose traversal proves its own extent |
+| `write` | an action, which has no observation type |
+| `conservative-negative` | a false negative tightens the gate it feeds |
+| `no-negative` | cannot reach a negative conclusion |
+| `bound-disclosed` | bounded, and the bound travels with the result |
 
 `bin/fm-retrieval-check.sh --check` prints that breakdown on its passing path, so the mix stays visible and re-running it is how to refresh these counts.
-The check scans its own owners, which is why `contract` has four sites and none of them is the migrated verifier: routing a read through the contract REMOVES the site rather than reclassifying it, because the line no longer calls a forge command.
+The check scans its own owners, and none of the `contract` sites is the migrated verifier: routing a read through the contract removes the direct-read site rather than reclassifying it, because the line no longer calls a forge command.
 
 Five scripts had independently re-derived a correct completeness proof before this audit: [`../../bin/fm-attest.sh`](../../bin/fm-attest.sh) on `hasNextPage` and on `total_count` against the returned length, [`../../bin/fm-pr-merge.sh`](../../bin/fm-pr-merge.sh) on `totalCount` against returned members, [`../../bin/fm-attribution-sweep.sh`](../../bin/fm-attribution-sweep.sh) on short-page termination with an explicit max-pages could-not-observe, [`../../bin/fm-bearings-snapshot.sh`](../../bin/fm-bearings-snapshot.sh) on an n+1 cap sentinel reported as a minimum, and [`../../bin/fm-wake-ledger.sh`](../../bin/fm-wake-ledger.sh) escalating from a bounded tail to a full-file read on exactly the path where a false negative would be damaging.
 That is strong evidence the discipline is understood and weak evidence it will be applied next time, which is the argument for one owner and a deterministic check rather than a sixth correct instruction.
