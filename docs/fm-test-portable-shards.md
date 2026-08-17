@@ -84,7 +84,7 @@ Replace the `portable_serial_weight_hints` table with the measured pairs and re-
 ## Serial budget recurrence control
 
 `bin/fm-test-run.sh --check-budget <lane.json>...` judges the serial lane a run actually executed against the declared budget, and `.github/workflows/ci.yml` runs it in `tests-timing-aggregate` where every lane artifact is already downloaded.
-It exists because the drift above was invisible until a shard reached its cap: nothing compared the lane the suite had become against the lane its timeout was sized for.
+It exists because serial-lane growth was invisible until a shard reached its cap: nothing compared the lane the suite had become against the lane its timeout was sized for.
 
 It answers three-valued, and could-not-observe is never a pass.
 
