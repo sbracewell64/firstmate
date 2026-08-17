@@ -956,8 +956,8 @@ for raw in sys.argv[7:]:
     paths, total = [], 0
     for row in rows:
         ms = row.get("duration_ms")
-        if not isinstance(ms, int):
-            unobserved(f"shard {idx} has a script with no measured duration")
+        if not isinstance(ms, int) or ms < 0:
+            unobserved(f"shard {idx} has a script with an invalid measured duration")
         paths.append(row.get("path"))
         total += ms
     seen[idx] = (total, paths)
