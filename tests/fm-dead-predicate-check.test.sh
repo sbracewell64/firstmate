@@ -429,6 +429,32 @@ maybe_used() { return 0; }')
   pass "an unobservable predicate is could-not-observe, never dead and never clean"
 }
 
+test_unrelated_unchecked_consumer_does_not_hide_dead_predicate() {
+  local dir out rc
+  dir=$(fixture property-scoped-cno 'live_one() { return 0; }
+dead_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one'
+  add_unparseable_consumer "$dir"
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "unrelated unchecked consumer hid a dead predicate, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'DEAD .*dead_one' \
+    || fail "dead predicate was not reported under property-scoped observation: $out"
+  pass "unchecked consumers affect only predicates they loosely reference"
+}
+
+test_backtick_substitution_is_unchecked() {
+  local dir out rc
+  dir=$(fixture backtick-substitution 'maybe_used() { return 0; }')
+  add_plain_consumer "$dir" 'value=`maybe_used`'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "backtick substitution produced a definitive verdict, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'plain-consumer.sh.*legacy backtick substitution' \
+    || fail "backtick substitution was not named unchecked: $out"
+  printf '%s' "$out" | grep -q 'CNO .*maybe_used' \
+    || fail "backtick candidate did not make its predicate could-not-observe: $out"
+  pass "legacy backtick substitutions fail closed as unchecked candidates"
+}
+
 test_dead_function_is_refused
 test_consulted_function_passes
 test_unparsed_file_that_never_mentions_it_leaves_the_universe_complete
@@ -441,6 +467,8 @@ test_single_quoted_substitution_is_not_a_call
 test_quoted_prose_describing_a_call_is_not_a_call
 test_unchecked_consumers_are_named_but_not_red
 test_unresolvable_predicate_is_could_not_observe_not_dead
+test_unrelated_unchecked_consumer_does_not_hide_dead_predicate
+test_backtick_substitution_is_unchecked
 test_mentions_are_not_call_sites
 test_quoted_command_shape_is_not_a_call_site
 test_heredoc_payload_is_not_a_call_site

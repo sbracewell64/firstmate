@@ -173,7 +173,7 @@ function_has_call_site() {  # <function>
 # open at end of file, the one case this cannot resolve.
 strip_quoted() {  # <file>
   awk '
-    BEGIN { mode = "normal"; escaped = 0; subdepth = 0 }
+    BEGIN { mode = "normal"; escaped = 0; subdepth = 0; saw_backtick = 0 }
     {
       out = ""
       n = length($0)
@@ -200,6 +200,7 @@ strip_quoted() {  # <file>
             i++
             continue
           }
+          if (c == "`") saw_backtick = 1
           if (c == "\"") mode = (mode == "dq" ? "normal" : "sub")
           continue
         }
@@ -215,6 +216,7 @@ strip_quoted() {  # <file>
         }
         if (c == "\047") { mode = (mode == "sub" ? "subsq" : "sq"); continue }
         if (c == "\"") { mode = (mode == "sub" ? "subdq" : "dq"); continue }
+        if (c == "`") saw_backtick = 1
         if (mode == "sub" && c == "(") parens[subdepth]++
         if (mode == "sub" && c == ")") {
           parens[subdepth]--
@@ -229,19 +231,29 @@ strip_quoted() {  # <file>
       }
       print out
     }
-    END { if (mode != "normal" || subdepth != 0) exit 1 }
+    END {
+      if (mode != "normal" || subdepth != 0) exit 1
+      if (saw_backtick) exit 2
+    }
   ' "$1"
 }
 
 # Why a file may not be reasoned about at all. Returns the offending
 # "<line>:<text>" on stdout and 1 when the file is outside the accepted syntax.
 file_parse_refusal() {  # <file>
-  local f=$1 hit
+  local f=$1 hit strip_rc
   hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
           grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
         } | head -1)
-  if [ -z "$hit" ] && ! strip_quoted "$f" >/dev/null 2>&1; then
-    hit="0:unterminated quoted string"
+  if [ -z "$hit" ]; then
+    strip_quoted "$f" >/dev/null 2>&1
+    strip_rc=$?
+    case $strip_rc in
+      0) ;;
+      1) hit="0:unterminated quoted string" ;;
+      2) hit="0:legacy backtick substitution" ;;
+      *) hit="0:quote walk failed" ;;
+    esac
   fi
   [ -z "$hit" ] && return 0
   printf '%s\n' "$hit"
@@ -321,13 +333,15 @@ done
 # the way to shorten it is to make more files parse.
 SCANNABLE=()
 UNCHECKED_CONSUMERS=()
+UNCHECKED_FILES=()
 while IFS= read -r cf; do
   [ -n "$cf" ] || continue
-  [ -r "$cf" ] || { UNCHECKED_CONSUMERS+=("$cf: unreadable"); continue; }
+  [ -r "$cf" ] || { UNCHECKED_CONSUMERS+=("$cf: unreadable"); UNCHECKED_FILES+=("$cf"); continue; }
   if refusal=$(file_parse_refusal "$cf"); then
     SCANNABLE+=("$cf")
   else
     UNCHECKED_CONSUMERS+=("$cf:${refusal%%:*} ${refusal#*:}")
+    UNCHECKED_FILES+=("$cf")
   fi
 done < <(consumer_files)
 
@@ -364,11 +378,32 @@ for f in "${SCANNABLE[@]}"; do
   done
   if [ -n "$unsupported" ]; then
     UNCHECKED_CONSUMERS+=("$f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}")
+    UNCHECKED_FILES+=("$f")
   else
     VALIDATED_SCANNABLE+=("$f")
   fi
 done
 SCANNABLE=("${VALIDATED_SCANNABLE[@]}")
+
+UNCHECKED_CANDIDATES=()
+for f in "${UNCHECKED_FILES[@]}"; do
+  if [ ! -r "$f" ]; then
+    UNCHECKED_CANDIDATES+=("${FUNCTIONS[@]}")
+    continue
+  fi
+  for fn in "${FUNCTIONS[@]}"; do
+    grep -Eq "(^|[^A-Za-z0-9_])$fn([^A-Za-z0-9_]|$)" "$f" \
+      && UNCHECKED_CANDIDATES+=("$fn")
+  done
+done
+
+function_has_unchecked_candidate() {  # <function>
+  local fn=$1 candidate
+  for candidate in "${UNCHECKED_CANDIDATES[@]}"; do
+    [ "$candidate" = "$fn" ] && return 0
+  done
+  return 1
+}
 
 dead_json='[]'
 marked_json='[]'
@@ -399,8 +434,7 @@ for f in "${FILES[@]}"; do
     # consumer outstanding, the call site may be in a file nobody looked at, and
     # asserting DEAD there would licence deleting live code. Missing a dead
     # predicate wastes an opportunity; deleting a live one is an outage.
-    # Complete universe or not, asked per predicate rather than globally.
-    if unparsed_consumer_may_call "$fn"; then
+    if function_has_unchecked_candidate "$fn"; then
       cno_json=$(printf '%s' "$cno_json" | jq --arg f "$f" --arg fn "$fn" --argjson l "$lineno" \
         '. + [{file:$f,function:$fn,line:$l}]')
       CNO=$((CNO + 1))
