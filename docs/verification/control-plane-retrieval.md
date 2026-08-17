@@ -328,5 +328,6 @@ The classification annotations are maintainer judgment recorded at the site.
 The check enforces that a judgment exists and names a class in the closed vocabulary with a reason; it cannot verify that the reason is true.
 
 A returned verdict is trustworthy, but a returned `INDETERMINATE` does not by itself prove the source was unreadable.
-Two filed limitations can produce one from a sound observation: a `--records` destination the process cannot write, and a language the coverage classifier cannot see reporting `UNCHECKED`.
-Read the `reason` field rather than the conclusion alone before concluding anything about the source, because `state_uncommitted` against a writable destination and `state_uncommitted` against an unwritable one are different facts about different subjects.
+The publication-gated live-verdict limitation can produce one from a sound observation when the process cannot write the `--records` destination.
+Read the `reason` field rather than the conclusion alone before concluding anything about the source, because `state_uncommitted` is a publication fact rather than a source-read fact.
+The separate native-classifier limitation produces a named `UNCHECKED` file and a non-zero gate result, not a retrieval conclusion.
