@@ -522,6 +522,29 @@ test_prove_refuses_output_through_a_symlinked_source_ancestor() {
   pass "source-custody: prove resolves a symlinked output ancestor physically"
 }
 
+test_prove_protects_the_checkout_when_source_is_a_subdirectory() {
+  local case_dir before after out code
+  case_dir=$(make_case prove_subdirectory_source)
+  before=$(source_snapshot "$case_dir/src")
+  set +e
+  out=$("$BIN" prove --case subdirectory-source --source "$case_dir/src/tests" \
+    --candidate HEAD --path tests/honest.sh --target "$case_dir/target.bytes" \
+    --falsify "$case_dir/falsify.bytes" --satisfy "$case_dir/satisfy.bytes" \
+    --out "$case_dir/src/evidence" -- bash tests/honest.sh 2>&1)
+  code=$?
+  set -e
+  after=$(source_snapshot "$case_dir/src")
+
+  expect_code 2 "$code" "prove protects the checkout root for a subdirectory source"
+  assert_contains "$out" 'output directory is inside the source checkout' \
+    "the prove refusal must name checkout-root containment"
+  [ ! -e "$case_dir/src/evidence" ] \
+    || fail "prove must refuse the checkout-root output before creating it"
+  [ "$before" = "$after" ] \
+    || fail "prove with a subdirectory source must leave the checkout byte-identical"
+  pass "source-custody: prove protects the checkout root for a subdirectory source"
+}
+
 test_refuses_a_primary_checkout_as_its_source() {
   local case_dir out code
   case_dir=$(make_case primary_source)
@@ -746,6 +769,28 @@ test_catalogue_refuses_output_through_a_symlinked_source_ancestor() {
   [ "$before" = "$after" ] \
     || fail "catalogue containment refusal must leave the source byte-identical"
   pass "source-custody: catalogue resolves a symlinked output ancestor physically"
+}
+
+test_catalogue_protects_the_checkout_when_source_is_a_subdirectory() {
+  local case_dir before after out code
+  case_dir=$(make_case catalogue_subdirectory_source)
+  printf '%s\n' '{"cases": []}' >"$case_dir/catalogue.json"
+  before=$(source_snapshot "$case_dir/src")
+  set +e
+  out=$("$BIN" catalogue --catalogue "$case_dir/catalogue.json" \
+    --source "$case_dir/src/tests" --candidate HEAD --out "$case_dir/src/evidence" 2>&1)
+  code=$?
+  set -e
+  after=$(source_snapshot "$case_dir/src")
+
+  expect_code 2 "$code" "catalogue protects the checkout root for a subdirectory source"
+  assert_contains "$out" 'output directory is inside the source checkout' \
+    "the catalogue refusal must name checkout-root containment"
+  [ ! -e "$case_dir/src/evidence" ] \
+    || fail "catalogue must refuse the checkout-root output before creating it"
+  [ "$before" = "$after" ] \
+    || fail "catalogue with a subdirectory source must leave the checkout byte-identical"
+  pass "source-custody: catalogue protects the checkout root for a subdirectory source"
 }
 
 test_output_outside_the_source_is_accepted() {
@@ -989,6 +1034,7 @@ FM_CONTROLS=(
   test_a_refused_source_is_never_written_to
   test_a_traversing_output_is_refused_without_touching_the_source
   test_prove_refuses_output_through_a_symlinked_source_ancestor
+  test_prove_protects_the_checkout_when_source_is_a_subdirectory
   test_the_disposable_clone_shares_no_object_storage
   test_refuses_a_primary_checkout_as_its_source
   test_refuses_to_overwrite_an_existing_record
@@ -1002,6 +1048,7 @@ FM_CONTROLS=(
   test_the_probe_argv_is_recorded_exactly
   test_catalogue_refuses_output_inside_a_linked_worktree_source
   test_catalogue_refuses_output_through_a_symlinked_source_ancestor
+  test_catalogue_protects_the_checkout_when_source_is_a_subdirectory
   test_output_outside_the_source_is_accepted
   test_one_failing_case_makes_the_catalogue_fail
   test_a_failing_case_outranks_an_unobservable_one

@@ -516,7 +516,7 @@ prove_clone_isolated() {  # <clone>
 
 cmd_prove() {
   local case_id='' source='' candidate='' path='' target='' falsify='' satisfy=''
-  local out='' declare_text='' want='' arg
+  local out='' declare_text='' want='' arg source_root
   local -a argv=()
   local saw_separator=0
 
@@ -612,6 +612,9 @@ cmd_prove() {
   source=$(cd "$source" && pwd -P) || cno "source cannot be resolved"
   [ "$(git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
     || cno "source is not a git checkout: $source"
+  source_root=$(git -C "$source" rev-parse --show-toplevel 2>/dev/null) \
+    || cno "source checkout root is unreadable"
+  source_root=$(cd "$source_root" && pwd -P) || cno "source checkout root cannot be resolved"
   local git_dir common_dir
   git_dir=$(git -C "$source" rev-parse --absolute-git-dir 2>/dev/null) \
     || cno "source git directory is unreadable"
@@ -620,7 +623,7 @@ cmd_prove() {
   [ "$git_dir" != "$common_dir" ] \
     || cno "mutation proof refuses a primary checkout as its source: $source"
 
-  guard_output_outside_source "$source" "$out"
+  guard_output_outside_source "$source_root" "$out"
 
   # Only now is the record directory claimed, and an occupied one is refused
   # rather than reused.
@@ -948,7 +951,7 @@ emit_result() {  # <dir>
 # --- catalogue ---------------------------------------------------------------
 
 cmd_catalogue() {
-  local catalogue='' source='' candidate='' out='' want='' arg
+  local catalogue='' source='' candidate='' out='' want='' arg source_root
   while [ "$#" -gt 0 ]; do
     arg=$1
     if [ -n "$want" ]; then
@@ -991,6 +994,9 @@ cmd_catalogue() {
   source=$(cd "$source" && pwd -P) || cno "source cannot be resolved"
   [ "$(git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
     || cno "source is not a git checkout: $source"
+  source_root=$(git -C "$source" rev-parse --show-toplevel 2>/dev/null) \
+    || cno "source checkout root is unreadable"
+  source_root=$(cd "$source_root" && pwd -P) || cno "source checkout root cannot be resolved"
   local cat_git_dir cat_common_dir
   cat_git_dir=$(git -C "$source" rev-parse --absolute-git-dir 2>/dev/null) \
     || cno "source git directory is unreadable"
@@ -999,7 +1005,7 @@ cmd_catalogue() {
   [ "$cat_git_dir" != "$cat_common_dir" ] \
     || cno "mutation proof refuses a primary checkout as its source: $source"
 
-  guard_output_outside_source "$source" "$out"
+  guard_output_outside_source "$source_root" "$out"
 
   if [ -e "$out" ]; then
     [ -d "$out" ] || cno "output path exists and is not a directory: $out"
