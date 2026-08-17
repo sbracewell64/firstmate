@@ -173,6 +173,14 @@ reject_newline() {  # <option> <value>
   esac
 }
 
+reject_boundary_whitespace() {  # <option> <value>
+  case "$2" in
+    [[:space:]]*|*[[:space:]])
+      die "$1 value has leading or trailing whitespace; aligned fields cannot preserve it"
+      ;;
+  esac
+}
+
 cmd_finding() {
   local check='' axis='' examined='' credited='' credited_as='' gap='' remedy=''
   local evidence='' missing='' opt val
@@ -185,6 +193,7 @@ cmd_finding() {
         val=$2
         shift 2
         reject_newline "$opt" "$val"
+        reject_boundary_whitespace "$opt" "$val"
         case "$opt" in
           --check) check=$val ;;
           --axis) axis=$val ;;

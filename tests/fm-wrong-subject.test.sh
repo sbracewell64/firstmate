@@ -105,6 +105,35 @@ test_refusals_that_protect_the_finding_form() {
   pass "the form refuses every way a finding can omit its reason"
 }
 
+test_renderer_refuses_unrepresentable_boundary_whitespace() {
+  local file out rc
+
+  out=$("$WS" finding --check c --axis instance --examined ' leading space' \
+    --credited B --credited-as pass --gap G 2>&1) && rc=0 || rc=$?
+  expect_code 2 "$rc" "a field with leading whitespace was rendered"
+  assert_contains "$out" '--examined value has leading or trailing whitespace' \
+    "leading-whitespace refusal does not name the offending option"
+
+  out=$("$WS" finding --check c --axis instance --examined A \
+    --credited 'trailing space ' --credited-as pass --gap G 2>&1) && rc=0 || rc=$?
+  expect_code 2 "$rc" "a field with trailing whitespace was rendered"
+  assert_contains "$out" '--credited value has leading or trailing whitespace' \
+    "trailing-whitespace refusal does not name the offending option"
+
+  file="$TMP_ROOT/internal-spaces.txt"
+  "$WS" finding --check 'a check with ordinary spaces' --axis instance \
+    --examined 'the examined claim has ordinary internal spaces' \
+    --credited 'the credited claim also has internal spaces' \
+    --credited-as pass --gap 'the two claims refer to different subjects' >"$file" ||
+    fail "ordinary internal spaces were refused by the renderer"
+  out=$("$WS" check "$file" 2>&1) && rc=0 || rc=$?
+  expect_code 0 "$rc" "a multi-word finding did not round-trip through check"
+  assert_contains "$out" 'FORM_COMPLETE' \
+    "a finding with ordinary internal spaces was not form complete"
+
+  pass "renderer preserves its exact-value round-trip boundary"
+}
+
 test_every_axis_is_renderable_and_documented() {
   local axes axis out
   axes=$("$WS" axes 2>&1) || fail "axes listing failed"
@@ -294,6 +323,7 @@ test_unknown_commands_are_refused() {
 test_valid_finding_renders_both_claims_and_the_derived_line
 test_derived_line_resolves_the_credited_claim_to_could_not_observe
 test_refusals_that_protect_the_finding_form
+test_renderer_refuses_unrepresentable_boundary_whitespace
 test_every_axis_is_renderable_and_documented
 test_check_reports_form_complete_only_for_a_well_formed_block
 test_check_refuses_a_block_whose_derived_line_was_edited
