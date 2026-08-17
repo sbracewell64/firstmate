@@ -28,7 +28,7 @@ Running each control separately produces a complete matrix, including the row th
 
 ### What this measurement caught in its own controls
 
-Six times, and each time the finding was the point rather than an obstacle.
+Seven times, and each time the finding was the point rather than an obstacle.
 
 A control was found inadequate rather than recorded as passing.
 The source-custody control originally observed the source only after the run finished, so a build that mutated the source in place and restored it in a `finally` satisfied every check it made.
@@ -73,6 +73,15 @@ Normalising around traversal is a rule that must be right every time; refusing t
 And the containment logic now lives in ONE function called by both `prove` and `catalogue`: duplicating that guard instead of sharing it is exactly what produced the second finding, because two copies have two chances to be incomplete and nothing notices when only one is updated.
 `D31`, `D32` and `D33` witness the three properties separately - traversal refused with the source left byte-identical, catalogue containment on a linked-worktree source, and the non-vacuity control that a legitimate output outside the source is still accepted.
 That last one is not optional: a guard that refused everything would satisfy the other two while making the tool useless, and nothing else in the suite would have noticed.
+
+Seventh, the guard binding this record to its subject was one-sided.
+The inventory claim bound the recorded digests to the CURRENT bytes; nothing bound them to the bytes that actually produced the measurement, so a repin that was not a re-measurement decoupled the two silently - and did so here, while every control stayed green.
+The record now also carries the digests AS MEASURED, written only by a measurement run, and a control fails when they diverge from the current subject. `D34` is its witness.
+
+That control's first measurement was discarded rather than recorded.
+Run against a record that did not yet carry a measured block, it failed for every defect build in the catalogue - not because any targets it, but because a precondition none of them controls was absent and each running build was credited with the result.
+Byte-identical failure text repeated across every build is one cause, not many detections, and recording it would have claimed a witness set none of those builds earned.
+It was re-measured against the completed record, and its witness is `D34` alone.
 
 ## What the proof owner establishes, and what it does not
 
@@ -134,14 +143,28 @@ That confirmation matters because a build that fails to parse fails every contro
 
 ### Inventory claim
 
-The suite executes 39 controls, and the current measured-file inventory is:
+The suite executes 40 controls, and the current measured-file inventory is:
 
 ```
-inventory_control_count: 39
+inventory_control_count: 40
 inventory_sha256: bin/fm-review-mutation.sh 6961e3bbee3bf13b876982b32ebb42a92c94e2ec64a066a05e46e968c4f88993
 inventory_sha256: bin/fm-verify.sh a187ed0765a1d17b419c83cbc55c9e98fd5f380701f0a50f8cdcd909e7c1bd37
-inventory_sha256: tests/fm-review-mutation.test.sh a34ef7a6bb49b6e9e575e9ffc49da672a4f28c4e9a21d703907e0fb75555c0c4
-inventory_sha256: tests/review-mutation-red-matrix.py ad788b1e8e0c0789ccfb29eaf9299dcfd23c1fb44c6c42bc9171cec86c7416cd
+inventory_sha256: tests/fm-review-mutation.test.sh 092b1fb90a77ab8e330627c552b2501629580a82e6d1ff88c763c854ea73a7fe
+inventory_sha256: tests/review-mutation-red-matrix.py 1917504e3326bbdb38182b2f41d61038c8709c03c84516e4f6422eb81602f668
+```
+
+The same digests, recorded as the bytes the matrix below was actually measured against.
+They are written only by a measurement run, so a repin that is not a re-measurement cannot
+move them, and `tests/fm-review-mutation.test.sh` fails when they diverge from the current
+subject. Without this the inventory could be made current while the measurement silently
+described bytes that no longer exist.
+
+```
+measured_at: 6269ffb4
+measured_sha256: bin/fm-review-mutation.sh 6961e3bbee3bf13b876982b32ebb42a92c94e2ec64a066a05e46e968c4f88993
+measured_sha256: bin/fm-verify.sh a187ed0765a1d17b419c83cbc55c9e98fd5f380701f0a50f8cdcd909e7c1bd37
+measured_sha256: tests/fm-review-mutation.test.sh 092b1fb90a77ab8e330627c552b2501629580a82e6d1ff88c763c854ea73a7fe
+measured_sha256: tests/review-mutation-red-matrix.py 1917504e3326bbdb38182b2f41d61038c8709c03c84516e4f6422eb81602f668
 ```
 
 This is an inventory claim only: it says these files and this control count agree with the
@@ -156,10 +179,11 @@ prevent, so the two are stated apart and never folded together.
 
 ### Measurement claim
 
-Measured at `015301ea`. The green pass ran all 35 controls against the shipped scripts and exited 0.
-33 single-defect builds were then measured, each control run separately against each build.
+Measured at `6269ffb4`. The green pass ran all 40 controls against the shipped scripts and exited 0.
+34 single-defect builds were then measured, each control run separately against each build.
 **Every control has at least one red witness, and no control is left unwitnessed.**
-**Every defect build reddened at least one control, and zero defect builds reddened nothing.**
+**Every defect build reddened at least one control, so no catalogued defect is inert.**
+That is a separate claim from control coverage above, and neither implies the other.
 
 The measurement pinned the inventory digests before and after the run and they were identical,
 so all of it describes one build rather than a moving one.
@@ -188,39 +212,40 @@ happened - what it removes is the need to take this record's word for it.
 
 | Build | sha256 | Defect injected |
 | --- | --- | --- |
-| D01 | `6a7dd35ba431bb2c2add98af9d3970bef93570f91564df8cb5058e145b6bb9be` | The retired defect, restored: the verdict is read from an `ok - ` line in the probe's captured output instead of from the differential. |
-| D02 | `4e0542f2ced6a7683ed69f068aa0df6f6c73cca2936bbcc4716e1c432029a984` | Control is established by the falsifying direction alone. |
-| D03 | `f2fadf5a95aeb6a7fcb7a13eee52702f120020fa228405ac046292e0c945844b` | The occurrence guard accepts more than one site and uses the first. |
-| D04 | `e83a830737670799e6e0ee7bafcbec5b93fd45d804699cfda3fa80b1b9073c58` | The clone is made locally and its isolation assumed rather than measured. |
-| D05 | `f136b1868efb3a418326428652bacb08142cd51cb455c739256dff9fc166b2b4` | The apparatus perturbs the baseline tree and nothing requires it not to. |
-| D06 | `a06ee73709fef8a601495ec74c5c9710a4f94302c2f08b871b048a776665b1ac` | Mutation facts are read out of the record instead of re-proven. |
-| D07 | `595dbabddd4bd3d805072ded3533b0bbb7309187abbc6d116f7b217007fafd3c` | An occupied output directory is cleared and reused. |
-| D08 | `dbd8116807e4d56e8c6d716a5023d394586f5b39c81fd96e62e09ef061764400` | The primary-checkout refusal is dropped. |
-| D09 | `50e428695921d3d5a6df0232a4ab38b5a1f725254c2ce9da585efba40117a594` | The catalogue fold reports a gap ahead of a failure. |
-| D10 | `b5eff3ae15e91a2adf4a0a088f54ad865035af47a7987ea00bb6be386e81b8ab` | An unobserved dimension no longer outranks the fold. |
-| D11 | `255ed4d64ed7573ca05b0d951320da0688b0b7c7c5b868b94abc28f138fb6a72` | A caller declaration is read and reaches the verdict. |
-| D12 | `654c7efea116bf9526aceffde129a10a22a6945e886cc0e8a080973198548149` | The source is mutated in place and restored in a finally - every after-the-fact check is satisfied, a reader during the run is not. |
-| D13 | `fbfd76b144c3a045e3499aa8bcfbc0e4016e4c3ce731b1812a42098510c521a9` | An empty catalogue is folded as clean. |
-| D14 | `bc90d4b820347f9b8cdc461d5d92e3d2f62c268da31cb5ffa5d91c3f2c897082` | Duplicate case identities are accepted. |
-| D15 | `0e29254c97c132422b8e913ed15070faab9f09686fa63dce96d0099969709539` | The probe argv is recorded as a space-joined rendering of itself. |
-| D16 | `3ec599d3e3c18c40757ddb19ec96b37a6a7dc58cd37caa34cdbfbd5ac183b7d3` | The regular-file guard on the target path is dropped. |
-| D17 | `8d5253611447759474e45f62c1d2353fd56cfef35bc14269d656690bb804d2cf` | With no execution substrate the build reports PASS itself rather than refusing - the exact fallback the law forbids. |
-| D18 | `21d4aa3cd9ba1e5b7ea56ac2cbdb94d2fef66a1bca06896df0aec468855e1e1e` | The wrapper narrows any transported result to PASS. |
-| D19 | `84a9de69a7d56f83170df8ad794e6008094caa3e0c884108a31e2fd3a4290eca` | The label defect in its other direction: a FAILURE literal in the probe's own output is read as a failure. |
-| D20 | `c0dfec4ab82493637eac922b40b4c06c75c1b9eede8116b47e70ad2f592c6f38` | The unmutated baseline is ignored once control is established. |
-| D21 | `7e9e3ce046a0ecc51a868b3873ac937f1149862821a99512cefa3f8adf0aaaf2` | A target that is not present is spliced in at the start of the file instead of refused - discovery failing open. |
-| D22 | `111d1aae91895cbf4548e28a33676fce14ac985351f2d395b80134b730e7cd3b` | The identical-substitution refusals are dropped. |
-| D23 | `8faa25652f2ec63973205027506233ed5bec91188772d3d9b6a9ff13fafd67a8` | The record is believed even when the clone it names is gone. |
-| D24 | `de97aca065ccc057803c1fd166e344c6c7acd5c6c22558c526b9bc9439211c14` | Every execution record is accepted for every variant, so an execution belonging to another mutation can manufacture control. |
-| D25 | `4390c5c5c6a2b3893c3bcb65e46a598762c3cb6a2165a448b19021e09ad29991` | The mutation bytes are not re-derived: any mismatch is swallowed, so a record can describe arbitrary commits as the three exact-byte mutations. |
-| D26 | `7c9278f40ca5926d3530b93a09c3bef0304c7fc2874c8ab87a674d4457c3a355` | The record's documented control count disagrees with the suite. |
-| D27 | `d66453c1fb7edec53f1e91f955a6f183603c2f6a1abbdcfa23c368f2e5053d87` | A documented file digest disagrees with the bytes it names. |
-| D28 | `7fa0e3d3d39b84160f9c1c8561c9fc20bbeb1629d10f5acfdec46bbfc179492f` | The record carries no parseable inventory count at all. |
-| D29 | `65e20a425ec16429e429a37a563033bee6f62e976ed3ce5cb6a6b7dc2f711a69` | The record's declared target path is never bound to where the mutants actually differ, so a record can name one file while its commits changed another. The binding lives in two places - the name-only diff and the re-derivation's path lookup - so defeating it takes both, which is one defect and not two. |
-| D30 | `18e14051668cc5584c884a1d7d7151fc11d33bad9f4afc31e96e69cc9db4b757` | The output directory is claimed before the source is judged, so a caller naming a primary checkout with an output path inside it gets a directory written into the very checkout the next line refuses. The refusal text stays correct; the refusal leaves a trace in what it refused. |
-| D31 | `d3d8d0330096b7a238981579e7a0a61d288b08a2df6440659bfc843d34a5bb27` | The closed `..` rejection is replaced by the old nearest-ancestor resolution, so traversal in a nonexistent suffix creates inside the source before the post-creation containment check refuses it. |
-| D32 | `215d9dc40a3eab64ae9c29a7bf8346b5e1f89ddff743822fbe81ae25ebf938c2` | The shared pre-creation output guard is omitted from catalogue only, so output inside a linked-worktree source is created before the backstop refuses it. |
-| D33 | `0764a1a4e4cb8b28a69a40f95f8fa4106db7a96046ed646de563e2df3250e6d9` | The shared output guard refuses every path, so legitimate evidence output outside the source can never proceed. |
+| D01 | `9a1ac2e8379ccb1be738031720b7b8fcb205ce8415feb86c047e6ab9d89c20ee` | The retired defect, restored: the verdict is read from an `ok - ` line in the probe's captured output instead of from the differential. |
+| D02 | `ea879d80254c4f0a9c6ef68e23fc7988d7bb3b891681d9f3fb98fb26225f14d3` | Control is established by the falsifying direction alone. |
+| D03 | `e60886802c6788f480fe19160ff7a28964779a37d96253472fffa8b80808a6d2` | The occurrence guard accepts more than one site and uses the first. |
+| D04 | `5857c1f1a845b1323adadead1087ecfd62ca772a836b56fda62e35d4b7aa3b52` | The clone is made locally and its isolation assumed rather than measured. |
+| D05 | `1aab728d213c0bff18474b6a6a55833e4e91041a54e65359370ffd97548330f2` | The apparatus perturbs the baseline tree and nothing requires it not to. |
+| D06 | `90927c701840e79a00820bf72d3d471280baf496fd8cf0ea57e281ecc112b6e7` | Mutation facts are read out of the record instead of re-proven. |
+| D07 | `cdef45a4d2969492c11f817f8307618d6d5a08b892a289b162d09c72a01f2d77` | An occupied output directory is cleared and reused. |
+| D08 | `cf64caed826ede9da8c36a341e5d5f398f5aa57d3cc3ff35babf0c9bb1fa8c20` | The primary-checkout refusal is dropped. |
+| D09 | `1d417fda35a130e9b0c59084dc015f3b78ad7f0cb97fbf30a529d031795805e1` | The catalogue fold reports a gap ahead of a failure. |
+| D10 | `d8ce626956cfa3b6e22f88d1093b683ca9e3dace069dcb92700fb8f630060f58` | An unobserved dimension no longer outranks the fold. |
+| D11 | `57324351a04426ac9900698523cf78d913ff9c2d10e91d2d35ee0049dd3ad4b3` | A caller declaration is read and reaches the verdict. |
+| D12 | `b141cd6f6aeae68ad1fff39450ceed6b35929f83aa60af08a9f2264e5c299647` | The source is mutated in place and restored in a finally - every after-the-fact check is satisfied, a reader during the run is not. |
+| D13 | `d9d468ce96ce9bacd405ec96cdbc267c289111ae87b27c916c30aaaa63cbb7e5` | An empty catalogue is folded as clean. |
+| D14 | `a5c6a1b0ae4b513f524b8347039b11fdf6859975d58feacae624721490c7e0e9` | Duplicate case identities are accepted. |
+| D15 | `9ff66a17d2ab798ef20dc49773467caeb57b152a96fa28751631af33adbba331` | The probe argv is recorded as a space-joined rendering of itself. |
+| D16 | `680a5ec3d64301bd331f9f1496cb9808efa388aefdc67981f0925b08ceac8946` | The regular-file guard on the target path is dropped. |
+| D17 | `c202f721a8ec9243a7d1f834355015bdb2503feeb6fbb813a4d3dadbab8044d2` | With no execution substrate the build reports PASS itself rather than refusing - the exact fallback the law forbids. |
+| D18 | `7e1afca02dda9a6bb7c0ba2d5b879bf2412d97a5b88d17caceb4d352fe8db52d` | The wrapper narrows any transported result to PASS. |
+| D19 | `127153e07ffbee086692747f1782a381e0300d19d089f8c02e09db243f61bc4c` | The label defect in its other direction: a FAILURE literal in the probe's own output is read as a failure. |
+| D20 | `b7ac23bd6194f30d9d9014870d661eb074c3dbb475e5b3ef76cc48f778ad3347` | The unmutated baseline is ignored once control is established. |
+| D21 | `0d06782581619116fba708fee0889b1ead64acad190944a20891072e84372842` | A target that is not present is spliced in at the start of the file instead of refused - discovery failing open. |
+| D22 | `9cf76b0ec54ffb0a86e63a509b381842cee363f603c6e6468cd3dce237bd2621` | The identical-substitution refusals are dropped. |
+| D23 | `4afe1bb9b2e17c26cc79f9eb3506b6fda7e60f1d31fe46dc78d393318da64026` | The record is believed even when the clone it names is gone. |
+| D24 | `0e9586ef2f6d8a5a0badcdca7c56940ea3be5b6100e3cf091c6e76b3e3f5e3fc` | Every execution record is accepted for every variant, so an execution belonging to another mutation can manufacture control. |
+| D25 | `91882314d14d8a234c42dca5c73562336d133418c007952e775b7b7a72b1a50a` | The mutation bytes are not re-derived: any mismatch is swallowed, so a record can describe arbitrary commits as the three exact-byte mutations. |
+| D26 | `1c19b33c01ebfee097b5417afd74d46ec2b6f567159400fc3b0b95c3e273fe66` | The record's documented control count disagrees with the suite. |
+| D27 | `5c847c616773cc043596f559e34290deadbda88add9e160f7462fb7e1124be9a` | A documented file digest disagrees with the bytes it names. |
+| D28 | `a2a00d5b94d5363fa11b2e172318907bd363d7cd01e39c9dad35522e0f593c01` | The record carries no parseable inventory count at all. |
+| D29 | `8ed879c96cc8eac0b5b473f4ea11bf40f36de20b1a537edead5149f137d25966` | The record's declared target path is never bound to where the mutants actually differ, so a record can name one file while its commits changed another. The binding lives in two places - the name-only diff and the re-derivation's path lookup - so defeating it takes both, which is one defect and not two. |
+| D30 | `8fd66d9777fcc24c32bc344ebc8ea30a4f767f50e4f5ee932ea02ef372bd266d` | The output directory is claimed before the source is judged, so a caller naming a primary checkout with an output path inside it gets a directory written into the very checkout the next line refuses. The refusal text stays correct; the refusal leaves a trace in what it refused. |
+| D31 | `afb748650811bf241f6d9b536eab4a082d3bb0d24a96eb6ee9ac778feb336544` | The closed `..` rejection is replaced by the old nearest-ancestor resolution, so traversal in a nonexistent suffix creates inside the source before the post-creation containment check refuses it. |
+| D32 | `2b6c33887d464113961a48bfe3da0bd58758ba42044312e3905b131b60ab2b37` | The shared pre-creation output guard is omitted from catalogue only, so output inside a linked-worktree source is created before the backstop refuses it. |
+| D33 | `eb4acbf4130fc3e9b90faec33fbbdf2eec46de4a3e32af04dc6618cc8a626eb0` | The shared output guard refuses every path, so legitimate evidence output outside the source can never proceed. |
+| D34 | `d6834a05a268debafd7cf456ab27150e40a7055eb13d04e8cc8f36fe749e36f8` | The record's measured digests no longer describe the current subject, so the matrix reports a measurement taken against bytes that have since changed. |
 
 ### The matrix
 
@@ -230,41 +255,46 @@ global label would let a single relabelling silently re-attribute every row.
 
 | Control | Reddened by | Observed red | Measured at |
 | --- | --- | --- | --- |
-| a matching success line cannot establish that the target ran | D01 D05 D33 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `015301ea` |
-| the proof owners own success literal cannot reach a verdict | D05 D19 D33 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `015301ea` |
-| a target that executed and passed is a pass | D01 D05 D33 | `the basis must say the target executed and concluded pass` | `015301ea` |
-| a target that executed and failed is a fail | D05 D20 D33 | `an executed target that concluded fail is FAIL: expected exit 1, got 2` | `015301ea` |
-| an unattributable substitution is could not observe | D01 D02 D05 D33 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `015301ea` |
-| a target occurring more than once is refused | D03 D33 | `the refusal must name the guard (missing: 'exactly one occurrence is required')` | `015301ea` |
-| a target occurring zero times is refused | D21 D33 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` | `015301ea` |
-| overlapping occurrences are counted separately | D03 D33 | `overlapping start positions must be counted separately (missing: 'target occurs 2 times')` | `015301ea` |
-| the identity substitution reproduces the candidate tree | D05 D33 | `the identity substitution must reproduce the candidate tree exactly` | `015301ea` |
-| a substitution identical to the target is refused | D22 D33 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` | `015301ea` |
-| the source is never mutated | D12 D33 | `the source file must be unmutated at every moment an execution was live` | `015301ea` |
-| a refused source is never written to | D08 D30 | `the refusal must name what it rejected (missing: 'refuses a primary checkout as its source')` | `015301ea` |
-| a traversing output is refused without touching the source | D30 D31 D33 | `a traversing output refusal must leave the source byte-identical` | `015301ea` |
-| the disposable clone shares no object storage | D04 D33 | `the disposable clone must share no object storage with the source` | `015301ea` |
-| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` | `015301ea` |
-| refuses to overwrite an existing record | D07 D33 | `a second generation must not be written over the first: expected exit 2, got 0` | `015301ea` |
-| a record whose mutants are gone is could not observe | D05 D33 | `the case must pass before the evidence is removed` | `015301ea` |
-| an edited record cannot be read into a verdict | D01 D05 D06 D23 D33 | `the label case must fail before editing` | `015301ea` |
-| an execution from the wrong variant is could not observe | D24 D33 | `an execution for another mutation must not enter the fold` | `015301ea` |
-| preserved mutation bytes are rederived | D25 D29 D33 | `changed preserved bytes must invalidate the claimed mutant` | `015301ea` |
-| a missing dimension outranks a clean fold | D10 D33 | `an incomplete record must not classify PASS (missing: 'review-mutation,NO_VERIFIER_RAN,verification_incomplete,')` | `015301ea` |
-| a record pointing at another path is could not observe | D29 | `a record whose named path is not where the mutants differ must not pass` | `015301ea` |
-| a caller declaration cannot change the verdict | D01 D05 D11 D33 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` | `015301ea` |
-| the probe argv is recorded exactly | D15 D33 | `probe_argv must record every argument, including an empty one` | `015301ea` |
-| catalogue refuses output inside a linked worktree source | D32 D33 | `catalogue containment refusal must leave the linked-worktree source byte-identical` | `015301ea` |
-| output outside the source is accepted | D05 D33 | `an output path outside the source remains accepted: expected exit 0, got 2` | `015301ea` |
-| one failing case makes the catalogue fail | D01 D05 D09 D33 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` | `015301ea` |
-| a failing case outranks an unobservable one | D01 D02 D05 D09 D33 | `an observation gap must never mask a real finding: expected exit 1, got 0` | `015301ea` |
-| an unobservable case outranks a passing one | D01 D02 D33 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` | `015301ea` |
-| an empty catalogue is could not observe | D13 D33 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` | `015301ea` |
-| a catalogue with duplicate identities is refused | D14 D33 | `the refusal must name the collision (missing: 'duplicate case identities')` | `015301ea` |
-| fm verify transports the result | D01 D05 D18 D33 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `015301ea` |
-| a symlinked target path is refused | D16 D33 | `the refusal must name what it saw (missing: 'not a regular file')` | `015301ea` |
-| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `015301ea` |
-| verification record inventory matches executed controls | D26 D27 D28 | `the documented control count (1) must equal the suite's declared control count (35)` | `015301ea` |
+| a matching success line cannot establish that the target ran | D01 D05 D33 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `6269ffb4` |
+| the proof owners own success literal cannot reach a verdict | D05 D19 D33 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `6269ffb4` |
+| a target that executed and passed is a pass | D01 D05 D33 | `the basis must say the target executed and concluded pass` | `6269ffb4` |
+| a target that executed and failed is a fail | D05 D20 D33 | `an executed target that concluded fail is FAIL: expected exit 1, got 2` | `6269ffb4` |
+| an unattributable substitution is could not observe | D01 D02 D05 D33 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `6269ffb4` |
+| a target occurring more than once is refused | D03 D33 | `the refusal must name the guard (missing: 'exactly one occurrence is required')` | `6269ffb4` |
+| a target occurring zero times is refused | D21 D33 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` | `6269ffb4` |
+| overlapping occurrences are counted separately | D03 D33 | `overlapping start positions must be counted separately (missing: 'target occurs 2 times')` | `6269ffb4` |
+| the identity substitution reproduces the candidate tree | D05 D33 | `the identity substitution must reproduce the candidate tree exactly` | `6269ffb4` |
+| a substitution identical to the target is refused | D22 D33 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` | `6269ffb4` |
+| the source is never mutated | D12 D33 | `the source file must be unmutated at every moment an execution was live` | `6269ffb4` |
+| a refused source is never written to | D08 D30 | `the refusal must name what it rejected (missing: 'refuses a primary checkout as its source')` | `6269ffb4` |
+| a traversing output is refused without touching the source | D30 D31 D33 | `a traversing output refusal must leave the source byte-identical` | `6269ffb4` |
+| prove refuses output through a symlinked source ancestor | D30 D33 | `prove containment refusal must happen before creating output` | `6269ffb4` |
+| prove protects the checkout when source is a subdirectory | D33 | `the prove refusal must name checkout-root containment (missing: 'output directory is inside the source checkout')` | `6269ffb4` |
+| the disposable clone shares no object storage | D04 D33 | `the disposable clone must share no object storage with the source` | `6269ffb4` |
+| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` | `6269ffb4` |
+| refuses to overwrite an existing record | D07 D33 | `a second generation must not be written over the first: expected exit 2, got 0` | `6269ffb4` |
+| a record whose mutants are gone is could not observe | D05 D33 | `the case must pass before the evidence is removed` | `6269ffb4` |
+| an edited record cannot be read into a verdict | D01 D05 D06 D23 D33 | `the label case must fail before editing` | `6269ffb4` |
+| an execution from the wrong variant is could not observe | D24 D33 | `an execution for another mutation must not enter the fold` | `6269ffb4` |
+| preserved mutation bytes are rederived | D25 D29 D33 | `changed preserved bytes must invalidate the claimed mutant` | `6269ffb4` |
+| a missing dimension outranks a clean fold | D10 D33 | `an incomplete record must not classify PASS (missing: 'review-mutation,NO_VERIFIER_RAN,verification_incomplete,')` | `6269ffb4` |
+| a record pointing at another path is could not observe | D29 | `a record whose named path is not where the mutants differ must not pass` | `6269ffb4` |
+| a caller declaration cannot change the verdict | D01 D05 D11 D33 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` | `6269ffb4` |
+| the probe argv is recorded exactly | D15 D33 | `probe_argv must record every argument, including an empty one` | `6269ffb4` |
+| catalogue refuses output inside a linked worktree source | D32 D33 | `catalogue containment refusal must leave the linked-worktree source byte-identical` | `6269ffb4` |
+| catalogue refuses output through a symlinked source ancestor | D32 D33 | `catalogue containment refusal must happen before creating output` | `6269ffb4` |
+| catalogue protects the checkout when source is a subdirectory | D33 | `the catalogue refusal must name checkout-root containment (missing: 'output directory is inside the source checkout')` | `6269ffb4` |
+| output outside the source is accepted | D05 D33 | `an output path outside the source remains accepted: expected exit 0, got 2` | `6269ffb4` |
+| one failing case makes the catalogue fail | D01 D05 D09 D33 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` | `6269ffb4` |
+| a failing case outranks an unobservable one | D01 D02 D05 D09 D33 | `an observation gap must never mask a real finding: expected exit 1, got 0` | `6269ffb4` |
+| an unobservable case outranks a passing one | D01 D02 D33 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` | `6269ffb4` |
+| an empty catalogue is could not observe | D13 D33 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` | `6269ffb4` |
+| a catalogue with duplicate identities is refused | D14 D33 | `the refusal must name the collision (missing: 'duplicate case identities')` | `6269ffb4` |
+| fm verify transports the result | D01 D05 D18 D33 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `6269ffb4` |
+| a symlinked target path is refused | D16 D33 | `the refusal must name what it saw (missing: 'not a regular file')` | `6269ffb4` |
+| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `6269ffb4` |
+| verification record inventory matches executed controls | D26 D27 D28 | `the documented control count (1) must equal the suite's declared control count (40)` | `6269ffb4` |
+| recorded measurement describes the current subject | D34 | `the recorded measurement describes different bytes than the current bin/fm-review-mutation.sh` | `6269ffb4` |
 
 ## What is not covered
 
