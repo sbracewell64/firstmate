@@ -9,12 +9,10 @@
 # rot invisibly. That recheck asks a wait that CAN change on its own whether it
 # still holds. Where the backlog records an exact upstream blocker, the wait
 # cannot change until that blocker changes, so the recheck asks a question whose
-# answer is fixed and spends a supervisor turn to hear "still waiting". Measured
-# 2026-08-17 in the primary home: 22 externally-held items carried a real
-# blocked-by edge, six of them with a live declared pause, every one of them
-# re-surfacing on the hour. This library replaces that clock with the edge: the
-# cadence becomes a cheap sampler, and the WAKE happens only when the blocker
-# actually moved, could not be read, or turned out to be part of a cycle.
+# answer is fixed and spends a supervisor turn to hear "still waiting". This
+# library replaces that clock with the edge: the cadence becomes a cheap sampler,
+# and the WAKE happens only when the blocker actually moved, could not be read,
+# or turned out to be part of a cycle.
 #
 # WHAT IS DELIBERATELY NOT HERE. This changes CADENCE only. The hold keeps every
 # other surface it already had - the backlog listing, the fleet snapshot, the
