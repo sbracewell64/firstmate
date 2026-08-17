@@ -925,6 +925,8 @@ test_check_reports_coverage_beside_violations() {
   local dir out rc=0
   dir="$TMP_ROOT/check-violation-and-unchecked"
   mkdir -p "$dir/bin"
+  # Preserve the literal command substitution so the fixture contains an unclassified read site.
+  # shellcheck disable=SC2016
   printf '%s\n' 'out=$(gh api repos/o/r/issues/1/comments)' > "$dir/bin/reader.sh"
   printf '%s\n' 'opaque outbound implementation' > "$dir/bin/reader.xyz"
   out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
