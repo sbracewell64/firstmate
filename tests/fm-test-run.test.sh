@@ -876,8 +876,25 @@ PY
   set -e
   [ "$rc" -eq 3 ] || fail "a foreign shard count must be could-not-observe (exit 3), got $rc"
 
+  # A malformed negative timing can shrink the total enough to manufacture an
+  # apparently healthy lane, so it is unreadable evidence rather than a pass.
+  fm_write_serial_fixture "$tmp/negative" 1000
+  python3 - "$tmp/negative/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["scripts"][0]["duration_ms"] = -1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/negative"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a negative duration must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a negative duration must report could-not-observe"
+
   rm -rf "$tmp"
-  pass "serial budget control reports could-not-observe instead of passing on absent evidence"
+  pass "serial budget control reports could-not-observe instead of passing on absent or invalid evidence"
 }
 
 # The partition half. A run that quietly executed fewer scripts than the lane
