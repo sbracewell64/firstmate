@@ -434,9 +434,11 @@ qualification_backlog_live() {  # <activation-id>
     case "$out" in *NOT_FOUND*) return 1 ;; *) return "$EXIT_UNOBSERVED" ;; esac
   fi
   state=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*state:[[:space:]]*//p' | head -1)
-  [ -n "$state" ] || return 1
-  [ "$state" != "done" ] || return 1
-  return 0
+  case "$state" in
+    queued) return 0 ;;
+    done) return 1 ;;
+    *) return "$EXIT_UNOBSERVED" ;;
+  esac
 }
 
 qualification_dependents() {  # <activation-id>

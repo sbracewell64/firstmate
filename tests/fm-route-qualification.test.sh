@@ -754,6 +754,25 @@ test_duplicate_qualification_workflows_are_suppressed() {
   pass "duplicate qualification workflows are suppressed"
 }
 
+test_an_unrecognised_backlog_state_withholds_duplicate_activation() {
+  local rec out
+  rec=$(make_home unreadablestate); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "the first activation failed"
+  awk -v id="$AID_ALPHA" '$1 == id { print $1 " unexpected"; next } { print }' \
+    "$TMP_ROOT/unreadablestate/tasks-axi.store" > "$TMP_ROOT/unreadablestate/tasks-axi.store.tmp"
+  mv "$TMP_ROOT/unreadablestate/tasks-axi.store.tmp" "$TMP_ROOT/unreadablestate/tasks-axi.store"
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work)
+  assert_contains "$out" "COULD NOT BE OBSERVED" \
+    "an unrecognised successful backlog response was treated as a finished workflow"
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA_SECOND.activation" \
+    "an unreadable backlog state permitted a duplicate workflow"
+  assert_no_grep "add $AID_ALPHA_SECOND" "$TASKS_LOG" \
+    "an unreadable backlog state reached backlog registration"
+  pass "an unrecognised backlog state withholds duplicate activation"
+}
+
 test_a_completed_tuple_can_activate_a_new_incarnation() {
   local rec out
   rec=$(make_home reactivate); read_home "$rec"
@@ -1173,6 +1192,7 @@ test_availability_of_one_vendor_is_not_runtime_engineering_availability
 test_a_malformed_capability_requirement_is_refused_by_name
 test_the_cheapest_promising_candidate_is_chosen_and_unmeasured_cost_sorts_last
 test_duplicate_qualification_workflows_are_suppressed
+test_an_unrecognised_backlog_state_withholds_duplicate_activation
 test_a_completed_tuple_can_activate_a_new_incarnation
 test_work_already_in_flight_under_the_workflow_identity_suppresses_activation
 test_a_could_not_observe_result_spends_one_attempt_and_stays_active

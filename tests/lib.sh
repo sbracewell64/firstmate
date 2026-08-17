@@ -606,7 +606,7 @@ JSON
 #                        ("Create the blocker task first, or choose an existing
 #                        task id") - the exact refusal that was being hidden
 #   done <id>            marks it done; refuses an unknown id
-#   show <id> [--json]   reports state, or fails for an unknown id
+#   show <id>            reports state, or fails for an unknown id
 #
 # tests/fm-route-qualification.test.sh pins this against the real binary in
 # test_the_fixture_refuses_what_the_real_tool_refuses, so the fake cannot drift
