@@ -5,9 +5,9 @@ Audience: maintainer verification.
 This record holds reusable evidence for one active guarantee of `bin/fm-outbound-artifact.sh`: that every control enforcing the outbound transport invariant can actually fail, and fails for its own reason.
 `bin/fm-outbound-artifact-lib.sh`'s header owns the invariant statement and the identity rule, `bin/fm-outbound-artifact.sh`'s header owns the command contract, [`../configuration.md`](../configuration.md) "Browser Sol control venue" owns the configuration, and `.agents/skills/bootstrap-diagnostics/SKILL.md` owns the handling procedure for a printed `OUTBOUND:` line.
 
-Verified on 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
+Verified on 2026-08-17 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
-The current green suites were re-run at implementation head `65ccbb71592f209478860c84599e663bf9141854` after ambiguous ruling rejection and property-scoped caller completeness joined the controls.
+The current green suites were re-run at pre-refresh implementation head `26a545e922ac42324afff7ba154fbae378b88520` after the dead-predicate control became repository-wide, identity-bound retrieval was revalidated, and the bootstrap integration joined the refresh recipe.
 
 ## Why this record exists
 
@@ -29,10 +29,10 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 40 outbound-artifact cases, 26 dead-predicate cases, and the bootstrap integration case pass.
+The 37 outbound-artifact cases, 28 dead-predicate cases, and the bootstrap integration cases pass.
 What follows is why that sentence is worth anything.
 
-The same suites, the repository lint gate, and the documentation audience check were re-run together on 2026-08-17 with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh && bin/fm-lint.sh && bin/fm-doc-audience-check.sh`; the command exited 0.
+The dead-predicate and bootstrap suites plus the documentation audience check were re-run together on 2026-08-17 with `bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh && bin/fm-doc-audience-check.sh`; the command exited 0.
 
 ## Watched-red evidence, one mutation per control
 

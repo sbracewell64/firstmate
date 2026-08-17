@@ -227,6 +227,25 @@ last line"')
   pass "multiline double-quoted data does not establish call identity"
 }
 
+test_same_line_double_quoted_command_shape_is_not_a_call() {
+  local dir out rc
+  dir=$(fixture same-line-double-quote 'dead_one() { return 0; }' 'message="prefix; dead_one"')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "same-line double-quoted data counted as a call, exit $rc: $out"
+  pass "same-line double-quoted data does not establish call identity"
+}
+
+test_unterminated_double_quote_is_unchecked() {
+  local dir out rc
+  dir=$(fixture unterminated-double-quote 'maybe_used() { return 0; }')
+  add_plain_consumer "$dir" 'message="maybe_used'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "unterminated double quote was treated as parseable, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'plain-consumer.sh.*unterminated quoted string' \
+    || fail "unterminated double quote was not named: $out"
+  pass "unterminated double quotes are named unchecked"
+}
+
 test_call_site_inside_its_own_file_counts() {
   local dir out rc
   # A helper used only by its own library is consulted. Counting only external
@@ -326,9 +345,20 @@ test_unsupported_call_form_in_unenrolled_consumer_is_unchecked() {
   add_plain_consumer "$dir" 'echo maybe_used'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 4 ] || fail "unenrolled unsupported call form did not fail closed, exit $rc: $out"
-  printf '%s' "$out" | grep -q 'UNCHECKED.*plain-consumer.sh.*unsupported call-site form for maybe_used' \
+  printf '%s' "$out" | grep -q 'plain-consumer.sh.*unsupported call-site form for maybe_used' \
     || fail "unenrolled unsupported call form was not named: $out"
   pass "unsupported call forms are validated across unenrolled consumers"
+}
+
+test_unsupported_call_form_alone_is_not_red() {
+  local dir out rc
+  dir=$(fixture unsupported-not-red 'live_one() { return 0; }' 'live_one')
+  add_plain_consumer "$dir" 'echo live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "unsupported consumer alone made the control red, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'plain-consumer.sh.*unsupported call-site form for live_one' \
+    || fail "unsupported consumer was not accumulated and named: $out"
+  pass "unsupported consumers alone do not make resolved predicates red"
 }
 
 test_single_quoted_substitution_is_not_a_call() {
@@ -406,6 +436,7 @@ test_unparsed_file_that_mentions_it_makes_the_universe_incomplete
 test_loose_exclusion_never_confirms_a_call
 test_call_from_unenrolled_consumer_counts
 test_unsupported_call_form_in_unenrolled_consumer_is_unchecked
+test_unsupported_call_form_alone_is_not_red
 test_single_quoted_substitution_is_not_a_call
 test_quoted_prose_describing_a_call_is_not_a_call
 test_unchecked_consumers_are_named_but_not_red
@@ -420,6 +451,8 @@ test_function_keyword_definition_is_scanned
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
 test_multiline_double_quoted_command_shape_is_not_a_call
+test_same_line_double_quoted_command_shape_is_not_a_call
+test_unterminated_double_quote_is_unchecked
 test_call_site_inside_its_own_file_counts
 test_blanket_exemption_cannot_silence
 test_adjacent_mark_keeps_one_and_still_reports_it

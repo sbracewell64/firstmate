@@ -173,29 +173,63 @@ function_has_call_site() {  # <function>
 # open at end of file, the one case this cannot resolve.
 strip_quoted() {  # <file>
   awk '
-    BEGIN { insq = 0; indq = 0 }
+    BEGIN { mode = "normal"; escaped = 0; subdepth = 0 }
     {
       out = ""
-      suppress_dq = indq
       n = length($0)
       for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
-        if (insq) { if (c == "\047") insq = 0; continue }
+        nextc = substr($0, i + 1, 1)
+        if (mode == "sq") { if (c == "\047") mode = "normal"; continue }
+        if (mode == "subsq") { if (c == "\047") mode = "sub"; continue }
+        if (mode == "ansi" || mode == "subansi") {
+          if (escaped) { escaped = 0; continue }
+          if (c == "\\") { escaped = 1; continue }
+          if (c == "\047") mode = (mode == "ansi" ? "normal" : "sub")
+          continue
+        }
+        if (mode == "dq" || mode == "subdq") {
+          if (escaped) { escaped = 0; continue }
+          if (c == "\\") { escaped = 1; continue }
+          if (c == "$" && nextc == "(") {
+            subdepth++
+            parens[subdepth] = 1
+            returns[subdepth] = mode
+            mode = "sub"
+            out = out "$("
+            i++
+            continue
+          }
+          if (c == "\"") mode = (mode == "dq" ? "normal" : "sub")
+          continue
+        }
         # A comment ends the line. Shell ignores an apostrophe in prose, and
         # without this every "control\047s" or "doesn\047t" in a header opened a
         # quote that never closed, so the file read as unterminated and every
         # predicate in it became could-not-observe.
-        if (c == "#" && !indq && (i == 1 || substr($0, i-1, 1) ~ /[ \t]/)) break
-        if (c == "\047" && !indq) { insq = 1; continue }
-        if (c == "\"") {
-          indq = !indq
-          if (!indq) suppress_dq = 0
+        if (c == "#" && (i == 1 || substr($0, i-1, 1) ~ /[ \t]/)) break
+        if (c == "$" && nextc == "\047") {
+          mode = (mode == "sub" ? "subansi" : "ansi")
+          i++
+          continue
         }
-        if (!suppress_dq) out = out c
+        if (c == "\047") { mode = (mode == "sub" ? "subsq" : "sq"); continue }
+        if (c == "\"") { mode = (mode == "sub" ? "subdq" : "dq"); continue }
+        if (mode == "sub" && c == "(") parens[subdepth]++
+        if (mode == "sub" && c == ")") {
+          parens[subdepth]--
+          if (parens[subdepth] == 0) {
+            mode = returns[subdepth]
+            delete parens[subdepth]
+            delete returns[subdepth]
+            subdepth--
+          }
+        }
+        out = out c
       }
       print out
     }
-    END { if (insq) exit 1 }
+    END { if (mode != "normal" || subdepth != 0) exit 1 }
   ' "$1"
 }
 
@@ -301,8 +335,10 @@ FUNCTIONS=()
 for f in "${FILES[@]}"; do
   while IFS= read -r line; do FUNCTIONS+=("${line#*:}"); done < <(function_definitions "$f")
 done
-for fn in "${FUNCTIONS[@]}"; do
-  for f in "${SCANNABLE[@]}"; do
+VALIDATED_SCANNABLE=()
+for f in "${SCANNABLE[@]}"; do
+  unsupported=''
+  for fn in "${FUNCTIONS[@]}"; do
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$f" && continue
     unsupported=$(strip_quoted "$f" | awk -v fn="$fn" '
       $0 ~ "^[[:space:]]*#" { next }
@@ -324,10 +360,15 @@ for fn in "${FUNCTIONS[@]}"; do
       $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
       $0 ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)") { print NR ":" $0; exit }
     ')
-    [ -z "$unsupported" ] \
-      || die "UNCHECKED $f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}" 4
+    [ -z "$unsupported" ] || break
   done
+  if [ -n "$unsupported" ]; then
+    UNCHECKED_CONSUMERS+=("$f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}")
+  else
+    VALIDATED_SCANNABLE+=("$f")
+  fi
 done
+SCANNABLE=("${VALIDATED_SCANNABLE[@]}")
 
 dead_json='[]'
 marked_json='[]'
