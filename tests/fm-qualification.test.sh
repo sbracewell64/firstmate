@@ -54,7 +54,14 @@ NO_OVERLAY="$TMP_ROOT/absent-overlay"
 DEP_FILE="$HOME_DIR/data/fixture/MANIFEST.json"
 UNRELATED="$HOME_DIR/data/fixture/UNRELATED.txt"
 
-mkdir -p "$HOME_DIR/config" "$HOME_DIR/state" "$HOME_DIR/data/fixture" "$CDIR" "$RDIR"
+FAKEBIN="$TMP_ROOT/fakebin"
+
+mkdir -p "$HOME_DIR/config" "$HOME_DIR/state" "$HOME_DIR/data/fixture" "$CDIR" "$RDIR" "$FAKEBIN"
+# A faithful tasks-axi, on PATH for every invocation. Without it these cases would
+# reach the REAL binary and whatever backlog its config resolved to, which is both
+# a hazard and the vacuity that hid total non-function for five review rounds.
+fm_fake_tasks_axi "$FAKEBIN" "$TMP_ROOT/tasks-axi.log"
+printf 'some-work queued\n' >> "$TMP_ROOT/tasks-axi.store"
 printf '{"package":"job-fixture","version":"1.0.0"}\n' > "$DEP_FILE"
 printf 'this byte is not a declared dependency of anything\n' > "$UNRELATED"
 
@@ -67,6 +74,7 @@ qual() {
   FM_QUALIFICATION_CONTRACT_DIR="$CDIR" \
   FM_QUALIFICATION_RECORD_DIR="$RDIR" \
   FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+  PATH="$FAKEBIN:$PATH" \
     "$QUAL" "$@"
 }
 
@@ -552,6 +560,10 @@ native_effort=high
 route=R-X
 attempt_budget=2
 ACT
+  # The workflow's own backlog item, which activation creates in production. It is
+  # the single fact that owns this workflow's liveness, so resolve cannot close a
+  # workflow the backlog owner never knew about.
+  printf '%s queued\n' "$QUAL_ACTIVATION_ID" >> "$TMP_ROOT/tasks-axi.store"
   local rc=0 out
   out=$(qual resolve "$QUAL_ACTIVATION_ID" --result QUALIFIED 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "a pass was accepted with no record in the register to support it"

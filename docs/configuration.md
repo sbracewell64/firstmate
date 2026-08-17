@@ -746,14 +746,26 @@ A candidate is promising only when its ONLY blocker is missing or stale qualific
 Promising candidates are ordered by recorded price ascending and then by pool position, and a candidate whose price cannot be observed sorts LAST rather than first - unmeasured cost is never read as cheap.
 
 `bin/fm-qualification.sh activate --route <id> --blocks <work-id>` creates or reuses ONE bounded workflow for that candidate.
-It refuses every classification other than `QUALIFICATION_REQUIRED`, derives a deterministic identity so a second request for the same pair reports already-active, and composes `bin/fm-decision-surface.sh check duplicate-dispatch` rather than re-deriving whether the work is already running.
-The record lands at `state/qualification/<activation-id>.activation`; the blocked work identity is blocked through the existing backlog owner, so the dependency-driven blocker re-evaluation already in the fleet is what returns it.
-No second scheduler, router, issue store, event system or polling loop exists: `bin/fm-qualification.sh dispatch` launches the worker through `bin/fm-spawn.sh`, the one chokepoint, and the bound is `bin/fm-attempt.sh` over the ACTIVATION's own identity - a qualification workflow never reads, spends or resets the accounting of the work it would unblock.
+It refuses every classification other than `QUALIFICATION_REQUIRED`, derives a deterministic identity from the whole record key so two distinct tuples can never collide, and composes `bin/fm-decision-surface.sh check duplicate-dispatch` rather than re-deriving whether the work is already running.
+
+**The workflow is a backlog task, and that is the whole design.**
+A bounded qualification run is a work item, so it is registered as one through the existing backlog owner - which is what makes `tasks-axi block --by` meet its documented precondition that the blocker must already exist, rather than working around it.
+Its backlog record is then the ONLY fact about whether it is live: the blocked work's dependency is not a second copy, because `unresolved_blocker_ids` is recomputed on every read and resolves a blocker exactly when its structured record is Done.
+The relationship is therefore derived on read by an owner that already exists, exactly as qualification state is computed on read and expired availability holds are dropped on read rather than swept.
+`state/qualification/<activation-id>.activation` holds the workflow's inert parameters and no state at all.
+
+There is deliberately **no transfer, compensation or reconciliation logic**, and a reader who goes looking for it should find this paragraph rather than an absence.
+An earlier design mirrored the workflow's liveness into both its own record and a backlog edge, and every defect it produced was a different way for those two facts to disagree.
+That machinery exists only because something is mirrored; nothing is mirrored now, so those failures are closed by construction and there is nothing left to reconcile.
+Do not add a compensation path back without first re-introducing a second liveness fact, which is the thing to avoid.
+
+No second scheduler, router, issue store, event system or polling loop exists: `bin/fm-qualification.sh dispatch` launches the worker through `bin/fm-spawn.sh`, the one chokepoint, and the bound is `bin/fm-attempt.sh` over the ACTIVATION's own identity - a qualification workflow never reads, spends or resets the accounting of the work it would release.
+The CANDIDATE is the worker, dispatched on a bootstrap route it already qualifies for whose floor meets the target floor's axes; the already-qualified binding supplies only the route, never the run, and a candidate with no bootstrap route is a stop-and-report rather than a licence to self-certify.
 
 `bin/fm-qualification.sh resolve <activation-id> --result <RESULT>` closes it.
-`QUALIFIED` is verified against the register before it is accepted, unblocks the same work identity with its identity, custody and budget unchanged, and makes the evidence reusable for every route requiring that contract.
-`FAILED` is terminal and preserves the exclusion so the next promising candidate is evaluated.
-`COULD_NOT_OBSERVE` is nonterminal: it spends one attempt, records nothing against the binding, and leaves the workflow open.
+`QUALIFIED` is verified against the register before it is accepted and then closes the workflow item - and closing it is what returns the same work identity to normal eligibility, with its identity, custody and budget unchanged and no unblock call that could fail afterwards.
+`FAILED` preserves the exclusion, activates the next promising candidate FIRST so the successor already holds the dependency, and only then closes this item.
+`COULD_NOT_OBSERVE` is nonterminal: it spends one attempt, records nothing against the binding, and leaves the item open.
 `loopspecs/terminal-states.json` carries these outcomes as source `role-qualification`, and deliberately gives could-not-observe no row, because an unmade observation is not an ending.
 
 Every ship and scout dispatch through a floor that declares a capability records `qualification_contracts=` and `qualification_observed=` in `state/<id>.meta`.

@@ -354,18 +354,70 @@ activation_file() {  # <activation-id>
   printf '%s/%s.activation\n' "$ACTIVATION_DIR" "$1"
 }
 
-activation_write_field() {  # <activation-file> <key> <value>
-  local file=$1 key=$2 value=$3 tmp
-  tmp=$(mktemp "$file.XXXXXX") || return 1
-  { awk -F= -v k="$key" '$1 != k' "$file"; printf '%s=%s\n' "$key" "$value"; } > "$tmp" \
-    || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" 2>/dev/null || true
-  mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; return 1; }
+# THE WORKFLOW IS A BACKLOG TASK, AND THAT IS THE WHOLE DESIGN.
+#
+# There is exactly ONE durable fact about whether a qualification workflow is
+# still live: its own backlog record. The blocked work's dependency on it is not a
+# second copy of that fact - bin/fm-fleet-snapshot.sh recomputes
+# `unresolved_blocker_ids` on every read, and resolves a blocker if and only if
+# its structured record is Done. So the relationship is DERIVED on read by an
+# owner that already exists, exactly as qualification state is computed on read
+# and expired availability holds are dropped on read rather than swept.
+#
+# WHY THERE IS NO TRANSFER, COMPENSATION, OR RECONCILIATION LOGIC HERE, and a
+# reader who goes looking for it should find this paragraph instead of an absence.
+# An earlier design kept the workflow's liveness in a `terminal=` field of its own
+# record AND mirrored it into a backlog edge, and every one of five review rounds
+# was a different way for those two facts to disagree: a predecessor blocker left
+# behind on advancement, a half-written block reported as active, an unblock that
+# could not be retried after a terminal write failed. Intermediate states,
+# compensation and retry reconciliation are machinery that exists BECAUSE
+# something is mirrored. Nothing is mirrored now, so those three findings are
+# closed by construction rather than patched, and there is nothing left for a
+# reconciliation path to reconcile.
+#
+# It also fixes a defect none of those rounds could see: `tasks-axi block` refuses
+# a blocker that is not itself a task ("Create the blocker task first, or choose an
+# existing task id"), and bin/fm-fleet-snapshot.sh leaves a blocker with no record
+# open forever. The old edge was therefore never written, and could never have
+# resolved if it had been. Registering the workflow as a task is what makes
+# `block --by` meet its documented precondition instead of working around it.
+qualification_backlog_available() {
+  command -v tasks-axi >/dev/null 2>&1
 }
 
-qualification_backlog_transition() {  # <block|unblock> <work-id> <activation-id>
-  command -v tasks-axi >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
-  tasks-axi "$1" "$2" --by "$3" >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
+# Register the workflow as a work item and make the blocked work depend on it.
+# Ordered so nothing is promised before it is confirmed: the task exists before
+# anything depends on it, and a failure at either step leaves the work UNBLOCKED
+# and re-runnable rather than blocked on something that can never resolve.
+qualification_backlog_open() {  # <activation-id> <contract> <model> <work-id>
+  local id=$1 contract=$2 model=$3 work=$4
+  qualification_backlog_available || return "$EXIT_UNOBSERVED"
+  tasks-axi add "$id" "qualify $contract for $model" >/dev/null 2>&1 \
+    || tasks-axi show "$id" >/dev/null 2>&1 \
+    || return "$EXIT_UNOBSERVED"
+  [ -n "$work" ] || return 0
+  tasks-axi block "$work" --by "$id" >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
+}
+
+# Close the workflow. This is the ONLY act that releases the blocked work, and it
+# releases it by making the blocker resolve rather than by editing the edge, so
+# there is no second mutation to fail, retry, or compensate for. It is idempotent
+# because `done` on a finished task is.
+qualification_backlog_close() {  # <activation-id>
+  qualification_backlog_available || return "$EXIT_UNOBSERVED"
+  tasks-axi "done" "$1" >/dev/null 2>&1 || return "$EXIT_UNOBSERVED"
+}
+
+# Is this workflow still live, according to the one fact that owns it?
+# 0 = live, 1 = finished or absent, EXIT_UNOBSERVED = the owner could not answer.
+qualification_backlog_live() {  # <activation-id>
+  local state
+  qualification_backlog_available || return "$EXIT_UNOBSERVED"
+  state=$(tasks-axi show "$1" --json 2>/dev/null | jq -r '.state // .task.state // empty' 2>/dev/null) || return "$EXIT_UNOBSERVED"
+  [ -n "$state" ] || return 1
+  [ "$state" != "done" ] || return 1
+  return 0
 }
 
 activation_field() {  # <file> <key>
@@ -374,17 +426,22 @@ activation_field() {  # <file> <key>
 }
 
 # Is another workflow for this pair already live? Three independent sources, and
-# ANY of them means already-active. The first two are this command's own durable
-# record; the third composes the fleet's duplicate-dispatch owner rather than
-# re-deriving "is this already running", which is exactly the reconstruction the
-# decision surface exists to replace.
+# ANY of them means already-active, and BOTH are derived rather than stored. The
+# first asks the backlog owner, which holds the workflow's only liveness fact; the
+# second composes the fleet's duplicate-dispatch owner rather than re-deriving "is
+# this already running", which is exactly the reconstruction the decision surface
+# exists to replace. The activation file is deliberately NOT consulted: it carries
+# the workflow's inert parameters and no state, so a stale one on disk can never
+# make a finished workflow look live.
 activation_already_active() {  # <activation-id>
-  local id=$1 file terminal out
-  file=$(activation_file "$id")
-  if [ -f "$file" ]; then
-    terminal=$(activation_field "$file" terminal || true)
-    [ -n "$terminal" ] || { printf 'a workflow for this pair is already recorded at %s\n' "$file"; return 0; }
-  fi
+  local id=$1 out rc=0
+  qualification_backlog_live "$id" || rc=$?
+  case "$rc" in
+    0) printf 'the backlog owner still holds an open work item for this pair: %s\n' "$id"; return 0 ;;
+    "$EXIT_UNOBSERVED")
+      printf 'whether a workflow for this pair is already open COULD NOT BE OBSERVED (the backlog owner did not answer for %s), and an unread duplicate check is not an absent one\n' "$id"
+      return 0 ;;
+  esac
   if [ -x "$SCRIPT_DIR/fm-decision-surface.sh" ] && fm_task_id_path_safe "$id" 2>/dev/null; then
     out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-decision-surface.sh" check duplicate-dispatch "$id" 2>/dev/null)
     case "$out" in
@@ -555,6 +612,9 @@ EOF
     printf 'fm-qualification: could not write beside %s\n' "$brief" >&2
     return "$EXIT_UNOBSERVED"
   }
+  # The backticks below are Markdown in the brief being written, not command
+  # substitution, and the single quotes are what keep them literal.
+  # shellcheck disable=SC2016
   {
     printf '# Role qualification workflow\n\n'
     printf 'Establish contract `%s` for binding `%s`, harness `%s`, and native effort `%s`.\n\n' "$contract" "$model" "$harness" "$effort"
@@ -588,7 +648,6 @@ EOF
     printf 'cost_rank=%s\n' "$cost"
     printf 'blocks=%s\n' "$BLOCKS"
     printf 'attempt_budget=%s\n' "$BUDGET"
-    printf 'transition=block_pending\n'
     printf 'created=%s\n' "$(date -u +%s)"
     printf 'created_date=%s\n' "$(fm_qualification_today)"
   } > "$tmp" || { rm -f -- "$tmp"; printf 'fm-qualification: could not record the workflow\n' >&2; return "$EXIT_UNOBSERVED"; }
@@ -596,19 +655,14 @@ EOF
   mv -f -- "$tmp" "$file" || { rm -f -- "$tmp"; printf 'fm-qualification: could not record the workflow\n' >&2; return "$EXIT_UNOBSERVED"; }
 
   # The blocked work identity keeps its identity, its custody and its budget. All
-  # that changes is that it now has a named blocker, recorded through the existing
-  # backlog owner, so the dependency-driven re-evaluation already in the fleet
-  # returns it to normal eligibility when this clears - no second scheduler
-  # watches it.
-  if [ -n "$BLOCKS" ]; then
-    if ! qualification_backlog_transition block "$BLOCKS" "$id"; then
-      record_terminal "$file" block_unobserved || true
-      printf 'fm-qualification: the backlog owner did not confirm blocking %s, so activation of %s could not be observed\n' "$BLOCKS" "$id" >&2
-      return "$EXIT_UNOBSERVED"
-    fi
-  fi
-  if ! activation_write_field "$file" transition active; then
-    printf 'fm-qualification: the activation transition for %s could not be persisted, so success is not reported\n' "$id" >&2
+  # that changes is that the workflow becomes a work item of its own and the work
+  # depends on it, both through the existing backlog owner - so the
+  # dependency-driven re-evaluation already in the fleet returns it to normal
+  # eligibility when that item is Done. No second scheduler watches it, and there
+  # is no second record of its liveness to keep in step.
+  if ! qualification_backlog_open "$id" "$contract" "$model" "$BLOCKS"; then
+    printf 'fm-qualification: the backlog owner did not confirm the workflow item for %s%s, so activation could not be observed. Nothing was promised: the work is not blocked and this is safe to re-run\n' \
+      "$id" "$( [ -n "$BLOCKS" ] && printf ' and the dependency of %s on it' "$BLOCKS" || printf '' )" >&2
     return "$EXIT_UNOBSERVED"
   fi
 
@@ -629,30 +683,37 @@ EOF
 }
 
 cmd_activations() {
-  local f id terminal
+  local f id live rc
   [ -d "$ACTIVATION_DIR" ] || { printf 'fm-qualification: no qualification workflow has been activated in this home\n'; return "$EXIT_OK"; }
   local out='[]'
   for f in "$ACTIVATION_DIR"/*.activation; do
     [ -f "$f" ] || continue
     id=$(activation_field "$f" activation || true)
-    terminal=$(activation_field "$f" terminal || true)
+    # Liveness is asked of the owner that holds it, on every read. Three values,
+    # because "the backlog could not answer" is not "finished".
+    rc=0
+    qualification_backlog_live "$id" || rc=$?
+    case "$rc" in
+      0) live=active ;;
+      1) live=closed ;;
+      *) live=could-not-observe ;;
+    esac
     if [ "$JSON" -eq 1 ]; then
-      out=$(printf '%s' "$out" | jq -c --arg id "$id" --arg t "$terminal" \
+      out=$(printf '%s' "$out" | jq -c --arg id "$id" --arg t "$live" \
         --arg c "$(activation_field "$f" contract || true)" \
         --arg m "$(activation_field "$f" model || true)" \
         --arg r "$(activation_field "$f" route || true)" \
         --arg b "$(activation_field "$f" blocks || true)" \
         '. + [{activation:$id, contract:$c, model:$m, route:$r,
                blocks:(if $b == "" then null else $b end),
-               terminal:(if $t == "" then null else $t end),
-               active:($t == "")}]')
+               liveness:$t,
+               active:($t == "active")}]')
     else
       printf '%s  contract=%s  binding=%s  route=%s  blocks=%s  %s\n' \
         "$id" "$(activation_field "$f" contract || true)" \
         "$(activation_field "$f" model || true)" \
         "$(activation_field "$f" route || true)" \
-        "$(activation_field "$f" blocks || printf -- -)" \
-        "$( [ -n "$terminal" ] && printf 'terminal=%s' "$terminal" || printf 'active' )"
+        "$(activation_field "$f" blocks || printf -- -)" "$live"
     fi
   done
   [ "$JSON" -eq 0 ] || printf '%s\n' "$out"
@@ -661,13 +722,23 @@ cmd_activations() {
 
 cmd_dispatch() {
   local id=${POS[0]:-} file contract model route floor blocks harness effort
-  local execution_route execution_model execution_harness execution_effort
+  local execution_route execution_model execution_harness execution_effort dispatch_rc
   [ -n "$id" ] || die "dispatch needs an activation id"
   fm_task_id_path_safe "$id" || die "unsafe activation id: $id"
   file=$(activation_file "$id")
   [ -f "$file" ] || { printf 'fm-qualification: no activation record at %s\n' "$file" >&2; return "$EXIT_UNOBSERVED"; }
-  [ -z "$(activation_field "$file" terminal || true)" ] \
-    || { printf 'fm-qualification: activation %s is terminal (%s) and is not re-dispatched\n' "$id" "$(activation_field "$file" terminal)" >&2; return "$EXIT_REFUSED"; }
+  # Asked of the backlog owner rather than of a field here, so a workflow that was
+  # closed elsewhere cannot be re-dispatched from a stale parameters file - and an
+  # owner that cannot answer refuses rather than launching on an unread answer.
+  dispatch_rc=0
+  qualification_backlog_live "$id" || dispatch_rc=$?
+  case "$dispatch_rc" in
+    1) printf 'fm-qualification: the backlog owner records %s as finished, so it is not re-dispatched\n' "$id" >&2
+       return "$EXIT_REFUSED" ;;
+    "$EXIT_UNOBSERVED")
+       printf 'fm-qualification: whether %s is still open COULD NOT BE OBSERVED, so it is not dispatched; an unread answer is not permission to launch\n' "$id" >&2
+       return "$EXIT_UNOBSERVED" ;;
+  esac
   contract=$(activation_field "$file" contract || true)
   model=$(activation_field "$file" model || true)
   route=$(activation_field "$file" route || true)
@@ -757,13 +828,16 @@ cmd_resolve() {
   # COULD_NOT_OBSERVE is NONTERMINAL and spends exactly one attempt. Nothing
   # adverse is recorded about the binding: an observation that did not happen is
   # not a finding, and writing one would build the reputation the ruling forbids.
+  # The workflow item stays open, which is the whole of "still active" - there is
+  # no second field to leave un-flipped.
   if [ -z "$terminal" ]; then
     local budget attempt_out rc=0
     budget=$(activation_field "$file" attempt_budget || printf '%s' "$BUDGET")
     attempt_out=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-attempt.sh" open "$id" --budget "$budget" 2>&1) || rc=$?
     if [ "$rc" -ne 0 ]; then
       printf 'fm-qualification: the bound on %s is spent or unrecordable (%s), so this workflow stops rather than retrying without a bound\n' "$id" "$attempt_out" >&2
-      record_terminal "$file" budget_exhausted
+      qualification_backlog_close "$id" \
+        || printf 'fm-qualification: the backlog owner did not confirm closing %s; it stays open and re-runnable rather than reported finished\n' "$id" >&2
       return "$EXIT_UNOBSERVED"
     fi
     FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-attempt.sh" end "$id" >/dev/null 2>&1 || true
@@ -772,6 +846,13 @@ cmd_resolve() {
     return "$EXIT_UNOBSERVED"
   fi
 
+  # A FAILED workflow advances BEFORE it closes, so the successor already holds
+  # the dependency when the predecessor stops holding it. Ordering is the entire
+  # mechanism: there is no edge to transfer, because closing this item resolves
+  # its own blocker and the successor registered its own. Reversed, a successor
+  # that failed to register would leave the work eligible with nothing qualified;
+  # this way the worst case is that the work is briefly blocked on both, which is
+  # safe and clears itself on the next close.
   if [ "$RESULT" = FAILED ]; then
     local advance_out advance_rc=0
     ROUTE=$(activation_field "$file" route || true)
@@ -779,48 +860,33 @@ cmd_resolve() {
     printf 'fm-qualification: %s is observed FAILED. The exclusion evidence for %s against %s is PRESERVED; evaluating the next promising candidate now\n' \
       "$id" "$model" "$contract" >&2
     advance_out=$(cmd_activate 2>&1) || advance_rc=$?
-    if [ "$advance_rc" -ne 0 ]; then
-      if [ "$advance_rc" -eq "$EXIT_REFUSED" ] && printf '%s' "$advance_out" | grep -qF "$FM_QUAL_TOKEN_NO_PROMISING"; then
-        printf '%s\n' "$advance_out" >&2
-        record_terminal "$file" "$terminal" || {
-          printf 'fm-qualification: could not mark %s terminal, so it remains active and observable\n' "$id" >&2
-          return "$EXIT_UNOBSERVED"
-        }
-        return "$EXIT_REFUSED"
-      fi
-      printf '%s\n' "$advance_out" >&2
-      printf 'fm-qualification: advancement from %s COULD NOT BE OBSERVED, so the workflow remains active and the blocked work is not stranded behind a terminal predecessor\n' "$id" >&2
+    printf '%s\n' "$advance_out" >&2
+    if [ "$advance_rc" -ne 0 ] \
+       && ! { [ "$advance_rc" -eq "$EXIT_REFUSED" ] && printf '%s' "$advance_out" | grep -qF "$FM_QUAL_TOKEN_NO_PROMISING"; }; then
+      # Advancement neither succeeded nor established that there is nothing left
+      # to try. That is could-not-observe, and this workflow stays OPEN so the
+      # work is not released on an unfinished search.
+      printf 'fm-qualification: advancement from %s COULD NOT BE OBSERVED, so it stays open and the blocked work is neither released nor stranded\n' "$id" >&2
       return "$EXIT_UNOBSERVED"
     fi
-    printf '%s\n' "$advance_out" >&2
-    record_terminal "$file" "$terminal" || {
-      printf 'fm-qualification: could not mark %s terminal, so it remains active and observable\n' "$id" >&2
+    if ! qualification_backlog_close "$id"; then
+      printf 'fm-qualification: the backlog owner did not confirm closing %s, so it stays open and re-runnable; the successor already holds the dependency and nothing is stranded\n' "$id" >&2
       return "$EXIT_UNOBSERVED"
-    }
+    fi
     return "$EXIT_REFUSED"
   fi
 
-  record_terminal "$file" qualified_pending_unblock || {
-    printf 'fm-qualification: could not persist the terminal transition for %s, so the blocked work remains untouched\n' "$id" >&2
+  # A pass closes the workflow item, and THAT is what returns the blocked work to
+  # normal eligibility: bin/fm-fleet-snapshot.sh resolves a blocker exactly when
+  # its record is Done. No unblock call exists to fail after the fact, so there is
+  # no window in which the work is eligible while the workflow still looks live.
+  if ! qualification_backlog_close "$id"; then
+    printf 'fm-qualification: the backlog owner did not confirm closing %s, so NO return to eligibility is claimed; the record stands and this is safe to re-run\n' "$id" >&2
     return "$EXIT_UNOBSERVED"
-  }
-  if [ -n "$blocks" ]; then
-    if ! qualification_backlog_transition unblock "$blocks" "$id"; then
-      printf 'fm-qualification: the backlog owner did not confirm unblocking %s, so %s remains pending and no return to eligibility is claimed\n' "$blocks" "$id" >&2
-      return "$EXIT_UNOBSERVED"
-    fi
   fi
-  record_terminal "$file" "$terminal" || {
-    printf 'fm-qualification: could not mark %s terminal after the unblock was confirmed\n' "$id" >&2
-    return "$EXIT_UNOBSERVED"
-  }
-  printf 'fm-qualification: %s is terminal QUALIFIED for %s against %s. The evidence is now reusable for every route requiring that contract, and %s returns to normal eligibility with its identity, custody and budget unchanged\n' \
+  printf 'fm-qualification: %s is closed QUALIFIED for %s against %s. The evidence is now reusable for every route requiring that contract, and %s returns to normal eligibility with its identity, custody and budget unchanged\n' \
     "$id" "$model" "$contract" "${blocks:-the blocked work}"
   return "$EXIT_OK"
-}
-
-record_terminal() {  # <activation-file> <terminal>
-  activation_write_field "$1" terminal "$2"
 }
 
 : "${DATA:?}"

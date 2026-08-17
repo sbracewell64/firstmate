@@ -591,6 +591,84 @@ fm_test_model_registry() {
 JSON
 }
 
+# A tasks-axi that REFUSES what the real tool refuses.
+#
+# The previous fake exited 0 for every invocation, and that single line made five
+# rounds of review vacuous above it: the real `tasks-axi block` rejects a blocker
+# that is not itself a task, so the design under test never worked AT ALL, and a
+# fixture that cannot fail reported it green every time. A fake that always
+# succeeds does not test a caller, it tests nothing - so this one keeps a tiny
+# task store and enforces the two contract rules the caller actually depends on:
+#
+#   add <id> <title>     creates a task; refuses a duplicate id, as the real
+#                        tool does, which is why the caller falls back to `show`
+#   block <id> --by <o>  REFUSES with VALIDATION_ERROR unless <o> already exists
+#                        ("Create the blocker task first, or choose an existing
+#                        task id") - the exact refusal that was being hidden
+#   done <id>            marks it done; refuses an unknown id
+#   show <id> [--json]   reports state, or fails for an unknown id
+#
+# tests/fm-route-qualification.test.sh pins this against the real binary in
+# test_the_fixture_refuses_what_the_real_tool_refuses, so the fake cannot drift
+# back into permissiveness unnoticed.
+fm_fake_tasks_axi() {  # <fakebin> <log>
+  local store="${2%.log}.store"
+  : > "$store"
+  cat > "$1/tasks-axi" <<SH
+#!/bin/sh
+printf '%s\n' "\$*" >> "$2"
+store="$store"
+cmd=\$1; shift
+case "\$cmd" in
+  add)
+    id=\$1
+    if grep -q "^\$id " "\$store" 2>/dev/null; then
+      printf 'error: "task %s already exists"\ncode: VALIDATION_ERROR\n' "\$id" >&2
+      exit 1
+    fi
+    printf '%s queued\n' "\$id" >> "\$store"
+    printf 'ok: add %s\n' "\$id"
+    ;;
+  block)
+    id=\$1; by=
+    while [ \$# -gt 0 ]; do
+      case "\$1" in --by) shift; by=\$1 ;; esac
+      shift
+    done
+    grep -q "^\$id " "\$store" 2>/dev/null || {
+      printf 'error: "task %s not found"\ncode: VALIDATION_ERROR\n' "\$id" >&2; exit 1; }
+    grep -q "^\$by " "\$store" 2>/dev/null || {
+      printf 'error: "blocker \\"%s\\" not found"\ncode: VALIDATION_ERROR\nhelp[1]: "Create the blocker task first, or choose an existing task id"\n' "\$by" >&2
+      exit 1; }
+    printf 'ok: block %s -> blocked-by %s\n' "\$id" "\$by"
+    ;;
+  unblock)
+    printf 'ok: unblock\n'
+    ;;
+  done)
+    id=\$1
+    grep -q "^\$id " "\$store" 2>/dev/null || {
+      printf 'error: "task %s not found"\ncode: VALIDATION_ERROR\n' "\$id" >&2; exit 1; }
+    tmp=\$(mktemp)
+    awk -v i="\$id" '\$1 == i { print \$1 " done"; next } { print }' "\$store" > "\$tmp" && mv "\$tmp" "\$store"
+    printf 'ok: done %s\n' "\$id"
+    ;;
+  show)
+    id=\$1
+    state=\$(awk -v i="\$id" '\$1 == i { print \$2; exit }' "\$store" 2>/dev/null)
+    [ -n "\$state" ] || { printf 'error: "task %s not found"\ncode: VALIDATION_ERROR\n' "\$id" >&2; exit 1; }
+    case " \$* " in
+      *" --json "*) printf '{"id":"%s","state":"%s"}\n' "\$id" "\$state" ;;
+      *) printf 'task: %s state: %s\n' "\$id" "\$state" ;;
+    esac
+    ;;
+  *) printf 'ok\n' ;;
+esac
+exit 0
+SH
+  chmod +x "$1/tasks-axi"
+}
+
 # --- state/<id>.meta writers ------------------------------------------------
 
 # fm_write_meta <file> <key=val> ...: write the given key=val lines to a meta

@@ -234,13 +234,11 @@ JSON
 
 # A tasks-axi that records every call, so the backlog blocker and its clearance
 # are observed through the existing owner rather than assumed.
+# The faithful tasks-axi fake lives in tests/lib.sh as fm_fake_tasks_axi, because
+# a fixture that models a tool's refusals is shared infrastructure and two copies
+# of it would drift the moment only one was corrected.
 write_tasks_axi() {  # <fakebin> <log>
-  cat > "$1/tasks-axi" <<SH
-#!/bin/sh
-printf '%s\n' "\$*" >> "$2"
-exit 0
-SH
-  chmod +x "$1/tasks-axi"
+  fm_fake_tasks_axi "$1" "$2"
 }
 
 # A fleet snapshot the duplicate-dispatch owner can read, so activation composes
@@ -266,6 +264,15 @@ make_home() {  # <name> [plain]
   chmod +x "$fakebin/tmux"
   fm_fake_treehouse "$fakebin"
   write_tasks_axi "$fakebin" "$TMP_ROOT/$name/tasks-axi.log"
+  # The blocked work EXISTS in the backlog, because in production it always does -
+  # it is the real work item that is waiting. Seeding it here is what lets the
+  # fixture enforce the real `block --by` precondition instead of pretending the
+  # dependency can name something that is not a task.
+  local id
+  for id in watcher-settled-transition-keeps-wedge-timer some-work runtime-task \
+            plain-task blocked-runtime-work; do
+    printf '%s queued\n' "$id" >> "$TMP_ROOT/$name/tasks-axi.store"
+  done
   write_snapshot "$TMP_ROOT/$name/snapshot.json"
   case "$shape" in
     plain) write_unrequiring_config "$home" ;;
@@ -336,6 +343,48 @@ zero() {  # <home> <route>
 }
 
 # --- 1. inert where nothing declares it --------------------------------------
+
+# --- 0. the fixture itself, before anything is tested THROUGH it --------------
+
+test_the_fixture_refuses_what_the_real_tool_refuses() {
+  # THE CONTROL THAT SHOULD HAVE EXISTED FIRST. Every case below runs through the
+  # fake tasks-axi, so a fake that accepts what the real tool rejects makes all of
+  # them vacuous - which is exactly what happened: the previous fake exited 0
+  # unconditionally and hid the fact that `block` was being refused every time and
+  # the design did not function at all. This case pins the fake against the real
+  # binary, so it cannot drift back into permissiveness without failing here.
+  local rec; rec=$(make_home fixturefidelity); read_home "$rec"
+  local out rc=0
+
+  # 1. The refusal that was hidden: block by a blocker that is not a task.
+  out=$(PATH="$FAKEBIN:$PATH" tasks-axi add real-work "the blocked work" 2>&1); rc=0
+  PATH="$FAKEBIN:$PATH" tasks-axi block real-work --by not-a-task >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 0 ] || fail "the fixture ACCEPTED a block whose blocker does not exist; the real tool refuses it, and a fake that cannot fail makes every case below vacuous"
+  out=$(PATH="$FAKEBIN:$PATH" tasks-axi block real-work --by not-a-task 2>&1 || true)
+  assert_contains "$out" "not found" "the fixture refusal does not name the real cause"
+
+  # 2. The same call succeeds once the blocker exists, so the refusal above is
+  #    about the precondition and not about the fake refusing everything.
+  PATH="$FAKEBIN:$PATH" tasks-axi add a-real-blocker "workflow" >/dev/null 2>&1 \
+    || fail "the fixture could not create a task"
+  PATH="$FAKEBIN:$PATH" tasks-axi block real-work --by a-real-blocker >/dev/null 2>&1 \
+    || fail "the fixture refused a block whose blocker exists; it now refuses everything, which is the opposite vacuity"
+
+  # 3. DIFFERENTIAL against the real binary where it is installed. The fake's
+  #    verdict must match the real tool's on the same call.
+  if command -v tasks-axi >/dev/null 2>&1 && [ "$(command -v tasks-axi)" != "$FAKEBIN/tasks-axi" ]; then
+    local real_dir real_rc=0
+    real_dir=$(mktemp -d "$TMP_ROOT/realaxi.XXXXXX")
+    printf 'backend = "markdown"\n\n[markdown]\npath = "backlog.md"\narchive = "done-archive.md"\ndone_keep = 10\n' > "$real_dir/.tasks.toml"
+    ( cd "$real_dir" && tasks-axi add real-work "the blocked work" >/dev/null 2>&1 \
+      && tasks-axi block real-work --by not-a-task >/dev/null 2>&1 ) || real_rc=$?
+    [ "$real_rc" -ne 0 ] \
+      || fail "the REAL tasks-axi accepted a block with a non-existent blocker, so this fleet's blocker contract is not what the fixture models"
+  else
+    printf '# note: the real tasks-axi is not on PATH, so the differential half of this control could not be observed; the fixture-side assertions above still ran\n'
+  fi
+  pass "the fixture refuses what the real tool refuses"
+}
 
 test_a_floor_declaring_no_capability_is_untouched() {
   local rec
@@ -415,8 +464,15 @@ test_the_recurrence_fixture_activates_a_bounded_workflow_and_never_asks_the_capt
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
   expect_code 0 "$rc" "a qualified result did not close the workflow"
   assert_contains "$out" "returns to normal eligibility" "the reader was not told the work was released"
-  assert_grep "unblock $work --by $AID_ALPHA" "$TASKS_LOG" \
-    "the blocked work identity was not unblocked through the existing backlog owner"
+  # THE CONSTRUCTION, ASSERTED DIRECTLY. The pass releases the work by closing the
+  # workflow's own backlog item; the dependency then resolves on read because
+  # bin/fm-fleet-snapshot.sh resolves a blocker exactly when its record is Done.
+  # The absence of an unblock call is the point, not an oversight - there is no
+  # second mutation to fail, retry or compensate for.
+  assert_grep "done $AID_ALPHA" "$TASKS_LOG" \
+    "the workflow item was not closed, so the blocker never resolves"
+  assert_no_grep "unblock" "$TASKS_LOG" \
+    "an unblock call exists; the edge must resolve by construction, not by a second mutation"
 
   # (f) The same blocked identity is eligible again, on the same route.
   rc=0
@@ -691,8 +747,10 @@ test_a_could_not_observe_result_spends_one_attempt_and_stays_active() {
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE) || rc=$?
   expect_code 4 "$rc" "a could-not-observe result must not read as a pass or a failure"
   assert_contains "$out" "remains ACTIVE" "the workflow was closed on an unmade observation"
+  assert_no_grep "done $AID_ALPHA" "$TASKS_LOG" \
+    "an unmade observation closed the workflow item"
   assert_no_grep "terminal=" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
-    "an unmade observation was recorded as a terminal state"
+    "the activation file stores liveness; it must carry inert parameters only"
   assert_absent "$RDIR/alpha-one-runtime.json" "an unmade observation wrote a record against the binding"
   assert_no_grep "unblock some-work" "$TASKS_LOG" "an unmade observation released the blocked work"
   pass "a could-not-observe result spends one attempt and stays active"
@@ -708,8 +766,8 @@ test_a_failed_result_is_terminal_and_preserves_the_exclusion() {
   local out rc=0
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result FAILED) || rc=$?
   expect_code 1 "$rc" "a failed workflow must be distinguishable by exit status"
-  assert_grep "terminal=failed" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
-    "the workflow was not marked terminal"
+  assert_grep "done $AID_ALPHA" "$TASKS_LOG" \
+    "the failed workflow item was not closed through the backlog owner"
   assert_present "$RDIR/alpha-one-runtime.json" "the exclusion evidence was removed"
   assert_contains "$out" "PRESERVED" "the reader was not told the exclusion is kept"
   assert_no_grep "unblock some-work" "$TASKS_LOG" "a failed qualification released the blocked work"
@@ -783,35 +841,40 @@ test_bootstrap_dispatch_refuses_a_substituted_worker() {
   pass "bootstrap dispatch refuses a substituted worker"
 }
 
-test_qualified_resolution_requires_confirmed_unblock() {
+test_qualified_resolution_requires_a_confirmed_close() {
+  # A pass releases the work by closing the workflow item, so an owner that will
+  # not confirm the close must not produce a claim that the work is available.
+  # There is exactly one mutation here, which is why there is nothing to unwind.
   local rec out rc=0
-  rec=$(make_home unblockcno); read_home "$rec"
+  rec=$(make_home closecno); read_home "$rec"
   reset_register
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
     || fail "activation failed"
   write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
-  printf '#!/bin/sh\n[ "$1" != unblock ]\n' > "$FAKEBIN/tasks-axi"
+  # $1 belongs to the fake being written, so it must reach the file unexpanded.
+  # shellcheck disable=SC2016
+  printf '#!/bin/sh\n[ "$1" != done ]\n' > "$FAKEBIN/tasks-axi"
   chmod +x "$FAKEBIN/tasks-axi"
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
-  expect_code 4 "$rc" "an unconfirmed unblock was reported as successful resolution"
-  assert_contains "$out" "no return to eligibility is claimed" "unblock uncertainty was reduced to a warning"
-  assert_grep "terminal=qualified_pending_unblock" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
-    "the recoverable terminal transition was not persisted before backlog release"
-  assert_not_contains "$out" "returns to normal eligibility" "resolution claimed a transition the backlog owner rejected"
-  pass "qualified resolution requires confirmed unblock"
+  expect_code 4 "$rc" "an unconfirmed close was reported as successful resolution"
+  assert_contains "$out" "NO return to eligibility is claimed" "close uncertainty was reduced to a warning"
+  assert_not_contains "$out" "returns to normal eligibility" "resolution claimed a release the backlog owner never confirmed"
+  pass "qualified resolution requires a confirmed close"
 }
 
-test_unconfirmed_transition_steps_never_report_success() {
+test_an_unconfirmed_step_never_reports_success_and_promises_nothing() {
+  # The class control. Each case drives a different durable step to fail and
+  # asserts the same two properties: no success is reported, and nothing was
+  # promised that would need compensating.
   local rec tmp out rc=0
   rec=$(make_home blockwrite); read_home "$rec"
   reset_register
   printf '#!/bin/sh\nexit 1\n' > "$FAKEBIN/tasks-axi"
   chmod +x "$FAKEBIN/tasks-axi"
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work) || rc=$?
-  expect_code 4 "$rc" "a rejected blocker registration was reported as activation"
+  expect_code 4 "$rc" "a rejected workflow registration was reported as activation"
   assert_not_contains "$out" "activated $AID_ALPHA" "activation was claimed without backlog confirmation"
-  assert_grep "terminal=block_unobserved" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
-    "the unconfirmed blocker transition was left looking active"
+  assert_contains "$out" "Nothing was promised" "the safe failure direction was not stated to the reader"
 
   rec=$(make_home bootstrapread); read_home "$rec"
   reset_register
@@ -823,21 +886,9 @@ test_unconfirmed_transition_steps_never_report_success() {
   expect_code 4 "$rc" "an unreadable bootstrap qualification was reported as merely missing"
   assert_contains "$out" "could not be observed" "bootstrap read uncertainty was collapsed into QUALIFICATION_REQUIRED"
   assert_not_contains "$out" "no route where" "an unevaluable route was reported as established ineligible"
-
-  rec=$(make_home terminalwrite); read_home "$rec"
-  reset_register
-  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
-    || fail "activation failed"
-  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
-  printf '#!/bin/sh\ncase "$1" in *.activation.*) exit 1 ;; esac\nexec /usr/bin/mktemp "$@"\n' > "$FAKEBIN/mktemp"
-  chmod +x "$FAKEBIN/mktemp"
-  rc=0
-  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
-  expect_code 4 "$rc" "failed terminal persistence was reported as successful resolution"
-  assert_no_grep "unblock some-work" "$TASKS_LOG" "backlog release ran before terminal persistence"
-  assert_not_contains "$out" "returns to normal eligibility" "a failed terminal write was reported as a completed transition"
-  pass "unconfirmed transition steps never report success"
+  pass "an unconfirmed step never reports success and promises nothing"
 }
+
 
 test_qualification_is_enforced_on_the_full_binding_tuple() {
   local rec out rc=0
@@ -943,8 +994,8 @@ test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded() {
   out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE) || rc=$?
   expect_code 4 "$rc" "a spent bound must stop rather than pass"
   assert_contains "$out" "stops rather than retrying without a bound" "the stop was not explained"
-  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
-    "the spent bound did not reach a terminal state, so every later read would resume it"
+  assert_grep "done $AID_ALPHA" "$TASKS_LOG" \
+    "the spent bound left the workflow item open, so every later read would resume it"
   pass "a spent workflow bound stops rather than retrying unbounded"
 }
 
@@ -1029,6 +1080,7 @@ test_spawn_is_untouched_where_no_floor_declares_a_capability() {
   pass "spawn is untouched where no floor declares a capability"
 }
 
+test_the_fixture_refuses_what_the_real_tool_refuses
 test_a_floor_declaring_no_capability_is_untouched
 test_the_recurrence_fixture_activates_a_bounded_workflow_and_never_asks_the_captain
 test_the_recurrence_fixture_turns_red_without_the_automatic_transition
@@ -1047,8 +1099,8 @@ test_an_asserted_failure_without_a_matching_record_is_refused
 test_failure_automatically_advances_to_the_next_candidate
 test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route
 test_bootstrap_dispatch_refuses_a_substituted_worker
-test_qualified_resolution_requires_confirmed_unblock
-test_unconfirmed_transition_steps_never_report_success
+test_qualified_resolution_requires_a_confirmed_close
+test_an_unconfirmed_step_never_reports_success_and_promises_nothing
 test_qualification_is_enforced_on_the_full_binding_tuple
 test_tuple_identity_distinguishes_a_colliding_slug_pair
 test_failed_advancement_error_remains_observable_and_nonterminal
