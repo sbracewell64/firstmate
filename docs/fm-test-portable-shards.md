@@ -92,9 +92,10 @@ It answers three-valued, and could-not-observe is never a pass.
 |---:|---|---|
 | 0 | `ok` | Within every stated bound, and the declared partition ran exactly once. |
 | 1 | `drifted` | A stated bound was passed, or the run did not execute the lane this head declares. |
-| 3 | `could-not-observe` | Artifacts missing, unreadable, incomplete, or built for a different shard count. |
+| 3 | `could-not-observe` | Artifacts missing, unreadable, structurally invalid, incomplete, or built for a different shard count. |
 
 A shard cancelled at its hang tripwire uploads no timing, so it lands on that third value rather than on either of the other two.
+Negative durations are structurally invalid evidence because they could otherwise manufacture an under-budget verdict.
 
 The lane-drift bound carries the stable semantic verdict, while shard headroom is compared only with the hang tripwire so ordinary per-shard jitter is not called a defect.
 `bin/fm-test-run.sh` owns both current thresholds and their measured margins.
