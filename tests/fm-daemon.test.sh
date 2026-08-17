@@ -1691,6 +1691,39 @@ test_housekeeping_blocker_baseline_survives_a_restart() {
   pass "the blocker baseline survives a daemon restart and still discriminates"
 }
 
+test_housekeeping_append_failure_does_not_advance_blocker_baseline() {
+  local dir state fakebin home win pane baseline
+  if ! command -v tasks-axi >/dev/null 2>&1; then
+    printf 'skip - blocker append recovery (tasks-axi not installed)\n'
+    return 0
+  fi
+  dir=$(make_supercase paused-blocker-append-failure)
+  state="$dir/state"; fakebin="$dir/fakebin"; home="$dir/home"
+  win="sess:fm-held-dep5"; pane="$dir/pane.txt"
+  printf 'paused: holding until the recorded upstream item moves\n' > "$state/held-dep5.status"
+  printf 'idle prompt $\n' > "$pane"
+  seed_blocked_pause_backlog "$home" held-dep5 dep5-upstream
+
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep5
+  baseline=$(cat "$state/held-dep5.blockers")
+  rm -f "$state/.subsuper-escalations" "$state/.subsuper-escalations.since"
+  mkdir "$state/.subsuper-escalations"
+  ( cd "$home" && tasks-axi "done" dep5-upstream ) >/dev/null 2>&1 \
+    || fail "could not move the recorded blocker before the append failure"
+
+  LOG="$dir/daemon.log" run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep5
+  [ "$(cat "$state/held-dep5.blockers")" = "$baseline" ] \
+    || fail "the blocker baseline advanced even though the wake append failed"
+  grep -F "blocker movement stays unrecorded for retry" "$dir/daemon.log" >/dev/null 2>&1 \
+    || fail "the daemon did not report that failed append recovery remains pending"
+
+  rmdir "$state/.subsuper-escalations"
+  run_blocked_pause_pass "$dir" "$state" "$fakebin" "$home" "$win" "$pane" held-dep5
+  grep -F "dep5-upstream" "$state/.subsuper-escalations" >/dev/null 2>&1 \
+    || fail "the next writable pass swallowed the blocker movement instead of surfacing it"
+  pass "a failed wake append leaves blocker movement available for the next pass"
+}
+
 # A pause whose pane became busy again (the crew resumed) drops its marker without
 # escalating, exactly like a resumed wedge.
 test_housekeeping_paused_resumed_cleared() {
@@ -3335,6 +3368,7 @@ test_housekeeping_unmoved_blocker_is_not_resurfaced
 test_housekeeping_moved_blocker_is_resurfaced
 test_housekeeping_unreadable_blocker_still_resurfaces
 test_housekeeping_blocker_baseline_survives_a_restart
+test_housekeeping_append_failure_does_not_advance_blocker_baseline
 test_housekeeping_paused_resumed_cleared
 test_housekeeping_paused_unpaused_cleared
 test_housekeeping_stale_marker_transitions_to_pause

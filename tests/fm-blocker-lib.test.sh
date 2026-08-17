@@ -41,6 +41,7 @@ make_case() {  # <name> -> case dir
 set -u
 [ "${1:-}" = show ] || { printf 'error: unsupported command\n' >&2; exit 2; }
 id=${2:-}
+[ -z "${FM_FAKE_TASKS_LOG:-}" ] || printf '%s\n' "$id" >> "$FM_FAKE_TASKS_LOG"
 f="$FM_FAKE_TASKS_DIR/$id"
 if [ ! -f "$f" ]; then
   printf 'error: "Task \\"%s\\" not found in this backlog"\ncode: NOT_FOUND\n' "$id"
@@ -423,6 +424,45 @@ test_node_bound_is_could_not_observe_and_names_itself() {
   pass "a blocker graph past the node bound is could-not-observe and names the bound"
 }
 
+test_node_bound_applies_across_a_wide_graph() {
+  local dir r
+  dir=$(make_case wide-node-bound)
+  put_task "$dir" held blocked_by=wide-a,wide-b,wide-c,wide-d held=yes hold_kind=external
+  put_task "$dir" wide-a
+  put_task "$dir" wide-b
+  put_task "$dir" wide-c
+  put_task "$dir" wide-d
+  r=$(movement "$dir" held FM_BLOCKER_MAX_NODES=3)
+  [ "$(verdict_of "$r")" = unobserved ] \
+    || fail "a wide graph exceeded the global node bound without surfacing: $r"
+  case "$(detail_of "$r")" in
+    *FM_BLOCKER_MAX_NODES=3*) : ;;
+    *) fail "the wide graph did not name the global node bound where it bit: $r" ;;
+  esac
+  pass "the node bound applies to total expansion across a wide graph"
+}
+
+test_shared_descendant_is_expanded_once() {
+  local dir out count
+  dir=$(make_case shared-descendant)
+  put_task "$dir" held blocked_by=left,right held=yes hold_kind=external
+  put_task "$dir" left blocked_by=shared
+  put_task "$dir" right blocked_by=shared
+  put_task "$dir" shared
+  export FM_FAKE_TASKS_LOG="$dir/reader.log"
+  out=$(PATH="$dir/fakebin:$PATH" FM_FAKE_TASKS_DIR="$dir/fixtures" \
+    FM_FAKE_TASKS_LOG="$FM_FAKE_TASKS_LOG" bash -c '
+      set -u
+      . "$1"
+      fm_blocker_cycle "$2"
+    ' _ "$LIB" held)
+  [ -z "$out" ] || fail "an acyclic shared-descendant graph reported a cycle: $out"
+  count=$(grep -c '^shared$' "$FM_FAKE_TASKS_LOG" 2>/dev/null || true)
+  [ "$count" -eq 1 ] || fail "the shared descendant was expanded $count times instead of once"
+  unset FM_FAKE_TASKS_LOG
+  pass "a finished shared descendant is not re-expanded across siblings"
+}
+
 # The dependency is durable, not in-memory. This constructs the restart rather
 # than reasoning about it: the baseline is written by one process, and every
 # later evaluation runs in a fresh interpreter that inherits no shell state, so
@@ -604,6 +644,8 @@ test_cycle_is_refused
 test_self_edge_is_refused
 test_depth_bound_is_could_not_observe_and_names_itself
 test_node_bound_is_could_not_observe_and_names_itself
+test_node_bound_applies_across_a_wide_graph
+test_shared_descendant_is_expanded_once
 test_dependency_survives_a_restart
 test_uncommitted_observation_repeats_the_wake
 test_malformed_blocker_id_is_could_not_observe

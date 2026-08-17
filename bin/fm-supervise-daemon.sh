@@ -1472,9 +1472,14 @@ housekeeping() {  # <state>
             if [ "$dep_verdict" = unchanged ]; then
               log "pause recheck suppressed for $win: $dep_detail"
             else
-              escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds - ${dep_detail}): $win"
+              # Buffer the wake durably before advancing its blocker baseline,
+              # so an append failure leaves the movement available to retry.
+              if escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds - ${dep_detail}): $win"; then
+                fm_blocker_commit "$state" "$task" || true
+              else
+                log "pause recheck append failed for $win: blocker movement stays unrecorded for retry"
+              fi
             fi
-            fm_blocker_commit "$state" "$task" || true
           fi
           _now > "$marker"
         else

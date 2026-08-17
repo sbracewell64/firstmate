@@ -228,52 +228,61 @@ fm_blocker_disposition() {  # <blocker-id> [home] -> one canonical line; rc 2 = 
 # could-not-observe (prints the bound or the unreadable node that stopped it).
 fm_blocker_cycle() {  # <task-id> [home]
   local root=${1:-} home=${2:-${FM_HOME:-}}
-  _FM_BLOCKER_DONE=''
-  _FM_BLOCKER_EXPANDED=0
-  _FM_BLOCKER_DEPTH_MAX=${FM_BLOCKER_MAX_DEPTH:-$FM_BLOCKER_MAX_DEPTH_DEFAULT}
-  _FM_BLOCKER_NODES_MAX=${FM_BLOCKER_MAX_NODES:-$FM_BLOCKER_MAX_NODES_DEFAULT}
-  _fm_blocker_walk "$root" "$root" "$home" "$_FM_BLOCKER_DEPTH_MAX"
-}
-
-_fm_blocker_walk() {  # <node> <ancestor-path> <home> <depth-left>
-  local node=$1 path=$2 home=$3 depth=$4 set rc child sub subrc
-  if [ "$depth" -le 0 ]; then
-    printf 'the blocker chain below %s is deeper than FM_BLOCKER_MAX_DEPTH=%s, so it was not fully enumerated and no cycle claim is available' \
-      "$node" "$_FM_BLOCKER_DEPTH_MAX"
-    return 2
-  fi
-  _FM_BLOCKER_EXPANDED=$(( _FM_BLOCKER_EXPANDED + 1 ))
-  if [ "$_FM_BLOCKER_EXPANDED" -gt "$_FM_BLOCKER_NODES_MAX" ]; then
-    printf 'the blocker graph reached FM_BLOCKER_MAX_NODES=%s before it was enumerated, so no cycle claim is available' \
-      "$_FM_BLOCKER_NODES_MAX"
-    return 2
-  fi
-  set=$(fm_blocker_set "$node" "$home"); rc=$?
-  if [ "$rc" -ne 0 ]; then
-    printf 'the blocker set of %s could not be read, so no cycle claim is available' "$node"
-    return 2
-  fi
-  [ -n "$set" ] || return 1
-  while IFS= read -r child; do
-    [ -n "$child" ] || continue
-    if _fm_blocker_in_list "$path" "$child"; then
-      printf '%s' "$(printf '%s\n%s\n' "$path" "$child" | tr '\n' '>' | sed 's/>$//')"
-      return 0
+  local done='' expanded=0 depth_max nodes_max stack frame kind rest node path depth
+  local set rc child frames child_path
+  depth_max=${FM_BLOCKER_MAX_DEPTH:-$FM_BLOCKER_MAX_DEPTH_DEFAULT}
+  nodes_max=${FM_BLOCKER_MAX_NODES:-$FM_BLOCKER_MAX_NODES_DEFAULT}
+  stack="enter"$'\t'"$root"$'\t'"$root"$'\t'"$depth_max"
+  while [ -n "$stack" ]; do
+    frame=${stack%%$'\n'*}
+    if [ "$frame" = "$stack" ]; then stack=; else stack=${stack#*$'\n'}; fi
+    kind=${frame%%$'\t'*}; rest=${frame#*$'\t'}
+    node=${rest%%$'\t'*}; rest=${rest#*$'\t'}
+    path=${rest%%$'\t'*}; depth=${rest#*$'\t'}
+    if [ "$kind" = exit ]; then
+      if [ -z "$done" ]; then done=$node; else done="$done"$'\n'"$node"; fi
+      continue
     fi
-    _fm_blocker_in_list "$_FM_BLOCKER_DONE" "$child" && continue
-    sub=$(_fm_blocker_walk "$child" "$path"$'\n'"$child" "$home" "$(( depth - 1 ))"); subrc=$?
-    case "$subrc" in
-      0) printf '%s' "$sub"; return 0 ;;
-      2) printf '%s' "$sub"; return 2 ;;
-    esac
-  done <<EOF
+    _fm_blocker_in_list "$done" "$node" && continue
+    if [ "$depth" -le 0 ]; then
+      printf 'the blocker chain below %s is deeper than FM_BLOCKER_MAX_DEPTH=%s, so it was not fully enumerated and no cycle claim is available' \
+        "$node" "$depth_max"
+      return 2
+    fi
+    expanded=$(( expanded + 1 ))
+    if [ "$expanded" -gt "$nodes_max" ]; then
+      printf 'the blocker graph reached FM_BLOCKER_MAX_NODES=%s before it was enumerated, so no cycle claim is available' \
+        "$nodes_max"
+      return 2
+    fi
+    set=$(fm_blocker_set "$node" "$home"); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      printf 'the blocker set of %s could not be read, so no cycle claim is available' "$node"
+      return 2
+    fi
+    frames=''
+    while IFS= read -r child; do
+      [ -n "$child" ] || continue
+      child_path="$path>$child"
+      case ">$path>" in
+        *">$child>"*)
+          printf '%s' "$child_path"
+          return 0
+          ;;
+      esac
+      _fm_blocker_in_list "$done" "$child" && continue
+      if [ -z "$frames" ]; then
+        frames="enter"$'\t'"$child"$'\t'"$child_path"$'\t'"$(( depth - 1 ))"
+      else
+        frames="$frames"$'\n'"enter"$'\t'"$child"$'\t'"$child_path"$'\t'"$(( depth - 1 ))"
+      fi
+    done <<EOF
 $set
 EOF
-  if [ -z "$_FM_BLOCKER_DONE" ]; then
-    _FM_BLOCKER_DONE=$node
-  else
-    _FM_BLOCKER_DONE="$_FM_BLOCKER_DONE"$'\n'"$node"
-  fi
+    frame="exit"$'\t'"$node"$'\t'"$path"$'\t'"$depth"
+    if [ -n "$frames" ]; then frame="$frames"$'\n'"$frame"; fi
+    if [ -n "$stack" ]; then stack="$frame"$'\n'"$stack"; else stack=$frame; fi
+  done
   return 1
 }
 
