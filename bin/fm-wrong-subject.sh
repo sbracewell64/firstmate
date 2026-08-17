@@ -311,11 +311,16 @@ cmd_check() {
   local axis='' seen='' examined='' credited='' credited_as='' key val
 
   [ -n "$src" ] || die "check needs a path or - (see --help)"
-  if [ "$src" != '-' ] && { [ ! -f "$src" ] || [ ! -r "$src" ]; }; then
+  if [ "$src" = '-' ]; then
+    src=/dev/stdin
+    if [ -d "$src" ] || [ ! -r "$src" ]; then
+      printf 'FORM_UNREADABLE input=- reason=not-readable\n'
+      return 3
+    fi
+  elif [ ! -f "$src" ] || [ ! -r "$src" ]; then
     printf 'FORM_UNREADABLE input=%s reason=not-readable\n' "$src"
     return 3
   fi
-  [ "$src" != '-' ] || src=/dev/stdin
 
   CHECK_THEREFORE=''
   while IFS= read -r line || [ -n "$line" ]; do

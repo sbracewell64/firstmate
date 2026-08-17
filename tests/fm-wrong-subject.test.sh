@@ -226,11 +226,27 @@ test_check_validates_findings_embedded_in_a_report() {
 }
 
 test_check_reads_stdin() {
-  local out rc
+  local directory out rc
+  directory="$TMP_ROOT/stdin-directory"
+  mkdir "$directory"
+
   out=$(render_valid | "$WS" check - 2>&1) && rc=0 || rc=$?
   expect_code 0 "$rc" "a well-formed block on stdin was not accepted"
   assert_contains "$out" 'FORM_COMPLETE' "stdin input was not graded"
-  pass "check reads a finding from stdin"
+
+  out=$("$WS" check - <"$directory" 2>&1) && rc=0 || rc=$?
+  expect_code 3 "$rc" "a directory on stdin did not report could-not-observe"
+  assert_contains "$out" 'FORM_UNREADABLE' "a directory on stdin was not reported unreadable"
+
+  out=$("$WS" check - <&- 2>&1) && rc=0 || rc=$?
+  expect_code 3 "$rc" "an unreadable stdin stream did not report could-not-observe"
+  assert_contains "$out" 'FORM_UNREADABLE' "an unreadable stdin stream was not reported unreadable"
+
+  out=$(printf 'wrong-subject finding (axis: instance)\n' | "$WS" check - 2>&1) && rc=0 || rc=$?
+  expect_code 1 "$rc" "a malformed readable stdin stream did not report incomplete"
+  assert_contains "$out" 'FORM_INCOMPLETE' "a malformed readable stdin stream was not reported incomplete"
+
+  pass "check preserves three-valued results for stdin"
 }
 
 test_help_states_the_limit_of_a_complete_form() {

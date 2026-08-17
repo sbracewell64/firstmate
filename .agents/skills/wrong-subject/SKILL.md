@@ -119,11 +119,18 @@ A detector for it would emit confident false positives - which is this exact fai
 It does not establish that the established claim is true, that the two claims differ in meaning, that the gap condition is real, or that the named check has this defect.
 Crediting it with any of those would be a `wrong-subject` finding against this tool, and the axis would be `property`.
 
-## The instance this tool committed
+## The two instances this tool committed
 
-`bin/fm-wrong-subject.sh check` tested whether its input was readable, and credited that with whether its input could be consumed.
+`bin/fm-wrong-subject.sh check` committed this defect twice, on two different input paths.
+
+It tested whether its input was readable, and credited that with whether its input could be consumed.
 A directory passes a readability test, and the read then died at exit 1 - the code reserved for a form that was examined and found wanting.
-So a could-not-observe was reported as a definite negative, on the `property` axis, inside the tool built to name that failure, and a reviewer found it rather than its author.
+The named-path input and the stdin input each carried that same gap, and each had to be closed on its own.
+Both reported a could-not-observe as a definite negative, on the `property` axis, inside the tool built to name that failure, and a reviewer found them rather than their author.
+
+Two instances on two surfaces of one small tool is the part worth keeping.
+A single slip would say only that someone was careless.
+A recurrence across input paths says the class is structural: it rides on whatever the check happens to touch, and it survives precisely where a guard looks most obviously correct.
 
 Take it as the measure of how hard this class is to see from inside.
 The surrounding reasoning was sound, the suite was green, and all three of its own values were documented and deliberately chosen.
