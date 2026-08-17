@@ -35,6 +35,10 @@
 # lines become the loop's recorded evidence.
 set -u
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-retrieval-lib.sh
+. "$SCRIPT_DIR/fm-retrieval-lib.sh"
+
 REPO="${FM_FORK_REPO:-sbracewell64/firstmate}"
 EVENT_KEY=""
 
@@ -80,22 +84,21 @@ fi
 # the contract means this line is no longer a direct read for
 # bin/fm-retrieval-check.sh to classify, and leaving a stale annotation behind
 # would satisfy that check for a future line that went back to calling gh here.
-record=$("$(dirname "${BASH_SOURCE[0]}")/fm-control-read.sh" \
+record=$("$SCRIPT_DIR/fm-control-read.sh" \
   endpoint "repos/$REPO/pulls?state=open" \
   --id-field number --text-field head.ref --time-field created_at \
   --identity "$EVENT_KEY" --identity-mode exact --claim latest 2>&1)
 status=$?
 
-read_field() {  # <name>
-  printf '%s\n' "$record" | awk -v want="$1" '
-    /^retrieval\[1\]\{/ { hdr = $0; sub(/^retrieval\[1\]\{/, "", hdr); sub(/\}:.*$/, "", hdr)
-      n = split(hdr, names, ","); next }
-    /^  / && n > 0 { row = $0; sub(/^  /, "", row); split(row, vals, ",")
-      for (i = 1; i <= n; i++) if (names[i] == want) { print vals[i]; exit } }'
-}
-retrieval=$(read_field retrieval)
-matches=$(read_field matches)
-number=$(read_field selected)
+if ! fm_retrieval_parse "$record"; then
+  printf 'unavailable: retrieval returned an unreadable result for %s at head %s\n' \
+    "$REPO" "$EVENT_KEY"
+  printf 'evidence: %s\n' "$(printf '%s\n' "$record" | tr '\n' ' ')"
+  exit 2
+fi
+retrieval=$FM_RETRIEVAL_COMPLETENESS
+matches=$FM_RETRIEVAL_MATCHES
+number=$FM_RETRIEVAL_SELECTED_ID
 
 case "$status" in
   0) ;;
