@@ -44,6 +44,12 @@
 #       that reviewer actually ran. It transports that script's result rather
 #       than forming its own, because only the component that performed the
 #       launch observed it.
+#   review-mutation <record-dir>
+#       Reads one bin/fm-review-mutation.sh record and reports whether the named
+#       target assertion ran and what it concluded. It transports that script's
+#       result for the same reason: the proof owner commissioned the three
+#       executions the answer is derived from, so it is the only thing that
+#       observed them.
 #
 # Output is exactly one record on stdout, in every case:
 #
@@ -103,7 +109,7 @@ usage() {
   ' "$0"
 }
 
-VERIFIERS=(browser pr-checks merge-clean review-exec)
+VERIFIERS=(browser pr-checks merge-clean review-exec review-mutation)
 
 RESULT=
 REASON=
@@ -382,6 +388,32 @@ verify_review_exec() {
   set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
 }
 
+# --- review-mutation --------------------------------------------------------
+
+# bin/fm-review-mutation.sh commissioned the baseline, falsified and satisfied
+# executions its answer is derived from, so it is the only thing that observed
+# them, and this adapter transports its result rather than forming one. It never
+# reads any probe's captured output: that output is the probe's own testimony
+# and is exactly the proxy the proof owner exists to refuse.
+verify_review_mutation() {
+  local dir
+  [ "$#" -eq 1 ] || refuse usage_error
+  dir=$1
+  [ -x "$SCRIPT_DIR/fm-review-mutation.sh" ] || {
+    set_result NO_VERIFIER_RAN verifier_unavailable
+    return 0
+  }
+  run_verifier "$SCRIPT_DIR/fm-review-mutation.sh" result "$dir" || {
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  }
+  if ! fm_verify_parse "$VERIFIER_OUT"; then
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  fi
+  set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
+}
+
 # --- dispatch ---------------------------------------------------------------
 
 case "$VERIFIER" in
@@ -389,6 +421,7 @@ case "$VERIFIER" in
   pr-checks) verify_pr_checks "$@" ;;
   merge-clean) verify_merge_clean "$@" ;;
   review-exec) verify_review_exec "$@" ;;
+  review-mutation) verify_review_mutation "$@" ;;
   *) refuse verifier_undeclared ;;
 esac
 
