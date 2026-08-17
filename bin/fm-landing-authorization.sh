@@ -60,10 +60,9 @@
 #   FM_LANDING_AUTH_DIR    authorization store (default: $FM_HOME/data/landing-authorizations)
 #   FM_OUTBOUND_DIR        correlation records (default: $FM_HOME/data/outbound-artifacts)
 #                          Owned by bin/fm-outbound-artifact.sh; read-only here.
-#   FM_AUTH_FAIL_AFTER_INTENT
-#                          test-only fault injection: exit hard after the intent
-#                          record is written and before the act runs, to
-#                          reproduce a crash inside the spend window.
+#   FM_AUTH_PAUSE_AFTER_INTENT_FILE
+#                          test-only fault injection: pause after intent until
+#                          the named file exists.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -75,6 +74,8 @@ CORRELATION_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # shellcheck source=bin/fm-landing-authorization-lib.sh
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 
 CLAIM=
 
@@ -253,10 +254,15 @@ observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
 # `reconcile` clears both together, which is the only path that has an
 # observation to justify it.
 claim_acquire() {  # <auth-id>
-  local dir
+  local dir pid identity
   dir=$(auth_claim_path "$1") || return 1
   mkdir -p "$AUTH_DIR" || return 1
   mkdir "$dir" 2>/dev/null || return 1
+  pid=${BASHPID:-$$}
+  identity=$(fm_pid_identity "$pid") || { rmdir "$dir" 2>/dev/null; return 1; }
+  printf '%s\n' "$pid" > "$dir/owner-pid" \
+    && printf '%s\n' "$identity" > "$dir/owner-identity" \
+    || { rm -f "$dir/owner-pid" "$dir/owner-identity"; rmdir "$dir" 2>/dev/null; return 1; }
   CLAIM=$dir
   trap claim_release EXIT INT TERM
   return 0
@@ -264,8 +270,44 @@ claim_acquire() {  # <auth-id>
 
 claim_release() {
   [ -n "$CLAIM" ] || return 0
+  rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity"
   rmdir "$CLAIM" 2>/dev/null || true
   CLAIM=
+}
+
+claim_owner_state() {  # <auth-id>
+  local dir pid identity current proc_root out
+  dir=$(auth_claim_path "$1") || { printf 'unobserved\n'; return; }
+  pid=$(cat "$dir/owner-pid" 2>/dev/null) \
+    && identity=$(cat "$dir/owner-identity" 2>/dev/null) \
+    || { printf 'unobserved\n'; return; }
+  case $pid in ''|*[!0-9]*) printf 'unobserved\n'; return ;; esac
+  [ -n "$identity" ] || { printf 'unobserved\n'; return; }
+  if current=$(fm_pid_identity "$pid" 2>/dev/null); then
+    if [ "$current" = "$identity" ]; then
+      printf 'live\n'
+    else
+      printf 'gone\n'
+    fi
+    return
+  fi
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  if [ -d "$proc_root" ]; then
+    if [ -e "$proc_root/$pid" ]; then printf 'unobserved\n'; else printf 'gone\n'; fi
+    return
+  fi
+  out=$(LC_ALL=C ps -p "$pid" -o pid= 2>/dev/null) \
+    || { printf 'unobserved\n'; return; }
+  if [ -n "$out" ]; then printf 'unobserved\n'; else printf 'gone\n'; fi
+}
+
+claim_reclaim_gone() {  # <auth-id>
+  local dir
+  [ "$(claim_owner_state "$1")" = gone ] || return 1
+  dir=$(auth_claim_path "$1") || return 1
+  rm -f "$dir/owner-pid" "$dir/owner-identity" || return 1
+  rmdir "$dir" 2>/dev/null || return 1
+  claim_acquire "$1"
 }
 
 # --- mint --------------------------------------------------------------------
@@ -480,12 +522,8 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the spend of $id could not be recorded before the act, so no act was performed"
 
-  # Fault injection for the restart control. Reproduces a process killed inside
-  # the spend window, which is the only way to observe that the window is
-  # genuinely durable rather than merely believed to be.
-  if [ -n "${FM_AUTH_FAIL_AFTER_INTENT:-}" ]; then
-    claim_release
-    exit 70
+  if [ -n "${FM_AUTH_PAUSE_AFTER_INTENT_FILE:-}" ]; then
+    while [ ! -e "$FM_AUTH_PAUSE_AFTER_INTENT_FILE" ]; do sleep 0.01; done
   fi
 
   "$@"
@@ -567,9 +605,11 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   # everywhere else.
   [ -n "$evidence" ] || die "reconcile needs --evidence naming what was observed" 2
 
-  claim_acquire "$id" \
-    || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
-      "the spender claim for $id is still held, so whether that spender has stopped could not be observed"
+  if ! claim_acquire "$id"; then
+    claim_reclaim_gone "$id" \
+      || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "the spender claim for $id is live or could not be observed as gone"
+  fi
 
   auth_read "$id"; rc=$?
   case $rc in

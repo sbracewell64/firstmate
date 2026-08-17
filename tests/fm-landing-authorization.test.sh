@@ -136,7 +136,7 @@ run_auth() {  # <dir> <args...>
     PATH="$dir/fakebin:$PATH" \
     FM_HOME="$dir/home" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
-    FM_AUTH_FAIL_AFTER_INTENT="${FM_AUTH_FAIL_AFTER_INTENT:-}" \
+    FM_AUTH_PAUSE_AFTER_INTENT_FILE="${FM_AUTH_PAUSE_AFTER_INTENT_FILE:-}" \
     "$AUTH" "$@" )
 }
 
@@ -152,6 +152,31 @@ fm_auth_id_shape() {  # <candidate>
 
 corr_path() {  # <dir> [<request-id>]
   printf '%s/home/data/outbound-artifacts/%s.json\n' "$1" "${2:-fm-ob-abcdef123456}"
+}
+
+crash_spend_after_intent() {  # <dir> <auth-id> <act>
+  local dir=$1 id=$2 act=$3 claim record owner job i
+  claim="$dir/home/data/landing-authorizations/.$id.claim"
+  record="$dir/home/data/landing-authorizations/$id.json"
+  FM_AUTH_PAUSE_AFTER_INTENT_FILE="$dir/release-spend" \
+    run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" > "$dir/crash-spend.out" 2>&1 &
+  job=$!
+  fm_test_reap "$job"
+  for i in $(seq 1 300); do
+    if [ -s "$claim/owner-pid" ] \
+      && [ "$(jq -r '.state // ""' "$record" 2>/dev/null)" = spending ]; then
+      break
+    fi
+    sleep 0.01
+  done
+  [ -s "$claim/owner-pid" ] || fail "restart: spender did not record its claim identity"
+  [ "$(jq -r '.state // ""' "$record" 2>/dev/null)" = spending ] \
+    || fail "restart: spender did not persist intent before SIGKILL"
+  owner=$(cat "$claim/owner-pid")
+  fm_test_reap "$owner"
+  kill -KILL "$owner" || fail "restart: could not SIGKILL spender $owner"
+  wait "$job" 2>/dev/null || true
+  [ -d "$claim" ] || fail "restart: SIGKILL did not leave an orphaned claim"
 }
 
 # --- 1: the non-vacuity control ----------------------------------------------
@@ -267,10 +292,7 @@ test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   act=$(act_script "$dir")
   id=$(mint_id "$dir")
 
-  # Die between recording the intent and performing the act. This is the window
-  # in which a naive implementation has already acted and not yet recorded it.
-  out=$( FM_AUTH_FAIL_AFTER_INTENT=1 run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" 2>&1 ); rc=$?
-  expect_code 70 "$rc" "restart: the injected crash did not fire: $out"
+  crash_spend_after_intent "$dir" "$id" "$act"
 
   # The state after the crash is DETERMINABLE and is neither of the neighbours.
   # Reporting granted would invite a retry that lands twice; reporting spent
@@ -301,7 +323,7 @@ test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   dir=$(new_case restart-applied) || fail "restart-applied: fixture failed"
   act=$(act_script "$dir")
   id=$(mint_id "$dir")
-  FM_AUTH_FAIL_AFTER_INTENT=1 run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" >/dev/null 2>&1
+  crash_spend_after_intent "$dir" "$id" "$act"
   run_auth "$dir" reconcile "$id" --observed applied --evidence 'pr 7 merged at 1111111' >/dev/null 2>&1 \
     || fail "restart-applied: reconciling applied failed"
   out=$(run_auth "$dir" status "$id" 2>&1)
