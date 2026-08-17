@@ -97,6 +97,10 @@ git -C "$REMOTE_ROOT" config user.email test@example.com
 git -C "$REMOTE_ROOT" config user.name Test
 git -C "$REMOTE_ROOT" add .
 git -C "$REMOTE_ROOT" commit -qm 'remote fixture root'
+# A local clone may race loose-object housekeeping and observe a source object
+# after it was listed but before it is copied. Pack the completed fixture once
+# so every provision clones the same immutable object set.
+git -C "$REMOTE_ROOT" repack -adq
 
 cat > "$FAKEBIN/fake-ssh" <<'SH'
 #!/usr/bin/env bash
