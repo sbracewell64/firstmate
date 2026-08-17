@@ -907,28 +907,61 @@ test_serial_budget_control_checks_the_partition_it_measured() {
 # passed in and checked. Silent disagreement would leave the derived bounds
 # describing a timeout that is no longer set.
 fm_check_ci_serial_timeout_link() {
-  python3 - "$1" <<'PY'
+  python3 - "$1" "${2:-check}" <<'PY'
+from pathlib import Path
+import re
 import sys
 
-import yaml
+path = Path(sys.argv[1])
+action = sys.argv[2]
+lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
 
-workflow = yaml.safe_load(open(sys.argv[1], encoding="utf-8"))
-serial_job = workflow["jobs"]["tests-portable-serial"]
-aggregate_job = workflow["jobs"]["tests-timing-aggregate"]
-timeout = serial_job["timeout-minutes"]
-budget_steps = [
-    step for step in aggregate_job["steps"]
-    if step.get("name") == "Check serial lane against its declared budget"
-]
-if len(budget_steps) != 1:
-    raise SystemExit("tests-timing-aggregate must have exactly one serial budget check")
-copied_timeout = budget_steps[0].get("env", {}).get("FM_SERIAL_TIMEOUT_MINUTES")
-if timeout != copied_timeout:
+
+def job_block(name):
+    pattern = re.compile(r"^(\s*)" + re.escape(name) + r"\s*:\s*(?:#.*)?(?:\r?\n)?$")
+    matches = [(i, match) for i, line in enumerate(lines) if (match := pattern.match(line))]
+    if len(matches) != 1:
+        raise SystemExit("job %s: expected 1 match, saw %d" % (name, len(matches)))
+    start, match = matches[0]
+    indent = match.group(1)
+    sibling = re.compile(r"^" + re.escape(indent) + r"[^\s#][^:]*\s*:")
+    end = next((i for i in range(start + 1, len(lines)) if sibling.match(lines[i])), len(lines))
+    return start + 1, end
+
+
+def field(job, key):
+    start, end = job_block(job)
+    pattern = re.compile(
+        r"^(\s*" + re.escape(key) + r"\s*:\s*)([^#\r\n]*?)(\s*(?:#.*)?(?:\r?\n)?)$"
+    )
+    matches = [(i, match) for i in range(start, end) if (match := pattern.match(lines[i]))]
+    if len(matches) != 1:
+        raise SystemExit("%s.%s: expected 1 match, saw %d" % (job, key, len(matches)))
+    index, match = matches[0]
+    value = match.group(2).strip()
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise SystemExit("%s.%s must be a positive integer" % (job, key))
+    return index, match, int(value)
+
+
+_, _, timeout = field("tests-portable-serial", "timeout-minutes")
+copied_index, copied_match, copied_timeout = field(
+    "tests-timing-aggregate", "FM_SERIAL_TIMEOUT_MINUTES"
+)
+if action == "diverge":
+    lines[copied_index] = "%s%d%s" % (
+        copied_match.group(1), timeout + 1, copied_match.group(3)
+    )
+    path.write_text("".join(lines), encoding="utf-8")
+elif action != "check":
+    raise SystemExit("unknown action: %s" % action)
+elif timeout != copied_timeout:
     raise SystemExit(
         "tests-portable-serial timeout-minutes %r disagrees with "
         "FM_SERIAL_TIMEOUT_MINUTES %r" % (timeout, copied_timeout)
     )
-print(timeout)
+else:
+    print(timeout)
 PY
 }
 
@@ -939,17 +972,8 @@ test_serial_budget_control_refuses_a_foreign_timeout_literal() {
 
   fixture="$tmp/ci.yml"
   cp "$ROOT/.github/workflows/ci.yml" "$fixture"
-  python3 - "$fixture" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-old = "          FM_SERIAL_TIMEOUT_MINUTES: 15\n"
-if text.count(old) != 1:
-    raise SystemExit("fixture must contain exactly one serial timeout copy")
-path.write_text(text.replace(old, "          FM_SERIAL_TIMEOUT_MINUTES: 20\n"), encoding="utf-8")
-PY
+  fm_check_ci_serial_timeout_link "$fixture" diverge \
+    || fail "the workflow timeout link fixture must be made divergent"
   set +e
   fm_check_ci_serial_timeout_link "$fixture" >/dev/null 2>"$tmp/link.err"
   rc=$?
