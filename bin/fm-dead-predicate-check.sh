@@ -148,6 +148,13 @@ function_has_call_site() {  # <function>
       $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      # A CONTINUATION LINE that opens with || or && , optionally negated. This is
+      # a genuine call site and a common idiom - measured at 65 occurrences across
+      # bin/ - so its absence was the whitelist being under-specified rather than
+      # the code being unusual. Added on that measurement, NOT to make a file pass:
+      # widening an accepted-syntax list to silence a refusal is shaping a control
+      # around its own answer, which is the failure this whitelist exists to avoid.
+      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
@@ -343,6 +350,13 @@ for f in "${SCANNABLE[@]}"; do
       $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
       $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
       $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      # A CONTINUATION LINE that opens with || or && , optionally negated. This is
+      # a genuine call site and a common idiom - measured at 65 occurrences across
+      # bin/ - so its absence was the whitelist being under-specified rather than
+      # the code being unusual. Added on that measurement, NOT to make a file pass:
+      # widening an accepted-syntax list to silence a refusal is shaping a control
+      # around its own answer, which is the failure this whitelist exists to avoid.
+      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
       $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
       $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
