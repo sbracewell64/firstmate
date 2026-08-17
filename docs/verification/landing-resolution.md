@@ -88,7 +88,7 @@ Established per consumer rather than assumed, because the safe direction is not 
 | [`../../bin/fm-slot-reservation-lib.sh`](../../bin/fm-slot-reservation-lib.sh) `fm_slot_reservation_read` | report `unobservable` and withhold nothing | a candidate universe read short cannot support the negative that the trunk has not moved, and a slot withheld on a reservation nobody can read is the permanent hold that record exists to avoid |
 | [`../../bin/fm-slot-reservation.sh`](../../bin/fm-slot-reservation.sh) `open --trunk-ref` | refuse the ref | a ref whose membership in the landing set was never established would record a head no candidate ref can be shown to have advanced past |
 
-The `bin/fm-outbound-artifact.sh` pass named alongside these consumers was never renamed, has never existed in this branch's history, and exists only on the unlanded sibling branch `fm/control-plane-outbound-transport-invariant`.
+The outbound-artifact consumer and its remaining landing-observation limit are documented in [`outbound-transport-invariant.md`](outbound-transport-invariant.md).
 
 ## The class control, and what it does not cover
 
