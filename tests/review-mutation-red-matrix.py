@@ -390,6 +390,35 @@ def d30(s, v, r):
                "  [ -d \"$source\" ] || cno \"source is not a directory: $source\""), v, r
 
 
+def d31(s, v, r):
+    """The closed `..` rejection is replaced by the old nearest-ancestor
+    resolution, so traversal in a nonexistent suffix creates inside the source
+    before the post-creation containment check refuses it."""
+    return sub(s, '''  case "$out" in
+    */../*|*/..|../*|..) cno "output path must not contain a .. component: $out" ;;
+  esac''', "  :"), v, r
+
+
+def d32(s, v, r):
+    """The shared pre-creation output guard is omitted from catalogue only, so
+    output inside a linked-worktree source is created before the backstop
+    refuses it."""
+    return sub(s, '''  [ "$cat_git_dir" != "$cat_common_dir" ] \\
+    || cno "mutation proof refuses a primary checkout as its source: $source"
+
+  guard_output_outside_source "$source" "$out"''', '''  [ "$cat_git_dir" != "$cat_common_dir" ] \\
+    || cno "mutation proof refuses a primary checkout as its source: $source"'''), v, r
+
+
+def d33(s, v, r):
+    """The shared output guard refuses every path, so legitimate evidence
+    output outside the source can never proceed."""
+    return sub(s, '''guard_output_outside_source() {  # <resolved-source> <raw-output>
+  local source=$1 out=$2 out_parent out_leaf out_resolved''', '''guard_output_outside_source() {  # <resolved-source> <raw-output>
+  local source=$1 out=$2 out_parent out_leaf out_resolved
+  cno "output path refused: $out"'''), v, r
+
+
 DEFECTS = [
     ("D01", d01), ("D02", d02), ("D03", d03), ("D04", d04), ("D05", d05),
     ("D06", d06), ("D07", d07), ("D08", d08), ("D09", d09), ("D10", d10),
@@ -397,6 +426,7 @@ DEFECTS = [
     ("D16", d16), ("D17", d17), ("D18", d18), ("D19", d19), ("D20", d20),
     ("D21", d21), ("D22", d22), ("D23", d23), ("D24", d24), ("D25", d25),
     ("D26", d26), ("D27", d27), ("D28", d28), ("D29", d29), ("D30", d30),
+    ("D31", d31), ("D32", d32), ("D33", d33),
 ]
 BY_NAME = dict(DEFECTS)
 

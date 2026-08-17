@@ -88,6 +88,24 @@ inventory_digest_file() {  # <path>
   fi
 }
 
+source_snapshot() {  # <directory>
+  local root=$1 path relative kind digest
+  while IFS= read -r path; do
+    relative=${path#"$root"/}
+    if [ -f "$path" ]; then
+      kind=file
+      digest=$(inventory_digest_file "$path") || return 1
+    elif [ -L "$path" ]; then
+      kind=link
+      digest=$(readlink "$path") || return 1
+    else
+      kind=directory
+      digest=-
+    fi
+    printf '%s\t%s\t%s\n' "$kind" "$relative" "$digest"
+  done < <(find "$root" -mindepth 1 -print | LC_ALL=C sort)
+}
+
 # A source the proof owner will accept: a linked worktree, never a primary
 # checkout. Returns the case directory.
 make_case() {  # <name> [subject-content]
@@ -457,6 +475,27 @@ test_a_refused_source_is_never_written_to() {
   pass "source-custody: a refused source is never written to, not even the output directory"
 }
 
+test_a_traversing_output_is_refused_without_touching_the_source() {
+  local case_dir before after out code
+  case_dir=$(make_case traversing_output)
+  before=$(source_snapshot "$case_dir/src")
+  set +e
+  out=$("$BIN" prove --case traversal --source "$case_dir/src" --candidate HEAD \
+    --path tests/honest.sh --target "$case_dir/target.bytes" \
+    --falsify "$case_dir/falsify.bytes" --satisfy "$case_dir/satisfy.bytes" \
+    --out "$case_dir/new/../src/evidence" -- bash tests/honest.sh 2>&1)
+  code=$?
+  set -e
+  after=$(source_snapshot "$case_dir/src")
+
+  expect_code 2 "$code" "an output path containing traversal is refused"
+  [ "$before" = "$after" ] \
+    || fail "a traversing output refusal must leave the source byte-identical"
+  assert_contains "$out" 'must not contain a .. component' \
+    "the refusal must name the closed traversal rule"
+  pass "source-custody: traversal in a nonexistent output suffix creates nothing in the source"
+}
+
 test_refuses_a_primary_checkout_as_its_source() {
   local case_dir out code
   case_dir=$(make_case primary_source)
@@ -638,6 +677,46 @@ catalogue_json() {  # <path> <case-json>...
   local out=$1
   shift
   printf '%s\n' "$@" | jq -s '{cases: .}' >"$out"
+}
+
+test_catalogue_refuses_output_inside_a_linked_worktree_source() {
+  local case_dir before after out code
+  case_dir=$(make_case catalogue_source_output)
+  printf '%s\n' '{"cases": []}' >"$case_dir/catalogue.json"
+  before=$(source_snapshot "$case_dir/src")
+  set +e
+  out=$("$BIN" catalogue --catalogue "$case_dir/catalogue.json" --source "$case_dir/src" \
+    --candidate HEAD --out "$case_dir/src/evidence" 2>&1)
+  code=$?
+  set -e
+  after=$(source_snapshot "$case_dir/src")
+
+  expect_code 2 "$code" "catalogue output inside a linked-worktree source is refused"
+  assert_contains "$out" 'output directory is inside the source checkout' \
+    "the refusal must name the source containment violation"
+  [ "$before" = "$after" ] \
+    || fail "catalogue containment refusal must leave the linked-worktree source byte-identical"
+  pass "source-custody: catalogue refuses output inside a linked-worktree source"
+}
+
+test_output_outside_the_source_is_accepted() {
+  local case_dir out code
+  case_dir=$(make_case outside_output)
+  catalogue_json "$case_dir/catalogue.json" \
+    "$(jq -n --arg t "$TARGET" --arg f "$FALSIFY" --arg s "$SATISFY" \
+      '{case:"honest", path:"tests/honest.sh", target:$t, falsify:$f, satisfy:$s, probe:["bash","tests/honest.sh"]}')"
+  set +e
+  out=$("$BIN" catalogue --catalogue "$case_dir/catalogue.json" --source "$case_dir/src" \
+    --candidate HEAD --out "$case_dir/evidence" 2>&1)
+  code=$?
+  set -e
+
+  expect_code 0 "$code" "an output path outside the source remains accepted"
+  assert_contains "$out" 'review-mutation-catalogue,PASS,' \
+    "an accepted outside output must proceed through the catalogue"
+  [ -f "$case_dir/evidence/catalogue.json" ] \
+    || fail "an accepted outside output must contain the completed catalogue"
+  pass "source-custody: legitimate output outside the source remains accepted"
 }
 
 test_one_failing_case_makes_the_catalogue_fail() {
@@ -859,6 +938,7 @@ FM_CONTROLS=(
   test_a_substitution_identical_to_the_target_is_refused
   test_the_source_is_never_mutated
   test_a_refused_source_is_never_written_to
+  test_a_traversing_output_is_refused_without_touching_the_source
   test_the_disposable_clone_shares_no_object_storage
   test_refuses_a_primary_checkout_as_its_source
   test_refuses_to_overwrite_an_existing_record
@@ -870,6 +950,8 @@ FM_CONTROLS=(
   test_a_record_pointing_at_another_path_is_could_not_observe
   test_a_caller_declaration_cannot_change_the_verdict
   test_the_probe_argv_is_recorded_exactly
+  test_catalogue_refuses_output_inside_a_linked_worktree_source
+  test_output_outside_the_source_is_accepted
   test_one_failing_case_makes_the_catalogue_fail
   test_a_failing_case_outranks_an_unobservable_one
   test_an_unobservable_case_outranks_a_passing_one
