@@ -359,6 +359,27 @@ for f in "${SCANNABLE[@]}"; do
 done
 SCANNABLE=("${VALIDATED_SCANNABLE[@]}")
 
+# WHY THIS MATCH IS ALLOWED TO BE LOOSE, AND WHERE THAT STOPS.
+#
+# The grep below is a bare identifier match with no syntax analysis behind it. It
+# is legitimate here, and ONLY here, because of what it is used FOR: it decides
+# whether an unparseable file belongs in a predicate's candidate universe, and
+# the answer is only ever used to EXCLUDE. A false positive costs a
+# COULD_NOT_OBSERVE - the control says "I could not tell" about a predicate that
+# may in fact be dead. That is a wasted opportunity and nothing worse.
+#
+# The identical looseness used to CONFIRM that a call exists would be the
+# opposite: it would let a mention in a comment, a quoted string or a heredoc
+# payload establish that a predicate is ALIVE, which is discovery mistaken for
+# identity - the defect this file has been falsified over seven times. A false
+# positive there does not cost an opportunity, it hides a dead guard behind
+# evidence that was never a call.
+#
+# So the asymmetry is the licence, not an accident of implementation: loose to
+# EXCLUDE, never to CONFIRM. Nothing may route a call-site confirmation through
+# UNCHECKED_CANDIDATES or through function_has_unchecked_candidate. Confirmation
+# goes through function_has_call_site, which reads quote-stripped text and
+# accepts only the enumerated call forms.
 UNCHECKED_CANDIDATES=()
 for f in "${UNCHECKED_FILES[@]}"; do
   if [ ! -r "$f" ]; then
