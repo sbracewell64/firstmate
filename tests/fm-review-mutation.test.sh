@@ -428,6 +428,35 @@ test_the_disposable_clone_shares_no_object_storage() {
   pass "isolation: the mutation clone owns its administration and shares no objects"
 }
 
+test_a_refused_source_is_never_written_to() {
+  local case_dir before after out code
+  case_dir=$(make_case refused_custody)
+
+  # The output path is placed INSIDE the checkout that is about to be refused.
+  # A build that claims its output directory before it judges the source prints
+  # a perfectly correct refusal and leaves a directory behind in the thing it
+  # refused - the control mutating the artifact it protects. The refusal text is
+  # not the property under test here; the absence of a trace is.
+  before=$(find "$case_dir/primary" -mindepth 1 -maxdepth 1 | LC_ALL=C sort)
+  set +e
+  out=$("$BIN" prove --case refused --source "$case_dir/primary" --candidate HEAD \
+    --path tests/honest.sh --target "$case_dir/target.bytes" \
+    --falsify "$case_dir/falsify.bytes" --satisfy "$case_dir/satisfy.bytes" \
+    --out "$case_dir/primary/evidence" -- bash tests/honest.sh 2>&1)
+  code=$?
+  set -e
+  after=$(find "$case_dir/primary" -mindepth 1 -maxdepth 1 | LC_ALL=C sort)
+
+  expect_code 2 "$code" "a primary checkout as source is could-not-observe"
+  assert_contains "$out" 'refuses a primary checkout as its source' \
+    "the refusal must name what it rejected"
+  [ ! -e "$case_dir/primary/evidence" ] \
+    || fail "a refused source must carry no trace of the refusal"
+  [ "$before" = "$after" ] \
+    || fail "refusing a source must leave its contents exactly as they were"
+  pass "source-custody: a refused source is never written to, not even the output directory"
+}
+
 test_refuses_a_primary_checkout_as_its_source() {
   local case_dir out code
   case_dir=$(make_case primary_source)
@@ -829,6 +858,7 @@ FM_CONTROLS=(
   test_the_identity_substitution_reproduces_the_candidate_tree
   test_a_substitution_identical_to_the_target_is_refused
   test_the_source_is_never_mutated
+  test_a_refused_source_is_never_written_to
   test_the_disposable_clone_shares_no_object_storage
   test_refuses_a_primary_checkout_as_its_source
   test_refuses_to_overwrite_an_existing_record
