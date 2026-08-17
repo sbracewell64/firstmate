@@ -33,6 +33,7 @@
 set -u
 
 # shellcheck source=tests/lib.sh
+FM_TEST_IDENTITY_CONTRACT=1
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 fm_git_identity fmtest fmtest@example.invalid
 
@@ -61,6 +62,16 @@ PASS_LITERAL='  review-mutation,PASS,verified,'
 
 write_bytes() {  # <path> <content>
   printf '%s' "$2" >"$1"
+}
+
+inventory_digest_file() {  # <path>
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | awk '{print $1}'
+  else
+    return 1
+  fi
 }
 
 # A source the proof owner will accept: a linked worktree, never a primary
@@ -744,6 +755,35 @@ test_a_missing_execution_substrate_is_could_not_observe() {
   pass "a build with no execution substrate refuses rather than judging output itself"
 }
 
+# This proves inventory agreement only and is not evidence that any matrix row was measured.
+test_verification_record_inventory_matches_executed_controls() {
+  local record=$ROOT/docs/verification/review-mutation-proof.md
+  local documented_count executed_count documented path actual
+
+  pass "the verification record inventory agrees with the executed controls"
+
+  [ -r "$record" ] || fail "the mutation verification record must be readable"
+  documented_count=$(sed -n 's/^inventory_control_count: \([0-9][0-9]*\)$/\1/p' "$record")
+  [ -n "$documented_count" ] \
+    || fail "the mutation verification record must carry one parseable inventory control count"
+  [ "$(printf '%s\n' "$documented_count" | wc -l | tr -d ' ')" = 1 ] \
+    || fail "the mutation verification record must carry exactly one inventory control count"
+  executed_count=$(printf '%s' "$FM_TEST_PASSED_TESTS" | awk 'NF && !seen[$0]++ { count++ } END { print count + 0 }')
+  [ "$documented_count" = "$executed_count" ] \
+    || fail "the documented control count must equal the suite's executed identity count"
+
+  for path in bin/fm-review-mutation.sh bin/fm-verify.sh tests/fm-review-mutation.test.sh; do
+    documented=$(sed -n "s|^inventory_sha256: $path \([0-9a-f][0-9a-f]*\)$|\\1|p" "$record")
+    [ "${#documented}" = 64 ] \
+      || fail "the mutation verification record must carry one parseable digest for $path"
+    [ "$(printf '%s\n' "$documented" | wc -l | tr -d ' ')" = 1 ] \
+      || fail "the mutation verification record must carry exactly one digest for $path"
+    actual=$(inventory_digest_file "$ROOT/$path") || fail "the current digest could not be observed for $path"
+    [ "$documented" = "$actual" ] \
+      || fail "the documented digest must match the current bytes of $path"
+  done
+}
+
 # The declared control set, in order. Naming it once lets a measurement run a
 # single control against a defect build, which is what a COMPLETE red matrix
 # needs: this suite stops at its first failing control, so a defect that would
@@ -779,6 +819,7 @@ FM_CONTROLS=(
   test_fm_verify_transports_the_result
   test_a_symlinked_target_path_is_refused
   test_a_missing_execution_substrate_is_could_not_observe
+  test_verification_record_inventory_matches_executed_controls
 )
 
 if [ -n "${FM_REVIEW_MUTATION_ONLY:-}" ]; then
@@ -790,7 +831,13 @@ if [ -n "${FM_REVIEW_MUTATION_ONLY:-}" ]; then
     control=
   done
   [ -n "$control" ] || fail "FM_REVIEW_MUTATION_ONLY names no declared control: $FM_REVIEW_MUTATION_ONLY"
-  "$FM_REVIEW_MUTATION_ONLY"
+  if [ "$FM_REVIEW_MUTATION_ONLY" = test_verification_record_inventory_matches_executed_controls ]; then
+    for control in "${FM_CONTROLS[@]}"; do
+      "$control"
+    done
+  else
+    "$FM_REVIEW_MUTATION_ONLY"
+  fi
 else
   for control in "${FM_CONTROLS[@]}"; do
     "$control"
