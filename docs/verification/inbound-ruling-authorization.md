@@ -11,12 +11,13 @@ A Browser Sol ruling that approves a landing grants an authority, and this mecha
 Four properties, and one control without which none of them means anything:
 
 1. An authorization is bound to an exact head and is refused for any other head.
-2. It is spent exactly once, so a second use is refused even after a restart mid-spend.
-3. A restart during the spend leaves the state determinable rather than silently spent-and-forgotten.
+2. It is spent exactly once, so a second use performs no act and returns the recorded spent outcome.
+3. A restart during the spend leaves a durable `indeterminate` state that requires evidence-backed reconciliation rather than silently treating the authority as spent or reusable.
 4. An authorization for a superseded request is refused.
 5. Non-vacuity: a fresh, correctly bound, unspent authorization is still consumed successfully.
 
-Property 5 is not a courtesy. Properties 1 through 4 are all refusals, and a mechanism that refuses everything satisfies all four at once, so without 5 the suite would be green and worthless.
+Property 5 is not a courtesy.
+Properties 1 through 4 can all pass while the mechanism performs no landing act, so without 5 the suite would be green and worthless.
 
 ## What is NOT claimed, and where those properties live
 
