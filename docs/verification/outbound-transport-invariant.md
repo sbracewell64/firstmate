@@ -7,7 +7,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 
 Verified on 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.
-The current green suites were re-run at implementation head `e19512b2b16b0b4f689406362ded6bf18d944462` after the dead-predicate control became repository-wide, identity-bound retrieval was revalidated, and the bootstrap integration joined the refresh recipe.
+The last recorded green suites were re-run at implementation head `e19512b2b16b0b4f689406362ded6bf18d944462` after the dead-predicate control became repository-wide, identity-bound retrieval was revalidated, and the bootstrap integration joined the refresh recipe.
 
 ## Why this record exists
 
@@ -29,7 +29,7 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 37 outbound-artifact cases, 23 dead-predicate cases, and the bootstrap integration case pass.
+The suites now contain 40 outbound-artifact cases, 26 dead-predicate cases, and the bootstrap integration case.
 What follows is why that sentence is worth anything.
 
 The same suites, the repository lint gate, and the documentation audience check were re-run together on 2026-08-16 with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh && bin/fm-lint.sh && bin/fm-doc-audience-check.sh`; the command exited 0.
@@ -112,6 +112,9 @@ Captain ruling 2026-08-16: filesystem location is a locator, not proof of semant
 
 Retrieval now recomputes the identity from the record's own fields rather than comparing the stored string, so a record whose id was rewritten to match its filename is still caught by its content. The consumer that owns `WAITING_FOR_RULING -> RULING_AVAILABLE` fetches the ruling comment and requires its body to carry every identity field exactly, so a comment id - which only says where to look - cannot satisfy a wait on its own.
 
+A ruling body must contain exactly one `verdict:` line.
+Zero verdict lines or more than one are ambiguous and refuse while naming the observed count; neither first-match nor last-match position is treated as identity or intent.
+
 The verdict is three-valued, and the two refusals are not interchangeable:
 
 | Verdict | Meaning | Response |
@@ -147,7 +150,8 @@ Each row states what the control actually establishes and what it does not. A kn
 | `disposition-completes-chain` | Closure requires ruling and resumption first | Closure accepts an `emitted` request - observed red | - |
 | `identity-mismatch-distinct` | A readable record naming another request refuses as a mismatch, NOT as unreadable | Collapse the two verdicts into one return - this is the defect that shipped | Does not cover a record whose non-identity fields are wrong |
 | `head-object-id-width` | A 64-character value is refused for a sha1 repository; an abbreviation is refused; an unresolvable well-shaped id is refused; undeterminable format refuses | Accept any 7-40 hex, or a bare 40-or-64 - observed red | **No sha256 repository was available.** Acceptance of a 64-character head in a sha256 repository is UNPROVEN |
-| `dead-predicate` | A function in an enrolled file with no call site anywhere parseable is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review. `DEAD` is issued only when every possible call site was parseable, so a predicate with an unparseable possible consumer is could-not-observe instead; on this repository 118 consumer files parse and 215 do not, so most of the tree is unreadable to it |
+| `unambiguous-ruling-verdict` | Exactly one verdict line is required, and ambiguity refuses while naming its count | Add a quoted prior verdict beside the decided verdict | Does not decide which verdict was intended when a ruling contains more than one |
+| `dead-predicate` | A function in an enrolled file with no call site in its complete possible-caller universe is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review. `DEAD` is issued only when every possible caller is parseable; an unparseable file that does not even loosely mention that predicate is outside its property-scoped universe, while a loose mention can only make the verdict could-not-observe and can never confirm a call |
 
 ## One recurrence, four instances: a canonical thing that exists and is not consulted
 
