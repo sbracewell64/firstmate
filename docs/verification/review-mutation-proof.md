@@ -159,6 +159,7 @@ prevent, so the two are stated apart and never folded together.
 Measured at `015301ea`. The green pass ran all 35 controls against the shipped scripts and exited 0.
 33 single-defect builds were then measured, each control run separately against each build.
 **Every control has at least one red witness, and no control is left unwitnessed.**
+**Every defect build reddened at least one control, and zero defect builds reddened nothing.**
 
 The measurement pinned the inventory digests before and after the run and they were identical,
 so all of it describes one build rather than a moving one.
