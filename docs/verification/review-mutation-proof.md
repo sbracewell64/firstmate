@@ -2,7 +2,7 @@
 
 Maintainer-verification record for [`bin/fm-review-mutation.sh`](../../bin/fm-review-mutation.sh), the proof owner that answers whether a named target assertion ran and what it concluded.
 The guarantee it records is narrow and exact: no label, marker, or caller-supplied name can establish that a named assertion executed.
-The measured table below records observed watched-red evidence.
+Watched-red evidence is recorded only when it describes the current measured subject.
 
 The script's own header owns the law, the fold, the twenty-two bound dimensions, and the mechanics.
 This file records only what was measured, and when.
@@ -20,7 +20,7 @@ The catalogue that defines them is tracked, in [`tests/review-mutation-red-matri
 
 The controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
 A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the other thirty, which is a coverage claim resting on an observation that was never made.
-Running each control separately produces the complete matrix below, including the row that matters most: **controls no defect reddened**, which is reported rather than left to be inferred from a table that happens to look full.
+Running each control separately produces a complete matrix, including the row that matters most: **controls no defect reddened**, which is reported rather than left to be inferred from a table that happens to look full.
 
 ### What this measurement caught in its own controls
 
@@ -40,8 +40,8 @@ That binding lives in two places, and no single defect defeated both, so the con
 `D29` removes both, because removing one leaves the other standing and reddens nothing.
 
 The inventory drift control was also reporting its own success before running its checks, so that it could count its own identity.
-It now counts the identities that have passed plus itself, asserts that it is the last declared control so that arithmetic cannot be silently shortened, and reports last.
-A success line emitted ahead of its evidence is this increment's own defect turned on its own suite.
+It now counts the suite's declared controls without executing them and reports only after its checks.
+A full run separately binds the declared controls to the identities that actually executed.
 
 ## What the proof owner establishes, and what it does not
 
@@ -109,120 +109,34 @@ The suite executes 31 controls, and the current measured-file inventory is:
 inventory_control_count: 31
 inventory_sha256: bin/fm-review-mutation.sh fcc9998483e554db47311a3b54bbcc4d219f79ffbdc472a1019654e78d0ed36e
 inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
-inventory_sha256: tests/fm-review-mutation.test.sh 94613e6c6215177001d44079500680fa1377afea8c00c1d594ba3bee69afa879
+inventory_sha256: tests/fm-review-mutation.test.sh 8cc6ccbf05b0e2aded4f60801d785e1c333364a2790a6aa58b880cdba354c9b0
 inventory_sha256: tests/review-mutation-red-matrix.py 876a0991d51f556999886482d5abb405488ff9d1d671fdccd947c567dcc08d48
 ```
 
 This is an inventory claim only: it says these files and this control count agree with the
-suite that runs today. `tests/fm-review-mutation.test.sh` enforces it and fails when they
-drift, counting from the suite's own executed identities rather than from a second number.
+suite that runs today.
+`tests/fm-review-mutation.test.sh` enforces it and fails when they drift, counting from the suite's declared control array rather than from a second number.
+The full-run branch separately enforces that every declared test identity executed.
 
 **Passing this inventory claim is NOT evidence for the measurement claim below.** A green
 inventory sitting on top of unmeasured rows is the collapse this separation exists to
 prevent, so the two are stated apart and never folded together.
 
-### Measurement claim
+### Measurement superseded at this head
 
-Measured at `e3412a41`. The green pass ran all 31 controls against the shipped scripts and exited 0.
-29 single-defect builds were then measured, each control run separately against each build.
-**Every control has at least one red witness, and no control is left unwitnessed.**
+The previous matrix was measured at `e3412a41`, and the measured subject has since changed, so it does not describe these bytes.
+The watched-red status of every control at this head is therefore COULD-NOT-OBSERVE.
+That status is explicitly not an omission, not a pass, and not a claim that the earlier result carries over.
+This record does NOT currently claim watched-red coverage.
+A fresh measurement runs at the final head and its results replace this block.
 
-The measurement pinned the inventory digests before and after the run and they were identical,
-so all of it describes one build rather than a moving one.
+Selecting the inventory control used to run every control, so 26 of the 29 defect builds recorded as witnessing it were in fact other controls failing, and only three ever exercised the inventory check itself.
+The contamination was confined to that one row because every other selection ran exactly one control.
+That blast radius was established by reading the per-row failure text in the recorded matrix data rather than assumed.
+The rule this finding instances is that a target and the observed control must match, and a neighbouring or broader red is not credit for the target.
 
-Controls are run one at a time rather than as a suite, because the suite stops at its first
-failing control. A suite-at-a-time measurement reports each defect reddening exactly one
-control and says nothing about the rest, which is a coverage claim resting on an observation
-that was never made.
-
-### Replaying an entry
-
-Every row is reproducible from the tracked catalogue in
-[`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py):
-
-```
-tests/review-mutation-red-matrix.py replay <defect> <control>
-```
-
-It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256
-alongside the outcome. Compare the digest with the defect table below before comparing
-outcomes: a digest that does not reproduce means the row describes a build that is not the
-one in front of you. A replay is a new execution and cannot establish that the historical run
-happened - what it removes is the need to take this record's word for it.
-
-### The defect builds
-
-| Build | sha256 | Defect injected |
-| --- | --- | --- |
-| D01 | `627f2db951f590f9` | The retired defect, restored: the verdict is read from an `ok - ` line in |
-| D02 | `fef4546f67969e3e` | Control is established by the falsifying direction alone. |
-| D03 | `d5f43b0401c76e2d` | The occurrence guard accepts more than one site and uses the first. |
-| D04 | `158e13322203f5a8` | The clone is made locally and its isolation assumed rather than measured. |
-| D05 | `e8cb6b01cfffbabe` | The apparatus perturbs the baseline tree and nothing requires it not to. |
-| D06 | `be851ac86bcf9f30` | Mutation facts are read out of the record instead of re-proven. |
-| D07 | `346d0123b63ad6d8` | An occupied output directory is cleared and reused. |
-| D08 | `d50d64f9895f7112` | The primary-checkout refusal is dropped. |
-| D09 | `15d19609060a4b37` | The catalogue fold reports a gap ahead of a failure. |
-| D10 | `1b3a0cdfbcec9244` | An unobserved dimension no longer outranks the fold. |
-| D11 | `ba8159821f850fa8` | A caller declaration is read and reaches the verdict. |
-| D12 | `ce29e47479a169ac` | The source is mutated in place and restored in a finally - every |
-| D13 | `010b2bd74507c4b9` | An empty catalogue is folded as clean. |
-| D14 | `e80b66ec4449a138` | Duplicate case identities are accepted. |
-| D15 | `54e56d12763b7591` | The probe argv is recorded as a space-joined rendering of itself. |
-| D16 | `cad8446665c476da` | The regular-file guard on the target path is dropped. |
-| D17 | `13bba21457ef46ec` | With no execution substrate the build reports PASS itself rather than |
-| D18 | `a430a1a85f5a627e` | The wrapper narrows any transported result to PASS. |
-| D19 | `41f7b07dcc93aeca` | The label defect in its other direction: a FAILURE literal in the probe's |
-| D20 | `270171091ae45d53` | The unmutated baseline is ignored once control is established. |
-| D21 | `accd2ed975181c20` | A target that is not present is spliced in at the start of the file |
-| D22 | `789a84f8165a934c` | The identical-substitution refusals are dropped. |
-| D23 | `7e66f8f567c68762` | The record is believed even when the clone it names is gone. |
-| D24 | `a729fe853d1c2690` | Every execution record is accepted for every variant, so an execution |
-| D25 | `11cde133a108a335` | The mutation bytes are not re-derived: any mismatch is swallowed, so a |
-| D26 | `a9fcbd8ed421551b` | The record's documented control count disagrees with the suite. |
-| D27 | `eccca013a6b9a25f` | A documented file digest disagrees with the bytes it names. |
-| D28 | `6e354dd22ac8b864` | The record carries no parseable inventory count at all. |
-| D29 | `70f8bd70e725dbca` | The record's declared target path is never bound to where the mutants |
-
-### The matrix
-
-Each row is one control, every defect build that reddened it, the exact failing line the
-first of those produced, and the head it was measured at. The head is recorded per row: one
-global label would let a single relabelling silently re-attribute every row.
-
-| Control | Reddened by | Observed red | Measured at |
-| --- | --- | --- | --- |
-| a matching success line cannot establish that the target ran | D01 D05 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `e3412a41` |
-| the proof owners own success literal cannot reach a verdict | D05 D19 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `e3412a41` |
-| a target that executed and passed is a pass | D01 D05 | `the basis must say the target executed and concluded pass` | `e3412a41` |
-| a target that executed and failed is a fail | D05 D20 | `an executed target that concluded fail is FAIL: expected exit 1, got 2` | `e3412a41` |
-| an unattributable substitution is could not observe | D01 D02 D05 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `e3412a41` |
-| a target occurring more than once is refused | D03 | `the refusal must name the guard (missing: 'exactly one occurrence is required')` | `e3412a41` |
-| a target occurring zero times is refused | D21 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` | `e3412a41` |
-| overlapping occurrences are counted separately | D03 | `overlapping start positions must be counted separately (missing: 'target occurs 2 times')` | `e3412a41` |
-| the identity substitution reproduces the candidate tree | D05 | `the identity substitution must reproduce the candidate tree exactly` | `e3412a41` |
-| a substitution identical to the target is refused | D22 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` | `e3412a41` |
-| the source is never mutated | D12 | `the source file must be unmutated at every moment an execution was live` | `e3412a41` |
-| the disposable clone shares no object storage | D04 | `the disposable clone must share no object storage with the source` | `e3412a41` |
-| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` | `e3412a41` |
-| refuses to overwrite an existing record | D07 | `a second generation must not be written over the first: expected exit 2, got 0` | `e3412a41` |
-| a record whose mutants are gone is could not observe | D05 | `the case must pass before the evidence is removed` | `e3412a41` |
-| an edited record cannot be read into a verdict | D01 D05 D06 D23 | `the label case must fail before editing` | `e3412a41` |
-| an execution from the wrong variant is could not observe | D24 | `an execution for another mutation must not enter the fold` | `e3412a41` |
-| preserved mutation bytes are rederived | D25 D29 | `changed preserved bytes must invalidate the claimed mutant` | `e3412a41` |
-| a missing dimension outranks a clean fold | D10 | `an incomplete record must not classify PASS (missing: 'review-mutation,NO_VERIFIER_RAN,verification_incomplete,')` | `e3412a41` |
-| a record pointing at another path is could not observe | D29 | `a record whose named path is not where the mutants differ must not pass` | `e3412a41` |
-| a caller declaration cannot change the verdict | D01 D05 D11 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` | `e3412a41` |
-| the probe argv is recorded exactly | D15 | `probe_argv must record every argument, including an empty one` | `e3412a41` |
-| one failing case makes the catalogue fail | D01 D05 D09 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` | `e3412a41` |
-| a failing case outranks an unobservable one | D01 D02 D05 D09 | `an observation gap must never mask a real finding: expected exit 1, got 0` | `e3412a41` |
-| an unobservable case outranks a passing one | D01 D02 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` | `e3412a41` |
-| an empty catalogue is could not observe | D13 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` | `e3412a41` |
-| a catalogue with duplicate identities is refused | D14 | `the refusal must name the collision (missing: 'duplicate case identities')` | `e3412a41` |
-| fm verify transports the result | D01 D05 D18 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `e3412a41` |
-| a symlinked target path is refused | D16 | `the refusal must name what it saw (missing: 'not a regular file')` | `e3412a41` |
-| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `e3412a41` |
-| verification record inventory matches executed controls | D01 D02 D03 D04 D05 D06 D07 D08 D09 D10 D11 D12 D13 D14 D15 D16 D17 D18 D19 D20 D21 D22 D23 D24 D25 D26 D27 D28 D29 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `e3412a41` |
+When the fresh matrix is recorded, every defect digest must be the full 64-character SHA-256, never a truncated prefix.
+A 16-character prefix is a weaker identity than it appears and is a collision surface nobody chose deliberately.
 
 ## What is not covered
 
