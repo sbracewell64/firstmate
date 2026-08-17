@@ -339,13 +339,15 @@ cmd_reviewer() {
 # first. Derived rather than allocated: an allocated id would make every duplicate
 # check a search for something that looks similar.
 activation_id() {  # <contract> <model> <harness> <effort>
-  local slug=$2
-  if [ "$3" != pi ] || [ "$4" != high ]; then
-    slug="$slug-$3-$4"
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print $1}')
+  else
+    return 1
   fi
-  slug=${slug//\//-}
-  slug=$(printf '%s' "$slug" | tr -c 'A-Za-z0-9._-' '-')
-  printf 'qualify-%s-%s\n' "$1" "$slug"
+  printf 'qualify-%s\n' "$digest"
 }
 
 activation_file() {  # <activation-id>
@@ -477,7 +479,10 @@ EOF
     printf 'fm-qualification: the harness and native effort for %s could not be observed, so no tuple-bound workflow may start\n' "$model" >&2
     return "$EXIT_UNOBSERVED"
   }
-  id=$(activation_id "$contract" "$model" "$harness" "$effort")
+  id=$(activation_id "$contract" "$model" "$harness" "$effort") || {
+    printf 'fm-qualification: sha256 is required to derive an unambiguous tuple identity\n' >&2
+    return "$EXIT_UNOBSERVED"
+  }
   fm_task_id_path_safe "$id" || die "derived activation id is not path-safe: $id"
   file=$(activation_file "$id")
 
@@ -513,7 +518,36 @@ EOF
   # place to read a count that changes underneath it - and its `show` line
   # literally contains `terminal=`, so a reader grepping this file for a terminal
   # marker would find one inside another field's value.
-  local tmp
+  local tmp brief_dir brief brief_tmp predicate fixture verify
+  brief_dir="$DATA/$id"
+  brief="$brief_dir/brief.md"
+  mkdir -p "$brief_dir" 2>/dev/null || {
+    printf 'fm-qualification: could not create the brief directory for %s\n' "$id" >&2
+    return "$EXIT_UNOBSERVED"
+  }
+  predicate=$(fm_qualification_contract "$contract") || {
+    printf 'fm-qualification: could not read contract %s while materializing the workflow brief\n' "$contract" >&2
+    return "$EXIT_UNOBSERVED"
+  }
+  fixture=$(printf '%s' "$predicate" | jq -r '.executable_predicate.fixture // empty')
+  verify=$(printf '%s' "$predicate" | jq -r '.executable_predicate.verify // .executable_predicate.check // empty')
+  brief_tmp=$(mktemp "$brief.XXXXXX") || {
+    printf 'fm-qualification: could not write beside %s\n' "$brief" >&2
+    return "$EXIT_UNOBSERVED"
+  }
+  {
+    printf '# Role qualification workflow\n\n'
+    printf 'Establish contract `%s` for binding `%s`, harness `%s`, and native effort `%s`.\n\n' "$contract" "$model" "$harness" "$effort"
+    printf 'Run the contract predicate unchanged and preserve its complete evidence package.\n\n'
+    [ -z "$fixture" ] || printf 'Use fixture `%s`.\n\n' "$fixture"
+    [ -z "$verify" ] || printf 'Use verifier `%s`.\n\n' "$verify"
+    printf 'Do not tune the fixture, acceptance criteria, or adjudication to obtain a pass.\n\n'
+    printf '# Definition of done\n\n'
+    printf 'An admissible tuple-bound qualification record and assignment-distinct adjudication are written, or the exact failed or could-not-observe evidence is preserved.\n'
+  } > "$brief_tmp" || { rm -f -- "$brief_tmp"; return "$EXIT_UNOBSERVED"; }
+  chmod 600 "$brief_tmp" 2>/dev/null || true
+  mv -f -- "$brief_tmp" "$brief" || { rm -f -- "$brief_tmp"; return "$EXIT_UNOBSERVED"; }
+
   tmp=$(mktemp "$file.XXXXXX") || {
     printf 'fm-qualification: could not write beside %s\n' "$file" >&2
     return "$EXIT_UNOBSERVED"
@@ -705,19 +739,38 @@ cmd_resolve() {
     return "$EXIT_UNOBSERVED"
   fi
 
+  if [ "$RESULT" = FAILED ]; then
+    local advance_out advance_rc=0
+    ROUTE=$(activation_field "$file" route || true)
+    BLOCKS=$blocks
+    printf 'fm-qualification: %s is observed FAILED. The exclusion evidence for %s against %s is PRESERVED; evaluating the next promising candidate now\n' \
+      "$id" "$model" "$contract" >&2
+    advance_out=$(cmd_activate 2>&1) || advance_rc=$?
+    if [ "$advance_rc" -ne 0 ]; then
+      if [ "$advance_rc" -eq "$EXIT_REFUSED" ] && printf '%s' "$advance_out" | grep -qF "$FM_QUAL_TOKEN_NO_PROMISING"; then
+        printf '%s\n' "$advance_out" >&2
+        record_terminal "$file" "$terminal" || {
+          printf 'fm-qualification: could not mark %s terminal, so it remains active and observable\n' "$id" >&2
+          return "$EXIT_UNOBSERVED"
+        }
+        return "$EXIT_REFUSED"
+      fi
+      printf '%s\n' "$advance_out" >&2
+      printf 'fm-qualification: advancement from %s COULD NOT BE OBSERVED, so the workflow remains active and the blocked work is not stranded behind a terminal predecessor\n' "$id" >&2
+      return "$EXIT_UNOBSERVED"
+    fi
+    printf '%s\n' "$advance_out" >&2
+    record_terminal "$file" "$terminal" || {
+      printf 'fm-qualification: could not mark %s terminal, so it remains active and observable\n' "$id" >&2
+      return "$EXIT_UNOBSERVED"
+    }
+    return "$EXIT_REFUSED"
+  fi
+
   record_terminal "$file" "$terminal" || {
     printf 'fm-qualification: could not mark %s terminal, so it would resume on the next read; repair %s by hand\n' "$id" "$file" >&2
     return "$EXIT_UNOBSERVED"
   }
-
-  if [ "$RESULT" = FAILED ]; then
-    ROUTE=$(activation_field "$file" route || true)
-    BLOCKS=$blocks
-    printf 'fm-qualification: %s is terminal FAILED. The exclusion evidence for %s against %s is PRESERVED; evaluating the next promising candidate now\n' \
-      "$id" "$model" "$contract" >&2
-    cmd_activate >&2 || true
-    return "$EXIT_REFUSED"
-  fi
 
   # A pass returns the SAME blocked work identity to normal eligibility through
   # the existing backlog owner. Its identity, custody bases, attempt count and

@@ -36,6 +36,12 @@ TMP_ROOT=$(fm_test_tmproot fm-qualification)
 
 command -v jq >/dev/null 2>&1 || fail "fm-qualification: jq is required"
 
+if command -v sha256sum >/dev/null 2>&1; then
+  QUAL_ACTIVATION_ID=$(printf '%s\0%s\0%s\0%s' job-maker alpha/one pi high | sha256sum | awk '{print "qualify-" $1}')
+else
+  QUAL_ACTIVATION_ID=$(printf '%s\0%s\0%s\0%s' job-maker alpha/one pi high | shasum -a 256 | awk '{print "qualify-" $1}')
+fi
+
 # --- fixture -----------------------------------------------------------------
 #
 # A self-contained register in temp dirs, so no case reads or writes the shipped
@@ -536,22 +542,24 @@ test_every_shipped_contract_declares_exactly_one_of_the_nine_axes() {
 test_a_qualified_pass_may_not_be_asserted_past_the_register() {
   reset_register
   mkdir -p "$HOME_DIR/state/qualification"
-  cat > "$HOME_DIR/state/qualification/qualify-job-maker-alpha-one.activation" <<'ACT'
+  cat > "$HOME_DIR/state/qualification/$QUAL_ACTIVATION_ID.activation" <<ACT
 schema=fm-qualification-activation.v1
-activation=qualify-job-maker-alpha-one
+activation=$QUAL_ACTIVATION_ID
 contract=job-maker
 model=alpha/one
+harness=pi
+native_effort=high
 route=R-X
 attempt_budget=2
 ACT
   local rc=0 out
-  out=$(qual resolve qualify-job-maker-alpha-one --result QUALIFIED 2>&1) || rc=$?
+  out=$(qual resolve "$QUAL_ACTIVATION_ID" --result QUALIFIED 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "a pass was accepted with no record in the register to support it"
   assert_contains "$out" "never what a caller asserts" "the refusal did not say why the word was not enough"
   # With the record present the same call is accepted, which is what proves the
   # refusal above was about the evidence and not about the command.
   write_record alpha-one-job
-  qual resolve qualify-job-maker-alpha-one --result QUALIFIED >/dev/null 2>&1 \
+  qual resolve "$QUAL_ACTIVATION_ID" --result QUALIFIED >/dev/null 2>&1 \
     || fail "a pass the register independently computes was still refused"
   pass "a qualified pass may not be asserted past the register"
 }

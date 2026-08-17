@@ -44,6 +44,20 @@ TMP_ROOT=$(fm_test_tmproot fm-route-qualification)
 
 command -v jq >/dev/null 2>&1 || fail "fm-route-qualification: jq is required"
 
+qualification_activation_id() {
+  local digest
+  if command -v sha256sum >/dev/null 2>&1; then
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print $1}')
+  else
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print $1}')
+  fi
+  printf 'qualify-%s\n' "$digest"
+}
+
+AID_ALPHA=$(qualification_activation_id runtime-job-maker alpha/one pi high)
+AID_BETA=$(qualification_activation_id runtime-job-maker beta/two pi high)
+AID_ALPHA_XHIGH=$(qualification_activation_id runtime-job-maker alpha/one pi xhigh)
+
 CDIR="$TMP_ROOT/contracts"
 RDIR="$TMP_ROOT/records"
 NO_OVERLAY="$TMP_ROOT/absent-overlay"
@@ -386,21 +400,21 @@ test_the_recurrence_fixture_activates_a_bounded_workflow_and_never_asks_the_capt
   rc=0
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks "$work") || rc=$?
   expect_code 0 "$rc" "the bounded qualification workflow did not activate"
-  assert_contains "$out" "activated qualify-runtime-job-maker-alpha-one" "the workflow identity was not reported"
-  assert_present "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_contains "$out" "activated $AID_ALPHA" "the workflow identity was not reported"
+  assert_present "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "no durable activation record was written, so this work would never resume"
-  assert_grep "block $work --by qualify-runtime-job-maker-alpha-one" "$TASKS_LOG" \
+  assert_grep "block $work --by $AID_ALPHA" "$TASKS_LOG" \
     "the blocked work identity was not blocked through the existing backlog owner"
-  assert_absent "$HOME_DIR/state/qualify-runtime-job-maker-alpha-one.attempt" \
+  assert_absent "$HOME_DIR/state/$AID_ALPHA.attempt" \
     "the workflow spent an attempt before it launched"
 
   # (e) A pass records reusable evidence and returns the SAME identity.
   write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
   rc=0
-  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result QUALIFIED) || rc=$?
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
   expect_code 0 "$rc" "a qualified result did not close the workflow"
   assert_contains "$out" "returns to normal eligibility" "the reader was not told the work was released"
-  assert_grep "unblock $work --by qualify-runtime-job-maker-alpha-one" "$TASKS_LOG" \
+  assert_grep "unblock $work --by $AID_ALPHA" "$TASKS_LOG" \
     "the blocked work identity was not unblocked through the existing backlog owner"
 
   # (f) The same blocked identity is eligible again, on the same route.
@@ -477,7 +491,7 @@ test_the_recurrence_fixture_turns_red_without_the_automatic_transition() {
         "$mutant/bin/fm-qualification.sh" activate --route R-RUNTIME 2>&1) || rc=$?
   [ "$rc" -ne 0 ] || fail "the mutant still activated a bounded workflow"
   assert_contains "$out" "NO_MODEL_CAN_SATISFY_ROUTE" "the mutant's refusal did not name the classification"
-  assert_absent "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "the mutant wrote an activation record it refused to create"
   pass "the recurrence fixture turns red without the automatic transition"
 }
@@ -524,7 +538,7 @@ test_an_unobservable_qualification_is_not_a_captain_exception() {
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME) || rc=$?
   expect_code 4 "$rc" "an unobservable qualification is could-not-observe, not a workflow to spend"
   assert_contains "$out" "repair is to the observation" "the reader was not told what to repair"
-  assert_absent "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "a workflow was activated for a candidate whose evidence could not be read"
   pass "an unobservable qualification is not a captain exception"
 }
@@ -627,7 +641,7 @@ test_the_cheapest_promising_candidate_is_chosen_and_unmeasured_cost_sorts_last()
     || fail "promising candidates were ordered $models; expected cheapest first with unmeasured cost last"
   local out
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE)
-  assert_contains "$out" "qualify-runtime-job-maker-beta-two" "the workflow was not spent on the cheapest candidate"
+  assert_contains "$out" "$AID_BETA" "the workflow was not spent on the cheapest candidate"
   pass "the cheapest promising candidate is chosen and unmeasured cost sorts last"
 }
 
@@ -640,10 +654,10 @@ test_duplicate_qualification_workflows_are_suppressed() {
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
     || fail "the first activation failed"
   local first out
-  first=$(cat "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation")
+  first=$(cat "$HOME_DIR/state/qualification/$AID_ALPHA.activation")
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work)
   assert_contains "$out" "FM_QUALIFICATION_ALREADY_ACTIVE" "a second workflow was created for the same pair"
-  [ "$first" = "$(cat "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation")" ] \
+  [ "$first" = "$(cat "$HOME_DIR/state/qualification/$AID_ALPHA.activation")" ] \
     || fail "the existing activation record was rewritten by the duplicate request"
   [ "$(grep -c "^block some-work" "$TASKS_LOG")" = 1 ] \
     || fail "the duplicate request blocked the work a second time"
@@ -656,12 +670,12 @@ test_work_already_in_flight_under_the_workflow_identity_suppresses_activation() 
   reset_register
   # The composed duplicate-dispatch owner, not a second implementation of "is this
   # already running": the census names a live task under the derived identity.
-  write_snapshot "$SNAPSHOT" qualify-runtime-job-maker-alpha-one
+  write_snapshot "$SNAPSHOT" "$AID_ALPHA"
   local out
   out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work)
   assert_contains "$out" "FM_QUALIFICATION_ALREADY_ACTIVE" "activation ignored work already in flight"
   assert_contains "$out" "already holds work under this identity" "the composed owner was not the source of the answer"
-  assert_absent "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "an activation record was written for work already in flight"
   pass "work already in flight under the workflow identity suppresses activation"
 }
@@ -673,10 +687,10 @@ test_a_could_not_observe_result_spends_one_attempt_and_stays_active() {
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work --budget 2 >/dev/null 2>&1 \
     || fail "activation failed"
   local out rc=0
-  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result COULD_NOT_OBSERVE) || rc=$?
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE) || rc=$?
   expect_code 4 "$rc" "a could-not-observe result must not read as a pass or a failure"
   assert_contains "$out" "remains ACTIVE" "the workflow was closed on an unmade observation"
-  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "an unmade observation was recorded as a terminal state"
   assert_absent "$RDIR/alpha-one-runtime.json" "an unmade observation wrote a record against the binding"
   assert_no_grep "unblock some-work" "$TASKS_LOG" "an unmade observation released the blocked work"
@@ -691,9 +705,9 @@ test_a_failed_result_is_terminal_and_preserves_the_exclusion() {
     || fail "activation failed"
   write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha FAILED
   local out rc=0
-  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result FAILED) || rc=$?
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result FAILED) || rc=$?
   expect_code 1 "$rc" "a failed workflow must be distinguishable by exit status"
-  assert_grep "terminal=failed" "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_grep "terminal=failed" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "the workflow was not marked terminal"
   assert_present "$RDIR/alpha-one-runtime.json" "the exclusion evidence was removed"
   assert_contains "$out" "PRESERVED" "the reader was not told the exclusion is kept"
@@ -707,10 +721,10 @@ test_an_asserted_failure_without_a_matching_record_is_refused() {
   reset_register
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
     || fail "activation failed"
-  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result FAILED) || rc=$?
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result FAILED) || rc=$?
   expect_code 3 "$rc" "an unestablished failure did not remain qualification-required"
   assert_contains "$out" "refusing to close" "the asserted failure was accepted without register evidence"
-  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "an unestablished failure closed the workflow"
   pass "an asserted failure without a matching record is refused"
 }
@@ -722,9 +736,9 @@ test_failure_automatically_advances_to_the_next_candidate() {
   run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks some-work >/dev/null 2>&1 \
     || fail "activation failed"
   write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
-  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-beta-two --result FAILED) || rc=$?
+  out=$(run_qual "$HOME_DIR" resolve "$AID_BETA" --result FAILED) || rc=$?
   expect_code 1 "$rc" "a recorded failure did not remain distinguishable"
-  assert_present "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_present "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "failure printed advice instead of activating the next promising candidate"
   assert_contains "$out" "evaluating the next promising candidate now" \
     "failure did not perform the route-owned transition"
@@ -737,10 +751,10 @@ test_qualification_dispatch_uses_an_already_qualified_adjudicator_route() {
   reset_register
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
     || fail "activation failed"
-  out=$(run_qual "$HOME_DIR" dispatch qualify-runtime-job-maker-alpha-one --dry-run)
-  assert_contains "$out" "--route R-QUAL" "the qualifying run reused the blocked target route"
-  assert_contains "$out" "--model beta/two" "the qualifying run was not assigned to the qualified adjudicator"
-  assert_not_contains "$out" "--route R-RUNTIME" "the target route received a self-qualification exemption"
+  out=$(run_qual "$HOME_DIR" dispatch "$AID_ALPHA") || true
+  assert_contains "$out" "launching $AID_ALPHA" "the real spawn chokepoint was not entered"
+  assert_not_contains "$out" "no brief" "activation did not materialize the brief required by spawn"
+  assert_not_contains "$out" "FM_ROUTE_QUALIFICATION_REQUIRED" "the qualifying run reused the blocked target route"
   pass "qualification dispatch uses an already-qualified adjudicator route"
 }
 
@@ -756,9 +770,62 @@ test_qualification_is_enforced_on_the_full_binding_tuple() {
   [ "$rc" -ne 0 ] || fail "a record at native effort high admitted native effort xhigh"
   assert_contains "$out" "FM_ROUTE_QUALIFICATION_REQUIRED" \
     "the route gate treated distinct native-effort tuples as identical"
-  assert_present "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one-pi-xhigh.activation" \
+  assert_present "$HOME_DIR/state/qualification/$AID_ALPHA_XHIGH.activation" \
     "the workflow identity omitted the differing tuple axes"
   pass "qualification is enforced on the full binding tuple"
+}
+
+test_tuple_identity_distinguishes_a_colliding_slug_pair() {
+  local rec one two tmp first second
+  rec=$(make_home collision-one); read_home "$rec"
+  reset_register
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '._models["provider/foo-codex-high"] = {smart_zone:140000, effort_expressible:["high"], tool_loop:"verified-agentic"}
+      | .rules = [.rules[] | if .route == "R-RUNTIME" then (.use.model = "provider/foo-codex-high" | .pool = ["provider/foo-codex-high"]) else . end]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  tmp="$HOME_DIR/config/models.json.tmp"
+  jq '.providers.provider = .providers.alpha
+      | .models["provider/foo-codex-high"] = (.models["alpha/one"] | .provider = "provider" | .model_id = "foo-codex-high")
+      | .zero_budget.allowlist["provider/foo-codex-high"] = .zero_budget.allowlist["alpha/one"]' \
+    "$HOME_DIR/config/models.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/models.json"
+  one=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --json | tail -1)
+  first=$(printf '%s' "$one" | jq -r '.activation')
+
+  rec=$(make_home collision-two); read_home "$rec"
+  reset_register
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '._models["provider/foo"] = {smart_zone:140000, effort_expressible:["high"], tool_loop:"verified-agentic"}
+      | .rules = [.rules[] | if .route == "R-RUNTIME" then (.use = {harness:"codex", model:"provider/foo", effort:"high"} | .pool = ["provider/foo"]) else . end]' \
+    "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  tmp="$HOME_DIR/config/models.json.tmp"
+  jq '.providers.provider = .providers.alpha
+      | .models["provider/foo"] = (.models["alpha/one"] | .provider = "provider" | .model_id = "foo" | .harness = "codex")
+      | .zero_budget.allowlist["provider/foo"] = .zero_budget.allowlist["alpha/one"]' \
+    "$HOME_DIR/config/models.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/models.json"
+  two=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --json | tail -1)
+  second=$(printf '%s' "$two" | jq -r '.activation')
+
+  [ -n "$first" ] && [ -n "$second" ] || fail "the collision controls did not activate both tuples"
+  [ "$first" != "$second" ] || fail "distinct tuples collapsed to the same workflow identity"
+  pass "tuple identity distinguishes a colliding slug pair"
+}
+
+test_failed_advancement_error_remains_observable_and_nonterminal() {
+  local rec tmp out rc=0
+  rec=$(make_home advancecno); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
+  tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
+  jq '.rules = [.rules[] | select(.route != "R-QUAL")]' "$HOME_DIR/config/crew-dispatch.json" > "$tmp" \
+    && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
+  out=$(run_qual "$HOME_DIR" resolve "$AID_BETA" --result FAILED) || rc=$?
+  expect_code 4 "$rc" "an unobservable successor transition was collapsed into ordinary failure"
+  assert_contains "$out" "COULD NOT BE OBSERVED" "the failed advancement was swallowed"
+  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/$AID_BETA.activation" \
+    "the predecessor became terminal before successor activation was established"
+  pass "failed advancement error remains observable and nonterminal"
 }
 
 test_the_workflow_bound_never_touches_the_blocked_work_accounting() {
@@ -772,9 +839,9 @@ test_the_workflow_bound_never_touches_the_blocked_work_accounting() {
   before=$(cat "$HOME_DIR/state/$work.attempt")
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks "$work" --budget 1 >/dev/null 2>&1 \
     || fail "activation failed"
-  run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result COULD_NOT_OBSERVE >/dev/null 2>&1
+  run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE >/dev/null 2>&1
   # The workflow's own bound is spent; the blocked work's is untouched.
-  assert_present "$HOME_DIR/state/qualify-runtime-job-maker-alpha-one.attempt" \
+  assert_present "$HOME_DIR/state/$AID_ALPHA.attempt" \
     "the workflow spent no attempt of its own, so nothing bounds it"
   after=$(cat "$HOME_DIR/state/$work.attempt")
   [ "$before" = "$after" ] \
@@ -788,12 +855,12 @@ test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded() {
   reset_register
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work --budget 1 >/dev/null 2>&1 \
     || fail "activation failed"
-  run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result COULD_NOT_OBSERVE >/dev/null 2>&1
+  run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE >/dev/null 2>&1
   local out rc=0
-  out=$(run_qual "$HOME_DIR" resolve qualify-runtime-job-maker-alpha-one --result COULD_NOT_OBSERVE) || rc=$?
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result COULD_NOT_OBSERVE) || rc=$?
   expect_code 4 "$rc" "a spent bound must stop rather than pass"
   assert_contains "$out" "stops rather than retrying without a bound" "the stop was not explained"
-  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_grep "terminal=budget_exhausted" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "the spent bound did not reach a terminal state, so every later read would resume it"
   pass "a spent workflow bound stops rather than retrying unbounded"
 }
@@ -836,9 +903,9 @@ test_spawn_refuses_an_unqualified_binding_and_records_the_workflow() {
   assert_contains "$out" "runtime-job-maker" "the refusal did not name the capability contract"
   assert_contains "$out" "not a captain decision" "the refusal read as an escalation"
   assert_absent "$HOME_DIR/state/runtime-task.meta" "a refused spawn wrote task metadata"
-  assert_present "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_present "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "the refusal recorded no bounded workflow, so this work would never resume"
-  assert_grep "block runtime-task --by qualify-runtime-job-maker-alpha-one" "$TASKS_LOG" \
+  assert_grep "block runtime-task --by $AID_ALPHA" "$TASKS_LOG" \
     "the refused work was not blocked on the workflow that would unblock it"
   pass "spawn refuses an unqualified binding and records the workflow"
 }
@@ -858,7 +925,7 @@ test_spawn_admits_a_qualified_binding_and_records_what_it_was_checked_against() 
         --reason-code NOVEL_DECOMPOSITION --route R-RUNTIME --model alpha/one --effort high --harness pi)
   assert_not_contains "$out" "FM_ROUTE_QUALIFICATION_REQUIRED" \
     "a qualified binding was refused by the qualification gate"
-  assert_absent "$HOME_DIR/state/qualification/qualify-runtime-job-maker-alpha-one.activation" \
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
     "a bounded workflow was activated for a binding that is already qualified"
   pass "spawn admits a qualified binding and records what it was checked against"
 }
@@ -897,6 +964,8 @@ test_an_asserted_failure_without_a_matching_record_is_refused
 test_failure_automatically_advances_to_the_next_candidate
 test_qualification_dispatch_uses_an_already_qualified_adjudicator_route
 test_qualification_is_enforced_on_the_full_binding_tuple
+test_tuple_identity_distinguishes_a_colliding_slug_pair
+test_failed_advancement_error_remains_observable_and_nonterminal
 test_the_workflow_bound_never_touches_the_blocked_work_accounting
 test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded
 test_a_route_requiring_two_capabilities_needs_both_records
