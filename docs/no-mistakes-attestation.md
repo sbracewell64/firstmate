@@ -57,7 +57,8 @@ The evidence was examined and found absent, unbound or invalid, so this is a ver
 A **failure** exits 2 and prints `cannot attest (<reason>)`.
 No verdict was reached, so it says nothing about the evidence either way: `not-a-git-repository`, `pipeline-tool-missing`, `head-unresolvable`, `head-detached`, `scratch-file-unavailable`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-not-reconciled`, `attestation-not-recorded`, `attestation-not-published`, or `commit-unknown` for `show`.
 
-`recheck` is about a different subject and does not borrow either headline, because a head can carry perfect evidence and still not be re-evaluated, and reporting that as `not attested` would send a reader to republish a note that is already correct.
+`recheck` is about a different subject and uses its own headline after its shared repository and scratch-file preflight, because a head can carry perfect evidence and still not be re-evaluated, and reporting that as `not attested` would send a reader to republish a note that is already correct.
+The shared preflight failures remain `cannot attest (not-a-git-repository)` and `cannot attest (scratch-file-unavailable)`.
 It prints `not re-evaluated (<reason>)` and exits 1 for a fact about this head, this pull request or this repository: `attestation-not-published`, `attestation-not-published-for-head`, `pull-request-not-open`, `pull-request-head-moved`, `pull-request-head-repository-mismatch`, `pull-request-ambiguous`, `no-applicable-run`, `run-in-progress` or `recheck-budget-spent`.
 It prints `cannot re-evaluate (<reason>)` and exits 2 when the re-evaluation could not be carried out or judged, so nothing it says bears on whether the check would now pass: `forge-tool-missing`, `forge-unreadable`, `forge-read-truncated`, `pull-request-list-truncated`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-ref-unreadable`, `pull-request-head-repository-absent`, `pull-request-head-repository-unreadable`, `rerun-not-requested`, `ledger-unreadable`, `ledger-unwritable`, `ledger-unlocatable`, `ledger-lock-unavailable` or `repository-unresolved`.
 Published evidence that is present but invalid is **not** one of these: it exits through `verify`'s own refusals above, because that is a verdict on the evidence rather than a step that did not happen.
@@ -174,7 +175,7 @@ Three outcomes are ordinary rather than faults, and each says so: the run alread
 
 Re-running a workflow run needs write access to that repository's Actions.
 The author of a pull request raised **from a fork against a parent repository** does not hold that on the parent, and `gh` may be absent or unauthenticated.
-In exactly those cases `recheck` reports `forge-tool-missing` or `rerun-not-requested`, says that nothing has re-read the head, and names the fallback: re-run that workflow run from the repository's Actions tab, or ask someone who holds the access to.
+In those cases `recheck` reports `forge-tool-missing`, `forge-unreadable` or `rerun-not-requested`, says that nothing has re-read the head, and names the fallback: re-run that workflow run from the repository's Actions tab, or ask someone who holds the access to.
 The attestation is already published and correct in that case and must not be published again.
 
 That is the whole residual manual case.
