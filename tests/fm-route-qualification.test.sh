@@ -1080,7 +1080,7 @@ test_the_workflow_bound_never_touches_the_blocked_work_accounting() {
 }
 
 test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded() {
-  local rec
+  local rec show activations duplicate
   rec=$(make_home bound); read_home "$rec"
   reset_register
   run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work --budget 1 >/dev/null 2>&1 \
@@ -1094,8 +1094,21 @@ test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded() {
     "the spent bound resolved the blocked dependency without a qualification outcome"
   assert_grep "hold $AID_ALPHA --reason Qualification attempt budget is spent and Firstmate must decide whether to raise the bound or abandon this qualification --kind parked" "$TASKS_LOG" \
     "the spent workflow was not parked with the operational decision it needs"
-  [ "$(PATH="$FAKEBIN:$PATH" tasks-axi show "$AID_ALPHA" | awk -F ': ' '$1 ~ /hold-kind/ { print $2; exit }')" = parked ] \
+  show=$(PATH="$FAKEBIN:$PATH" tasks-axi show "$AID_ALPHA")
+  [ "$(printf '%s\n' "$show" | awk -F ': ' '$1 ~ /hold-kind/ { print $2; exit }')" = parked ] \
     || fail "the spent workflow is not parked under the backlog owner"
+  [ "$(printf '%s\n' "$show" | awk -F ': ' '$1 ~ /state/ { print $2; exit }')" = in_flight ] \
+    || fail "the parked workflow fixture did not reproduce the backlog owner's in_flight state"
+  activations=$(run_qual "$HOME_DIR" activations --json)
+  [ "$(printf '%s\n' "$activations" | jq -r --arg id "$AID_ALPHA" '.[] | select(.activation == $id) | .liveness')" = active ] \
+    || fail "the parked in-flight workflow did not read as open"
+  duplicate=$(run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work)
+  assert_contains "$duplicate" "FM_QUALIFICATION_ALREADY_ACTIVE" \
+    "the parked workflow permitted a replacement workflow"
+  assert_grep "block some-work --by $AID_ALPHA" "$TASKS_LOG" \
+    "the parked workflow lost its dependent edge"
+  assert_no_grep "done $AID_ALPHA" "$TASKS_LOG" \
+    "the parked workflow released its dependent work"
   pass "a spent workflow stays open and parked for Firstmate"
 }
 

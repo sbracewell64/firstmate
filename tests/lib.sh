@@ -660,6 +660,8 @@ case "\$cmd" in
     [ -n "\$reason" ] || {
       printf 'error: "hold reason required"\ncode: VALIDATION_ERROR\n' >&2; exit 1; }
     tmp=\$(mktemp)
+    awk -v i="\$id" '\$1 == i { print \$1 " in_flight"; next } { print }' "\$store" > "\$tmp" && mv "\$tmp" "\$store"
+    tmp=\$(mktemp)
     awk -v i="\$id" '\$1 != i { print }' "\$holds" > "\$tmp"
     printf '%s\t%s\t%s\n' "\$id" "\$kind" "\$reason" >> "\$tmp"
     mv "\$tmp" "\$holds"

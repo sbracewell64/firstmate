@@ -435,7 +435,7 @@ qualification_backlog_live() {  # <activation-id>
   fi
   state=$(printf '%s\n' "$out" | sed -n 's/^[[:space:]]*state:[[:space:]]*//p' | head -1)
   case "$state" in
-    queued) return 0 ;;
+    queued|in_flight) return 0 ;;
     done) return 1 ;;
     *) return "$EXIT_UNOBSERVED" ;;
   esac
