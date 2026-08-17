@@ -99,7 +99,15 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # --- store -------------------------------------------------------------------
 
-auth_path() { printf '%s/%s.json\n' "$AUTH_DIR" "$1"; }
+auth_path() {
+  fm_auth_id_valid "${1:-}" || return 1
+  printf '%s/%s.json\n' "$AUTH_DIR" "$1"
+}
+
+auth_claim_path() {
+  fm_auth_id_valid "${1:-}" || return 1
+  printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
+}
 
 # Atomic by rename, so a reader never sees a half-written record and a crash
 # leaves either the previous record or the new one - never a torn one. The spend
@@ -107,7 +115,7 @@ auth_path() { printf '%s/%s.json\n' "$AUTH_DIR" "$1"; }
 # the fourth state back.
 auth_write() {  # <auth-id> <json>
   local path tmp
-  path=$(auth_path "$1")
+  path=$(auth_path "$1") || return 1
   mkdir -p "$AUTH_DIR" || return 1
   tmp="$path.tmp.$$"
   printf '%s\n' "$2" > "$tmp" || { rm -f "$tmp"; return 1; }
@@ -120,8 +128,8 @@ auth_write() {  # <auth-id> <json>
 #   4                  present and unreadable, or not this schema
 AUTH_RECORD=
 auth_read() {  # <auth-id>
-  local path raw schema
-  path=$(auth_path "$1")
+  local expected=$1 path raw schema stored request comment verdict item project repo pr head computed
+  path=$(auth_path "$expected") || return 4
   if [ ! -e "$path" ]; then
     AUTH_RECORD=
     return 3
@@ -130,6 +138,56 @@ auth_read() {  # <auth-id>
   printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 4
   schema=$(printf '%s' "$raw" | jq -r '.schema // ""')
   [ "$schema" = "$FM_AUTH_SCHEMA" ] || return 4
+  printf '%s' "$raw" | jq -e '
+    (.authorization_id | type == "string" and length > 0) and
+    (.request_id | type == "string" and length > 0) and
+    (.ruling | type == "object") and
+    (.ruling.comment_id | type == "string" and length > 0) and
+    (.ruling.verdict | type == "string" and length > 0) and
+    (.grant | type == "object") and
+    (.grant.item | type == "string" and length > 0) and
+    (.grant.project | type == "string") and
+    (.grant.repo | type == "string") and
+    ((.grant.pr == null) or (.grant.pr | type == "string" and length > 0)) and
+    (.grant.head | type == "string") and
+    (.uses == 1) and
+    (.state == "granted" or .state == "spending" or .state == "spent" or .state == "void") and
+    (.minted | type == "string" and length > 0) and
+    (.updated | type == "string" and length > 0) and
+    (.history | type == "array") and
+    (if .state == "granted" then .spend == null and .void_reason == null
+     elif .state == "void" then .spend == null and (.void_reason | type == "string" and length > 0)
+     elif .state == "spending" then
+       (.void_reason == null) and (.spend | type == "object") and
+       (.spend.started | type == "string" and length > 0) and
+       (.spend.act_digest | type == "string") and
+       (.spend.observed_head | type == "string") and
+       (.spend.outcome == null or .spend.outcome == "failed") and
+       ((.spend.finished == null) or (.spend.finished | type == "string" and length > 0)) and
+       (.spend.evidence == null)
+     else
+       (.void_reason == null) and (.spend | type == "object") and
+       (.spend.started | type == "string" and length > 0) and
+       (.spend.act_digest | type == "string") and
+       (.spend.observed_head | type == "string") and
+       (.spend.outcome == "applied") and
+       (.spend.finished | type == "string" and length > 0) and
+       ((.spend.evidence == null) or (.spend.evidence | type == "string" and length > 0))
+     end)' >/dev/null 2>&1 || return 4
+  stored=$(printf '%s' "$raw" | jq -r '.authorization_id')
+  [ "$stored" = "$expected" ] || return 4
+  request=$(printf '%s' "$raw" | jq -r '.request_id')
+  comment=$(printf '%s' "$raw" | jq -r '.ruling.comment_id')
+  verdict=$(printf '%s' "$raw" | jq -r '.ruling.verdict')
+  item=$(printf '%s' "$raw" | jq -r '.grant.item')
+  project=$(printf '%s' "$raw" | jq -r '.grant.project')
+  repo=$(printf '%s' "$raw" | jq -r '.grant.repo')
+  pr=$(printf '%s' "$raw" | jq -r '.grant.pr // "-"')
+  head=$(printf '%s' "$raw" | jq -r '.grant.head')
+  fm_auth_head_shape_valid "$head" || return 4
+  computed=$(fm_auth_id "$request" "$comment" "$verdict" "$item" "$project" "$repo" "$pr" "$head") \
+    || return 4
+  [ "$computed" = "$expected" ] || return 4
   AUTH_RECORD=$raw
   return 0
 }
@@ -195,7 +253,8 @@ observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
 # `reconcile` clears both together, which is the only path that has an
 # observation to justify it.
 claim_acquire() {  # <auth-id>
-  local dir="$AUTH_DIR/.$1.claim"
+  local dir
+  dir=$(auth_claim_path "$1") || return 1
   mkdir -p "$AUTH_DIR" || return 1
   mkdir "$dir" 2>/dev/null || return 1
   CLAIM=$dir
@@ -508,6 +567,10 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   # everywhere else.
   [ -n "$evidence" ] || die "reconcile needs --evidence naming what was observed" 2
 
+  claim_acquire "$id" \
+    || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+      "the spender claim for $id is still held, so whether that spender has stopped could not be observed"
+
   auth_read "$id"; rc=$?
   case $rc in
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
@@ -532,9 +595,7 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   fi
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the reconciliation of $id could not be recorded"
-  # The claim and the durable state are cleared together: this is the only path
-  # that has an observation entitling it to release the claim.
-  rmdir "$AUTH_DIR/.$id.claim" 2>/dev/null || true
+  claim_release
   printf 'reconciled: %s is now %s\n' "$id" \
     "$(fm_auth_reported_status "$(printf '%s' "$rec" | jq -r '.state')")"
 }

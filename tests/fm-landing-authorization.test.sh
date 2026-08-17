@@ -19,6 +19,9 @@
 #  10. an unobservable head stops the spend without destroying the authorization
 #  11. a spend already in flight is refused
 #  12. a partial enumeration is could-not-observe, not a short list
+#  13. reconciliation cannot reclaim a live spender's authorization
+#  14. malformed authorization ids cannot address the store
+#  15. malformed or misbound authorization records are unreadable
 #
 # CONTROL 1 IS NOT OPTIONAL AND IS NOT DECORATION. Every other control here is a
 # refusal, and a mechanism that refuses everything satisfies all of them at once.
@@ -516,6 +519,89 @@ test_a_partial_enumeration_is_could_not_observe_rather_than_a_short_list() {
   pass "a partial enumeration is could-not-observe rather than a short list"
 }
 
+# --- 13: reconciliation owns the claim before changing durable state ---------
+
+test_reconciliation_cannot_reclaim_a_live_spenders_authorization() {
+  local dir id act out rc pid i
+  dir=$(new_case live-reconcile) || fail "live-reconcile: fixture failed"
+  id=$(mint_id "$dir")
+  act="$dir/blocking-act.sh"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf 'landed\\n' >> '$dir/act.log'" \
+    ": > '$dir/act-entered'" \
+    "while [ ! -e '$dir/act-release' ]; do sleep 0.01; done" > "$act"
+  chmod +x "$act"
+
+  run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" >"$dir/spend.out" 2>&1 &
+  pid=$!
+  fm_test_reap "$pid"
+  for i in $(seq 1 200); do
+    [ -e "$dir/act-entered" ] && break
+    sleep 0.01
+  done
+  [ -e "$dir/act-entered" ] || fail "live-reconcile: spender never entered the act"
+
+  out=$(run_auth "$dir" reconcile "$id" --observed not-applied --evidence 'forge has not reported applied' 2>&1); rc=$?
+  expect_code 4 "$rc" "live-reconcile: reconciliation reclaimed a live spender: $out"
+  assert_contains "$out" "FM_AUTH_SPEND_INDETERMINATE" "live-reconcile: refusal token"
+  out=$(run_auth "$dir" status "$id" 2>&1); rc=$?
+  [ "$out" = indeterminate ] || fail "live-reconcile: reconciliation changed live state to '$out'"
+  expect_code 4 "$rc" "live-reconcile: live spend status must remain indeterminate"
+
+  : > "$dir/act-release"
+  wait "$pid" || fail "live-reconcile: original spender did not finish"
+  [ "$(act_count "$dir")" = 1 ] || fail "live-reconcile: act did not run exactly once"
+  out=$(run_auth "$dir" status "$id" 2>&1)
+  [ "$out" = spent ] || fail "live-reconcile: completed spender left status '$out'"
+  pass "reconciliation cannot reclaim a live spender's authorization"
+}
+
+# --- 14: ids are validated at the store boundary -----------------------------
+
+test_malformed_authorization_ids_cannot_address_the_store() {
+  local dir out rc
+  dir=$(new_case malformed-id) || fail "malformed-id: fixture failed"
+  mkdir -p "$dir/home/data"
+  printf '%s\n' '{"schema":"fm-landing-authorization.v1","state":"spent"}' > "$dir/home/data/outside.json"
+
+  out=$(run_auth "$dir" status ../outside 2>&1); rc=$?
+  expect_code 4 "$rc" "malformed-id: traversal id reached a record path: $out"
+  [ "$out" = unreadable ] || fail "malformed-id: traversal id reported '$out', not unreadable"
+  pass "malformed authorization ids cannot address the store"
+}
+
+# --- 15: records prove their shape and identity ------------------------------
+
+test_malformed_or_misbound_authorization_records_are_unreadable() {
+  local dir id act path out rc
+  dir=$(new_case malformed-record) || fail "malformed-record: fixture failed"
+  act=$(act_script "$dir")
+  id=$(mint_id "$dir")
+  path="$dir/home/data/landing-authorizations/$id.json"
+  printf '%s\n' '{"schema":"fm-landing-authorization.v1","state":"spent"}' > "$path"
+  out=$(run_auth "$dir" status "$id" 2>&1); rc=$?
+  expect_code 4 "$rc" "malformed-record: skeletal record was trusted: $out"
+  [ "$out" = unreadable ] || fail "malformed-record: skeletal record reported '$out'"
+
+  dir=$(new_case misbound-record) || fail "misbound-record: fixture failed"
+  act=$(act_script "$dir")
+  id=$(mint_id "$dir")
+  path="$dir/home/data/landing-authorizations/$id.json"
+  jq '.grant.item = "different-item"' "$path" > "$path.new" && mv "$path.new" "$path"
+  out=$(run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" 2>&1); rc=$?
+  expect_code 4 "$rc" "misbound-record: identity mismatch reached spend: $out"
+  assert_contains "$out" "FM_AUTH_RECORD_UNREADABLE" "misbound-record: refusal token"
+  [ "$(act_count "$dir")" = 0 ] || fail "misbound-record: act ran from a misbound record"
+
+  dir=$(new_case record-control) || fail "record-control: fixture failed"
+  act=$(act_script "$dir")
+  id=$(mint_id "$dir")
+  run_auth "$dir" spend "$id" --head "$HEAD_A" -- "$act" >/dev/null 2>&1 \
+    || fail "record-control: valid record did not spend"
+  [ "$(act_count "$dir")" = 1 ] || fail "record-control: valid record did not run the act once"
+  pass "malformed or misbound authorization records are unreadable"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_a_fresh_authorization_is_minted_and_spent_exactly_once
@@ -530,5 +616,8 @@ test_a_correlation_record_filed_under_another_id_is_refused
 test_an_unobservable_head_stops_the_spend_without_destroying_the_authorization
 test_a_spend_already_in_flight_is_refused
 test_a_partial_enumeration_is_could_not_observe_rather_than_a_short_list
+test_reconciliation_cannot_reclaim_a_live_spenders_authorization
+test_malformed_authorization_ids_cannot_address_the_store
+test_malformed_or_misbound_authorization_records_are_unreadable
 
 fm_test_contract "$0"
