@@ -246,7 +246,7 @@ guard_output_outside_source() {  # <resolved-source> <raw-output>
     out_parent=$(dirname -- "$out_parent")
   done
   [ -d "$out_parent" ] || cno "output directory has no existing ancestor: $out"
-  out_parent=$(cd "$out_parent" && pwd) || cno "output directory cannot be resolved: $out"
+  out_parent=$(cd "$out_parent" && pwd -P) || cno "output directory cannot be resolved: $out"
   out_resolved=$out_parent/$out_leaf
   case "$out_resolved" in
     "$source"|"$source"/*) cno "output directory is inside the source checkout: $out" ;;
@@ -609,7 +609,7 @@ cmd_prove() {
   # printing a correct refusal. A refusal that leaves a trace in what it refused
   # is not a refusal.
   [ -d "$source" ] || cno "source is not a directory: $source"
-  source=$(cd "$source" && pwd) || cno "source cannot be resolved"
+  source=$(cd "$source" && pwd -P) || cno "source cannot be resolved"
   [ "$(git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
     || cno "source is not a git checkout: $source"
   local git_dir common_dir
@@ -988,7 +988,7 @@ cmd_catalogue() {
   # a directory inside the checkout it is about to refuse. prove re-checks the
   # source per case; this is the copy that runs before the first mkdir.
   [ -d "$source" ] || cno "source is not a directory: $source"
-  source=$(cd "$source" && pwd) || cno "source cannot be resolved"
+  source=$(cd "$source" && pwd -P) || cno "source cannot be resolved"
   [ "$(git -C "$source" rev-parse --is-inside-work-tree 2>/dev/null)" = true ] \
     || cno "source is not a git checkout: $source"
   local cat_git_dir cat_common_dir

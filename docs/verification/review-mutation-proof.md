@@ -134,13 +134,13 @@ That confirmation matters because a build that fails to parse fails every contro
 
 ### Inventory claim
 
-The suite executes 35 controls, and the current measured-file inventory is:
+The suite executes 37 controls, and the current measured-file inventory is:
 
 ```
-inventory_control_count: 35
-inventory_sha256: bin/fm-review-mutation.sh cef8ffdebb59d1a99deb1e228452ffa21031ac2a5bdc51ae3ebdd020dbfdeb11
-inventory_sha256: bin/fm-verify.sh 5682f35bbf89cda3bd15de96a0df825317e5698d4956122bd0c7fb4627dd8318
-inventory_sha256: tests/fm-review-mutation.test.sh 024e75e0244502af6be71bacfe3bd5a246916c2ec196bb958ce8d6f4a34023a6
+inventory_control_count: 37
+inventory_sha256: bin/fm-review-mutation.sh 0dc496800262c2a6692db9e8ae4c6f49fe6160c23ac6df9cee30ca8c00b684ca
+inventory_sha256: bin/fm-verify.sh a187ed0765a1d17b419c83cbc55c9e98fd5f380701f0a50f8cdcd909e7c1bd37
+inventory_sha256: tests/fm-review-mutation.test.sh 57f98f8b0a52ae85e098b744b2baf696fb05f0347d99bd90b5a5b9a451c43492
 inventory_sha256: tests/review-mutation-red-matrix.py ad788b1e8e0c0789ccfb29eaf9299dcfd23c1fb44c6c42bc9171cec86c7416cd
 ```
 
