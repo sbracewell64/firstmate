@@ -134,7 +134,7 @@ function_has_call_site() {  # <function>
     # call detection and would silently discard the one call form that is
     # declared rather than written.
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
-    if strip_single_quoted "$f" | awk -v fn="$fn" '
+    if strip_quoted "$f" | awk -v fn="$fn" '
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
@@ -159,7 +159,7 @@ function_has_call_site() {  # <function>
   return 1
 }
 
-# Blank every single-quoted span, so quoted text is DATA and never read as code.
+# Blank every quoted span, so quoted text is DATA and never read as code.
 #
 # This is a real walk over two states rather than a per-line heuristic, because
 # the heuristic was wrong in the direction that matters. Counting quotes per line
@@ -169,13 +169,14 @@ function_has_call_site() {  # <function>
 # quote opener, which is why double-quote state is tracked too: without it the
 # quote-escape dance this repo uses everywhere would desynchronise the walk.
 #
-# Prints the file with single-quoted spans blanked. Exits 1 if a span is still
+# Prints the file with quoted spans blanked. Exits 1 if a span is still
 # open at end of file, the one case this cannot resolve.
-strip_single_quoted() {  # <file>
+strip_quoted() {  # <file>
   awk '
     BEGIN { insq = 0; indq = 0 }
     {
       out = ""
+      suppress_dq = indq
       n = length($0)
       for (i = 1; i <= n; i++) {
         c = substr($0, i, 1)
@@ -186,8 +187,11 @@ strip_single_quoted() {  # <file>
         # predicate in it became could-not-observe.
         if (c == "#" && !indq && (i == 1 || substr($0, i-1, 1) ~ /[ \t]/)) break
         if (c == "\047" && !indq) { insq = 1; continue }
-        if (c == "\"") indq = !indq
-        out = out c
+        if (c == "\"") {
+          indq = !indq
+          if (!indq) suppress_dq = 0
+        }
+        if (!suppress_dq) out = out c
       }
       print out
     }
@@ -202,8 +206,8 @@ file_parse_refusal() {  # <file>
   hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
           grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
         } | head -1)
-  if [ -z "$hit" ] && ! strip_single_quoted "$f" >/dev/null 2>&1; then
-    hit="0:unterminated single-quoted string"
+  if [ -z "$hit" ] && ! strip_quoted "$f" >/dev/null 2>&1; then
+    hit="0:unterminated quoted string"
   fi
   [ -z "$hit" ] && return 0
   printf '%s\n' "$hit"
@@ -298,9 +302,9 @@ for f in "${FILES[@]}"; do
   while IFS= read -r line; do FUNCTIONS+=("${line#*:}"); done < <(function_definitions "$f")
 done
 for fn in "${FUNCTIONS[@]}"; do
-  for f in "${FILES[@]}"; do
+  for f in "${SCANNABLE[@]}"; do
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$f" && continue
-    unsupported=$(strip_single_quoted "$f" | awk -v fn="$fn" '
+    unsupported=$(strip_quoted "$f" | awk -v fn="$fn" '
       $0 ~ "^[[:space:]]*#" { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }

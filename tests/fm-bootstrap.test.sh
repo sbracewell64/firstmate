@@ -1484,6 +1484,34 @@ SH
   pass "bootstrap preserves and reports automatic reconciliation failure"
 }
 
+test_outbound_defect_is_not_reclassified_as_unevaluable() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-defect"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'OUTBOUND: pull-request missing durable artifact\n'
+exit 3
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: pull-request missing durable artifact" \
+    "a definitive outbound defect must be relayed"
+  assert_not_contains "$out" "OUTBOUND: sweep unevaluable" \
+    "a definitive outbound defect must not also be called unevaluable"
+  pass "bootstrap preserves definitive outbound defect classification"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
@@ -1520,3 +1548,4 @@ test_open_commitment_denies_a_quiet_session_start
 test_missing_commitment_interpreter_is_not_a_quiet_session_start
 test_outbound_sweep_has_bootstrap_deadline
 test_outbound_reconcile_failure_is_reported
+test_outbound_defect_is_not_reclassified_as_unevaluable

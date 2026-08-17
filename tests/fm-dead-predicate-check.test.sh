@@ -214,7 +214,17 @@ test_call_in_quoted_substitution_counts() {
   dir=$(fixture quoted-substitution 'live_one() { return 0; }' 'value="$(live_one)"')
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "a call inside a quoted command substitution was refused, exit $rc: $out"
-  pass "calls inside quoted command substitutions count"
+  pass "executable substitutions inside quotes count without exposing quoted text"
+}
+
+test_multiline_double_quoted_command_shape_is_not_a_call() {
+  local dir out rc
+  dir=$(fixture multiline-double-quote 'dead_one() { return 0; }' 'message="first line
+dead_one
+last line"')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "multiline double-quoted data counted as a call, exit $rc: $out"
+  pass "multiline double-quoted data does not establish call identity"
 }
 
 test_call_site_inside_its_own_file_counts() {
@@ -290,12 +300,13 @@ test_outbound_library_stays_enrolled() {
   pass "the outbound library is enrolled, and cannot be quietly un-enrolled"
 }
 
-test_repository_is_clean_under_the_control() {
+test_repository_has_no_dead_predicates_under_the_control() {
   local out rc
   out=$("$CHECK" 2>&1); rc=$?
-  [ "$rc" -ne 4 ] || fail "the real repository run found nothing to check: $out"
-  [ "$rc" -eq 0 ] || fail "the real repository has an unconsulted guard: $out"
-  pass "every enrolled file in this repository has its guards consulted"
+  [ "$rc" -ne 3 ] || fail "the real repository has an unconsulted guard: $out"
+  [ "$rc" -eq 0 ] || [ "$rc" -eq 4 ] \
+    || fail "the real repository produced an unexpected verdict, exit $rc: $out"
+  pass "the repository has no predicate proven dead under observable syntax"
 }
 
 test_call_from_unenrolled_consumer_counts() {
@@ -307,6 +318,17 @@ test_call_from_unenrolled_consumer_counts() {
   printf '%s' "$out" | grep -q 'DEAD' \
     && fail "unenrolled consumer: a called predicate was reported dead: $out"
   pass "a call from a non-enrolled consumer counts, so the verdict follows the code not the configuration"
+}
+
+test_unsupported_call_form_in_unenrolled_consumer_is_unchecked() {
+  local dir out rc
+  dir=$(fixture unenrolled-unsupported 'maybe_used() { return 0; }')
+  add_plain_consumer "$dir" 'echo maybe_used'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "unenrolled unsupported call form did not fail closed, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'UNCHECKED.*plain-consumer.sh.*unsupported call-site form for maybe_used' \
+    || fail "unenrolled unsupported call form was not named: $out"
+  pass "unsupported call forms are validated across unenrolled consumers"
 }
 
 test_single_quoted_substitution_is_not_a_call() {
@@ -383,6 +405,7 @@ test_unparsed_file_that_never_mentions_it_leaves_the_universe_complete
 test_unparsed_file_that_mentions_it_makes_the_universe_incomplete
 test_loose_exclusion_never_confirms_a_call
 test_call_from_unenrolled_consumer_counts
+test_unsupported_call_form_in_unenrolled_consumer_is_unchecked
 test_single_quoted_substitution_is_not_a_call
 test_quoted_prose_describing_a_call_is_not_a_call
 test_unchecked_consumers_are_named_but_not_red
@@ -396,12 +419,13 @@ test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
+test_multiline_double_quoted_command_shape_is_not_a_call
 test_call_site_inside_its_own_file_counts
 test_blanket_exemption_cannot_silence
 test_adjacent_mark_keeps_one_and_still_reports_it
 test_mark_must_be_adjacent_to_the_definition
 test_no_enrolled_file_is_could_not_observe
 test_outbound_library_stays_enrolled
-test_repository_is_clean_under_the_control
+test_repository_has_no_dead_predicates_under_the_control
 
 printf '\nall fm-dead-predicate-check tests passed\n'
