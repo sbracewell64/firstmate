@@ -111,8 +111,9 @@ This round converged because the remaining classifier item is a measured coverag
 
 The replay proof now carries a SHA-256 digest of the exact JSONL record bytes.
 Replay recomputes that digest before schema validation or selection, and a missing digest, unavailable digest tool, or byte mismatch is unobserved state that forces `INDETERMINATE`.
-Publication computes and validates the digest over a private per-attempt staging directory before taking the target lock and replacing the record set and proof in order.
-Concurrent publishers therefore serialize the final pair, and a digest command failure or malformed digest leaves unobserved state rather than certifying an empty binding.
+Publication computes and validates the digest over a private per-attempt staging directory before replacing the record set and proof in order, proof last.
+Replay first copies both shared files into a private snapshot, then hashes, validates, selects, and concludes only over that immutable snapshot.
+Concurrent or crashed publishers can therefore leave a mismatch that reads as unobserved, but no lock or abandoned coordination state can block the next reader or publisher.
 
 One coverage emitter owns the computed verdict and named `UNCHECKED` list for census, violation, coverage-refusal, and passing exits.
 An unclassified site can therefore no longer conceal that the file universe was also incomplete.

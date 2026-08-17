@@ -116,6 +116,7 @@ FM_RETRIEVAL_DUPLICATES=0
 FM_RETRIEVAL_REPORTED=unknown
 FM_RETRIEVAL_RECORDS_FILE=
 FM_RETRIEVAL_PROVENANCE=
+FM_RETRIEVAL_SNAPSHOT_DIR=
 FM_RETRIEVAL_DETAIL=
 
 FM_RETRIEVAL_CANDIDATES=0
@@ -137,6 +138,7 @@ fm_retrieval_reset() {
   FM_RETRIEVAL_REPORTED=unknown
   FM_RETRIEVAL_RECORDS_FILE=
   FM_RETRIEVAL_PROVENANCE=
+  FM_RETRIEVAL_SNAPSHOT_DIR=
   FM_RETRIEVAL_DETAIL=
   FM_RETRIEVAL_CANDIDATES=0
   FM_RETRIEVAL_MATCHES=0
@@ -442,7 +444,7 @@ fm_retrieval_validate_records() {  # <jsonl-records> <id-field> <text-field> <ti
 # out so the ordering is stated in one place and cannot be reordered by editing
 # the traversal.
 fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
-  local records=$1 staged=$2 pages_file=$3 dir meta observed digest publish_dir lock
+  local records=$1 staged=$2 pages_file=$3 dir meta observed digest publish_dir
   dir=$(dirname "$records")
   [ -d "$dir" ] || mkdir -p "$dir" || {
     fm_retrieval_set_reason usage_error "cannot write to $dir"
@@ -454,7 +456,6 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     fm_retrieval_set_reason state_uncommitted "cannot create private publication staging"
     return 1
   }
-  lock=$records.publish.lock
 
   cp "$staged" "$publish_dir/records" || {
     fm_retrieval_set_reason usage_error "cannot stage the record set at $records"
@@ -486,37 +487,23 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages>
     rm -rf "$publish_dir"
     return 1
   }
-  if ! fm_retrieval_publish_lock "$lock"; then
-    fm_retrieval_set_reason state_uncommitted "another publisher owns $records"
-    rm -rf "$publish_dir"
-    return 1
-  fi
   rm -f "$meta"
   mv -f "$publish_dir/records" "$records" || {
-    rmdir "$lock" 2>/dev/null || :
     rm -rf "$publish_dir"
     fm_retrieval_set_reason state_uncommitted "cannot publish the record set at $records"
     return 1
   }
+  if [ "${FM_RETRIEVAL_TEST_KILL_AFTER_RECORDS:-0}" = 1 ]; then
+    kill -KILL "$$"
+  fi
   mv -f "$publish_dir/meta" "$meta" || {
-    rmdir "$lock" 2>/dev/null || :
     rm -rf "$publish_dir"
     fm_retrieval_set_reason usage_error "cannot publish the completeness proof"
     return 1
   }
-  rmdir "$lock" 2>/dev/null || :
   rm -rf "$publish_dir"
   FM_RETRIEVAL_PROVENANCE=$meta
   return 0
-}
-
-fm_retrieval_publish_lock() {  # <lock-dir>
-  local lock=$1 attempt=0
-  while ! mkdir "$lock" 2>/dev/null; do
-    attempt=$((attempt + 1))
-    [ "$attempt" -lt 200 ] || return 1
-    ${FM_RETRIEVAL_SLEEP:-sleep} 0.01
-  done
 }
 
 fm_retrieval_sha256() {  # <file>
@@ -537,7 +524,7 @@ fm_retrieval_sha256() {  # <file>
 # is required: a record set with none is an interrupted write, and the count of
 # whatever survived is not a fact about the collection.
 fm_retrieval_load() {  # <records-file>
-  local records=$1 meta=$1.meta expected_digest actual_digest
+  local records=$1 meta=$1.meta expected_digest actual_digest snapshot
   if [ ! -f "$records" ]; then
     fm_retrieval_set_reason state_uncommitted "no record set at $records"
     return 1
@@ -548,6 +535,18 @@ fm_retrieval_load() {  # <records-file>
     FM_RETRIEVAL_RECORDS_FILE=$records
     return 1
   fi
+  snapshot=$(mktemp -d "${TMPDIR:-/tmp}/fm-retrieval-snapshot.XXXXXX") || {
+    fm_retrieval_set_reason state_uncommitted "could not create a replay snapshot"
+    return 1
+  }
+  if ! cp "$records" "$snapshot/records" || ! cp "$meta" "$snapshot/meta"; then
+    rm -rf "$snapshot"
+    fm_retrieval_set_reason state_uncommitted "could not copy a replay snapshot"
+    return 1
+  fi
+  records=$snapshot/records
+  meta=$snapshot/meta
+  FM_RETRIEVAL_SNAPSHOT_DIR=$snapshot
   if ! jq -e --arg s "$FM_RETRIEVAL_SCHEMA" '.schema == $s' "$meta" >/dev/null 2>&1; then
     fm_retrieval_set_reason schema_unexpected \
       "$meta is not a $FM_RETRIEVAL_SCHEMA proof"

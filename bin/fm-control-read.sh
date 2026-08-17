@@ -258,6 +258,8 @@ WORK_DIR=
 # shellcheck disable=SC2329  # invoked by the EXIT trap below.
 cleanup() {
   [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ] && rm -rf "$WORK_DIR"
+  [ -n "$FM_RETRIEVAL_SNAPSHOT_DIR" ] && [ -d "$FM_RETRIEVAL_SNAPSHOT_DIR" ] \
+    && rm -rf "$FM_RETRIEVAL_SNAPSHOT_DIR"
   return 0
 }
 trap cleanup EXIT
@@ -272,6 +274,10 @@ RETRIEVED=0
 if [ -n "$REPLAY" ]; then
   RECORDS=$REPLAY
   if fm_retrieval_load "$RECORDS"; then
+    if [ -n "${FM_RETRIEVAL_TEST_REPLACE_REPLAY_WITH:-}" ]; then
+      cp "$FM_RETRIEVAL_TEST_REPLACE_REPLAY_WITH" "$REPLAY"
+    fi
+    RECORDS=$FM_RETRIEVAL_RECORDS_FILE
     fm_retrieval_validate_records "$RECORDS" "$ID_FIELD" "$TEXT_FIELD" \
       "$TIME_FIELD" "replayed record set" && RETRIEVED=1
   fi

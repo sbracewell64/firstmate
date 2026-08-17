@@ -707,6 +707,7 @@ test_digest_command_failure_cannot_certify() {
   assert_field "$record" retrieval unobserved "failed digest command"
   assert_field "$record" conclusion INDETERMINATE "failed digest command"
   expect_code 2 "$rc" "a failed digest command cannot certify records"
+  rm -f "$fakebin/shasum"
   pass "a failing digest command yields unobserved state"
 }
 
@@ -734,10 +735,53 @@ test_concurrent_publishers_cannot_mix_proof_and_records() {
   wait "$pid_b" || fail "second concurrent publisher failed"
   count=$(awk 'NF { n++ } END { print n + 0 }' "$records")
   proof_count=$(jq -r '.records' "$records.meta")
-  [ "$count" = "$proof_count" ] || fail "concurrent proof count $proof_count certifies $count records"
   RECORD=$("$READ" --replay "$records" --identity req-7 --claim exists 2>&1) && RC=0 || RC=$?
-  assert_field "$RECORD" retrieval complete "concurrent publication"
+  if [ "$count" = "$proof_count" ]; then
+    assert_field "$RECORD" retrieval complete "coherent concurrent publication"
+  else
+    assert_field "$RECORD" retrieval unobserved "interleaved concurrent publication"
+  fi
   pass "concurrent publishers cannot mix record and proof generations"
+}
+
+test_replay_selects_only_from_certified_snapshot() {
+  local fix records replacement
+  fix=$(fixture_new snapshot-race)
+  records="$TMP_ROOT/snapshot-race.jsonl"
+  replacement="$TMP_ROOT/snapshot-replacement.jsonl"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')")"
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --records "$records"
+  comment 21 2026-08-02T00:00:00Z 'unrelated' > "$replacement"
+  RECORD=$(FM_RETRIEVAL_TEST_REPLACE_REPLAY_WITH="$replacement" \
+    "$READ" --replay "$records" --identity req-7 --applicable APPROVE \
+    --claim exists 2>&1) && RC=0 || RC=$?
+  case "$(field "$RECORD" retrieval):$(field "$RECORD" conclusion)" in
+    complete:PRESENT) expect_code 0 "$RC" "selection uses the certified snapshot" ;;
+    unobserved:INDETERMINATE) expect_code 2 "$RC" "a raced snapshot fails closed" ;;
+    *) fail "snapshot selection race produced an unauthorized verdict: $RECORD" ;;
+  esac
+  pass "replay replacement cannot authorize a verdict over changed bytes"
+}
+
+test_crashed_publisher_cannot_block_reader_or_retry() {
+  local fix records fakebin rc=0
+  fix=$(fixture_new publisher-crash)
+  records="$TMP_ROOT/publisher-crash.jsonl"
+  fixture_page "$fix" 1 - 200 "$(page_body \
+    "$(comment 11 2026-08-01T00:00:00Z 'APPROVE req-7')")"
+  fakebin=$(install_fake_gh "$fix")
+  PATH="$fakebin:$PATH" FM_RETRIEVAL_SLEEP=: FM_RETRIEVAL_TEST_KILL_AFTER_RECORDS=1 \
+    "$READ" endpoint 'fixture?fm_page=1' --identity req-7 --applicable APPROVE \
+    --claim exists --records "$records" >/dev/null 2>&1 || :
+  RECORD=$("$READ" --replay "$records" --identity req-7 --applicable APPROVE \
+    --claim exists 2>&1) && RC=0 || RC=$?
+  assert_field "$RECORD" retrieval unobserved "reader after publisher crash"
+  expect_code 2 "$RC" "a reader after publisher crash makes progress"
+  run_read "$fix" --identity req-7 --applicable APPROVE --claim exists --records "$records"
+  assert_field "$RECORD" conclusion PRESENT "retry after publisher crash"
+  expect_code 0 "$RC" "a publish retry after crash succeeds"
+  pass "a publisher crash blocks neither readers nor later publication"
 }
 
 # --- the consumer type ------------------------------------------------------
@@ -1009,6 +1053,8 @@ run test_replay_with_reordered_records_fails_closed
 run test_replay_without_record_digest_fails_closed
 run test_digest_command_failure_cannot_certify
 run test_concurrent_publishers_cannot_mix_proof_and_records
+run test_replay_selects_only_from_certified_snapshot
+run test_crashed_publisher_cannot_block_reader_or_retry
 run test_consumer_must_handle_all_three_conclusions
 run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
