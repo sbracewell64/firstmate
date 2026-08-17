@@ -2,25 +2,20 @@
 
 Audience: maintainer verification.
 
-This record holds the evidence for one active guarantee: no read failure anywhere in the landing-resolution path produces a definite negative.
+This record holds the evidence that the exercised landing-library entry points never turn a single failed read into a definite negative, plus the safe-direction controls for their exercised consumers.
 
 [`../../bin/fm-landed-lib.sh`](../../bin/fm-landed-lib.sh) owns the contract, the exit-status vocabulary, and the rule that a proven negative needs a successful read.
 [`../../tests/fm-landed-lib.test.sh`](../../tests/fm-landed-lib.test.sh) owns the controls, including the class control that sweeps every read by index.
-Each consumer's own suite owns the direction that consumer falls: [`../../tests/fm-teardown.test.sh`](../../tests/fm-teardown.test.sh) case (w2), [`../../tests/fm-worktree-guard.test.sh`](../../tests/fm-worktree-guard.test.sh) case (o9), and [`../../tests/fm-task-base.test.sh`](../../tests/fm-task-base.test.sh).
+The exercised consumer directions are owned by [`../../tests/fm-teardown.test.sh`](../../tests/fm-teardown.test.sh) case (w2), [`../../tests/fm-worktree-guard.test.sh`](../../tests/fm-worktree-guard.test.sh) case (o9), and [`../../tests/fm-task-base.test.sh`](../../tests/fm-task-base.test.sh).
 
 Verified on 2026-08-17 with git 2.53.0 and ShellCheck 0.11.0 on Linux 6.18.33.2-microsoft-standard-WSL2.
 Re-run the commands below rather than trusting the recorded output.
 
-## The defect
+## Safety boundary
 
-`fm_landed_push_target_ref` mapped every failed read of the push url to the same status as "this repository has no distinct push target".
-The landing target was then simply absent from `fm_landed_candidate_refs`' output while that function still returned SUCCESS with a NON-EMPTY list, because the local branch and origin's trunk were still there.
-
-That combination is what made it undetectable from any call site.
-A caller could not see it in the status, because the status said success; and could not see it in the output, because the output was neither empty nor wrong - only short.
-Containment was then tested against a partial universe and "not landed" concluded from it.
-
-This was the sixth instance of one habit; five others were fixed in [`../../bin/fm-landing-authorization-lib.sh`](../../bin/fm-landing-authorization-lib.sh)'s lane, which made every read it owned three-valued and still could not detect a non-empty-but-incomplete candidate set from outside.
+`fm_landed_push_target_ref` distinguishes a repository with no distinct push target from one whose push target could not be read.
+`fm_landed_candidate_refs` reports completeness in its status even when it can still print a non-empty partial list.
+A partial list may prove a positive containment result, but only a complete list may support the negative conclusion that no landing target contains the work.
 
 ## Verified mechanism facts
 
@@ -83,17 +78,13 @@ Detecting repository corruption is a different question than "has this landed?",
 
 Established per consumer rather than assumed, because the safe direction is not the same in all of them.
 
-| Consumer | Effect of the collapse before the fix | Safe direction | Was it safe? |
-| --- | --- | --- | --- |
-| [`../../bin/fm-teardown.sh`](../../bin/fm-teardown.sh) `content_in_default` | with the push url unread, the landing target was never named and the UPSTREAM trunk answered instead | refuse | **no** - it released a worktree; see below |
-| [`../../bin/fm-worktree-guard.sh`](../../bin/fm-worktree-guard.sh) `worktree_evidence` | a missing candidate can only reduce containment, so the slot was refused | refuse | act yes, reason no - it worded a definite commit count over a universe it never enumerated |
-| [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_upstream_ref` | an unread push url read as "no distinct upstream", collapsing the two base references onto one commit | `unresolved` | **no** - that collapse is the branch pollution the file exists to prevent |
-| [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_venue` | an unread push url was replaced by the fetch url, naming the wrong forge | refuse | **no** - [`../../bin/fm-pr-check.sh`](../../bin/fm-pr-check.sh) then refuses the task's own correct request |
-| [`../../bin/fm-decision-surface.sh`](../../bin/fm-decision-surface.sh) | none directly: it names this library as the `work_landed` owner and calls none of it | refuse | delegated - fixing the delegate is what fixes the surface |
-
-The teardown case is the one where the act, not only the wording, was wrong.
-Its own header already claimed that an unreadable push url "refuses rather than falling back to the upstream answer", and that claim held for a push url whose TRUNK could not be fetched but not for a push url whose EXISTENCE could not be read - the second returned "nothing to refresh" and let the upstream trunk answer.
-Measured against `tests/fm-teardown.test.sh` case (w2)'s fixture, pre-fix teardown exited 0 and released the worktree.
+| Consumer | Could-not-observe direction | Reason |
+| --- | --- | --- |
+| [`../../bin/fm-teardown.sh`](../../bin/fm-teardown.sh) `content_in_default` | refuse teardown | an unread landing target cannot establish that work is safe to discard |
+| [`../../bin/fm-worktree-guard.sh`](../../bin/fm-worktree-guard.sh) `worktree_evidence` | refuse with unverifiable wording | a partial candidate universe cannot support a definite unlanded-commit count |
+| [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_upstream_ref` | report `unresolved` | unread remotes cannot justify collapsing the slot and contribution bases |
+| [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_venue` | refuse | an unread push url cannot be replaced with the fetch url without potentially naming the wrong forge |
+| [`../../bin/fm-decision-surface.sh`](../../bin/fm-decision-surface.sh) | delegate to the landing owner | the surface names the library as owner and does not call it directly |
 
 The `bin/fm-outbound-artifact.sh` pass named alongside these consumers is not present in this tree; that is a could-not-observe on this checkout, not a finding that it does not consume the library.
 
@@ -108,7 +99,6 @@ Failures are injected at the tool boundary by a `git` shim (`fm_fake_git_fault` 
 The same sweep is applied to the second library on this path in `tests/fm-task-base.test.sh`, over `task_base_resolve` (9 reads) and `task_base_venue` (19 reads).
 Its allowed set is deliberately not "could-not-observe every time", and the difference matters: some negatives there are established by a DIFFERENT read that succeeded - failing `remote get-url upstream` still leaves `git remote` to prove no such remote exists - so those answers are earned and must stand.
 What it forbids is the collapse itself: no read failure may produce `coincident`, and none may name a venue other than the one the unperturbed derivation named.
-Pre-fix, failing read #5 of `task_base_resolve` produced `coincident`.
 
 Stated limits, so no reader credits it with more:
 
@@ -120,25 +110,16 @@ Stated limits, so no reader credits it with more:
 
 The control is non-vacuous by construction rather than by inspection: every swept entry point must return its DEFINITE answer on the unperturbed fixture in the same case, so a library that answered could-not-observe to everything fails instead of passing.
 
-## Reproducing the defect and the controls
-
-Point the suite's library at the pre-fix copy and every control fails; the class sweep reports status 0 - a claim of a COMPLETE candidate set - for every one of the five reads `fm_landed_candidate_refs` makes on a fetch/push split:
-
-```sh
-$ git show <pre-fix-rev>:bin/fm-landed-lib.sh > /tmp/old-landed-lib.sh
-# with the suite's fault-injecting git shim on PATH, against the fetch/push split fixture:
-  fm_landed_push_url            -> 1 (want 2)
-  fm_landed_push_target_ref     -> 1 (want 2)
-  fm_landed_refresh_push_target -> 0 (want 2)
-  candidate_refs status         -> 0 (want 2), list non-empty: yes, landing ref present: no
-  failing read #1..#5           -> status 0 (want 2)
-```
-
-Post-fix, the same measurements return 2, 2, 2, 2 and 2 for every read index, with the list still non-empty and still missing the landing ref - the list is unchanged and only the completeness claim moved, which is the whole correction.
-
-Run the controls:
+## Running the controls
 
 ```sh
 $ bin/fm-test-run.sh tests/fm-landed-lib.test.sh
 $ bin/fm-test-run.sh tests/fm-worktree-guard.test.sh tests/fm-task-base.test.sh tests/fm-teardown.test.sh
+```
+
+Recorded result:
+
+```text
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0
+FM_TEST_SUMMARY total=3 failed=0 skipped_gate=0
 ```
