@@ -72,19 +72,31 @@ fm_landed_tree_contains() {  # <dir> <ref>
 # or a remote-tracking branch. Non-zero when no name resolves, which every
 # caller must treat as unverifiable rather than as "nothing to protect".
 fm_landed_default_branch_name() {  # <dir>
-  local dir=$1 ref branch
-  ref=$(git --no-optional-locks -C "$dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)
+  local dir=$1 ref branch rc uncertain=0
+  ref=$(git --no-optional-locks -C "$dir" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  rc=$?
+  [ "$rc" -le 1 ] || uncertain=1
   if [ -n "$ref" ]; then
     printf '%s\n' "${ref#origin/}"
     return 0
   fi
   for branch in main master; do
-    if git --no-optional-locks -C "$dir" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1 \
-      || git --no-optional-locks -C "$dir" rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1; then
+    git --no-optional-locks -C "$dir" rev-parse --verify --quiet "refs/heads/$branch" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
       printf '%s\n' "$branch"
       return 0
     fi
+    [ "$rc" -eq 1 ] || uncertain=1
+    git --no-optional-locks -C "$dir" rev-parse --verify --quiet "refs/remotes/origin/$branch" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+      printf '%s\n' "$branch"
+      return 0
+    fi
+    [ "$rc" -eq 1 ] || uncertain=1
   done
+  [ "$uncertain" -eq 0 ] || return 2
   return 1
 }
 
@@ -141,17 +153,22 @@ fm_landed_refresh_push_target() {  # <dir> <name>
 # tested reads the whole list. Empty output (non-zero) means the name resolved
 # but no ref carrying it exists.
 fm_landed_candidate_refs() {  # <dir> <name>
-  local dir=$1 name=$2 found=1 ref push_ref
+  local dir=$1 name=$2 found=1 ref push_ref rc uncertain=0
   local -a candidates=("refs/heads/$name")
   if push_ref=$(fm_landed_push_target_ref "$dir" "$name"); then
     candidates+=("$push_ref")
   fi
   candidates+=("refs/remotes/origin/$name")
   for ref in "${candidates[@]}"; do
-    if git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$ref" >/dev/null 2>&1; then
+    git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$ref" >/dev/null 2>&1
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
       printf '%s\n' "$ref"
       found=0
+    elif [ "$rc" -ne 1 ]; then
+      uncertain=1
     fi
   done
+  [ "$uncertain" -eq 0 ] || return 2
   return "$found"
 }

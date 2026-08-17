@@ -23,6 +23,8 @@
 # identity digest, the real record writes, the real retry loop - and only the
 # network is fake. Fleet state is a canned fm-fleet-snapshot.v1 document through
 # FM_OUTBOUND_SNAPSHOT, so no case depends on a live fleet or a spawned worker.
+# A behavior control cannot prove that a future read bypasses the observed path.
+# The class-level control therefore covers every injectable read boundary owned by this path, while review remains responsible for detecting a newly added boundary.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -239,8 +241,38 @@ run_ob() {  # <case-dir> <args...>
   local dir=$1; shift
   PATH="$dir/bin:$PATH" FORGE_DIR="$dir/forge" \
     FM_HOME="$dir/home" FM_OUTBOUND_SNAPSHOT="$dir/snap.json" \
-    FM_OUTBOUND_BACKOFF_BASE=0 \
+    FM_OUTBOUND_BACKOFF_BASE=0 REAL_GIT="$(command -v git)" \
     "$OB" "$@"
+}
+
+install_inventory_git_fault() {  # <case-dir> <fault>
+  printf '%s\n' "$2" > "$1/forge/git_fault"
+  cat > "$1/bin/git" <<'SH'
+#!/usr/bin/env bash
+fault=$(cat "$FORGE_DIR/git_fault")
+case "$fault:$*" in
+  for-each-ref:*for-each-ref*) exit 128 ;;
+  ref-head:*rev-parse*refs/heads/fm/faulty*) exit 128 ;;
+  object-width:*rev-parse*--show-object-format*) exit 128 ;;
+  default-branch:*symbolic-ref*refs/remotes/origin/HEAD*) exit 128 ;;
+  default-branch:*rev-parse*refs/heads/main*|default-branch:*rev-parse*refs/remotes/origin/main*|default-branch:*rev-parse*refs/heads/master*|default-branch:*rev-parse*refs/remotes/origin/master*) exit 128 ;;
+  candidate-refs:*rev-parse*refs/heads/main) exit 128 ;;
+esac
+exec "$REAL_GIT" "$@"
+SH
+  chmod +x "$1/bin/git"
+}
+
+prepare_inventory_fault_case() {  # <name>
+  local dir repo
+  dir=$(new_case "$1")
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  git -C "$repo" branch fm/faulty
+  git -C "$repo" branch -M main
+  git -C "$repo" symbolic-ref refs/remotes/origin/HEAD refs/heads/main
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  printf '%s\n' "$dir"
 }
 
 new_case() {  # <name> -> prints case dir
@@ -379,6 +411,86 @@ test_branch_inventory_absent_registry_is_unevaluable() {
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_PROJECT_REGISTRY_UNREADABLE' \
     || fail "inventory registry: absent inventory looked empty: $out"
   pass "inventory registry: an absent registry is not an empty inventory"
+}
+
+test_branch_inventory_failing_ref_enumeration_is_unevaluable() {
+  local dir out rc
+  dir=$(prepare_inventory_fault_case cinvrefs)
+  install_inventory_git_fault "$dir" for-each-ref
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory refs: expected unevaluable, got $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_REFS_UNOBSERVED' \
+    || fail "inventory refs: failed enumeration looked empty: $out"
+  pass "inventory refs: a failing for-each-ref is could-not-observe"
+}
+
+test_branch_inventory_failing_head_reads_are_unevaluable() {
+  local fault dir out rc
+  for fault in ref-head object-width; do
+    dir=$(prepare_inventory_fault_case "cinv-$fault")
+    install_inventory_git_fault "$dir" "$fault"
+    out=$(run_ob "$dir" check 2>&1); rc=$?
+    [ "$rc" -eq 4 ] || fail "inventory $fault: expected unevaluable, got $rc: $out"
+    printf '%s' "$out" | grep -q 'FM_OUTBOUND_REF_UNOBSERVED' \
+      || fail "inventory $fault: failed head read was skipped: $out"
+  done
+  pass "inventory head: failing ref and object-width reads are could-not-observe"
+}
+
+test_branch_inventory_unreadable_posture_is_unevaluable() {
+  local dir out rc
+  dir=$(prepare_inventory_fault_case cinvposture)
+  cat > "$dir/bin/project-mode-fail" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$dir/bin/project-mode-fail"
+  out=$(FM_OUTBOUND_PROJECT_MODE_COMMAND="$dir/bin/project-mode-fail" run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory posture: expected unevaluable, got $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_PROJECT_POSTURE_UNOBSERVED' \
+    || fail "inventory posture: failed posture read became permissive: $out"
+  pass "inventory posture: an unreadable project mode is could-not-observe"
+}
+
+test_branch_inventory_failing_default_branch_read_is_unevaluable() {
+  local dir out rc
+  dir=$(prepare_inventory_fault_case cinvdefault)
+  install_inventory_git_fault "$dir" default-branch
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory default branch: expected unevaluable, got $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_LANDING_TARGET_UNOBSERVED' \
+    || fail "inventory default branch: read failure became not-landed: $out"
+  pass "inventory default branch: a failed name read is could-not-observe"
+}
+
+test_branch_inventory_failing_candidate_refs_is_unevaluable() {
+  local dir out rc
+  dir=$(prepare_inventory_fault_case cinvcandidates)
+  install_inventory_git_fault "$dir" candidate-refs
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory candidate refs: expected unevaluable, got $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_LANDING_TARGET_UNOBSERVED' \
+    || fail "inventory candidate refs: read failure became an empty target list: $out"
+  pass "inventory candidate refs: failed target enumeration is could-not-observe"
+}
+
+test_branch_inventory_read_failures_never_certify_empty() {
+  local fault dir out rc
+  for fault in for-each-ref ref-head object-width default-branch candidate-refs; do
+    dir=$(prepare_inventory_fault_case "cinvclass-$fault")
+    install_inventory_git_fault "$dir" "$fault"
+    out=$(run_ob "$dir" check 2>&1); rc=$?
+    [ "$rc" -eq 4 ] || fail "inventory read class: $fault certified empty at exit $rc: $out"
+  done
+  dir=$(prepare_inventory_fault_case cinvclass-posture)
+  cat > "$dir/bin/project-mode-fail" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$dir/bin/project-mode-fail"
+  out=$(FM_OUTBOUND_PROJECT_MODE_COMMAND="$dir/bin/project-mode-fail" run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "inventory read class: posture certified empty at exit $rc: $out"
+  pass "inventory read class: every owned read boundary fails closed"
 }
 
 test_no_request_is_red() {
@@ -1383,6 +1495,12 @@ test_branch_inventory_excludes_landed_work
 test_branch_inventory_excludes_squash_landed_work
 test_branch_inventory_unresolvable_landing_target_is_unevaluable
 test_branch_inventory_absent_registry_is_unevaluable
+test_branch_inventory_failing_ref_enumeration_is_unevaluable
+test_branch_inventory_failing_head_reads_are_unevaluable
+test_branch_inventory_unreadable_posture_is_unevaluable
+test_branch_inventory_failing_default_branch_read_is_unevaluable
+test_branch_inventory_failing_candidate_refs_is_unevaluable
+test_branch_inventory_read_failures_never_certify_empty
 test_request_present_is_green
 test_request_presence_requires_exact_validated_identity
 test_head_change_invalidates

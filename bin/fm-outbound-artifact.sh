@@ -443,23 +443,20 @@ project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
 # BY NAME - never folded into a no-unsubmitted-work conclusion, which would be
 # the completeness defect this pass exists to remove.
 registered_pr_projects() {
-  local reg="$DATA/projects.md" name mode
+  local reg="$DATA/projects.md"
   [ -r "$reg" ] || return 1
-  while IFS= read -r name; do
-    [ -n "$name" ] || continue
-    mode=$("$SCRIPT_DIR/fm-project-mode.sh" "$name" 2>/dev/null | awk '{print $1}')
-    [ "$mode" = "local-only" ] && continue
-    printf '%s\n' "$name"
-  done < <(sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg")
+  sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg"
 }
 
 # Is this head already contained in what the project lands onto? Landed work is
 # not unsubmitted work, so it is excluded before anything is reported.
 head_already_landed() {  # <clone-dir> <sha>
   local dir=$1 sha=$2 name refs ref ref_tree merged rc uncertain=0
-  name=$(fm_landed_default_branch_name "$dir" 2>/dev/null) || return 2
+  name=$(fm_landed_default_branch_name "$dir" 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || return 2
   [ -n "$name" ] || return 2
-  refs=$(fm_landed_candidate_refs "$dir" "$name" 2>/dev/null) || return 2
+  refs=$(fm_landed_candidate_refs "$dir" "$name" 2>/dev/null); rc=$?
+  [ "$rc" -eq 0 ] || return 2
   [ -n "$refs" ] || return 2
   while IFS= read -r ref; do
     [ -n "$ref" ] || continue
@@ -481,14 +478,24 @@ head_already_landed() {  # <clone-dir> <sha>
 }
 
 branch_inventory_rows() {  # appends row_json lines to $1
-  local out=$1 project dir venue ref sha item present rc projects
-  if ! projects=$(registered_pr_projects); then
+  local out=$1 project dir venue ref sha item present rc projects mode refs width
+  local project_mode_command=${FM_OUTBOUND_PROJECT_MODE_COMMAND:-$SCRIPT_DIR/fm-project-mode.sh}
+  projects=$(registered_pr_projects); rc=$?
+  if [ "$rc" -ne 0 ]; then
     row_json project-registry "" inventory pull-request "" "" "" "" \
       unevaluable "$FM_OUTBOUND_TOKEN_REGISTRY_UNREADABLE" "" "" 0 >> "$out"
     return
   fi
   while IFS= read -r project; do
     [ -n "$project" ] || continue
+    mode=$("$project_mode_command" "$project" 2>/dev/null); rc=$?
+    if [ "$rc" -ne 0 ] || [ -z "$mode" ]; then
+      row_json "$project" "" inventory pull-request "$project" "" "" "" \
+        unevaluable "$FM_OUTBOUND_TOKEN_POSTURE_UNOBSERVED" "" "" 0 >> "$out"
+      continue
+    fi
+    mode=${mode%% *}
+    [ "$mode" = "local-only" ] && continue
     dir="$PROJECTS/$project"
     if [ ! -d "$dir/.git" ]; then
       row_json "$project" "" inventory pull-request "$project" "" "" "" \
@@ -496,12 +503,25 @@ branch_inventory_rows() {  # appends row_json lines to $1
       continue
     fi
     venue=$(project_venue "$project")
+    refs=$(git --no-optional-locks -C "$dir" for-each-ref --format='%(refname)' \
+             'refs/remotes/*/fm/*' 'refs/heads/fm/*' 2>/dev/null); rc=$?
+    if [ "$rc" -ne 0 ]; then
+      row_json "$project" "" inventory pull-request "$project" "$venue" "" "" \
+        unevaluable "$FM_OUTBOUND_TOKEN_REFS_UNOBSERVED" "" "" 0 >> "$out"
+      continue
+    fi
     while IFS= read -r ref; do
       [ -n "$ref" ] || continue
       item=${ref##*/fm/}
       [ -n "$item" ] || continue
-      sha=$(obs git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$ref") || sha=
-      fm_outbound_is_sha "$sha" "$(fm_outbound_object_width "$dir")" || continue
+      sha=$(obs git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$ref"); rc=$?
+      width=$(fm_outbound_object_width "$dir")
+      if [ "$rc" -ne 0 ] || [ -z "$sha" ] || [ -z "$width" ] \
+        || ! fm_outbound_is_sha "$sha" "$width"; then
+        row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+          "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "" "" 0 >> "$out"
+        continue
+      fi
       head_already_landed "$dir" "$sha"; rc=$?
       case $rc in
         0) continue ;;
@@ -523,8 +543,7 @@ branch_inventory_rows() {  # appends row_json lines to $1
         *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED" "" "" 0 >> "$out" ;;
       esac
-    done < <(git --no-optional-locks -C "$dir" for-each-ref --format='%(refname)' \
-               'refs/remotes/*/fm/*' 'refs/heads/fm/*' 2>/dev/null)
+    done <<< "$refs"
   done <<< "$projects"
 }
 
