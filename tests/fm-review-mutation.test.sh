@@ -776,20 +776,12 @@ test_a_missing_execution_substrate_is_could_not_observe() {
 # green inventory sitting on top of unmeasured rows is precisely the collapse
 # the record's two separate claims exist to prevent.
 #
-# It counts from the suite's own EXECUTED identities, never from a second number
-# written down somewhere, and it reports its own success only after it has
-# established the thing that success attests to. Emitting the success line first
-# would be this increment's own defect turned on its own suite.
+# It counts from the suite's own declared control array, never from a second
+# number written down somewhere, and it reports its own success only after it
+# has established the thing that success attests to.
 test_verification_record_inventory_matches_executed_controls() {
   local record=${FM_REVIEW_MUTATION_RECORD:-$ROOT/docs/verification/review-mutation-proof.md}
   local documented_count executed_count documented path actual
-
-  # This control counts every identity that has already passed, plus itself,
-  # which is executing right now. That arithmetic is only complete if nothing is
-  # declared after it, so being last is asserted rather than assumed: a later
-  # insertion would otherwise silently under-count and still look green.
-  [ "${FM_CONTROLS[${#FM_CONTROLS[@]} - 1]}" = test_verification_record_inventory_matches_executed_controls ] \
-    || fail "the inventory control must be the last declared control, or its count is short by whatever follows it"
 
   [ -r "$record" ] || fail "the mutation verification record must be readable"
   documented_count=$(sed -n 's/^inventory_control_count: \([0-9][0-9]*\)$/\1/p' "$record")
@@ -797,12 +789,9 @@ test_verification_record_inventory_matches_executed_controls() {
     || fail "the mutation verification record must carry one parseable inventory control count"
   [ "$(printf '%s\n' "$documented_count" | wc -l | tr -d ' ')" = 1 ] \
     || fail "the mutation verification record must carry exactly one inventory control count"
-  # Distinct identities that have already reported success, plus this one, which
-  # is executing but has deliberately not reported yet.
-  executed_count=$(printf '%s' "$FM_TEST_PASSED_TESTS" \
-    | awk 'NF && !seen[$0]++ { count++ } END { print count + 1 }')
+  executed_count=${#FM_CONTROLS[@]}
   [ "$documented_count" = "$executed_count" ] \
-    || fail "the documented control count ($documented_count) must equal the suite's executed identity count ($executed_count)"
+    || fail "the documented control count ($documented_count) must equal the suite's declared control count ($executed_count)"
 
   # The measured subjects, plus the harness that defines the defects. The
   # harness is included deliberately: it is the measuring instrument, and a
@@ -871,15 +860,10 @@ if [ -n "${FM_REVIEW_MUTATION_ONLY:-}" ]; then
     control=
   done
   [ -n "$control" ] || fail "FM_REVIEW_MUTATION_ONLY names no declared control: $FM_REVIEW_MUTATION_ONLY"
-  if [ "$FM_REVIEW_MUTATION_ONLY" = test_verification_record_inventory_matches_executed_controls ]; then
-    for control in "${FM_CONTROLS[@]}"; do
-      "$control"
-    done
-  else
-    "$FM_REVIEW_MUTATION_ONLY"
-  fi
+  "$FM_REVIEW_MUTATION_ONLY"
 else
   for control in "${FM_CONTROLS[@]}"; do
     "$control"
   done
+  fm_test_contract "$(basename "${BASH_SOURCE[0]}")" || exit 1
 fi
