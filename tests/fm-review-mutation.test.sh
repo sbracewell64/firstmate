@@ -498,6 +498,30 @@ test_a_traversing_output_is_refused_without_touching_the_source() {
   pass "source-custody: traversal in a nonexistent output suffix creates nothing in the source"
 }
 
+test_prove_refuses_output_through_a_symlinked_source_ancestor() {
+  local case_dir before after out code
+  case_dir=$(make_case prove_symlinked_output)
+  ln -s "$case_dir/src" "$case_dir/source-alias"
+  before=$(source_snapshot "$case_dir/src")
+  set +e
+  out=$("$BIN" prove --case symlinked-output --source "$case_dir/src" --candidate HEAD \
+    --path tests/honest.sh --target "$case_dir/target.bytes" \
+    --falsify "$case_dir/falsify.bytes" --satisfy "$case_dir/satisfy.bytes" \
+    --out "$case_dir/source-alias/evidence" -- bash tests/honest.sh 2>&1)
+  code=$?
+  set -e
+  after=$(source_snapshot "$case_dir/src")
+
+  expect_code 2 "$code" "prove output through a symlinked source ancestor is refused"
+  assert_contains "$out" 'output directory is inside the source checkout' \
+    "the prove refusal must name the physical source containment violation"
+  [ ! -e "$case_dir/src/evidence" ] \
+    || fail "prove containment refusal must happen before creating output"
+  [ "$before" = "$after" ] \
+    || fail "prove containment refusal must leave the source byte-identical"
+  pass "source-custody: prove resolves a symlinked output ancestor physically"
+}
+
 test_refuses_a_primary_checkout_as_its_source() {
   local case_dir out code
   case_dir=$(make_case primary_source)
@@ -699,6 +723,29 @@ test_catalogue_refuses_output_inside_a_linked_worktree_source() {
   [ "$before" = "$after" ] \
     || fail "catalogue containment refusal must leave the linked-worktree source byte-identical"
   pass "source-custody: catalogue refuses output inside a linked-worktree source"
+}
+
+test_catalogue_refuses_output_through_a_symlinked_source_ancestor() {
+  local case_dir before after out code
+  case_dir=$(make_case catalogue_symlinked_output)
+  printf '%s\n' '{"cases": []}' >"$case_dir/catalogue.json"
+  ln -s "$case_dir/src" "$case_dir/source-alias"
+  before=$(source_snapshot "$case_dir/src")
+  set +e
+  out=$("$BIN" catalogue --catalogue "$case_dir/catalogue.json" --source "$case_dir/src" \
+    --candidate HEAD --out "$case_dir/source-alias/evidence" 2>&1)
+  code=$?
+  set -e
+  after=$(source_snapshot "$case_dir/src")
+
+  expect_code 2 "$code" "catalogue output through a symlinked source ancestor is refused"
+  assert_contains "$out" 'output directory is inside the source checkout' \
+    "the catalogue refusal must name the physical source containment violation"
+  [ ! -e "$case_dir/src/evidence" ] \
+    || fail "catalogue containment refusal must happen before creating output"
+  [ "$before" = "$after" ] \
+    || fail "catalogue containment refusal must leave the source byte-identical"
+  pass "source-custody: catalogue resolves a symlinked output ancestor physically"
 }
 
 test_output_outside_the_source_is_accepted() {
@@ -941,6 +988,7 @@ FM_CONTROLS=(
   test_the_source_is_never_mutated
   test_a_refused_source_is_never_written_to
   test_a_traversing_output_is_refused_without_touching_the_source
+  test_prove_refuses_output_through_a_symlinked_source_ancestor
   test_the_disposable_clone_shares_no_object_storage
   test_refuses_a_primary_checkout_as_its_source
   test_refuses_to_overwrite_an_existing_record
@@ -953,6 +1001,7 @@ FM_CONTROLS=(
   test_a_caller_declaration_cannot_change_the_verdict
   test_the_probe_argv_is_recorded_exactly
   test_catalogue_refuses_output_inside_a_linked_worktree_source
+  test_catalogue_refuses_output_through_a_symlinked_source_ancestor
   test_output_outside_the_source_is_accepted
   test_one_failing_case_makes_the_catalogue_fail
   test_a_failing_case_outranks_an_unobservable_one
