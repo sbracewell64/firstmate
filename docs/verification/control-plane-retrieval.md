@@ -222,6 +222,8 @@ Every negative case asserts the retrieval completeness value alongside the concl
 bash tests/fm-retrieval-contract.test.sh
 ```
 
+The 2026-08-17 rerun completed with `FM_TEST_CONTRACT suite=fm-retrieval-contract.test.sh status=pass`.
+
 Controls covering the commissioned list: an applicable ruling only on page 2 or later; multiple pages with the oldest record on page 1; the latest applicable ruling not on the first page; page 1 carrying a ruling a later page supersedes; pagination stopping early; one page that cannot be read; duplicate identifiers across pages; an irrelevant later comment after the applicable ruling; an identifier present only in quoted or reply prose; prefix collision, `X` versus `X` plus a suffix; complete retrieval with a genuinely absent ruling, the negative that must stay assertable; and complete retrieval with exactly one applicable ruling, the non-vacuity anchor.
 
 Beyond that list: an absent reader tool, a moved response schema, live and replayed records missing each configured selection-critical field, an unparsable continuation, a bounded retry that recovers a transient page, a rate-limited source, a refused credential, an unreadable subject, the completeness sidecar as the write commit point, digest refusal after record deletion, append, reorder, a missing digest, or digest-command failure, coherent concurrent publication without coordination, valid replay anchors for both `PRESENT` and `ABSENT`, consumer exhaustiveness, non-coercibility of `INDETERMINATE`, per-language gate coverage including native reads and its `UNCHECKED` class, coverage emission beside violations, and the three rollup-cap behaviors.
