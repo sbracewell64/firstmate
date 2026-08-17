@@ -297,6 +297,30 @@ fm_blocker_pending_path() {  # <state-dir> <task-id>
   printf '%s/%s.blockers.pending' "${1:-}" "${2:-}"
 }
 
+_fm_blocker_discard_pending() {  # <state-dir> <task-id>
+  local state=${1:-} task=${2:-}
+  [ -d "$state" ] || return 0
+  case "$task" in ''|*/*) return 0 ;; esac
+  rm -f "$(fm_blocker_pending_path "$state" "$task")" 2>/dev/null || return 1
+}
+
+_fm_blocker_stage() {  # <pending-path> <record-bytes>
+  local pend=$1 bytes=$2 tmpdir tmp
+  tmpdir="$pend.tmp.$$"
+  tmp="$tmpdir/record"
+  rmdir "$tmpdir" 2>/dev/null || [ ! -e "$tmpdir" ] || return 1
+  rm -f "$pend" 2>/dev/null || return 1
+  mkdir -m 0700 "$tmpdir" 2>/dev/null || return 1
+  if ! printf '%s' "$bytes" > "$tmp" 2>/dev/null \
+    || ! mv -f "$tmp" "$pend" 2>/dev/null; then
+    rm -f "$tmp" "$pend" 2>/dev/null || true
+    rmdir "$tmpdir" 2>/dev/null || true
+    return 1
+  fi
+  rmdir "$tmpdir" 2>/dev/null || true
+  return 0
+}
+
 # The disposition recorded for <blocker> in a baseline file, or empty when the
 # file is absent, is not a baseline this version wrote, or holds no line for that
 # blocker. Empty is therefore always "no usable prior observation", never "the
@@ -334,10 +358,13 @@ _fm_blocker_recorded_ids() {  # <record-file>
 # after the wake it decided on is durably queued, so a crash before this point
 # repeats the wake instead of losing it. A no-op when nothing was staged, which
 # is exactly what a refused cycle leaves behind.
-fm_blocker_commit() {  # <state-dir> <task-id>
-  local pend
+fm_blocker_commit() {  # <state-dir> <task-id> <stage-token>
+  local pend token=${3:-} staged
+  [ -n "$token" ] || return 0
   pend=$(fm_blocker_pending_path "${1:-}" "${2:-}")
   [ -f "$pend" ] || return 0
+  staged=$(sed -n 's/^stage=//p' "$pend" 2>/dev/null | head -1)
+  [ "$staged" = "$token" ] || return 0
   mv -f "$pend" "$(fm_blocker_record_path "$1" "$2")" 2>/dev/null || return 1
   return 0
 }
@@ -364,18 +391,18 @@ _fm_blocker_names() {  # <list>
 
 # Has the named blocker moved since the last recorded observation?
 #
-# Prints "<verdict>\t<detail>" - one member of FM_BLOCKER_MOVEMENT_VOCABULARY and
-# one short human sentence for the supervisor to read - and always returns 0, so
-# a consumer branches on the verdict rather than on an exit status that would
-# have to cover both a failure and a refusal.
+# Prints "<verdict>\t<detail>[\t<stage-token>]" - one vocabulary member, one
+# short human sentence, and a commit token only when this call staged an
+# observation - and always returns 0, so a consumer branches on the verdict.
 #
 # Stages what it observed for fm_blocker_commit, except on `cycle`, where nothing
 # is staged: a refused graph must keep surfacing until the loop is broken.
-fm_blocker_movement() {  # <task-id> <state-dir> [home] -> "<verdict>\t<detail>"
+fm_blocker_movement() {  # <task-id> <state-dir> [home]
   local task=${1:-} state=${2:-} home=${3:-${FM_HOME:-}}
-  local set rc cyc b disp prior pending record pend
+  local set rc cyc b disp prior pending record pend token
   local moved='' cno='' gone='' first=0 walk_cno=''
 
+  _fm_blocker_discard_pending "$state" "$task" || true
   case "$task" in
     ''|*[!A-Za-z0-9._-]*)
       printf 'unobserved\tthe task id is not usable, so its blocker set could not be read'
@@ -404,9 +431,13 @@ fm_blocker_movement() {  # <task-id> <state-dir> [home] -> "<verdict>\t<detail>"
     # is staged so the NEXT window legitimately falls back to the timer.
     gone=$(_fm_blocker_names "$(_fm_blocker_recorded_ids "$record")")
     if [ -n "$gone" ]; then
-      printf '%s\ntask=%s\nobserved=%s\n' "$FM_BLOCKER_RECORD_MAGIC" "$task" "$(date +%s)" \
-        > "$pend" 2>/dev/null || true
-      printf 'moved\t%s %s no longer block %s' "$(_fm_blocker_noun "$gone")" "$gone" "$task"
+      token="$$.$(date +%s).$RANDOM"
+      pending="$FM_BLOCKER_RECORD_MAGIC"$'\n'"task=$task"$'\n'"stage=$token"$'\n'"observed=$(date +%s)"$'\n'
+      if ! _fm_blocker_stage "$pend" "$pending"; then
+        printf 'unobserved\tthe current blocker observation for %s could not be recorded durably' "$task"
+        return 0
+      fi
+      printf 'moved\t%s %s no longer block %s\t%s' "$(_fm_blocker_noun "$gone")" "$gone" "$task" "$token"
       return 0
     fi
     printf 'none\tno upstream blocker is recorded for %s, so this wait keeps its ordinary recheck' "$task"
@@ -428,7 +459,8 @@ fm_blocker_movement() {  # <task-id> <state-dir> [home] -> "<verdict>\t<detail>"
   esac
 
   [ -f "$record" ] || first=1
-  pending="$FM_BLOCKER_RECORD_MAGIC"$'\n'"task=$task"$'\n'"observed=$(date +%s)"$'\n'
+  token="$$.$(date +%s).$RANDOM"
+  pending="$FM_BLOCKER_RECORD_MAGIC"$'\n'"task=$task"$'\n'"stage=$token"$'\n'"observed=$(date +%s)"$'\n'
   while IFS= read -r b; do
     [ -n "$b" ] || continue
     disp=$(fm_blocker_disposition "$b" "$home") || disp=$FM_BLOCKER_UNOBSERVED
@@ -458,33 +490,43 @@ EOF
 $(_fm_blocker_recorded_ids "$record")
 EOF
 
-  printf '%s' "$pending" > "$pend" 2>/dev/null || true
-
   if [ -n "$moved" ]; then
-    printf 'moved\t%s %s moved' "$(_fm_blocker_noun "$moved")" "$(_fm_blocker_names "$moved")"
+    if ! _fm_blocker_stage "$pend" "$pending"; then
+      printf 'unobserved\tthe current blocker observation for %s could not be recorded durably' "$task"
+      return 0
+    fi
+    printf 'moved\t%s %s moved\t%s' "$(_fm_blocker_noun "$moved")" "$(_fm_blocker_names "$moved")" "$token"
     return 0
   fi
   if [ -n "$gone" ]; then
-    printf 'moved\t%s %s no longer block %s' \
-      "$(_fm_blocker_noun "$gone")" "$(_fm_blocker_names "$gone")" "$task"
+    if ! _fm_blocker_stage "$pend" "$pending"; then
+      printf 'unobserved\tthe current blocker observation for %s could not be recorded durably' "$task"
+      return 0
+    fi
+    printf 'moved\t%s %s no longer block %s\t%s' \
+      "$(_fm_blocker_noun "$gone")" "$(_fm_blocker_names "$gone")" "$task" "$token"
     return 0
   fi
   if [ -n "$walk_cno" ]; then
     printf 'unobserved\t%s' "$walk_cno"
     return 0
   fi
+  if ! _fm_blocker_stage "$pend" "$pending"; then
+    printf 'unobserved\tthe current blocker observation for %s could not be recorded durably' "$task"
+    return 0
+  fi
   if [ "$first" -eq 1 ]; then
-    printf 'unobserved\tno prior observation of %s %s was recorded, so movement could not be judged' \
-      "$(_fm_blocker_noun "$set")" "$(_fm_blocker_names "$set")"
+    printf 'unobserved\tno prior observation of %s %s was recorded, so movement could not be judged\t%s' \
+      "$(_fm_blocker_noun "$set")" "$(_fm_blocker_names "$set")" "$token"
     return 0
   fi
   if [ -n "$cno" ]; then
-    printf 'unobserved\t%s %s could not be observed, and an unread blocker has not cleared' \
-      "$(_fm_blocker_noun "$cno")" "$(_fm_blocker_names "$cno")"
+    printf 'unobserved\t%s %s could not be observed, and an unread blocker has not cleared\t%s' \
+      "$(_fm_blocker_noun "$cno")" "$(_fm_blocker_names "$cno")" "$token"
     return 0
   fi
-  printf 'unchanged\t%s %s have not moved, so this wait cannot have changed' \
-    "$(_fm_blocker_noun "$set")" "$(_fm_blocker_names "$set")"
+  printf 'unchanged\t%s %s have not moved, so this wait cannot have changed\t%s' \
+    "$(_fm_blocker_noun "$set")" "$(_fm_blocker_names "$set")" "$token"
   return 0
 }
 
@@ -495,9 +537,17 @@ fm_blocker_verdict_of() {  # <movement-result>
   printf '%s' "${1%%$'\t'*}"
 }
 fm_blocker_detail_of() {  # <movement-result>
-  local r=${1:-}
+  local r=${1:-} detail
   case "$r" in
-    *$'\t'*) printf '%s' "${r#*$'\t'}" ;;
+    *$'\t'*) detail=${r#*$'\t'}; printf '%s' "${detail%%$'\t'*}" ;;
     *) printf '' ;;
   esac
+}
+fm_blocker_token_of() {  # <movement-result>
+  local r=${1:-} rest
+  case "$r" in
+    *$'\t'*) rest=${r#*$'\t'} ;;
+    *) return 0 ;;
+  esac
+  case "$rest" in *$'\t'*) printf '%s' "${rest#*$'\t'}" ;; esac
 }

@@ -390,7 +390,7 @@ busy_turn_over_age() {  # <task>
 # .seen-* signatures follow.
 handle_paused_stale() {  # <window> <task> <hash>
   local win=$1 task=$2 h=$3 key statusf mtime age rf rf_age reason
-  local dep dep_verdict dep_detail
+  local dep dep_verdict dep_detail dep_token
   key=$(printf '%s' "$win" | tr ':/.' '___')
   printf '%s' "$h" > "$STATE/.stale-$key"
   : > "$STATE/.paused-$key"
@@ -405,10 +405,11 @@ handle_paused_stale() {  # <window> <task> <hash>
     dep=$(fm_blocker_movement "$task" "$STATE")
     dep_verdict=$(fm_blocker_verdict_of "$dep")
     dep_detail=$(fm_blocker_detail_of "$dep")
+    dep_token=$(fm_blocker_token_of "$dep")
     if [ "$dep_verdict" = unchanged ]; then
       triage_log "paused re-surface suppressed (dependency unmoved): $win - $dep_detail"
       date +%s > "$rf"
-      fm_blocker_commit "$STATE" "$task" || true
+      fm_blocker_commit "$STATE" "$task" "$dep_token" || true
     else
       reason="stale: $win (paused ${age}s, awaiting external - declared pause, rechecked on a long cadence not a wedge; confirm the wait still holds - ${dep_detail})"
       # The durable queue first, then the throttle and the baseline, and only
@@ -417,7 +418,7 @@ handle_paused_stale() {  # <window> <task> <hash>
       # after wake() would run at all.
       fm_wake_append stale "$win" "$reason" || exit 1
       date +%s > "$rf"
-      fm_blocker_commit "$STATE" "$task" || true
+      fm_blocker_commit "$STATE" "$task" "$dep_token" || true
       wake "$reason"
     fi
   fi

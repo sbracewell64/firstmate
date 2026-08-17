@@ -1268,7 +1268,7 @@ stale_gate_read_budget() {  # sets STALE_GATE_READ_BUDGET; call directly, never 
 #     captain-relevant line the per-wake classifier missed and escalate it.
 housekeeping() {  # <state>
   local state=$1 now due f key task win marker age last max_defer oldest pause_secs pr_rc
-  local dep dep_verdict dep_detail
+  local dep dep_verdict dep_detail dep_token
   local working_reads=0 working_reads_max absorb wedge_reason
   stale_gate_read_budget
   working_reads_max=$STALE_GATE_READ_BUDGET
@@ -1469,13 +1469,14 @@ housekeeping() {  # <state>
             dep=$(fm_blocker_movement "$task" "$state")
             dep_verdict=$(fm_blocker_verdict_of "$dep")
             dep_detail=$(fm_blocker_detail_of "$dep")
+            dep_token=$(fm_blocker_token_of "$dep")
             if [ "$dep_verdict" = unchanged ]; then
               log "pause recheck suppressed for $win: $dep_detail"
             else
               # Buffer the wake durably before advancing its blocker baseline,
               # so an append failure leaves the movement available to retry.
               if escalate_add "$state" "paused ${age}s (awaiting external, recheck whether the wait still holds - ${dep_detail}): $win"; then
-                fm_blocker_commit "$state" "$task" || true
+                fm_blocker_commit "$state" "$task" "$dep_token" || true
               else
                 log "pause recheck append failed for $win: blocker movement stays unrecorded for retry"
               fi

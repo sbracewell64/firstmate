@@ -111,18 +111,19 @@ movement() {  # <case-dir> <task> [extra env assignments...]
 }
 
 # Promote a staged observation, in the same fresh-process style.
-commit_baseline() {  # <case-dir> <task>
-  local dir=$1 task=$2
+commit_baseline() {  # <case-dir> <task> [movement-result]
+  local dir=$1 task=$2 result=${3:-} token
+  token=$(fm_blocker_token_of "$result")
   bash -c '
     set -u
     # shellcheck disable=SC1090
     . "$1"
-    fm_blocker_commit "$2" "$3"
-  ' _ "$LIB" "$dir/state" "$task"
+    fm_blocker_commit "$2" "$3" "$4"
+  ' _ "$LIB" "$dir/state" "$task" "$token"
 }
 
 verdict_of() { printf '%s' "${1%%	*}"; }
-detail_of() { printf '%s' "${1#*	}"; }
+detail_of() { local detail=${1#*	}; printf '%s' "${detail%%	*}"; }
 
 # Establish a baseline for <task>: the first observation can never be a
 # comparison, so it is evaluated and committed before a case asserts anything
@@ -132,7 +133,7 @@ seed_baseline() {  # <case-dir> <task>
   r=$(movement "$dir" "$task")
   [ "$(verdict_of "$r")" = unobserved ] \
     || fail "a first observation with no baseline claimed '$(verdict_of "$r")' instead of could-not-observe"
-  commit_baseline "$dir" "$task" || fail "could not commit the first observation"
+  commit_baseline "$dir" "$task" "$r" || fail "could not commit the first observation"
 }
 
 # --- the three cases that carry the property --------------------------------
@@ -166,7 +167,6 @@ test_moved_blocker_triggers_reevaluation() {
   seed_baseline "$dir" held
   [ "$(verdict_of "$(movement "$dir" held)")" = unchanged ] \
     || fail "the baseline did not settle before the movement was applied"
-  commit_baseline "$dir" held
   put_task "$dir" upstream state=done held=no closed=2026-08-17
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = moved ] || fail "a blocker that moved did not trigger re-evaluation: $r"
@@ -186,7 +186,6 @@ test_prose_edit_is_not_movement() {
   put_task "$dir" upstream state=in_flight held=yes hold_kind=external title='original' reason='original' body='original'
   put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   put_task "$dir" upstream state=in_flight held=yes hold_kind=external \
     title='rewritten title' reason='rewritten reason with much more detail' body='rewritten body'
   r=$(movement "$dir" held)
@@ -217,7 +216,6 @@ test_unreadable_blocker_is_could_not_observe() {
   put_task "$dir" upstream state=in_flight
   put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   rm -f "$dir/fixtures/upstream"
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = unobserved ] \
@@ -279,7 +277,6 @@ test_blocker_leaving_the_set_is_movement() {
   put_task "$dir" up-b state=in_flight
   put_task "$dir" held blocked_by=up-a,up-b held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   put_task "$dir" held blocked_by=up-a held=yes hold_kind=external
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = moved ] \
@@ -301,7 +298,6 @@ test_last_blocker_clearing_is_movement_then_falls_back_to_the_timer() {
   put_task "$dir" upstream state=in_flight
   put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   put_task "$dir" held held=yes hold_kind=external
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = moved ] \
@@ -310,7 +306,7 @@ test_last_blocker_clearing_is_movement_then_falls_back_to_the_timer() {
     *upstream*) : ;;
     *) fail "the movement did not name the blocker that cleared: $r" ;;
   esac
-  commit_baseline "$dir" held
+  commit_baseline "$dir" held "$r"
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = none ] \
     || fail "an item whose blockers have all cleared did not fall back to its timer: $r"
@@ -327,7 +323,6 @@ test_movement_outranks_could_not_observe() {
   put_task "$dir" up-b state=in_flight
   put_task "$dir" held blocked_by=up-a,up-b held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   put_task "$dir" up-a state=done closed=2026-08-17
   rm -f "$dir/fixtures/up-b"
   r=$(movement "$dir" held)
@@ -343,7 +338,6 @@ test_could_not_observe_outranks_unchanged() {
   put_task "$dir" up-b state=in_flight
   put_task "$dir" held blocked_by=up-a,up-b held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   rm -f "$dir/fixtures/up-b"
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = unobserved ] \
@@ -478,7 +472,6 @@ test_dependency_survives_a_restart() {
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = unchanged ] \
     || fail "a fresh process did not recover the recorded dependency: $r"
-  commit_baseline "$dir" held
   # The disconfirming half: the recovered baseline is a real comparison, not a
   # file whose mere presence answers unchanged.
   put_task "$dir" upstream state=done held=no closed=2026-08-17
@@ -497,7 +490,6 @@ test_uncommitted_observation_repeats_the_wake() {
   put_task "$dir" upstream state=in_flight
   put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
   seed_baseline "$dir" held
-  commit_baseline "$dir" held
   put_task "$dir" upstream state=done closed=2026-08-17
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = moved ] || fail "the movement was not detected at all: $r"
@@ -505,11 +497,94 @@ test_uncommitted_observation_repeats_the_wake() {
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = moved ] \
     || fail "an uncommitted observation swallowed the wake it had already decided: $r"
-  commit_baseline "$dir" held
+  commit_baseline "$dir" held "$r"
   r=$(movement "$dir" held)
   [ "$(verdict_of "$r")" = unchanged ] \
     || fail "the committed observation did not become the new baseline: $r"
   pass "an observation that was never committed repeats its wake instead of swallowing it"
+}
+
+assert_nonstaging_discards_stale_pending() {  # <case-dir> <task> <verdict> [env...]
+  local dir=$1 task=$2 expected=$3 record pend before r
+  shift 3
+  record=$(fm_blocker_record_path "$dir/state" "$task")
+  pend=$(fm_blocker_pending_path "$dir/state" "$task")
+  printf '%s\ntask=%s\nobserved=1\n' "$FM_BLOCKER_RECORD_MAGIC" "$task" > "$record"
+  before=$(cat "$record")
+  printf '%s\ntask=%s\nobserved=2\nblocker=ghost\tstate=done\n' \
+    "$FM_BLOCKER_RECORD_MAGIC" "$task" > "$pend"
+  r=$(movement "$dir" "$task" "$@")
+  [ "$(verdict_of "$r")" = "$expected" ] \
+    || fail "$task did not reach the expected non-staging verdict $expected: $r"
+  [ ! -f "$pend" ] || fail "$task left a stale pending observation committable"
+  commit_baseline "$dir" "$task" "$r" || fail "$task could not run a no-op commit"
+  [ "$(cat "$record")" = "$before" ] || fail "$task promoted a stale pending observation"
+  r=$(movement "$dir" "$task" "$@")
+  [ "$(verdict_of "$r")" = "$expected" ] \
+    || fail "$task fabricated $(verdict_of "$r") after discarding stale pending state: $r"
+}
+
+test_nonstaging_verdicts_discard_stale_pending() {
+  local dir r
+
+  dir=$(make_case stale-pending-invalid-task)
+  assert_nonstaging_discards_stale_pending "$dir" 'bad task' unobserved
+
+  dir=$(make_case stale-pending-unreadable)
+  assert_nonstaging_discards_stale_pending "$dir" missing unobserved
+
+  dir=$(make_case stale-pending-none)
+  put_task "$dir" held
+  assert_nonstaging_discards_stale_pending "$dir" held none
+
+  dir=$(make_case stale-pending-cycle)
+  put_task "$dir" held blocked_by=up-a
+  put_task "$dir" up-a blocked_by=held
+  assert_nonstaging_discards_stale_pending "$dir" held cycle
+
+  dir=$(make_case stale-pending-bound)
+  put_task "$dir" held blocked_by=up-a
+  put_task "$dir" up-a blocked_by=up-b
+  put_task "$dir" up-b
+  assert_nonstaging_discards_stale_pending "$dir" held unobserved FM_BLOCKER_MAX_DEPTH=1
+
+  dir=$(make_case stale-pending-missing-state)
+  r=$(PATH="$dir/fakebin:$PATH" FM_FAKE_TASKS_DIR="$dir/fixtures" bash -c '
+    set -u
+    . "$1"
+    fm_blocker_movement held "$2"
+  ' _ "$LIB" "$dir/absent-state")
+  [ "$(verdict_of "$r")" = unobserved ] \
+    || fail "a missing state directory did not remain could-not-observe: $r"
+
+  pass "every non-staging verdict discards stale pending observations"
+}
+
+test_staging_failure_is_could_not_observe_and_leaves_no_pending() {
+  local dir r probe
+  dir=$(make_case staging-failure)
+  put_task "$dir" upstream state=in_flight
+  put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
+  seed_baseline "$dir" held
+  chmod 0500 "$dir/state"
+  probe="$dir/state/.write-probe"
+  if : > "$probe" 2>/dev/null; then
+    rm -f "$probe"
+    chmod 0700 "$dir/state"
+    printf 'skip - blocker staging failure (state remains writable)\n'
+    return 0
+  fi
+  r=$(movement "$dir" held)
+  chmod 0700 "$dir/state"
+  [ "$(verdict_of "$r")" = unobserved ] \
+    || fail "a staging failure was treated as an observed verdict: $r"
+  case "$(detail_of "$r")" in
+    *could\ not\ be\ recorded*) : ;;
+    *) fail "the staging failure did not name the durable observation failure: $r" ;;
+  esac
+  [ ! -f "$(fm_blocker_pending_path "$dir/state" held)" ] \
+    || fail "a staging failure left a committable pending observation"
+  pass "a staging failure is could-not-observe and leaves nothing committable"
 }
 
 # A blocker id outside the id grammar makes the SET unenumerable rather than
@@ -543,10 +618,12 @@ test_movement_vocabulary_is_total() {
   # unobserved (first observation), then unchanged, then moved
   put_task "$dir" upstream state=in_flight
   put_task "$dir" held blocked_by=upstream held=yes hold_kind=external
-  seen="$seen $(verdict_of "$(movement "$dir" held)")"
-  commit_baseline "$dir" held
-  seen="$seen $(verdict_of "$(movement "$dir" held)")"
-  commit_baseline "$dir" held
+  r=$(movement "$dir" held)
+  seen="$seen $(verdict_of "$r")"
+  commit_baseline "$dir" held "$r"
+  r=$(movement "$dir" held)
+  seen="$seen $(verdict_of "$r")"
+  commit_baseline "$dir" held "$r"
   put_task "$dir" upstream state=done closed=2026-08-17
   seen="$seen $(verdict_of "$(movement "$dir" held)")"
   # cycle
@@ -607,7 +684,7 @@ TOML
     fm_blocker_movement "$2" "$3"
   ' _ "$LIB" real-held "$dir/state")
   [ "$(verdict_of "$r")" = unobserved ] || fail "a real first observation was not could-not-observe: $r"
-  commit_baseline "$dir" real-held
+  commit_baseline "$dir" real-held "$r"
   r=$(FM_HOME="$home" bash -c '
     set -u
     # shellcheck disable=SC1090
@@ -615,7 +692,7 @@ TOML
     fm_blocker_movement "$2" "$3"
   ' _ "$LIB" real-held "$dir/state")
   [ "$(verdict_of "$r")" = unchanged ] || fail "a real unmoved blocker did not suppress: $r"
-  commit_baseline "$dir" real-held
+  commit_baseline "$dir" real-held "$r"
 
   ( cd "$home" && tasks-axi "done" real-upstream ) >/dev/null 2>&1 \
     || fail "could not move the real blocker"
@@ -648,6 +725,8 @@ test_node_bound_applies_across_a_wide_graph
 test_shared_descendant_is_expanded_once
 test_dependency_survives_a_restart
 test_uncommitted_observation_repeats_the_wake
+test_nonstaging_verdicts_discard_stale_pending
+test_staging_failure_is_could_not_observe_and_leaves_no_pending
 test_malformed_blocker_id_is_could_not_observe
 test_movement_vocabulary_is_total
 test_real_backlog_grammar_is_parsed
