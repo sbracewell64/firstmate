@@ -341,9 +341,9 @@ cmd_reviewer() {
 activation_id() {  # <contract> <model> <harness> <effort>
   local digest
   if command -v sha256sum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print $1}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print substr($1,1,40)}')
   elif command -v shasum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print $1}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
   else
     return 1
   fi
@@ -382,35 +382,30 @@ activation_already_active() {  # <activation-id>
   return 1
 }
 
-qualification_bootstrap() {  # <target-contract>
-  local target_contract=$1 adjudicator route zero model harness effort floor
-  adjudicator=$(fm_qualification_contract "$target_contract" | jq -r '.adjudication.adjudicator_contract // empty' 2>/dev/null)
-  [ -n "$adjudicator" ] || return 1
+qualification_bootstrap() {  # <target-route> <target-floor> <model> <harness> <effort>
+  local target_route=$1 target_floor=$2 model=$3 harness=$4 effort=$5 route checked rc
   while IFS= read -r route; do
     [ -n "$route" ] || continue
-    zero=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-route.sh" zero-route --route "$route" --json 2>/dev/null) || continue
-    [ "$(printf '%s' "$zero" | jq -r '.classification // empty')" = ELIGIBLE ] || continue
-    model=$(printf '%s' "$zero" | jq -r '.eligible[0] // empty')
-    [ -n "$model" ] || continue
-    IFS=$'\x1f' read -r harness effort <<EOF2
-$(jq -r --arg route "$route" --arg model "$model" '
-  ([((.rules // [])[]? | select(.route == $route)),
-     (.default // empty | select(.route == $route))] | first) as $r
-  | (if ($r.use | type) == "array"
-     then ([$r.use[] | select((.model // "") == $model)] | first // {})
-     else ($r.use // {}) end) as $p
-  | [$p.harness // "", $p.effort // ""] | join("\u001f")' "$CONFIG/crew-dispatch.json" 2>/dev/null)
-EOF2
-    floor=$(printf '%s' "$zero" | jq -r '.floor // empty')
-    [ -n "$harness" ] && [ -n "$effort" ] && [ -n "$floor" ] || continue
+    rc=0
+    checked=$(FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-route.sh" check --route "$route" \
+      --model "$model" --harness "$harness" --effort "$effort" --json 2>/dev/null) || rc=$?
+    [ "$rc" -eq 0 ] || continue
+    [ "$(printf '%s' "$checked" | jq -r '.subject.resolved // empty')" = "$model" ] || continue
     printf '%s\037%s\037%s\037%s\n' "$route" "$model" "$harness" "$effort"
     return 0
   done <<EOF
-$(jq -r --arg c "$adjudicator" '
-  . as $root | (.rules // [])[]?
+$(jq -r --arg target_route "$target_route" --arg target_floor "$target_floor" --arg model "$model" '
+  def effort_rank: {low:1, medium:2, high:3, xhigh:4, max:5}[.] // 0;
+  def loop_rank: {none:0, basic:1, verified_agentic:2, "verified-agentic":2}[.] // 0;
+  . as $root | ($root._floors[$target_floor] // {}) as $target
+  | (.rules // [])[]?
   | . as $r
-  | ($root._floors[$r.floor].requires_capabilities // []) as $caps
-  | select(($caps | type) == "array" and ($caps | index($c)) != null)
+  | ($root._floors[$r.floor] // {}) as $bootstrap
+  | select(.route != $target_route)
+  | select((.pool // []) | index($model))
+  | select((($bootstrap.effort_floor // "") | effort_rank) >= (($target.effort_floor // "") | effort_rank))
+  | select(($bootstrap.context_ceiling // 0) >= ($target.context_ceiling // 0))
+  | select((($bootstrap.tool_loop // "none") | loop_rank) >= (($target.tool_loop // "none") | loop_rank))
   | .route' "$CONFIG/crew-dispatch.json" 2>/dev/null)
 EOF
   return 1
@@ -486,8 +481,10 @@ EOF
   fm_task_id_path_safe "$id" || die "derived activation id is not path-safe: $id"
   file=$(activation_file "$id")
 
-  if ! bootstrap=$(qualification_bootstrap "$contract"); then
-    printf 'fm-qualification: no already-qualified assignment-distinct adjudicator route is available for %s, so qualification stops without self-certifying %s\n' "$contract" "$model" >&2
+  local target_floor
+  target_floor=$(printf '%s' "$zero" | jq -r '.floor // empty')
+  if ! bootstrap=$(qualification_bootstrap "$ROUTE" "$target_floor" "$model" "$harness" "$effort"); then
+    printf 'fm-qualification: no route where %s is already eligible also meets target floor %s, so qualification stops without an exemption\n' "$model" "$target_floor" >&2
     return "$EXIT_REQUIRED"
   fi
   IFS=$'\x1f' read -r execution_route execution_model execution_harness execution_effort <<EOF
@@ -653,13 +650,18 @@ cmd_dispatch() {
   execution_effort=$(activation_field "$file" execution_effort || true)
   [ -n "$contract" ] && [ -n "$model" ] && [ -n "$route" ] \
     || { printf 'fm-qualification: activation %s is incomplete and is not dispatched\n' "$id" >&2; return "$EXIT_REFUSED"; }
+  if [ "$execution_model" != "$model" ] || [ "$execution_harness" != "$harness" ] || [ "$execution_effort" != "$effort" ]; then
+    printf 'fm-qualification: activation %s assigns the bootstrap run to a binding other than the candidate tuple and is refused\n' "$id" >&2
+    return "$EXIT_REFUSED"
+  fi
 
   # EVERY field is re-validated and passed as a SEPARATE argument. The record
   # stores no command line, for the same reason the capacity deferral record
   # stores none: a state file must never be able to name something to run.
-  local -a args=("$id" "$FM_HOME" --scout --reason-code TOOLING_GAP
+  local -a args=("$id" "$FM_HOME" --scout --reason-code NOVEL_DECOMPOSITION
                  --route "$execution_route" --model "$execution_model"
                  --harness "$execution_harness" --effort "$execution_effort")
+  # The candidate runs once on the bootstrap route; missing target qualification blocks only the target route, so a second invocation path would manufacture evidence.
   if [ "$DRY_RUN" -eq 1 ]; then
     printf 'bin/fm-spawn.sh'
     printf ' %q' "${args[@]}"
@@ -767,18 +769,20 @@ cmd_resolve() {
     return "$EXIT_REFUSED"
   fi
 
+  if [ -n "$blocks" ]; then
+    if ! command -v tasks-axi >/dev/null 2>&1; then
+      printf 'fm-qualification: the backlog owner needed to unblock %s could not be observed, so %s remains active and no return to eligibility is claimed\n' "$blocks" "$id" >&2
+      return "$EXIT_UNOBSERVED"
+    fi
+    if ! tasks-axi unblock "$blocks" --by "$id" >/dev/null 2>&1; then
+      printf 'fm-qualification: the backlog owner did not confirm unblocking %s, so %s remains active and no return to eligibility is claimed\n' "$blocks" "$id" >&2
+      return "$EXIT_UNOBSERVED"
+    fi
+  fi
   record_terminal "$file" "$terminal" || {
-    printf 'fm-qualification: could not mark %s terminal, so it would resume on the next read; repair %s by hand\n' "$id" "$file" >&2
+    printf 'fm-qualification: could not mark %s terminal after the unblock was confirmed\n' "$id" >&2
     return "$EXIT_UNOBSERVED"
   }
-
-  # A pass returns the SAME blocked work identity to normal eligibility through
-  # the existing backlog owner. Its identity, custody bases, attempt count and
-  # retry budget are untouched: the work was never re-created, only unblocked.
-  if [ -n "$blocks" ] && command -v tasks-axi >/dev/null 2>&1; then
-    tasks-axi unblock "$blocks" --by "$id" >/dev/null 2>&1 \
-      || printf 'fm-qualification: could not clear the backlog blocker on %s; clear it by hand so the work returns to normal eligibility\n' "$blocks" >&2
-  fi
   printf 'fm-qualification: %s is terminal QUALIFIED for %s against %s. The evidence is now reusable for every route requiring that contract, and %s returns to normal eligibility with its identity, custody and budget unchanged\n' \
     "$id" "$model" "$contract" "${blocks:-the blocked work}"
   return "$EXIT_OK"

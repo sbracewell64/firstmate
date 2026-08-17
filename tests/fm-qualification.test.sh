@@ -37,9 +37,9 @@ TMP_ROOT=$(fm_test_tmproot fm-qualification)
 command -v jq >/dev/null 2>&1 || fail "fm-qualification: jq is required"
 
 if command -v sha256sum >/dev/null 2>&1; then
-  QUAL_ACTIVATION_ID=$(printf '%s\0%s\0%s\0%s' job-maker alpha/one pi high | sha256sum | awk '{print "qualify-" $1}')
+  QUAL_ACTIVATION_ID=$(printf '%s\0%s\0%s\0%s' job-maker alpha/one pi high | sha256sum | awk '{print "qualify-" substr($1,1,40)}')
 else
-  QUAL_ACTIVATION_ID=$(printf '%s\0%s\0%s\0%s' job-maker alpha/one pi high | shasum -a 256 | awk '{print "qualify-" $1}')
+  QUAL_ACTIVATION_ID=$(printf '%s\0%s\0%s\0%s' job-maker alpha/one pi high | shasum -a 256 | awk '{print "qualify-" substr($1,1,40)}')
 fi
 
 # --- fixture -----------------------------------------------------------------

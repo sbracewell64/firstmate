@@ -47,9 +47,9 @@ command -v jq >/dev/null 2>&1 || fail "fm-route-qualification: jq is required"
 qualification_activation_id() {
   local digest
   if command -v sha256sum >/dev/null 2>&1; then
-    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print $1}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | sha256sum | awk '{print substr($1,1,40)}')
   else
-    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print $1}')
+    digest=$(printf '%s\0%s\0%s\0%s' "$1" "$2" "$3" "$4" | shasum -a 256 | awk '{print substr($1,1,40)}')
   fi
   printf 'qualify-%s\n' "$digest"
 }
@@ -262,7 +262,7 @@ make_home() {  # <name> [plain]
   home="$TMP_ROOT/$name/home"
   fakebin="$TMP_ROOT/$name/fakebin"
   mkdir -p "$home/config" "$home/state" "$home/data" "$TMP_ROOT/$name/projects/proj" "$fakebin"
-  printf '#!/bin/sh\nexit 1\n' > "$fakebin/tmux"
+  printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\nexit 1\n' "$home/tmux.log" > "$fakebin/tmux"
   chmod +x "$fakebin/tmux"
   fm_fake_treehouse "$fakebin"
   write_tasks_axi "$fakebin" "$TMP_ROOT/$name/tasks-axi.log"
@@ -304,6 +304,7 @@ run_qual() {  # <home> <args...>
     FM_DECISION_SURFACE_SNAPSHOT="${SNAPSHOT:-}" \
     FM_QUALIFICATION_CONTRACT_DIR="$CDIR" FM_QUALIFICATION_RECORD_DIR="$RDIR" \
     FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+    FM_BACKEND=tmux HERDR_ENV='' \
     PATH="${FAKEBIN:-}:$PATH" \
     "$QUAL" "$@" 2>&1
 }
@@ -745,7 +746,7 @@ test_failure_automatically_advances_to_the_next_candidate() {
   pass "failure automatically advances to the next candidate"
 }
 
-test_qualification_dispatch_uses_an_already_qualified_adjudicator_route() {
+test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route() {
   local rec out
   rec=$(make_home bootstrap); read_home "$rec"
   reset_register
@@ -755,7 +756,49 @@ test_qualification_dispatch_uses_an_already_qualified_adjudicator_route() {
   assert_contains "$out" "launching $AID_ALPHA" "the real spawn chokepoint was not entered"
   assert_not_contains "$out" "no brief" "activation did not materialize the brief required by spawn"
   assert_not_contains "$out" "FM_ROUTE_QUALIFICATION_REQUIRED" "the qualifying run reused the blocked target route"
-  pass "qualification dispatch uses an already-qualified adjudicator route"
+  assert_present "$HOME_DIR/tmux.log" "the candidate dispatch did not reach the real invocation owner"
+  assert_grep "execution_model=alpha/one" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the candidate was not recorded as the worker dispatched through the chokepoint"
+  assert_no_grep "execution_model=beta/two" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the route-supplying binding was incorrectly recorded as the worker"
+  assert_grep "execution_route=R-GENHARD" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the bootstrap route did not preserve the target floor axes"
+  pass "qualification dispatch runs the candidate on a bootstrap route"
+}
+
+test_bootstrap_dispatch_refuses_a_substituted_worker() {
+  local rec tmp out rc=0
+  rec=$(make_home wrongworker); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  tmp="$HOME_DIR/state/qualification/$AID_ALPHA.activation.tmp"
+  sed 's/^execution_model=.*/execution_model=beta\/two/' \
+    "$HOME_DIR/state/qualification/$AID_ALPHA.activation" > "$tmp" \
+    && mv "$tmp" "$HOME_DIR/state/qualification/$AID_ALPHA.activation"
+  out=$(run_qual "$HOME_DIR" dispatch "$AID_ALPHA") || rc=$?
+  expect_code 1 "$rc" "a route-supplying binding was accepted as the qualification worker"
+  assert_contains "$out" "other than the candidate tuple" "the inverted worker role was not refused by name"
+  assert_absent "$HOME_DIR/tmux.log" "the substituted worker reached the invocation owner"
+  pass "bootstrap dispatch refuses a substituted worker"
+}
+
+test_qualified_resolution_requires_confirmed_unblock() {
+  local rec out rc=0
+  rec=$(make_home unblockcno); read_home "$rec"
+  reset_register
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "activation failed"
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
+  printf '#!/bin/sh\n[ "$1" != unblock ]\n' > "$FAKEBIN/tasks-axi"
+  chmod +x "$FAKEBIN/tasks-axi"
+  out=$(run_qual "$HOME_DIR" resolve "$AID_ALPHA" --result QUALIFIED) || rc=$?
+  expect_code 4 "$rc" "an unconfirmed unblock was reported as successful resolution"
+  assert_contains "$out" "no return to eligibility is claimed" "unblock uncertainty was reduced to a warning"
+  assert_no_grep "terminal=" "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "the workflow became terminal before the backlog owner confirmed release"
+  assert_not_contains "$out" "returns to normal eligibility" "resolution claimed a transition the backlog owner rejected"
+  pass "qualified resolution requires confirmed unblock"
 }
 
 test_qualification_is_enforced_on_the_full_binding_tuple() {
@@ -781,7 +824,8 @@ test_tuple_identity_distinguishes_a_colliding_slug_pair() {
   reset_register
   tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
   jq '._models["provider/foo-codex-high"] = {smart_zone:140000, effort_expressible:["high"], tool_loop:"verified-agentic"}
-      | .rules = [.rules[] | if .route == "R-RUNTIME" then (.use.model = "provider/foo-codex-high" | .pool = ["provider/foo-codex-high"]) else . end]' \
+      | .rules = [.rules[] | if .route == "R-RUNTIME" then (.use.model = "provider/foo-codex-high" | .pool = ["provider/foo-codex-high"])
+                            elif .route == "R-GENHARD" then .pool += ["provider/foo-codex-high"] else . end]' \
     "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
   tmp="$HOME_DIR/config/models.json.tmp"
   jq '.providers.provider = .providers.alpha
@@ -795,7 +839,8 @@ test_tuple_identity_distinguishes_a_colliding_slug_pair() {
   reset_register
   tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
   jq '._models["provider/foo"] = {smart_zone:140000, effort_expressible:["high"], tool_loop:"verified-agentic"}
-      | .rules = [.rules[] | if .route == "R-RUNTIME" then (.use = {harness:"codex", model:"provider/foo", effort:"high"} | .pool = ["provider/foo"]) else . end]' \
+      | .rules = [.rules[] | if .route == "R-RUNTIME" then (.use = {harness:"codex", model:"provider/foo", effort:"high"} | .pool = ["provider/foo"])
+                            elif .route == "R-GENHARD" then .pool += ["provider/foo"] else . end]' \
     "$HOME_DIR/config/crew-dispatch.json" > "$tmp" && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
   tmp="$HOME_DIR/config/models.json.tmp"
   jq '.providers.provider = .providers.alpha
@@ -818,7 +863,7 @@ test_failed_advancement_error_remains_observable_and_nonterminal() {
     || fail "activation failed"
   write_record beta-two-runtime runtime-job-maker RUNTIME_JOB_MAKER beta/two beta FAILED
   tmp="$HOME_DIR/config/crew-dispatch.json.tmp"
-  jq '.rules = [.rules[] | select(.route != "R-QUAL")]' "$HOME_DIR/config/crew-dispatch.json" > "$tmp" \
+  jq '.rules = [.rules[] | select(.route != "R-GENHARD")]' "$HOME_DIR/config/crew-dispatch.json" > "$tmp" \
     && mv "$tmp" "$HOME_DIR/config/crew-dispatch.json"
   out=$(run_qual "$HOME_DIR" resolve "$AID_BETA" --result FAILED) || rc=$?
   expect_code 4 "$rc" "an unobservable successor transition was collapsed into ordinary failure"
@@ -962,7 +1007,9 @@ test_a_could_not_observe_result_spends_one_attempt_and_stays_active
 test_a_failed_result_is_terminal_and_preserves_the_exclusion
 test_an_asserted_failure_without_a_matching_record_is_refused
 test_failure_automatically_advances_to_the_next_candidate
-test_qualification_dispatch_uses_an_already_qualified_adjudicator_route
+test_qualification_dispatch_runs_the_candidate_on_a_bootstrap_route
+test_bootstrap_dispatch_refuses_a_substituted_worker
+test_qualified_resolution_requires_confirmed_unblock
 test_qualification_is_enforced_on_the_full_binding_tuple
 test_tuple_identity_distinguishes_a_colliding_slug_pair
 test_failed_advancement_error_remains_observable_and_nonterminal
