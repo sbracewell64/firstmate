@@ -19,6 +19,21 @@ set -u
 TMP_ROOT=$(fm_test_tmproot fm-turnend-guard)
 fm_git_identity fmtest fmtest@example.invalid
 
+JITI_REGISTER=
+if PI_BIN=$(command -v pi 2>/dev/null); then
+  PI_ENTRY=$(node -e 'process.stdout.write(require("node:fs").realpathSync(process.argv[1]))' "$PI_BIN") || fail "cannot resolve installed Pi executable at $PI_BIN"
+  PI_PACKAGE_DIR=$(dirname "$(dirname "$PI_ENTRY")")
+  [ ! -f "$PI_PACKAGE_DIR/node_modules/jiti/lib/jiti-register.mjs" ] || JITI_REGISTER="$PI_PACKAGE_DIR/node_modules/jiti/lib/jiti-register.mjs"
+fi
+
+node_ts() {
+  if [ -n "$JITI_REGISTER" ]; then
+    node --import "$JITI_REGISTER" "$@"
+  else
+    node "$@"
+  fi
+}
+
 REQUIRED_REASON='watcher supervision needs Stop-owned automatic recovery; inspect the hook registration and startup status before ending the turn'
 
 # --- PREDICATE: bin/fm-supervision-lib.sh -----------------------------------
@@ -927,7 +942,7 @@ SH
 exit 0
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$ext" FM_HOME="$home" FM_GUARD_LOG="$log" node_ts --input-type=module 2>&1 <<'EOF'
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
@@ -948,7 +963,7 @@ const pi = {
   },
 };
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
-mod.default(pi);
+(mod.default?.default ?? mod.default)(pi);
 if (handlers.has("turn_end")) throw new Error("guard still treats internal Pi turns as logical runs");
 const settled = handlers.get("agent_settled");
 if (!settled) throw new Error("agent_settled handler was not registered");
@@ -992,7 +1007,7 @@ SH
 exit 0
 SH
   chmod +x "$repo/bin/fm-turnend-guard.sh" "$repo/bin/fm-arm-pretool-check.sh"
-  out=$(PLUGIN="$ext" FM_HOME="$home" node --input-type=module 2>&1 <<'EOF'
+  out=$(PLUGIN="$ext" FM_HOME="$home" node_ts --input-type=module 2>&1 <<'EOF'
 import { pathToFileURL } from "node:url";
 
 const handlers = new Map();
@@ -1008,7 +1023,7 @@ const pi = {
   },
 };
 const mod = await import(pathToFileURL(process.env.PLUGIN).href);
-mod.default(pi);
+(mod.default?.default ?? mod.default)(pi);
 const settled = handlers.get("agent_settled");
 await settled({ type: "agent_settled" }, {});
 await settled({ type: "agent_settled" }, {});
