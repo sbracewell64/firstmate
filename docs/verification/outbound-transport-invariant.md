@@ -147,7 +147,19 @@ Each row states what the control actually establishes and what it does not. A kn
 | `disposition-completes-chain` | Closure requires ruling and resumption first | Closure accepts an `emitted` request - observed red | - |
 | `identity-mismatch-distinct` | A readable record naming another request refuses as a mismatch, NOT as unreadable | Collapse the two verdicts into one return - this is the defect that shipped | Does not cover a record whose non-identity fields are wrong |
 | `head-object-id-width` | A 64-character value is refused for a sha1 repository; an abbreviation is refused; an unresolvable well-shaped id is refused; undeterminable format refuses | Accept any 7-40 hex, or a bare 40-or-64 - observed red | **No sha256 repository was available.** Acceptance of a 64-character head in a sha256 repository is UNPROVEN |
-| `dead-predicate` | A function in an enrolled file with zero call sites repo-wide is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Add an uncalled canonical function to an enrolled file - observed red | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review |
+| `dead-predicate` | A function in an enrolled file with no call site anywhere parseable is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review. `DEAD` is issued only when every possible call site was parseable, so a predicate with an unparseable possible consumer is could-not-observe instead; on this repository 118 consumer files parse and 215 do not, so most of the tree is unreadable to it |
+
+## One recurrence, four instances: a canonical thing that exists and is not consulted
+
+Four separate review findings in this module were the same defect, and naming the shape matters more than the four fixes:
+
+- `fm_outbound_applicability` - written correct, zero call sites, so no applicability test ran at all.
+- `fm_outbound_record_state_valid` - defined once, consulted nowhere.
+- `record_read` - a three-valued verdict collapsed back to a boolean at five call sites, so a readable record belonging to another request reported as merely unreadable.
+- the typed `outbound-gate.json` declaration - authoritative in name, outranked by prose, so a stale sentence could route a detect-only item onto the emitting channel.
+
+In each case the artifact existed, read correctly, and was not consulted - which is why reading the code proves nothing and only exercising it does.
+The class control below catches the first two shapes and explicitly does not catch the second two; that boundary is stated in its own header rather than inferred.
 
 ## Refreshing this record
 
