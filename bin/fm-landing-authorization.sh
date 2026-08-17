@@ -259,10 +259,15 @@ claim_acquire() {  # <auth-id>
   identity=$(fm_pid_identity "$pid") || return 1
   mkdir -p "$AUTH_DIR" || return 1
   mkdir "$dir" 2>/dev/null || return 1
-  printf '%s\n' "$pid" > "$dir/owner-pid" \
+  if printf '%s\n' "$pid" > "$dir/owner-pid" \
     && printf '%s\n' "$identity" > "$dir/owner-identity" \
-    && printf '%s\n' "$group" > "$dir/owner-group" \
-    || { rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"; rmdir "$dir" 2>/dev/null; return 1; }
+    && printf '%s\n' "$group" > "$dir/owner-group"; then
+    :
+  else
+    rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"
+    rmdir "$dir" 2>/dev/null
+    return 1
+  fi
   CLAIM=$dir
   trap claim_release EXIT INT TERM
   return 0
@@ -295,10 +300,14 @@ claim_group_state() {  # <process-group>
 claim_owner_state() {  # <auth-id>
   local dir pid identity group current current_group proc_root
   dir=$(auth_claim_path "$1") || { printf 'unobserved\n'; return; }
-  pid=$(cat "$dir/owner-pid" 2>/dev/null) \
+  if pid=$(cat "$dir/owner-pid" 2>/dev/null) \
     && identity=$(cat "$dir/owner-identity" 2>/dev/null) \
-    && group=$(cat "$dir/owner-group" 2>/dev/null) \
-    || { printf 'unobserved\n'; return; }
+    && group=$(cat "$dir/owner-group" 2>/dev/null); then
+    :
+  else
+    printf 'unobserved\n'
+    return
+  fi
   case $pid in ''|*[!0-9]*) printf 'unobserved\n'; return ;; esac
   [ "$group" = "$pid" ] || { printf 'unobserved\n'; return; }
   [ -n "$identity" ] || { printf 'unobserved\n'; return; }
