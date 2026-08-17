@@ -26,7 +26,7 @@ The mutation is the arbiter: a named property whose mutation leaves the suite gr
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against head `6a3d3692`, and EACH ENTRY in the campaign artifact records that head individually rather than relying on one head written once.
+Every measurement below was taken against head `836785a0`, and EACH ENTRY in the campaign artifact records that head individually rather than relying on one head written once.
 Each entry also carries a digest of its whole captured run and the patch that rebuilds its variant, so an independent party can replay any entry and compare rather than taking this record's word for it.
 
 ## Campaign artifact
@@ -34,8 +34,8 @@ Each entry also carries a digest of its whole captured run and the patch that re
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `0000000`.
-Mutations built: 0.
+Campaign head: `836785a0dab185e9b22f79d1b8cd00476d3a82ba`.
+Mutations built: 72.
 
 ## Commands
 
@@ -60,11 +60,10 @@ Both files are copied because the entrypoint sources its library from its own di
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
-Mutation-measurement claim: 72 mutations were built against the subjects recorded in the campaign artifact, and 71 turned the suite red.
+Mutation-measurement claim: 72 mutations were built against the subjects recorded in the campaign artifact, and all 72 turned the suite red.
 Coverage is counted per property rather than per test function, because a named property whose mutation leaves the suite green is uncovered however many controls exist.
 
-One mutation deliberately did not turn the suite red.
-That one is listed in the table as a non-red with its reason, rather than dropped from the table or given a manufactured red, because a control whose redundancy makes it single-mutation-proof is a real property and stating it is more honest than a uniform table.
+There is no non-red in this campaign, and the reason that changed is recorded below rather than left as a silently uniform table.
 
 Each row is one property, the mutation aimed at it, and the exact first failing line that mutation produced, or an explicit non-red where that is what was measured.
 Every mutation is a real edit to a real code path, and each build was confirmed to differ from the tracked script and to run before the suite was pointed at it.
@@ -89,7 +88,7 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a red calibration that records a pass refuses | the calibration's recorded outcome is no longer checked | `not ok - a calibration that never went red refuses: expected exit 1, got 0` |
 | a could-not-observe verifier cannot become review-ready | a non-PASS verifier result falls through to the passing path | `not ok - a could-not-observe verifier is not a pass: expected exit 2, got 0` |
 | a broken evidence digest refuses | the evidence check returns before it checks anything | `not ok - evidence that no longer matches its digest refuses: expected exit 1, got 0` |
-| an evidence locator that escapes its root refuses | the lexical parent-traversal guard alone is removed | **NO RED - deliberate, see below**: containment is enforced twice and independently, so removing one guard alone does not falsify this control |
+| an evidence locator that escapes its root refuses | the lexical parent-traversal guard is removed | `not ok - a locator escaping its evidence root refuses: expected exit 1, got 0` |
 | a result that does not identify its verifier refuses | a result carrying no verifier identity is accepted | `not ok - a result that does not identify what produced it refuses: expected exit 1, got 0` |
 | wrong head ci refuses | every attempt is treated as if it ran at the candidate head | `not ok - a required platform covered only by another head's run refuses: expected exit 1, got 0` |
 | a skipped required check refuses | a skipped current check stops refusing | `not ok - a skipped required check refuses: expected exit 1, got 0` |
@@ -125,7 +124,7 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | validate rechecks evidence bytes | the evidence recheck arm never runs | `not ok - evidence replaced after compilation refuses at validation: expected exit 1, got 0` |
 | the generated contract page matches the catalog | the generated contract page's section heading changes | `not ok - docs/contracts/review-envelope.md is stale; regenerate it with bin/fm-review-envelope.sh docs` |
 | a crashed compiler cannot reach a verdict | an unreadable compiler result is read as a pass | `not ok - a compiler that produced no result is could-not-observe: expected exit 2, got 0` |
-| symlink out of root refused before any byte is read or digested | real-path containment is removed, leaving only lexical checks | `not ok - a symlink outside the evidence root refuses: expected exit 1, got 0` |
+| symlink out of root refused before any byte is read or digested | the final open stops refusing to follow a symlink | `not ok - a symlink outside the evidence root refuses: expected exit 1, got 0` |
 | duplicate disposition refused, order A (later duplicate wins) | duplicate dispositions resolve by last-one-wins | `not ok - duplicate dispositions refuse in preserved-first order: expected exit 1, got 0` |
 | duplicate disposition refused, order B (earlier duplicate wins) | duplicate dispositions resolve by first-one-wins | `not ok - the duplicate refusal must not depend on disposition order (missing: 'refusal obligation_disposition_duplicate')` |
 | claimed identity mismatching a recomputation refuses | a mismatched declared identity stops refusing at compile time | `not ok - a mismatched claimed request identity refuses: expected exit 1, got 0` |
@@ -135,7 +134,7 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | absent claim field is could-not-observe | an absent claim state is read as an explicit null | `not ok - an absent claim state is could-not-observe: expected exit 2, got 0` |
 | explicit null claim is distinguishable from a missing field | an explicit null claim is collapsed into absent | `not ok - the readable verify record must name the malformed envelope (missing: 'unobserved envelope_unreadable')` |
 | a correct claim with intact digests validates (non-vacuity, inverted) | INVERTED: an intact outer digest is made to refuse | `not ok - a structurally malformed body is could-not-observe: expected exit 2, got 1` |
-| an evidence locator that escapes its root refuses | both evidence-root containment guards are removed | `not ok - a locator escaping its evidence root refuses: expected exit 1, got 0` |
+| an evidence locator that escapes its root refuses | both the lexical traversal guard and the symlink refusal are removed | `not ok - a locator escaping its evidence root refuses: expected exit 1, got 0` |
 | a ruling without a stable id refuses | a ruling with no stable id is accepted | `not ok - a missing ruling id refuses: expected exit 1, got 0` |
 | duplicate ruling ids are ambiguous, order A | duplicate ruling ids stop being ambiguous | `not ok - duplicate ruling ids refuse in applicable-first order: expected exit 1, got 0` |
 | duplicate ruling ids are ambiguous, order B | duplicate ruling ids are detected only when the pair does not start the list | `not ok - duplicate ruling ids refuse in applicable-first order: expected exit 1, got 0` |
@@ -147,14 +146,15 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | an explicit no-contracts declaration is accepted | an explicit no-contracts declaration stops being accepted | `not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2` |
 | requested decisions accept only uppercase tokens | the requested-decision token format stops being enforced | `not ok - a malformed requested decision refuses: expected exit 1, got 0` |
 
-## The one mutation that stayed green, and why it is not a gap
+## The redundancy that used to hide a guard, and why it is gone
 
-Removing the lexical parent-traversal guard alone left the suite green.
-That is not an uncovered property; it is redundancy. Evidence-root containment is now enforced twice and independently, by the lexical component check and by real-path containment, and either one alone still refuses `../outside.log`.
+Earlier campaigns recorded one deliberate non-red: removing the lexical parent-traversal guard alone left the suite green, because evidence-root containment was then enforced twice over the same case - lexically, and again by a real-path comparison. No single-guard mutation could falsify that control.
 
-So the property was measured with BOTH guards removed, which is the last row of the table, and it turns red.
-The consequence worth stating: no single-guard mutation can falsify that control, so a future change that removes one guard will not be caught by this suite.
-Whoever removes either guard must re-measure with the remaining one removed too.
+Containment was since rewritten to open the evidence once without following symlinks and to hash that same descriptor, so the check and the use share one handle rather than resolving a path twice.
+
+That rewrite removed the overlap. The two guards now cover DISJOINT cases: the lexical check is the only thing refusing a `..` component, because a parent directory is not a symlink and the no-follow open does not stop it, and the no-follow open is the only thing refusing a symlink. Each is now singly enforced and singly falsifiable, which is why every mutation in this campaign turns red and none is a deliberate non-red.
+
+This is a strengthening of the measurement rather than a weakening of the guard. Containment itself is stricter than before; what disappeared is the redundancy that made one guard's removal undetectable.
 
 ## Three properties measured directly rather than through the suite
 
