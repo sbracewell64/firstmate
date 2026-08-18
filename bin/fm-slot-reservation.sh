@@ -213,9 +213,11 @@ open_lock_acquire() {  # <pool-real>
 }
 
 # Is <ref> one of the refs bin/fm-landed-lib.sh names as landing targets for
-# <pool>'s default branch? 0 it provably is, 1 it provably is not, 2 the set
-# could not be established. Sets TRUNK_REF_SET_NAME to the branch name whenever
-# that much resolved, so a refusal can name the trunk it measured against.
+# <pool>'s default branch? 0 it provably is, 1 it provably is not, 2 membership
+# could not be established. Sets TRUNK_REF_SET_NAME to the branch name and
+# TRUNK_REF_SET_LIST to the candidate refs it walked, whenever that much
+# resolved, so a refusal can name both the trunk it measured against and the
+# refs it would have accepted.
 #
 # MAKE THE INVALID STATE UNREPRESENTABLE RATHER THAN DOCUMENT THAT IT IS
 # INVALID. fm_slot_reservation_read decides release by walking the default
@@ -226,34 +228,65 @@ open_lock_acquire() {  # <pool-real>
 # hours later by whoever is denied the slot; it is refused now, while the caller
 # is still present to correct the ref.
 #
-# The 2 refuses as firmly as the 1. Membership in a set that could not be
-# enumerated is not established either, and admitting on a short universe is
-# exactly the negative-over-an-unread-universe this file refuses everywhere
-# else.
+# INCOMPLETENESS KILLS THE NEGATIVE, NOT THE POSITIVE - the same asymmetry
+# fm_slot_reservation_read applies to the very same candidate list, and stated
+# there at length. So the list in hand is walked FIRST, in every case, and a
+# match returns before completeness is considered at all: a ref found in the
+# printed list is a proven member whatever else went unread. Completeness only
+# decides how a MISS reads.
+#
+#   complete   + present -> 0, a proven member
+#   complete   + absent  -> 1, a proven non-member
+#   INCOMPLETE + present -> 0, still proven; incompleteness cannot unprove a hit
+#   incomplete + absent  -> 2, absence over an unread universe proves nothing,
+#                           so membership is unestablished and this refuses -
+#                           the conservative side, which is what keeps the
+#                           unreleasable reservation unrepresentable.
 TRUNK_REF_SET_NAME=
+TRUNK_REF_SET_LIST=
 trunk_ref_in_candidate_set() {  # <pool-real> <ref>
   local pool=$1 ref=$2 name refs status candidate
   TRUNK_REF_SET_NAME=
-  name=$(fm_landed_default_branch_name "$pool") || return 2
-  TRUNK_REF_SET_NAME=$name
-  refs=$(fm_landed_candidate_refs "$pool" "$name")
-  status=$?
-  case "$status" in
-    0) : ;;
+  TRUNK_REF_SET_LIST=
+  name=$(fm_landed_default_branch_name "$pool")
+  case $? in
+    0) TRUNK_REF_SET_NAME=$name ;;
+    # A project with no default branch at all carries no landing refs, so the
+    # ref provably is not one of them; a project whose branches could not be
+    # read establishes nothing either way.
     1) return 1 ;;
     *) return 2 ;;
   esac
+  refs=$(fm_landed_candidate_refs "$pool" "$name")
+  status=$?
+  TRUNK_REF_SET_LIST=$refs
   while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
     [ "$candidate" = "$ref" ] && return 0
   done <<EOF
 $refs
 EOF
+  [ "$status" -ne 2 ] || return 2
   return 1
+}
+
+# The candidate refs a refusal would have accepted, rendered for a person.
+# Membership is exact-string against fully-qualified refs, so naming them is
+# what makes `--trunk-ref main` correctable without reading bin/fm-landed-lib.sh.
+trunk_ref_set_accepted() {
+  local candidate out=''
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    if [ -z "$out" ]; then out=$candidate; else out="$out, $candidate"; fi
+  done <<EOF
+$TRUNK_REF_SET_LIST
+EOF
+  printf '%s' "$out"
 }
 
 cmd_open() {  # <task-id> ...
   local task='' project='' verdict='' ref='' ttl=$FM_SLOT_RESERVATION_TTL_DEFAULT
-  local pool name head now file tmp
+  local pool name head now file tmp membership accepted
   [ $# -gt 0 ] || { usage >&2; exit 2; }
   task=$1
   shift
@@ -285,10 +318,20 @@ cmd_open() {  # <task-id> ...
     esac
   else
     trunk_ref_in_candidate_set "$pool" "$ref"
-    case $? in
+    membership=$?
+    accepted=$(trunk_ref_set_accepted)
+    case "$membership" in
       0) : ;;
-      1) die "--trunk-ref $ref is not one of the refs carrying ${TRUNK_REF_SET_NAME:-the default branch of $pool}, which is the set the release condition watches; a reservation opened against it could never be shown released and would withhold an empty slot for its whole TTL, so nothing was reserved" ;;
-      *) die "the refs carrying ${TRUNK_REF_SET_NAME:-the default branch of $pool} could not be enumerated, so whether --trunk-ref $ref is one of them was never established; nothing was reserved" ;;
+      1)
+        [ -n "$TRUNK_REF_SET_NAME" ] \
+          || die "$pool has no resolvable default branch, so it carries no landing refs for --trunk-ref $ref to name and there is no trunk to reserve a slot to repair"
+        die "--trunk-ref $ref is not one of the refs carrying $TRUNK_REF_SET_NAME, which is the set the release condition watches (accepted: ${accepted:-no ref carrying $TRUNK_REF_SET_NAME exists}); a reservation opened against it could never be shown released and would withhold an empty slot for its whole TTL, so nothing was reserved"
+        ;;
+      *)
+        [ -n "$TRUNK_REF_SET_NAME" ] \
+          || die "$pool's default branch could not be read, so whether --trunk-ref $ref is one of its landing refs was never established; nothing was reserved"
+        die "the refs carrying $TRUNK_REF_SET_NAME could not be read in full and --trunk-ref $ref is not among the ones that were listed (listed: ${accepted:-none}), so its membership was never established; nothing was reserved"
+        ;;
     esac
   fi
   head=$(git --no-optional-locks -C "$pool" rev-parse --verify --quiet "$ref" 2>/dev/null) || head=

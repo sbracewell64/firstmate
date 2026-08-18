@@ -235,6 +235,10 @@ fm_slot_reservation_tier_valid() {  # <value>
 #   FM_SLOT_RESERVATION_STATE   absent | held | released | unobservable
 #   FM_SLOT_RESERVATION_REASON  '' | landed_or_superseded | expired
 #                               | unreadable_record | trunk_unresolvable
+#                               | trunk_absent
+#                               This block is the one place the vocabulary is
+#                               enumerated for consumers, so a `case` written
+#                               against it is a case over the whole closed set.
 #   FM_SLOT_RESERVATION_DETAIL  one short human phrase, always set
 #   FM_SLOT_RESERVATION_TASK    the holder, when the record parsed
 #   FM_SLOT_RESERVATION_PATH    the record's path, when it could be resolved
@@ -328,7 +332,7 @@ fm_slot_reservation_unobservable() {  # <reason> <detail>
 fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   local pool=$1 now=$2 file task project ref head opened ttl verifier evidence
   local version age tier
-  local name refs status candidate tip incomplete=0 observed=0 universe_empty=0
+  local name refs status candidate tip incomplete=0 listed=0 observed=0 universe_empty=0
   fm_slot_reservation_reset
   if ! file=$(fm_slot_reservation_path "$pool"); then
     fm_slot_reservation_unobservable unreadable_record \
@@ -440,6 +444,7 @@ fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   esac
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
+    listed=$((listed + 1))
     tip=$(git --no-optional-locks -C "$pool" rev-parse --verify --quiet "$candidate" 2>/dev/null) || tip=
     if [ -z "$tip" ]; then
       incomplete=1
@@ -468,6 +473,11 @@ EOF
   if [ "$universe_empty" -ne 0 ]; then
     fm_slot_reservation_unobservable trunk_absent \
       "$pool's refs carrying $name were enumerated in full and there are none, so there is no trunk left to compare $head against"
+    return 0
+  fi
+  if [ "$listed" -eq 0 ]; then
+    fm_slot_reservation_unobservable trunk_unresolvable \
+      "$pool's refs carrying $name could not be enumerated, so nothing was listed to compare $head against"
     return 0
   fi
   if [ "$observed" -eq 0 ]; then

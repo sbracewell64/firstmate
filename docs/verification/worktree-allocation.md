@@ -255,7 +255,7 @@ Only a mismatched identity with none of those present reads dead.
 
 ## The one slot a queued trunk repair may be held
 
-Verified 2026-08-18, against the shipped build and twenty defect builds, by `tests/fm-slot-reservation.test.sh`.
+Verified 2026-08-18, against the shipped build and twenty-two defect builds, by `tests/fm-slot-reservation.test.sh`.
 
 A pool may carry one reservation, which withholds a single demonstrably empty slot from every dispatch except the one task it names.
 `bin/fm-slot-reservation-lib.sh` owns the record, the admission predicate, and the release conditions; `bin/fm-worktree-guard.sh` applies it; `bin/fm-pool-lib.sh` owns where a pool's machine-private state lives, so the reservation and the pool selection lock cannot disagree about which directory that is.
@@ -318,9 +318,11 @@ The advance is tested by ancestry rather than by content containment, because th
 
 Because that set is what the release condition watches, `open` refuses a `--trunk-ref` naming anything outside it, rather than recording a head no candidate ref can ever be shown to have advanced past.
 The invalid state is made unrepresentable instead of documented as invalid: a reservation with no reachable release condition but its TTL must not be created and then discovered hours later by whoever is denied the slot.
-That refusal is three-valued like everything else here, and its two forms are worded apart - a ref proven outside the set, and a set that could not be enumerated, since membership in a set nobody could read is not established either.
+That refusal is three-valued like everything else here, and its two forms are worded apart - a ref proven outside the set, and a ref whose membership was never established, since membership in a set nobody could read in full is not established either.
+Both name the refs that would have been accepted, because membership is exact-string against fully-qualified refs and `--trunk-ref main` is otherwise uncorrectable from the message alone.
+The same asymmetry governs it as governs the release read: the list in hand is walked first and a match returns before completeness is considered at all, so an incomplete enumeration can refuse a miss but can never unprove a hit.
 The flag itself stays, because which landing ref the head was read from is real provenance.
-Cases (18) and (19) pin the refusal and the control that an in-set ref still opens and is still recorded.
+Cases (18) and (19) pin the complete-universe pair, and cases (21) and (22) pin the incomplete one in both directions.
 
 Incompleteness kills the negative and not the positive.
 A proven advance stands whatever went unread, so the read releases on the first candidate that shows one.
@@ -373,13 +375,15 @@ Case (12) is the acceptance sequence end to end - a full pool starts nothing, on
 | (18) | a `--trunk-ref` outside the trunk's landing refs is refused and reserves nothing | the membership check removed, so `open` accepts whatever ref it is given |
 | (19) | control: a `--trunk-ref` that is in that set still opens and is recorded | the membership check inverted, so every `--trunk-ref` is refused |
 | (20) | a trunk whose landing refs were enumerated and found to be none reads a proven absence, not a failed read | the proven-absence reason folded back into `trunk_unresolvable` |
+| (21) | an incomplete candidate universe still accepts a `--trunk-ref` its partial list contains | the bail-on-incomplete arm restored |
+| (22) | control: that same incomplete universe still refuses a `--trunk-ref` it never listed | the incomplete miss made an acceptance |
 
 Every case is asserted green against the shipped build and red against its own defect build planted in the exact production bytes it depends on, and the suite closes on positive executed counts rather than an absence of failures:
 
 ```
 $ bash tests/fm-slot-reservation.test.sh | tail -4
 FM_TEST_CONTRACT suite=fm-slot-reservation.test.sh status=pass
-FM_SLOT_RESERVATION_COUNTS properties_green=20 defect_builds_red=20
+FM_SLOT_RESERVATION_COUNTS properties_green=22 defect_builds_red=22
 
 all fm-slot-reservation tests passed
 ```

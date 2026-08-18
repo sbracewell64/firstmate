@@ -529,7 +529,7 @@ tests/fm-session-lock-ancestry.test.sh 1216
 tests/fm-session-start.test.sh 66070
 tests/fm-sessionstart-nudge.test.sh 274
 tests/fm-shared-captain-inheritance.test.sh 4615
-tests/fm-slot-reservation.test.sh 30439
+tests/fm-slot-reservation.test.sh 31683
 tests/fm-spawn-dispatch-profile.test.sh 51982
 tests/fm-spawn-worktree-settle.test.sh 13775
 tests/fm-startup-memory-budget.test.sh 6509

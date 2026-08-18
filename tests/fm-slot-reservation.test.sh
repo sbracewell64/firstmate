@@ -59,6 +59,13 @@
 #  (20) a trunk whose refs were enumerated and found    the proven-absence
 #       to be none reads a different reason from a       reason folded back into
 #       trunk that could not be read at all              trunk_unresolvable
+#  (21) an INCOMPLETE candidate universe still accepts   the bail-on-incomplete
+#       a --trunk-ref its partial list contains           arm restored
+#  (22) NON-VACUITY CONTROL: that same incomplete        the incomplete miss
+#       universe still refuses one it does not contain    made an acceptance
+#
+# Cases (18) and (19) are the COMPLETE-universe pair for that same membership
+# check, in both directions: an absent ref refuses and a present one accepts.
 #
 # Every plant below passes the production bytes it replaces as single-quoted
 # literals, which is the point of the quoting: those bytes must reach `plant`
@@ -931,6 +938,149 @@ test_a_proven_absent_trunk_is_not_reported_as_an_unread_one() {
   pass "(20) a trunk whose landing refs were enumerated and found to be none reports a proven absence, never a read that failed"
 }
 
+# --- (21) an incomplete universe still accepts a ref its partial list holds ---
+
+# A `git` that answers everything for real except one read: origin's fetch url,
+# and that one only for the next <n> attempts. fm_landed_push_url takes that
+# failure with `git remote` still listing origin as its "the remote
+# configuration could not be read" branch, so fm_landed_candidate_refs reports
+# an INCOMPLETE universe while still printing refs/heads/<default>.
+#
+# That shape is not reachable from git alone - a broken ref file, a directory in
+# place of a ref, a dangling symref, a url-less remote and an empty pushurl were
+# all measured on this branch, and every one of them still answers git cleanly -
+# so it is driven deliberately here and then asserted below rather than hoped
+# for.
+#
+# It is a COUNTDOWN rather than a switch because the failure being modelled is a
+# read that did not happen at one moment, not a repository that is permanently
+# unreadable: `open` decides membership and then reads the reservation back, and
+# a permanently unreadable remote would make the read-back unobservable and hide
+# the membership decision this case is about.
+install_flaky_origin_url_git() {  # <fakebin>
+  local fakebin=$1 real
+  real=$(command -v git) || return 1
+  {
+    printf '#!/usr/bin/env bash\n'
+    printf 'REAL_GIT=%s\n' "$real"
+    printf 'FAILS=%s\n' "$fakebin/../git-url-fails"
+    cat <<'SH'
+args=("$@")
+n=${#args[@]}
+if [ "$n" -ge 3 ] && [ "${args[n-3]}" = remote ] \
+  && [ "${args[n-2]}" = get-url ] && [ "${args[n-1]}" = origin ]; then
+  left=$(cat "$FAILS" 2>/dev/null || printf 0)
+  case "$left" in ''|*[!0-9]*) left=0 ;; esac
+  if [ "$left" -gt 0 ]; then
+    printf '%s\n' "$((left - 1))" > "$FAILS"
+    echo "fake git: origin's url could not be read" >&2
+    exit 128
+  fi
+fi
+exec "$REAL_GIT" "$@"
+SH
+  } > "$fakebin/git" || return 1
+  chmod +x "$fakebin/git"
+}
+
+# Arm exactly <n> unreadable-url answers, so the next <n> enumerations are the
+# incomplete ones and everything after them is ordinary.
+arm_unreadable_origin_url() {  # <fakebin> <n>
+  printf '%s\n' "$2" > "$1/../git-url-fails"
+}
+
+# "<status>|<refs on one line>" for this pool's candidate universe, read through
+# bin/fm-landed-lib.sh itself so the fixture's shape is measured rather than
+# assumed. A case whose fixture stopped producing an incomplete universe would
+# otherwise keep passing while testing nothing.
+candidate_universe_shape() {  # <bin-root> <fakebin> <proj>
+  PATH="$2:$PATH" bash -c '
+. "$1/fm-landed-lib.sh"
+name=$(fm_landed_default_branch_name "$2") || exit 9
+refs=$(fm_landed_candidate_refs "$2" "$name")
+status=$?
+printf "%s|%s\n" "$status" "$(printf "%s" "$refs" | tr "\n" " ")"
+' _ "$1" "$3" 2>/dev/null
+}
+
+# One pool whose candidate universe is incomplete and still lists
+# refs/heads/main, plus a real off-trunk ref to ask about. Echoes the fakebin.
+incomplete_universe_pool() {  # <bin-root> <label> <proj>
+  local root=$1 label=$2 proj=$3 base fakebin shape
+  base=$(dirname "$proj")
+  git -C "$proj" remote add origin https://example.invalid/upstream.git || return 1
+  advance_ref_past_head "$proj" refs/heads/some-feature >/dev/null || return 1
+  fakebin=$(fm_fakebin "$base")
+  install_flaky_origin_url_git "$fakebin" || return 1
+  arm_unreadable_origin_url "$fakebin" 1
+  shape=$(candidate_universe_shape "$root" "$fakebin" "$proj")
+  case "$shape" in
+    2\|*refs/heads/main*) ;;
+    *) echo "$label: the fixture is not an incomplete universe still listing refs/heads/main (got '$shape')" >&2; return 1 ;;
+  esac
+  printf '%s\n' "$fakebin"
+}
+
+prop_incomplete_universe_accepts_a_listed_ref() {  # <bin-root> <label>
+  local root=$1 label=$2 proj fakebin out rc row
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  fakebin=$(incomplete_universe_pool "$root" "$label" "$proj") || return 1
+  arm_unreadable_origin_url "$fakebin" 1
+  out=$(PATH="$fakebin:$PATH" "$root/fm-slot-reservation.sh" open trunk-repair \
+    --project "$proj" --verdict "$VERDICT_FAIL" --trunk-ref refs/heads/main 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] \
+    || { echo "$label: a --trunk-ref the partial candidate list contains was refused: $out" >&2; return 1; }
+  [ "$(res_state "$root" "$proj")" = held ] \
+    || { echo "$label: the accepted --trunk-ref did not leave a held reservation" >&2; return 1; }
+  row=$("$root/fm-slot-reservation.sh" status --project "$proj" 2>/dev/null | sed -n '2p')
+  [ "$(printf '%s' "$row" | cut -d, -f5 | tr -d '[:space:]')" = refs/heads/main ] \
+    || { echo "$label: the accepted --trunk-ref was not recorded as trunk_ref provenance: $row" >&2; return 1; }
+  return 0
+}
+
+test_an_incomplete_universe_accepts_a_trunk_ref_its_partial_list_contains() {
+  watch_red prop_incomplete_universe_accepts_a_listed_ref incomplete-positive fm-slot-reservation.sh \
+    '  TRUNK_REF_SET_LIST=$refs
+  while IFS= read -r candidate; do' \
+    '  TRUNK_REF_SET_LIST=$refs
+  [ "$status" -ne 2 ] || return 2
+  while IFS= read -r candidate; do'
+  pass "(21) an incomplete candidate universe still accepts a --trunk-ref its partial list contains, because incompleteness cannot unprove a positive"
+}
+
+# --- (22) NON-VACUITY CONTROL: an incomplete universe still refuses a miss ----
+
+prop_incomplete_universe_refuses_an_unlisted_ref() {  # <bin-root> <label>
+  local root=$1 label=$2 proj fakebin out rc
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  fakebin=$(incomplete_universe_pool "$root" "$label" "$proj") || return 1
+  arm_unreadable_origin_url "$fakebin" 1
+  out=$(PATH="$fakebin:$PATH" "$root/fm-slot-reservation.sh" open trunk-repair \
+    --project "$proj" --verdict "$VERDICT_FAIL" --trunk-ref refs/heads/some-feature 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] \
+    || { echo "$label: an incomplete universe accepted a --trunk-ref it never listed: $out" >&2; return 1; }
+  case "$out" in
+    *"never established"*) ;;
+    *) echo "$label: the refusal does not say membership was unestablished: $out" >&2; return 1 ;;
+  esac
+  [ "$(res_state "$root" "$proj")" = absent ] \
+    || { echo "$label: a refused --trunk-ref left a reservation record behind" >&2; return 1; }
+  return 0
+}
+
+test_control_an_incomplete_universe_still_refuses_a_trunk_ref_it_does_not_list() {
+  watch_red prop_incomplete_universe_refuses_an_unlisted_ref incomplete-negative fm-slot-reservation.sh \
+    '  [ "$status" -ne 2 ] || return 2
+  return 1' \
+    '  [ "$status" -ne 2 ] || return 0
+  return 1'
+  pass "(22) control: an incomplete candidate universe still refuses a --trunk-ref it never listed, so (21) does not pass by accepting everything"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_a_queued_trunk_repair_is_handed_the_next_free_slot
@@ -953,6 +1103,8 @@ test_an_admission_reports_the_strength_of_its_evidence
 test_a_trunk_ref_outside_the_landing_refs_is_refused
 test_control_an_in_set_trunk_ref_is_still_accepted
 test_a_proven_absent_trunk_is_not_reported_as_an_unread_one
+test_an_incomplete_universe_accepts_a_trunk_ref_its_partial_list_contains
+test_control_an_incomplete_universe_still_refuses_a_trunk_ref_it_does_not_list
 
 fm_test_contract "$0" || exit 1
 
