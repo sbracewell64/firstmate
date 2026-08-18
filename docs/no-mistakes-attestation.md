@@ -258,4 +258,4 @@ It does not directly prove that two invocations racing for the last budget slot 
 It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
 The stale-attempt merge reduction is separately owned and proved by `bin/fm-pr-merge.sh` and `tests/fm-pr-merge.test.sh`.
 
-The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which measured 46 passing attestation cases.
+The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which measured 46 of 46 passing attestation cases.
