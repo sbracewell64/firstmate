@@ -40,6 +40,7 @@
 # set itself.
 FM_AUTONOMY_STATE_SELF=on
 FM_AUTONOMY_STATE_CAPTAIN=off
+# shellcheck disable=SC2034 # Read by sourcing callers (tests/fm-task-delivery.test.sh).
 FM_AUTONOMY_STATE_VOCABULARY="$FM_AUTONOMY_STATE_SELF $FM_AUTONOMY_STATE_CAPTAIN"
 
 # 0 if <value> is a member of that vocabulary.
