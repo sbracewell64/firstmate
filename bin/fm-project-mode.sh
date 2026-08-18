@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Resolve a project's REGISTERED delivery posture from the data/projects.md registry.
 # Prints two words to stdout: "<mode> <yolo>" where mode is one of
-# no-mistakes|direct-PR|local-only and yolo is on|off.
+# no-mistakes|direct-PR|local-only and yolo is on|off, the two members
+# bin/fm-autonomy-lib.sh owns.
 #
 # MECHANICAL CONSUMERS ONLY. This answers "what posture did the captain register
 # for this project", never "how does this task ship". A task's delivery mode and
@@ -39,6 +40,8 @@
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-autonomy-lib.sh
+. "$SCRIPT_DIR/fm-autonomy-lib.sh"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
@@ -84,7 +87,12 @@ case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
   *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off ;;
 esac
-case "$yolo" in on|off) ;; *) yolo=off ;; esac
+# The vocabulary is bin/fm-autonomy-lib.sh's, so the standing posture this
+# prints is spelled the way the spawn that consumes it accepts. A value the
+# awk above could not produce falls back to the captain's side, matching the
+# unknown-mode fallback: this resolves a registry DEFAULT, and the conservative
+# default is that nothing granted standing routine authority.
+fm_autonomy_state_is_known "$yolo" || yolo=$FM_AUTONOMY_STATE_CAPTAIN
 # A conditional policy is not a task mode. Mechanical callers get its most
 # rigorous leg; --raw callers get the annotation itself (see the header).
 if [ "$RAW" -eq 0 ] && [ "$mode" = no-mistakes-prod-only ]; then

@@ -39,6 +39,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 . "$SCRIPT_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-task-axis-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-task-axis-lib.sh"
+# shellcheck source=bin/fm-autonomy-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-autonomy-lib.sh"
 # shellcheck source=bin/fm-reasoning-lib.sh
 . "$SCRIPT_DIR/fm-reasoning-lib.sh"
 
@@ -85,10 +87,14 @@ case "$MODE" in
     exit 1 ;;
   *) echo "error: --mode must be one of no-mistakes, direct-PR, local-only (got '$MODE')" >&2; exit 1 ;;
 esac
-case "$YOLO" in
-  on|off) ;;
-  *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
-esac
+# The vocabulary belongs to bin/fm-autonomy-lib.sh, the same owner the decision
+# fold that reads this meta consults, so a reflag cannot write a posture the
+# reader does not accept.
+YOLO_CANONICAL=$(fm_autonomy_state_normalize "$YOLO") || {
+  echo "error: --yolo must be $FM_AUTONOMY_STATE_SELF or $FM_AUTONOMY_STATE_CAPTAIN (got '$YOLO')" >&2
+  exit 1
+}
+YOLO=$YOLO_CANONICAL
 
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=${POS[0]}

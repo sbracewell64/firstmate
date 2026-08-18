@@ -270,7 +270,14 @@ test_disposition_vocabulary_is_total_and_non_vacuous() {
     || fail "a decision whose task metadata is absent must be CNO_DECISION_SUBJECT, got $got"
   checked=$((checked + 1))
 
-  printf 'worktree=%s\nyolo=0\n' "$home" > "$home/state/plain.meta"
+  # The postures below are spelled from bin/fm-autonomy-lib.sh, the owner both
+  # this fold and bin/fm-spawn.sh consult, so these fixtures cannot drift into a
+  # vocabulary the fleet does not write. They did once: this test used to write
+  # `yolo=1` and `yolo=0`, values no producer emits, and stayed green for the
+  # entire time the SELF_HANDLE branch was unreachable in production.
+  # tests/fm-task-delivery.test.sh pins the two ends against the REAL producer;
+  # this file pins what the fold does with each.
+  printf 'worktree=%s\nyolo=%s\n' "$home" "$FM_AUTONOMY_STATE_CAPTAIN" > "$home/state/plain.meta"
   got=$(decision_disposition plain k needs-decision "$home")
   [ "$got" = CAPTAIN_REQUIRED_NONBLOCKING ] \
     || fail "an open needs-decision on a live task must be CAPTAIN_REQUIRED_NONBLOCKING, got $got"
@@ -280,10 +287,24 @@ test_disposition_vocabulary_is_total_and_non_vacuous() {
     || fail "a blocked decision on a live task must be CAPTAIN_REQUIRED_AND_BLOCKING, got $got"
   checked=$((checked + 1))
 
-  printf 'worktree=%s\nyolo=1\n' "$home" > "$home/state/auto.meta"
+  printf 'worktree=%s\nyolo=%s\n' "$home" "$FM_AUTONOMY_STATE_SELF" > "$home/state/auto.meta"
   got=$(decision_disposition auto k needs-decision "$home")
   [ "$got" = SELF_HANDLE ] \
     || fail "standing routine authority makes the decision firstmate's own, got $got"
+  checked=$((checked + 1))
+  got=$(decision_disposition auto k blocked "$home")
+  [ "$got" = SELF_HANDLE ] \
+    || fail "standing routine authority is the task's, not the verb's, got $got"
+  checked=$((checked + 1))
+
+  # An ABSENT posture is a live producer state and a DIFFERENT fact from an
+  # unreadable one: a scout records none by design, so nothing granted standing
+  # authority and the captain holds the decision. Narrowing this into
+  # could-not-observe would hide a decision the captain really does owe.
+  printf 'worktree=%s\n' "$home" > "$home/state/noposture.meta"
+  got=$(decision_disposition noposture k blocked "$home")
+  [ "$got" = CAPTAIN_REQUIRED_AND_BLOCKING ] \
+    || fail "a task recording no posture at all must stay the captain's, got $got"
   checked=$((checked + 1))
 
   # A verb the fold could not classify is could-not-observe, never narrowed into
@@ -315,7 +336,7 @@ test_disposition_vocabulary_is_total_and_non_vacuous() {
   chmod 644 "$home/data/plain/decision-unreadable.md"
 
   # Totality: every answer this function can give is a member.
-  [ "$checked" -eq 6 ] || fail "expected 6 derivation cases, drove $checked"
+  [ "$checked" -eq 8 ] || fail "expected 8 derivation cases, drove $checked"
   for got in \
     "$(decision_disposition '' k needs-decision "$home")" \
     "$(decision_disposition plain '' needs-decision "$home")" \
@@ -325,6 +346,114 @@ test_disposition_vocabulary_is_total_and_non_vacuous() {
       || fail "a malformed input produced '$got', which is outside the closed vocabulary"
   done
   pass "the decision disposition vocabulary is closed, total, and every member is reachable"
+}
+
+# --- the autonomy-state fold, and the control that was manufactured ----------
+#
+# THE REGRESSION. bin/fm-spawn.sh writes `yolo=on`; this fold used to test
+# `yolo= 1`. SELF_HANDLE was reachable only from a hand-edited record, so every
+# routine decision on a task carrying standing routine authority was rendered as
+# owed by the captain - 48 of the fleet's 49 open decisions when it was found.
+#
+# The row set below is the executed negative control from that investigation,
+# kept verbatim as the regression case. Its finding was that of {on, off, 1,
+# true, yes} ONLY `1` reached SELF_HANDLE. The expectations here are what each
+# must produce now: the producer's own two values partition into the two real
+# answers, and each of the three spellings the producer never writes REFUSES to
+# CNO_DECISION_SUBJECT rather than being narrowed into either.
+#
+# The refusal direction is the point. Silently reading an uninterpretable
+# posture as "the captain's" would restate this defect with the failure hidden:
+# the queue would look right and the record would still be unreadable.
+test_autonomy_postures_partition_and_unknown_ones_refuse() {
+  local home value expect got n=0
+  home=$(disposition_home autonomy-fold)
+
+  while IFS='|' read -r value expect; do
+    [ -n "$value" ] || continue
+    n=$((n + 1))
+    printf 'worktree=%s\nyolo=%s\n' "$home" "$value" > "$home/state/ctl$n.meta"
+    got=$(decision_disposition "ctl$n" k blocked "$home")
+    [ "$got" = "$expect" ] \
+      || fail "a task recorded yolo=$value resolved to $got, expected $expect"
+  done <<'ROWS'
+on|SELF_HANDLE
+off|CAPTAIN_REQUIRED_AND_BLOCKING
+1|CNO_DECISION_SUBJECT
+true|CNO_DECISION_SUBJECT
+yes|CNO_DECISION_SUBJECT
+ROWS
+  [ "$n" -eq 5 ] || fail "the preserved negative control has 5 rows; drove $n"
+
+  # A truncated write leaves `yolo=` with no value. That is a BROKEN record, not
+  # an absent field, so it refuses rather than inheriting the scout's answer.
+  printf 'worktree=%s\nyolo=\n' "$home" > "$home/state/truncated.meta"
+  got=$(decision_disposition truncated k blocked "$home")
+  [ "$got" = CNO_DECISION_SUBJECT ] \
+    || fail "a posture line with no value resolved to $got rather than could-not-observe"
+
+  pass "the autonomy postures the producer writes partition, and every other spelling refuses"
+}
+
+# --- the recorded-only branches, driven through their real writer -------------
+#
+# BROWSER_SOL and EXTERNAL_DEPENDENCY are recorded, never derived: no structured
+# fleet fact establishes them and the only other source is the note's prose,
+# which is the wrong-subject failure .agents/skills/wrong-subject names. So the
+# reachability question for them is about their WRITER, and the audit that found
+# the `yolo=` defect asked whether they carry the same one. They do not, and
+# this pins why: bin/fm-decision-hold.sh and this fold both consult
+# decision_disposition_is_known, so writer and reader cannot spell the set
+# differently - the same one-owner shape the autonomy posture now has.
+#
+# These two branches had no production instance when this was written, and that
+# is a USE gap rather than a reachability defect. The difference is exactly what
+# this test keeps visible: a branch nothing has reached YET still has a working
+# source, and a branch nothing CAN reach does not.
+test_recorded_only_dispositions_round_trip_through_their_writer() {
+  local home hold got member n=0
+  home=$(disposition_home recorded-only)
+  hold="$ROOT/bin/fm-decision-hold.sh"
+  [ -x "$hold" ] || fail "bin/fm-decision-hold.sh is not executable, so this control cannot run"
+
+  mkdir -p "$home/data/soltask" "$home/state"
+  printf 'worktree=%s\nyolo=%s\n' "$home" "$FM_AUTONOMY_STATE_SELF" > "$home/state/soltask.meta"
+  printf '# decision\n\nprose that reassigns this decision, which is never evidence\n' \
+    > "$home/data/soltask/decision-solkey.md"
+
+  # Each is written by the real writer and read back by the real fold. The task
+  # carries standing routine authority on purpose: a recorded disposition must
+  # win over the derivation, or recording one would be a no-op on exactly the
+  # tasks whose decisions get reassigned.
+  for member in BROWSER_SOL EXTERNAL_DEPENDENCY; do
+    n=$((n + 1))
+    FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+      "$hold" disposition soltask solkey "$member" >/dev/null 2>&1 \
+      || fail "the writer refused $member, so that branch has no live source"
+    got=$(decision_disposition soltask solkey blocked "$home")
+    [ "$got" = "$member" ] \
+      || fail "$member was written but the fold read back $got"
+  done
+  [ "$n" -eq 2 ] || fail "expected 2 recorded-only branches driven, drove $n"
+
+  # The writer refuses a value outside the vocabulary rather than storing a
+  # record the fold would later have to call could-not-observe.
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$hold" disposition soltask solkey NOT_A_MEMBER >/dev/null 2>&1 \
+    && fail "the writer accepted a value outside the closed vocabulary"
+  got=$(decision_disposition soltask solkey blocked "$home")
+  [ "$got" = EXTERNAL_DEPENDENCY ] \
+    || fail "a refused write disturbed the record already there, now $got"
+
+  # Cleared, the fold returns to deriving - and derives SELF_HANDLE, because
+  # this task does carry standing routine authority.
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$hold" disposition soltask solkey --clear >/dev/null 2>&1 \
+    || fail "the writer could not clear a recorded disposition"
+  got=$(decision_disposition soltask solkey blocked "$home")
+  [ "$got" = SELF_HANDLE ] \
+    || fail "a cleared record did not fall back to the derivation, got $got"
+  pass "the recorded-only dispositions round-trip through their real writer and clear back to the derivation"
 }
 
 test_unreadable_status_is_in_band_universe_cno() {
@@ -345,6 +474,8 @@ test_unobserved_is_subject_to_dead_agent_pause_recovery
 test_liveness_open_membership_has_one_owner
 test_agent_liveness_verdict_is_fail_safe
 test_disposition_vocabulary_is_total_and_non_vacuous
+test_autonomy_postures_partition_and_unknown_ones_refuse
+test_recorded_only_dispositions_round_trip_through_their_writer
 test_unreadable_status_is_in_band_universe_cno
 
 echo "all fm-classify tests passed"

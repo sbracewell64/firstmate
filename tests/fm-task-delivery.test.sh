@@ -17,6 +17,14 @@ set -u
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+# The consumer half of the pairing assertion below. Both libraries are pure -
+# they observe nothing and create nothing - so sourcing them costs this suite
+# nothing and lets it drive the REAL reader rather than a restatement of it.
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-autonomy-lib.sh"
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-classify-lib.sh"
+
 SPAWN="$ROOT/bin/fm-spawn.sh"
 REFLAG="$ROOT/bin/fm-reflag.sh"
 PROJECT_MODE="$ROOT/bin/fm-project-mode.sh"
@@ -272,6 +280,212 @@ EOF
   pass "fm-project-mode: the conditional policy is accepted, mapped for mechanical callers, and readable raw"
 }
 
+# --- the autonomy-state pairing assertion ------------------------------------
+#
+# THE PROPERTY: the set of autonomy-state values the PRODUCERS write equals the
+# set the CONSUMER accepts, and the consumer TELLS THEM APART. Both halves are
+# load-bearing, and the second is the one that was missing.
+#
+# The defect this pins: bin/fm-spawn.sh wrote `yolo=on`, and the
+# decision-disposition fold in bin/fm-classify-lib.sh tested `yolo= 1`. Its
+# SELF_HANDLE branch was unreachable by any value the fleet writes, so every
+# routine decision on a task carrying standing routine authority was rendered
+# as owed by the captain. 48 of 49 open decisions were misaddressed that way.
+#
+# WHY "IS EVERY WRITTEN VALUE RECOGNISED" IS NOT ENOUGH. Under that defect both
+# written values returned CAPTAIN_REQUIRED_AND_BLOCKING - a real disposition,
+# not a refusal - so a test asking only "does the consumer answer" would have
+# been green throughout. The vocabulary collapsed silently: two producer values
+# that MEAN different things reached one consumer answer. So this asserts the
+# partition, not the totality: the self value must reach SELF_HANDLE, the
+# captain value must not, and the two must differ.
+#
+# Nothing here reads either script's source. Every producer value comes from
+# RUNNING the producer and reading the record it wrote, so a producer that
+# starts writing a different spelling is caught by this suite rather than by a
+# grep that agrees with whatever the file happens to say.
+
+# A fake tmux that lets a spawn run to completion and report the pane as the
+# worktree, plus the treehouse stub, so fm-spawn actually writes state/<id>.meta.
+make_producer_fakebin() {  # <dir> -> prints fakebin
+  local dir=$1 fakebin
+  fakebin=$(fm_fakebin "$dir")
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
+case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux"
+  fm_fake_treehouse "$fakebin"
+  printf '%s\n' "$fakebin"
+}
+
+# Run one REAL ship or scout spawn to completion and print the `yolo=` line it
+# wrote, or the literal ABSENT when it wrote none. Extra args go to fm-spawn.
+run_producer_spawn() {  # <name> <id> <spawn-arg>...
+  local name=$1 id=$2 case_dir home proj wt fakebin line
+  shift 2
+  case_dir="$TMP_ROOT/producer/$name"
+  home="$case_dir/home"; proj="$case_dir/project"; wt="$case_dir/wt"
+  fakebin=$(make_producer_fakebin "$case_dir/fake")
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  printf 'codex\n' > "$home/config/crew-harness"
+  fm_git_worktree "$proj" "$wt" "wt-$name"
+  mkdir -p "$home/data/$id"
+  printf 'brief\n' > "$home/data/$id/brief.md"
+  touch "$home/state/.last-watcher-beat"
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_FAKE_PANE_PATH="$wt" PATH="$fakebin:$PATH" \
+    "$SPAWN" "$id" "$proj" "$@" >/dev/null 2>&1 \
+    || { printf 'SPAWN_FAILED\n'; return 0; }
+  line=$(grep '^yolo=' "$home/state/$id.meta" 2>/dev/null | tail -1) || true
+  [ -n "$line" ] || { printf 'ABSENT\n'; return 0; }
+  printf '%s\n' "${line#yolo=}"
+}
+
+# Run one REAL reflag and print the `yolo=` value it wrote.
+run_producer_reflag() {  # <name> <yolo>
+  local name=$1 want=$2 home meta line
+  home="$TMP_ROOT/producer/$name/home"
+  mkdir -p "$home/state"
+  meta="$home/state/$name.meta"
+  printf 'window=fm-%s\nkind=scout\nworktree=/tmp/wt\n' "$name" > "$meta"
+  FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
+    "$REFLAG" "$name" --mode direct-PR --yolo "$want" >/dev/null 2>&1 \
+    || { printf 'REFLAG_FAILED\n'; return 0; }
+  line=$(grep '^yolo=' "$meta" 2>/dev/null | tail -1) || true
+  [ -n "$line" ] || { printf 'ABSENT\n'; return 0; }
+  printf '%s\n' "${line#yolo=}"
+}
+
+# Ask the REAL consumer what a task carrying <written> resolves to. Pass ABSENT
+# to write no posture at all, which is what a scout's record looks like.
+disposition_for_written() {  # <home> <task> <written> <verb>
+  local home=$1 task=$2 written=$3 verb=$4
+  mkdir -p "$home/state" "$home/data"
+  {
+    printf 'window=x\nworktree=%s\n' "$home"
+    [ "$written" = ABSENT ] || printf 'yolo=%s\n' "$written"
+  } > "$home/state/$task.meta"
+  decision_disposition "$task" k "$verb" "$home"
+}
+
+# The owner's own reader keeps THREE values, and the third is a real result
+# rather than a missing one. The decision fold reaches only two of them (it
+# establishes the record is readable first), so the unreadable case has no other
+# control and would otherwise be asserted by nobody.
+test_autonomy_reader_keeps_three_values() {
+  local dir meta got rc
+  dir="$TMP_ROOT/reader"
+  mkdir -p "$dir"
+  meta="$dir/task.meta"
+
+  printf 'window=x\nyolo=%s\n' "$FM_AUTONOMY_STATE_SELF" > "$meta"
+  got=$(fm_autonomy_state_of_meta "$meta"); rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = "$FM_AUTONOMY_STATE_SELF" ] \
+    || fail "a recorded member read back as rc=$rc value='$got'"
+
+  printf 'window=x\n' > "$meta"
+  got=$(fm_autonomy_state_of_meta "$meta"); rc=$?
+  [ "$rc" -eq 1 ] && [ -z "$got" ] \
+    || fail "an absent posture read back as rc=$rc value='$got' rather than the absent answer"
+
+  printf 'window=x\nyolo=1\n' > "$meta"
+  got=$(fm_autonomy_state_of_meta "$meta"); rc=$?
+  # The raw value comes back so a caller can NAME what it could not read.
+  [ "$rc" -eq 2 ] && [ "$got" = 1 ] \
+    || fail "an uninterpretable posture read back as rc=$rc value='$got'"
+
+  # The LAST line wins, matching every other reader of this file.
+  printf 'yolo=%s\nyolo=%s\n' "$FM_AUTONOMY_STATE_CAPTAIN" "$FM_AUTONOMY_STATE_SELF" > "$meta"
+  got=$(fm_autonomy_state_of_meta "$meta"); rc=$?
+  [ "$rc" -eq 0 ] && [ "$got" = "$FM_AUTONOMY_STATE_SELF" ] \
+    || fail "a repeated posture line did not resolve last-wins, rc=$rc value='$got'"
+
+  # An absent file is could-not-observe, never the absent-FIELD answer: "this
+  # task recorded no posture" and "there is no record here" are different facts.
+  got=$(fm_autonomy_state_of_meta "$dir/nothing-here.meta"); rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "a missing record read back as rc=$rc rather than could-not-observe"
+
+  # Normalization is identity-or-refuse. Widening it to fold `1` or `true` onto
+  # a member would rebuild the second vocabulary this library exists to end.
+  for got in 1 true yes ON Off ''; do
+    fm_autonomy_state_normalize "$got" >/dev/null \
+      && fail "normalization accepted '$got', reopening a second spelling for one fact"
+  done
+  pass "the autonomy-state reader keeps three values and normalization stays identity-or-refuse"
+}
+
+test_autonomy_state_producers_and_consumer_are_paired() {
+  local home self_written captain_written scout_written reflag_on reflag_off
+  local got_self got_captain got_scout member observed n=0
+  home="$TMP_ROOT/pairing/home"
+  mkdir -p "$home/state" "$home/data"
+
+  # --- producer side, observed by running each producer -----------------------
+  self_written=$(run_producer_spawn ship-self pair-self claude \
+    --mode no-mistakes --yolo on --reason-code NL_RULE_CLASSIFICATION)
+  captain_written=$(run_producer_spawn ship-captain pair-captain claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION)
+  scout_written=$(run_producer_spawn scout pair-scout claude \
+    --scout --reason-code NL_RULE_CLASSIFICATION)
+  reflag_on=$(run_producer_reflag reflag-self on)
+  reflag_off=$(run_producer_reflag reflag-captain off)
+
+  for observed in "$self_written" "$captain_written" "$reflag_on" "$reflag_off"; do
+    case "$observed" in
+      SPAWN_FAILED|REFLAG_FAILED|ABSENT)
+        fail "a producer that must record a posture recorded '$observed' instead" ;;
+    esac
+  done
+  [ "$scout_written" = ABSENT ] \
+    || fail "a scout spawn recorded a posture ('$scout_written'); its deliverable is a report, not a merge"
+
+  # --- pairing, both directions ----------------------------------------------
+  # Every value a producer wrote is one the consumer's owner accepts.
+  for observed in "$self_written" "$captain_written" "$reflag_on" "$reflag_off"; do
+    fm_autonomy_state_is_known "$observed" \
+      || fail "a producer wrote '$observed', which the consumer's vocabulary does not accept"
+  done
+  # And every value the consumer accepts is one some producer actually writes,
+  # so a member nothing can emit cannot sit in the set reading as a contract.
+  for member in $FM_AUTONOMY_STATE_VOCABULARY; do
+    n=$((n + 1))
+    case "$member" in
+      "$self_written"|"$captain_written"|"$reflag_on"|"$reflag_off") ;;
+      *) fail "the consumer accepts '$member', which no producer here emits: dead vocabulary" ;;
+    esac
+  done
+  [ "$n" -eq 2 ] || fail "the autonomy vocabulary has $n members; every one must be driven, not counted"
+
+  # --- the partition: the consumer TELLS THE TWO APART ------------------------
+  got_self=$(disposition_for_written "$home" pair-a "$self_written" blocked)
+  got_captain=$(disposition_for_written "$home" pair-b "$captain_written" blocked)
+  [ "$got_self" = SELF_HANDLE ] \
+    || fail "a task the producer recorded as '$self_written' resolved to $got_self, so standing routine authority never reaches SELF_HANDLE"
+  [ "$got_captain" != SELF_HANDLE ] \
+    || fail "a task the producer recorded as '$captain_written' resolved to SELF_HANDLE"
+  [ "$got_self" != "$got_captain" ] \
+    || fail "both written postures collapsed to $got_self, so the consumer does not distinguish them"
+
+  # A scout's absent posture is a LIVE producer state, not a broken record: it
+  # granted no standing authority, so the captain holds the decision.
+  got_scout=$(disposition_for_written "$home" pair-c ABSENT blocked)
+  [ "$got_scout" = CAPTAIN_REQUIRED_AND_BLOCKING ] \
+    || fail "an absent posture resolved to $got_scout rather than the captain's"
+
+  # NOT DRIVEN HERE, and named rather than assumed: a --secondmate spawn records
+  # a FIXED posture instead of taking one, and provisioning a standing home is
+  # out of this suite's reach. Its constant is covered as a VALUE by the
+  # captain-side case above; that it is the constant that path writes is not
+  # something this assertion observes.
+  pass "the autonomy-state vocabulary has one owner, every member is produced, and the consumer partitions them"
+}
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
@@ -279,4 +493,6 @@ test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_reflag_requires_and_records_the_delivery_contract
 test_project_mode_maps_the_conditional_policy
+test_autonomy_reader_keeps_three_values
+test_autonomy_state_producers_and_consumer_are_paired
 echo "# all fm-task-delivery tests passed"

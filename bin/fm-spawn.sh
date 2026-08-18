@@ -290,6 +290,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-task-base-lib.sh"
 # shellcheck source=bin/fm-task-axis-lib.sh
 . "$SCRIPT_DIR/fm-task-axis-lib.sh"
+# shellcheck source=bin/fm-autonomy-lib.sh
+. "$SCRIPT_DIR/fm-autonomy-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-secondmate-nudge-lib.sh
@@ -504,10 +506,16 @@ if [ "$KIND" = ship ]; then
       exit 1 ;;
     *) echo "error: --mode must be one of no-mistakes, direct-PR, local-only (got '$MODE')" >&2; exit 1 ;;
   esac
-  case "$YOLO" in
-    on|off) ;;
-    *) echo "error: --yolo must be on or off (got '$YOLO')" >&2; exit 1 ;;
-  esac
+  # The autonomy-state vocabulary is bin/fm-autonomy-lib.sh's, not this
+  # script's: the value written into meta below has to be one the decision
+  # fold that reads it accepts, and the only way to guarantee that is for the
+  # writer and the reader to consult the same owner. Spelling the set here
+  # again is how `on` and `1` came to be two vocabularies for one fact.
+  YOLO_CANONICAL=$(fm_autonomy_state_normalize "$YOLO") || {
+    echo "error: --yolo must be $FM_AUTONOMY_STATE_SELF or $FM_AUTONOMY_STATE_CAPTAIN (got '$YOLO')" >&2
+    exit 1
+  }
+  YOLO=$YOLO_CANONICAL
 else
   [ "$MODE_SET" -eq 0 ] || {
     echo "error: --mode applies only to ship spawns; a scout delivers a report and a secondmate records its own fixed posture" >&2
