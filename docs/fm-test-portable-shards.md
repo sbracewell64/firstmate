@@ -96,6 +96,8 @@ It answers three-valued, and could-not-observe is never a pass.
 
 A shard cancelled at its hang tripwire uploads no timing, so it lands on that third value rather than on either of the other two.
 Negative durations are structurally invalid evidence because they could otherwise manufacture an under-budget verdict.
+The summary duration is shard wall time, so legitimate runner overhead may make it longer than the sum of its script durations.
+A summary duration shorter than that sum is self-contradictory evidence and yields `could-not-observe`.
 
 The lane-drift bound carries the stable semantic verdict, while shard headroom is compared only with the hang tripwire so ordinary per-shard jitter is not called a defect.
 `bin/fm-test-run.sh` owns both current thresholds and their measured margins.
