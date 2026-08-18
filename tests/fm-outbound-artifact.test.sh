@@ -1555,8 +1555,11 @@ test_forge_head_provenance_survives_record_lifecycle() {
   [ "$(printf '%s' "$rec" | jq -r '.identity.head_source')" = forge ] \
     || fail "forge record: persisted correlation lost forge provenance"
   out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
-  [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'already requested' \
-    || fail "forge record: deduplication could not reread the correlation: $out"
+  if [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'already requested'; then
+    :
+  else
+    fail "forge record: deduplication could not reread the correlation: $out"
+  fi
   out=$(run_ob "$dir" check 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "forge record: sweep rejected the correlation: $out"
   write_ruling "$dir" "$rid" 556
