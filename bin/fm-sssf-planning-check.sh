@@ -332,7 +332,7 @@ cmd_check() {
 }
 
 cmd_install() {
-  local repo= ref= path=$DEFAULT_PATH
+  local repo='' ref='' path=$DEFAULT_PATH
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --repo) [ "$#" -ge 2 ] || usage; repo=$2; shift 2 ;;
