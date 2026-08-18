@@ -1002,7 +1002,7 @@ for raw in sys.argv[7:]:
         or summary["duration_ms"] < total
     ):
         unobserved(f"shard {idx} timing artifact summary disagrees with its script records")
-    seen[idx] = (total, paths)
+    seen[idx] = (total, summary["duration_ms"], paths)
 
 missing_shards = [i for i in range(1, shards + 1) if i not in seen]
 if missing_shards:
@@ -1012,10 +1012,10 @@ if missing_shards:
         + " (a shard cancelled at its hang tripwire uploads none)"
     )
 
-observed = [p for _, paths in seen.values() for p in paths]
-lane_total = sum(total for total, _ in seen.values())
-worst_idx = max(seen, key=lambda i: (seen[i][0], i))
-worst = seen[worst_idx][0]
+observed = [p for _, _, paths in seen.values() for p in paths]
+lane_total = sum(total for total, _, _ in seen.values())
+worst_idx = max(seen, key=lambda i: (seen[i][1], i))
+worst = seen[worst_idx][1]
 
 failures = []
 

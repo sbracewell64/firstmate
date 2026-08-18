@@ -805,12 +805,19 @@ test_serial_budget_control_catches_a_single_shard_near_the_tripwire() {
   headroom=$(printf '%s' "$bounds" | cut -d' ' -f4)
   [ "$shards" -ge 2 ] || fail "this test needs at least two shards to skew one"
 
-  # One shard just past the headroom bound; the rest carry the remaining budget
-  # so the LANE total stays inside its allowance. Only the shard rule can fail
-  # this, which is the point: the original incident looked healthy in aggregate.
-  rest=$(((budget - headroom) / (shards - 1)))
+  # Every shard's scripts stay comfortably inside the lane budget, while one
+  # shard's wall clock carries enough runner overhead to cross the headroom
+  # bound. Only the wall-clock shard rule can fail this.
+  rest=$((budget / shards))
   [ "$rest" -gt 0 ] || fail "the declared budget leaves no room to build this fixture"
-  fm_write_serial_fixture "$tmp/skew" "$rest" '' 2 $((headroom + headroom / 20))
+  fm_write_serial_fixture "$tmp/skew" "$rest"
+  python3 - "$tmp/skew/shard-2.json" "$headroom" <<'PY'
+import json, sys
+p, headroom = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["duration_ms"] = headroom + headroom // 20
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
 
   set +e
   out=$("$RUNNER" --check-budget "$tmp/skew"/shard-*.json 2>"$tmp/skew.err")
