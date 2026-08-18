@@ -471,8 +471,10 @@ CATALOG = {
                  "description": "The facts the ruling was issued against, as any of work_id, head, tree or envelope_digest; envelope_digest is the canonical digest of this envelope with rulings empty, so the identity is current and non-circular."},
                 {"name": "relied_upon", "source": "declared", "required": False,
                  "description": "Whether this envelope leans on the ruling; a relied-upon ruling that does not apply refuses."},
+                {"name": "applicability_established", "source": "computed", "required": True,
+                 "description": "Whether applies_to names at least one candidate-identifying axis: head, tree or envelope_digest."},
                 {"name": "applicable", "source": "computed", "required": True,
-                 "description": "Whether every fact the ruling was issued against still matches this candidate."},
+                 "description": "Whether applicability is established and every supplied fact matches this candidate."},
             ],
         },
         {
@@ -524,6 +526,7 @@ CATALOG = {
         {"code": "ruling_id_absent", "meaning": "A ruling carries no non-blank stable id."},
         {"code": "ruling_id_ambiguous", "meaning": "More than one ruling carries the same stable id."},
         {"code": "ruling_applicability_mismatch", "meaning": "A ruling this envelope relies on does not apply to this candidate."},
+        {"code": "ruling_applicability_unestablished_relied_upon", "meaning": "A ruling this envelope relies on names no candidate-identifying applicability axis."},
         {"code": "request_identity_mismatch", "meaning": "A declared or stored request identity does not match the identity recomputed from the bound facts."},
         {"code": "forge_request_identity_invalid", "meaning": "The authoritative forge request identity is absent or incomplete."},
         {"code": "obligation_dropped", "meaning": "A predecessor obligation is unaccounted for."},
@@ -559,6 +562,7 @@ CATALOG = {
         {"code": "evidence_recheck_declined", "meaning": "Validation was told not to re-read the evidence bytes, and did not."},
         {"code": "outer_integrity_digest_unobserved", "meaning": "The outer integrity digest is absent, so outer facts cannot be checked."},
         {"code": "request_identity_claim_unobserved", "meaning": "The declared request identity state is absent rather than an explicit value or null."},
+        {"code": "ruling_applicability_unestablished", "meaning": "A ruling names no head, tree, or envelope digest, so its applicability to this candidate cannot be established."},
     ],
 }
 
@@ -918,6 +922,22 @@ def ruling_target_digest(envelope):
     target = json.loads(json.dumps(envelope))
     target["rulings"] = []
     return digest_of(target)
+
+
+def ruling_applicability(applies_to, envelope, envelope_digest):
+    candidate_axes = ("head", "tree", "envelope_digest")
+    established = any(applies_to.get(axis) for axis in candidate_axes)
+    mismatches = []
+    if applies_to.get("work_id") and applies_to["work_id"] != envelope["identity"]["work"]["id"]:
+        mismatches.append("work_id")
+    if applies_to.get("head") and applies_to["head"] != envelope["candidate"]["head_commit"]:
+        mismatches.append("head")
+    if applies_to.get("tree") and applies_to["tree"] != envelope["candidate"]["head_tree"]:
+        mismatches.append("tree")
+    if (applies_to.get("envelope_digest")
+            and applies_to["envelope_digest"] != envelope_digest):
+        mismatches.append("envelope_digest")
+    return established, mismatches
 
 
 def outer_integrity_payload(document):
@@ -1297,16 +1317,9 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
     current_envelope_digest = ruling_target_digest(envelope)
     for ruling in as_list(inputs, "rulings"):
         applies_to = as_dict(ruling, "applies_to")
-        mismatches = []
-        if applies_to.get("work_id") and applies_to["work_id"] != envelope["identity"]["work"]["id"]:
-            mismatches.append("work_id")
-        if applies_to.get("head") and applies_to["head"] != head_commit:
-            mismatches.append("head")
-        if applies_to.get("tree") and applies_to["tree"] != head_tree:
-            mismatches.append("tree")
-        if (applies_to.get("envelope_digest")
-                and applies_to["envelope_digest"] != current_envelope_digest):
-            mismatches.append("envelope_digest")
+        established, mismatches = ruling_applicability(
+            applies_to, envelope, current_envelope_digest
+        )
         envelope["rulings"].append(
             {
                 "id": "" if ruling.get("id") is None else str(ruling.get("id")),
@@ -1314,7 +1327,8 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
                 "disposition": ruling.get("disposition"),
                 "relied_upon": bool(ruling.get("relied_upon")),
                 "applies_to": applies_to,
-                "applicable": not mismatches,
+                "applicability_established": established,
+                "applicable": established and not mismatches,
                 "mismatches": mismatches,
             }
         )
@@ -1509,19 +1523,25 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
     }
     for ruling in envelope["rulings"]:
         applies_to = ruling.get("applies_to") if isinstance(ruling.get("applies_to"), dict) else {}
-        mismatches = []
-        if applies_to.get("work_id") and applies_to["work_id"] != envelope["identity"]["work"]["id"]:
-            mismatches.append("work_id")
-        if applies_to.get("head") and applies_to["head"] != envelope["candidate"]["head_commit"]:
-            mismatches.append("head")
-        if applies_to.get("tree") and applies_to["tree"] != envelope["candidate"]["head_tree"]:
-            mismatches.append("tree")
-        if (applies_to.get("envelope_digest")
-                and applies_to["envelope_digest"] != current_envelope_digest):
-            mismatches.append("envelope_digest")
-        ruling["applicable"] = not mismatches
+        established, mismatches = ruling_applicability(
+            applies_to, envelope, current_envelope_digest
+        )
+        ruling["applicability_established"] = established
+        ruling["applicable"] = established and not mismatches
         ruling["mismatches"] = mismatches
-        if ruling.get("relied_upon") and mismatches:
+        if not established:
+            problems.unobserve(
+                "ruling_applicability_unestablished",
+                ruling.get("id"),
+                "names no head, tree, or envelope digest",
+            )
+        if ruling.get("relied_upon") and not established:
+            problems.refuse(
+                "ruling_applicability_unestablished_relied_upon",
+                ruling.get("id"),
+                "relied upon without a candidate-identifying applicability axis",
+            )
+        elif ruling.get("relied_upon") and mismatches:
             problems.refuse(
                 "ruling_applicability_mismatch",
                 ruling.get("id"),
@@ -1848,11 +1868,18 @@ def classify_obligations(problems, envelope, ruling_index, evidence_root, rechec
                     "resolution must name an explicit authority and reason",
                 )
             elif str(authority) in ruling_index and not ruling_index[str(authority)].get("applicable"):
-                problems.refuse(
-                    "ruling_applicability_mismatch",
-                    authority,
-                    "cited to resolve " + obligation_id + " but it does not apply to this candidate",
-                )
+                if ruling_index[str(authority)].get("applicability_established"):
+                    problems.refuse(
+                        "ruling_applicability_mismatch",
+                        authority,
+                        "cited to resolve " + obligation_id + " but it does not apply to this candidate",
+                    )
+                else:
+                    problems.refuse(
+                        "ruling_applicability_unestablished_relied_upon",
+                        authority,
+                        "cited to resolve " + obligation_id + " without established applicability",
+                    )
         elif kind == "SUPERSEDED":
             replacement = str(disposition.get("replaced_by") or "")
             if not replacement or replacement not in active:

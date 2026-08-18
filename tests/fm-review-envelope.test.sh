@@ -571,7 +571,8 @@ write_array_registry_inputs() {  # <case-dir>
         "work_id": "other-work", "head": "0000000000000000000000000000000000000000",
         "tree": "1111111111111111111111111111111111111111",
         "envelope_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"}},
-      {"id": "R-1", "source": "captain", "relied_upon": false, "applies_to": {}}],
+      {"id": "R-1", "source": "captain", "relied_upon": false,
+       "applies_to": {"head": "'"$(git -C "$case_dir/repo" rev-parse candidate)"'"}}],
     "obligations": {
       "predecessor": {"envelope_digest": "'"$prior"'"},
       "active": [{"id": "OBL-2"}, {"id": "OBL-1"}],
@@ -811,8 +812,8 @@ test_order_insensitive_facts_produce_an_identical_identity() {
       "adverse": [{"id": "F-2", "blocking": false}, {"id": "F-1", "blocking": false}],
       "unproven": [{"id": "U-2", "required": false}, {"id": "U-1", "required": false}]},
     "rulings": [
-      {"id": "R-2", "source": "captain", "applies_to": {}},
-      {"id": "R-1", "source": "captain", "applies_to": {}}],
+      {"id": "R-2", "source": "captain", "applies_to": {"head": "candidate"}},
+      {"id": "R-1", "source": "captain", "applies_to": {"head": "candidate"}}],
     "obligations": {"active": [{"id": "OBL-2"}, {"id": "OBL-1"}]}}'
   python3 - "$case_dir/inputs.json" "$case_dir/repo" <<'PY'
 import json, subprocess, sys
@@ -824,6 +825,9 @@ head = subprocess.run(
 for attempt in document["ci"]["attempts"]:
     if attempt["head"] == "candidate":
         attempt["head"] = head
+for ruling in document["rulings"]:
+    if ruling["applies_to"].get("head") == "candidate":
+        ruling["applies_to"]["head"] = head
 json.dump(document, open(path, "w"), indent=2)
 PY
   capture run_prepare "$case_dir" first
@@ -2134,6 +2138,69 @@ test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution() {
   pass "a ruling issued against a different candidate cannot authorize resolving an obligation"
 }
 
+test_a_relied_upon_ruling_with_empty_applicability_refuses() {
+  local case_dir
+  case_dir=$(make_case ruling-empty-applicability)
+  write_inputs "$case_dir" '{"rulings": [
+      {"id": "R-1", "source": "captain", "relied_upon": true, "applies_to": {}}]}'
+  capture run_prepare "$case_dir" env
+  expect_code 1 "$CAPTURED_CODE" "an empty relied-upon ruling applicability refuses"
+  assert_contains "$CAPTURED" 'unobserved ruling_applicability_unestablished' \
+    "the absent candidate binding must remain could-not-establish"
+  assert_contains "$CAPTURED" 'refusal ruling_applicability_unestablished_relied_upon' \
+    "reliance on the unestablished ruling must refuse"
+  pass "an empty applicability cannot authorize a relied-upon ruling"
+}
+
+test_work_identity_alone_does_not_establish_ruling_applicability() {
+  local case_dir
+  case_dir=$(make_case ruling-work-only-applicability)
+  write_inputs "$case_dir" '{"rulings": [
+      {"id": "R-1", "source": "captain", "relied_upon": true,
+       "applies_to": {"work_id": "fixture-work"}}]}'
+  capture run_prepare "$case_dir" env
+  expect_code 1 "$CAPTURED_CODE" "work identity alone cannot bind a relied-upon ruling"
+  assert_contains "$CAPTURED" 'unobserved ruling_applicability_unestablished' \
+    "a work-only applicability must remain could-not-establish"
+  assert_contains "$CAPTURED" 'refusal ruling_applicability_unestablished_relied_upon' \
+    "reliance on the work-only ruling must refuse"
+  pass "work identity alone cannot establish ruling applicability"
+}
+
+test_matching_candidate_axes_establish_ruling_applicability() {
+  local case_dir head tree
+  case_dir=$(make_case ruling-matching-applicability)
+  head=$(git -C "$case_dir/repo" rev-parse candidate)
+  tree=$(git -C "$case_dir/repo" rev-parse 'candidate^{tree}')
+  write_inputs "$case_dir" '{"rulings": [
+      {"id": "R-1", "source": "captain", "relied_upon": true,
+       "applies_to": {"work_id": "fixture-work", "head": "'"$head"'", "tree": "'"$tree"'"}}]}'
+  capture run_prepare "$case_dir" env
+  expect_code 0 "$CAPTURED_CODE" "matching candidate axes establish ruling applicability"
+  assert_contains "$CAPTURED" 'review-envelope: REVIEW_READY' \
+    "a candidate-bound ruling must remain accepted"
+  pass "matching candidate axes establish ruling applicability"
+}
+
+test_unestablished_ruling_cannot_authorize_a_resolution() {
+  local case_dir prior
+  case_dir=$(make_case ruling-unestablished-authority)
+  prior=$(seed_predecessor "$case_dir")
+  write_inputs "$case_dir" '{
+    "rulings": [{"id": "R-1", "source": "captain", "applies_to": {}}],
+    "obligations": {
+      "predecessor": {"envelope_digest": "'"$prior"'"},
+      "active": [],
+      "dispositions": [
+        {"id": "OBL-1", "disposition": "RESOLVED", "authority": "R-1", "reason": "ruled moot"},
+        {"id": "OBL-2", "disposition": "RESOLVED", "authority": "captain", "reason": "withdrawn"}]}}'
+  capture run_prepare "$case_dir" successor --predecessor "$case_dir/prior"
+  expect_code 1 "$CAPTURED_CODE" "an unestablished ruling cannot authorize a resolution"
+  assert_contains "$CAPTURED" 'refusal ruling_applicability_unestablished_relied_upon' \
+    "the authority lookup must refuse an unestablished ruling"
+  pass "an unestablished ruling cannot discharge an obligation"
+}
+
 test_duplicate_ruling_ids_are_ambiguous_in_both_orders() {
   local case_dir order rulings
   for order in applicable-first stale-first; do
@@ -2774,6 +2841,10 @@ test_duplicate_dispositions_refuse_in_both_orders
 test_request_identity_is_recomputed_and_checked
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe
 test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution
+test_a_relied_upon_ruling_with_empty_applicability_refuses
+test_work_identity_alone_does_not_establish_ruling_applicability
+test_matching_candidate_axes_establish_ruling_applicability
+test_unestablished_ruling_cannot_authorize_a_resolution
 test_duplicate_ruling_ids_are_ambiguous_in_both_orders
 test_a_ruling_without_a_stable_id_refuses
 test_a_ruling_envelope_digest_binds_the_current_envelope

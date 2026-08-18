@@ -143,7 +143,8 @@ Prior rulings and whether they apply to this exact candidate.
 | `id` | `declared` | yes | The ruling's identity in its own authority's namespace. |
 | `applies_to` | `declared` | no | The facts the ruling was issued against, as any of work_id, head, tree or envelope_digest; envelope_digest is the canonical digest of this envelope with rulings empty, so the identity is current and non-circular. |
 | `relied_upon` | `declared` | no | Whether this envelope leans on the ruling; a relied-upon ruling that does not apply refuses. |
-| `applicable` | `computed` | yes | Whether every fact the ruling was issued against still matches this candidate. |
+| `applicability_established` | `computed` | yes | Whether applies_to names at least one candidate-identifying axis: head, tree or envelope_digest. |
+| `applicable` | `computed` | yes | Whether applicability is established and every supplied fact matches this candidate. |
 
 ## obligations
 
@@ -195,6 +196,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `ruling_id_absent` | A ruling carries no non-blank stable id. |
 | `ruling_id_ambiguous` | More than one ruling carries the same stable id. |
 | `ruling_applicability_mismatch` | A ruling this envelope relies on does not apply to this candidate. |
+| `ruling_applicability_unestablished_relied_upon` | A ruling this envelope relies on names no candidate-identifying applicability axis. |
 | `request_identity_mismatch` | A declared or stored request identity does not match the identity recomputed from the bound facts. |
 | `forge_request_identity_invalid` | The authoritative forge request identity is absent or incomplete. |
 | `obligation_dropped` | A predecessor obligation is unaccounted for. |
@@ -237,3 +239,4 @@ None of them is a pass, and none of them is skippable.
 | `evidence_recheck_declined` | Validation was told not to re-read the evidence bytes, and did not. |
 | `outer_integrity_digest_unobserved` | The outer integrity digest is absent, so outer facts cannot be checked. |
 | `request_identity_claim_unobserved` | The declared request identity state is absent rather than an explicit value or null. |
+| `ruling_applicability_unestablished` | A ruling names no head, tree, or envelope digest, so its applicability to this candidate cannot be established. |
