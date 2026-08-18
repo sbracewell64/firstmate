@@ -907,8 +907,10 @@ test_pi_session_transition_generation_owner() {
   cat > "$repo/bin/fm-watch-arm.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'watcher: started pid=%s\n' "$$"
-printf '%s\n' "$$" > "${FM_CHILD_PID_FILE:?}"
+child_pid_tmp="${FM_CHILD_PID_FILE:?}.$$"
+printf '%s\n' "$$" > "$child_pid_tmp"
 printf 'arm pid=%s\n' "$$" >> "${FM_ARM_LOG:?}"
+mv "$child_pid_tmp" "$FM_CHILD_PID_FILE"
 trap 'exit 0' TERM INT
 while :; do sleep 0.2; done
 SH
@@ -1071,7 +1073,7 @@ if (liveArmPids().length !== 0) {
 EOF
 )
   status=$?
-  expect_code 0 "$status" "Pi session transitions must rearm through an explicit generation owner"
+  [ "$status" -eq 0 ] || fail "Pi session transitions must rearm through an explicit generation owner: expected exit 0, got $status"$'\n'"--- output ---"$'\n'"$out"
   [ -z "$out" ] || fail "Pi session-transition generation owner test printed output: $out"
   pass "Pi session transitions use a generation owner across /new /resume /fork, stale callbacks, and quit"
 }

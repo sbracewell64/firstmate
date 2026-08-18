@@ -42,7 +42,13 @@ export FM_GATE_REFUSE_BYPASS=1
 # be alive would leak into every suite that asserts exact bootstrap output. The
 # cases that own that check set NM_HOME per invocation, which wins over this.
 # Same hermeticity discipline as pinning PATH: the tests decide the inputs.
-export NM_HOME="${TMPDIR:-/tmp}/fm-test-absent-nm-home"
+# Include this shell's process identity and verify absence so a stale directory
+# from an earlier run cannot turn the intended no-daemon input into an outage.
+FM_TEST_ABSENT_NM_HOME="${TMPDIR:-/tmp}/fm-test-absent-nm-home-$$"
+while [ -e "$FM_TEST_ABSENT_NM_HOME" ]; do
+  FM_TEST_ABSENT_NM_HOME=${FM_TEST_ABSENT_NM_HOME}x
+done
+export NM_HOME=$FM_TEST_ABSENT_NM_HOME
 
 # Point every suite's session-start commitment read (bootstrap's COMMITMENT
 # check) at an EMPTY register, for the same reason and by the same discipline:

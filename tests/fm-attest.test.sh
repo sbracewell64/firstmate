@@ -249,8 +249,11 @@ test_ref_without_note_for_head_refuses_distinctly() {
   add_note "$repo" "$other" "$(good_note "$other")"
   out=$(verify_out "$repo" "$head")
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a head with no attestation was accepted"
+  [ "$rc" -eq 1 ] \
+    || fail "a missing exact-head attestation did not return the verifier's refusal verdict (exit $rc): $out"
   assert_contains "$out" "no-attestation-for-head" "missing note for the head was not reported distinctly"
+  assert_contains "$out" "$NOTES_REF exists but carries no attestation for $head." \
+    "missing-note refusal evidence did not identify the exact unattested head"
   assert_not_contains "$out" "no-attestation-ref" "a present ref was reported as an absent one"
   pass "fm-attest.sh: an attestation for another commit is not evidence for this one"
 }
@@ -1554,7 +1557,7 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   install_verifier_stub "$dir" 1
   out=$(run_verify_step)
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a refused attestation passed the check"
+  [ "$rc" -eq 1 ] || fail "a refused attestation did not fail the check with exit 1 (exit $rc): $out"
   assert_contains "$out" "carries no verified no-mistakes attestation" \
     "a refusal was not reported as an absent attestation"
   assert_not_contains "$out" "could not evaluate" \
@@ -1565,7 +1568,8 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   install_verifier_stub "$dir" 2
   out=$(run_verify_step)
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a verifier that reached no verdict passed the check"
+  [ "$rc" -eq 1 ] \
+    || fail "a verifier that reached no verdict did not fail the check with exit 1 (exit $rc): $out"
   assert_contains "$out" "could not evaluate" \
     "a verifier that reached no verdict was not reported as such"
   assert_contains "$out" "exited 2" "the failing exit status was not named"
@@ -1578,7 +1582,7 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   rm -f "$dir/bin/fm-attest.sh"
   out=$(run_verify_step)
   rc=$?
-  [ "$rc" -ne 0 ] || fail "a head carrying no verifier passed the check"
+  [ "$rc" -eq 1 ] || fail "a head carrying no verifier did not fail the check with exit 1 (exit $rc): $out"
   assert_contains "$out" "could not evaluate" \
     "a head that carries no verifier was not reported as one the check could not evaluate"
   assert_not_contains "$out" "carries no verified no-mistakes attestation" \
