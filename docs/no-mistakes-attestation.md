@@ -13,16 +13,20 @@ It is keyed by a commit sha, so it can name the commit it covers without changin
 It never rewrites the branch, so producing one cannot disturb the pipeline's custody of it.
 It reaches the forge as an ordinary ref, so a `pull_request` workflow can read it with `contents: read` and nothing more.
 
-Git notes do not travel with `refs/pull/*`, so the workflow fetches the ref from the repository the branch was pushed to.
-The base repository is read through an explicit token URL and a fork through its plain `https` URL, which still carries the job's token because `actions/checkout` persists it in the workspace's git configuration.
-Neither read is anonymous; both are read-only and both go to the host that issued the token.
+Git notes do not travel with `refs/pull/*`, so the ref is read from the repository the branch was pushed to.
+The workflow addresses that repository, and the base repository holding `refs/pull/*`, as two named remotes and performs no read itself; the verifier reads them, once before its verdict and again for as long as the window below is open.
+One program doing all of that is what keeps the first read and the re-reads from coming to disagree about what an unreachable repository means.
+What stays in the workflow is what a pull request's own copy of anything must not decide: which repositories are addressed, and how the job's token is put into a URL.
+The base repository is addressed through an explicit token URL and a fork through its plain `https` URL, which still carries the job's token because `actions/checkout` persists it in the workspace's git configuration.
+Neither read is anonymous; both are read-only and both go to the host that issued the token, and the token is written where `actions/checkout` has already written it.
 A read that fails for any reason other than "the ref is not there" stops the job, so an unreachable head repository is never resolved as either an absent or a present attestation.
-Both remote calls are made with their output suppressed and are reported by the head repository's name, because when the head repository is the base repository the URL carries the job token and git quotes the whole remote URL back in its own http errors.
-Actions redacts that token from logs, which makes the suppression defence in depth rather than the only thing between the token and the log, and is the reason to keep the two calls consistent rather than to let one of them rely on it.
+Every remote call is made with its output suppressed, because a URL embedding the job token is quoted back by git in its own http errors and a stream left attached writes that token into the job log.
+Actions redacts that token from logs, which makes the suppression defence in depth rather than the only thing between the token and the log.
+The verifier names the repository it could not read by resolving the remote's URL back out and passing it through the same scrubber every other line it prints goes through, because "the remote 'attestation-source' would not serve it" sends nobody anywhere.
 
 The workflow reads the verifier's exit status rather than only its success, because `bin/fm-attest.sh` separates a refusal from a failure and collapsing the two would have the check report evidence it never examined as absent evidence.
 Exit 1 is a verdict and is reported as no attestation for this head.
-Any other non-zero exit reached no verdict, and is reported as the check being unable to evaluate this head, naming the status and the causes that reach it: a head that predates this check, or one where `bin/fm-attest.sh` is missing or has lost its executable bit.
+Any other non-zero exit reached no verdict, and is reported as the check being unable to evaluate this head, naming the status and the two families of causes that reach it: repository or ref state the verifier could not read, or a verifier unavailable because the head predates this check, `bin/fm-attest.sh` is missing, or it has lost its executable bit.
 Both outcomes fail the check, because a check that could not look must never report a pass; what differs is what the contributor is sent to repair.
 
 ## The format
@@ -56,6 +60,17 @@ The evidence was examined and found absent, unbound or invalid, so this is a ver
 
 A **failure** exits 2 and prints `cannot attest (<reason>)`.
 No verdict was reached, so it says nothing about the evidence either way: `not-a-git-repository`, `pipeline-tool-missing`, `head-unresolvable`, `head-detached`, `scratch-file-unavailable`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-not-reconciled`, `attestation-not-recorded`, `attestation-not-published`, or `commit-unknown` for `show`.
+`reconcile` adds `attestation-source-unreadable`, `attestation-source-unfetchable`, `pull-request-head-absent`, `pull-request-head-unreadable` and `clock-unreadable` to that list, and reaches no reason of its own beyond them: every verdict it reports is `verify`'s.
+
+`--supports` is neither, and borrows neither error model.
+It is a capability query answered as an exit status, zero for a capability this program has and non-zero for one it does not, and a copy old enough to predate the query answers non-zero by not recognizing it.
+
+`recheck` is about a different subject and uses its own headline after its shared repository and scratch-file preflight, because a head can carry perfect evidence and still not be re-evaluated, and reporting that as `not attested` would send a reader to republish a note that is already correct.
+The shared preflight failures remain `cannot attest (not-a-git-repository)` and `cannot attest (scratch-file-unavailable)`.
+It prints `not re-evaluated (<reason>)` and exits 1 for a fact about this head, this pull request or this repository: `attestation-not-published`, `attestation-not-published-for-head`, `pull-request-not-open`, `pull-request-head-moved`, `pull-request-head-repository-mismatch`, `pull-request-ambiguous`, `no-applicable-run`, `run-in-progress` or `recheck-budget-spent`.
+It prints `cannot re-evaluate (<reason>)` and exits 2 when the re-evaluation could not be carried out or judged, so nothing it says bears on whether the check would now pass: `forge-tool-missing`, `forge-unreadable`, `forge-read-truncated`, `pull-request-list-truncated`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-ref-unreadable`, `pull-request-head-repository-absent`, `pull-request-head-repository-unreadable`, `rerun-not-requested`, `ledger-unreadable`, `ledger-unwritable`, `ledger-unlocatable`, `ledger-lock-unavailable` or `repository-unresolved`.
+Published evidence that is present but invalid is **not** one of these: it exits through `verify`'s own refusals above, because that is a verdict on the evidence rather than a step that did not happen.
+When `recheck` runs as `write`'s last step, every non-zero exit also says that the note was recorded and pushed before it ran, so the repair is never to publish it again.
 
 A **usage error** exits 2 and names the argument in plain words, because there is no state to describe.
 
@@ -88,8 +103,9 @@ It is why the check's verdict is visible in the diff and why required-check conf
 
 ## Producing one
 
-`bin/fm-attest.sh write` reads the pipeline's own run record through `no-mistakes axi status`, refuses unless that run covers this branch and completed every required step, then records and pushes the note on the head that run validated.
+`bin/fm-attest.sh write` reads the pipeline's own run record through `no-mistakes axi status`, refuses unless that run covers this branch and completed every required step, then records and pushes the note on the head that run validated, and finally re-evaluates that head as described below.
 It re-verifies its own payload with the same code path the gate uses, so a malformed note cannot reach the forge and be discovered only in CI.
+`--no-recheck` publishes without asking GitHub anything, and is for the case where the note is wanted but the check is not the point.
 
 The head it attests is not always `HEAD`.
 The pipeline commits its own fixes and advances the run tip past the local checkout, so a run tip ahead of `HEAD` on the same history is the normal state, it is the head the pull request is opened on, and it is what gets attested.
@@ -121,17 +137,56 @@ A tool that failed is recognised from that stdout rather than from its exit stat
 Read from the exit status alone it is `run-record-unparsed`, which says this transcription needs updating and sends a reader to repair something that was never broken; `bin/fm-nm-run-lib.sh` owns reading that line, from the first non-empty line only, so a record carrying an `error` field about the run it describes stays a record.
 Every call to the tool is time-bounded, so one blocked on a lock or a network read refuses as `run-record-unreadable` rather than hanging at a contributor's terminal.
 `bin/fm-timeout-lib.sh` owns imposing that bound, and `bin/fm-nm-run-lib.sh` delegates to it rather than carrying a second copy of the mechanism.
-`docs/configuration.md` owns the `FM_ATTEST_NM_TIMEOUT` knob, including why a non-positive value falls back to the default rather than shortening the bound.
+`docs/configuration.md` owns the `FM_ATTEST_NM_TIMEOUT`, `FM_ATTEST_RECHECK_WAIT`, `FM_ATTEST_RECHECK_POLL`, `FM_ATTEST_RECHECK_LOCK_WAIT`, `FM_ATTEST_RECONCILE_WINDOW` and `FM_ATTEST_RECONCILE_POLL` knobs, including why a non-positive `FM_ATTEST_NM_TIMEOUT` falls back to the default rather than shortening the bound while zero is a real value for the wait and window bounds.
 
 When `no-mistakes` publishes this note itself, the helper becomes redundant and nothing about the check changes: the note format is the contract, and which program writes it is not.
 
+## The bounded window before a verdict
+
+The note can only exist after the push it attests, and that push is what starts this check, so the check's first look at a genuinely pipeline-raised head can be a near miss rather than anything about the change.
+`bin/fm-attest.sh reconcile` is what the workflow runs, and it re-reads the attestation ref for a short bounded window while - and only while - no attestation for this head has arrived, then reaches its verdict through `verify`.
+`verify` is the only thing here that reaches one at all: `reconcile` can delay a verdict, it cannot produce one, and it cannot delay one already reached.
+
+### How long, and on what basis
+
+60 seconds, measured against this repository's own publication history rather than picked.
+Across 45 published attestations, the delay from the pull request event that started a check to the note being published ran from 9 seconds to 1815, with a median of 200.
+Those observations cluster rather than spread: 11 of the 45 land within 55 seconds and the next one is at 75, because a short delay is a publication that raced its own push while a long one is a pipeline still working.
+60 seconds covers that cluster and stops before the tail begins.
+[`docs/verification/attestation-publication-latency.md`](verification/attestation-publication-latency.md) holds that measurement and the commands that reproduce it, so the number can be re-derived rather than inherited.
+The bound is on waiting, so the observations themselves add to what a job spends; `FM_ATTEST_RECONCILE_WINDOW` and `FM_ATTEST_RECONCILE_POLL` are the knobs and `docs/configuration.md` owns them.
+
+It is deliberately not sized to the tail, and what that costs is worth stating rather than leaving to be discovered.
+It absorbs the near miss and nothing more: on those 45 observations, 11 publish inside the window and the other 34 still report a first red and still converge through the re-evaluation below.
+Sizing the window to the tail would be an unbounded wait wearing a bound - it would hold a runner for the length of somebody else's validation run, and for every second of it the head would still be unattested.
+The layering is the design rather than a compromise in it: a short window absorbs the race, and re-evaluation recovers everything past it.
+
+### What ends the window
+
+Four things, and only one of them is the clock.
+
+- An attestation for this head arrives, and the verdict is `verify`'s immediately.
+- Evidence is there and is invalid, unbound, stale or unreadable, and the verdict is `verify`'s on the first look.
+  A window that graced evidence already observed to be bad would be buying time for exactly what this check exists to refuse, so the window is for absence and for nothing else.
+- The pull request proposes a different commit.
+  `refs/pull/<n>/head` is re-read on every observation the window makes, because waiting is a bet that evidence for **this** head is about to arrive and a request that has moved on will never produce it.
+  Head movement is not a verdict and does not become one: the verdict is still `verify`'s, about the head this run was raised for, reached early rather than differently.
+- The bound is spent, and the refusal says how long it waited, because otherwise the one number that shaped the verdict is the one number nowhere in it.
+
+A repository or a ref that could not be read at all ends it differently, as `cannot attest`: `attestation-source-unreadable`, `attestation-source-unfetchable`, `pull-request-head-absent`, `pull-request-head-unreadable`, or `clock-unreadable` when the wait could not be bounded.
+Not reading a repository is not reading an absence, which is the same line this component draws everywhere else.
+Both outcomes are red; what differs is that one sends a contributor to publish an attestation and the other sends them to re-run a job.
+
+The verifier runs from the pull request's own head, so a head raised before `reconcile` existed does not carry it.
+The workflow asks `bin/fm-attest.sh --supports reconcile` before choosing what to run, and verifies such a head without a window exactly as it did before rather than failing it for the age of its checkout.
+`--supports` answers as an exit status and nothing else, so a caller never has to tell "this program does not do that" from "that failed" by reading a message.
+That fallback can go once no open pull request predates the subcommand.
+
 ## Re-evaluating a head after the note is published
 
-The note can only exist after the push it attests, and that push is what started the check, so the first evaluation of a genuinely pipeline-raised head runs before its evidence exists and correctly refuses.
-
-Publishing the note does not by itself repair that verdict.
+Most attestations are published past the window above, and one published past it repairs the evidence but not the verdict already reported.
 `refs/notes/no-mistakes` is not a pull request head, so pushing it fires no `pull_request` event and nothing re-reads the head.
-Close and reopen the pull request, or edit its title or body: `reopened` and `edited` are both subscribed for exactly this, and because the verdict is bound to the head commit, re-running against an unchanged head simply re-derives it from the evidence now present.
+`bin/fm-attest.sh recheck` is what re-reads it, and `write` runs it on the head it just published, so a successful delivery converges on a green check with nobody closing, reopening or editing a pull request.
 
 It re-runs the workflow run that already judged that exact head.
 That is GitHub's own supported mechanism, and it keeps GitHub the only place a verdict comes from: the same event payload replays, so the job checks out the same `head.sha`, fetches the ref afresh, and re-derives its verdict from the evidence now present.
@@ -187,6 +242,8 @@ A fork's landing branch carries work that was validated upstream, but its commit
 Because the attestation is bound to a commit rather than written into a pull request body, that branch can be validated in its own right without proposing anything upstream.
 Run the pipeline against the landing branch with the pull request and CI steps skipped, then attest the head it validated.
 That is what separates the signature from upstream submission: previously the only way to obtain the marker was to open an upstream pull request, so a landing branch could not be signed without duplicating a live contribution.
+
+A head proposed nowhere has no check to re-evaluate, and `write` reports exactly that and exits cleanly rather than treating it as a fault.
 
 ## Verification
 

@@ -42,7 +42,7 @@ Every path is therefore exercised in isolation, leaving no exemption branch for 
 ## Environment
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
-Every measurement below was taken against head `9c15cbb3`, and EACH ENTRY in the campaign artifact records that head individually rather than relying on one head written once.
+Every measurement below was taken against the subjects cited under "Campaign artifact", and EACH ENTRY in the campaign artifact records the head it was measured at individually rather than relying on one head written once.
 Each entry also carries a digest of its whole captured run and the patch that rebuilds its variant, so an independent party can replay any entry and compare rather than taking this record's word for it.
 
 ## Campaign artifact
@@ -50,8 +50,20 @@ Each entry also carries a digest of its whole captured run and the patch that re
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `9c15cbb31bc9baf9cd78ef5deb01c004b9a864a7`.
+A record about a subject NAMES THE SUBJECT. The citation for this campaign is therefore these three digests, and nothing else:
+
+- `bin/fm-review-envelope-lib.sh` — `sha256:e952abd6bb0ec8633dfe52f68ed87b411edac4d90546803f7c99bb7e44e7a7a7`
+- `bin/fm-review-envelope.sh` — `sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a`
+- `tests/fm-review-envelope.test.sh` — `sha256:625358e42e8ba76daeca51d1ffcef03cf6b5056957656b58e27c7ac5df6e34db`
+
+Campaign head: `9c15cbb31bc9baf9cd78ef5deb01c004b9a864a7` (provenance only).
 Mutations built: 73.
+
+That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is explicitly NOT a coordinate anyone is expected to resolve, and it is not reachable from this branch - the branch was rebased after the campaign ran, which stranded the commit while changing not one measured byte. It survives in this clone only under a local pre-rebase backup ref, which is why the control asks about REACHABILITY FROM THE BRANCH rather than whether the object happens to be present: the second question answers yes here and no for everyone who fetches the branch, which is precisely the defect. A rebase strands heads and leaves measurements verifiable, which is exactly what happened here; re-stamping the record against a reachable commit would buy a label that goes stale again on the next rebase, and writing a commit where the measurement was not taken is the relabelling this record exists to refuse.
+
+To replay, do not go looking for that commit. Check out this branch, confirm each subject above hashes to the digest cited for it, then rebuild any entry from its `replay_patch` and compare the whole captured run against its `output_sha256`. The subject digests are obtainable from the branch; the head is not, and no measurement here ever rested on it.
+
+The control enforces exactly that. It requires all three subjects to be recorded, requires each to still hash to the digest cited, requires this prose to cite the digests the artifact measured, and requires any cited head to be either reachable from this branch or carry the provenance-only label above. Comparing the record's head field with the artifact's head field - which is all it used to do - establishes only that two fields agree, not that anything is replayable.
 
 ## Commands
 
@@ -68,11 +80,24 @@ FM_REVIEW_ENVELOPE_BIN=<variant>/bin/fm-review-envelope.sh bash tests/fm-review-
 ```
 
 Both files are copied because the entrypoint sources its library from its own directory, so a variant carrying only one of them would test the tracked build.
+
+## The two seams, and what each one may do
+
 `FM_REVIEW_ENVELOPE_BIN` is read only by the test file and defaults to the tracked script, so the seam exists for this measurement and changes nothing in production.
+
+`FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM` and `FM_REVIEW_ENVELOPE_TEST_OPENED_LOCATOR` are read by `digest_evidence_handle` in `bin/fm-review-envelope-lib.sh`, so unlike the one above this seam is in shipped code and is documented here for that reason - an undocumented seam in `bin/` reads as an accident.
+It exists because the property it proves cannot be observed any other way: that the bytes bound are the OPENED HANDLE's rather than the pathname's, which requires repointing the name after the handle opens and at a moment the test chooses.
+It replaced a scheduler-dependent control that could pass without ever reaching its window, and a control that can pass without exercising its case is worse than a seam.
+
+Three properties bound what a leak of either variable can do:
+
+- The seam is confined to one directory this library owns, `SEAM_DIRECTORY` under the system temporary directory. A seam pointed anywhere else is refused before anything is written, so an ambient variable can never make this program write at a path its caller picked.
+- Both halves of the handshake are bounded by `SEAM_DEADLINE_SECONDS`, one number in the library that the test reads out of the build under test rather than restating. A leak costs that bound once, and the two halves of one handshake cannot drift into disagreeing about how long it lasts.
+- Every way it can refuse - a seam outside its root, a signal it could not write, a handshake that did not complete - is the contract's own could-not-observe under `evidence_seam_unusable`. A seam that answers a refusal with a traceback is a hole in the three-valued promise rather than a measurement affordance.
 
 ## What was measured
 
-76 controls pass against the shipped scripts.
+78 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 

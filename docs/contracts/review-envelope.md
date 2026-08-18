@@ -237,6 +237,7 @@ None of them is a pass, and none of them is skippable.
 | `predecessor_unreadable` | The declared predecessor envelope could not be read, or does not match its own digest. |
 | `verification_applicability_undeclared` | The inputs carry neither non-empty verification applicability rules nor an explicit none with a reason, so required contracts cannot be judged. |
 | `evidence_recheck_declined` | Validation was told not to re-read the evidence bytes, and did not. |
+| `evidence_seam_unusable` | The evidence-handle synchronization seam was pointed outside the directory it is confined to, or its bounded handshake did not complete. |
 | `outer_integrity_digest_unobserved` | The outer integrity digest is absent, so outer facts cannot be checked. |
 | `request_identity_claim_unobserved` | The declared request identity state is absent rather than an explicit value or null. |
 | `ruling_applicability_unestablished` | A ruling names no head, tree, or envelope digest, so its applicability to this candidate cannot be established. |

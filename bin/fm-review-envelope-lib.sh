@@ -156,6 +156,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
 
@@ -163,6 +164,12 @@ SCHEMA = "review-envelope/v1"
 INPUTS_SCHEMA = "review-envelope-inputs/v1"
 CLASSIFICATION_SCHEMA = "review-envelope-classification/v1"
 CANONICALIZATION = "json-sorted-compact-utf8-v1"
+
+# The evidence-handle synchronization seam. Both halves of its handshake are
+# bounded by one number, and tests/fm-review-envelope.test.sh reads that number
+# out of this file rather than carrying a second copy of it that could drift.
+SEAM_DIRECTORY = "fm-review-envelope-seam"
+SEAM_DEADLINE_SECONDS = 5
 
 # A check attempt that reached an adverse verdict. A workflow that failed to
 # start never clears by waiting, so it is a verdict rather than a silence.
@@ -258,27 +265,82 @@ def digest_file(path):
         return digest_handle(handle)
 
 
+def seam_root():
+    """The one directory this library will let the synchronization seam use.
+
+    The seam is a measurement affordance, so the only thing an ambient
+    environment variable may choose about it is a name inside a location this
+    code owns. A seam pointed anywhere else is refused rather than followed,
+    because a leaked variable must never be able to make this program write at
+    a path its caller picked.
+    """
+    return os.path.realpath(os.path.join(tempfile.gettempdir(), SEAM_DIRECTORY))
+
+
+def seam_prefix():
+    configured = os.environ.get("FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM")
+    if not configured:
+        return None
+    root = seam_root()
+    resolved = os.path.realpath(configured)
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise Unobservable(
+            "evidence_seam_unusable",
+            "the evidence synchronization seam is confined to " + root,
+            str(configured),
+        )
+    return resolved
+
+
+def seam_signal(prefix, suffix):
+    try:
+        os.makedirs(os.path.dirname(prefix), exist_ok=True)
+        with open(prefix + suffix, "x", encoding="utf-8") as handle:
+            handle.write(suffix.lstrip(".") + "\n")
+    except OSError as error:
+        raise Unobservable(
+            "evidence_seam_unusable",
+            "the evidence synchronization seam could not signal " + suffix + ": " + str(error),
+            prefix,
+        )
+
+
+def seam_await(prefix, suffix):
+    deadline = time.monotonic() + SEAM_DEADLINE_SECONDS
+    while not os.path.exists(prefix + suffix):
+        if time.monotonic() >= deadline:
+            raise Unobservable(
+                "evidence_seam_unusable",
+                "the evidence synchronization seam did not reach "
+                + suffix.lstrip(".")
+                + " within "
+                + str(SEAM_DEADLINE_SECONDS)
+                + "s",
+                prefix,
+            )
+        time.sleep(0.01)
+
+
 def digest_evidence_handle(handle, locator):
-    # Test-only synchronization seam for repointing a name after this handle opens.
-    test_seam = os.environ.get("FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM")
+    """Digest an already-open evidence handle.
+
+    The seam below lets a control repoint a name after this handle opens, which
+    is the only way to observe that the bytes bound are the opened handle's
+    rather than the pathname's. It is confined to seam_root(), bounded by
+    SEAM_DEADLINE_SECONDS, and every way it can refuse is a classified
+    could-not-observe, because a seam that answers with a traceback where the
+    contract promises a three-valued classification is a hole rather than a
+    seam.
+    """
+    prefix = seam_prefix()
     test_locator = os.environ.get("FM_REVIEW_ENVELOPE_TEST_OPENED_LOCATOR")
-    if not test_seam or locator != test_locator or os.path.exists(test_seam + ".hashed"):
+    if not prefix or locator != test_locator or os.path.exists(prefix + ".hashed"):
         return digest_handle(handle)
-    with open(test_seam + ".opened", "x", encoding="utf-8") as signal:
-        signal.write("opened\n")
-    deadline = time.monotonic() + 10
-    while not os.path.exists(test_seam + ".continue"):
-        if time.monotonic() >= deadline:
-            raise OSError("test synchronization seam timed out before hashing")
-        time.sleep(0.01)
+    seam_signal(prefix, ".opened")
+    seam_await(prefix, ".continue")
     observed = digest_handle(handle)
-    with open(test_seam + ".hashed", "x", encoding="utf-8") as signal:
-        signal.write("hashed\n")
-    deadline = time.monotonic() + 10
-    while not os.path.exists(test_seam + ".restored"):
-        if time.monotonic() >= deadline:
-            raise OSError("test synchronization seam timed out after hashing")
-        time.sleep(0.01)
+    seam_signal(prefix, ".hashed")
+    seam_await(prefix, ".restored")
     return observed
 
 
@@ -560,6 +622,7 @@ CATALOG = {
         {"code": "predecessor_unreadable", "meaning": "The declared predecessor envelope could not be read, or does not match its own digest."},
         {"code": "verification_applicability_undeclared", "meaning": "The inputs carry neither non-empty verification applicability rules nor an explicit none with a reason, so required contracts cannot be judged."},
         {"code": "evidence_recheck_declined", "meaning": "Validation was told not to re-read the evidence bytes, and did not."},
+        {"code": "evidence_seam_unusable", "meaning": "The evidence-handle synchronization seam was pointed outside the directory it is confined to, or its bounded handshake did not complete."},
         {"code": "outer_integrity_digest_unobserved", "meaning": "The outer integrity digest is absent, so outer facts cannot be checked."},
         {"code": "request_identity_claim_unobserved", "meaning": "The declared request identity state is absent rather than an explicit value or null."},
         {"code": "ruling_applicability_unestablished", "meaning": "A ruling names no head, tree, or envelope digest, so its applicability to this candidate cannot be established."},
@@ -2051,9 +2114,23 @@ def command_prepare(args):
             target,
         )
     inputs = read_json(args.inputs, "inputs_malformed", "inputs are unreadable")
-    envelope = compile_envelope(args.repo, inputs, args.predecessor, args.evidence_root)
-    envelope_digest = digest_of(envelope)
-    computed_request_identity = request_identity(envelope, envelope_digest)
+    # A document that parses as JSON can still be malformed in a way no
+    # individual guard names - a rule whose value is a number where a pattern
+    # belongs, say. That is an input this compiler could not observe, and it is
+    # reported as one: the contract promises three values on every path, so no
+    # path may answer with a traceback instead.
+    try:
+        envelope = compile_envelope(args.repo, inputs, args.predecessor, args.evidence_root)
+        envelope_digest = digest_of(envelope)
+        computed_request_identity = request_identity(envelope, envelope_digest)
+    except Unobservable:
+        raise
+    except Exception as error:
+        raise Unobservable(
+            "inputs_malformed",
+            "inputs are structurally malformed: " + str(error),
+            str(args.inputs),
+        )
     request_input = as_dict(inputs, "request")
     document = {
         "schema": SCHEMA,
@@ -2077,7 +2154,16 @@ def command_prepare(args):
     with open(target, "w", encoding="utf-8") as handle:
         json.dump(document, handle, indent=2, sort_keys=True)
         handle.write("\n")
-    classification = classify(envelope, args.repo, args.evidence_root, True)
+    try:
+        classification = classify(envelope, args.repo, args.evidence_root, True)
+    except Unobservable:
+        raise
+    except Exception as error:
+        raise Unobservable(
+            "inputs_malformed",
+            "inputs are structurally malformed: " + str(error),
+            str(args.inputs),
+        )
     if "identity" in request_input and request_input["identity"] != computed_request_identity:
         classification["refusals"].append(
             {

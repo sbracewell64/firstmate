@@ -254,6 +254,39 @@ capture() {
   CAPTURED_CODE=$?
 }
 
+# The evidence-handle synchronization seam's bound and its confinement root
+# belong to the library, and are read out of the build under test rather than
+# restated here. Two halves of one handshake carrying two numbers is how a
+# control ends up polling for a fraction of the deadline it is synchronizing
+# against, and then reporting a slow machine as a broken property.
+seam_library() {
+  printf '%s\n' "$(dirname "$BIN")/fm-review-envelope-lib.sh"
+}
+
+seam_deadline() {
+  sed -n 's/^SEAM_DEADLINE_SECONDS = \([0-9][0-9]*\)$/\1/p' "$(seam_library)"
+}
+
+run_prepare_with_seam() {  # <case-dir> <out-name> <seam> <locator>
+  local case_dir=$1 out=$2 seam=$3 locator=$4
+  FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM=$seam \
+  FM_REVIEW_ENVELOPE_TEST_OPENED_LOCATOR=$locator \
+  PATH="$case_dir/fakebin:$PATH" "$BIN" prepare \
+    --repo "$case_dir/repo" \
+    --inputs "$case_dir/inputs.json" \
+    --evidence-root "$case_dir/evidence" \
+    --out "$case_dir/$out"
+}
+
+seam_root() {
+  local name
+  name=$(sed -n 's/^SEAM_DIRECTORY = "\([^"]*\)"$/\1/p' "$(seam_library)")
+  [ -n "$name" ] || return 1
+  python3 -c \
+    'import os, sys, tempfile; print(os.path.realpath(os.path.join(tempfile.gettempdir(), sys.argv[1])))' \
+    "$name"
+}
+
 check_array_registry() {  # <envelope> <registry> <current|extra|stale|contradict-summary|attempt-exemption>
   python3 - "$@" <<'PY'
 import copy, json, sys
@@ -1489,7 +1522,10 @@ PY
 }
 
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading() {
-  local case_dir seam prepare_pid prepare_code
+  local case_dir seam prepare_pid prepare_code seam_polls seam_deadline_seconds
+  seam_deadline_seconds=$(seam_deadline)
+  [ -n "$seam_deadline_seconds" ] \
+    || fail "the library must publish one synchronization seam deadline"
   case_dir=$(make_case evidence-symlink-escape)
   printf 'external bytes that must not be read\n' > "$case_dir/outside.log"
   ln -s "$case_dir/outside.log" "$case_dir/evidence/linked.log"
@@ -1536,15 +1572,19 @@ PY
   assert_contains "$CAPTURED" 'REVIEW_READY' \
     "ordinary evidence binding must remain review-ready with the seam unset"
 
-  seam=$case_dir/evidence-opened-seam
-  (
-    export FM_REVIEW_ENVELOPE_TEST_OPENED_SEAM=$seam
-    export FM_REVIEW_ENVELOPE_TEST_OPENED_LOCATOR=linked.log
-    run_prepare "$case_dir" seam-engaged
-  ) > "$case_dir/seam.out" 2>&1 &
+  # Both halves of the handshake are bounded by the library's own number, read
+  # out of the library rather than restated here: a control that polls for a
+  # fraction of the deadline it is synchronizing against reports a slow machine
+  # as a broken property.
+  seam_polls=$((seam_deadline_seconds * 100))
+  seam=$(seam_root)/opened-$$
+  mkdir -p "$(dirname "$seam")"
+  rm -f "$seam".*
+  run_prepare_with_seam "$case_dir" seam-engaged "$seam" linked.log \
+    > "$case_dir/seam.out" 2>&1 &
   prepare_pid=$!
   fm_test_reap "$prepare_pid"
-  for _ in $(seq 1 200); do
+  for _ in $(seq 1 "$seam_polls"); do
     [ -f "$seam.opened" ] && break
     sleep 0.01
   done
@@ -1552,7 +1592,7 @@ PY
   mv "$case_dir/evidence/linked.log" "$case_dir/evidence/opened.log"
   cp "$case_dir/outside.log" "$case_dir/evidence/linked.log"
   printf 'continue\n' > "$seam.continue"
-  for _ in $(seq 1 200); do
+  for _ in $(seq 1 "$seam_polls"); do
     [ -f "$seam.hashed" ] && break
     sleep 0.01
   done
@@ -1585,6 +1625,52 @@ if block.get("observed_sha256") != opened or block.get("observed_sha256") == swa
     sys.exit(1)
 PY
   pass "a symlink cannot carry evidence outside its root into the envelope"
+}
+
+# The seam is reached through ambient environment variables, so the only thing
+# a leaked variable may choose about it is a name inside a directory the library
+# owns. A seam pointed anywhere else must refuse where it stands, must write
+# nothing at the path it was handed, and must refuse as the contract's
+# could-not-observe: a seam that answers a refusal with a traceback is a hole in
+# the three-valued promise rather than a measurement affordance.
+test_a_synchronization_seam_outside_its_root_refuses() {
+  local case_dir seam
+  case_dir=$(make_case seam-outside-root)
+  write_inputs "$case_dir"
+  seam=$case_dir/caller-directed-seam
+  capture run_prepare_with_seam "$case_dir" env "$seam" baseline.log
+  expect_code 2 "$CAPTURED_CODE" \
+    "a synchronization seam outside its root is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved evidence_seam_unusable' \
+    "the refusal must name the seam in the contract's own closed vocabulary"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a seam refusal must never escape as a Python traceback"
+  if [ -e "$seam.opened" ] || [ -e "$seam.hashed" ]; then
+    fail "a refused seam must write nothing at the path it was pointed at"
+  fi
+  pass "a synchronization seam pointed outside its confinement root refuses"
+}
+
+# The contract promises three values on EVERY path. An inputs document that
+# parses as JSON but is malformed inside - an exclusion rule whose value is a
+# number where a pattern belongs - reached a Python traceback instead: no
+# classification, no summary file, and nothing for a --json consumer to read.
+test_a_malformed_but_parseable_inputs_document_is_could_not_observe() {
+  local case_dir
+  case_dir=$(make_case inputs-malformed-within)
+  write_inputs "$case_dir" '{"scope": {"excluded": [{"type": "prefix", "value": 123}]}}'
+  capture run_prepare "$case_dir" env --json --summary-out "$case_dir/summary"
+  expect_code 2 "$CAPTURED_CODE" \
+    "inputs that parse but are malformed within are could-not-observe"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a malformed inputs document must never answer with a traceback"
+  assert_contains "$CAPTURED" '"code": "inputs_malformed"' \
+    "the classification must name the malformed inputs in the closed vocabulary"
+  assert_contains "$CAPTURED" '"readiness": "COULD_NOT_OBSERVE"' \
+    "a document this compiler could not observe must classify as could-not-observe"
+  assert_grep 'result=NO_VERIFIER_RAN' "$case_dir/summary" \
+    "the summary a caller reads must be written even when the inputs are malformed"
+  pass "an inputs document that parses but is malformed within classifies rather than crashing"
 }
 
 test_a_result_that_does_not_identify_its_verifier_refuses() {
@@ -2528,6 +2614,66 @@ test_the_measurement_record_is_backed_by_the_campaign_artifact() {
     || fail "the measurement record is not backed by the campaign artifact"
 
   local mutant=$TMP_ROOT/campaign-mutant.json
+  local mutant_record=$TMP_ROOT/campaign-mutant-record.md
+
+  # An artifact that simply stops naming a subject would satisfy a check that
+  # only compares what it does name, and would say nothing about the rest.
+  python3 - "$artifact" "$mutant" <<'PYEOF'
+import json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+del artifact["subjects"]["tests/fm-review-envelope.test.sh"]
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_campaign_artifact "$mutant" "$record" "$ROOT" "$TMP_ROOT/campaign-subject-absent"
+  assert_contains "$CAPTURED" 'records no digest for tests/fm-review-envelope.test.sh' \
+    "an artifact that drops a measured subject must fail for the missing subject"
+
+  # The citation is the subject digests. A record citing a digest the artifact
+  # never measured is the relabelling defect wearing the new citation.
+  python3 - "$record" "$mutant_record" <<'PYEOF'
+import re, sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+record = re.sub(
+    r"^(- `bin/fm-review-envelope\.sh` \u2014 `)sha256:[0-9a-f]{64}`$",
+    r"\1sha256:" + "0" * 64 + "`",
+    record,
+    flags=re.M,
+)
+open(target, "w", encoding="utf-8").write(record)
+PYEOF
+  if cmp -s "$record" "$mutant_record"; then
+    fail "the citation mutant must actually change the record's cited digest"
+  fi
+  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-citation"
+  assert_contains "$CAPTURED" 'record cites sha256:0000000000000000000000000000000000000000000000000000000000000000' \
+    "a record citing a digest the artifact never measured must fail"
+
+  # A head offered as a replay coordinate has to resolve. This one does not,
+  # because the branch was rebased after the campaign ran - so the record labels
+  # it provenance-only, and stripping that label must be caught rather than
+  # silently reinstating an unreplayable citation.
+  python3 - "$record" "$mutant_record" <<'PYEOF'
+import re, sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+record = re.sub(
+    r"^Campaign head: `([0-9a-f]{7,40})` \(provenance only\)\.$",
+    r"Campaign head: `\1`.",
+    record,
+    flags=re.M,
+)
+open(target, "w", encoding="utf-8").write(record)
+PYEOF
+  if cmp -s "$record" "$mutant_record"; then
+    fail "the head mutant must actually strip the provenance-only label"
+  fi
+  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head"
+  assert_contains "$CAPTURED" 'is not reachable from this branch' \
+    "a head offered as a replay coordinate that the branch does not carry must fail"
+
   python3 - "$artifact" "$mutant" missing <<'PYEOF'
 import json, sys
 source, target, mutation = sys.argv[1:]
@@ -2632,8 +2778,23 @@ except (OSError, ValueError) as error:
     sys.exit(1)
 record = open(record_path, encoding="utf-8").read()
 
+# The subjects the campaign measured. Naming them here rather than accepting
+# whatever the artifact happens to list is the difference between "every subject
+# recorded still matches" and "every subject measured is recorded": an artifact
+# that simply drops a subject would satisfy the first and say nothing.
+REQUIRED_SUBJECTS = (
+    "bin/fm-review-envelope-lib.sh",
+    "bin/fm-review-envelope.sh",
+    "tests/fm-review-envelope.test.sh",
+)
+subjects = artifact.get("subjects") or {}
+for required in REQUIRED_SUBJECTS:
+    if required not in subjects:
+        sys.stderr.write("the campaign artifact records no digest for %s\n" % required)
+        sys.exit(1)
+
 # The measured subjects must still be the shipped subjects, byte for byte.
-for path, recorded in sorted(artifact.get("subjects", {}).items()):
+for path, recorded in sorted(subjects.items()):
     try:
         actual = "sha256:" + hashlib.sha256(open(root + "/" + path, "rb").read()).hexdigest()
     except OSError as error:
@@ -2644,9 +2805,29 @@ for path, recorded in sorted(artifact.get("subjects", {}).items()):
             "%s changed since the campaign: measured %s, shipped %s\n" % (path, recorded, actual))
         sys.exit(1)
 
+# The CITATION is the subject digests, because a record about a subject names
+# the subject. Checking that the prose cites them is what makes the record
+# replayable from the branch alone; comparing two fields of the same artifact to
+# each other would establish only that the artifact agrees with itself.
+for path, recorded in sorted(subjects.items()):
+    cited = re.search(
+        r"^- `" + re.escape(path) + r"` \u2014 `(sha256:[0-9a-f]{64})`$", record, re.M)
+    if not cited:
+        sys.stderr.write("the record cites no subject digest for %s\n" % path)
+        sys.exit(1)
+    if cited.group(1) != recorded:
+        sys.stderr.write(
+            "record cites %s for %s, artifact measured %s\n" % (cited.group(1), path, recorded))
+        sys.exit(1)
+
 # The record's stated head must be the artifact's, so relabelling the prose
-# alone contradicts the experiment instead of quietly redescribing it.
-stated = re.search(r"^Campaign head: `([0-9a-f]{7,40})`\.$", record, re.M)
+# alone contradicts the experiment instead of quietly redescribing it. A head is
+# additionally either RESOLVABLE or explicitly labelled provenance-only, because
+# an unresolvable commit offered as a replay coordinate sends an independent
+# party somewhere that does not exist. A rebase strands a head while changing no
+# measured byte, so the label is the honest answer rather than a re-stamp.
+stated = re.search(
+    r"^Campaign head: `([0-9a-f]{7,40})`( \(provenance only\))?\.$", record, re.M)
 if not stated:
     sys.stderr.write("the record states no campaign head in the required form\n")
     sys.exit(1)
@@ -2655,6 +2836,20 @@ if stated.group(1) != artifact.get("head"):
         "record states campaign head %s, artifact was produced at %s\n"
         % (stated.group(1), artifact.get("head")))
     sys.exit(1)
+if not stated.group(2):
+    # Reachability from this branch, not mere object presence. The stranded head
+    # is still an object in THIS clone, held alive by a local pre-rebase backup
+    # ref, so asking whether it resolves would answer yes here and no for
+    # everyone who fetches the branch - which is the whole defect.
+    reachable = subprocess.run(
+        ["git", "-C", root, "merge-base", "--is-ancestor", stated.group(1), "HEAD"],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+    )
+    if reachable.returncode:
+        sys.stderr.write(
+            "record offers campaign head %s as a replay coordinate and it is not reachable from "
+            "this branch; label it provenance-only or cite something that is\n" % stated.group(1))
+        sys.exit(1)
 
 built = re.search(r"^Mutations built: ([0-9]+)\.$", record, re.M)
 if not built:
@@ -2857,6 +3052,8 @@ test_a_broken_evidence_digest_refuses
 test_an_evidence_locator_that_escapes_its_root_refuses
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading
 test_a_result_that_does_not_identify_its_verifier_refuses
+test_a_synchronization_seam_outside_its_root_refuses
+test_a_malformed_but_parseable_inputs_document_is_could_not_observe
 test_wrong_head_ci_refuses
 test_a_skipped_required_check_refuses
 test_an_absent_required_platform_refuses
