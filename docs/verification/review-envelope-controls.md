@@ -274,9 +274,9 @@ The mutation was REMOVED from the campaign table rather than retargeted at the c
 
 Measured directly on scratch copies of this tree at `git archive` fidelity, one carrying only this defect: the defect build reddens the control with the line above, and the tracked build passes it with `ok - a compiler that reaches no readable result is could-not-observe, whatever its exit status was`. Both runs exit 1 overall, because a suite reduced to one control fails its own record-inventory checks, so the EXIT CODE IS NOT THE OBSERVATION HERE - the control's own assertion is, and it is what is reported.
 
-## Three controls measured outside the mutation table
+## Controls that sit outside the mutation table
 
-Three controls check this record against the suite or against the campaign artifact rather than checking the compiler, so no mutation of the compiler can falsify them.
+The controls in this section check this record against the suite or against the campaign artifact rather than checking the compiler, so no mutation of the compiler can falsify them. Each is described below by its own status, because that status differs between them at this head and a heading that summarised it would have to be corrected two sentences later.
 The artifact-backing control was measured on scratch copies of the tree, by making the change each one exists to catch, and its rows below are those past measurements.
 The mutation-table control MANUFACTURES EVERY DIRECTION IT CLAIMS, on every run: it builds a record with a row nothing backs, a record missing a measured row, and a record crediting a real red to a property it never examined, and requires each to be refused. None of its reds is a past measurement to be taken on trust, and its rows below record what every run reproduces.
 
