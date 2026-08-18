@@ -1677,12 +1677,16 @@ EOF
           and .provenance.summary_valid == false
           and .provenance.trust == "partial-structured"
           and .invalidity == {kind:"child_current_unavailable",ids:["unreadable-child"]}
-          and [.decisions_open[].id] == ["reviewer-decision"]
+          and [.decisions_open[].id] == ["reviewer-decision", "unreadable-child"]
+          and (.decisions_open[] | select(.id == "unreadable-child")
+            | .key == "CNO_DECISION_UNIVERSE"
+              and .verb == "CNO_DECISION_UNIVERSE"
+              and .source == "status")
           and [.holds[].id] == ["reviewer-decision"]
           and [.queued[].id] == ["reviewer-decision"]
           and [.landed[].id] == ["prior-release"]
           and [.endpoints[].id] == ["unreadable-child"]
-          and .counts.decisions_open == 1
+          and .counts.decisions_open == 2
           and .counts.holds == 1
           and .counts.queued == 1
           and .counts.landed == 1

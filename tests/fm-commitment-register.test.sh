@@ -33,6 +33,16 @@
 #   - THE PROBE-RESULT CACHE NEVER SERVES AN OLD ANSWER AS A CURRENT ONE. It is
 #     driven both ways: a served result carries its observation time, and the
 #     truth it is standing in for is shown to differ from it.
+#   - ENUMERATION DOES NOT PAY FOR VERIFICATION. The open-decision fold answers
+#     "which decisions are open" without executing a registered probe, and a
+#     caller that wants a verdict grants an explicit probe budget. Both halves are
+#     driven, with counts of what actually executed rather than an absence of
+#     failures: cases whose subject is the CLOSURE gate therefore set
+#     FM_CLASSIFY_DECISION_PROBE_MAX, and the case whose subject is the SPLIT
+#     proves that without it nothing runs and the listing is still complete.
+#   - THE CACHE CAN WARM. Its freshness bound is proven longer than the pass that
+#     fills it, because a bound shorter than that pass expires every entry it
+#     writes before the pass ends and the cache can never serve at all.
 #
 # Probes run against fixture registers through FM_COMMITMENT_DIR, so no case
 # depends on what the shipped register currently happens to contain.
@@ -884,7 +894,7 @@ run: test -f criterion-established'
   err="$TMP_ROOT/acceptnote-stderr"
   printf 'resolved [key=crit]: fix applied\n' >> "$home/state/accepttask.status"
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/accepttask.status" 2>"$err"
@@ -900,7 +910,7 @@ run: test -f criterion-established'
   rm -rf "$home/state/commitment-probe-cache"
   : > "$err"
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/accepttask.status" 2>"$err"
@@ -918,7 +928,7 @@ reason: the criterion is that a comment reads accurately'
   printf 'resolved [key=crit]: fix applied\n' >> "$home/state/attesttask.status"
   : > "$err"
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/attesttask.status" 2>"$err"
@@ -945,7 +955,7 @@ run: test -f criterion-established'
   printf 'resolved [key=crit]: fix applied\n' >> "$home/state/task1.status"
 
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/task1.status"
@@ -966,7 +976,7 @@ run: test -f criterion-established'
     commit -q --allow-empty -m 'the commit that establishes the criterion'
   printf 'resolved [key=crit]: criterion established\n' >> "$home/state/task1.status"
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/task1.status"
@@ -977,13 +987,146 @@ run: test -f criterion-established'
   printf 'needs-decision [key=plain]: an ordinary decision\n' > "$home/state/task2.status"
   printf 'resolved [key=plain]: decided\n' >> "$home/state/task2.status"
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/task2.status"
   )
   [ -z "$out" ] || fail "a decision with no registered probe must still close, got: $out"
   pass "the open-decision fold refuses a resolution its registered probe does not support"
+}
+
+# --- enumeration does not pay for verification -------------------------------
+#
+# THE PROPERTY: answering "which decisions are open" executes no registered probe
+# and always completes; answering "may this one close" does, and only when a
+# caller asks for it. Before this split the fold asked the expensive question per
+# resolved key, and a home with five such keys took a measured 301s to enumerate -
+# past every caller's bound, so bin/fm-fleet-snapshot.sh and bin/fm-admission.sh
+# returned nothing at all.
+#
+# Driven with POSITIVE EXECUTED COUNTS on both sides. A case that only showed
+# "the listing was fast" would pass just as well against a fold that enumerated
+# nothing, and one that only showed "no probe ran" would pass against a fold that
+# had no probes to run.
+enumeration_executes_no_probe_and_still_completes() {
+  local home out marker ran wt i
+
+  home=$(make_home enumcost)
+  mkdir -p "$TMP_ROOT/enumcost"
+  marker="$TMP_ROOT/enumcost/ran"
+  : > "$marker"
+  for i in 1 2 3; do
+    wt=$(give_worktree "$home" "enumtask$i")
+    write_decision "$home" "enumtask$i" "k$i" "tier: executable
+run: printf 'x\n' >> $marker"
+    printf 'needs-decision [key=k%s]: the ruled finding\n' "$i" > "$home/state/enumtask$i.status"
+    printf 'resolved [key=k%s]: fix applied\n' "$i" >> "$home/state/enumtask$i.status"
+  done
+
+  # The ENUMERATING call: no budget granted.
+  out=$(
+    FM_HOME="$home" bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      scan_open_decisions "$2"
+    ' _ "$ROOT" "$home/state" 2>/dev/null
+  )
+  ran=$(wc -l < "$marker" | tr -cd '0-9')
+  [ "$ran" -eq 0 ] \
+    || fail "enumeration executed $ran registered probes; listing which decisions are open must not pay for verifying them"
+  [ "$(printf '%s\n' "$out" | grep -c .)" -eq 3 ] \
+    || fail "enumeration must list every open decision, got: $out"
+  assert_contains "$out" "NOT PROBED YET" \
+    "an unverified criterion must be carried as could-not-observe on the entry, not dropped from the listing"
+
+  # THE NON-VACUITY CONTROL, and the accepting path is the one it breaks: grant a
+  # budget and the SAME three keys execute their probes and close. Without this
+  # the case above would pass against a fold with nothing to run.
+  : > "$marker"
+  rm -rf "$home/state/commitment-probe-cache"
+  out=$(
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=3 bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      scan_open_decisions "$2"
+    ' _ "$ROOT" "$home/state" 2>/dev/null
+  )
+  ran=$(wc -l < "$marker" | tr -cd '0-9')
+  [ "$ran" -eq 3 ] \
+    || fail "control: a granted budget of 3 must execute 3 probes, executed $ran; the case above would otherwise prove nothing"
+  [ -z "$out" ] || fail "control: three passing criteria must close all three decisions, got: $out"
+
+  # And the budget BOUNDS rather than merely permits: one is one, per status file.
+  : > "$marker"
+  rm -rf "$home/state/commitment-probe-cache"
+  out=$(
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      status_open_decisions "$2"
+    ' _ "$ROOT" "$home/state/enumtask1.status" 2>/dev/null
+  )
+  ran=$(wc -l < "$marker" | tr -cd '0-9')
+  [ "$ran" -eq 1 ] \
+    || fail "a budget of 1 must execute exactly 1 probe, executed $ran"
+  pass "enumeration executes no registered probe and still lists every open decision"
+}
+
+# THE PROPERTY: the freshness bound is longer than the pass that fills the cache.
+# Set shorter, every entry the pass writes has expired before the pass ends, so
+# the cache can never serve and the cost it exists to remove is never removed.
+# Driven against the SAME stored observation at the SAME instant under both
+# bounds, so the difference is the bound and nothing else.
+cache_warms_because_its_bound_outlives_the_pass_that_fills_it() {
+  local home wt out shipped ttl bound
+
+  home=$(make_home cachewarm)
+  wt=$(give_worktree "$home" warmtask)
+  : > "$wt/criterion-established"
+  write_decision "$home" warmtask crit 'tier: executable
+run: test -f criterion-established'
+  printf 'needs-decision [key=crit]: the ruled finding\n' > "$home/state/warmtask.status"
+
+  # One verifying pass fills the cache.
+  run_reg "$TMP_ROOT/cachewarm/unused" "$home" --closes warmtask crit >/dev/null 2>&1
+  [ -d "$home/state/commitment-probe-cache" ] \
+    || fail "the verifying pass stored no observation, so nothing below is about the cache"
+
+  # Served at the shipped bound: the enumerating caller gets the verdict and the
+  # key closes, spending no probe run.
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/warmtask.status"
+  out=$(
+    FM_HOME="$home" bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      status_open_decisions "$2"
+    ' _ "$ROOT" "$home/state/warmtask.status" 2>/dev/null
+  )
+  [ -z "$out" ] || fail "a stored observation inside the bound must serve the enumerating caller, got: $out"
+
+  # THE WATCHED-RED CONTROL: the same stored entry under a 1s bound, which is what
+  # a bound shorter than the filling pass amounts to - the observation has aged
+  # past it and is not served at all. This is the defect build for this property.
+  sleep 2
+  out=$(
+    FM_HOME="$home" FM_COMMITMENT_PROBE_CACHE_TTL=1 bash -c '
+      . "$1/bin/fm-classify-lib.sh"
+      status_open_decisions "$2"
+    ' _ "$ROOT" "$home/state/warmtask.status" 2>/dev/null
+  )
+  assert_contains "$out" "NOT PROBED YET" \
+    "control: past its bound a stored observation must not be served, or the case above is about nothing"
+
+  # And the shipped bound is documented as derived from the PASS rather than from
+  # one probe: it must exceed the per-probe bound by more than one probe's worth,
+  # or a pass over two keys already outlives it.
+  # shellcheck disable=SC2016  # the ${...} is the literal default-expansion being matched, not one to expand
+  shipped=$(sed -n 's/^PROBE_CACHE_TTL=${FM_COMMITMENT_PROBE_CACHE_TTL:-\([0-9][0-9]*\)}$/\1/p' "$REG" | head -1)
+  ttl=$(jq -r '.probe_bounds.decision_probe_cache_ttl_seconds' "$SCHEMA_SRC")
+  bound=$(jq -r '.probe_bounds.decision_file_probe_seconds' "$SCHEMA_SRC")
+  [ -n "$shipped" ] || fail "the cache freshness bound could not be read out of $REG"
+  [ "$shipped" = "$ttl" ] \
+    || fail "the code serves a stored observation for ${shipped}s and commitments/schema.json documents ${ttl}s"
+  [ "$ttl" -gt "$bound" ] \
+    || fail "a freshness bound of ${ttl}s cannot outlive a single ${bound}s probe, so the cache could never warm"
+  pass "the probe-result cache warms because its bound outlives the pass that fills it"
 }
 
 # The gate's cost contract, driven rather than asserted. The fold runs over every
@@ -1049,7 +1192,7 @@ run: true'
 
   # The control first: with the interpreter present, this exact probe closes.
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/task9.status"
@@ -1057,7 +1200,7 @@ run: true'
   [ -z "$out" ] || fail "control: a passing probe must close this decision, got: $out"
 
   out=$(
-    FM_HOME="$home" FM_CLASSIFY_COMMITMENT_BIN="$TMP_ROOT/nointerp/no-such-register.sh" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 FM_CLASSIFY_COMMITMENT_BIN="$TMP_ROOT/nointerp/no-such-register.sh" bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/task9.status"
@@ -1067,6 +1210,35 @@ run: true'
   assert_contains "$out" "not available to evaluate it" \
     "the still-open decision must say why the criterion could not be evaluated"
   pass "a registered probe with no interpreter refuses the closure rather than being waved through"
+}
+
+probe_budget_counts_only_executable_registered_probes() {
+  local home out marker cached_wt
+  home=$(make_home executable-budget)
+  marker="$TMP_ROOT/executable-budget-ran"
+  : > "$home/state/budget.status"
+  cached_wt=$(give_worktree "$home" budget)
+  : > "$cached_wt/cached-pass"
+  write_decision "$home" budget attested 'tier: attested
+reason: accepted without execution'
+  write_decision "$home" budget cached 'tier: executable
+run: test -f cached-pass'
+  run_reg "$TMP_ROOT/executable-budget-unused" "$home" --closes budget cached >/dev/null 2>&1
+  write_decision "$home" budget executable "tier: executable
+run: : > $marker"
+  {
+    printf 'needs-decision [key=attested]: attested\nresolved [key=attested]: done\n'
+    printf 'needs-decision [key=cached]: cached\nresolved [key=cached]: done\n'
+    printf 'needs-decision [key=executable]: verify me\nresolved [key=executable]: done\n'
+  } >> "$home/state/budget.status"
+
+  out=$(FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 bash -c '
+    . "$1/bin/fm-classify-lib.sh"
+    status_open_decisions "$2"
+  ' _ "$ROOT" "$home/state/budget.status" 2>/dev/null)
+  [ -e "$marker" ] || fail "attested and cached decisions consumed the executable probe's budget"
+  [ -z "$out" ] || fail "the executable probe did not close after receiving the budget: $out"
+  pass "the verification budget counts only executable registered probes"
 }
 
 # --- session start executes no probe -----------------------------------------
@@ -1099,9 +1271,11 @@ run: : > $marker"
   printf 'needs-decision [key=crit]: the ruled finding\n' > "$home/state/noexectask.status"
   printf 'resolved [key=crit]: fix applied\n' >> "$home/state/noexectask.status"
 
-  # Control: allowed to run, this `run:` executes and the key closes.
+  # Control: allowed to run - which now means BOTH permissions, since the fold
+  # enumerates unless a caller grants it a probe budget - this `run:` executes and
+  # the key closes.
   out=$(
-    FM_HOME="$home" bash -c '
+    FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=5 bash -c '
       . "$1/bin/fm-classify-lib.sh"
       status_open_decisions "$2"
     ' _ "$ROOT" "$home/state/noexectask.status" 2>/dev/null
@@ -1669,5 +1843,8 @@ absolute_path_target_is_refused_verbatim
 malformed_unobserved_conditions_is_inadmissible
 symbol_called_does_not_count_a_mention
 fold_keeps_refused_resolution_open
+enumeration_executes_no_probe_and_still_completes
+cache_warms_because_its_bound_outlives_the_pass_that_fills_it
 fold_spends_no_subprocess_on_a_decision_without_a_probe
 fold_refuses_a_registered_probe_it_cannot_evaluate
+probe_budget_counts_only_executable_registered_probes

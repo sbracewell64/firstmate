@@ -1202,7 +1202,7 @@ JSON
   # asked by something that is NOT session start, both probes run.
   FM_COMMITMENT_DIR="$register" FM_HOME="$home" FM_ROOT_OVERRIDE="$root" \
     "$ROOT/bin/fm-commitment-register.sh" --open >/dev/null 2>&1
-  FM_HOME="$home" bash -c '
+  FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 bash -c '
     . "$1/bin/fm-classify-lib.sh"
     status_open_decisions "$2"
   ' _ "$ROOT" "$home/state/probed.status" >/dev/null 2>&1
@@ -1376,13 +1376,13 @@ EOF
   printf 'needs-decision [key=crit]: the ruled finding\n' > "$home/state/probed.status"
   printf 'resolved [key=crit]: fix applied\n' >> "$home/state/probed.status"
 
-  # The control: the same admission read, unguarded, does reach the probe.
+  # Admission enumerates the census directly, outside session start as well as
+  # inside it. Its read must never spend the optional verification budget.
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root" PATH="$fakebin:$BASE_PATH" \
     "$ROOT/bin/fm-admission.sh" --brief >/dev/null 2>&1 || true
-  [ -e "$decision_ran" ] \
-    || fail "control: an unguarded admission read never reached the decision probe, so the case below proves nothing"
+  [ ! -e "$decision_ran" ] \
+    || fail "a direct admission read executed a decision file's run"
 
-  rm -f "$decision_ran"
   rm -rf "$home/state/commitment-probe-cache"
 
   # A held lock makes this session read-only, which skips the wake drain and

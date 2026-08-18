@@ -133,7 +133,25 @@
 #   decision, and no bound makes it a small one.
 #
 # They must not share a switch, because a switch that answers the trust question
-# would silence the cost one too.
+# would silence the cost one too. --no-decision-run is the trust switch and
+# --cache-only is the cost one; the next section is what the cost switch is for.
+#
+# ENUMERATION IS NOT VERIFICATION, and they may not share a cost. Listing WHICH
+# decisions are open is a cheap read of durable records. Deciding WHETHER a
+# decision's criterion is met is expensive verification. Conflating them made the
+# cheap listing pay the expensive price: bin/fm-classify-lib.sh's open-decision
+# fold called --closes per resolved key, each key spent up to
+# FM_COMMITMENT_DECISION_PROBE_TIMEOUT, and a home with five such keys took a
+# measured 301s to answer "which decisions are open" - past every caller's bound,
+# so bin/fm-fleet-snapshot.sh and bin/fm-admission.sh returned nothing at all.
+# Nothing is strictly worse than either answer alone.
+#
+# --cache-only is the separation. A caller enumerating the universe passes it and
+# gets a complete listing at the price of a file read per key: a fresh stored
+# observation answers, and a key with none answers could-not-observe and stays
+# visibly open. A caller asking the expensive question about a key spends the
+# probe, which also stores the observation the cheap path then serves. Both
+# answers are three-valued and neither can pass on silence.
 #
 # That first paragraph is only true because of probe_target_fault below: the
 # KINDS are closed, but the TARGETS they run come out of the entry's own JSON,
@@ -222,6 +240,12 @@
 #       `run:` and report every such criterion as could-not-observe rather than
 #       finding out. The register's own typed probes are unaffected. See TWO KINDS
 #       OF PROBE above.
+#   Any report may be combined with --cache-only, which is
+#       FM_COMMITMENT_PROBE_CACHE_ONLY=1 as a flag: answer a decision criterion
+#       from a fresh stored observation when one exists and report
+#       could-not-observe otherwise, instead of spending a probe run to find out.
+#       It is the COST switch and it is deliberately NOT the trust switch above;
+#       see TWO KINDS OF PROBE and ENUMERATION IS NOT VERIFICATION.
 #   fm-commitment-register.sh --help
 #
 # Exit status is the verdict, so a caller that ignores stdout still stops safely:
@@ -230,6 +254,7 @@
 #   3  at least one entry is UNMET, and none is UNOBSERVED
 #   4  at least one entry is UNOBSERVED - including a register that could not be
 #      read at all, which is never a quiet pass
+#   5  the internal closure fold requested an executable-probe availability receipt
 #
 # Entries are read from three places, and a JSON id must be unique across the two
 # JSON sources:
@@ -258,8 +283,14 @@
 #   FM_COMMITMENT_DECISION_PROBE_TIMEOUT
 #                                 seconds bounding one decision-file `run:`
 #                                 (default 60)
+#   FM_COMMITMENT_PROBE_CACHE_ONLY
+#                                 1 to answer a decision criterion only from a
+#                                 fresh stored observation, spending no probe run
+#                                 (default 0). The COST switch, not the trust one;
+#                                 --no-decision-run outranks it. The register's own
+#                                 typed probes are unaffected.
 #   FM_COMMITMENT_PROBE_CACHE_TTL seconds a decision-probe result stays servable
-#                                 (default 120; 0 disables the cache entirely)
+#                                 (default 3600; 0 disables the cache entirely)
 #   FM_COMMITMENT_PROBE_CACHE_DIR where those results live (default
 #                                 $FM_HOME/state/commitment-probe-cache)
 #
@@ -303,6 +334,23 @@
 #   - past the freshness bound it is not served at all: the probe re-runs, and if
 #     it cannot re-run the answer is could-not-observe, never the stale verdict.
 # The cache is an accelerator for an answer, never a substitute for one.
+#
+# THE FRESHNESS BOUND IS DERIVED FROM THE PASS THAT POPULATES IT, and getting that
+# relationship wrong is self-defeating rather than merely slow. The bound was
+# first set to 120s while one probe costs up to 60s, so a warming pass over three
+# or more keys had already expired its own first entry before it finished: every
+# entry the cache wrote was unservable by the time the pass that wrote it ended,
+# and the cache could never warm at all. A bound must therefore exceed the whole
+# warming pass, not one probe. 3600s is 60x the 60s per-probe bound, so a pass
+# over up to 60 decision probes - well past the 108 decision files this fleet has
+# ever carried at once, of which only the resolved ones are ever probed - can
+# finish with its first entry still servable. Freshness does not rest on this
+# number: the entry is keyed on the decision file's bytes and the task worktree's
+# head, which are the two things the verdict actually depends on, so a rewritten
+# criterion or a new commit invalidates it immediately whatever the bound says.
+# The bound is the backstop against drift in neither, and every served result
+# still carries its observation time. commitments/schema.json carries the same
+# number and derivation under probe_bounds, and a test pins them equal.
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -323,6 +371,7 @@ EXIT_OK=0
 EXIT_USAGE=2
 EXIT_UNMET=3
 EXIT_UNOBSERVED=4
+EXIT_PROBE_AVAILABLE=5
 
 SCHEMA=fm-commitment-register.v1
 SCHEMA_VERSION=1
@@ -349,11 +398,18 @@ CLOSES_KEY=
 NO_DECISION_RUN=0
 [ "${FM_COMMITMENT_NO_DECISION_RUN:-0}" != 1 ] || NO_DECISION_RUN=1
 
+# The COST switch, and a separate variable from the trust one above on purpose:
+# see TWO KINDS OF PROBE and ENUMERATION IS NOT VERIFICATION. Anything other than
+# a literal 1 leaves probe execution on, for the same reason.
+CACHE_ONLY=0
+[ "${FM_COMMITMENT_PROBE_CACHE_ONLY:-0}" != 1 ] || CACHE_ONLY=1
+
 while [ $# -gt 0 ]; do
   case "$1" in
     --json) [ "$MODE" = human ] || die "--json, --open and --closes are different reports"; MODE=json ;;
     --open) [ "$MODE" = human ] || die "--json, --open and --closes are different reports"; MODE=open ;;
     --no-decision-run) NO_DECISION_RUN=1 ;;
+    --cache-only) CACHE_ONLY=1 ;;
     --closes)
       [ "$MODE" = human ] || die "--json, --open and --closes are different reports"
       MODE=closes
@@ -403,7 +459,10 @@ PROBE_TIMEOUT=${FM_COMMITMENT_PROBE_TIMEOUT:-10}
 # in commitments/schema.json's probe_bounds, which a test pins equal to these.
 DECISION_PROBE_TIMEOUT_DEFAULT=60
 DECISION_PROBE_TIMEOUT=${FM_COMMITMENT_DECISION_PROBE_TIMEOUT:-$DECISION_PROBE_TIMEOUT_DEFAULT}
-PROBE_CACHE_TTL=${FM_COMMITMENT_PROBE_CACHE_TTL:-120}
+# Derived from the warming pass rather than from one probe; THE FRESHNESS BOUND
+# IS DERIVED FROM THE PASS THAT POPULATES IT above states the derivation, and
+# commitments/schema.json carries the same number.
+PROBE_CACHE_TTL=${FM_COMMITMENT_PROBE_CACHE_TTL:-3600}
 PROBE_CACHE_DIR=${FM_COMMITMENT_PROBE_CACHE_DIR:-$STATE/commitment-probe-cache}
 bounding_tool() {
   if command -v timeout >/dev/null 2>&1; then printf 'timeout'
@@ -453,6 +512,16 @@ probe_timed_out() {  # <what> <seconds>
 probe_not_executed() {  # <what>
   probe_answer NO_VERIFIER_RAN verifier_unavailable \
     "NOT RUN: this caller executes no decision-file run command, so $1 was not executed and the criterion stays unverified rather than accepted"
+}
+
+# The answer for a decision file's `run:` this caller declined to SPEND, having
+# found no fresh stored observation. A different answer from the one above and
+# from a probe that failed: the verifier is available and reachable, no verdict
+# exists yet, and one is obtainable by asking the expensive question about this
+# key. Still could-not-observe, so it closes nothing.
+probe_not_run_yet() {  # <what>
+  probe_answer NO_VERIFIER_RAN verification_incomplete \
+    "NOT PROBED YET: $1 has no stored observation inside the ${PROBE_CACHE_TTL}s freshness bound and this caller is enumerating rather than verifying, so the criterion is could-not-observe and stays open until a verifying caller spends the probe"
 }
 
 # Does every harness firstmate can launch compose a session whose permission
@@ -1067,6 +1136,14 @@ run_decision_probe() {  # <task> <key>
     ''|*[!0-9]*) now= ;;
     *) probe_cache_read "$task" "$key" "$fingerprint" "$now" && return 0 ;;
   esac
+  # The cost decision, taken only after the stored observation has been tried and
+  # missed, so an enumerating caller pays a file read per key and never a probe.
+  # It is checked here rather than beside the trust guard above deliberately: the
+  # trust guard may not serve a stored verdict, and this one exists to.
+  if [ "$CACHE_ONLY" -eq 1 ]; then
+    probe_not_run_yet "the probe for $key"
+    return 0
+  fi
   out=$(cd "$wt" && run_timed "$DECISION_PROBE_TIMEOUT" bash -c "$DP_RUN" 2>&1)
   rc=$?
   if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
@@ -1577,6 +1654,11 @@ render_closes() {
     return "$EXIT_OK"
   fi
   run_decision_probe "$CLOSES_TASK" "$CLOSES_KEY"
+  if [ "${FM_COMMITMENT_REPORT_PROBE_AVAILABILITY:-0}" = 1 ] \
+    && [ "$CACHE_ONLY" -eq 1 ] && [ "$PROBE_REASON" = verification_incomplete ]; then
+    printf '%s\n' "$PROBE_EVIDENCE"
+    return "$EXIT_PROBE_AVAILABLE"
+  fi
   case "$PROBE_RESULT" in
     PASS)
       # An acceptance resting on an earlier observation says when that

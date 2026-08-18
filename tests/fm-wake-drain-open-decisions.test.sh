@@ -6,6 +6,15 @@
 # open/resolved statement); these tests exercise the real drain script over
 # crafted status logs and assert on its printed output, not on the fold's own
 # source text.
+#
+# The section's own property, beyond the wiring: it presents the COMPLETE open
+# universe, or says explicitly and in band that it could not. A listing that
+# showed a fifth of the universe under a trailing "N more omitted" footnote read
+# as a complete statement about what needs the captain and was not one, so
+# exceeding the presentation bound is now reported as CNO_DECISION_UNIVERSE - an
+# instrument defect carrying both counts - and never as a quiet truncation. Every
+# entry also carries one disposition from the closed vocabulary
+# fm-classify-lib.sh owns, so no entry can be left for the reader to interpret.
 set -u
 
 # shellcheck source=tests/wake-helpers.sh
@@ -137,7 +146,7 @@ test_status_symlink_is_not_followed() {
 
   FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed with a symlinked status file"
 
-  grep -F 'local [key=local] needs-decision: keep this visible' "$out" >/dev/null \
+  grep -F 'local [key=local] CNO_DECISION_SUBJECT needs-decision: keep this visible' "$out" >/dev/null \
     || fail "the valid local decision did not surface alongside a rejected status symlink"
   if grep -F 'do not expose this' "$out" >/dev/null; then
     fail "the fleet scan followed a status symlink outside the state directory"
@@ -145,7 +154,125 @@ test_status_symlink_is_not_followed() {
   pass "the fleet-wide decision scan does not follow status symlinks"
 }
 
+# THE PROPERTY: every open decision reaches the section, at the size of universe
+# this fleet actually carries. Driven with a positive count of entries actually
+# printed, because "nothing was omitted" is satisfied by a section that
+# enumerated nothing at all - and at a REALISTIC size, because the defect this
+# replaces dropped 55 of 75 entries and a fixture small enough to fit any bound
+# would have passed against it.
+UNIVERSE_SIZE=80
+test_the_whole_universe_is_listed() {
+  local dir state out i shown note
+  dir=$(make_case whole-universe)
+  state="$dir/state"
+  out="$dir/drain.out"
+  # A note of the length real escalations carry, so the fixture exercises the
+  # presentation bound rather than sitting comfortably inside any bound at all.
+  note='the worker reached a gate it cannot answer under the accepted contract and needs a ruling before it can continue, with the alternatives and their consequences recorded'
+  for i in $(seq 1 "$UNIVERSE_SIZE"); do
+    printf 'needs-decision [key=k%s]: %s (%s)\n' "$i" "$note" "$i" > "$state/task$i.status"
+  done
+
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed on a full universe"
+
+  shown=$(grep -c '^task[0-9]* \[key=k[0-9]*\] ' "$out" || true)
+  [ "$shown" -eq "$UNIVERSE_SIZE" ] \
+    || fail "the section listed $shown of $UNIVERSE_SIZE open decisions; enumeration must complete"
+  grep -F "OPEN DECISIONS ($UNIVERSE_SIZE, complete" "$out" >/dev/null \
+    || fail "a complete listing must say how many it is complete over: $(head -3 "$out")"
+  grep -F 'CNO_DECISION_UNIVERSE' "$out" >/dev/null \
+    && fail "the shipped presentation bound must admit a universe of $UNIVERSE_SIZE real-length entries"
+  for i in 1 40 "$UNIVERSE_SIZE"; do
+    grep -F "[key=k$i]" "$out" >/dev/null || fail "decision k$i never reached the section"
+  done
+  pass "the open-decision section lists the complete universe at fleet scale"
+}
+
+# THE PROPERTY: when a bound IS exceeded, the section reports could-not-observe
+# with both counts and names it an instrument defect, ahead of the entries. The
+# defect build is the old shape: a quiet trailing omission footnote.
+test_exceeding_the_bound_is_reported_as_cno_not_truncated() {
+  local dir state out i first_line
+  dir=$(make_case cno-universe)
+  state="$dir/state"
+  out="$dir/drain.out"
+  for i in $(seq 1 12); do
+    printf 'needs-decision [key=k%s]: decision number %s needs a ruling\n' "$i" "$i" \
+      > "$state/task$i.status"
+  done
+
+  # A bound small enough that most entries cannot be presented.
+  FM_WAKE_OPEN_DECISION_BYTES=200 FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" \
+    || fail "drain failed when the presentation bound was exceeded"
+
+  first_line=$(head -1 "$out")
+  case "$first_line" in
+    CNO_DECISION_UNIVERSE:*) ;;
+    *) fail "the incompleteness must lead the section, not trail it: $first_line" ;;
+  esac
+  grep -F 'of 12 entries' "$out" >/dev/null \
+    || fail "the report must name the size of the universe it could not present: $(cat "$out")"
+  grep -F 'INSTRUMENT DEFECT' "$out" >/dev/null \
+    || fail "omitted entries must be named an instrument defect, not additional captain decisions"
+  grep -F 'INCOMPLETE' "$out" >/dev/null \
+    || fail "a truncated listing must never be labelled complete"
+  grep -F 'byte cap' "$out" >/dev/null \
+    && fail "the quiet byte-cap footnote is the defect shape and must not return"
+
+  # THE CONTROL: the same twelve decisions under the shipped bound report no
+  # incompleteness at all, so the case above is about the bound rather than about
+  # a section that always shouts.
+  FM_STATE_OVERRIDE="$state" "$DRAIN" > "$out" || fail "drain failed under the shipped bound"
+  grep -F 'CNO_DECISION_UNIVERSE' "$out" >/dev/null \
+    && fail "control: the shipped bound must present twelve decisions completely"
+  grep -F 'OPEN DECISIONS (12, complete' "$out" >/dev/null \
+    || fail "control: twelve decisions must be presented completely: $(cat "$out")"
+  pass "exceeding the presentation bound is reported as CNO_DECISION_UNIVERSE, never truncated quietly"
+}
+
+# THE PROPERTY: every entry carries exactly one disposition from the closed set,
+# including the entries whose disposition could not be established.
+test_every_entry_carries_a_disposition() {
+  local dir state drain_out line seen vocab
+  dir=$(make_case disposition)
+  state="$dir/state"
+  drain_out="$dir/drain.out"
+  mkdir -p "$dir/data/dtask"
+  printf 'needs-decision [key=derived]: no metadata for this one\n' > "$state/dtask.status"
+  printf 'blocked [key=blocking]: work has stopped\n' >> "$state/dtask.status"
+  printf 'worktree=%s\nyolo=0\n' "$dir" > "$state/dtask.meta"
+  # shellcheck disable=SC2016  # the backticks are the literal fence the fold reads, not a substitution
+  printf '# decision\n\n```disposition\nBROWSER_SOL\n```\n' > "$dir/data/dtask/decision-derived.md"
+
+  FM_DATA_OVERRIDE="$dir/data" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" "$DRAIN" > "$drain_out" \
+    || fail "drain failed while reporting dispositions"
+
+  vocab=$(
+    . "$ROOT/bin/fm-classify-lib.sh"
+    printf '%s' "$FM_DECISION_DISPOSITION_VOCABULARY"
+  )
+  seen=0
+  while IFS= read -r line; do
+    case "$line" in
+      'task'*|'dtask '*) ;;
+      *) continue ;;
+    esac
+    seen=$((seen + 1))
+    printf '%s\n' "$vocab" | tr ' ' '\n' | grep -Fqx "$(printf '%s' "$line" | awk '{print $3}')" \
+      || fail "entry carries no vocabulary disposition: $line"
+  done < "$drain_out"
+  [ "$seen" -eq 2 ] || fail "expected 2 entries to check, checked $seen"
+  grep -F 'dtask [key=derived] BROWSER_SOL' "$drain_out" >/dev/null \
+    || fail "a recorded disposition must be the one reported: $(cat "$drain_out")"
+  grep -F 'dtask [key=blocking] CAPTAIN_REQUIRED_AND_BLOCKING' "$drain_out" >/dev/null \
+    || fail "an unrecorded blocked decision must derive its disposition: $(cat "$drain_out")"
+  pass "every listed decision carries one disposition from the closed vocabulary"
+}
+
 test_buried_decision_still_surfaces
+test_the_whole_universe_is_listed
+test_exceeding_the_bound_is_reported_as_cno_not_truncated
+test_every_entry_carries_a_disposition
 test_explicit_resolution_closes_it
 test_later_unrelated_terminal_line_does_not_close_it
 test_no_open_decisions_prints_nothing

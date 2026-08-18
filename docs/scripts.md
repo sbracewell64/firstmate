@@ -27,7 +27,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-doctor.sh`    | Check, and with `--fix` repair, one remote account's second-mate readiness (remote job worker, Herdr, Aqua launch agents, PATH, and required tools) |
 | `fm-backlog-handoff.sh`  | Validate and delegate queued backlog-item moves into a secondmate home               |
 | `fm-backlog-receive.sh`  | Idempotently ingest one confined remote handoff outbox through tasks-axi             |
-| `fm-decision-hold.sh`    | Create, verify, complete, and resolve durable captain-held decisions                 |
+| `fm-decision-hold.sh`    | Create, verify, complete, dispose, and resolve durable captain-held decisions        |
 | `fm-ruling-reconcile.sh` | Match open captain decision holds against the ruling documents that name them, and apply the captain's two-condition closure test without ever closing a hold |
 | `fm-commitment-register.sh` | Compute every recorded commitment's state from its own probe, and gate a keyed decision's closure on the probe pinned into its decision file |
 | `fm-brief.sh`            | Scaffold ship (explicit `--mode`), scout, secondmate-charter, and Herdr-lab briefs   |

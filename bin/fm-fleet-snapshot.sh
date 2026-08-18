@@ -43,7 +43,13 @@
 #     hints.open_decisions is the keyed open-decision set returned by
 #     fm-classify-lib.sh's authoritative status_open_decisions fold and reconciled
 #     against current_state; hints.pending_decision and hints.blocked_event are
-#     booleans derived from that set.
+#     booleans derived from that set. Each entry carries a `disposition` from
+#     FM_DECISION_DISPOSITION_VOCABULARY (fm-classify-lib.sh), which is total: an
+#     entry whose disposition could not be established carries
+#     CNO_DECISION_SUBJECT rather than a null or an absent field. The fold
+#     ENUMERATES and never executes a decision probe here, so this set is complete
+#     whatever any probe costs - see ENUMERATION IS NOT VERIFICATION in
+#     bin/fm-classify-lib.sh.
 #     endpoint.exists is the cheap backend endpoint-presence read.
 #     endpoint.agent_alive is populated for secondmates only, where it is useful
 #     return-channel supervision data; other tasks use "not_checked".
@@ -508,7 +514,7 @@ task_json_lines() {
   local remote_host remote_root remote_state remote_rc remote_home_present
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local current_state current_source pending_decision blocked_event report_present=0 pr_from_status
-  local open_decisions_tsv open_decisions_json
+  local open_decisions_tsv open_decisions_json universe_cno line key
 
   # pipefail is scoped to this subshell so a row that cannot be serialized fails
   # the whole read. Without it the row generator's failure is swallowed by the
@@ -590,13 +596,20 @@ task_json_lines() {
     # way the negative-condition chain this replaces let interrupted, stale, and
     # idle do.
     open_decisions_tsv=$(status_open_decisions "$status_log")
+    universe_cno=
+    while IFS=$(printf '\t') read -r key line; do
+      [ "$key" = CNO_DECISION_UNIVERSE ] || continue
+      universe_cno="${universe_cno}${key}"$'\t'"${line}"$'\n'
+    done <<EOF
+$open_decisions_tsv
+EOF
     if [ "$role" != secondmate ] \
       && crew_state_clears_open_decision "$current_state" "$current_source"; then
-      open_decisions_tsv=""
+      open_decisions_tsv=$universe_cno
     fi
     open_decisions_json=$(printf '%s' "$open_decisions_tsv" | jq -R -s '
       [ splits("\n") | select(length > 0)
-        | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<summary>.*)$")?)
+        | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<disposition>[^\t]*)\t(?<summary>.*)$")?)
         | select(. != null) ]')
     pending_decision=$(printf '%s' "$open_decisions_json" | jq 'if any(.[]; .verb == "needs-decision") then 1 else 0 end')
     blocked_event=$(printf '%s' "$open_decisions_json" | jq 'if any(.[]; .verb == "blocked") then 1 else 0 end')

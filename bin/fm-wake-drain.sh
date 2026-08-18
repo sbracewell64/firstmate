@@ -47,20 +47,49 @@ record_wake_ledger() {
 # buried under later unrelated appends cannot be silently missed. Runs on
 # every drain - including the empty-queue fast path - because the decision can
 # still be open even when nothing new is queued for its task this turn.
-# Bounded and silent: prints nothing when no decision is open, which is the
-# common case.
+# Silent when no decision is open, which is the common case.
+#
+# THE UNIVERSE IS ENUMERATED COMPLETELY OR ITS INCOMPLETENESS IS THE HEADLINE.
+# This section carried a 4000-byte global cap and, past it, one trailing
+# "N more omitted (byte cap)" line. In this fleet that dropped 55 of 75 open
+# decisions, and the shape of the report was the defect rather than the number:
+# a listing that shows a fifth of the universe cannot support any complete
+# statement about what needs the captain, yet it read as one with a footnote.
+#
+# The captain ruled that this condition is CNO_DECISION_UNIVERSE - an INSTRUMENT
+# DEFECT, not additional captain decisions - so it is now reported as
+# could-not-observe with both counts and named as an instrument fault, ahead of
+# the entries rather than after them. The cap itself is raised past any universe
+# this fleet has carried, because the fold is complete by construction and the
+# only reason to bound the PRESENTATION is a runaway one. FM_WAKE_OPEN_DECISION_*
+# override both bounds; a nonsensical value falls back to the default rather than
+# disabling the bound.
+#
+# Per-item truncation is a different thing and stays: it shortens one entry's
+# free-text note in place, marks it `[truncated]`, and never removes the entry,
+# so the universe stays complete even when one note does not fit.
 print_open_decisions_section() {
-  local open task key verb note line item_bytes=220 global_bytes=4000
-  local output='' used=0 shown=0 omitted=0 bytes suffix keep
+  local open task key verb disposition note line item_bytes global_bytes
+  local output='' used=0 shown=0 omitted=0 total=0 bytes suffix keep universe_cno=''
+
+  item_bytes=${FM_WAKE_OPEN_DECISION_ITEM_BYTES:-260}
+  case "$item_bytes" in ''|*[!0-9]*) item_bytes=260 ;; esac
+  global_bytes=${FM_WAKE_OPEN_DECISION_BYTES:-65536}
+  case "$global_bytes" in ''|*[!0-9]*) global_bytes=65536 ;; esac
 
   open=$(scan_open_decisions "$STATE") || return 0
   [ -n "$open" ] || return 0
 
-  while IFS=$(printf '\t') read -r task key verb note; do
+  while IFS=$(printf '\t') read -r task key verb disposition note; do
     [ -n "$task" ] || continue
+    if [ "$key" = CNO_DECISION_UNIVERSE ]; then
+      universe_cno="${universe_cno}${task}: ${note}"$'\n'
+      continue
+    fi
+    total=$((total + 1))
     line="$task"
     [ "$key" = default ] || line="$line [key=$key]"
-    line="$line $verb: $note"
+    line="$line $disposition $verb: $note"
     if [ $(( ${#line} + 1 )) -gt "$item_bytes" ]; then
       suffix=' [truncated]'
       keep=$((item_bytes - ${#suffix} - 1))
@@ -79,12 +108,22 @@ print_open_decisions_section() {
 $open
 EOF
 
-  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
-  printf 'OPEN DECISIONS (still open, folded from the durable status logs - not just the latest line):\n'
-  printf '%s' "$output"
-  if [ "$omitted" -gt 0 ]; then
-    printf 'OPEN DECISIONS: %d more omitted (byte cap)\n' "$omitted"
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || [ -n "$universe_cno" ] || return 0
+  if [ -n "$universe_cno" ]; then
+    printf 'CNO_DECISION_UNIVERSE: one or more durable status logs could not be enumerated safely. This is an INSTRUMENT DEFECT, not an additional captain decision:\n%s' "$universe_cno"
   fi
+  if [ "$omitted" -gt 0 ]; then
+    # Leads the section, because a reader who stops after the entries must not
+    # come away believing they read the universe.
+    printf 'CNO_DECISION_UNIVERSE: the open-decision universe could not be presented completely - %d of %d entries fit the %d-byte presentation bound and %d could not be shown. This is an INSTRUMENT DEFECT, not %d additional captain decisions: raise FM_WAKE_OPEN_DECISION_BYTES or read the complete set with bin/fm-fleet-snapshot.sh --json.\n' \
+      "$shown" "$total" "$global_bytes" "$omitted" "$omitted"
+    printf 'OPEN DECISIONS (%d of %d, INCOMPLETE - see CNO_DECISION_UNIVERSE above):\n' "$shown" "$total"
+  elif [ -n "$universe_cno" ]; then
+    printf 'OPEN DECISIONS (%d observed, INCOMPLETE - see CNO_DECISION_UNIVERSE above):\n' "$total"
+  else
+    printf 'OPEN DECISIONS (%d, complete, folded from the durable status logs - not just the latest line):\n' "$total"
+  fi
+  printf '%s' "$output"
 }
 
 # shellcheck disable=SC2317,SC2329 # Invoked by trap handlers below.

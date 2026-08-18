@@ -610,6 +610,158 @@ _fm_decision_key() {  # <status-line> -> key slug, or "default" when no token
 # decision folds exactly as it always did.
 FM_CLASSIFY_COMMITMENT_BIN="${FM_CLASSIFY_COMMITMENT_BIN:-$_FM_CLASSIFY_LIB_DIR/fm-commitment-register.sh}"
 
+# --- ENUMERATION IS NOT VERIFICATION -----------------------------------------
+#
+# Listing WHICH decisions are open is a cheap read of durable records. Deciding
+# WHETHER a decision's criterion is met is expensive verification. They are
+# different questions and they may not share a cost.
+#
+# The fold below conflated them: it asked the interpreter for a fresh verdict per
+# resolved key, each key spent up to that interpreter's 60s decision-probe bound,
+# and a home with five such keys took a MEASURED 301s to answer "which decisions
+# are open" - past the bound of every caller, so bin/fm-fleet-snapshot.sh and
+# bin/fm-admission.sh returned nothing at all rather than an answer. Nothing is
+# strictly worse than either answer alone, and the cost was self-defeating on top:
+# the interpreter's result cache expired faster than the pass that filled it.
+#
+# So the fold ENUMERATES. It asks with --cache-only, which spends a file read per
+# key instead of a probe run: a fresh stored observation answers, and a key with
+# none answers could-not-observe and STAYS VISIBLY OPEN. No gate weakens - a key
+# whose probe would have passed keeps showing rather than closing, which is the
+# fail-closed direction - and enumeration always completes.
+#
+# A caller that needs the expensive answer asks for it explicitly by granting a
+# BUDGET: the fold executes at most FM_CLASSIFY_DECISION_PROBE_MAX decision
+# probes, in the order it meets them, and every key past that budget is answered
+# from the cache exactly as above. The budget is a COUNT rather than a deadline so
+# the worst case is provable arithmetic: MAX times the interpreter's own
+# per-probe bound, and nothing else. Zero, the default, means pure enumeration.
+# bin/fm-decision-hold.sh is the caller that grants one, because verifying a
+# closure is precisely the question it exists to ask. Each execution also stores
+# its observation, so a granted budget warms the cache the enumerating callers
+# then serve.
+FM_CLASSIFY_DECISION_PROBE_MAX_DEFAULT=0
+
+# --- decision disposition: WHOSE decision is this, and is it live? -----------
+#
+# Every enumerated decision carries exactly one of these, so a listing can never
+# leave the reader to infer what an entry means. The set is CLOSED and total: an
+# entry whose disposition cannot be established takes CNO_DECISION_SUBJECT, which
+# is a VALUE in the set rather than a missing field or an error.
+#
+#   CAPTAIN_REQUIRED_AND_BLOCKING  the captain owes a ruling and work has stopped
+#   CAPTAIN_REQUIRED_NONBLOCKING   the captain owes a ruling, work continues
+#   CAPTAIN_DEFERRED               the captain has it and has parked it by choice
+#   BROWSER_SOL                    routed to the browser review channel
+#   SELF_HANDLE                    firstmate may decide it under standing authority
+#   EXTERNAL_DEPENDENCY            waiting on something outside the fleet
+#   CNO_DECISION_SUBJECT           could not be established
+#   WITHDRAWN                      no longer a decision anyone owes
+FM_DECISION_DISPOSITION_VOCABULARY='CAPTAIN_REQUIRED_AND_BLOCKING CAPTAIN_REQUIRED_NONBLOCKING CAPTAIN_DEFERRED BROWSER_SOL SELF_HANDLE EXTERNAL_DEPENDENCY CNO_DECISION_SUBJECT WITHDRAWN'
+
+# 0 if <value> is a member of that vocabulary.
+decision_disposition_is_known() {  # <value>
+  [ -n "${1:-}" ] || return 1
+  case " $FM_DECISION_DISPOSITION_VOCABULARY " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# The disposition RECORDED for a decision, printed when the record carries one.
+# Non-zero when it carries none.
+#
+# It lives in the decision record firstmate already writes,
+# $FM_HOME/data/<task>/decision-<key>.md, as one fenced block beside the pinned
+# probe block - the same file, read in the same pass, so no second store exists:
+#
+#     ```disposition
+#     BROWSER_SOL
+#     ```
+#
+# A worker can never write it. The typed status envelope's field set is closed
+# (bin/fm-status-event-lib.sh) precisely so a supervisor's classification of a
+# worker cannot be declared by that worker, and a disposition is exactly that
+# class of claim. bin/fm-decision-hold.sh writes this block.
+#
+# Three answers, not two, because "no record" and "a record nobody here can read"
+# are different facts:
+#   0  a block is present; stdout is its vocabulary member, or EMPTY when the
+#      block carries none. Recorded-but-unreadable is could-not-observe, which the
+#      caller turns into CNO_DECISION_SUBJECT rather than falling through to a
+#      derivation that would quietly answer around the operator's own record.
+#   1  the file carries no such block, so the caller derives.
+#   2  the file EXISTS and could not be read at all. It may carry a record nobody
+#      here can see, so it takes the same could-not-observe answer as an
+#      unreadable block rather than the derivation.
+_fm_decision_recorded_disposition() {  # <decision-file>
+  local file=$1 line inside=0
+  if [ ! -r "$file" ]; then
+    [ ! -e "$file" ] || return 2
+    return 1
+  fi
+  while IFS= read -r line || [ -n "$line" ]; do
+    line=${line%$'
+'}
+    if [ "$inside" -eq 0 ]; then
+      case "$line" in '```disposition'|'```disposition '*) inside=1 ;; esac
+      continue
+    fi
+    case "$line" in '```'*) break ;; esac
+    line=${line#"${line%%[![:space:]]*}"}
+    line=${line%"${line##*[![:space:]]}"}
+    [ -n "$line" ] || continue
+    decision_disposition_is_known "$line" && printf '%s' "$line"
+    return 0
+  done < "$file" 2>/dev/null
+  [ "$inside" -eq 0 ] || return 0
+  return 1
+}
+
+# The disposition for one open decision. Always prints exactly one vocabulary
+# member.
+#
+# WHAT IS DERIVED AND WHAT IS NOT. Four members are recorded-only -
+# CAPTAIN_DEFERRED, BROWSER_SOL, EXTERNAL_DEPENDENCY and WITHDRAWN - because no
+# structured fleet fact establishes them and the only other source is the note's
+# prose. Classifying on that prose is the wrong-subject failure this repo names
+# in .agents/skills/wrong-subject: the reasoning would be about a sentence and
+# the verdict credited to the decision. A deferral is also unreachable by
+# construction here, since bin/fm-decision-hold.sh's transfer to the durable
+# backlog owner CLOSES the key in this fold. So an unrecorded decision answers
+# from what the fleet does own - the task's own metadata and the verb - and
+# takes CNO_DECISION_SUBJECT when even that is absent.
+decision_disposition() {  # <task-id> <key> <verb> [home]
+  local task=$1 key=$2 verb=$3 home=${4:-${FM_HOME:-}} recorded meta
+  case "$task" in ''|*[!A-Za-z0-9._-]*) printf 'CNO_DECISION_SUBJECT'; return 0 ;; esac
+  case "$key" in ''|*[!A-Za-z0-9._-]*) printf 'CNO_DECISION_SUBJECT'; return 0 ;; esac
+  [ -n "$home" ] || { printf 'CNO_DECISION_SUBJECT'; return 0; }
+  recorded=$(_fm_decision_recorded_disposition "$home/data/$task/decision-$key.md")
+  case $? in
+    0)
+      # Recorded, including recorded-but-unreadable, which is the empty string.
+      if [ -n "$recorded" ]; then printf '%s' "$recorded"; else printf 'CNO_DECISION_SUBJECT'; fi
+      return 0
+      ;;
+    2) printf 'CNO_DECISION_SUBJECT'; return 0 ;;
+  esac
+  meta="$home/state/$task.meta"
+  # No metadata means the subject of this decision is gone or was never
+  # observable from here, so nothing about it can be established.
+  [ -r "$meta" ] || { printf 'CNO_DECISION_SUBJECT'; return 0; }
+  # Standing routine authority for this task is firstmate's to exercise, so the
+  # decision is firstmate's own move rather than the captain's.
+  if [ "$(sed -n 's/^yolo=//p' "$meta" 2>/dev/null | tail -1)" = 1 ]; then
+    printf 'SELF_HANDLE'
+    return 0
+  fi
+  case "$verb" in
+    blocked) printf 'CAPTAIN_REQUIRED_AND_BLOCKING' ;;
+    needs-decision) printf 'CAPTAIN_REQUIRED_NONBLOCKING' ;;
+    *) printf 'CNO_DECISION_SUBJECT' ;;
+  esac
+}
+
 # 0 when a probe block cannot be ruled out for this decision file, so the
 # interpreter has to be asked; 1 when the file demonstrably carries none.
 #
@@ -625,9 +777,9 @@ _fm_decision_probe_fenced() {  # <decision-file>
   return 1
 }
 
-# 0 when a registered probe REFUSES this closure, printing why on stdout; 1 when
-# the closure may be accepted (no probe registered, the probe passed, or the
-# criterion is attested rather than probed).
+# Returns 1 when the closure may be accepted, 2 when an executable probe is
+# available but unspent, 3 when a probe observed failure, and 4 when the result
+# is could-not-observe. Every non-pass result prints its reason on stdout.
 #
 # A probe that cannot run refuses the closure: could-not-observe is never a pass,
 # and accepting a resolution on an unobserved criterion is the exact failure the
@@ -647,10 +799,26 @@ _fm_decision_probe_fenced() {  # <decision-file>
 #
 # It has to be stdout rather than a variable: every caller invokes this inside a
 # command substitution, so a global set here dies with the subshell.
-decision_close_refused() {  # <task-id> <key> [home]
-  local task=$1 key=$2 home=${3:-${FM_HOME:-}} bin=$FM_CLASSIFY_COMMITMENT_BIN out rc
-  [ -n "$task" ] && [ -n "$key" ] || return 1
-  [ -n "$home" ] || return 1
+decision_close_refused() {  # <task-id> <key> [home] [execute]
+  local task=$1 key=$2 home=${3:-${FM_HOME:-}} execute=${4:-0}
+  local bin=$FM_CLASSIFY_COMMITMENT_BIN out rc cache_only=1
+  local -a mode=(--cache-only)
+  if [ -z "$task" ] || [ -z "$key" ]; then
+    printf 'the decision-close subject is incomplete, so the resolution is not accepted'
+    return 4
+  fi
+  if [ -z "$home" ]; then
+    printf 'the decision home is unavailable, so the resolution is not accepted'
+    return 4
+  fi
+  # ENUMERATION IS NOT VERIFICATION above owns why the default is --cache-only
+  # and who may pass execute=1. The flag is dropped rather than negated, because
+  # there is no "run it after all" switch to get wrong: executing is the
+  # interpreter's default and this only ever declines it.
+  if [ "$execute" = 1 ]; then
+    mode=()
+    cache_only=0
+  fi
   # Cheap gate first: no decision file, no registered probe, no cost.
   [ -f "$home/data/$task/decision-$key.md" ] || return 1
   _fm_decision_probe_fenced "$home/data/$task/decision-$key.md" || return 1
@@ -662,9 +830,11 @@ decision_close_refused() {  # <task-id> <key> [home]
     # with the reason.
     printf 'a registered probe for this criterion could not be ruled out and %s is not available to evaluate it, so the resolution is not accepted' \
       "${bin##*/}"
-    return 0
+    return 4
   fi
-  out=$(FM_HOME="$home" "$bin" --closes "$task" "$key" 2>/dev/null)
+  out=$(FM_HOME="$home" FM_COMMITMENT_PROBE_CACHE_ONLY="$cache_only" \
+    FM_COMMITMENT_REPORT_PROBE_AVAILABILITY=1 \
+    "$bin" "${mode[@]+"${mode[@]}"}" --closes "$task" "$key" 2>/dev/null)
   rc=$?
   # Either way the text becomes a field beside TAB-separated fold records, and it
   # carries text read out of a decision file, so a stray tab or newline there
@@ -673,8 +843,16 @@ decision_close_refused() {  # <task-id> <key> [home]
     [ -z "$out" ] || printf '%s' "$out" | tr '\n\t' '  '
     return 1
   fi
+  if [ "$rc" -eq 5 ]; then
+    printf '%s' "$out" | tr '\n\t' '  '
+    return 2
+  fi
+  if [ "$rc" -eq 3 ]; then
+    printf '%s' "${out:-a registered probe for this criterion did not pass}" | tr '\n\t' '  '
+    return 3
+  fi
   printf '%s' "${out:-a registered probe for this criterion did not pass}" | tr '\n\t' '  '
-  return 0
+  return 4
 }
 
 # The verb currently recorded for <key>, or empty when the key is not open. Used
@@ -697,7 +875,8 @@ EOF
   return 0
 }
 
-# Drop the record for <key> from a newline-terminated "<key>\t<verb>\t<note>" set.
+# Drop the record for <key> from a newline-terminated
+# "<key>\t<verb>\t<disposition>\t<note>" set.
 # Portable (no associative arrays) so the fold runs on bash 3.2 as well as 4+.
 _fm_decision_drop() {  # <open-set> <key>
   local set=$1 key=$2 line out=''
@@ -713,11 +892,17 @@ EOF
   printf '%s' "$out"
 }
 # Fold the WHOLE status stream into the set of decisions still open. Prints one
-# TAB-separated "<key>\t<verb>\t<summary>" line per still-open decision, in
-# most-recently-opened-last order; prints nothing when none are open. Pure read of
-# the file, no globals beyond the optional FM_CLASSIFY_RESOLVE_VERB override. This
-# is the durable open-set the fleet snapshot and any point-in-time consumer must use
-# instead of trusting the last status line.
+# TAB-separated "<key>\t<verb>\t<disposition>\t<summary>" line per still-open
+# decision, in most-recently-opened-last order; prints nothing when none are open.
+# The free-text summary is LAST so a consumer reading three fields cannot split it.
+#
+# ENUMERATION, not verification: this always completes, at the price of a bounded
+# number of file reads per key, and executes a registered probe only within a
+# budget its caller granted. See ENUMERATION IS NOT VERIFICATION above. Pure read
+# of the file otherwise, no globals beyond the optional FM_CLASSIFY_RESOLVE_VERB
+# and FM_CLASSIFY_DECISION_PROBE_MAX overrides. This is the durable open-set the
+# fleet snapshot and any point-in-time consumer must use instead of trusting the
+# last status line.
 # The scan_open_decisions wrapper below enumerates a whole directory rather than
 # a single caller-chosen path, so a status file that is itself a symlink (e.g.
 # escaping the state directory) is rejected outright with a plain [ -L ] check
@@ -726,7 +911,13 @@ EOF
 # path resolution rather than this directory-local glob.
 status_open_decisions() {  # <status-file>
   local f=$1 line verb key note resolve held open='' stripped task home refusal prior
-  [ -f "$f" ] && [ -r "$f" ] && [ ! -L "$f" ] || return 0
+  local disposition probe_budget probes_spent=0 close_rc close_verdict
+  if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
+    printf 'CNO_DECISION_UNIVERSE\tCNO_DECISION_UNIVERSE\tCNO_DECISION_SUBJECT\tstatus log %s could not be read safely, so its decision universe is unknown\n' "${f##*/}"
+    return 0
+  fi
+  probe_budget=${FM_CLASSIFY_DECISION_PROBE_MAX:-$FM_CLASSIFY_DECISION_PROBE_MAX_DEFAULT}
+  case "$probe_budget" in ''|*[!0-9]*) probe_budget=0 ;; esac
   resolve=${FM_CLASSIFY_RESOLVE_VERB:-$FM_CLASSIFY_RESOLVE_VERB_DEFAULT}
   held=${FM_CLASSIFY_CAPTAIN_HELD_VERB:-$FM_CLASSIFY_CAPTAIN_HELD_VERB_DEFAULT}
   task=${f##*/}; task=${task%.status}
@@ -746,20 +937,43 @@ status_open_decisions() {  # <status-file>
     case "$verb" in
       needs-decision|blocked)
         note=$(status_line_note "$line")
+        disposition=$(decision_disposition "$task" "$key" "$verb" "$home")
         open=$(_fm_decision_drop "$open" "$key")
         [ -n "$open" ] && open="${open}"$'\n'
-        open="${open}${key}"$'\t'"${verb}"$'\t'"${note}"$'\n'
+        open="${open}${key}"$'\t'"${verb}"$'\t'"${disposition}"$'\t'"${note}"$'\n'
         ;;
       "$resolve")
         # A resolution is a CLAIM that the criterion is met. When the key carries
         # a registered probe, the claim is checked and only a pass closes it; the
         # decision keeps showing until then, carrying the reason it did not close.
         # A key with no registered probe closes exactly as it always did.
-        if refusal=$(decision_close_refused "$task" "$key" "$home"); then
+        refusal=$(decision_close_refused "$task" "$key" "$home" 0)
+        close_rc=$?
+        if [ "$close_rc" -eq 2 ]; then
+          if [ "$probes_spent" -lt "$probe_budget" ]; then
+            refusal=$(decision_close_refused "$task" "$key" "$home" 1)
+            close_rc=$?
+            probes_spent=$((probes_spent + 1))
+          else
+            close_rc=4
+          fi
+        fi
+        # A path that clears, truncates or filters must say what it removed, and a tri-state result must name its unobserved value explicitly rather than folding it into a nonzero-means-yes test, because ABSENCE OF A REFUSAL IS NOT A VERDICT.
+        case "$close_rc" in
+          1) close_verdict=PASS ;;
+          3) close_verdict=FAIL ;;
+          2|4) close_verdict=COULD-NOT-OBSERVE ;;
+          *)
+            close_verdict=COULD-NOT-OBSERVE
+            refusal="${refusal:+$refusal; }unrecognized decision-close result $close_rc, so the resolution is not accepted"
+            ;;
+        esac
+        if [ "$close_verdict" != PASS ]; then
           prior=$(_fm_decision_verb "$open" "$key")
           open=$(_fm_decision_drop "$open" "$key")
           [ -n "$open" ] && open="${open}"$'\n'
-          open="${open}${key}"$'\t'"${prior:-needs-decision}"$'\t'"${refusal}"$'\n'
+          disposition=$(decision_disposition "$task" "$key" "${prior:-needs-decision}" "$home")
+          open="${open}${key}"$'\t'"${prior:-needs-decision}"$'\t'"${disposition}"$'\t'"${refusal}"$'\n'
         else
           # Accepted. `refusal` still holds whatever the gate disclosed about WHY
           # - a stored observation with its time, or an attested criterion
@@ -794,8 +1008,11 @@ status_open_decisions() {  # <status-file>
 # id, so a per-wake or per-session surface can print the consolidated open set
 # without re-walking the fold itself. A thin directory scan only - the fold
 # above remains the ONE place the open/resolved semantics are decided. Prints
-# one "<task>\t<key>\t<verb>\t<note>" line per open decision, in glob (task id)
-# order; prints nothing when none are open.
+# one "<task>\t<key>\t<verb>\t<disposition>\t<note>" line per open decision, in
+# glob (task id) order; prints nothing when none are open. It is COMPLETE by
+# construction: it applies no cap of its own, and every entry carries a
+# disposition, so a consumer that must bound its own presentation reports what it
+# could not show rather than dropping it silently.
 scan_open_decisions() {  # <state>
   local state=$1 f task open line
   for f in "$state"/*.status; do
@@ -1086,12 +1303,17 @@ signal_reason_is_actionable() {  # <file> ...
 # A missing or unreadable status file yields no open decision, so parked/blocked
 # stay unsettled and keep escalating.
 crew_state_is_settled() {  # <id> <reconciled-state> [state-dir]
-  local id=$1 s=$2 dir=${3:-${STATE:-${FM_STATE_OVERRIDE:-}}}
+  local id=$1 s=$2 dir=${3:-${STATE:-${FM_STATE_OVERRIDE:-}}} open line key
   case "$s" in
     done) return 0 ;;
     parked|blocked)
       [ -n "$id" ] || return 1
-      [ -n "$(status_open_decisions "$dir/$id.status")" ]
+      open=$(status_open_decisions "$dir/$id.status")
+      while IFS= read -r line || [ -n "$line" ]; do
+        key=${line%%$'\t'*}
+        [ "$key" = CNO_DECISION_UNIVERSE ] || [ -z "$key" ] || return 0
+      done <<< "$open"
+      return 1
       ;;
     *) return 1 ;;
   esac

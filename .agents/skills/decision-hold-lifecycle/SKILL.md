@@ -22,6 +22,9 @@ A completed investigation and an ended visual review use this same owner and com
 Run the command in the originating work's authoritative `FM_HOME`; main-home work creates main-home holds, and secondmate-owned work creates holds in that secondmate home's backlog rather than copying them into the main backlog.
 Do not close a hold merely because the originating investigation completed, its report was archived, its visual review ended, or its task was torn down.
 The hold remains the authoritative Captain's Call item until the captain's answer is durably recorded, dependent work is created in the same backlog and blocked by that hold, and `bin/fm-decision-hold.sh resolve` routes the answer by clearing those dependency edges before closing the hold.
+Record whose decision an open one is with `bin/fm-decision-hold.sh disposition`, from the closed vocabulary `FM_DECISION_DISPOSITION_VOCABULARY` owns in `bin/fm-classify-lib.sh`.
+Four of its members - `CAPTAIN_DEFERRED`, `BROWSER_SOL`, `EXTERNAL_DEPENDENCY`, and `WITHDRAWN` - are established only by that record, because no structured fleet fact establishes them and reading them out of a note's prose would credit a verdict to a sentence rather than to the decision.
+The rest derive from the task's own metadata and its verb, and an entry whose disposition cannot be established carries `CNO_DECISION_SUBJECT`, which is an answer rather than a missing field.
 Resolved findings, recommendations that need no captain choice, and prose that merely sounds decision-like do not create holds.
 Bearings reads the resulting structured state and must never compensate by scraping historical reports, visual-review artifacts, terminal output, chat, or other prose.
 
