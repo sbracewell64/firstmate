@@ -1277,7 +1277,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
     printf '%s: comment %s does not carry exactly one "from: %s" sender line\n' \
       "$FM_OUTBOUND_TOKEN_SENDER_INVALID" "$comment" "$FM_OUTBOUND_INBOUND_SENDER" >&2
     printf 'Refusing rather than guessing the sender. Nothing is woken by a body whose origin is ambiguous.\n' >&2
-    exit 3
+    exit 4
   fi
   # EXACTLY ONE verdict line, or refuse. Not the first, and not the last: both
   # resolve ambiguity by POSITION, which is a guess wearing the clothes of a

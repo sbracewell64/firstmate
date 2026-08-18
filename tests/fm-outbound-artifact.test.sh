@@ -619,7 +619,7 @@ test_inbound_ruling_with_wrong_sender_wakes_nothing() {
   rid=$(emitted_request_id "$dir")
   write_ruling "$dir" "$rid" 563 approved firstmate
   out=$(run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "sender e2e: a firstmate-sent ruling was accepted, exit $rc: $out"
+  [ "$rc" -eq 4 ] || fail "sender e2e: invalid sender was not could-not-observe, exit $rc: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_SENDER_INVALID' \
     || fail "sender e2e: the refusal was not named: $out"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
@@ -632,6 +632,16 @@ test_inbound_ruling_with_wrong_sender_wakes_nothing() {
     || fail "sender e2e: a correctly-sent ruling was also refused"
   [ "$(run_ob "$dir" show "$rid" | jq -r '.state')" = "ruled" ] \
     || fail "sender e2e: a valid ruling did not advance the request"
+
+  dir=$(new_case csender-poll)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "sender poll: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 565 approved firstmate
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "sender poll: invalid sender was not could-not-observe, exit $rc: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "emitted" ] \
+    || fail "sender poll: request advanced to '$state' despite an invalid sender"
   pass "sender e2e: a wrong sender wakes nothing, a right one still does"
 }
 
