@@ -366,6 +366,37 @@ test_branch_inventory_dedupes_only_complete_identity() {
   pass "inventory identity: a shared branch name cannot suppress another project"
 }
 
+test_branch_inventory_dedupes_duplicate_refs_before_probing() {
+  local dir repo duplicate_head out rc
+  dir=$(new_case cinventory-duplicate-refs)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  git -C "$repo" config user.email fixture@example.com
+  git -C "$repo" config user.name Fixture
+  git -C "$repo" checkout -q -b fm/duplicate
+  printf 'duplicate\n' > "$repo/duplicate"
+  git -C "$repo" add duplicate
+  git -C "$repo" -c commit.gpgsign=false commit -qm duplicate
+  duplicate_head=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" update-ref refs/remotes/origin/fm/duplicate "$duplicate_head"
+  git -C "$repo" checkout -q master
+  git -C "$repo" checkout -q -b fm/unique
+  printf 'unique\n' > "$repo/unique"
+  git -C "$repo" add unique
+  git -C "$repo" -c commit.gpgsign=false commit -qm unique
+  git -C "$repo" checkout -q master
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  out=$(FM_OUTBOUND_MAX_PROBES=2 run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "inventory duplicate refs: unique heads did not fit two probes, exit $rc: $out"
+  [ "$(printf '%s' "$out" | grep -c '^  DEFECT  duplicate$')" -eq 1 ] \
+    || fail "inventory duplicate refs: duplicate identity produced multiple findings: $out"
+  printf '%s' "$out" | grep -q '^  DEFECT  unique$' \
+    || fail "inventory duplicate refs: duplicate refs hid the unique head: $out"
+  printf '%s' "$out" | grep -q 'PROBE CAP REACHED' \
+    && fail "inventory duplicate refs: duplicate refs exhausted the probe budget: $out"
+  pass "inventory: duplicate local and remote refs consume one probe"
+}
+
 test_branch_inventory_excludes_landed_work() {
   local dir repo out rc
   # The negative control. Landed work is not unsubmitted work, and without this
@@ -1575,6 +1606,7 @@ test_forge_head_provenance_survives_record_lifecycle() {
 test_no_request_is_red
 test_branch_inventory_finds_an_unannotated_unsubmitted_branch
 test_branch_inventory_dedupes_only_complete_identity
+test_branch_inventory_dedupes_duplicate_refs_before_probing
 test_branch_inventory_excludes_landed_work
 test_branch_inventory_excludes_squash_landed_work
 test_branch_inventory_unresolvable_landing_target_is_unevaluable

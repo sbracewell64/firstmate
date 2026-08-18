@@ -487,8 +487,10 @@ head_already_landed() {  # <clone-dir> <sha>
 }
 
 branch_inventory_rows() {  # appends row_json lines to $1
-  local out=$1 project dir venue ref sha item present rc projects mode refs width
+  local out=$1 project dir venue ref sha item present rc projects mode refs width identity
+  local seen="$SCRATCH/inventory-identities"
   local project_mode_command=${FM_OUTBOUND_PROJECT_MODE_COMMAND:-$SCRIPT_DIR/fm-project-mode.sh}
+  : > "$seen"
   projects=$(registered_pr_projects); rc=$?
   if [ "$rc" -ne 0 ]; then
     row_json project-registry "" inventory pull-request "" "" "" "" \
@@ -531,6 +533,12 @@ branch_inventory_rows() {  # appends row_json lines to $1
           "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "" "" 0 >> "$out"
         continue
       fi
+      identity=$(fm_outbound_identity_canonical CONTRIBUTION_SUBMISSION_REQUIRED \
+        "$project" "$venue" "$item" - "$sha" | fm_outbound_digest) || identity=
+      if [ -n "$identity" ] && grep -Fqx "$identity" "$seen"; then
+        continue
+      fi
+      [ -z "$identity" ] || printf '%s\n' "$identity" >> "$seen"
       head_already_landed "$dir" "$sha"; rc=$?
       case $rc in
         0) continue ;;
