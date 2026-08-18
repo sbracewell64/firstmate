@@ -777,14 +777,6 @@ _fm_decision_probe_fenced() {  # <decision-file>
   return 1
 }
 
-decision_probe_is_executable() {  # <task-id> <key> [home]
-  local task=$1 key=$2 home=${3:-${FM_HOME:-}}
-  [ -n "$task" ] && [ -n "$key" ] && [ -n "$home" ] || return 1
-  [ -f "$home/data/$task/decision-$key.md" ] || return 1
-  _fm_decision_probe_fenced "$home/data/$task/decision-$key.md" || return 1
-  [ -x "$FM_CLASSIFY_COMMITMENT_BIN" ]
-}
-
 # 0 when a registered probe REFUSES this closure, printing why on stdout; 1 when
 # the closure may be accepted (no probe registered, the probe passed, or the
 # criterion is attested rather than probed).
@@ -831,7 +823,8 @@ decision_close_refused() {  # <task-id> <key> [home] [execute]
       "${bin##*/}"
     return 0
   fi
-  out=$(FM_HOME="$home" "$bin" "${mode[@]+"${mode[@]}"}" --closes "$task" "$key" 2>/dev/null)
+  out=$(FM_HOME="$home" FM_COMMITMENT_REPORT_PROBE_AVAILABILITY=1 \
+    "$bin" "${mode[@]+"${mode[@]}"}" --closes "$task" "$key" 2>/dev/null)
   rc=$?
   # Either way the text becomes a field beside TAB-separated fold records, and it
   # carries text read out of a decision file, so a stray tab or newline there
@@ -839,6 +832,10 @@ decision_close_refused() {  # <task-id> <key> [home] [execute]
   if [ "$rc" -eq 0 ]; then
     [ -z "$out" ] || printf '%s' "$out" | tr '\n\t' '  '
     return 1
+  fi
+  if [ "$rc" -eq 5 ]; then
+    printf '%s' "$out" | tr '\n\t' '  '
+    return 2
   fi
   printf '%s' "${out:-a registered probe for this criterion did not pass}" | tr '\n\t' '  '
   return 0
@@ -899,7 +896,7 @@ EOF
 # path resolution rather than this directory-local glob.
 status_open_decisions() {  # <status-file>
   local f=$1 line verb key note resolve held open='' stripped task home refusal prior
-  local disposition probe_budget probes_spent=0 execute
+  local disposition probe_budget probes_spent=0 close_rc
   if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
     printf 'CNO_DECISION_UNIVERSE\tCNO_DECISION_UNIVERSE\tCNO_DECISION_SUBJECT\tstatus log %s could not be read safely, so its decision universe is unknown\n' "${f##*/}"
     return 0
@@ -935,12 +932,18 @@ status_open_decisions() {  # <status-file>
         # a registered probe, the claim is checked and only a pass closes it; the
         # decision keeps showing until then, carrying the reason it did not close.
         # A key with no registered probe closes exactly as it always did.
-        execute=0
-        if [ "$probes_spent" -lt "$probe_budget" ] \
-          && decision_probe_is_executable "$task" "$key" "$home"; then
-          execute=1
+        refusal=$(decision_close_refused "$task" "$key" "$home" 0)
+        close_rc=$?
+        if [ "$close_rc" -eq 2 ]; then
+          if [ "$probes_spent" -lt "$probe_budget" ]; then
+            refusal=$(decision_close_refused "$task" "$key" "$home" 1)
+            close_rc=$?
+            probes_spent=$((probes_spent + 1))
+          else
+            close_rc=0
+          fi
         fi
-        if refusal=$(decision_close_refused "$task" "$key" "$home" "$execute"); then
+        if [ "$close_rc" -eq 0 ]; then
           prior=$(_fm_decision_verb "$open" "$key")
           open=$(_fm_decision_drop "$open" "$key")
           [ -n "$open" ] && open="${open}"$'\n'
@@ -961,11 +964,6 @@ status_open_decisions() {  # <status-file>
           open=$(_fm_decision_drop "$open" "$key")
           [ -n "$open" ] && open="${open}"$'\n'
         fi
-        # Spent whether the gate refused or accepted: the budget bounds probe
-        # EXECUTIONS, and a key that closed cost exactly the same run as one that
-        # did not. Counting only refusals would let an accepting stream run
-        # unbounded probes under a budget of one.
-        [ "$execute" -eq 0 ] || probes_spent=$((probes_spent + 1))
         ;;
       "$held")
         # A captain-held transfer moves the decision to the backlog; it never

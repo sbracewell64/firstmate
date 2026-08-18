@@ -1213,36 +1213,29 @@ run: true'
 }
 
 probe_budget_counts_only_executable_registered_probes() {
-  local home stub log out i
+  local home out marker cached_wt
   home=$(make_home executable-budget)
-  log="$TMP_ROOT/executable-budget.log"
-  stub="$TMP_ROOT/executable-budget-register.sh"
-  cat > "$stub" <<SH
-#!/usr/bin/env bash
-printf '%s\n' "\$*" >> "$log"
-exit 0
-SH
-  chmod +x "$stub"
+  marker="$TMP_ROOT/executable-budget-ran"
   : > "$home/state/budget.status"
-  for i in $(seq 1 20); do
-    mkdir -p "$home/data/budget"
-    printf '# legacy decision without a probe\n' > "$home/data/budget/decision-legacy$i.md"
-    printf 'needs-decision [key=legacy%s]: legacy\nresolved [key=legacy%s]: done\n' "$i" "$i" >> "$home/state/budget.status"
-  done
-  write_decision "$home" budget executable 'tier: executable
-run: true'
+  cached_wt=$(give_worktree "$home" budget)
+  : > "$cached_wt/cached-pass"
+  write_decision "$home" budget attested 'tier: attested
+reason: accepted without execution'
+  write_decision "$home" budget cached 'tier: executable
+run: test -f cached-pass'
+  run_reg "$TMP_ROOT/executable-budget-unused" "$home" --closes budget cached >/dev/null 2>&1
+  write_decision "$home" budget executable "tier: executable
+run: : > $marker"
+  printf 'needs-decision [key=attested]: attested\nresolved [key=attested]: done\n' >> "$home/state/budget.status"
+  printf 'needs-decision [key=cached]: cached\nresolved [key=cached]: done\n' >> "$home/state/budget.status"
   printf 'needs-decision [key=executable]: verify me\nresolved [key=executable]: done\n' >> "$home/state/budget.status"
 
-  out=$(FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 FM_CLASSIFY_COMMITMENT_BIN="$stub" bash -c '
+  out=$(FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 bash -c '
     . "$1/bin/fm-classify-lib.sh"
     status_open_decisions "$2"
-  ' _ "$ROOT" "$home/state/budget.status")
-  [ -z "$out" ] || fail "the executable probe did not receive the budget after legacy resolutions: $out"
-  [ "$(wc -l < "$log" | tr -d ' ')" -eq 1 ] \
-    || fail "the budget was not charged exactly once to the executable registered probe: $(cat "$log")"
-  if grep -F -- '--cache-only' "$log" >/dev/null; then
-    fail "the executable probe was left cache-only after no-probe resolutions consumed its budget"
-  fi
+  ' _ "$ROOT" "$home/state/budget.status" 2>/dev/null)
+  [ -e "$marker" ] || fail "attested and cached decisions consumed the executable probe's budget"
+  [ -z "$out" ] || fail "the executable probe did not close after receiving the budget: $out"
   pass "the verification budget counts only executable registered probes"
 }
 

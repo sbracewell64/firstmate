@@ -514,7 +514,7 @@ task_json_lines() {
   local remote_host remote_root remote_state remote_rc remote_home_present
   local pr pr_source event_json current_json endpoint_exists agent_alive meta_json status_json report_json worktree_json home_json
   local current_state current_source pending_decision blocked_event report_present=0 pr_from_status
-  local open_decisions_tsv open_decisions_json
+  local open_decisions_tsv open_decisions_json universe_cno line key
 
   # pipefail is scoped to this subshell so a row that cannot be serialized fails
   # the whole read. Without it the row generator's failure is swallowed by the
@@ -596,9 +596,16 @@ task_json_lines() {
     # way the negative-condition chain this replaces let interrupted, stale, and
     # idle do.
     open_decisions_tsv=$(status_open_decisions "$status_log")
+    universe_cno=
+    while IFS=$(printf '\t') read -r key line; do
+      [ "$key" = CNO_DECISION_UNIVERSE ] || continue
+      universe_cno="${universe_cno}${key}"$'\t'"${line}"$'\n'
+    done <<EOF
+$open_decisions_tsv
+EOF
     if [ "$role" != secondmate ] \
       && crew_state_clears_open_decision "$current_state" "$current_source"; then
-      open_decisions_tsv=""
+      open_decisions_tsv=$universe_cno
     fi
     open_decisions_json=$(printf '%s' "$open_decisions_tsv" | jq -R -s '
       [ splits("\n") | select(length > 0)

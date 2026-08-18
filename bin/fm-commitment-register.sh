@@ -254,6 +254,7 @@
 #   3  at least one entry is UNMET, and none is UNOBSERVED
 #   4  at least one entry is UNOBSERVED - including a register that could not be
 #      read at all, which is never a quiet pass
+#   5  the internal closure fold requested an executable-probe availability receipt
 #
 # Entries are read from three places, and a JSON id must be unique across the two
 # JSON sources:
@@ -370,6 +371,7 @@ EXIT_OK=0
 EXIT_USAGE=2
 EXIT_UNMET=3
 EXIT_UNOBSERVED=4
+EXIT_PROBE_AVAILABLE=5
 
 SCHEMA=fm-commitment-register.v1
 SCHEMA_VERSION=1
@@ -1652,6 +1654,11 @@ render_closes() {
     return "$EXIT_OK"
   fi
   run_decision_probe "$CLOSES_TASK" "$CLOSES_KEY"
+  if [ "${FM_COMMITMENT_REPORT_PROBE_AVAILABILITY:-0}" = 1 ] \
+    && [ "$CACHE_ONLY" -eq 1 ] && [ "$PROBE_REASON" = verification_incomplete ]; then
+    printf '%s\n' "$PROBE_EVIDENCE"
+    return "$EXIT_PROBE_AVAILABLE"
+  fi
   case "$PROBE_RESULT" in
     PASS)
       # An acceptance resting on an earlier observation says when that
