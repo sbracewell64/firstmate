@@ -2690,6 +2690,34 @@ for entry in mutations:
             % (entry.get("id"), entry["replay_patch_sha256"], replay_patch_sha256)
         )
         sys.exit(1)
+    # A campaign in which EVERY mutation reddens cannot show that this harness is
+    # able to report green at all, which is the vacuous-pass defect inverted: a
+    # suite that fails on everything produces a perfect-looking record and proves
+    # nothing. So the campaign carries its own non-vacuity control - a mutation
+    # chosen so that green is the CORRECT answer - and that entry is judged
+    # against the opposite expectation rather than exempted from judgement.
+    expected = entry.get("expected", "red")
+    if expected not in ("red", "green"):
+        sys.stderr.write(
+            "mutation %s declares an unknown expectation %r\n" % (entry.get("id"), expected))
+        sys.exit(1)
+    if expected == "green":
+        if any(line.startswith("not ok") for line in entry["captured_output"].splitlines()):
+            sys.stderr.write(
+                "mutation %s expected green and its captured run contains a failure\n"
+                % entry.get("id"))
+            sys.exit(1)
+        if entry.get("observed_control") or entry.get("target_control"):
+            sys.stderr.write(
+                "mutation %s expected green and must name no control\n" % entry.get("id"))
+            sys.exit(1)
+        captured_output_sha256 = "sha256:" + hashlib.sha256(
+            entry["captured_output"].encode("utf-8")).hexdigest()
+        if captured_output_sha256 != entry["output_sha256"]:
+            sys.stderr.write(
+                "mutation %s captured output digest does not match\n" % entry.get("id"))
+            sys.exit(1)
+        continue
     target_control = entry.get("target_control")
     observed_control = entry.get("observed_control")
     if not target_control or not observed_control:
