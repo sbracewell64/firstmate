@@ -1226,9 +1226,11 @@ run: test -f cached-pass'
   run_reg "$TMP_ROOT/executable-budget-unused" "$home" --closes budget cached >/dev/null 2>&1
   write_decision "$home" budget executable "tier: executable
 run: : > $marker"
-  printf 'needs-decision [key=attested]: attested\nresolved [key=attested]: done\n' >> "$home/state/budget.status"
-  printf 'needs-decision [key=cached]: cached\nresolved [key=cached]: done\n' >> "$home/state/budget.status"
-  printf 'needs-decision [key=executable]: verify me\nresolved [key=executable]: done\n' >> "$home/state/budget.status"
+  {
+    printf 'needs-decision [key=attested]: attested\nresolved [key=attested]: done\n'
+    printf 'needs-decision [key=cached]: cached\nresolved [key=cached]: done\n'
+    printf 'needs-decision [key=executable]: verify me\nresolved [key=executable]: done\n'
+  } >> "$home/state/budget.status"
 
   out=$(FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 bash -c '
     . "$1/bin/fm-classify-lib.sh"
