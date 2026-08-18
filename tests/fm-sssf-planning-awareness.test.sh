@@ -45,7 +45,7 @@ case "$args" in
     ;;
 esac
 case "$args" in
-  *"contents/$FM_TEST_SOURCE_PATH"*"Accept: application/vnd.github.raw+json"*) cat "$FM_TEST_FEED_FILE"; exit 0 ;;
+  *"Accept: application/vnd.github.raw+json"*"contents/$FM_TEST_SOURCE_PATH"*) cat "$FM_TEST_FEED_FILE"; exit 0 ;;
 esac
 case "$args" in
   *"contents/docs/development/FUTURE_CANDIDATES.md"*"--jq .type"*)
