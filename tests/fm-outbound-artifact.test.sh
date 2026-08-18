@@ -1525,6 +1525,23 @@ test_binding_refuses_a_vague_head() {
   pass "binding: head width comes from the target repository, and resolvability beats shape"
 }
 
+test_forge_observed_head_need_not_exist_locally() {
+  # shellcheck source=bin/fm-outbound-artifact-lib.sh disable=SC1091
+  . "$ROOT/bin/fm-outbound-artifact-lib.sh"
+  local remote_head
+  remote_head=$(printf '%040d' 0 | tr 0 c)
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i \
+    "$remote_head" "$HEAD_REPO" forge >/dev/null 2>&1 \
+    || fail "forge head: an authoritative exact PR head was required to exist locally"
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i \
+    "$remote_head" "$HEAD_REPO" local >/dev/null 2>&1 \
+    && fail "forge head: local provenance bypassed object resolution"
+  fm_outbound_binding_missing AWAITING_BROWSER_SOL p o/r i \
+    "${remote_head}c" "$HEAD_REPO" forge >/dev/null 2>&1 \
+    && fail "forge head: authoritative provenance bypassed repository-specific width"
+  pass "forge head: authoritative PR heads keep strict width without local resolution"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
@@ -1584,5 +1601,6 @@ test_recognition_survives_a_truncated_hold_reason
 test_untyped_gate_is_reported_as_untyped
 test_identity_binds_every_named_axis
 test_binding_refuses_a_vague_head
+test_forge_observed_head_need_not_exist_locally
 
 printf '\nall fm-outbound-artifact tests passed\n'

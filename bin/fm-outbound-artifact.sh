@@ -317,7 +317,7 @@ branch_head() {  # <clone-dir> <item> -> sha or empty
 # anything else - a forge error body, an abbreviated ref, a stray line - falls
 # through to the next step and finally to unobservable, rather than handing a
 # non-identity to the binding check and letting it surface as evidence.
-observe_head() {  # <item> <pr-url> <project> -> sha or empty
+observe_head() {  # <item> <pr-url> <project> -> sha<TAB>source or empty
   local item=$1 pr_url=$2 project=$3 head width dir=
   [ -z "$project" ] || dir="$PROJECTS/$project"
   # The width comes from the target repository, so it is resolved ONCE here and
@@ -326,14 +326,14 @@ observe_head() {  # <item> <pr-url> <project> -> sha or empty
   # candidate rather than falling back to a guessed default.
   width=$(fm_outbound_object_width "$dir")
   head=$(declared_field "$item" head)
-  fm_outbound_is_sha "$head" "$width" && { printf '%s\n' "$head"; return 0; }
+  fm_outbound_is_sha "$head" "$width" && { printf '%s\tdeclared\n' "$head"; return 0; }
   if [ -n "$pr_url" ]; then
     head=$(pr_head "$pr_url")
-    fm_outbound_is_sha "$head" "$width" && { printf '%s\n' "$head"; return 0; }
+    fm_outbound_is_sha "$head" "$width" && { printf '%s\tforge\n' "$head"; return 0; }
   fi
   if [ -n "$dir" ] && [ -d "$dir/.git" ]; then
     head=$(branch_head "$dir" "$item")
-    fm_outbound_is_sha "$head" "$width" && { printf '%s\n' "$head"; return 0; }
+    fm_outbound_is_sha "$head" "$width" && { printf '%s\tlocal\n' "$head"; return 0; }
   fi
   printf ''
 }
@@ -578,7 +578,7 @@ row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <ve
 }
 
 sweep() {
-  local rows count i rec verdict gate tier item project pr_url pr_ref head
+  local rows count i rec verdict gate tier item project pr_url pr_ref head_observation head head_source
   local channel venue repo rid missing stale present rc row token capped cls
   local existing record_state applicability record_rc
 
@@ -617,7 +617,9 @@ sweep() {
     pr_url=$(printf '%s' "$rec" | jq -r '.pr_url // ""')
     pr_ref=$(printf '%s' "$rec" | jq -r '.pr_url // "-"')
     channel=$(fm_outbound_gate_channel "$gate")
-    head=$(observe_head "$item" "$pr_url" "$project")
+    head_observation=$(observe_head "$item" "$pr_url" "$project")
+    head=$(printf '%s' "$head_observation" | cut -f1)
+    head_source=$(printf '%s' "$head_observation" | cut -f2)
 
     if [ "$channel" = "pull-request" ]; then
       venue=$(project_venue "$project" "$(printf '%s' "$rec" | jq -r '.contribution_venue // ""')")
@@ -630,7 +632,7 @@ sweep() {
     # Fail closed on an incomplete binding BEFORE anything else. An item whose
     # binding cannot be constructed cannot have an exact-head-bound artifact, so
     # it is a defect regardless of what happens to be on the forge.
-    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" || true)
+    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
     if [ -n "$missing" ]; then
       if [ -z "$head" ]; then token=$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED
       else token=$FM_OUTBOUND_TOKEN_INCOMPLETE; fi
@@ -828,7 +830,7 @@ require_unique_backlog_record() {  # <item>
 
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
-  local rec gate channel project pr_url pr_ref head venue missing rid record
+  local rec gate channel project pr_url pr_ref head_observation head head_source venue missing rid record
   local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc
 
   read_snapshot || die "fleet backlog could not be read" 4
@@ -853,7 +855,9 @@ cmd_emit() {
   project=$(printf '%s' "$rec" | jq -r '.repo // ""')
   pr_url=$(printf '%s' "$rec" | jq -r '.pr_url // ""')
   pr_ref=$(printf '%s' "$rec" | jq -r '.pr_url // "-"')
-  head=$(observe_head "$item" "$pr_url" "$project")
+  head_observation=$(observe_head "$item" "$pr_url" "$project")
+  head=$(printf '%s' "$head_observation" | cut -f1)
+  head_source=$(printf '%s' "$head_observation" | cut -f2)
 
   if ! read_sol_config; then
     printf '%s: config/sol-control.json is absent or incomplete, so no request can be addressed.\n' \
@@ -863,7 +867,7 @@ cmd_emit() {
   fi
   venue=$SOL_REPO
 
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" "$PROJECTS/$project" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
   if [ -n "$missing" ]; then
     printf '%s: cannot construct an exact-head-bound request for %s - missing %s\n' \
       "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" \
@@ -1023,7 +1027,7 @@ require_record() {  # <request-id>; sets RECORD or exits
 }
 
 require_record_applicable_now() {  # <request-id> <record-json>
-  local rid=$1 rec=$2 item current gate channel project repo pr_url pr_ref head missing
+  local rid=$1 rec=$2 item current gate channel project repo pr_url pr_ref head_observation head head_source missing
   local stored_identity current_identity stored_venue current_venue
   item=$(printf '%s' "$rec" | jq -r '.identity.item')
   read_snapshot || die "fleet backlog could not be read while validating $rid" 4
@@ -1035,7 +1039,9 @@ require_record_applicable_now() {  # <request-id> <record-json>
   project=$(printf '%s' "$current" | jq -r '.repo // ""')
   pr_url=$(printf '%s' "$current" | jq -r '.pr_url // ""')
   pr_ref=$(printf '%s' "$current" | jq -r '.pr_url // "-"')
-  head=$(observe_head "$item" "$pr_url" "$project")
+  head_observation=$(observe_head "$item" "$pr_url" "$project")
+  head=$(printf '%s' "$head_observation" | cut -f1)
+  head_source=$(printf '%s' "$head_observation" | cut -f2)
   if [ "$channel" = "pull-request" ]; then
     repo=$(project_venue "$project" \
       "$(printf '%s' "$current" | jq -r '.contribution_venue // ""')")
@@ -1044,7 +1050,7 @@ require_record_applicable_now() {  # <request-id> <record-json>
     repo=$SOL_REPO
     current_venue="$SOL_REPO#$SOL_ISSUE"
   fi
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
   [ -z "$missing" ] || die "the current identity for $item is incomplete: $(printf '%s' "$missing" | tr '\n' ',')" 4
   stored_identity=$(printf '%s' "$rec" | jq -r \
     '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head] | @tsv')

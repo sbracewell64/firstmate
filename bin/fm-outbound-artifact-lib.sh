@@ -299,19 +299,20 @@ fm_outbound_is_sha() {  # <candidate> [<width>]
   printf '%s' "$candidate" | grep -Eq "^[0-9a-f]{$width}\$"
 }
 
-# The full predicate: exact width for this repository, and resolvable there when
-# the repository is present.
-fm_outbound_head_valid() {  # <candidate> <clone-dir>
-  local candidate=$1 dir=$2 width
+# The full predicate: exact width for this repository, and resolvable there
+# unless the forge authoritatively observed the exact pull-request head.
+fm_outbound_head_valid() {  # <candidate> <clone-dir> [<observation-source>]
+  local candidate=$1 dir=$2 source=${3:-} width
   width=$(fm_outbound_object_width "$dir")
   [ -n "$width" ] || return 1
   fm_outbound_is_sha "$candidate" "$width" || return 1
+  [ "$source" = forge ] && return 0
   # Resolvability beats shape wherever it can be observed.
   git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$candidate^{object}" \
     >/dev/null 2>&1
 }
 
-fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head> [<clone-dir>]
+fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head> [<clone-dir>] [<head-source>]
   local gate=$1 project=$2 repo=$3 item=$4 head=$5 missing=0
   if [ -z "$gate" ] || ! fm_outbound_gate_valid "$gate"; then
     printf 'gate\n'; missing=1
@@ -321,7 +322,7 @@ fm_outbound_binding_missing() {  # <gate> <project> <repo> <item> <head> [<clone
   [ -n "$item" ] || { printf 'item\n'; missing=1; }
   # <clone-dir> is optional so existing callers keep working; without it the
   # width is undeterminable and the head is refused rather than assumed.
-  fm_outbound_head_valid "$head" "${6:-}" || { printf 'head\n'; missing=1; }
+  fm_outbound_head_valid "$head" "${6:-}" "${7:-}" || { printf 'head\n'; missing=1; }
   [ "$missing" -eq 0 ]
 }
 
