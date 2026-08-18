@@ -377,6 +377,9 @@ EOF
   open=$(origin_open_decisions "$origin")
   while IFS=$'\t' read -r key _verb _disposition _summary; do
     [ -n "$key" ] || continue
+    # CNO_DECISION_UNIVERSE reports an instrument defect in-band. It is not a
+    # decision the Captain owes, so it must never require a captain hold.
+    [ "$key" != CNO_DECISION_UNIVERSE ] || continue
     list_has_key "$keys" "$key" \
       || fail "open structured decision $origin/$key has no captain-held inventory entry"
   done <<EOF
@@ -392,6 +395,7 @@ EOF
     # live status fold does not duplicate the same Captain's Call item.
     while IFS=$'\t' read -r key _verb _disposition _summary; do
       [ -n "$key" ] || continue
+      [ "$key" != CNO_DECISION_UNIVERSE ] || continue
       list_has_key "$keys" "$key" || continue
       printf 'captain-held [key=%s]: tracked by %s\n' "$key" "$(hold_id "$origin" "$key")" >> "$status_file"
       key_seen=1
@@ -424,6 +428,7 @@ EOF
   open=$(origin_open_decisions "$origin")
   while IFS=$'\t' read -r key _verb _disposition _summary; do
     [ -n "$key" ] || continue
+    [ "$key" != CNO_DECISION_UNIVERSE ] || continue
     list_has_key "$keys" "$key" \
       || fail "open structured decision $origin/$key is outside the reviewed inventory"
     verify_hold_durable "$(hold_id "$origin" "$key")"
