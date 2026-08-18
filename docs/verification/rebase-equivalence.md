@@ -3,6 +3,9 @@
 Repeatable evidence that [`../../bin/fm-rebase-equivalence.sh`](../../bin/fm-rebase-equivalence.sh) detects a rebase that drops validated content and clears one that does not.
 The predicate, its verdict vocabulary, and why it is neither a tip-to-tip diff nor a merge-result comparison are owned by that script's header and `--help`; this page records evidence only.
 
+Commit-id citations in this record are NON-RETRIEVABLE PROVENANCE: they name real objects that the history shipped here cannot reach, because branches are replayed under fresh ids as they move through the gate. They record when a measurement was taken; they are not coordinates a reader is expected to resolve. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
+That covers `eabefe42`, `74230fc`, `352c5691` and `d459e94`. `ac22a2b` is different and carries the other label: UNRESOLVABLE - NAMING NO KNOWN OBJECT. It was produced in a scratch clone, as the section citing it says, and resolves to nothing in this repository; whether the object survives anywhere else COULD NOT BE OBSERVED from here, so nothing is claimed either way.
+
 > ## THE DEFECT THIS PAGE IS ABOUT IS STILL OPEN
 >
 > A validation pipeline's push-time rebase can silently drop content the pipeline already validated, so an opened request can misrepresent what was judged.

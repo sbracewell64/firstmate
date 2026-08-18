@@ -14,6 +14,8 @@ Each supersession is recorded rather than overwritten, because a record that sho
 The script's own header owns the law, the fold, the twenty-two bound dimensions, and the mechanics.
 This file records only what was measured, when, and when that measurement no longer applies.
 
+Commit-id citations here are NON-RETRIEVABLE PROVENANCE: `01923575`, `015301ea`, `43b78b12`, `6269ffb4` and `fe9efa50` name real objects that the history shipped here cannot reach, because branches are replayed under fresh ids as they move through the gate. They record when each measurement was taken and are not coordinates a reader is expected to resolve; the binding is the subject digest. `c5c7dff1` is reachable from this history and needs no label. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
+
 ## Why watched red is the acceptance condition here
 
 The predecessor this replaces accepted a proxy in its own implementation.

@@ -43,6 +43,7 @@ Every path is therefore exercised in isolation, leaving no exemption branch for 
 
 Measured 2026-08-16 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, Python 3.14.4 and GNU bash 5.3.9.
 Every measurement below was taken against the subjects cited under "Campaign artifact", and EACH ENTRY in the campaign artifact records the head it was measured at individually rather than relying on one head written once.
+Those subjects are NOT the bytes shipped at this head: the fixes recorded under "Wrong subject, four times in one component" edited two of them, so the campaign is invalidated by design and awaits re-measurement. The campaign-artifact control refuses until it is re-measured, which is that invalidation being visible rather than assumed.
 Each entry also carries a digest of its whole captured run and the patch that rebuilds its variant, so an independent party can replay any entry and compare rather than taking this record's word for it.
 
 ## Campaign artifact
@@ -99,8 +100,12 @@ Three properties bound what a leak of either variable can do:
 
 ## What was measured
 
-81 controls pass against the shipped scripts.
-Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
+No control count is asserted at this head: the fixes above changed measured subjects, so the suite halts at the campaign-artifact control before reaching its end, and no run from here can observe how many controls pass. The count is stated again after re-measurement lets a run reach the end of the suite.
+
+THE RULE THAT PRODUCES THAT SENTENCE, recorded because it was learned the expensive way twice in one day: A CLAIM ABOUT SUITE COVERAGE MAY ONLY BE WRITTEN AFTER A RUN THAT REACHED THE SUITE'S END. A halted suite tells you what RAN passed. It never tells you that everything ran, and a count copied out of the invocation list is arithmetic, not an observation - which is how a number nobody had seen came to stand in the one section this record reserves for what was measured.
+The count-drift control enforces both halves: a stated number must equal the run's executed count, and a record that states no number must DECLARE that explicitly with a reason. Absence alone fails, and a number standing beside a pending declaration fails, so the pending state cannot become a place to keep a claim quiet.
+
+Count claim, when a number stands here: the green count-drift control establishes only that the number matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
 Mutation-measurement claim: 73 expected-red mutations were built against the subjects recorded in the campaign artifact, and all 73 turned the suite red. A 74th entry is expected-GREEN and is the campaign's own non-vacuity control, described below.
@@ -208,6 +213,23 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | a malformed but parseable inputs document is could-not-observe | prepare's generic exception guard narrows to one exception class | `test_a_malformed_but_parseable_inputs_document_is_could_not_observe` | `not ok - a malformed inputs document must never answer with a traceback (unexpected: 'Traceb` |
 | the harness reports GREEN when a change alters no behaviour | a sorted result is bound to a name before being returned; identical behaviour, real code path | `(none)` | **GREEN, and that is the correct answer** - the campaign's own non-vacuity control |
 
+## Wrong subject, four times in one component
+
+Four defects closed here are the same defect. Each established one claim and was credited with a neighbouring, stronger one:
+
+- `check_campaign_artifact` compared the record's head field with the artifact's head field. That establishes that two fields agree; it was credited with the campaign being replayable, which is a claim about a commit existing.
+- The applicability classifier built a mismatch list from the `applies_to` fields that were SUPPLIED and set `applicable = not mismatches`. That establishes that no supplied field disagrees; it was credited with the ruling being BOUND to this candidate and permitted to authorize it. An empty mismatch list is produced by absence of evidence and by genuine agreement alike.
+- The ancestry axis tested `is False` only. That establishes that git did not answer "no"; it was credited with the ancestry not contradicting readiness, which an unanswerable question also produces.
+- The mutation-table check bound a row to a campaign entry on the control and the observed line. That establishes that a red with that text happened; it was credited with the row's PROPERTY having been measured, which the entry's own `property` field can contradict.
+
+Four in one component is a design property, not four separate lapses. The component's whole job is deciding what a piece of evidence is allowed to authorize, so every check in it is one step from crediting an adjacent claim, and the defect will keep arriving in new clothes. The standing question for any check here is therefore not "does it pass" but: WHAT DOES THIS ESTABLISH, AND WHAT IS THE VERDICT CREDITED WITH? Where the two differ, the credited claim is could-not-observe.
+
+## The unreadable ancestry is COULD-NOT-OBSERVE, and an instruction to refuse was declined
+
+The fix instruction for the ancestry axis said to make the unreadable case REFUSE with a closed-vocabulary code, "as every other unobservable path here does". Those two halves name different values - a refusal is exit 1 and an unobservable path is exit 2 - so the instruction could not be followed as written, and the implementation records `problems.unobserve("repository_unreadable", ...)` at both consumers.
+
+That is the correct half. A refusal asserts the candidate IS bad; an ancestry git could not compute is precisely not knowing, and deciding against a candidate from an absent observation is the shape this increment exists to refuse. The invariant the instruction was defending - an unreadable ancestry must never pass as satisfied - holds under could-not-observe, which is why the fix is sound even though the instruction was not. It is recorded here rather than silently reinterpreted, because the next reader comparing the instruction with the code should find the disagreement already noticed and settled.
+
 ## The redundancy that used to hide a guard, and why it is gone
 
 Earlier campaigns recorded one deliberate non-red: removing the lexical parent-traversal guard alone left the suite green, because evidence-root containment was then enforced twice over the same case - lexically, and again by a real-path comparison. No single-guard mutation could falsify that control.
@@ -309,7 +331,9 @@ The commit itself is preserved and reachable in the gate repository at `refs/fm-
 
 This is recorded because it is a measured failure of the process that produces this file, and because the episodes themselves are kept rather than rewritten out of the record.
 
-EVERY COMMIT ID BELOW IS HISTORICAL PROVENANCE THAT NO LONGER RESOLVES. None of them is reachable from the history shipped here, and neither is the campaign head above: this branch is replayed under fresh commit ids as it moves through the gate, so an id written before a replay is stranded for anyone who fetches the branch even though not one measured byte changed. They are recorded so the episodes stay attributable, not as coordinates a reader can check out - a citation a reader cannot resolve is not a citation, and pretending otherwise is the same defect as the fabricated measurement it would be describing. The binding is the SUBJECT DIGEST, and a commit id is provenance.
+EVERY COMMIT ID IN THIS RECORD IS NON-RETRIEVABLE PROVENANCE - the nine cited below, the campaign head above, and the one under the previous heading. None is reachable from the history shipped here: this branch is replayed under fresh commit ids as it moves through the gate, so an id written before a replay is stranded for anyone who fetches the branch even though not one measured byte changed. They are recorded so the episodes stay attributable, not as coordinates a reader can check out - a citation a reader cannot resolve is not a citation, and pretending otherwise is the same defect as the fabricated measurement it would be describing. The binding is the SUBJECT DIGEST, and a commit id is provenance.
+
+TWO LABELS, because two different facts hide under one appearance and collapsing them buries the more serious one. NON-RETRIEVABLE PROVENANCE, used here, means the id names a real object that this history cannot reach. UNRESOLVABLE - NAMING NO KNOWN OBJECT means the id resolves to nothing at all in this repository, which is a different and sharper fact: such an id was either fabricated or had its object destroyed, and which of those happened CANNOT BE OBSERVED from here, so neither is claimed. Every commit id in this record is the first kind; the sibling records under `docs/verification/` carry both and each states which.
 
 Commit `f388e430` was titled "record final-head mutation campaign" and ran no campaign.
 It was written as `50257ee3` and replayed under that id when the branch was later rebased; both ids name the same bytes, and neither resolves in the history shipped here.

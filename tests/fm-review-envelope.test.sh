@@ -2773,17 +2773,105 @@ test_the_generated_contract_page_matches_the_catalog() {
   pass "the tracked contract page is exactly what the field catalog generates"
 }
 
+# A control count is a claim about a run that REACHED THE SUITE'S END, and this
+# suite halts at its first failing control. So the record is allowed exactly two
+# states, and absence is not one of them: a number, which must match, or an
+# EXPLICIT declaration with a reason that no count is asserted yet. Demanding a
+# number unconditionally is what once put an unmeasured number in the one
+# section reserved for what was measured - the record had no way to say "not
+# observed yet", so it said something nobody had seen.
+check_recorded_control_count() {  # <record> <actual-count>
+  python3 - "$@" <<'PYEOF'
+import re, sys
+
+record_path, actual = sys.argv[1:]
+record = open(record_path, encoding="utf-8").read()
+stated = re.findall(r"^([0-9]+) controls pass against the shipped scripts\.$", record, re.M)
+pending = re.findall(
+    r"^No control count is asserted at this head: (.+)$", record, re.M)
+if stated and pending:
+    sys.stderr.write(
+        "the record both states a control count and declares none asserted; one or the other\n")
+    sys.exit(1)
+if not stated and not pending:
+    sys.stderr.write(
+        "the record neither states a control count nor declares that none is asserted\n")
+    sys.exit(1)
+if pending:
+    if len(pending) > 1:
+        sys.stderr.write("the record declares no-count-asserted more than once\n")
+        sys.exit(1)
+    if not pending[0].strip():
+        sys.stderr.write("the no-count-asserted declaration carries no reason\n")
+        sys.exit(1)
+    sys.exit(0)
+if len(stated) > 1:
+    sys.stderr.write("the record states more than one control count\n")
+    sys.exit(1)
+if stated[0] != actual:
+    sys.stderr.write(
+        "the verification record states %s controls, but the suite executed %s\n"
+        % (stated[0], actual))
+    sys.exit(1)
+PYEOF
+}
+
 test_the_verification_record_matches_the_executed_control_count() {
-  local recorded executed actual
-  recorded=$(sed -n 's/^\([0-9][0-9]*\) controls pass against the shipped scripts\.$/\1/p' \
-    "$ROOT/docs/verification/review-envelope-controls.md")
+  local record=$ROOT/docs/verification/review-envelope-controls.md
+  local mutant=$TMP_ROOT/control-count-mutant.md
+  local executed actual
   executed=$(printf '%s' "$FM_TEST_PASSED_TESTS" | awk 'NF' | LC_ALL=C sort -u | wc -l)
   actual=$((executed + 1))
-  [ -n "$recorded" ] || fail "the verification record must state one numeric control count"
   [ "$actual" -gt 1 ] || fail "the control-count comparison must observe executed controls"
-  [ "$recorded" -eq "$actual" ] \
-    || fail "the verification record states $recorded controls, but the suite executed $actual"
-  pass "the verification record matches the suite's executed control count"
+  check_recorded_control_count "$record" "$actual" \
+    || fail "the verification record's control-count state is not one this suite can accept"
+
+  # NON-VACUITY for the numeric branch, which the shipped record does not
+  # exercise while the count is pending: a record stating the count this run
+  # actually executed is accepted.
+  count_mutant() {  # <replacement-block>
+    python3 - "$record" "$mutant" "$1" <<'PYEOF'
+import re, sys
+source, target, replacement = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+pattern = r"^(?:[0-9]+ controls pass against the shipped scripts\.|No control count is asserted at this head: .+)$"
+rewritten, count = re.subn(pattern, replacement.replace("\\", "\\\\"), record, count=1, flags=re.M)
+if count != 1:
+    sys.stderr.write("the record carries no control-count statement to replace\n")
+    sys.exit(1)
+open(target, "w", encoding="utf-8").write(rewritten)
+PYEOF
+  }
+  count_mutant "$actual controls pass against the shipped scripts." \
+    || fail "the correct-count mutant must build"
+  check_recorded_control_count "$mutant" "$actual" \
+    || fail "a record stating the count this run executed must be accepted"
+
+  # THE CONTROL. Drift in the number is what this exists to catch.
+  count_mutant "1 controls pass against the shipped scripts." \
+    || fail "the wrong-count mutant must build"
+  capture check_recorded_control_count "$mutant" "$actual"
+  expect_code 1 "$CAPTURED_CODE" "a record stating a count the suite did not execute must fail"
+  assert_contains "$CAPTURED" 'but the suite executed' \
+    "the failure must name both the stated and the executed count"
+
+  # Neither state. An absent count must not read as a satisfied one.
+  count_mutant "The record says nothing about how many controls ran." \
+    || fail "the absent-count mutant must build"
+  capture check_recorded_control_count "$mutant" "$actual"
+  expect_code 1 "$CAPTURED_CODE" "a record asserting no count and declaring none must fail"
+  assert_contains "$CAPTURED" 'neither states a control count nor declares' \
+    "the failure must say the record declared nothing"
+
+  # Both states. A pending declaration standing beside a number would let a
+  # reader take the number as measured and the control as satisfied.
+  count_mutant "$actual controls pass against the shipped scripts."$'\n'"No control count is asserted at this head: measured subjects changed." \
+    || fail "the both-states mutant must build"
+  capture check_recorded_control_count "$mutant" "$actual"
+  expect_code 1 "$CAPTURED_CODE" "a record both stating and disclaiming a count must fail"
+  assert_contains "$CAPTURED" 'both states a control count and declares none asserted' \
+    "the failure must name the contradiction"
+  pass "the verification record states a control count this run executed, or explicitly declares none asserted"
 }
 
 # The mutation table is prose, and prose is not the evidence. Every row in it
@@ -2808,32 +2896,51 @@ record = open(record_path, encoding="utf-8").read()
 # tables carry three columns and make a different claim, which is why they are
 # separate tables rather than more rows here.
 ROW = re.compile(
-    r"^\| .*? \| .*? \| `(test_[a-z0-9_]+)` \| `(.*)` \|$", re.M)
+    r"^\| (.*?) \| .*? \| `(test_[a-z0-9_]+)` \| `(.*)` \|$", re.M)
 rows = [match.groups() for match in ROW.finditer(record)]
 if not rows:
     sys.stderr.write("the record carries no mutation-table rows to check\n")
     sys.exit(1)
 
+# The row's FIRST column is part of the binding, not decoration. A row that
+# matched on the control and the observed line alone would be credited with a
+# measured red while naming a different property under test - a real red
+# establishing something nobody examined, which is the wrong-subject shape this
+# component has already produced three times elsewhere.
+#
 # The record's observed cell is the artifact's observed line truncated to the
 # table's width, so a row is backed when its cell is a PREFIX of a measured
-# line on the same control. Matching on the prefix keeps this checking the claim
-# the record makes rather than assuming a truncation width.
+# line. Matching on the prefix keeps this checking the claim the record makes
+# rather than assuming a truncation width.
 unmatched = [
-    (entry.get("observed_control"), entry.get("observed") or "")
+    (entry.get("property") or "", entry.get("observed_control"), entry.get("observed") or "")
     for entry in artifact.get("mutations", [])
     if entry.get("expected", "red") == "red"
 ]
 status = 0
-for control, observed in rows:
-    for index, (measured_control, measured_observed) in enumerate(unmatched):
-        if measured_control == control and measured_observed.startswith(observed):
+for prop, control, observed in rows:
+    for index, (measured_property, measured_control, measured_observed) in enumerate(unmatched):
+        if (measured_property == prop and measured_control == control
+                and measured_observed.startswith(observed)):
             unmatched.pop(index)
             break
     else:
-        sys.stderr.write(
-            "the record claims a red no campaign entry backs: %s / %s\n" % (control, observed))
+        # Separate the two failures, because they are different facts: a red
+        # nobody measured, and a red measured for another property.
+        misattributed = [
+            measured_property
+            for measured_property, measured_control, measured_observed in unmatched
+            if measured_control == control and measured_observed.startswith(observed)
+        ]
+        if misattributed:
+            sys.stderr.write(
+                "the record credits a red to the wrong property: row says %r, the campaign "
+                "measured it for %r\n" % (prop, misattributed[0]))
+        else:
+            sys.stderr.write(
+                "the record claims a red no campaign entry backs: %s / %s\n" % (control, observed))
         status = 1
-for control, observed in unmatched:
+for prop, control, observed in unmatched:
     sys.stderr.write(
         "the campaign measured a red the record has no row for: %s / %s\n" % (control, observed))
     status = 1
@@ -2883,7 +2990,26 @@ PYEOF
   expect_code 1 "$CAPTURED_CODE" "a measured red with no row must fail"
   assert_contains "$CAPTURED" 'the campaign measured a red the record has no row for' \
     "the failure must name the measured entry with no row"
-  pass "every mutation-table row is backed by a campaign entry, and every entry has a row"
+
+  # A row that keeps a real measured red and renames the property it is credited
+  # with establishing. The red happened; the claim built on it did not. This is
+  # the direction a binding on control-plus-observed-line alone cannot see.
+  python3 - "$record" "$mutant_record" <<'PYEOF'
+import re, sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+match = re.search(r"^\| (.*?) \| (.*? \| `test_[a-z0-9_]+` \| `.*` \|)$", record, re.M)
+if not match:
+    sys.stderr.write("the mutation table carries no row to re-credit\n")
+    sys.exit(1)
+rewritten = "| a property this red never examined | " + match.group(2)
+open(target, "w", encoding="utf-8").write(record.replace(match.group(0), rewritten, 1))
+PYEOF
+  capture check_mutation_table "$artifact" "$mutant_record"
+  expect_code 1 "$CAPTURED_CODE" "a red credited to the wrong property must fail"
+  assert_contains "$CAPTURED" 'the record credits a red to the wrong property' \
+    "the failure must say the row names a property the campaign measured for another"
+  pass "every mutation-table row is backed by a campaign entry for its own property, and every entry has a row"
 }
 
 # The measurement record's claims are checked against a durable artifact rather
