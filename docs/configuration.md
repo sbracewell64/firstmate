@@ -911,7 +911,7 @@ When a limit is configured and the snapshot's age cannot be measured, the freshn
 `coordination_debt`, `host_resources`, and `reservation_pressure` have no collector in this home yet and must stay `enabled: false`; enabling one would record an invented value instead of an observation.
 
 `authority` accepts only `mode: "single-primary"`.
-The existing per-home session lock supplies that authority, so admission adds no new process, daemon, or reservation store; a session that does not hold the lock is not the admission authority and gets `unreachable_band`.
+The existing per-home session lock supplies that authority, so admission adds no new process, daemon, or admission reservation store; a session that does not hold the lock is not the admission authority and gets `unreachable_band`.
 `reservations` must stay disabled until a second intake authority or a remote node is registered; its durations exist so the distributed contract is settled in advance, not so it can be switched on early.
 `queue` pins the substrate and the two release triggers, and names the known already-empty-fleet gap that is deliberately left to session start rather than cured with a timer.
 `telemetry` names the sink for decision records; while admission is enabled, `record_every_decision` and `credentials_forbidden` must both be true.

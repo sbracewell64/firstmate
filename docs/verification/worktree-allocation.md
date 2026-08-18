@@ -3,10 +3,11 @@
 Audience: maintainer verification.
 
 This record supports the pre-allocation guard in `bin/fm-worktree-guard.sh`, its call site in `bin/fm-spawn.sh`, and the slot reservation that guard applies (`bin/fm-slot-reservation.sh`, `bin/fm-slot-reservation-lib.sh`, `bin/fm-pool-lib.sh`).
-It records the treehouse behavior the guard's placement and shape depend on, so a treehouse version bump can be re-checked against it, and the properties that reservation must keep.
+It records the treehouse behavior the guard's placement and shape depend on, so a treehouse version bump can be re-checked against it, and the properties that slot reservation must keep.
+Throughout this record `reservation` is always the slot sense, never admission control's `reservations`; [`../vocabulary-collisions.md`](../vocabulary-collisions.md) owns that ruling.
 Incident chronology and delivery evidence stay in private reports or PR evidence.
 
-The regression coverage is `tests/fm-worktree-guard.test.sh`, plus `tests/fm-slot-reservation.test.sh` for the reservation.
+The regression coverage is `tests/fm-worktree-guard.test.sh`, plus `tests/fm-slot-reservation.test.sh` for the slot reservation.
 
 ## Why the guard runs before `treehouse get`, not after
 
@@ -257,7 +258,7 @@ Only a mismatched identity with none of those present reads dead.
 
 Verified 2026-08-18, against the shipped build and twenty-two defect builds, by `tests/fm-slot-reservation.test.sh`.
 
-A pool may carry one reservation, which withholds a single demonstrably empty slot from every dispatch except the one task it names.
+A pool may carry one slot reservation, which withholds a single demonstrably empty slot from every dispatch except the one task it names.
 `bin/fm-slot-reservation-lib.sh` owns the record, the admission predicate, and the release conditions; `bin/fm-worktree-guard.sh` applies it; `bin/fm-pool-lib.sh` owns where a pool's machine-private state lives, so the reservation and the pool selection lock cannot disagree about which directory that is.
 
 ### The honest bound, which is the reason it exists and the reason it is small
@@ -266,18 +267,18 @@ On 2026-08-16 the trunk was red, every pool slot held live work, and the repair 
 
 **This would not have fixed that day.**
 The fleet was genuinely full and the repair would still have waited.
-What a reservation does is bound the worst case - the repair waits for the next slot rather than for a slot it happens to win - not remove the wait.
+What a slot reservation does is bound the worst case - the repair waits for the next slot rather than for a slot it happens to win - not remove the wait.
 It creates no capacity, guarantees no time bound, and promises no immediate start, so it must not be described as preventing trunk-red starvation.
 
 ### What it may not do
 
 It never preempts.
-The reservation is read strictly after the emptiness test above, never in place of it, so no running lane is stopped, evicted, or reclaimed for one, and no slot holding unlanded work is touched.
+The slot reservation is read strictly after the emptiness test above, never in place of it, so no running lane is stopped, evicted, or reclaimed for one, and no slot holding unlanded work is touched.
 That is structural rather than a policy: there is no path through the applier that hands out a slot this guard would otherwise have refused.
 Case (3) pins it, and its defect build - the applier reached with the last-inspected occupied slot - is observed handing out a slot holding live work.
 
 It reserves one slot, not the pool, and it decides no order.
-A pool holds one reservation; a second request is refused naming the current holder rather than queued behind it, because choosing between several waiting repairs is a scheduler and none was asked for.
+A pool holds one slot reservation; a second request is refused naming the current holder rather than queued behind it, because choosing between several waiting repairs is a scheduler and none was asked for.
 Cases (8) and (10) pin both halves.
 
 ### What counts as a trunk repair

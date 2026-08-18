@@ -377,7 +377,7 @@ The mechanism is deliberately small.
 `bin/fm-admission.sh` composes the existing read-only fleet snapshot into named signals, each with its own validity, and combines them into a `preferred`, `soft`, or `hard` band whose every threshold and mapping is read from configuration.
 Missing or contradictory required evidence maps to the configured `unknown_band` rather than resolving to `preferred`.
 Backlog consistency is a separate signal from worker-census integrity, because a backlog row that contradicts task metadata is a bookkeeping fault to repair, not evidence that the fleet is physically saturated, and one aggregate health bit would close the fleet for the wrong reason.
-The existing per-home session lock is the single-primary admission authority, so admission adds no process, daemon, reservation store, or second queue: admission-deferred and admission-refused requests stay in the owning backlog under a `load` hold, and admission is re-examined at exactly two existing seams, successful cleanup and session start.
+The existing per-home session lock is the single-primary admission authority, so admission adds no process, daemon, admission reservation store, or second queue: admission-deferred and admission-refused requests stay in the owning backlog under a `load` hold, and admission is re-examined at exactly two existing seams, successful cleanup and session start.
 
 Nothing numeric enforces.
 Only the deterministic safety conditions - admission authority, census integrity, and snapshot freshness - can set a band, and the schema refuses a configuration that tries to enable a threshold whose predictive value is unmeasured.

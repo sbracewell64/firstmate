@@ -12,6 +12,11 @@
 # bin/fm-worktree-guard.sh is the only consumer that acts on the state. Nothing
 # else may parse this record.
 #
+# The qualified name above is required in prose: admission control's
+# `reservations` are a different thing under the same word, and
+# docs/vocabulary-collisions.md owns that ruling. Identifiers here already carry
+# `slot` and are not renamed.
+#
 # WHAT THIS IS FOR, AND THE HONEST BOUND ON IT
 #
 # On 2026-08-16 firstmate's trunk was red. The repair could not start because

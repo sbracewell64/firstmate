@@ -57,7 +57,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
 | `fm-worktree-guard.sh`   | Choose the demonstrably empty Treehouse slot a spawn may use, and refuse when no available slot is one |
 | `fm-pool-lib.sh`         | Single owner of where one worktree pool's machine-private state lives and of the key naming that pool |
-| `fm-slot-reservation.sh` | Reserve a pool's next free slot for one queued trunk repair, and read, claim or release that reservation |
+| `fm-slot-reservation.sh` | Reserve a pool's next free slot for one queued trunk repair, and read, claim or release that slot reservation |
 | `fm-slot-reservation-lib.sh` | Single owner of the slot-reservation record, what may open one, and how its state is computed on read |
 | `fm-launch-lib.sh`       | Single owner of every verified harness launch command for crewmate, scout, secondmate, and primary sessions |
 | `fm-launch.sh`           | The captain's front door: probe the harness menu, then start and attach to one primary session in this home (docs/launcher.md) |

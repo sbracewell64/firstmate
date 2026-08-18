@@ -76,17 +76,20 @@
 # a mismatched identity read "dead".
 #
 # THE ONE SLOT A QUEUED TRUNK REPAIR MAY BE HELD
-# A pool may carry one reservation, which withholds a single demonstrably empty
-# slot from everything except the one task it names. bin/fm-slot-reservation-lib.sh
-# owns that record, what may open one, and its release conditions; this file only
-# applies it, and applies it strictly AFTER the emptiness test above, so a
-# reservation can never hand out a slot this guard would otherwise have refused
-# and never touches a running lane. It withholds ONE slot, so a pool with a
-# second empty slot still hands that one to ordinary work.
+# A pool may carry one SLOT RESERVATION, which withholds a single demonstrably
+# empty slot from everything except the one task it names. The qualifier is
+# required rather than decorative: admission control's `reservations` are a
+# different thing under the same word, and docs/vocabulary-collisions.md owns
+# that ruling. bin/fm-slot-reservation-lib.sh owns this record, what may open
+# one, and its release conditions; this file only applies it, and applies it
+# strictly AFTER the emptiness test above, so a slot reservation can never hand
+# out a slot this guard would otherwise have refused and never touches a running
+# lane. It withholds ONE slot, so a pool with a second empty slot still hands
+# that one to ordinary work.
 #
 # A call that names no task is an inspection, not an allocation. It reports the
-# reservation and withholds nothing, because a caller that is not taking a slot
-# cannot be the holder and denying it would deny the holder its own slot.
+# slot reservation and withholds nothing, because a caller that is not taking a
+# slot cannot be the holder and denying it would deny the holder its own slot.
 #
 # Usage:
 #   fm-worktree-guard.sh check <project-dir> [--for <task-id>]
@@ -103,9 +106,10 @@
 #       Print the worktree_owner_pid= and worktree_owner_identity= meta lines
 #       for an accepted worktree. Both values are empty when no occupant is
 #       resolvable, which reads UNRESOLVED at check time.
-#   --for <task-id> names the task the allocation is for. It is what a held
-#       reservation is matched against, and `select` consumes the reservation at
-#       the moment it hands that task the slot. Without it no slot is withheld.
+#   --for <task-id> names the task the allocation is for. It is what a held slot
+#       reservation is matched against, and `select` consumes that reservation
+#       at the moment it hands that task the slot. Without it no slot is
+#       withheld.
 #
 # FM_WORKTREE_RECLAIM_OK=<path>[:<path>...] is explicit operator authority for
 # exactly the listed worktree paths. It is path-scoped on purpose so it cannot
@@ -533,7 +537,7 @@ reservation_apply() {  # <mode> <pool-real> <requester> <chosen> <chosen-second>
     # here. `check` decides nothing and consumes nothing.
     if [ "$mode" = select ]; then
       "$FM_GUARD_DIR/fm-slot-reservation.sh" claim "$requester" --project "$pool" >/dev/null 2>&1 \
-        || printf 'worktree guard: %s was handed its reserved slot, but the reservation could not be consumed; it keeps withholding a slot until it expires\n' \
+        || printf 'worktree guard: %s was handed its reserved slot, but the slot reservation could not be consumed; it keeps withholding a slot until it expires\n' \
              "$requester" >&2
     fi
     printf 'worktree guard: handing %s the slot reserved for it (%s)\n' \
@@ -557,7 +561,7 @@ reservation_apply() {  # <mode> <pool-real> <requester> <chosen> <chosen-second>
     # valid one, since a record that does not reads unreadable_record.
     printf '  evidence tier: %s\n' "$FM_SLOT_RESERVATION_EVIDENCE_TIER"
     echo "    Nothing was reset, cleaned, or discarded, and no running lane was touched. This spawn simply did not run."
-    echo "    The reservation releases when $FM_SLOT_RESERVATION_TASK takes the slot, when the trunk advances past $FM_SLOT_RESERVATION_TRUNK_HEAD on any of its landing refs, or when it expires."
+    echo "    The slot reservation releases when $FM_SLOT_RESERVATION_TASK takes the slot, when the trunk advances past $FM_SLOT_RESERVATION_TRUNK_HEAD on any of its landing refs, or when it expires."
     echo "    Release it early only if that repair is no longer wanted:"
     echo "      bin/fm-slot-reservation.sh release --project $pool --for $FM_SLOT_RESERVATION_TASK"
     echo "    Run this guard's check with no --for to see the rest of the pool."

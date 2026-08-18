@@ -4,35 +4,35 @@
 # claim it, or release it.
 #
 # bin/fm-slot-reservation-lib.sh is the single owner of the record format, the
-# admission predicate, the state vocabulary, and the honest bound on what a
+# admission predicate, the state vocabulary, and the honest bound on what a slot
 # reservation does and does not do. Read that header before changing anything
 # here; this file only turns those into commands.
 #
-# In one line, so it is not lost between the two: a reservation makes a queued
-# trunk repair wait for the NEXT slot that frees rather than for a slot it
-# happens to win. It creates no capacity, preempts nothing, and guarantees no
+# In one line, so it is not lost between the two: a slot reservation makes a
+# queued trunk repair wait for the NEXT slot that frees rather than for a slot
+# it happens to win. It creates no capacity, preempts nothing, and guarantees no
 # time bound.
 #
 # Usage:
 #   fm-slot-reservation.sh open <task-id> --project <dir> --verdict <file>
 #                               [--trunk-ref <ref>] [--ttl <seconds>]
 #       Reserve this pool's next free slot for <task-id>. --verdict is a
-#       bin/fm-verify.sh record; only result=FAIL admits a reservation. The
-#       trunk ref defaults to the project's resolved default branch, and its
+#       bin/fm-verify.sh record; only result=FAIL admits a slot reservation.
+#       The trunk ref defaults to the project's resolved default branch, and its
 #       HEAD is read here rather than supplied. --trunk-ref names WHICH of the
 #       default branch's landing refs the recorded head is read from, and is
 #       refused when it names anything else, because the release condition
-#       watches exactly that set. Refuses while a reservation is already held,
-#       naming the holder - one pool holds one reservation, and choosing between
+#       watches exactly that set. Refuses while one is already held, naming the
+#       holder - one pool holds one slot reservation, and choosing between
 #       several waiting requests is a scheduler this deliberately is not.
 #   fm-slot-reservation.sh status --project <dir> [--for <task-id>]
-#       Print one record for the pool's reservation and exit by its state:
+#       Print one record for the pool's slot reservation and exit by its state:
 #       0 held, 1 absent or released, 2 unobservable. With --for, a `holder:`
 #       line reports whether that task is the one the slot is held for.
 #   fm-slot-reservation.sh claim <task-id> --project <dir>
-#       Consume the reservation because <task-id> has just been handed the slot.
-#       Exit 0 when it was consumed, 1 when there was nothing to consume or it
-#       is held for another task, 2 when its state could not be observed.
+#       Consume the slot reservation because <task-id> has just been handed the
+#       slot. Exit 0 when it was consumed, 1 when there was nothing to consume
+#       or it is held for another task, 2 when its state could not be observed.
 #   fm-slot-reservation.sh release --project <dir> [--for <task-id>]
 #       Remove the record. With --for, only when it is held for that task.
 #       Releasing is always safe: it withholds a slot and nothing else, so this
@@ -165,7 +165,7 @@ read_verdict() {  # <file>
       die "--verdict $file reports NO_VERIFIER_RAN: the observation did not happen, and an observation that did not happen is not evidence a trunk is broken"
       ;;
     *)
-      die "--verdict $file reports an unknown result '$result'; only FAIL admits a reservation"
+      die "--verdict $file reports an unknown result '$result'; only FAIL admits a slot reservation"
       ;;
   esac
 }
@@ -209,7 +209,7 @@ open_lock_acquire() {  # <pool-real>
     sleep 0.1
     attempt=$((attempt + 1))
   done
-  die "another spawn or reservation holds this pool's selection lock ($RESERVATION_LOCK, pid ${FM_LOCK_HELD_PID:-unknown}), so whether a slot is already reserved could not be observed"
+  die "another spawn or slot reservation holds this pool's selection lock ($RESERVATION_LOCK, pid ${FM_LOCK_HELD_PID:-unknown}), so whether a slot is already reserved could not be observed"
 }
 
 # Is <ref> one of the refs bin/fm-landed-lib.sh names as landing targets for
@@ -325,7 +325,7 @@ cmd_open() {  # <task-id> ...
       1)
         [ -n "$TRUNK_REF_SET_NAME" ] \
           || die "$pool has no resolvable default branch, so it carries no landing refs for --trunk-ref $ref to name and there is no trunk to reserve a slot to repair"
-        die "--trunk-ref $ref is not one of the refs carrying $TRUNK_REF_SET_NAME, which is the set the release condition watches (accepted: ${accepted:-no ref carrying $TRUNK_REF_SET_NAME exists}); a reservation opened against it could never be shown released and would withhold an empty slot for its whole TTL, so nothing was reserved"
+        die "--trunk-ref $ref is not one of the refs carrying $TRUNK_REF_SET_NAME, which is the set the release condition watches (accepted: ${accepted:-no ref carrying $TRUNK_REF_SET_NAME exists}); a slot reservation opened against it could never be shown released and would withhold an empty slot for its whole TTL, so nothing was reserved"
         ;;
       *)
         [ -n "$TRUNK_REF_SET_NAME" ] \
@@ -340,7 +340,7 @@ cmd_open() {  # <task-id> ...
   read_verdict "$verdict"
 
   now=$(now_epoch)
-  fm_slot_reservation_positive_int "$now" || die "the current time could not be read, so a reservation could not be given an expiry"
+  fm_slot_reservation_positive_int "$now" || die "the current time could not be read, so a slot reservation could not be given an expiry"
 
   open_lock_acquire "$pool"
   fm_slot_reservation_read "$pool" "$now"
@@ -353,7 +353,7 @@ cmd_open() {  # <task-id> ...
     fi
     {
       echo "error: this pool's next free slot is already reserved for $FM_SLOT_RESERVATION_TASK ($FM_SLOT_RESERVATION_DETAIL)."
-      echo "       One pool holds one reservation. Deciding which of several waiting repairs goes first is a scheduler, and this is not one."
+      echo "       One pool holds one slot reservation. Deciding which of several waiting repairs goes first is a scheduler, and this is not one."
       echo "       Wait for $FM_SLOT_RESERVATION_TASK to take the slot, or release it explicitly:"
       echo "         bin/fm-slot-reservation.sh release --project $pool --for $FM_SLOT_RESERVATION_TASK"
     } >&2
@@ -395,7 +395,7 @@ cmd_open() {  # <task-id> ...
   fm_slot_reservation_read "$pool" "$now"
   print_record "$(expires_in "$now")"
   [ "$FM_SLOT_RESERVATION_STATE" = held ] \
-    || die "the reservation was written but does not read back as held ($FM_SLOT_RESERVATION_STATE: $FM_SLOT_RESERVATION_DETAIL)"
+    || die "the slot reservation was written but does not read back as held ($FM_SLOT_RESERVATION_STATE: $FM_SLOT_RESERVATION_DETAIL)"
   open_lock_release
   return 0
 }
@@ -449,7 +449,7 @@ cmd_claim() {  # <task-id> --project <dir>
         return 1
       fi
       rm -f "$FM_SLOT_RESERVATION_PATH" \
-        || die "the reservation for $task could not be removed, so it will keep withholding a slot until it expires"
+        || die "the slot reservation for $task could not be removed, so it will keep withholding a slot until it expires"
       printf 'fm-slot-reservation: %s claimed this pool'"'"'s reserved slot\n' "$task" >&2
       return 0
       ;;
