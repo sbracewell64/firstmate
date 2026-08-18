@@ -966,7 +966,7 @@ for raw in sys.argv[7:]:
     rows = doc.get("scripts")
     if not isinstance(rows, list) or not rows:
         unobserved(f"shard {idx} timing artifact lists no scripts")
-    paths, total = [], 0
+    paths, total, failed, skipped_gate = [], 0, 0, 0
     for row in rows:
         if not isinstance(row, dict):
             unobserved(f"shard {idx} has an invalid script record")
@@ -976,8 +976,18 @@ for raw in sys.argv[7:]:
         path = row.get("path")
         if not isinstance(path, str) or not path:
             unobserved(f"shard {idx} has a script with an invalid path")
+        exit_code = row.get("exit")
+        if type(exit_code) is not int or exit_code < 0:
+            unobserved(f"shard {idx} has a script with an invalid exit code")
+        gate_skip = row.get("gate_skip")
+        if type(gate_skip) is not bool:
+            unobserved(f"shard {idx} has a script with an invalid gate-skip result")
+        if gate_skip and exit_code != 0:
+            unobserved(f"shard {idx} has a self-contradictory script result")
         paths.append(path)
         total += ms
+        failed += exit_code != 0
+        skipped_gate += gate_skip
     summary = doc.get("summary")
     if not isinstance(summary, dict):
         unobserved(f"shard {idx} timing artifact has an invalid summary")
@@ -985,7 +995,12 @@ for raw in sys.argv[7:]:
         value = summary.get(field)
         if type(value) is not int or value < 0:
             unobserved(f"shard {idx} timing artifact has an invalid summary {field}")
-    if summary["total"] != len(rows) or summary["duration_ms"] != total:
+    if (
+        summary["total"] != len(rows)
+        or summary["failed"] != failed
+        or summary["skipped_gate"] != skipped_gate
+        or summary["duration_ms"] != total
+    ):
         unobserved(f"shard {idx} timing artifact summary disagrees with its script records")
     seen[idx] = (total, paths)
 

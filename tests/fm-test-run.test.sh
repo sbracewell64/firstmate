@@ -976,6 +976,36 @@ PY
   assert_contains "$out" "verdict=could-not-observe" "an invalid summary must report could-not-observe"
   assert_not_contains "$out" "verdict=drifted" "an invalid summary must not report drifted"
 
+  fm_write_serial_fixture "$tmp/contradictory-failed" 1000
+  python3 - "$tmp/contradictory-failed/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["failed"] = 1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/contradictory-failed"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a contradictory failed count must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a contradictory failed count must report could-not-observe"
+
+  fm_write_serial_fixture "$tmp/contradictory-skips" 1000
+  python3 - "$tmp/contradictory-skips/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["skipped_gate"] = doc["summary"]["total"] + 1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/contradictory-skips"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a contradictory gate-skip count must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a contradictory gate-skip count must report could-not-observe"
+
   # A malformed extra artifact must not disappear as though it belonged to a
   # different lane and let an otherwise complete artifact set pass.
   fm_write_serial_fixture "$tmp/invalid-selection" 1000
