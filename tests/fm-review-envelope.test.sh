@@ -2694,7 +2694,19 @@ PYEOF
   if cmp -s "$record" "$mutant_record"; then
     fail "the head mutant must actually replace the cited head"
   fi
-  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head"
+  # The artifact's head moves with it. A record disagreeing with the artifact is
+  # already refused by the check above, and that refusal would satisfy a
+  # reachability assertion without ever reaching the reachability question - so
+  # the pair is made CONSISTENT and unreachable, leaving reachability as the only
+  # thing left to fail on.
+  python3 - "$artifact" "$mutant" <<'PYEOF'
+import json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+artifact["head"] = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+json.dump(artifact, open(target, "w", encoding="utf-8"), indent=2, sort_keys=True)
+PYEOF
+  capture check_campaign_artifact "$mutant" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head"
   assert_contains "$CAPTURED" 'is not reachable from this branch' \
     "a head offered as a replay coordinate that the branch does not carry must fail"
 
