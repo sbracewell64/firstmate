@@ -1058,6 +1058,7 @@ SH
   out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
   expect_code 0 "$rc" "a named pull request object read passes"
   assert_contains "$out" "coverage=complete" "the named-object classification preserves complete coverage"
+  assert_contains "$out" "sites=1" "the named pull request remains one classified read in the portable audit"
   pass "a pull request selected by repository and number is classified as one object"
 }
 
