@@ -7,7 +7,7 @@ It records the treehouse behavior the guard's placement and shape depend on, so 
 Throughout this record `reservation` is always the slot sense, never admission control's `reservations`; [`../vocabulary-collisions.md`](../vocabulary-collisions.md) owns that ruling.
 Incident chronology and delivery evidence stay in private reports or PR evidence.
 
-Object ids reproduced inside the recorded command output below are TRANSCRIPT CONTENT, not citations this record makes. They resolve to nothing here, they are left exactly as captured because editing evidence to label it would corrupt the evidence, and they are not offered as coordinates to resolve.
+Object ids reproduced inside the recorded command output below are TRANSCRIPT CONTENT, not citations this record makes. They are left exactly as captured, because editing a transcript destroys what makes it a transcript, and they are not offered as coordinates to resolve. Whether any of them happens to resolve here is irrelevant to that, so this record makes no claim either way.
 
 `f90ed1d` is reachable from the history shipped here and needs no label. `2582c15` is UNRESOLVABLE - NAMING NO KNOWN OBJECT: it was a squash-merge head recorded during the episode and resolves to nothing in this repository. Whether the object survives anywhere else COULD NOT BE OBSERVED from here, so nothing is claimed either way. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
 

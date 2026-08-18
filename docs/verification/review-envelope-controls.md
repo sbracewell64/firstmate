@@ -278,8 +278,11 @@ Measured directly on scratch copies of this tree at `git archive` fidelity, one 
 
 Three controls check this record against the suite or against the campaign artifact rather than checking the compiler, so no mutation of the compiler can falsify them.
 The artifact-backing control was measured on scratch copies of the tree, by making the change each one exists to catch, and its rows below are those past measurements.
-The other two now MANUFACTURE EVERY DIRECTION THEY CLAIM, on every run, so none of their reds is a past measurement to be taken on trust. The mutation-table control builds a record with a row nothing backs, a record missing a measured row, and a record crediting a real red to a property it never examined, and requires each to be refused. The count-drift control builds a record stating this run's executed count and requires it accepted, then a wrong count, an absent statement, a number standing beside a deferral, a deferral checked against an artifact that matches the tree, and a deferral naming no stale subject, and requires each of those five to be refused.
-Their rows below therefore record what each run reproduces rather than what someone once saw, and the old scratch observation of the count control - `not ok - the verification record states 63 controls, but the suite executed 64` - is superseded by the inline directions and is not restated as a standing claim.
+The mutation-table control MANUFACTURES EVERY DIRECTION IT CLAIMS, on every run: it builds a record with a row nothing backs, a record missing a measured row, and a record crediting a real red to a property it never examined, and requires each to be refused. None of its reds is a past measurement to be taken on trust, and its rows below record what every run reproduces.
+
+The count-drift control is described separately, because the same sentence is not true of it AT THIS HEAD. It manufactures the same way - a record stating this run's executed count, which it requires accepted, then a wrong count, an absent statement, a number standing beside a deferral, a deferral checked against an artifact that matches the tree, and a deferral naming no stale subject, each of which it requires refused - but it is the LAST control the suite invokes, the artifact-backing control runs immediately before it and refuses on the stale subject digests, and this suite halts at its first failing control. So NO RUN AT THIS HEAD REACHES IT. Its refusals are listed below as what the control requires, in their own table under a heading that says so, because listing them under "Observed" would be a claim nobody can make from here. They become per-run reproductions the moment re-measurement lets a run reach the end of the suite, and not before.
+
+The old scratch observation of the count control - `not ok - the verification record states 63 controls, but the suite executed 64` - is superseded by those inline directions and is not restated as a standing claim.
 
 | Control | Change made | Observed |
 | --- | --- | --- |
@@ -288,13 +291,18 @@ Their rows below therefore record what each run reproduces rather than what some
 | the mutation table matches the campaign artifact | a row added that no campaign entry backs | `the record claims a red no campaign entry backs: ...` |
 | the mutation table matches the campaign artifact | a measured entry's row removed from the table | `the campaign measured a red the record has no row for: ...` |
 | the mutation table matches the campaign artifact | a row re-credited to a property the campaign measured for another | `the record credits a red to the wrong property: row says ...` |
-| the verification record matches the executed control count | a wrong count stated | `the verification record states 1 controls, but the suite executed ...` |
-| the verification record matches the executed control count | no count and no deferral | `the record neither states a control count nor declares that none is asserted` |
-| the verification record matches the executed control count | a count stated beside a deferral | `the record both states a control count and declares none asserted` |
-| the verification record matches the executed control count | the deferral checked against an artifact matching the tree | `it must be stated, not deferred` |
-| the verification record matches the executed control count | the deferral's stale subjects stripped | `does not name the stale subjects it is pending on` |
 
-The artifact control was green on the untouched copy first, so neither of its reds comes from a copy that never worked; the manufactured directions carry their accepting anchors in the same run, so the same is established there each time rather than once.
+The count-drift control's directions, NOT OBSERVED AT THIS HEAD because no run reaches it. These are the refusals the control requires, read from the checker rather than from a run:
+
+| Change made | Refusal the control requires |
+| --- | --- |
+| a wrong count stated | `the verification record states <n> controls, but the suite executed <m>` |
+| no count and no deferral | `the record neither states a control count nor declares that none is asserted` |
+| a count stated beside a deferral | `the record both states a control count and declares none asserted` |
+| the deferral checked against an artifact matching the tree | `it must be stated, not deferred` |
+| the deferral's stale subjects stripped | `does not name the stale subjects it is pending on` |
+
+The artifact control was green on the untouched copy first, so neither of its reds comes from a copy that never worked; the mutation-table control carries its accepting anchor in the same run, so the same is established there each time rather than once.
 The second reading for the artifact control is the more valuable one: it catches drift nobody tried to hide, which is more common than deliberate relabelling.
 
 ## The relabelling attack, and what now catches it
@@ -376,7 +384,11 @@ That shape is AMBIGUOUS and the ambiguity is stated rather than resolved by asse
 
 For an id that resolves to no object here, whether it was fabricated or whether its object was destroyed CANNOT BE OBSERVED from this repository, and neither story is told. Several of them are explicable from the citing record's own text - a commit in a probed platform's history, an upstream project's pull request, a scratch clone, a squash-merge head - and where the record already says so, that is repeated as the record's statement rather than offered as a finding of this sweep.
 
-Ids reproduced INSIDE recorded command output are transcript content, not citations this record makes. They are left exactly as captured, because editing evidence to carry a label would corrupt the evidence to describe it; the standing note in each such record says that they resolve to nothing here and are not offered as coordinates.
+Ids reproduced INSIDE recorded command output are transcript content, not citations this record makes. They are left exactly as captured, because editing a transcript destroys what makes it a transcript, and the standing note in each such record says they are not offered as coordinates. It says NOTHING about whether they resolve, in either direction.
+
+That silence is deliberate and was arrived at the hard way. The first version of that note asserted the ids resolve to nothing here, which is false - several of them are commits in this repository - and it was written by a sweep whose whole purpose was removing an unchecked claim about resolution. Nothing about the note's job required the claim: it exists to say these are captured output rather than citations, and that stands whatever the ids resolve to.
+
+WHEN A CLAIM IS NOT REQUIRED, NOT MAKING IT IS STRONGER THAN MAKING IT CAREFULLY. Every claim is a maintenance obligation and a chance to be wrong, and an unnecessary one buys nothing against either.
 
 ### An amendment to this run's fence
 
