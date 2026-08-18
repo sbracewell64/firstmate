@@ -245,46 +245,46 @@ The head is recorded per row: one global label would let a single relabelling si
 
 | Control | Reddened by | Observed red | Measured at |
 | --- | --- | --- | --- |
-| a matching success line cannot establish that the target ran | D01 D05 D33 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| the proof owners own success literal cannot reach a verdict | D05 D19 D33 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a target that executed and passed is a pass | D01 D05 D33 | `the basis must say the target executed and concluded pass` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a target that executed and failed is a fail | D05 D20 D33 | `an executed target that concluded fail is FAIL: expected exit 1, got 2` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| an unattributable substitution is could not observe | D01 D02 D05 D33 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a target occurring more than once is refused | D03 D33 | `the refusal must name the guard (missing: 'exactly one occurrence is required')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a target occurring zero times is refused | D21 D33 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| overlapping occurrences are counted separately | D03 D33 | `overlapping start positions must be counted separately (missing: 'target occurs 2 times')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| the identity substitution reproduces the candidate tree | D05 D33 | `the identity substitution must reproduce the candidate tree exactly` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a substitution identical to the target is refused | D22 D33 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| the source is never mutated | D12 D33 | `the source file must be unmutated at every moment an execution was live` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a refused source is never written to | D08 D30 | `the refusal must name what it rejected (missing: 'refuses a primary checkout as its source')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a traversing output is refused without touching the source | D30 D31 D33 | `a traversing output refusal must leave the source byte-identical` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| prove refuses output through a symlinked source ancestor | D30 D33 | `prove containment refusal must happen before creating output` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| prove protects the checkout when source is a subdirectory | D33 | `the prove refusal must name checkout-root containment (missing: 'output directory is inside the source checkout')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| the disposable clone shares no object storage | D04 D33 | `the disposable clone must share no object storage with the source` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| refuses to overwrite an existing record | D07 D33 | `a second generation must not be written over the first: expected exit 2, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a record whose mutants are gone is could not observe | D05 D33 | `the case must pass before the evidence is removed` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| an edited record cannot be read into a verdict | D01 D05 D06 D23 D33 | `the label case must fail before editing` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| an execution from the wrong variant is could not observe | D24 D33 | `an execution for another mutation must not enter the fold` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| preserved mutation bytes are rederived | D25 D29 D33 | `changed preserved bytes must invalidate the claimed mutant` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a missing dimension outranks a clean fold | D10 D33 | `an incomplete record must not classify PASS (missing: 'review-mutation,NO_VERIFIER_RAN,verification_incomplete,')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a record pointing at another path is could not observe | D29 | `a record whose named path is not where the mutants differ must not pass` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a caller declaration cannot change the verdict | D01 D05 D11 D33 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| the probe argv is recorded exactly | D15 D33 | `probe_argv must record every argument, including an empty one` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| catalogue refuses output inside a linked worktree source | D32 D33 | `catalogue containment refusal must leave the linked-worktree source byte-identical` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| catalogue refuses output through a symlinked source ancestor | D32 D33 | `catalogue containment refusal must happen before creating output` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| catalogue protects the checkout when source is a subdirectory | D33 | `the catalogue refusal must name checkout-root containment (missing: 'output directory is inside the source checkout')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| output outside the source is accepted | D05 D33 | `an output path outside the source remains accepted: expected exit 0, got 2` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| one failing case makes the catalogue fail | D01 D05 D09 D33 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a failing case outranks an unobservable one | D01 D02 D05 D09 D33 | `an observation gap must never mask a real finding: expected exit 1, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| an unobservable case outranks a passing one | D01 D02 D33 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| an empty catalogue is could not observe | D13 D33 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a catalogue with duplicate identities is refused | D14 D33 | `the refusal must name the collision (missing: 'duplicate case identities')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| fm verify transports the result | D01 D05 D18 D33 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a symlinked target path is refused | D16 D33 | `the refusal must name what it saw (missing: 'not a regular file')` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| verification record inventory matches executed controls | D26 D27 D28 | `the documented control count (1) must equal the suite's declared control count (40)` | `6269ffb4` |`31278a6f` |`31278a6f` |
-| recorded measurement describes the current subject | D34 | `the recorded measurement describes different bytes than the current bin/fm-review-mutation.sh` | `6269ffb4` |`31278a6f` |`31278a6f` |
+| a matching success line cannot establish that the target ran | D01 D05 D33 | `a target that did not execute must FAIL even when a suite printed its success line: expected exit 1, got 0` | `31278a6f` |
+| the proof owners own success literal cannot reach a verdict | D05 D19 D33 | `a real execution must pass even while printing this script's failure record: expected exit 0, got 2` | `31278a6f` |
+| a target that executed and passed is a pass | D01 D05 D33 | `the basis must say the target executed and concluded pass` | `31278a6f` |
+| a target that executed and failed is a fail | D05 D20 D33 | `an executed target that concluded fail is FAIL: expected exit 1, got 2` | `31278a6f` |
+| an unattributable substitution is could not observe | D01 D02 D05 D33 | `a substitution that moves the verdict for another reason is could-not-observe: expected exit 2, got 0` | `31278a6f` |
+| a target occurring more than once is refused | D03 D33 | `the refusal must name the guard (missing: 'exactly one occurrence is required')` | `31278a6f` |
+| a target occurring zero times is refused | D21 D33 | `the refusal must report the count it saw (missing: 'target occurs 0 times')` | `31278a6f` |
+| overlapping occurrences are counted separately | D03 D33 | `overlapping start positions must be counted separately (missing: 'target occurs 2 times')` | `31278a6f` |
+| the identity substitution reproduces the candidate tree | D05 D33 | `the identity substitution must reproduce the candidate tree exactly` | `31278a6f` |
+| a substitution identical to the target is refused | D22 D33 | `the refusal must name what was not tested (missing: 'the falsifying substitution is the target itself')` | `31278a6f` |
+| the source is never mutated | D12 D33 | `the source file must be unmutated at every moment an execution was live` | `31278a6f` |
+| a refused source is never written to | D08 D30 | `the refusal must name what it rejected (missing: 'refuses a primary checkout as its source')` | `31278a6f` |
+| a traversing output is refused without touching the source | D30 D31 D33 | `a traversing output refusal must leave the source byte-identical` | `31278a6f` |
+| prove refuses output through a symlinked source ancestor | D30 D33 | `prove containment refusal must happen before creating output` | `31278a6f` |
+| prove protects the checkout when source is a subdirectory | D33 | `the prove refusal must name checkout-root containment (missing: 'output directory is inside the source checkout')` | `31278a6f` |
+| the disposable clone shares no object storage | D04 D33 | `the disposable clone must share no object storage with the source` | `31278a6f` |
+| refuses a primary checkout as its source | D08 | `a primary checkout is refused as a mutation source: expected exit 2, got 0` | `31278a6f` |
+| refuses to overwrite an existing record | D07 D33 | `a second generation must not be written over the first: expected exit 2, got 0` | `31278a6f` |
+| a record whose mutants are gone is could not observe | D05 D33 | `the case must pass before the evidence is removed` | `31278a6f` |
+| an edited record cannot be read into a verdict | D01 D05 D06 D23 D33 | `the label case must fail before editing` | `31278a6f` |
+| an execution from the wrong variant is could not observe | D24 D33 | `an execution for another mutation must not enter the fold` | `31278a6f` |
+| preserved mutation bytes are rederived | D25 D29 D33 | `changed preserved bytes must invalidate the claimed mutant` | `31278a6f` |
+| a missing dimension outranks a clean fold | D10 D33 | `an incomplete record must not classify PASS (missing: 'review-mutation,NO_VERIFIER_RAN,verification_incomplete,')` | `31278a6f` |
+| a record pointing at another path is could not observe | D29 | `a record whose named path is not where the mutants differ must not pass` | `31278a6f` |
+| a caller declaration cannot change the verdict | D01 D05 D11 D33 | `a declaration that the target ran cannot make it have run: expected exit 1, got 0` | `31278a6f` |
+| the probe argv is recorded exactly | D15 D33 | `probe_argv must record every argument, including an empty one` | `31278a6f` |
+| catalogue refuses output inside a linked worktree source | D32 D33 | `catalogue containment refusal must leave the linked-worktree source byte-identical` | `31278a6f` |
+| catalogue refuses output through a symlinked source ancestor | D32 D33 | `catalogue containment refusal must happen before creating output` | `31278a6f` |
+| catalogue protects the checkout when source is a subdirectory | D33 | `the catalogue refusal must name checkout-root containment (missing: 'output directory is inside the source checkout')` | `31278a6f` |
+| output outside the source is accepted | D05 D33 | `an output path outside the source remains accepted: expected exit 0, got 2` | `31278a6f` |
+| one failing case makes the catalogue fail | D01 D05 D09 D33 | `one failing case must make the whole catalogue fail: expected exit 1, got 0` | `31278a6f` |
+| a failing case outranks an unobservable one | D01 D02 D05 D09 D33 | `an observation gap must never mask a real finding: expected exit 1, got 0` | `31278a6f` |
+| an unobservable case outranks a passing one | D01 D02 D33 | `a catalogue with an unobservable case is not a passing catalogue: expected exit 2, got 0` | `31278a6f` |
+| an empty catalogue is could not observe | D13 D33 | `zero findings over an empty universe is not a clean universe: expected exit 2, got 0` | `31278a6f` |
+| a catalogue with duplicate identities is refused | D14 D33 | `the refusal must name the collision (missing: 'duplicate case identities')` | `31278a6f` |
+| fm verify transports the result | D01 D05 D18 D33 | `the wrapper must transport FAIL as FAIL: expected exit 1, got 0` | `31278a6f` |
+| a symlinked target path is refused | D16 D33 | `the refusal must name what it saw (missing: 'not a regular file')` | `31278a6f` |
+| a missing execution substrate is could not observe | D17 | `no execution substrate means no observation of execution: expected exit 2, got 0` | `31278a6f` |
+| verification record inventory matches executed controls | D26 D27 D28 | `the documented control count (1) must equal the suite's declared control count (40)` | `31278a6f` |
+| recorded measurement describes the current subject | D34 | `the recorded measurement describes different bytes than the current bin/fm-review-mutation.sh` | `31278a6f` |
 
 ## What is not covered
 
