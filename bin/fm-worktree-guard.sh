@@ -551,8 +551,13 @@ reservation_apply() {  # <mode> <pool-real> <requester> <chosen> <chosen-second>
     printf '  admitted by: %s reporting FAIL (evidence %s)\n' \
       "${FM_SLOT_RESERVATION_VERIFIER:-an unrecorded verifier}" \
       "${FM_SLOT_RESERVATION_EVIDENCE:-none recorded}"
+    # The strength of that admission, beside it, because an operator denied a
+    # slot is owed how strong the evidence that denied them was. The vocabulary
+    # is bin/fm-slot-reservation-lib.sh's; a held reservation always carries a
+    # valid one, since a record that does not reads unreadable_record.
+    printf '  evidence tier: %s\n' "$FM_SLOT_RESERVATION_EVIDENCE_TIER"
     echo "    Nothing was reset, cleaned, or discarded, and no running lane was touched. This spawn simply did not run."
-    echo "    The reservation releases when $FM_SLOT_RESERVATION_TASK takes the slot, when $FM_SLOT_RESERVATION_TRUNK_REF moves off $FM_SLOT_RESERVATION_TRUNK_HEAD, or when it expires."
+    echo "    The reservation releases when $FM_SLOT_RESERVATION_TASK takes the slot, when the trunk advances past $FM_SLOT_RESERVATION_TRUNK_HEAD on any of its landing refs, or when it expires."
     echo "    Release it early only if that repair is no longer wanted:"
     echo "      bin/fm-slot-reservation.sh release --project $pool --for $FM_SLOT_RESERVATION_TASK"
     echo "    Run this guard's check with no --for to see the rest of the pool."

@@ -38,12 +38,20 @@
 #
 # The record it prints, one line, for every state:
 #
-#   reservation[1]{state,reason,task,project,trunk_ref,trunk_head,expires_in,verifier,evidence}:
-#     held,,trunk-red-repair,/home/x/projects/p,refs/heads/main,a1b2c3d,6821,pr-checks,/tmp/fm-verify-pr-checks.log
+#   reservation[1]{state,reason,task,project,trunk_ref,trunk_head,expires_in,verifier,evidence_tier,evidence}:
+#     held,,trunk-red-repair,/home/x/projects/p,refs/heads/main,a1b2c3d,6821,pr-checks,caller-asserted,/tmp/fm-verify-pr-checks.log
 #
-# state and reason come from the library's closed vocabulary. expires_in is
-# seconds remaining against the TTL, negative once past it, and empty when the
-# record did not parse. An empty field is an absent value, never a zero.
+# state, reason and evidence_tier come from the library's closed vocabularies.
+# expires_in is seconds remaining against the TTL, negative once past it, and
+# empty when the record did not parse. An empty field is an absent value, never
+# a zero. evidence is last because it is the one field that may itself contain a
+# comma.
+#
+# evidence_tier is machine-readable on purpose: `open` admits from a verdict
+# record the CALLER supplies, so every admission today is caller-asserted, and a
+# consumer must be able to see that rather than read it in a comment. Declaring
+# a trunk-checks verifier is what upgrades a later admission to verified; it
+# does not change what caller-asserted means.
 #
 # EXIT STATUS IS THREE-VALUED, LIKE THE ANSWER. 0 means observed and held, 1
 # means observed and not held, 2 means the state could not be observed. A caller
@@ -53,6 +61,8 @@
 set -u
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-pool-lib.sh
 . "$SCRIPT_DIR/fm-pool-lib.sh"
 # shellcheck source=bin/fm-landed-lib.sh
@@ -101,12 +111,13 @@ task_id_valid() {  # <id>
 
 print_record() {  # <expires-in>
   local expires=$1
-  printf 'reservation[1]{state,reason,task,project,trunk_ref,trunk_head,expires_in,verifier,evidence}:\n'
-  printf '  %s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
+  printf 'reservation[1]{state,reason,task,project,trunk_ref,trunk_head,expires_in,verifier,evidence_tier,evidence}:\n'
+  printf '  %s,%s,%s,%s,%s,%s,%s,%s,%s,%s\n' \
     "$FM_SLOT_RESERVATION_STATE" "$FM_SLOT_RESERVATION_REASON" \
     "$FM_SLOT_RESERVATION_TASK" "$FM_SLOT_RESERVATION_PROJECT" \
     "$FM_SLOT_RESERVATION_TRUNK_REF" "$FM_SLOT_RESERVATION_TRUNK_HEAD" \
-    "$expires" "$FM_SLOT_RESERVATION_VERIFIER" "$FM_SLOT_RESERVATION_EVIDENCE"
+    "$expires" "$FM_SLOT_RESERVATION_VERIFIER" \
+    "$FM_SLOT_RESERVATION_EVIDENCE_TIER" "$FM_SLOT_RESERVATION_EVIDENCE"
 }
 
 expires_in() {  # <now>
@@ -157,6 +168,48 @@ read_verdict() {  # <file>
   esac
 }
 
+# The per-pool selection lock, taken across `open`'s read-then-write window.
+#
+# WHY A LOCK AT ALL. Reading "no reservation is held" and then writing one are
+# two steps, and two concurrent opens both observing absent both install a
+# record - the second silently replacing the first with no refusal printed. The
+# contract is that a second request is REFUSED rather than queued, and a refusal
+# that only happens when opens are serialized by hand is not that contract.
+#
+# WHY THIS LOCK. bin/fm-pool-lib.sh already keys one lock per pool, and
+# bin/fm-spawn.sh already takes it around slot selection, which is the same
+# read-then-decide window over the same pool. A second lock namespace would
+# serialize opens against each other and against nothing else, so an open could
+# still land in the middle of a selection. Only `open` takes it: `claim` runs
+# from inside the guard while a spawn already holds it, so taking it there would
+# deadlock the very handover it exists to complete.
+RESERVATION_LOCK=
+RESERVATION_LOCK_HELD=0
+
+open_lock_release() {
+  [ "$RESERVATION_LOCK_HELD" = 1 ] || return 0
+  RESERVATION_LOCK_HELD=0
+  fm_lock_release "$RESERVATION_LOCK" || true
+}
+
+open_lock_acquire() {  # <pool-real>
+  local attempt=0 max=${FM_SLOT_RESERVATION_LOCK_POLLS:-1200}
+  RESERVATION_LOCK=$(fm_pool_state_path "$1" select .lock) \
+    || die "the pool's machine-private state directory could not be resolved or validated, so nothing was reserved"
+  # Armed before the first attempt so every exit path below - a die, a refusal,
+  # a signal - releases it, rather than every return statement remembering to.
+  trap open_lock_release EXIT
+  while [ "$attempt" -lt "$max" ]; do
+    if fm_lock_try_acquire "$RESERVATION_LOCK"; then
+      RESERVATION_LOCK_HELD=1
+      return 0
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  die "another spawn or reservation holds this pool's selection lock ($RESERVATION_LOCK, pid ${FM_LOCK_HELD_PID:-unknown}), so whether a slot is already reserved could not be observed"
+}
+
 cmd_open() {  # <task-id> ...
   local task='' project='' verdict='' ref='' ttl=$FM_SLOT_RESERVATION_TTL_DEFAULT
   local pool name head now file tmp
@@ -198,6 +251,7 @@ cmd_open() {  # <task-id> ...
   now=$(now_epoch)
   fm_slot_reservation_positive_int "$now" || die "the current time could not be read, so a reservation could not be given an expiry"
 
+  open_lock_acquire "$pool"
   fm_slot_reservation_read "$pool" "$now"
   if [ "$FM_SLOT_RESERVATION_STATE" = held ]; then
     if [ "$FM_SLOT_RESERVATION_TASK" = "$task" ]; then
@@ -238,6 +292,11 @@ cmd_open() {  # <task-id> ...
     printf 'opened=%s\n' "$now"
     printf 'ttl=%s\n' "$ttl"
     printf 'verifier=%s\n' "$VERDICT_VERIFIER"
+    # Always caller-asserted, because the FAIL observation arrived as a record
+    # this was HANDED. The verified tier is reachable only by resolving a
+    # declared trunk-checks verifier here, and firstmate declares none
+    # (bin/fm-verify.sh --list), so nothing in this file may write it today.
+    printf 'evidence_tier=%s\n' "$FM_SLOT_RESERVATION_TIER_CALLER_ASSERTED"
     printf 'evidence=%s\n' "$VERDICT_EVIDENCE"
   } > "$tmp" || die "could not write $tmp"
   mv -f "$tmp" "$file" || { rm -f "$tmp"; die "could not install $file"; }
@@ -246,6 +305,7 @@ cmd_open() {  # <task-id> ...
   print_record "$(expires_in "$now")"
   [ "$FM_SLOT_RESERVATION_STATE" = held ] \
     || die "the reservation was written but does not read back as held ($FM_SLOT_RESERVATION_STATE: $FM_SLOT_RESERVATION_DETAIL)"
+  open_lock_release
   return 0
 }
 

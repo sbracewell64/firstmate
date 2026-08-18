@@ -255,7 +255,7 @@ Only a mismatched identity with none of those present reads dead.
 
 ## The one slot a queued trunk repair may be held
 
-Verified 2026-08-18, against the shipped build and twelve defect builds, by `tests/fm-slot-reservation.test.sh`.
+Verified 2026-08-18, against the shipped build and seventeen defect builds, by `tests/fm-slot-reservation.test.sh`.
 
 A pool may carry one reservation, which withholds a single demonstrably empty slot from every dispatch except the one task it names.
 `bin/fm-slot-reservation-lib.sh` owns the record, the admission predicate, and the release conditions; `bin/fm-worktree-guard.sh` applies it; `bin/fm-pool-lib.sh` owns where a pool's machine-private state lives, so the reservation and the pool selection lock cannot disagree about which directory that is.
@@ -291,6 +291,14 @@ Declaring such a verifier is the way to tighten it.
 What keeps that proportionate is the bound above - a reservation grants no capacity and cannot preempt, so the worst an unjustified one does is withhold one empty slot, visibly, until it expires.
 Case (9) pins the admission, including that the record names the observation that admitted it.
 
+That disclosure is typed rather than left to prose, because a comment is not something a consumer can read.
+Every record and every printed result carries an `evidence_tier` from a closed vocabulary owned by `bin/fm-slot-reservation-lib.sh`: `caller-asserted` when the `FAIL` observation arrived as a record the caller handed over, and `verified` when a declared trunk-checks verifier produced it.
+Every admission today is `caller-asserted`, because there is no declared trunk-checks verifier for `open` to run itself, and nothing in `bin/fm-slot-reservation.sh` may write the other value.
+Declaring one upgrades a later admission into the stronger tier; it never changes what `caller-asserted` means, so records already written keep saying what they said.
+A record whose `evidence_tier` is missing or outside that vocabulary is `unreadable_record` like any other malformed field, never defaulted to either tier.
+`bin/fm-worktree-guard.sh` names the tier beside the admitting verifier in its refusal, so an operator denied a slot sees the strength of the evidence that denied them.
+Case (17) pins it, against a defect build in which `open` writes `verified`.
+
 ### How it ends, which is stated because state nobody ends becomes a permanent hold
 
 Three release conditions, any one of which ends it:
@@ -298,8 +306,20 @@ Three release conditions, any one of which ends it:
 | Condition | Reached when | Case |
 | --- | --- | --- |
 | claimed | its holder is handed the slot, which `select` consumes at that moment | (11) |
-| `landed_or_superseded` | the recorded ref no longer points at the recorded head, so the repair landed or something else ended the situation | (5) |
+| `landed_or_superseded` | some candidate ref carrying the trunk's name has a tip that differs from the recorded head and has that head as an ancestor, so the trunk advanced past the commit the reservation was opened against | (5), (15) |
 | `expired` | the TTL, default 7200 seconds and recorded in the record, has run out | (4) |
+
+The trunk is a candidate set and not one ref, and `bin/fm-landed-lib.sh` owns that set.
+`refs/heads/<name>` is the landing target only while something keeps fast-forwarding it: on a fetch-upstream/push-fork fleet, which is the shape firstmate itself has, the repair lands on the push target or on `origin/<name>` while the pool project's local branch sits exactly where it was.
+A release condition watching that one ref never fires there, and the reservation withholds an empty slot until its TTL runs out instead.
+Case (15) pins the forge-only advance, against a defect build that restores the single-ref comparison.
+
+The advance is tested by ancestry rather than by content containment, because the recorded head is the trunk commit the reservation was opened against and a trunk that advanced keeps it as an ancestor even when the repair itself landed squashed.
+
+Incompleteness kills the negative and not the positive.
+A proven advance stands whatever went unread, so the read releases on the first candidate that shows one.
+"No candidate advanced" is a negative claim over the whole universe of candidates, so a list that could not be enumerated at all, a list none of whose refs could be read, and an incomplete list with no advance found are all `trunk_unresolvable` rather than `held`.
+That is the same reasoning this guard already applies to an incomplete candidate list.
 
 The TTL is the unconditional backstop for the abandoned case and needs no other condition to hold: a dropped repair leaves a trunk that never moves, so without a clock the record would withhold a slot until a person noticed it.
 It is deliberately shorter than a repair might take, because expiry does not cancel a repair - it only stops withholding a slot for one - while a TTL long enough to cover every repair is long enough for an abandoned reservation to survive into a day nobody remembers opening it.
@@ -310,20 +330,45 @@ The clock is therefore checked before the trunk read, because a clock is readabl
 
 `absent` and `unreadable_record` are different facts and reach different branches with different output.
 An absent reservation is silent, because nothing is being withheld.
-A reservation whose state could not be observed - an unparseable record, or a trunk ref that could not be resolved - withholds nothing **and says so**, because a slot silently withheld on a record nobody can read is precisely the invisible permanent hold this design exists to avoid.
+A reservation whose state could not be observed - an unparseable record, or a trunk whose candidate refs could not be enumerated or read in full - withholds nothing **and says so**, because a slot silently withheld on a record nobody can read is precisely the invisible permanent hold this design exists to avoid.
 Case (6) pins the distinction against a defect build that collapses the could-not-observe branch into the same silence as absence.
 
 ### Non-vacuity
 
 Case (7) is the control: with no reservation in the pool, an ordinary dispatch still gets a free slot.
+Case (16) is the second control: a trunk that did not move still holds its reservation, so case (15) cannot be passing because every read releases.
 Case (12) is the acceptance sequence end to end - a full pool starts nothing, one slot frees, an unrelated dispatch reaches the pool first and is refused, and the queued repair takes the slot that freed.
+
+### Every property, and the defect build each is watched against
+
+| Case | Property | Defect build it is red against |
+| --- | --- | --- |
+| (1) | the holder is handed the reserved slot | the requester match removed |
+| (2) | another dispatch is refused it | the reservation never consulted |
+| (3) | no running lane is preempted for one | an occupied slot handed out |
+| (4) | an expired reservation releases | the TTL comparison disabled |
+| (5) | a superseded one releases | the ancestry test disabled |
+| (6) | unreadable is not the same fact as absent | the could-not-observe branch collapsed into silence |
+| (7) | control: with no reservation a normal dispatch still gets a free slot | the absent branch made a refusal |
+| (8) | one pool holds one reservation | the held-holder check removed |
+| (9) | only a `FAIL` observation admits one | every verdict accepted |
+| (10) | one slot is withheld, not the pool | the second empty slot hidden |
+| (11) | the holder taking the slot consumes it | the claim call removed |
+| (12) | end to end: a full pool starts nothing, and the next slot to free goes to the queued repair | the requesting task's identity discarded |
+| (13) | a pool state namespace this user does not control reads could-not-observe | the namespace ownership and mode check inverted |
+| (14) | an option with no value refuses, never loops | the arity check dropped |
+| (15) | a trunk that advanced at the forge with no local fast-forward releases | the single-ref release condition restored |
+| (16) | control: a trunk that did not move still holds | the difference test removed, so every read releases |
+| (17) | the admission reports evidence tier `caller-asserted`, never `verified` | `open` writes the `verified` tier instead |
 
 Every case is asserted green against the shipped build and red against its own defect build planted in the exact production bytes it depends on, and the suite closes on positive executed counts rather than an absence of failures:
 
 ```
-$ bash tests/fm-slot-reservation.test.sh | tail -3
+$ bash tests/fm-slot-reservation.test.sh | tail -4
 FM_TEST_CONTRACT suite=fm-slot-reservation.test.sh status=pass
-FM_SLOT_RESERVATION_COUNTS properties_green=12 defect_builds_red=12
+FM_SLOT_RESERVATION_COUNTS properties_green=17 defect_builds_red=17
+
+all fm-slot-reservation tests passed
 ```
 
 A plant whose target bytes are absent, or present more than once, fails its case outright, so a defect build that did not apply can never leave an ordinary green run reading as a watched red.

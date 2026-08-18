@@ -2,7 +2,9 @@
 # fm-slot-reservation-lib.sh - the single owner of the POOL SLOT RESERVATION
 # record: its format, what may open one, and how its state is computed on read.
 #
-# Source it; it defines and runs nothing on its own:
+# Source it AFTER bin/fm-pool-lib.sh and bin/fm-landed-lib.sh, which own the
+# record's location and the trunk's candidate ref set respectively; it defines
+# and runs nothing on its own:
 #   # shellcheck source=bin/fm-slot-reservation-lib.sh
 #   . "$SCRIPT_DIR/fm-slot-reservation-lib.sh"
 #
@@ -72,17 +74,40 @@
 #   cannot preempt, so the worst an unjustified one does is withhold one empty
 #   slot, visibly, for at most its TTL.
 #
+# HOW STRONG THAT ADMISSION WAS IS TYPED, NOT LEFT TO PROSE. The paragraph above
+# is a disclosure no consumer can read, so the strength of the evidence that
+# admitted a reservation is a field with a closed vocabulary
+# (FM_SLOT_RESERVATION_TIERS):
+#
+#   caller-asserted  the FAIL observation arrived as a record the caller handed
+#                    over. Every admission today is this one, because no
+#                    trunk-checks verifier is declared for `open` to run itself.
+#   verified         the FAIL observation was produced by a declared
+#                    trunk-checks verifier this resolved for itself.
+#
+# Declaring such a verifier UPGRADES an admission into the second tier; it never
+# changes what the first one means, so a record already carrying
+# caller-asserted keeps saying exactly what it said when it was written. A
+# record whose evidence_tier is missing or outside that vocabulary is
+# unreadable_record like any other malformed field, never quietly defaulted to
+# either tier: guessing which strength a record meant is the one thing a typed
+# tier exists to stop.
+#
 # THE RECORD. One file per pool, written atomically, keyed and located by
 # bin/fm-pool-lib.sh:
 #
 #   fm-slot-reservation.v1     exact first line; anything else is unreadable
 #   task=<id>                  the ONE task this slot is held for
 #   project=<pool-real-path>   the pool, re-checked against the key on read
-#   trunk_ref=<ref>            the ref whose tip was observed failing
+#   trunk_ref=<ref>            the ref whose tip was observed failing, kept for
+#                              provenance: it says which ref `open` read, not
+#                              which refs the release condition watches
 #   trunk_head=<sha>           that tip, resolved by `open`, never supplied
 #   opened=<epoch>             when the reservation was opened
 #   ttl=<seconds>              how long it may withhold a slot at the outside
 #   verifier=<name>            which bin/fm-verify.sh verifier observed FAIL
+#   evidence_tier=<tier>       how strong that observation was, from the closed
+#                              vocabulary above
 #   evidence=<ref>             that observation's evidence reference
 #
 # STATE IS COMPUTED, NEVER STORED. Every state below is derived from the record
@@ -93,17 +118,20 @@
 #   absent           no record. The ordinary case, and an observation in its own
 #                    right - it is not the same fact as a record that could not
 #                    be read, and the two never share a branch.
-#   held             the record is readable, its recorded trunk head is still
-#                    the tip of its recorded ref, and its TTL has not run out.
-#                    This is the only state that withholds a slot.
+#   held             the record is readable, its TTL has not run out, and the
+#                    trunk's candidate refs were enumerated COMPLETELY with none
+#                    of them advanced past the recorded head. This is the only
+#                    state that withholds a slot.
 #   released         the reservation is over and withholds nothing. Its reason
 #                    says which end it reached:
-#                      landed_or_superseded  the recorded head is no longer the
-#                                            ref's tip, so the trunk moved: the
+#                      landed_or_superseded  some candidate ref carrying the
+#                                            trunk's name has a tip that differs
+#                                            from the recorded head AND has that
+#                                            head as an ancestor, so the trunk
+#                                            advanced past the commit this
+#                                            reservation was opened against: the
 #                                            repair landed, or something else
-#                                            ended the situation. Either way the
-#                                            reservation is about a commit that
-#                                            is no longer the trunk.
+#                                            ended the situation.
 #                      expired               the TTL ran out. This is the
 #                                            unconditional backstop for the
 #                                            abandoned case, and it needs no
@@ -120,9 +148,31 @@
 #                                            malformed number, or a project that
 #                                            does not match the pool it is keyed
 #                                            under.
-#                      trunk_unresolvable    the recorded ref's tip could not be
-#                                            read, so whether the trunk moved is
-#                                            unknown.
+#                      trunk_unresolvable    the trunk's candidate refs could
+#                                            not be enumerated at all, or none
+#                                            of them could be read, or the list
+#                                            was INCOMPLETE and no advance was
+#                                            proven within it - so whether the
+#                                            trunk moved is unknown.
+#
+# WHY THE TRUNK IS A CANDIDATE SET AND NOT ONE REF. bin/fm-landed-lib.sh owns
+# that set, and owns it because refs/heads/<name> is the landing target only
+# while something keeps fast-forwarding it. On a fetch-upstream/push-fork fleet
+# the repair lands on the push target or on origin/<name> while the pool
+# project's local branch sits exactly where it was, so a release condition
+# watching that one ref never fires and the reservation withholds an empty slot
+# until its TTL runs out instead. The advance is tested by ANCESTRY rather than
+# by content containment: the recorded head is the trunk commit the reservation
+# was opened against, and a trunk that advanced keeps it as an ancestor even
+# when the repair itself landed squashed.
+#
+# INCOMPLETENESS KILLS THE NEGATIVE, NOT THE POSITIVE. A proven advance stands
+# whatever went unread, so it releases on the first candidate that shows one.
+# But "no candidate advanced" is a negative claim over the whole universe of
+# candidates, and a list that could not be fully enumerated is not that
+# universe, so an incomplete list with no advance found is could-not-observe
+# rather than held. That is the same reasoning bin/fm-worktree-guard.sh already
+# applies to an incomplete candidate list.
 #
 # WHAT A CONSUMER MUST DO WITH unobservable, AND WHY. It must not withhold a
 # slot, and it must say so out loud. Withholding on a record nobody can read is
@@ -134,8 +184,8 @@
 # even when nothing else about it can be observed.
 #
 # RELEASE IS THEREFORE THREE THINGS, ALL STATED: the holder claims it, the trunk
-# moves past the commit it names, or its TTL runs out. No reservation survives
-# all three.
+# advances past the commit it names on any of its candidate refs, or its TTL
+# runs out. No reservation survives all three.
 set -u
 
 # The default TTL, in seconds. Two hours, chosen against the failure it bounds
@@ -149,6 +199,25 @@ FM_SLOT_RESERVATION_TTL_DEFAULT=7200
 
 FM_SLOT_RESERVATION_VERSION=fm-slot-reservation.v1
 
+# The closed evidence-tier vocabulary described in the header. A later declared
+# trunk-checks verifier admits into FM_SLOT_RESERVATION_TIER_VERIFIED; nothing
+# may redefine what FM_SLOT_RESERVATION_TIER_CALLER_ASSERTED means, because
+# records already written carry it.
+# shellcheck disable=SC2034 # Contract constants consumed by sourcing callers.
+FM_SLOT_RESERVATION_TIER_CALLER_ASSERTED=caller-asserted
+# shellcheck disable=SC2034 # Contract constants consumed by sourcing callers.
+FM_SLOT_RESERVATION_TIER_VERIFIED=verified
+
+# Whether <value> is one of the tiers above. There is no default: a record that
+# does not name its tier has not said how strong its admission was, and
+# inventing an answer is exactly what the field exists to prevent.
+fm_slot_reservation_tier_valid() {  # <value>
+  case "${1:-}" in
+    "$FM_SLOT_RESERVATION_TIER_CALLER_ASSERTED"|"$FM_SLOT_RESERVATION_TIER_VERIFIED") return 0 ;;
+  esac
+  return 1
+}
+
 # Results, set by fm_slot_reservation_read:
 #   FM_SLOT_RESERVATION_STATE   absent | held | released | unobservable
 #   FM_SLOT_RESERVATION_REASON  '' | landed_or_superseded | expired
@@ -156,7 +225,8 @@ FM_SLOT_RESERVATION_VERSION=fm-slot-reservation.v1
 #   FM_SLOT_RESERVATION_DETAIL  one short human phrase, always set
 #   FM_SLOT_RESERVATION_TASK    the holder, when the record parsed
 #   FM_SLOT_RESERVATION_PATH    the record's path, when it could be resolved
-# plus FM_SLOT_RESERVATION_{PROJECT,TRUNK_REF,TRUNK_HEAD,OPENED,TTL,VERIFIER,EVIDENCE}.
+# plus FM_SLOT_RESERVATION_{PROJECT,TRUNK_REF,TRUNK_HEAD,OPENED,TTL,VERIFIER,
+#                           EVIDENCE_TIER,EVIDENCE}.
 # shellcheck disable=SC2034 # Out-variables consumed by sourcing callers.
 fm_slot_reservation_reset() {
   FM_SLOT_RESERVATION_STATE=absent
@@ -170,6 +240,7 @@ fm_slot_reservation_reset() {
   FM_SLOT_RESERVATION_OPENED=
   FM_SLOT_RESERVATION_TTL=
   FM_SLOT_RESERVATION_VERIFIER=
+  FM_SLOT_RESERVATION_EVIDENCE_TIER=
   FM_SLOT_RESERVATION_EVIDENCE=
 }
 
@@ -208,10 +279,21 @@ fm_slot_reservation_positive_int() {  # <value>
   [ "$1" -gt 0 ]
 }
 
-# Whether <value> is the shape git prints for a resolved object name.
+# Whether <value> is the shape git prints for a FULL resolved object name: 40
+# hex characters under SHA-1, 64 under SHA-256.
+#
+# A full name rather than any abbreviation, because the recorded head is
+# compared for exact equality against `git rev-parse` output. An abbreviation
+# would parse as usable and then never equal any tip, so a hand-edited short
+# head would read as a trunk advance that did not happen and silently drop the
+# reservation. A head this cannot use is unreadable_record, which withholds
+# nothing and says why.
 fm_slot_reservation_sha_shape() {  # <value>
   local value=${1:-}
-  [ "${#value}" -ge 7 ] || return 1
+  case "${#value}" in
+    40|64) ;;
+    *) return 1 ;;
+  esac
   case "$value" in
     *[!0-9a-f]*) return 1 ;;
   esac
@@ -232,7 +314,8 @@ fm_slot_reservation_unobservable() {  # <reason> <detail>
 # shellcheck disable=SC2034 # Out-variables consumed by sourcing callers.
 fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   local pool=$1 now=$2 file task project ref head opened ttl verifier evidence
-  local version current age
+  local version age tier
+  local name refs status candidate tip incomplete=0 observed=0
   fm_slot_reservation_reset
   if ! file=$(fm_slot_reservation_path "$pool"); then
     fm_slot_reservation_unobservable unreadable_record \
@@ -262,6 +345,7 @@ fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   opened=$(fm_slot_reservation_field "$file" opened) || opened=
   ttl=$(fm_slot_reservation_field "$file" ttl) || ttl=
   verifier=$(fm_slot_reservation_field "$file" verifier) || verifier=
+  tier=$(fm_slot_reservation_field "$file" evidence_tier) || tier=
   evidence=$(fm_slot_reservation_field "$file" evidence) || evidence=
   if [ -z "$task" ] || [ -z "$project" ] || [ -z "$ref" ]; then
     fm_slot_reservation_unobservable unreadable_record \
@@ -271,6 +355,11 @@ fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   if ! fm_slot_reservation_sha_shape "$head"; then
     fm_slot_reservation_unobservable unreadable_record \
       "$file records no usable trunk_head"
+    return 0
+  fi
+  if ! fm_slot_reservation_tier_valid "$tier"; then
+    fm_slot_reservation_unobservable unreadable_record \
+      "$file records no evidence_tier in the closed vocabulary ($FM_SLOT_RESERVATION_TIER_CALLER_ASSERTED, $FM_SLOT_RESERVATION_TIER_VERIFIED)"
     return 0
   fi
   if ! fm_slot_reservation_positive_int "$opened" || ! fm_slot_reservation_positive_int "$ttl"; then
@@ -293,6 +382,7 @@ fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   FM_SLOT_RESERVATION_OPENED=$opened
   FM_SLOT_RESERVATION_TTL=$ttl
   FM_SLOT_RESERVATION_VERIFIER=$verifier
+  FM_SLOT_RESERVATION_EVIDENCE_TIER=$tier
   FM_SLOT_RESERVATION_EVIDENCE=$evidence
   # The clock first, deliberately. It is the one condition that is readable
   # whatever else is broken, so a record past its TTL releases even when the
@@ -310,19 +400,62 @@ fm_slot_reservation_read() {  # <pool-real> <now-epoch>
     FM_SLOT_RESERVATION_DETAIL="opened ${age}s ago, past its ${ttl}s limit"
     return 0
   fi
-  current=$(git --no-optional-locks -C "$pool" rev-parse --verify --quiet "$ref" 2>/dev/null) || current=
-  if [ -z "$current" ]; then
+  # The trunk is the candidate set bin/fm-landed-lib.sh owns, not the single ref
+  # the record names for provenance. See the header: refs/heads/<name> is the
+  # landing target only while something keeps fast-forwarding it.
+  #
+  # Both non-zero statuses refuse together: "no such branch" and "the branches
+  # could not be read" are different facts, and neither of them enumerates a
+  # universe this could take a negative over.
+  if ! name=$(fm_landed_default_branch_name "$pool"); then
     fm_slot_reservation_unobservable trunk_unresolvable \
-      "$ref could not be resolved in $pool, so whether the trunk moved past $head is unknown"
+      "$pool names no readable default branch, so whether the trunk moved past $head is unknown"
     return 0
   fi
-  if [ "$current" != "$head" ]; then
-    FM_SLOT_RESERVATION_STATE=released
-    FM_SLOT_RESERVATION_REASON=landed_or_superseded
-    FM_SLOT_RESERVATION_DETAIL="$ref has moved from $head to $current"
+  refs=$(fm_landed_candidate_refs "$pool" "$name")
+  status=$?
+  # 0 complete with candidates, 1 a PROVEN empty universe, 2 INCOMPLETE and the
+  # printed list is short. Only the third can still carry candidates worth
+  # reading, and reading them can still prove an advance.
+  [ "$status" -ne 2 ] || incomplete=1
+  while IFS= read -r candidate; do
+    [ -n "$candidate" ] || continue
+    tip=$(git --no-optional-locks -C "$pool" rev-parse --verify --quiet "$candidate" 2>/dev/null) || tip=
+    if [ -z "$tip" ]; then
+      incomplete=1
+      continue
+    fi
+    observed=$((observed + 1))
+    [ "$tip" != "$head" ] || continue
+    git --no-optional-locks -C "$pool" merge-base --is-ancestor "$head" "$tip" 2>/dev/null
+    status=$?
+    case "$status" in
+      0)
+        FM_SLOT_RESERVATION_STATE=released
+        FM_SLOT_RESERVATION_REASON=landed_or_superseded
+        FM_SLOT_RESERVATION_DETAIL="$candidate has advanced from $head to $tip"
+        return 0
+        ;;
+      1) : ;;
+      *) incomplete=1 ;;
+    esac
+  done <<EOF
+$refs
+EOF
+  # A positive stands on its own, so the loop above returns the moment one ref
+  # proves an advance. Everything from here is the NEGATIVE, and a negative is
+  # only as good as the universe it was taken over.
+  if [ "$observed" -eq 0 ]; then
+    fm_slot_reservation_unobservable trunk_unresolvable \
+      "no ref carrying $name could be read in $pool, so whether the trunk moved past $head is unknown"
+    return 0
+  fi
+  if [ "$incomplete" -ne 0 ]; then
+    fm_slot_reservation_unobservable trunk_unresolvable \
+      "$pool's refs carrying $name could not be read in full, so an advance past $head cannot be ruled out"
     return 0
   fi
   FM_SLOT_RESERVATION_STATE=held
-  FM_SLOT_RESERVATION_DETAIL="held for $task against $ref at $head"
+  FM_SLOT_RESERVATION_DETAIL="held for $task against $name at $head"
   return 0
 }

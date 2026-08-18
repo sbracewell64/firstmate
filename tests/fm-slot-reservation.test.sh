@@ -43,6 +43,13 @@
 #  (13) a pool state namespace this user does           the namespace ownership
 #       not control reads could-not-observe             and mode check inverted
 #  (14) an option with no value refuses, never loops   the arity check dropped
+#  (15) a trunk that advanced at the forge with no      the single-ref release
+#       local fast-forward releases the reservation      condition restored
+#  (16) NON-VACUITY CONTROL: a trunk that did not       the difference test
+#       move still holds the reservation                 removed, so every read
+#                                                        releases
+#  (17) the admission reports evidence tier             open writes the verified
+#       caller-asserted, never verified                  tier instead
 #
 # Every plant below passes the production bytes it replaces as single-quoted
 # literals, which is the point of the quoting: those bytes must reach `plant`
@@ -347,9 +354,9 @@ prop_superseded_reservation_releases() {  # <bin-root> <label>
 }
 
 test_a_reservation_whose_trunk_moved_on_releases() {
-  watch_red prop_superseded_reservation_releases trunk-head-bound fm-slot-reservation-lib.sh \
-    '  if [ "$current" != "$head" ]; then' \
-    '  if [ "$current" != "$current" ]; then'
+  watch_red prop_superseded_reservation_releases trunk-advance-bound fm-slot-reservation-lib.sh \
+    '    git --no-optional-locks -C "$pool" merge-base --is-ancestor "$head" "$tip" 2>/dev/null' \
+    '    false "$head" "$tip" 2>/dev/null'
   pass "(5) a reservation whose trunk moved past the commit it names releases and holds no slot"
 }
 
@@ -678,6 +685,118 @@ test_an_option_with_no_value_refuses_instead_of_looping() {
   pass "(14) an option given with no value refuses within a bound instead of looping on it forever"
 }
 
+# --- (15) a trunk that advanced at the forge releases the reservation --------
+
+# Advance <ref> in <proj> one commit past its current tip WITHOUT touching any
+# branch that is checked out: the new commit carries the same tree, so this is
+# the shape of a merge landing at the forge and being fetched, not of local work.
+advance_ref_past_head() {  # <proj> <ref>
+  local proj=$1 ref=$2 tree parent commit
+  parent=$(git -C "$proj" rev-parse HEAD) || return 1
+  tree=$(git -C "$proj" rev-parse 'HEAD^{tree}') || return 1
+  commit=$(git -C "$proj" commit-tree "$tree" -p "$parent" -m "landed at the forge") || return 1
+  git -C "$proj" update-ref "$ref" "$commit" || return 1
+  printf '%s\n' "$commit"
+}
+
+# bin/fm-landed-lib.sh documents the fetch-upstream/push-fork shape this pins:
+# the repair merges at the forge, the landing ref moves, and nobody fast-forwards
+# the pool project's local branch. Watching refs/heads/<name> alone leaves the
+# reservation withholding an empty slot until its TTL runs out, which is the
+# release condition being inert in exactly the fleet shape firstmate itself has.
+prop_forge_advance_releases() {  # <bin-root> <label>
+  local root=$1 label=$2 proj json local_before local_after state
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  json=$(pool_json "$proj" 1)
+  reserve "$root" trunk-repair "$proj" || { echo "$label: could not open the reservation" >&2; return 1; }
+  local_before=$(git -C "$proj" rev-parse refs/heads/main)
+  advance_ref_past_head "$proj" refs/remotes/origin/main >/dev/null \
+    || { echo "$label: could not advance the landing ref" >&2; return 1; }
+  local_after=$(git -C "$proj" rev-parse refs/heads/main)
+  [ "$local_before" = "$local_after" ] \
+    || { echo "$label: the fixture moved the local branch, so it does not test a forge-only advance" >&2; return 1; }
+  state=$(res_state "$root" "$proj")
+  [ "$state" = released ] \
+    || { echo "$label: a trunk that advanced at the forge reads '$state', so the slot is withheld until the TTL runs out" >&2; return 1; }
+  guard "$root" select "$proj" "$json" --for unrelated-work
+  [ "$GUARD_RC" -eq 0 ] \
+    || { echo "$label: the released reservation still withheld the slot (rc=$GUARD_RC): $GUARD_ERR" >&2; return 1; }
+  return 0
+}
+
+test_a_trunk_that_advanced_at_the_forge_releases_the_reservation() {
+  watch_red prop_forge_advance_releases forge-advance fm-slot-reservation-lib.sh \
+    '  refs=$(fm_landed_candidate_refs "$pool" "$name")
+  status=$?' \
+    '  refs=$ref
+  status=0'
+  pass "(15) a trunk that advanced at the forge with no local fast-forward releases the reservation instead of waiting out its TTL"
+}
+
+# --- (16) NON-VACUITY CONTROL: an unmoved trunk still holds -------------------
+
+prop_unmoved_trunk_still_holds() {  # <bin-root> <label>
+  local root=$1 label=$2 proj json state
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  json=$(pool_json "$proj" 1)
+  # `open` refuses a record that does not read back as held, so a read that
+  # releases an unmoved trunk is caught here as well as at the state below.
+  reserve "$root" trunk-repair "$proj" \
+    || { echo "$label: a reservation against an unmoved trunk could not be opened, so the read did not hold it" >&2; return 1; }
+  state=$(res_state "$root" "$proj")
+  [ "$state" = held ] \
+    || { echo "$label: a trunk nothing moved reads '$state', so case (15) proves nothing about advances" >&2; return 1; }
+  guard "$root" select "$proj" "$json" --for unrelated-work
+  [ "$GUARD_RC" -ne 0 ] \
+    || { echo "$label: an unmoved trunk let unrelated work take the reserved slot ('$GUARD_OUT')" >&2; return 1; }
+  return 0
+}
+
+test_control_an_unmoved_trunk_still_holds_the_reservation() {
+  watch_red prop_unmoved_trunk_still_holds unmoved-trunk-control fm-slot-reservation-lib.sh \
+    '    [ "$tip" != "$head" ] || continue' \
+    '    [ "$tip" = "$tip" ] || continue'
+  pass "(16) control: a trunk that did not move still holds the reservation, so (15) does not pass because everything releases"
+}
+
+# --- (17) the admission says how strong its evidence was ---------------------
+
+# Admission today rests on a bin/fm-verify.sh record the CALLER supplies, which
+# is a bounded exposure rather than a closed one. The condition on accepting it
+# is that a caller-asserted admission must never read as a verified one, so the
+# tier is a field a consumer can read rather than prose in a header.
+res_evidence_tier() {  # <bin-root> <proj>
+  "$1/fm-slot-reservation.sh" status --project "$2" 2>/dev/null \
+    | sed -n '2p' | cut -d, -f9 | tr -d '[:space:]'
+}
+
+prop_admission_reports_its_evidence_tier() {  # <bin-root> <label>
+  local root=$1 label=$2 proj tier header
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  reserve "$root" trunk-repair "$proj" || { echo "$label: could not open the reservation" >&2; return 1; }
+  header=$("$root/fm-slot-reservation.sh" status --project "$proj" 2>/dev/null | sed -n '1p')
+  case "$header" in
+    *evidence_tier*) ;;
+    *) echo "$label: the printed record names no evidence_tier field: $header" >&2; return 1 ;;
+  esac
+  tier=$(res_evidence_tier "$root" "$proj")
+  [ "$tier" != verified ] \
+    || { echo "$label: an admission built from a caller-supplied verdict reports 'verified'" >&2; return 1; }
+  [ "$tier" = caller-asserted ] \
+    || { echo "$label: the admission reports evidence tier '$tier', not caller-asserted" >&2; return 1; }
+  return 0
+}
+
+test_an_admission_reports_the_strength_of_its_evidence() {
+  watch_red prop_admission_reports_its_evidence_tier evidence-tier fm-slot-reservation.sh \
+    '    printf '"'"'evidence_tier=%s\n'"'"' "$FM_SLOT_RESERVATION_TIER_CALLER_ASSERTED"' \
+    '    printf '"'"'evidence_tier=%s\n'"'"' "$FM_SLOT_RESERVATION_TIER_VERIFIED"'
+  pass "(17) an admission built from a caller-supplied verdict reports evidence tier caller-asserted, never verified"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_a_queued_trunk_repair_is_handed_the_next_free_slot
@@ -694,6 +813,9 @@ test_the_holder_taking_the_slot_consumes_the_reservation
 test_end_to_end_the_next_slot_to_free_goes_to_the_queued_repair
 test_a_pool_state_namespace_this_user_does_not_control_is_could_not_observe
 test_an_option_with_no_value_refuses_instead_of_looping
+test_a_trunk_that_advanced_at_the_forge_releases_the_reservation
+test_control_an_unmoved_trunk_still_holds_the_reservation
+test_an_admission_reports_the_strength_of_its_evidence
 
 fm_test_contract "$0" || exit 1
 
