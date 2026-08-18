@@ -19,7 +19,7 @@ The vocabulary of this column follows the platform's Register 3 precedent.
 
 ## Rows
 
-Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation`, ruled on 2026-08-18 when its second sense was built.
+Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation`, ruled on 2026-08-18 when its second sense was built, and any row that states its own later ruling date.
 
 ### `axi`
 
@@ -180,6 +180,29 @@ Do not rename `reservations`, `reservation_pressure`, or any policy key, and do 
 Nothing in the slot sense is renamed either: `FM_SLOT_RESERVATION_*`, `fm_slot_reservation_*`, `reservation-<key>.state`, and the `reservation[1]{...}` record already carry `slot` in their own names or paths.
 
 **Where it bites:** [`AGENTS.md`](../AGENTS.md) section 7; the slot-reservation rows of [`docs/scripts.md`](scripts.md); the slot-reservation section of [`docs/verification/worktree-allocation.md`](verification/worktree-allocation.md); the admission paragraph of [`docs/architecture.md`](architecture.md); the operator-facing refusals of [`bin/fm-worktree-guard.sh`](../bin/fm-worktree-guard.sh) and [`bin/fm-slot-reservation.sh`](../bin/fm-slot-reservation.sh).
+
+### `FM_OUTBOUND_TIMEOUT`
+
+Ruled 2026-08-18, on the review finding that surfaced the collision rather than on the CFVC-16 census.
+
+| | |
+|---|---|
+| **Disposition** | DISSOLVED BY SPLIT |
+| **Module sense** | seconds allowed for **one** forge or git observation, owned by [`bin/fm-outbound-artifact.sh`](../bin/fm-outbound-artifact.sh) |
+| **Bootstrap sense** | seconds allowed for the **whole** session-start sweep, owned by [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh) |
+
+One name carried a per-observation timeout and a whole-run deadline at once, and the two cannot be reconciled by qualifying the prose at each use: a variable name *is* its use, and every home that set it moved both meanings together.
+At the shared default of 15 a single slow probe could spend the entire sweep budget, and the terminated sweep discarded defects it had already found in favour of `OUTBOUND: sweep unevaluable`; raising the value to give the sweep room widened every individual probe by the same factor, so no single value existed that was correct for both.
+
+The whole-sweep deadline is now `FM_OUTBOUND_BOOTSTRAP_DEADLINE` (default 60).
+`FM_OUTBOUND_TIMEOUT` (default 15) keeps the per-observation sense only, and the module header says so at the definition rather than at each call.
+The bootstrap default must remain several probe timeouts wide, because the relationship between the two - a run is many observations - is the reason they are separate names.
+
+**Retirement of the split.**
+The split retires when the session-start relay no longer runs the sweep in the foreground - that is, once the outbound sweep is driven by the persistent poller rather than by `bin/fm-bootstrap.sh` - at which point there is no whole-run deadline for bootstrap to own and `FM_OUTBOUND_BOOTSTRAP_DEADLINE` is removed rather than renamed.
+Until then both names are live and neither may be read as the other.
+
+**Where it bites:** the environment table in [`bin/fm-outbound-artifact.sh`](../bin/fm-outbound-artifact.sh); `outbound_artifact_report` in [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh); the Browser Sol control venue section of [`configuration.md`](configuration.md).
 
 ## Maintaining this file
 

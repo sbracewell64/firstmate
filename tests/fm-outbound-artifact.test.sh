@@ -480,6 +480,27 @@ test_inventory_conflicting_lifecycle_is_could_not_observe() {
   pass "lifecycle conflict: completed and open records are could-not-observe"
 }
 
+test_inventory_unparsable_lifecycle_row_is_unobserved_not_a_conflict() {
+  # TWO DIFFERENT COULD-NOT-OBSERVE REASONS, KEPT APART. The candidate match is a
+  # substring search while the state extraction is anchored to the start of the
+  # line, so an indented row is a candidate whose state cannot be parsed. That is
+  # "nothing could be read", not "the records disagree": told there is a
+  # conflict, a reader goes looking for a second row that contradicts this one
+  # and there is no second row.
+  local dir out rc
+  dir=$(inventory_case cinv-indented indented-row)
+  printf -- '  - [x] indented-row - finished but written indented (repo: demo) (kind: ship)\n' \
+    > "$dir/home/data/backlog.md"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "unparsable lifecycle: expected could-not-observe, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WORK_STATE_UNOBSERVED' \
+    || fail "unparsable lifecycle: an unreadable state was not named as unobserved: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WORK_LIFECYCLE_CONFLICT' \
+    && fail "unparsable lifecycle: one unreadable row was reported as a disagreement: $out"
+  pass "unparsable lifecycle: an unreadable row is unobserved, never a conflict"
+}
+
 test_inventory_non_ship_work_is_not_a_defect() {
   local dir out rc
   # An investigation produces a report and never a pull request, so its branch
@@ -1051,6 +1072,46 @@ SH
   pass "dedupe observation: emission fails closed unless absence is conclusive"
 }
 
+test_reconcile_reports_the_emit_status_it_produced() {
+  # THE STATUS MUST COME FROM THE STAGE THAT PRODUCED IT. The emit refuses here
+  # with could-not-observe (4) after exhausting its transport attempts. If
+  # reconcile reads its status from the wrong place, that refusal is discarded
+  # and the still-unsatisfied row is reported by the following sweep as a proven
+  # defect (3) - the exact 3-versus-4 collapse this command exists to refuse,
+  # reached through its own plumbing rather than through an observation.
+  local dir out rc
+  dir=$(new_case cadence-emit-status)
+  printf '99\n' > "$dir/forge/fail_remaining"
+  out=$(run_ob "$dir" reconcile 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "cadence: reconcile reported $rc for an emit that could not observe: $out"
+  printf '%s' "$out" | grep -q 'transport failed after' \
+    || fail "cadence: reconcile discarded the emit's own refusal: $out"
+  pass "cadence: reconcile reports the emit's own verdict, never the next sweep's"
+}
+
+test_reconcile_releases_every_emit_lock() {
+  # cmd_emit takes a per-request lock. Under reconcile it is called once per
+  # waiting item in ONE process, so a lock released only at process exit leaves
+  # every item but the last holding its lock forever. Recovery still works - a
+  # lock held by a dead pid is stolen - so the symptom is silent accumulation
+  # rather than a hang, which is why it is asserted rather than trusted. Two
+  # waiting items, because one cannot show the difference.
+  local dir out rc leftover posts
+  dir=$(new_case cadence-locks)
+  jq '.backlog.records += [(.backlog.records[0] | .order = 3 | .id = "waiting-item-two")]' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  out=$(run_ob "$dir" reconcile 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "cadence locks: reconcile did not satisfy both waits, exit $rc: $out"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 2 ] || fail "cadence locks: reconcile posted $posts requests, expected two"
+  leftover=$(find "$dir/home/data/outbound-artifacts" -maxdepth 1 -name '.*.lock' 2>/dev/null | wc -l)
+  [ "$leftover" -eq 0 ] \
+    || fail "cadence locks: reconcile left $leftover emit lock(s) behind"
+  pass "cadence locks: every emit releases its own lock rather than waiting for process exit"
+}
+
 test_reconcile_emits_sol_control_only() {
   local dir out rc posts
   dir=$(new_case cadence)
@@ -1422,6 +1483,17 @@ test_request_requires_readable_correlation() {
   [ "$rc" -eq 3 ] || fail "correlation: emit did not refuse a foreign keyed record: $out"
   [ "$(jq -r '.identity.item' "$record")" = "another-item" ] \
     || fail "correlation: refused emit overwrote the foreign keyed record"
+  # The SWEEP has to keep the same two answers apart that emit and ruling do. A
+  # record that is perfectly readable and says it belongs to another request is
+  # a correlation defect with a known repair, not an unreadable file; reported
+  # as unreadable it sends the operator looking for corruption or permissions
+  # that are not there.
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "correlation: sweep did not report a foreign keyed record as a defect, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_IDENTITY_REFUSED' \
+    || fail "correlation: sweep did not name the foreign keyed record as an identity refusal: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
+    && fail "correlation: sweep reported a readable foreign record as unreadable: $out"
   # A MISMATCH is not could-not-observe. This record is perfectly readable and
   # says plainly that it belongs to another request, which is a correlation
   # defect (exit 3) and not a failure to observe (exit 4). The distinction is not
@@ -1877,6 +1949,8 @@ test_crash_recovery_adopts_its_own_request
 test_ambiguous_post_is_observed_before_retry
 test_dedupe_observation_failure_refuses_to_post
 test_reconcile_emits_sol_control_only
+test_reconcile_reports_the_emit_status_it_produced
+test_reconcile_releases_every_emit_lock
 test_ruling_wakes_the_exact_item
 test_quoted_prior_verdict_makes_the_ruling_ambiguous
 test_single_verdict_is_read_and_no_verdict_refuses
@@ -1913,6 +1987,7 @@ test_forge_observed_head_need_not_exist_locally
 test_forge_head_provenance_survives_record_lifecycle
 test_inventory_unfinished_work_is_not_a_defect
 test_inventory_conflicting_lifecycle_is_could_not_observe
+test_inventory_unparsable_lifecycle_row_is_unobserved_not_a_conflict
 test_inventory_non_ship_work_is_not_a_defect
 test_inventory_reads_the_rotated_archive
 test_inventory_unreadable_archive_is_could_not_observe

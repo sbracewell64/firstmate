@@ -320,12 +320,33 @@ test_outbound_library_stays_enrolled() {
 }
 
 test_repository_has_no_dead_predicates_under_the_control() {
+  # This asserts the SAME outcome the CI invariants job asserts by running the
+  # same command with no arguments over the real repository. Accepting exit 4
+  # here as well as 0 would have made the test pass while CI went red, and would
+  # have let the repository drift into a state where no predicate resolves at
+  # all - which is what the control's own header says must never read as clean.
   local out rc
   out=$("$CHECK" 2>&1); rc=$?
-  [ "$rc" -ne 3 ] || fail "the real repository has an unconsulted guard: $out"
-  [ "$rc" -eq 0 ] || [ "$rc" -eq 4 ] \
+  [ "$rc" -ne 3 ] \
+    || fail "the real repository has an unconsulted guard: $out"
+  [ "$rc" -ne 4 ] \
+    || fail "the real repository has an unresolved predicate; that is not a pass: $out"
+  [ "$rc" -eq 0 ] \
     || fail "the real repository produced an unexpected verdict, exit $rc: $out"
-  pass "the repository has no predicate proven dead under observable syntax"
+  printf '%s' "$out" | grep -q 'fm-dead-predicate-check: ok ' \
+    || fail "the repository run did not report its alive/could-not-observe counts: $out"
+  pass "the real repository passes the control the CI invariants job runs"
+}
+
+test_control_is_wired_into_the_automatic_check_path() {
+  # The control exists to catch a guard nothing consults. A control that itself
+  # depends on somebody choosing to run it is that same defect one level up, so
+  # its presence on the automatic path is pinned rather than assumed.
+  local workflow="$ROOT/.github/workflows/ci.yml"
+  [ -r "$workflow" ] || fail "the CI workflow is unreadable, so its wiring cannot be checked"
+  grep -qE '^[[:space:]]*run:[[:space:]]*bin/fm-dead-predicate-check\.sh[[:space:]]*$' "$workflow" \
+    || fail "bin/fm-dead-predicate-check.sh is not run by the CI workflow; nothing invokes the control automatically"
+  pass "the control runs on the automatic repo-wide check path, not only by hand"
 }
 
 test_call_from_unenrolled_consumer_counts() {
@@ -488,6 +509,7 @@ test_adjacent_mark_keeps_one_and_still_reports_it
 test_mark_must_be_adjacent_to_the_definition
 test_no_enrolled_file_is_could_not_observe
 test_outbound_library_stays_enrolled
+test_control_is_wired_into_the_automatic_check_path
 test_repository_has_no_dead_predicates_under_the_control
 
 printf '\nall fm-dead-predicate-check tests passed\n'

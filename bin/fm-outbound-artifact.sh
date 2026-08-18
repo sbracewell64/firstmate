@@ -73,7 +73,14 @@
 #                               (default 1; 0 disables sleeping)
 #   FM_OUTBOUND_MAX_PROBES      cap on forge probes per sweep (default 40).
 #                               Reaching it is REPORTED, never silently applied.
-#   FM_OUTBOUND_TIMEOUT         seconds per forge or git observation (default 15)
+#   FM_OUTBOUND_TIMEOUT         seconds per forge or git observation (default 15).
+#                               ONE observation, never a whole sweep. A caller
+#                               that needs to bound the whole run owns its own
+#                               deadline under its own name - see
+#                               FM_OUTBOUND_BOOTSTRAP_DEADLINE in
+#                               bin/fm-bootstrap.sh - because a single name
+#                               cannot mean both without one of them widening
+#                               the other.
 # fail-closed-predicates: enforced
 set -u
 
@@ -118,8 +125,18 @@ SCRATCH=$(mktemp -d "${TMPDIR:-/tmp}/fm-outbound.XXXXXX") || die "cannot create 
 PROBE_COUNT="$SCRATCH/probes"
 PROBE_CAPPED="$SCRATCH/capped"
 EMIT_LOCK=
-cleanup() {
+
+# The lock is released HERE rather than only from the EXIT trap. `reconcile`
+# calls cmd_emit once per waiting item in one process, so a lock released only
+# at process exit means each emit overwrites the previous EMIT_LOCK and every
+# one of them outlives the run as a stale lock directory.
+release_emit_lock() {
   [ -z "$EMIT_LOCK" ] || fm_lock_release "$EMIT_LOCK"
+  EMIT_LOCK=
+}
+
+cleanup() {
+  release_emit_lock
   rm -rf "$SCRATCH" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -138,6 +155,16 @@ probe_budget() {
 }
 
 probes_capped() { [ -s "$PROBE_CAPPED" ]; }
+
+# The budget is reset at each PHASE BOUNDARY rather than divided in advance,
+# because `reconcile` runs poll, sweep, emit and sweep again in one process and
+# the phases have no fixed ratio to divide by. A cap that bounds this phase is a
+# cap; a cap that a previous phase can spend on this one's behalf is a race, and
+# it reports the later sweep as capped for work it never did.
+probe_budget_reset() {
+  printf '0' > "$PROBE_COUNT"
+  : > "$PROBE_CAPPED"
+}
 
 # --- durable records ---------------------------------------------------------
 
@@ -563,6 +590,13 @@ finished_work_evidence() {  # <project> <item>
     | sed -n 's/^- \[x\] .*/completed/p; s/^- \[ \] .*/unfinished/p' | sort -u)
   count=$(printf '%s\n' "$states" | grep -c . || true)
   case $count in ''|*[!0-9]*) count=0 ;; esac
+  # Two different could-not-observe reasons, kept apart. Zero parsed states means
+  # the candidate lines matched the row token but none of them was a lifecycle
+  # row this parser can read - an indented row, or one quoted mid-line - so
+  # nothing was observed. Two or more means rows WERE read and contradict each
+  # other. Reporting the first as a conflict sends the reader looking for a
+  # disagreement that does not exist.
+  [ "$count" -ne 0 ] || return 2
   # Disagreeing lifecycle records are ambiguous identity, not a menu to choose from.
   [ "$count" -eq 1 ] || return 3
   [ "$states" = completed ] || return 2
@@ -705,7 +739,9 @@ row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <ve
 sweep() {
   local rows count i rec verdict gate tier item project pr_url pr_ref head_observation head head_source
   local channel venue repo rid missing stale present rc row token capped cls
-  local existing record_state applicability record_rc
+  local existing record_state applicability record_rc all_records
+
+  probe_budget_reset
 
   if ! read_snapshot; then
     SWEEP=$(jq -n '{schema:"fm-outbound-sweep.v1",readable:false,capped:false,
@@ -715,6 +751,11 @@ sweep() {
 
   rows=$(mktemp "$SCRATCH/rows.XXXXXX")
   count=$(printf '%s' "$SNAPSHOT" | jq '.backlog.records | length')
+  # ONE pass over the record store per sweep. Nothing in this loop writes a
+  # record, and the per-row question is a filter over the same snapshot, so
+  # re-reading and re-validating every record for every waiting row bought
+  # nothing and cost a full store walk per row inside a bounded sweep.
+  all_records=$(records_all)
   i=0
   while [ "$i" -lt "$count" ]; do
     rec=$(printf '%s' "$SNAPSHOT" | jq -c ".backlog.records[$i]")
@@ -783,8 +824,13 @@ sweep() {
           [ "$applicability" = "applicable" ] || rc=1
         else
           record_rc=$?
+          # A record that is READABLE and says it belongs to another request is
+          # not an unreadable record. One is a correlation defect with a known
+          # repair; the other is an observation gap. Collapsing them sends the
+          # operator hunting for corruption or permissions that are not there.
           case $record_rc in
             1) rc=4 ;;
+            5) rc=6 ;;
             *) rc=5 ;;
           esac
         fi
@@ -795,7 +841,7 @@ sweep() {
     # presence. A record bound to a different head is exactly the stale-request
     # case, so the operator is told the previous ask went inapplicable rather
     # than merely that none exists.
-    stale=$(records_all | jq --arg i "$item" --arg h "$head" \
+    stale=$(printf '%s' "$all_records" | jq --arg i "$item" --arg h "$head" \
       '[.[] | select(.identity.item? == $i and .identity.head != $h)] | length')
     case $stale in ''|*[!0-9]*) stale=0 ;; esac
 
@@ -823,6 +869,10 @@ sweep() {
       5)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
           unevaluable "$FM_OUTBOUND_TOKEN_UNREADABLE" "" "" "$stale" >> "$rows"
+        ;;
+      6)
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
+          defect "$FM_OUTBOUND_TOKEN_IDENTITY" "" "" "$stale" >> "$rows"
         ;;
       *)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
@@ -938,6 +988,14 @@ sweep_exit() {
 supersede_other_heads() {  # <item> <current-request-id> <current-head>
   local item=$1 rid=$2 head=$3 f other rec read_rc
   [ -d "$RECORD_DIR" ] || return 0
+  # THE BOUND, STATED: this pass is O(records in the store), by construction and
+  # not by oversight. The store is content-addressed - a record is named
+  # fm-ob-<digest>.json where the digest is over the canonical identity - so the
+  # work item cannot be recovered from a filename and no cheap name filter can
+  # narrow the walk. The jq below is what scopes the DECISION to this item and
+  # to non-terminal records; reading every file is what it costs to reach that
+  # decision. Narrowing this would mean indexing the store, which is a change to
+  # the record format rather than to this loop.
   for f in "$RECORD_DIR"/*.json; do
     [ -f "$f" ] || continue
     other=${f##*/}
@@ -1071,6 +1129,7 @@ cmd_emit() {
     fi
     record_write "$rid" "$record" || die "could not write the correlation record" 4
     printf 'already requested: %s (comment %s)\n' "$rid" "$found"
+    release_emit_lock
     return 0
   fi
   if [ "$dedupe_rc" -ne 1 ]; then
@@ -1111,6 +1170,7 @@ cmd_emit() {
       fi
       record_write "$rid" "$record" || die "could not write the correlation record" 4
       printf 'requested: %s on %s#%s\n' "$rid" "$SOL_REPO" "$SOL_ISSUE"
+      release_emit_lock
       return 0
     fi
     found=$(sol_artifact_present "$rid" "$record"); retry_rc=$?
@@ -1120,6 +1180,7 @@ cmd_emit() {
       record_write "$rid" "$record" || die "could not write the correlation record" 4
       printf 'requested: %s on %s#%s (accepted before transport response failed)\n' \
         "$rid" "$SOL_REPO" "$SOL_ISSUE"
+      release_emit_lock
       return 0
     fi
     if [ "$retry_rc" -ne 1 ]; then
@@ -1404,13 +1465,23 @@ case $CMD in
     cmd_poll
     POLL_RC=$?
     sweep || true
+    # The emit loop runs in THIS shell, reading the selected rows from a file
+    # rather than from the end of a pipeline. A pipeline stage is a subshell, so
+    # its status has to be recovered by position from PIPESTATUS - which
+    # silently credits the wrong stage the moment a stage is added, and did:
+    # index 1 named jq, not the loop, so every emit refusal was discarded and
+    # reported as whatever the next sweep happened to say. Bash also resets the
+    # EXIT trap inside that subshell, so a per-emit lock taken there was never
+    # released. One temporary file removes both hazards and leaves the status
+    # unambiguous: cmd_emit's own refusals exit this shell directly.
+    RECONCILE_ITEMS="$SCRATCH/reconcile-items"
     printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="defect" and .channel=="sol-control" and .missing==null) | .item' \
-      | while IFS= read -r ITEM; do
-          [ -n "$ITEM" ] || continue
-          cmd_emit "$ITEM" "" 0 || exit $?
-        done
-    RECONCILE_RC=${PIPESTATUS[1]}
-    [ "$RECONCILE_RC" -eq 0 ] || exit "$RECONCILE_RC"
+      > "$RECONCILE_ITEMS" || die "the sweep rows could not be read for reconciliation" 4
+    probe_budget_reset
+    while IFS= read -r ITEM; do
+      [ -n "$ITEM" ] || continue
+      cmd_emit "$ITEM" "" 0
+    done < "$RECONCILE_ITEMS"
     sweep || true
     render_defects
     sweep_exit; SWEEP_RC=$?

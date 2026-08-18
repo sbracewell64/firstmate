@@ -989,17 +989,27 @@ commitment_register_report() {
 # predates the invariant, or one whose exec bit a checkout dropped, would
 # otherwise report a clean fleet while nothing checked at all - which is the
 # reads-as-working-while-doing-nothing shape the whole mechanism refuses.
+#
+# THE DEADLINE HAS ITS OWN NAME. This bounds the WHOLE sweep - poll, sweep, every
+# emit, and the sweep again - while FM_OUTBOUND_TIMEOUT bounds ONE forge or git
+# observation inside it. They were the same variable, and a single name cannot
+# carry both: raising it to give the sweep room widened every individual probe by
+# the same factor, and leaving it at one probe's worth meant a single slow probe
+# could consume the entire sweep and the whole run was reported as unevaluable
+# with real defects already found and discarded. The default is deliberately
+# several probe timeouts wide so that relationship is visible in the numbers.
+# docs/vocabulary-collisions.md carries the ruling and its retirement point.
 outbound_artifact_report() {
-  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out tmp timeout pid start elapsed child_rc
+  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out tmp deadline pid start elapsed child_rc
   local monitor_was_on
   if [ ! -x "$bin" ]; then
     printf 'OUTBOUND: sweep unevaluable - %s is missing or not executable, so no waiting item could be checked\n' \
       "bin/fm-outbound-artifact.sh"
     return 0
   fi
-  timeout=${FM_OUTBOUND_TIMEOUT:-15}
-  case $timeout in
-    ''|*[!0-9]*|0) timeout=15 ;;
+  deadline=${FM_OUTBOUND_BOOTSTRAP_DEADLINE:-60}
+  case $deadline in
+    ''|*[!0-9]*|0) deadline=60 ;;
   esac
   tmp=$(mktemp "${TMPDIR:-/tmp}/fm-outbound-bootstrap.XXXXXX" 2>/dev/null) || {
     printf 'OUTBOUND: sweep unevaluable - bootstrap could not allocate bounded sweep output\n'
@@ -1017,12 +1027,12 @@ outbound_artifact_report() {
   start=$SECONDS
   while jobs -r -p | grep -qx "$pid"; do
     elapsed=$((SECONDS - start))
-    if [ "$elapsed" -ge "$timeout" ]; then
+    if [ "$elapsed" -ge "$deadline" ]; then
       kill -TERM "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
       rm -f "$tmp"
-      printf 'OUTBOUND: sweep unevaluable - bootstrap deadline expired after %ss\n' "$timeout"
+      printf 'OUTBOUND: sweep unevaluable - bootstrap deadline expired after %ss\n' "$deadline"
       return 0
     fi
     sleep 0.1

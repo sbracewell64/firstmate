@@ -424,6 +424,13 @@ jobs:
       # do not re-spell either here.
       - name: Every load-bearing remote collection read must be classified
         run: bin/fm-retrieval-check.sh --check
+      # Single owner of the enrolment marker, the accepted call forms, and the
+      # three-valued verdict; do not re-spell any of them here. A guard nothing
+      # calls is why this control exists, so it must not itself depend on
+      # somebody choosing to run it. Exit 4 (could-not-observe) is red here on
+      # purpose: an unresolved predicate is not a clean repository.
+      - name: Every enrolled fail-closed predicate must be consulted
+        run: bin/fm-dead-predicate-check.sh
       - name: Personal fleet paths must not be tracked
         run: |
           set -eu

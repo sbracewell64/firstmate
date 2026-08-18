@@ -1455,7 +1455,7 @@ SH
   fakebin=$(make_fake_toolchain "$case_dir")
 
   out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
-    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_OUTBOUND_TIMEOUT=1 \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_OUTBOUND_BOOTSTRAP_DEADLINE=1 \
     "$fakescripts/fm-bootstrap.sh")
   assert_contains "$out" "OUTBOUND: sweep unevaluable - bootstrap deadline expired after 1s" \
     "a stalled outbound sweep must fail closed within its bootstrap deadline"

@@ -134,7 +134,13 @@ function_has_call_site() {  # <function>
     # call detection and would silently discard the one call form that is
     # declared rather than written.
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
-    if strip_quoted "$f" | awk -v fn="$fn" '
+    if strip_cached "$f" | awk -v fn="$fn" '
+      # A line that does not contain the name as a SUBSTRING cannot match any
+      # rule below, because every rule that concludes anything embeds the name.
+      # Skipping the regex battery for those lines is a pure prefilter, not a
+      # narrowing of the accepted syntax, and it is what makes a repo-wide run
+      # cheap enough to sit on the automatic check path.
+      index($0, fn) == 0 { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
@@ -245,6 +251,48 @@ strip_quoted() {  # <file>
   ' "$1"
 }
 
+# ONE quote walk per FILE, not per (file x function).
+#
+# The walk above is char-by-char in awk and was re-run for every function under
+# test against every consumer, so a repo-wide run cost files x functions walks -
+# roughly nine thousand of them here. That is not merely slow: it is the reason
+# the control was impractical to put on the repo-wide check path, and a control
+# that is too expensive to run automatically is a control nobody runs, which is
+# the same end state as the dead predicates it exists to catch.
+#
+# The cache lives ON DISK rather than in a shell array, because most call sites
+# are the left side of a pipeline and a pipeline stage is a subshell: an
+# in-memory cache written there is discarded when the stage ends, so every
+# lookup would miss and the walk would be re-run exactly as before. The walk's
+# EXIT STATUS is stored beside its output, because 0, 1 (unterminated span) and
+# 2 (legacy backtick) are three different answers and file_parse_refusal
+# branches on all three. The cache mirrors the source path under one scratch
+# root, so the key is injective without hashing or truncation.
+STRIP_DIR=$(mktemp -d "${TMPDIR:-/tmp}/fm-dead-predicate.XXXXXX") \
+  || die "cannot create a work directory" 4
+# shellcheck disable=SC2329 # Registered by the EXIT trap below.
+strip_cache_cleanup() { rm -rf "$STRIP_DIR" 2>/dev/null || true; }
+trap strip_cache_cleanup EXIT
+
+strip_cached() {  # <file> - stripped text on stdout, exit status of strip_quoted
+  local f=$1 cache rcfile rc
+  cache="$STRIP_DIR/files/$f"
+  rcfile="$cache.rc"
+  if [ ! -f "$rcfile" ]; then
+    mkdir -p "${cache%/*}" || die "cannot cache the quote walk for $f" 4
+    strip_quoted "$f" > "$cache.part" 2>/dev/null
+    rc=$?
+    # The status file is published LAST and by rename, so a cache entry is never
+    # visible without the status that explains it.
+    mv -f "$cache.part" "$cache" || die "cannot cache the quote walk for $f" 4
+    printf '%s' "$rc" > "$rcfile.part"
+    mv -f "$rcfile.part" "$rcfile" || die "cannot cache the quote walk for $f" 4
+  fi
+  read -r rc < "$rcfile"
+  cat "$cache"
+  return "$rc"
+}
+
 # Why a file may not be reasoned about at all. Returns the offending
 # "<line>:<text>" on stdout and 1 when the file is outside the accepted syntax.
 file_parse_refusal() {  # <file>
@@ -253,7 +301,7 @@ file_parse_refusal() {  # <file>
           grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
         } | head -1)
   if [ -z "$hit" ]; then
-    strip_quoted "$f" >/dev/null 2>&1
+    strip_cached "$f" >/dev/null
     strip_rc=$?
     case $strip_rc in
       0) ;;
@@ -335,7 +383,13 @@ for f in "${SCANNABLE[@]}"; do
   unsupported=''
   for fn in "${FUNCTIONS[@]}"; do
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$f" && continue
-    unsupported=$(strip_quoted "$f" | awk -v fn="$fn" '
+    unsupported=$(strip_cached "$f" | awk -v fn="$fn" '
+      # A line that does not contain the name as a SUBSTRING cannot match any
+      # rule below, because every rule that concludes anything embeds the name.
+      # Skipping the regex battery for those lines is a pure prefilter, not a
+      # narrowing of the accepted syntax, and it is what makes a repo-wide run
+      # cheap enough to sit on the automatic check path.
+      index($0, fn) == 0 { next }
       $0 ~ "^[[:space:]]*#" { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }

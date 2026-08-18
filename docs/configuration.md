@@ -203,6 +203,12 @@ The `pull-request` channel ignores this file entirely: it resolves each project'
 `fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects and unevaluable observations at every session start so a stranded item or a blind sweep surfaces without anyone going looking.
 [`verification/outbound-transport-invariant.md`](verification/outbound-transport-invariant.md) records the dated watched-red evidence for each control and the commands that refresh it.
 
+Two timeouts bound that session-start relay, and they are deliberately separate names for separate things.
+`FM_OUTBOUND_TIMEOUT` (default 15) bounds **one** forge or git observation inside the sweep; `bin/fm-outbound-artifact.sh` owns it and never applies it to a whole run.
+`FM_OUTBOUND_BOOTSTRAP_DEADLINE` (default 60) bounds the **whole** sweep that `bin/fm-bootstrap.sh` starts, and must stay several probe timeouts wide so a single slow observation cannot consume the run.
+When the deadline expires the sweep is terminated and reported as unevaluable rather than partially believed, because a sweep that was cut short did not answer the question either way.
+[`vocabulary-collisions.md`](vocabulary-collisions.md) carries the ruling that split the two names and the condition under which the split retires.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and pins `commands.lint` to `bin/fm-lint.sh` so local lint matches CI.
