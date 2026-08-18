@@ -54,10 +54,10 @@ A record about a subject NAMES THE SUBJECT. The citation for this campaign is th
 
 - `bin/fm-review-envelope-lib.sh` — `sha256:b6bbe3e1bb7a56c3f5085915153ce8c91ec2b0c0d2a3f248c2db5ebfb7190948`
 - `bin/fm-review-envelope.sh` — `sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a`
-- `tests/fm-review-envelope.test.sh` — `sha256:ab67406c9dc73dea297b7fe19de3821e82920eb7103554f61eb96ef4353128d2`
+- `tests/fm-review-envelope.test.sh` — `sha256:988b9a7ea4b1050496cb89302eb7500bc6be0d4c62070fb2d0913fdc6fde3c1a`
 
-Campaign head: `0a6857d38fa48748b3e32905425d3e08756963e1` (provenance only).
-Mutations built: 73.
+Campaign head: `3d37b6998beed3ca37180752f91773e2866d2434` (provenance only).
+Mutations built: 74.
 
 That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is not the coordinate a replay depends on. It happens to be reachable from this branch today, and that is convenience rather than the binding — the digests above are the binding, and they stay checkable whatever later becomes of the commit.
 
@@ -103,14 +103,14 @@ Three properties bound what a leak of either variable can do:
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
-Mutation-measurement claim: 72 mutations were built against the subjects recorded in the campaign artifact, and all 72 turned the suite red.
+Mutation-measurement claim: 73 expected-red mutations were built against the subjects recorded in the campaign artifact, and all 73 turned the suite red. A 74th entry is expected-GREEN and is the campaign's own non-vacuity control, described below.
 Coverage is counted per property rather than per test function, because a named property whose mutation leaves the suite green is uncovered however many controls exist.
 
 There is no non-red in this campaign, and the reason that changed is recorded below rather than left as a silently uniform table.
 
-Every expected-red entry's target control and observed control agree: 72 of 72.
+Every expected-red entry's target control and observed control agree: 73 of 73.
 
-The campaign also carries its OWN non-vacuity control, and it is the seventy-third entry. A campaign in which every mutation reddens cannot show that this harness is able to report green at all - which is the vacuous-pass defect inverted, since a suite that fails on everything produces a perfect-looking record and proves nothing, exactly as a suite reporting zero failures over zero executed tests does. So one mutation is chosen such that GREEN is the correct answer: a semantics-preserving edit that binds a sorted result to a name before returning it, a real change to a real code path that alters no behaviour. It is judged against that expectation rather than exempted from judgement, must carry a captured run containing no failure, and must name no control.
+The campaign also carries its OWN non-vacuity control, and it is the seventy-fourth entry. A campaign in which every mutation reddens cannot show that this harness is able to report green at all - which is the vacuous-pass defect inverted, since a suite that fails on everything produces a perfect-looking record and proves nothing, exactly as a suite reporting zero failures over zero executed tests does. So one mutation is chosen such that GREEN is the correct answer: a semantics-preserving edit that binds a sorted result to a name before returning it, a real change to a real code path that alters no behaviour. It is judged against that expectation rather than exempted from judgement, must carry a captured run containing no failure, and must name no control.
 
 It cannot be measured against a red baseline, because it would record that baseline's failure instead of its own result. So the campaign runs in two passes: the expected-red entries first, the artifact written from them, and the expected-green entry against the green baseline that produces. The generator refuses to stamp a head while any measured subject is uncommitted, because a head recorded over uncommitted bytes labels the measurement with a commit whose contents are not the measured contents.
 
@@ -118,7 +118,7 @@ The target is assigned from each mutation's INTENT and the observed control is D
 
 An earlier campaign at this head had three entries whose red belonged to a neighbouring control. Each of those mutations was coarser than the property it named - it emptied an array, which tripped the fixture-defect guard before the target control ran - so each was narrowed to violate only its own property, and all three now redden their own control. That is recorded because the narrowing, not the count, is what makes those three measurements real.
 
-Of those 72 reds, 68 are DISTINCT, they land on 61 distinct controls, and every entry carries its whole captured run rather than only a digest of it.
+Of those 73 reds, 69 are DISTINCT, they land on 62 distinct controls, and every entry carries its whole captured run rather than only a digest of it.
 
 That distinctness is recorded because the total on its own is exactly what a forged campaign would produce. While the artifact is stale the suite is red at baseline, so a campaign measured in that state records the SAME failure for every mutation: 72 entries, all red, a complete-looking matrix generated by one defect rather than by 72. Nothing downstream could tell that apart from a real campaign by reading the count.
 
