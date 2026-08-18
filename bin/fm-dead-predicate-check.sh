@@ -56,10 +56,11 @@
 # depended on which files happened to be enrolled rather than on the code.
 #
 # The cost is visibility, and it is large enough to state plainly: on this
-# repository 118 consumer files parse and 215 do not, so most of the tree is
+# repository 119 consumer files parse and 233 do not, so most of the tree is
 # currently unreadable to this control and could_not_observe is its honest answer
 # for any predicate whose consumers live in that majority. That is a measurement
-# rather than a failure - the way to shrink 215 is to make more files parse - but
+# rather than a failure - the way to shrink 233 is to make more files parse, and
+# the `scanned=`/`unchecked=` summary below is what refreshes both numbers - but
 # it must never be mistaken for a clean repository. Every unchecked consumer is
 # named in the output, and the summary line always prints `alive=` and
 # `could_not_observe=` counts, because "nothing is dead" and "nothing could be

@@ -201,6 +201,8 @@ Detection and emission are separated exactly so an unconfigured venue can never 
 The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
 
 `fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects and unevaluable observations at every session start so a stranded item or a blind sweep surfaces without anyone going looking.
+Configuring this file is therefore also what lets a session start POST: a session holding the fleet lock reconciles the missing sol-control requests it finds, while a lock-refused or detect-only session performs the same bounded read and emits nothing.
+`bin/fm-bootstrap.sh`'s header owns that mutating-sweep list.
 [`verification/outbound-transport-invariant.md`](verification/outbound-transport-invariant.md) records the dated watched-red evidence for each control and the commands that refresh it.
 
 Two timeouts bound that session-start relay, and they are deliberately separate names for separate things.

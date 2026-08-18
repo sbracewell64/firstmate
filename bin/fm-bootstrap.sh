@@ -118,12 +118,17 @@
 #          wake_ledger_terminal_sweep mutates too and honours the same flag by
 #          switching to its dry run, so a read-only session still REPORTS the
 #          declared failures it declined to record.
+#          outbound_artifact_report mutates too - it reconciles missing
+#          sol-control requests onto the forge - and honours the same flag by
+#          running the detect-only sweep instead, so a read-only session still
+#          REPORTS every stranded item without emitting anything for it.
 #          The TANGLE line switches to advisory-only wording with no
 #          checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
 #          PR-check artifacts, secondmate homes, pending handoff outboxes,
-#          X-mode artifacts, project clones, or repair instructions.
+#          X-mode artifacts, project clones, outbound control requests, or
+#          repair instructions.
 #          Unset/0 (the default) runs every sweep exactly as before - this flag
 #          is purely additive.
 #        fm-bootstrap.sh install <tool>...
