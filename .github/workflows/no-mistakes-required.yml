@@ -199,6 +199,15 @@ jobs:
             echo "this exact commit, so it cannot be satisfied by editing text. A new commit is"
             echo "a new head and needs its own attestation."
             echo
+            echo "If it refuses because no pipeline run validated this commit, then nothing has"
+            echo "validated this head and no attestation for it can exist yet."
+            echo "Publishing is not the repair, and repeating it will not become one."
+            echo "Validate this head first with 'git push no-mistakes', then publish the"
+            echo "attestation for the head that run pushed."
+            echo "Do not add a commit merely to restart this check: that advances the head past"
+            echo "the one the last run validated, and this check refuses the new head for the"
+            echo "same reason as the old one."
+            echo
             echo "Publishing the note does not re-run this check by itself. refs/notes/no-mistakes"
             echo "is not a pull request head, so pushing it fires no pull request event of its own."
             echo "That gap is why 'bin/fm-attest.sh write' re-runs the run that judged this head as"

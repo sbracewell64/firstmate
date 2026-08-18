@@ -1601,6 +1601,46 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   pass "no-mistakes-required.yml: a verifier that could not run is not reported as an absent attestation"
 }
 
+# The refusal's other reachable state: a head no pipeline run ever validated. It
+# reaches the same exit 1, so the text is the only thing that distinguishes it,
+# and a refusal that stops at "publish one" sends that reader to a command that
+# must refuse and to the commit-to-restart loop that follows from being refused.
+test_check_step_names_validating_an_unvalidated_head_as_the_repair() {
+  local dir script head out rc
+  dir="$TMP_ROOT/workflow-unvalidated"
+  mkdir -p "$dir"
+  script="$dir/verify-step.sh"
+  head=0123456789012345678901234567890123456789
+  workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
+  [ -s "$script" ] || fail "the verify step's own script could not be read out of the workflow"
+
+  install_verifier_stub "$dir" 1
+  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a refused attestation did not fail the check with exit 1 (exit $rc): $out"
+  # Each of these is a sentence the refusal did not carry before, because the
+  # refusal already named 'git push no-mistakes' as how this repository is
+  # contributed to and asserting on that alone would pass without any of it.
+  assert_contains "$out" "no attestation for it can exist yet" \
+    "the refusal did not name a head no pipeline run validated as its own state"
+  assert_contains "$out" "Publishing is not the repair" \
+    "the refusal left publishing as the only thing an unvalidated head is sent to do"
+  assert_contains "$out" "Validate this head first with 'git push no-mistakes'" \
+    "the refusal did not name validating this head as the repair for a head no run validated"
+  assert_contains "$out" "Do not add a commit merely to restart this check" \
+    "the refusal did not rule out the commit that advances the head past the last validated one"
+
+  # The matched control: a head that passes is told none of it, so the lines
+  # above are reached by the refusal rather than printed unconditionally.
+  install_verifier_stub "$dir" 0
+  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "an attested head was failed by the check: $out"
+  assert_not_contains "$out" "Validate this head first with 'git push no-mistakes'" \
+    "a passing head was sent to re-validate itself"
+  pass "no-mistakes-required.yml: a head no run validated is sent to the pipeline rather than to publishing"
+}
+
 test_check_step_addresses_both_repositories_without_logging_its_token() {
   local dir script log out rc repo fork
   dir="$TMP_ROOT/workflow-address"
@@ -2951,6 +2991,7 @@ test_write_withholds_a_url_carrying_a_query_or_fragment
 test_write_makes_the_pipeline_tools_own_streams_safe_to_print
 test_write_rejects_a_zero_bound_rather_than_running_the_read_unbounded
 test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run
+test_check_step_names_validating_an_unvalidated_head_as_the_repair
 test_check_step_addresses_both_repositories_without_logging_its_token
 test_write_outside_a_repository_fails_as_such
 test_write_without_the_pipeline_tool_fails_as_such

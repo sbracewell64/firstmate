@@ -113,6 +113,10 @@ A run tip behind or beside `HEAD` is refused as `run-covers-another-head`, becau
 A run tip that is not a commit in this checkout at all is refused separately as `run-head-unavailable`, because that is a fetch rather than a re-validation.
 `bin/fm-nm-run-lib.sh` owns that directional rule for every caller that has to decide whether a run belongs to a worktree, and owns reading this tool's output; both are read from there rather than re-derived here, so a change to the tool's shape moves every reader at once.
 
+Those refusals are reached by a head no pipeline run validated, which the check's own refusal names as a case of its own rather than leaving to be discovered by running `write` and being refused.
+Sending that reader to publish and no further would send them to a command that must refuse, so the refusal says that this head has not been validated, that publishing is not the repair, and that the repair is to validate it through the pipeline and then attest the head that run pushed.
+It says in the same breath not to add a commit merely to restart the check, because that advances the head past the last run's tip and reproduces the identical refusal on the new head; that is the loop this case exists to stop, and `CONTRIBUTING.md` step 8 states the same rule for the contributor following the workflow rather than reading a failed check.
+
 It publishes to the remote's push URL rather than its fetch URL, and reconciles against that same repository before writing, because those are two different repositories in the setup `CONTRIBUTING.md` describes and only the push target is the one the check reads.
 The reconciliation merges the published ref instead of forcing over the local one, so an attestation recorded locally with `--no-push` survives the publishing of a later one.
 It names that repository in what it prints, because "published to origin" does not say which repository was reached and the note is evidence only on the one holding the pull request head.
