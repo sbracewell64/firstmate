@@ -50,8 +50,8 @@ Each entry also carries a digest of its whole captured run and the patch that re
 The measurements below are backed by [`review-envelope-campaign.json`](review-envelope-campaign.json), which records the content digest of every measured subject.
 A control fails when a subject's shipped bytes differ from the bytes measured, or when the claims below disagree with the artifact, so relabelling this prose contradicts the experiment instead of quietly redescribing it.
 
-Campaign head: `d016170a7078fed2aa860a57694e7b96823366a3`.
-Mutations built: 72.
+Campaign head: `c86683a300a6633216fa6a2f60f8b9321f20433f`.
+Mutations built: 73.
 
 ## Commands
 
@@ -72,7 +72,7 @@ Both files are copied because the entrypoint sources its library from its own di
 
 ## What was measured
 
-72 controls pass against the shipped scripts.
+76 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 

@@ -2577,6 +2577,12 @@ source, target = sys.argv[1:]
 artifact = json.load(open(source, encoding="utf-8"))
 artifact["control_order"] = ["matching-control", "test_array_classifications_are_exercised_in_isolation"]
 for item in artifact["mutations"]:
+    # This fixture stamps a FAILING captured run onto every entry, so every entry
+    # it produces is red-shaped. An expected-green entry carrying a failing run
+    # would contradict itself, and the contradiction would be the fixture's
+    # rather than the validator's - so the expectation is normalised with the
+    # shape, not left to disagree with it.
+    item["expected"] = "red"
     item["captured_output"] = "not ok - synthetic\n"
     item["output_sha256"] = "sha256:" + __import__("hashlib").sha256(item["captured_output"].encode()).hexdigest()
     item["observed_control"] = item["target_control"] = "matching-control"
