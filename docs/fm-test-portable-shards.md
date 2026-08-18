@@ -126,7 +126,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 | Job | timeout-minutes | Rationale |
 |---|---:|---|
 | portable parallel 1/2 | 10 | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
-| portable serial | See `bin/fm-test-run.sh` | The runner owns the shard count, measured basis, and hang-tripwire margin. |
+| portable serial | 15 | The workflow owns the timeout literal; the runner owns the shard count, measured basis, and hang-tripwire margin. |
 | Herdr | 40 | The real-Herdr lane keeps its dedicated timeout. |
 
 Timeouts are hang tripwires rather than expected healthy durations.
