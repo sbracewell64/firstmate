@@ -19,10 +19,12 @@
 #       Reserve this pool's next free slot for <task-id>. --verdict is a
 #       bin/fm-verify.sh record; only result=FAIL admits a reservation. The
 #       trunk ref defaults to the project's resolved default branch, and its
-#       HEAD is read here rather than supplied. Refuses while a reservation is
-#       already held, naming the holder - one pool holds one reservation, and
-#       choosing between several waiting requests is a scheduler this
-#       deliberately is not.
+#       HEAD is read here rather than supplied. --trunk-ref names WHICH of the
+#       default branch's landing refs the recorded head is read from, and is
+#       refused when it names anything else, because the release condition
+#       watches exactly that set. Refuses while a reservation is already held,
+#       naming the holder - one pool holds one reservation, and choosing between
+#       several waiting requests is a scheduler this deliberately is not.
 #   fm-slot-reservation.sh status --project <dir> [--for <task-id>]
 #       Print one record for the pool's reservation and exit by its state:
 #       0 held, 1 absent or released, 2 unobservable. With --for, a `holder:`
@@ -210,6 +212,45 @@ open_lock_acquire() {  # <pool-real>
   die "another spawn or reservation holds this pool's selection lock ($RESERVATION_LOCK, pid ${FM_LOCK_HELD_PID:-unknown}), so whether a slot is already reserved could not be observed"
 }
 
+# Is <ref> one of the refs bin/fm-landed-lib.sh names as landing targets for
+# <pool>'s default branch? 0 it provably is, 1 it provably is not, 2 the set
+# could not be established. Sets TRUNK_REF_SET_NAME to the branch name whenever
+# that much resolved, so a refusal can name the trunk it measured against.
+#
+# MAKE THE INVALID STATE UNREPRESENTABLE RATHER THAN DOCUMENT THAT IT IS
+# INVALID. fm_slot_reservation_read decides release by walking the default
+# branch's candidate refs, so a head resolved from a ref outside that set can
+# never be shown to have been advanced past: the reservation it opens has no
+# reachable release condition but its TTL, and it withholds an empty slot for
+# the whole of it. That reservation must not be created here and discovered
+# hours later by whoever is denied the slot; it is refused now, while the caller
+# is still present to correct the ref.
+#
+# The 2 refuses as firmly as the 1. Membership in a set that could not be
+# enumerated is not established either, and admitting on a short universe is
+# exactly the negative-over-an-unread-universe this file refuses everywhere
+# else.
+TRUNK_REF_SET_NAME=
+trunk_ref_in_candidate_set() {  # <pool-real> <ref>
+  local pool=$1 ref=$2 name refs status candidate
+  TRUNK_REF_SET_NAME=
+  name=$(fm_landed_default_branch_name "$pool") || return 2
+  TRUNK_REF_SET_NAME=$name
+  refs=$(fm_landed_candidate_refs "$pool" "$name")
+  status=$?
+  case "$status" in
+    0) : ;;
+    1) return 1 ;;
+    *) return 2 ;;
+  esac
+  while IFS= read -r candidate; do
+    [ "$candidate" = "$ref" ] && return 0
+  done <<EOF
+$refs
+EOF
+  return 1
+}
+
 cmd_open() {  # <task-id> ...
   local task='' project='' verdict='' ref='' ttl=$FM_SLOT_RESERVATION_TTL_DEFAULT
   local pool name head now file tmp
@@ -241,6 +282,13 @@ cmd_open() {  # <task-id> ...
       0) ref="refs/heads/$name" ;;
       1) die "$pool has no resolvable default branch, so there is no trunk to reserve a slot to repair" ;;
       *) die "$pool's default branch could not be read, so whether it needs repair could not be observed" ;;
+    esac
+  else
+    trunk_ref_in_candidate_set "$pool" "$ref"
+    case $? in
+      0) : ;;
+      1) die "--trunk-ref $ref is not one of the refs carrying ${TRUNK_REF_SET_NAME:-the default branch of $pool}, which is the set the release condition watches; a reservation opened against it could never be shown released and would withhold an empty slot for its whole TTL, so nothing was reserved" ;;
+      *) die "the refs carrying ${TRUNK_REF_SET_NAME:-the default branch of $pool} could not be enumerated, so whether --trunk-ref $ref is one of them was never established; nothing was reserved" ;;
     esac
   fi
   head=$(git --no-optional-locks -C "$pool" rev-parse --verify --quiet "$ref" 2>/dev/null) || head=

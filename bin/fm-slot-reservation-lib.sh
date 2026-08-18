@@ -148,12 +148,25 @@
 #                                            malformed number, or a project that
 #                                            does not match the pool it is keyed
 #                                            under.
-#                      trunk_unresolvable    the trunk's candidate refs could
-#                                            not be enumerated at all, or none
-#                                            of them could be read, or the list
-#                                            was INCOMPLETE and no advance was
+#                      trunk_unresolvable    A READ THAT DID NOT HAPPEN: the
+#                                            trunk's candidate refs could not be
+#                                            enumerated at all, or none of the
+#                                            refs the enumeration did list could
+#                                            be resolved, or the list was
+#                                            INCOMPLETE and no advance was
 #                                            proven within it - so whether the
 #                                            trunk moved is unknown.
+#                      trunk_absent          A READ THAT DID HAPPEN AND FOUND
+#                                            NOTHING: the refs carrying the
+#                                            trunk's name were enumerated
+#                                            completely and there are none. The
+#                                            state is still unobservable,
+#                                            because a trunk that does not exist
+#                                            cannot be shown to have moved - but
+#                                            a proven absence is not a failed
+#                                            read, and reporting it as one sends
+#                                            a reader hunting for a broken
+#                                            reader that does not exist.
 #
 # WHY THE TRUNK IS A CANDIDATE SET AND NOT ONE REF. bin/fm-landed-lib.sh owns
 # that set, and owns it because refs/heads/<name> is the landing target only
@@ -315,7 +328,7 @@ fm_slot_reservation_unobservable() {  # <reason> <detail>
 fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   local pool=$1 now=$2 file task project ref head opened ttl verifier evidence
   local version age tier
-  local name refs status candidate tip incomplete=0 observed=0
+  local name refs status candidate tip incomplete=0 observed=0 universe_empty=0
   fm_slot_reservation_reset
   if ! file=$(fm_slot_reservation_path "$pool"); then
     fm_slot_reservation_unobservable unreadable_record \
@@ -414,10 +427,17 @@ fm_slot_reservation_read() {  # <pool-real> <now-epoch>
   fi
   refs=$(fm_landed_candidate_refs "$pool" "$name")
   status=$?
-  # 0 complete with candidates, 1 a PROVEN empty universe, 2 INCOMPLETE and the
-  # printed list is short. Only the third can still carry candidates worth
-  # reading, and reading them can still prove an advance.
-  [ "$status" -ne 2 ] || incomplete=1
+  # The universe status is captured HERE, where it is still three-valued, rather
+  # than inferred later from an empty list: 0 complete with candidates, 1 a
+  # COMPLETE enumeration that proved there are none, 2 INCOMPLETE so the printed
+  # list is short. Folding 1 into "nothing could be read" would report a
+  # successful enumeration as a failed one. The incomplete list is still walked,
+  # because a positive found in it is valid whatever went unread.
+  case "$status" in
+    0) : ;;
+    1) universe_empty=1 ;;
+    *) incomplete=1 ;;
+  esac
   while IFS= read -r candidate; do
     [ -n "$candidate" ] || continue
     tip=$(git --no-optional-locks -C "$pool" rev-parse --verify --quiet "$candidate" 2>/dev/null) || tip=
@@ -445,9 +465,14 @@ EOF
   # A positive stands on its own, so the loop above returns the moment one ref
   # proves an advance. Everything from here is the NEGATIVE, and a negative is
   # only as good as the universe it was taken over.
+  if [ "$universe_empty" -ne 0 ]; then
+    fm_slot_reservation_unobservable trunk_absent \
+      "$pool's refs carrying $name were enumerated in full and there are none, so there is no trunk left to compare $head against"
+    return 0
+  fi
   if [ "$observed" -eq 0 ]; then
     fm_slot_reservation_unobservable trunk_unresolvable \
-      "no ref carrying $name could be read in $pool, so whether the trunk moved past $head is unknown"
+      "every ref carrying $name that $pool listed failed to resolve, so whether the trunk moved past $head went unread"
     return 0
   fi
   if [ "$incomplete" -ne 0 ]; then

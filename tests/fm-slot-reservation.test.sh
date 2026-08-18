@@ -50,6 +50,15 @@
 #                                                        releases
 #  (17) the admission reports evidence tier             open writes the verified
 #       caller-asserted, never verified                  tier instead
+#  (18) a --trunk-ref outside the trunk's landing       the membership check
+#       refs is refused and reserves nothing             removed, so open accepts
+#                                                        whatever ref it is given
+#  (19) NON-VACUITY CONTROL: a --trunk-ref that IS in   the membership check
+#       that set still opens, and is recorded            inverted, so every
+#                                                        --trunk-ref is refused
+#  (20) a trunk whose refs were enumerated and found    the proven-absence
+#       to be none reads a different reason from a       reason folded back into
+#       trunk that could not be read at all              trunk_unresolvable
 #
 # Every plant below passes the production bytes it replaces as single-quoted
 # literals, which is the point of the quoting: those bytes must reach `plant`
@@ -797,6 +806,131 @@ test_an_admission_reports_the_strength_of_its_evidence() {
   pass "(17) an admission built from a caller-supplied verdict reports evidence tier caller-asserted, never verified"
 }
 
+# --- (18) a --trunk-ref outside the trunk's landing refs is refused ----------
+
+# The release condition walks the default branch's candidate refs, so a head
+# read from a ref outside that set can never be shown to have been advanced
+# past: such a reservation has no reachable release condition but its TTL. The
+# invalid state is therefore refused at open rather than documented as invalid.
+prop_out_of_set_trunk_ref_is_refused() {  # <bin-root> <label>
+  local root=$1 label=$2 proj out rc
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  advance_ref_past_head "$proj" refs/heads/some-feature >/dev/null \
+    || { echo "$label: could not build the off-trunk ref" >&2; return 1; }
+  out=$("$root/fm-slot-reservation.sh" open trunk-repair --project "$proj" \
+    --verdict "$VERDICT_FAIL" --trunk-ref refs/heads/some-feature 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] \
+    || { echo "$label: a --trunk-ref outside the trunk's landing refs opened a reservation: $out" >&2; return 1; }
+  case "$out" in
+    *some-feature*) ;;
+    *) echo "$label: the refusal does not name the ref it refused: $out" >&2; return 1 ;;
+  esac
+  [ "$(res_state "$root" "$proj")" = absent ] \
+    || { echo "$label: a refused --trunk-ref left a reservation record behind" >&2; return 1; }
+  return 0
+}
+
+test_a_trunk_ref_outside_the_landing_refs_is_refused() {
+  watch_red prop_out_of_set_trunk_ref_is_refused trunk-ref-membership fm-slot-reservation.sh \
+    '    trunk_ref_in_candidate_set "$pool" "$ref"' \
+    '    true "$pool" "$ref"'
+  pass "(18) a --trunk-ref that is not one of the trunk's landing refs is refused at open and reserves nothing"
+}
+
+# --- (19) NON-VACUITY CONTROL: an in-set --trunk-ref still opens -------------
+
+prop_in_set_trunk_ref_is_accepted() {  # <bin-root> <label>
+  local root=$1 label=$2 proj out rc row
+  isolate_pool_namespace "$label"
+  proj=$(empty_pool "$label" 1)
+  out=$("$root/fm-slot-reservation.sh" open trunk-repair --project "$proj" \
+    --verdict "$VERDICT_FAIL" --trunk-ref refs/heads/main 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] \
+    || { echo "$label: a --trunk-ref naming one of the trunk's own landing refs was refused: $out" >&2; return 1; }
+  [ "$(res_state "$root" "$proj")" = held ] \
+    || { echo "$label: an accepted --trunk-ref did not leave a held reservation" >&2; return 1; }
+  row=$("$root/fm-slot-reservation.sh" status --project "$proj" 2>/dev/null | sed -n '2p')
+  [ "$(printf '%s' "$row" | cut -d, -f5 | tr -d '[:space:]')" = refs/heads/main ] \
+    || { echo "$label: the accepted --trunk-ref was not recorded as trunk_ref provenance: $row" >&2; return 1; }
+  return 0
+}
+
+test_control_an_in_set_trunk_ref_is_still_accepted() {
+  watch_red prop_in_set_trunk_ref_is_accepted trunk-ref-membership-control fm-slot-reservation.sh \
+    '    [ "$candidate" = "$ref" ] && return 0' \
+    '    [ "$candidate" = "$ref" ] && return 1'
+  pass "(19) control: a --trunk-ref that is one of the trunk's landing refs still opens and is recorded, so (18) does not pass by refusing every ref"
+}
+
+# --- (20) a proven-absent trunk is not reported as an unread one -------------
+
+res_reason() {  # <bin-root> <proj>
+  "$1/fm-slot-reservation.sh" status --project "$2" 2>/dev/null \
+    | sed -n '2p' | cut -d, -f2 | tr -d '[:space:]'
+}
+
+res_detail() {  # <bin-root> <proj>
+  "$1/fm-slot-reservation.sh" status --project "$2" 2>/dev/null \
+    | sed -n '3p'
+}
+
+# bin/fm-landed-lib.sh answers three-valued about the UNIVERSE of landing refs,
+# and a complete enumeration that found none is not a read that failed. Both
+# still read unobservable - a trunk that does not exist cannot be shown to have
+# moved - so what has to differ is the reason and the wording a person reads.
+#
+# The unreadable side is built by taking the repository away from under the
+# pool, which is a read that genuinely does not happen. An INCOMPLETE candidate
+# list is the third member of that vocabulary and is not fixture-reachable
+# through git: every way a ref or a remote goes bad here still answers
+# git cleanly, so it is not asserted rather than asserted against a mock.
+prop_absent_trunk_is_not_an_unread_one() {  # <bin-root> <label>
+  local root=$1 label=$2 empty_proj unread_proj empty_reason unread_reason empty_detail
+  isolate_pool_namespace "$label"
+  empty_proj=$(empty_pool "$label-empty" 1)
+  reserve "$root" trunk-repair "$empty_proj" \
+    || { echo "$label: could not open the reservation for the enumerated-empty case" >&2; return 1; }
+  # origin/HEAD names a branch no ref carries, so the enumeration completes and
+  # proves the universe empty.
+  git -C "$empty_proj" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/ghost \
+    || { echo "$label: could not point origin/HEAD at a branch nothing carries" >&2; return 1; }
+  [ "$(res_state "$root" "$empty_proj")" = unobservable ] \
+    || { echo "$label: an enumerated-empty trunk does not read unobservable" >&2; return 1; }
+  empty_reason=$(res_reason "$root" "$empty_proj")
+  empty_detail=$(res_detail "$root" "$empty_proj")
+
+  unread_proj=$(empty_pool "$label-unread" 1)
+  reserve "$root" trunk-repair "$unread_proj" \
+    || { echo "$label: could not open the reservation for the unreadable case" >&2; return 1; }
+  mv "$unread_proj/.git" "$unread_proj/.git-taken-away" \
+    || { echo "$label: could not take the repository away from under the pool" >&2; return 1; }
+  [ "$(res_state "$root" "$unread_proj")" = unobservable ] \
+    || { echo "$label: an unreadable trunk does not read unobservable" >&2; return 1; }
+  unread_reason=$(res_reason "$root" "$unread_proj")
+
+  [ -n "$empty_reason" ] && [ -n "$unread_reason" ] \
+    || { echo "$label: a could-not-observe read reported no reason at all" >&2; return 1; }
+  [ "$empty_reason" != "$unread_reason" ] \
+    || { echo "$label: a trunk proven to have no refs and a trunk that could not be read share the reason '$empty_reason'" >&2; return 1; }
+  case "$empty_detail" in
+    *"could not be read"*|*"went unread"*)
+      echo "$label: a completed enumeration is described as a failed read: $empty_detail" >&2
+      return 1
+      ;;
+  esac
+  return 0
+}
+
+test_a_proven_absent_trunk_is_not_reported_as_an_unread_one() {
+  watch_red prop_absent_trunk_is_not_an_unread_one proven-absence fm-slot-reservation-lib.sh \
+    'fm_slot_reservation_unobservable trunk_absent' \
+    'fm_slot_reservation_unobservable trunk_unresolvable'
+  pass "(20) a trunk whose landing refs were enumerated and found to be none reports a proven absence, never a read that failed"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_a_queued_trunk_repair_is_handed_the_next_free_slot
@@ -816,6 +950,9 @@ test_an_option_with_no_value_refuses_instead_of_looping
 test_a_trunk_that_advanced_at_the_forge_releases_the_reservation
 test_control_an_unmoved_trunk_still_holds_the_reservation
 test_an_admission_reports_the_strength_of_its_evidence
+test_a_trunk_ref_outside_the_landing_refs_is_refused
+test_control_an_in_set_trunk_ref_is_still_accepted
+test_a_proven_absent_trunk_is_not_reported_as_an_unread_one
 
 fm_test_contract "$0" || exit 1
 
