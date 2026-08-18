@@ -104,7 +104,7 @@ fm_status_event_parse() {  # <line>
   FM_STATUS_EVENT_INVALID_REASON=''
   fm_status_event_is_typed "$line" || return 2
   # A TAB is the record separator of the open-decision fold this event feeds
-  # (status_open_decisions emits "<key>\t<verb>\t<note>"), so a TAB inside an
+  # (status_open_decisions emits "<key>\t<verb>\t<disposition>\t<note>"), so a TAB inside an
   # event would split one record into two. Prose inherited that hazard; the
   # typed form refuses it instead of carrying it forward.
   case "$line" in

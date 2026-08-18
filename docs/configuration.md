@@ -214,7 +214,7 @@ An absent overlay is silent, because most homes have no private commitments.
 Every state it prints is computed from that entry's probe on the spot and is never stored, so an entry retires by itself when its commitment becomes real, and no hand-written status word can satisfy one.
 
 The one thing it writes is `state/commitment-probe-cache/`, and only for the probes pinned into decision files, which are consulted on the open-decision fold's hot path rather than once per session.
-That cache is an accelerator for an answer and never a substitute for one: a stored result carries its observation time into whatever reads it, and past `FM_COMMITMENT_PROBE_CACHE_TTL` seconds (default 120, `0` to disable) it is not served at all.
+That cache is an accelerator for an answer and never a substitute for one: a stored result carries its observation time into whatever reads it, and past `FM_COMMITMENT_PROBE_CACHE_TTL` seconds (default 3600, `0` to disable) it is not served at all.
 It is keyed on what the probe's answer depends on - the decision file's bytes, the task worktree, and that worktree's head - and deliberately not on the task's status stream, because the open-decision fold is driven by status appends, so keying on those would invalidate the entry precisely on the append where the cache was meant to help while saying nothing about the worktree the answer actually lives in.
 `bin/fm-teardown.sh` reaps a task's stored results with the task, and the directory is listed in the `AGENTS.md` state inventory.
 
