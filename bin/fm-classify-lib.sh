@@ -1303,12 +1303,17 @@ signal_reason_is_actionable() {  # <file> ...
 # A missing or unreadable status file yields no open decision, so parked/blocked
 # stay unsettled and keep escalating.
 crew_state_is_settled() {  # <id> <reconciled-state> [state-dir]
-  local id=$1 s=$2 dir=${3:-${STATE:-${FM_STATE_OVERRIDE:-}}}
+  local id=$1 s=$2 dir=${3:-${STATE:-${FM_STATE_OVERRIDE:-}}} open line key
   case "$s" in
     done) return 0 ;;
     parked|blocked)
       [ -n "$id" ] || return 1
-      [ -n "$(status_open_decisions "$dir/$id.status")" ]
+      open=$(status_open_decisions "$dir/$id.status")
+      while IFS= read -r line || [ -n "$line" ]; do
+        key=${line%%$'\t'*}
+        [ "$key" = CNO_DECISION_UNIVERSE ] || [ -z "$key" ] || return 0
+      done <<< "$open"
+      return 1
       ;;
     *) return 1 ;;
   esac
