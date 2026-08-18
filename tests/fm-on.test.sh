@@ -11,7 +11,25 @@ TMP_ROOT=$(fm_test_tmproot fm-on)
 # and physicalize macOS's /var -> /private/var alias before transport validation.
 mkdir -p "$TMP_ROOT"
 TMP_ROOT=$(cd "$TMP_ROOT" && pwd -P)
-trap 'if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then kill "$(cat "$TMP_ROOT/remote-jobs/worker.pid")" 2>/dev/null || true; fi; rm -rf -- "$TMP_ROOT"' EXIT
+# Signalling the worker does not stop it: it can still be writing its job state
+# under TMP_ROOT while the removal walks that directory, and then `rm -rf` fails
+# with "Directory not empty". Because this removal is the last command of the
+# EXIT trap, its status becomes the script's, so a suite whose every assertion
+# passed still reports failure. Wait for the worker to actually die first, the
+# same way tests/fm-remote-backlog-handoff.test.sh does.
+cleanup() {
+  local worker_pid='' wait_attempt=0
+  if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
+    worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid")
+    kill "$worker_pid" 2>/dev/null || true
+    while kill -0 "$worker_pid" 2>/dev/null && [ "$wait_attempt" -lt 100 ]; do
+      wait_attempt=$((wait_attempt + 1))
+      sleep 0.05
+    done
+  fi
+  rm -rf -- "$TMP_ROOT"
+}
+trap cleanup EXIT
 LOCAL_HOME="$TMP_ROOT/local-home"
 REMOTE_ROOT="$TMP_ROOT/remote-root"
 REMOTE_HOME="$TMP_ROOT/remote-home"
