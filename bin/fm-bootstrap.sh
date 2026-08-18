@@ -18,6 +18,9 @@
 #                  _scheduling.admission_control - <reason>",
 #                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",
 #                 "COMMITMENT: register unreadable - <reason>",
+#                 "COMMITMENT: register unevaluable - the register exited <rc>
+#                  [and reported nothing|without a verdict line], so no recorded
+#                  commitment could be checked",
 #                 "OUTBOUND: <item> is waiting on <gate> with no applicable
 #                  durable artifact (<token>) - <evidence>",
 #                 "OUTBOUND: <item> artifact state COULD-NOT-OBSERVE (<token>) - <evidence>",
