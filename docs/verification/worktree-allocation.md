@@ -253,6 +253,81 @@ Stronger bindings are therefore read first, and any one of them carries the live
 Only a mismatched identity with none of those present reads dead.
 `tests/fm-worktree-guard.test.sh` case (s3) pins each binding carrying the verdict on its own, with a negative control per binding and a near-miss value that must not read alive.
 
+## The one slot a queued trunk repair may be held
+
+Verified 2026-08-18, against the shipped build and twelve defect builds, by `tests/fm-slot-reservation.test.sh`.
+
+A pool may carry one reservation, which withholds a single demonstrably empty slot from every dispatch except the one task it names.
+`bin/fm-slot-reservation-lib.sh` owns the record, the admission predicate, and the release conditions; `bin/fm-worktree-guard.sh` applies it; `bin/fm-pool-lib.sh` owns where a pool's machine-private state lives, so the reservation and the pool selection lock cannot disagree about which directory that is.
+
+### The honest bound, which is the reason it exists and the reason it is small
+
+On 2026-08-16 the trunk was red, every pool slot held live work, and the repair stayed queued for hours behind unrelated dispatches while every lane cutting a worktree cut it from a broken trunk.
+
+**This would not have fixed that day.**
+The fleet was genuinely full and the repair would still have waited.
+What a reservation does is bound the worst case - the repair waits for the next slot rather than for a slot it happens to win - not remove the wait.
+It creates no capacity, guarantees no time bound, and promises no immediate start, so it must not be described as preventing trunk-red starvation.
+
+### What it may not do
+
+It never preempts.
+The reservation is read strictly after the emptiness test above, never in place of it, so no running lane is stopped, evicted, or reclaimed for one, and no slot holding unlanded work is touched.
+That is structural rather than a policy: there is no path through the applier that hands out a slot this guard would otherwise have refused.
+Case (3) pins it, and its defect build - the applier reached with the last-inspected occupied slot - is observed handing out a slot holding live work.
+
+It reserves one slot, not the pool, and it decides no order.
+A pool holds one reservation; a second request is refused naming the current holder rather than queued behind it, because choosing between several waiting repairs is a scheduler and none was asked for.
+Cases (8) and (10) pin both halves.
+
+### What counts as a trunk repair
+
+The predicate is established from state the opener resolves itself, never from what the requesting task says about itself.
+Opening one requires a project whose default branch resolves through `bin/fm-landed-lib.sh`, a trunk head the opener reads for itself rather than accepting from the caller, and a `bin/fm-verify.sh` record whose result is `FAIL`.
+`PASS` is refused because a trunk observed good needs no repair, and `NO_VERIFIER_RAN` is refused because an observation that did not happen is not evidence.
+
+That third condition is corroboration and not proof, and the boundary is stated rather than implied: firstmate declares no trunk-checks verifier today, so what can be required is that an observation ran and returned `FAIL`, not that a particular check proved this particular trunk red.
+Declaring such a verifier is the way to tighten it.
+What keeps that proportionate is the bound above - a reservation grants no capacity and cannot preempt, so the worst an unjustified one does is withhold one empty slot, visibly, until it expires.
+Case (9) pins the admission, including that the record names the observation that admitted it.
+
+### How it ends, which is stated because state nobody ends becomes a permanent hold
+
+Three release conditions, any one of which ends it:
+
+| Condition | Reached when | Case |
+| --- | --- | --- |
+| claimed | its holder is handed the slot, which `select` consumes at that moment | (11) |
+| `landed_or_superseded` | the recorded ref no longer points at the recorded head, so the repair landed or something else ended the situation | (5) |
+| `expired` | the TTL, default 7200 seconds and recorded in the record, has run out | (4) |
+
+The TTL is the unconditional backstop for the abandoned case and needs no other condition to hold: a dropped repair leaves a trunk that never moves, so without a clock the record would withhold a slot until a person noticed it.
+It is deliberately shorter than a repair might take, because expiry does not cancel a repair - it only stops withholding a slot for one - while a TTL long enough to cover every repair is long enough for an abandoned reservation to survive into a day nobody remembers opening it.
+
+The clock is therefore checked before the trunk read, because a clock is readable whatever else is broken.
+
+### Three-valued throughout
+
+`absent` and `unreadable_record` are different facts and reach different branches with different output.
+An absent reservation is silent, because nothing is being withheld.
+A reservation whose state could not be observed - an unparseable record, or a trunk ref that could not be resolved - withholds nothing **and says so**, because a slot silently withheld on a record nobody can read is precisely the invisible permanent hold this design exists to avoid.
+Case (6) pins the distinction against a defect build that collapses the could-not-observe branch into the same silence as absence.
+
+### Non-vacuity
+
+Case (7) is the control: with no reservation in the pool, an ordinary dispatch still gets a free slot.
+Case (12) is the acceptance sequence end to end - a full pool starts nothing, one slot frees, an unrelated dispatch reaches the pool first and is refused, and the queued repair takes the slot that freed.
+
+Every case is asserted green against the shipped build and red against its own defect build planted in the exact production bytes it depends on, and the suite closes on positive executed counts rather than an absence of failures:
+
+```
+$ bash tests/fm-slot-reservation.test.sh | tail -3
+FM_TEST_CONTRACT suite=fm-slot-reservation.test.sh status=pass
+FM_SLOT_RESERVATION_COUNTS properties_green=12 defect_builds_red=12
+```
+
+A plant whose target bytes are absent, or present more than once, fails its case outright, so a defect build that did not apply can never leave an ordinary green run reading as a watched red.
+
 ## Boundaries this guard does not cross
 
 The guard never resets, cleans, forces, discards, or releases a slot; it only names one to allocate, or refuses the spawn.

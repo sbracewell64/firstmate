@@ -320,6 +320,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-qualification-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
+# shellcheck source=bin/fm-pool-lib.sh
+. "$SCRIPT_DIR/fm-pool-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -1071,54 +1073,12 @@ spawn_herdr_presentation_order_lock_release() {
 # nothing until the holder process occupies the chosen slot, so two spawns
 # selecting concurrently would both pick the same first-clean slot. The
 # contenders are every home spawning into the pool, so the lock can never live
-# under $STATE, which is per-home; it uses the same machine-private /tmp
-# namespace shape as the herdr presentation lock (bin/backends/herdr.sh), with
-# the same ownership and mode validation before use.
-spawn_pool_select_lock_namespace_mode() {
-  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-    stat -f '%Lp' "$1" 2>/dev/null
-  else
-    stat -c '%a' "$1" 2>/dev/null
-  fi
-}
-
-spawn_pool_select_lock_namespace_uid() {
-  if [ "$(uname -s 2>/dev/null)" = Darwin ]; then
-    stat -f '%u' "$1" 2>/dev/null
-  else
-    stat -c '%u' "$1" 2>/dev/null
-  fi
-}
-
-spawn_pool_select_lock_namespace_valid() {
-  local dir=$1 expected_uid owner mode
-  [ -d "$dir" ] && [ ! -L "$dir" ] || return 1
-  expected_uid=$(id -u 2>/dev/null) || return 1
-  owner=$(spawn_pool_select_lock_namespace_uid "$dir") || return 1
-  mode=$(spawn_pool_select_lock_namespace_mode "$dir") || return 1
-  [ "$owner" = "$expected_uid" ] && [ "$mode" = 700 ]
-}
-
+# under $STATE, which is per-home. bin/fm-pool-lib.sh is the single owner of that
+# machine-private namespace, its ownership and mode validation, and the key that
+# names one pool, so the lock and the pool's slot reservation cannot drift into
+# disagreeing about which directory a pool's state lives in.
 spawn_pool_select_lock_path() {  # <pool-real>
-  local pool=$1 hash key dir
-  [ -n "$pool" ] || return 1
-  if command -v shasum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$pool" | shasum -a 256 2>/dev/null | awk '{print $1}')
-  elif command -v sha256sum >/dev/null 2>&1; then
-    hash=$(printf '%s' "$pool" | sha256sum 2>/dev/null | awk '{print $1}')
-  else
-    return 1
-  fi
-  [ -n "$hash" ] || return 1
-  key=${hash:0:32}
-  dir=/tmp/firstmate-worktree-pool
-  if [ ! -e "$dir" ] && [ ! -L "$dir" ]; then
-    if ! mkdir -m 700 "$dir" 2>/dev/null; then
-      spawn_pool_select_lock_namespace_valid "$dir" || return 1
-    fi
-  fi
-  spawn_pool_select_lock_namespace_valid "$dir" || return 1
-  printf '%s/select-%s.lock' "$dir" "$key"
+  fm_pool_state_path "$1" select .lock
 }
 
 # A lock that cannot be acquired refuses the spawn: proceeding unlocked would
@@ -1127,7 +1087,7 @@ spawn_pool_select_lock_path() {  # <pool-real>
 spawn_pool_select_lock_acquire() {  # <pool-real>
   local pool=$1 attempt max
   if ! WT_POOL_LOCK=$(spawn_pool_select_lock_path "$pool"); then
-    echo "error: cannot resolve the pool selection lock for $pool: /tmp/firstmate-worktree-pool is not this user's mode-700 directory and could not be created; refusing to choose a slot unserialized" >&2
+    echo "error: cannot resolve the pool selection lock for $pool: ${FM_POOL_NAMESPACE_DIR:-$FM_POOL_NAMESPACE_DEFAULT} is not this user's mode-700 directory and could not be created; refusing to choose a slot unserialized" >&2
     return 1
   fi
   attempt=0
@@ -2223,7 +2183,11 @@ WT_SLOT_NAME=
 WT_SLOT_REAL=
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_pool_select_lock_acquire "$PROJ_ABS_REAL" || exit 1
-  wt_selection=$("$FM_ROOT/bin/fm-worktree-guard.sh" select "$PROJ_ABS_REAL") || exit 1
+  # --for names this task, which is what a pool's slot reservation is matched
+  # against: a queued trunk repair's reservation withholds one empty slot from
+  # every other dispatch, and hands it over - and is consumed - only here, for
+  # the one task it names (bin/fm-slot-reservation-lib.sh).
+  wt_selection=$("$FM_ROOT/bin/fm-worktree-guard.sh" select "$PROJ_ABS_REAL" --for "$ID") || exit 1
   if [ -n "$wt_selection" ]; then
     WT_SLOT_NAME=${wt_selection%%$'\t'*}
     WT_SLOT_REAL=$(real_path_or_raw "${wt_selection#*$'\t'}")
