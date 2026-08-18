@@ -1435,6 +1435,85 @@ test_missing_commitment_interpreter_is_not_a_quiet_session_start() {
   pass "an absent commitment interpreter is reported, never silently skipped"
 }
 
+# The OTHER way the same relay goes quietly vacuous, and the one that was open.
+# The absence guard above answers "is the interpreter there?"; its green was
+# being credited with "did the interpreter answer?". A register that is PRESENT
+# and CRASHES - a malformed schema, an absent jq, an unreadable overlay - had its
+# stderr discarded and its exit status thrown away, so it printed nothing at all,
+# and a silent COMMITMENT section is defined to mean no action is needed.
+test_failing_commitment_interpreter_is_not_a_quiet_session_start() {
+  local case_dir fakebin home fakescripts f out stub
+  case_dir="$TMP_ROOT/commitment-crash"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    case "${f##*/}" in fm-commitment-register.sh) continue ;; esac
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  stub="$fakescripts/fm-commitment-register.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  # NEGATIVE CONTROL FIRST. An interpreter that runs and reaches the "everything
+  # is satisfied" verdict must leave the section silent, or every assertion below
+  # is satisfied by unrelated noise.
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$stub"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_not_contains "$out" "COMMITMENT:" \
+    "control: a satisfied register must stay silent, or this case proves nothing"
+
+  # THE DEFECT: present, ran, crashed, and spoke only on stderr.
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+printf 'fm-commitment-register: commitments/schema.json is not valid JSON\n' >&2
+exit 5
+SH
+  chmod +x "$stub"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: register unevaluable" \
+    "a register that crashed must not read as a clean register"
+  assert_contains "$out" "exited 5" \
+    "the line must carry the status the register actually returned"
+  assert_contains "$out" "commitments/schema.json is not valid JSON" \
+    "the register's own words went to stderr and must survive the relay"
+
+  # A verdict status that renders NOTHING is not a verdict anyone can read.
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+exit 3
+SH
+  chmod +x "$stub"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: register unevaluable" \
+    "a non-zero verdict that printed nothing must not pass as reported"
+  assert_contains "$out" "reported nothing" \
+    "the line must say the register produced no report"
+
+  # NON-VACUITY: a register that runs and reaches a verdict still renders that
+  # verdict, and gains no unevaluable line on top of it.
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+printf 'COMMITMENT: some-commitment UNMET (RULED-NOT-ENFORCED) - the owner is not present and executable\n'
+exit 3
+SH
+  chmod +x "$stub"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: some-commitment UNMET (RULED-NOT-ENFORCED)" \
+    "a real verdict must still be relayed verbatim"
+  assert_not_contains "$out" "register unevaluable" \
+    "a register that answered must not also be reported as unevaluable"
+  pass "a commitment register that runs and fails is reported, never silently skipped"
+}
+
 test_outbound_sweep_has_bootstrap_deadline() {
   local case_dir fakebin home fakescripts f out
   case_dir="$TMP_ROOT/outbound-timeout"
@@ -1590,6 +1669,7 @@ test_validation_daemon_unused_root_is_silent
 test_wake_ledger_terminal_sweep_reports_only_durable_records
 test_open_commitment_denies_a_quiet_session_start
 test_missing_commitment_interpreter_is_not_a_quiet_session_start
+test_failing_commitment_interpreter_is_not_a_quiet_session_start
 test_outbound_sweep_has_bootstrap_deadline
 test_outbound_deadline_relays_what_the_sweep_established
 test_outbound_reconcile_failure_is_reported

@@ -1161,9 +1161,16 @@ test_reconcile_emits_sol_control_only() {
   jq '.backlog.records[0].contribution_venue = "o/r"
     | .backlog.records[0].pr_url = null' "$dir/snap.json" > "$dir/snap2.json"
   mv "$dir/snap2.json" "$dir/snap.json"
+  # The branch this row is about. Without it the sweep cannot bind an exact head
+  # at all, so it never reaches the pull-request probe - and this case would be
+  # asserting an unbindable identity while claiming to assert a missing pull
+  # request. A MISSING artifact is only provable once the head is observable.
+  git -C "$dir/home/projects/demo" branch "fm/waiting-item" "$HEAD_A"
   : > "$dir/forge/post_log"
   out=$(run_ob "$dir" reconcile 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "cadence: detect-only missing PR did not remain red: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_NO_ARTIFACT' \
+    || fail "cadence: red for a reason other than the missing pull request: $out"
   [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
     || fail "cadence: reconcile gained pull-request delivery authority"
   pass "cadence: reconcile emits sol-control and leaves pull requests detect-only"
@@ -1606,9 +1613,62 @@ test_incomplete_binding_refuses_rather_than_emitting_vaguely() {
   printf '%s' "$out" | grep -q 'head' || fail "control 8: the missing field was not named: $out"
   posts=$(wc -l < "$dir/forge/post_log")
   [ "$posts" -eq 0 ] || fail "control 8: a vague request was posted anyway ($posts)"
+  # EMITTING and OBSERVING ask different questions of the same binding, so they
+  # get different answers. Emit is an ACTION: a request cannot be constructed
+  # without a head, so it refuses at 3 and the item stays red. Check is an
+  # OBSERVATION: the head could not be READ, so the sweep never looked at the
+  # forge and may not report an absence. It reaches 4, which is still not clean
+  # and still not zero.
   out=$(run_ob "$dir" check 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "control 8: the unbindable item was not left red, exit $rc"
-  pass "control 8: an incomplete binding refuses to emit and leaves the item red"
+  [ "$rc" -eq 4 ] || fail "control 8: the unbindable item did not stay non-clean, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_HEAD_UNOBSERVED' \
+    || fail "control 8: an unreadable head was not reported as unobserved: $out"
+  pass "control 8: an incomplete binding refuses to emit and leaves the item non-clean"
+}
+
+# A sweep that holds BOTH answers. This is the case the exit fold was skipping:
+# sweep_exit tested `defects` first and returned, so `unevaluable` was never
+# consulted and the command reported 3 - the fleet is provably wrong - while the
+# module's own severity order, written directly above that function, makes the
+# honest answer 4. A caller reading only the exit status is exactly the caller
+# the file header invites, and it was being told the wrong one of the two.
+#
+# An unevaluable-ONLY sweep already reached 4 before this fix, so it cannot be
+# the red control: only the mixed sweep can distinguish the fold from the ladder.
+test_exit_status_is_the_declared_fold_not_a_defect_shortcut() {
+  local dir out rc json defects unevaluable
+  dir=$(new_case exit-fold)
+  # The could-not-observe half: a free-form backlog row carries no typed state,
+  # so the recognizer genuinely cannot say whether it is waiting.
+  jq '.backlog.records += [{order:3,state:"queued",structured:false,
+        id:"free-form-row",title:null,hold_kind:null,hold_reason:null,
+        repo:"demo",pr_url:null,body_excerpt:null}]' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+
+  json=$(run_ob "$dir" check --json 2>/dev/null)
+  defects=$(printf '%s' "$json" | jq '[.rows[] | select(.verdict=="defect")] | length')
+  unevaluable=$(printf '%s' "$json" | jq '[.rows[] | select(.verdict=="unevaluable")] | length')
+  # Non-vacuity: this case proves nothing unless the sweep really does hold both.
+  [ "$defects" -ge 1 ] \
+    || fail "exit fold: the fixture produced no defect row, so the fold is untested ($json)"
+  [ "$unevaluable" -ge 1 ] \
+    || fail "exit fold: the fixture produced no could-not-observe row, so the fold is untested ($json)"
+
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "exit fold: $defects defect + $unevaluable could-not-observe exited $rc, not the folded 4: $out"
+  # The 4 must not have cost the defect its own report.
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_NO_ARTIFACT' \
+    || fail "exit fold: folding to 4 lost the defect's line: $out"
+
+  # NON-VACUITY, the other direction: a defect with nothing unobserved beside it
+  # still drives the exit, and still drives it to 3 rather than being folded away.
+  write_snapshot "$dir/snap.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "exit fold: a defect-only sweep no longer exits 3, got $rc: $out"
+  pass "exit fold: the exit is the module's severity fold over both counts, not a defect shortcut"
 }
 
 test_unobservable_forge_is_not_a_pass() {
@@ -1625,6 +1685,108 @@ test_unobservable_forge_is_not_a_pass() {
   printf '%s' "$out" | grep -q '0 satisfied' \
     || fail "control 9: an unobservable artifact was counted as satisfied: $out"
   pass "control 9: an unobservable artifact is could-not-observe, never a pass"
+}
+
+# An exact head that could not be READ is a failed observation, and a failed
+# observation may not be rendered as an observed absence. The sweep asked the
+# declaration, the forge and the clone; none answered; it never looked at the
+# forge for an artifact at all. Reporting that as "no applicable durable
+# artifact" derives a claim about the forge from a failed local read - while
+# three sibling tokens naming the identical condition all reach unevaluable.
+#
+# The three arms below are one control: the head-only case must move, and the
+# two structural cases must NOT, or the repair is just a quieter sweep.
+test_unreadable_head_is_could_not_observe_not_an_absent_artifact() {
+  local dir out rc json verdict
+  dir=$(new_case head-unreadable)
+  # A TYPED gate, so the head is the only thing the binding lacks. The gate file
+  # declares no head on purpose, and the forge answers nothing for the pull
+  # request, and the clone carries no fm/waiting-item ref.
+  write_snapshot "$dir/snap.json" outbound "awaiting Browser Sol"
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n '{gate:"AWAITING_BROWSER_SOL"}' > "$dir/home/data/waiting-item/outbound-gate.json"
+  : > "$dir/forge/head"
+
+  json=$(run_ob "$dir" check --json 2>/dev/null)
+  [ "$(printf '%s' "$json" | jq -r '[.rows[] | select(.item=="waiting-item")] | length')" -eq 1 ] \
+    || fail "unreadable head: the fixture did not produce exactly one row for the item: $json"
+  [ "$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .missing')" = head ] \
+    || fail "unreadable head: the fixture left more than the head unbound, so it tests the wrong case: $json"
+  verdict=$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .verdict')
+  [ "$verdict" = unevaluable ] \
+    || fail "unreadable head: classified as '$verdict', not could-not-observe: $json"
+  [ "$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .token')" \
+    = FM_OUTBOUND_HEAD_UNOBSERVED ] \
+    || fail "unreadable head: wrong token: $json"
+
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "unreadable head: exited $rc rather than could-not-observe: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_INCOMPLETE_BINDING' \
+    && fail "unreadable head: still rendered as an incomplete binding: $out"
+  # The RENDERED sentence, not just the token. The defect wording and the
+  # unobserved token contradicted each other inside a single line, and an
+  # operator acts on the sentence.
+  printf '%s' "$out" | grep -q 'could not be READ' \
+    || fail "unreadable head: the line does not say the head could not be read: $out"
+  out=$(run_ob "$dir" defects 2>&1)
+  printf '%s' "$out" | grep -q 'waiting-item.*no applicable durable artifact' \
+    && fail "unreadable head: the relay still asserts an absent artifact: $out"
+  printf '%s' "$out" | grep -q 'NOT reporting that none exists' \
+    || fail "unreadable head: the relay line does not refuse the absence claim: $out"
+
+  # NON-VACUITY 1: a structurally absent field is still a defect, even when the
+  # head is unreadable too. A read that succeeded and found no gate is not the
+  # same fact as a read that failed.
+  dir=$(new_case head-unreadable-and-untyped)
+  write_snapshot "$dir/snap.json" outbound "awaiting Browser Sol"
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n '{gate:"NOT_A_GATE"}' > "$dir/home/data/waiting-item/outbound-gate.json"
+  : > "$dir/forge/head"
+  json=$(run_ob "$dir" check --json 2>/dev/null)
+  [ "$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .verdict')" = defect ] \
+    || fail "untyped and headless: no longer a defect, which is a quieter sweep: $json"
+  [ "$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .token')" \
+    = FM_OUTBOUND_INCOMPLETE_BINDING ] \
+    || fail "untyped and headless: wrong token: $json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "untyped and headless: exited $rc rather than defect: $out"
+
+  # NON-VACUITY 2: a structurally absent field with a perfectly readable head is
+  # untouched by the split.
+  dir=$(new_case untyped-readable-head)
+  write_snapshot "$dir/snap.json" outbound "awaiting Browser Sol"
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n --arg h "$HEAD_A" '{gate:"NOT_A_GATE",head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  json=$(run_ob "$dir" check --json 2>/dev/null)
+  [ "$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .missing')" = gate ] \
+    || fail "untyped with a readable head: the fixture is not the structural case: $json"
+  [ "$(printf '%s' "$json" | jq -r '.rows[] | select(.item=="waiting-item") | .verdict')" = defect ] \
+    || fail "untyped with a readable head: no longer a defect: $json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "untyped with a readable head: exited $rc rather than defect: $out"
+  pass "unreadable head: an unread head is could-not-observe, while a structurally absent field stays a defect"
+}
+
+# Every other *_UNOBSERVED token in this vocabulary reaches unevaluable. The one
+# that did not was the defect. This pins the class rather than the instance, so
+# a future token cannot re-enter through the same door.
+test_no_unobserved_token_is_ever_rendered_as_a_defect() {
+  local dir json offenders
+  dir=$(new_case unobserved-class)
+  write_snapshot "$dir/snap.json" outbound "awaiting Browser Sol"
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n '{gate:"AWAITING_BROWSER_SOL"}' > "$dir/home/data/waiting-item/outbound-gate.json"
+  : > "$dir/forge/head"
+  json=$(run_ob "$dir" check --json 2>/dev/null)
+  # Non-vacuity: the sweep must actually carry an *_UNOBSERVED row.
+  [ "$(printf '%s' "$json" | jq '[.rows[] | select(.token | test("_UNOBSERVED$"))] | length')" -ge 1 ] \
+    || fail "unobserved class: no *_UNOBSERVED row was produced, so this control measured nothing: $json"
+  offenders=$(printf '%s' "$json" | jq -r \
+    '[.rows[] | select(.verdict=="defect") | select(.token | test("_UNOBSERVED$")) | .token] | join(",")')
+  [ -z "$offenders" ] \
+    || fail "unobserved class: a could-not-observe token was rendered as a defect: $offenders"
+  pass "unobserved class: no *_UNOBSERVED token reaches a defect verdict"
 }
 
 test_detect_only_channel_refuses_to_emit() {
@@ -1852,11 +2014,15 @@ exit 1
 SH
   chmod +x "$dir/bin/gh"
   out=$(run_ob "$dir" check 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "forge error: expected a defect, got $rc: $out"
+  [ "$rc" -eq 4 ] || fail "forge error: expected could-not-observe, got $rc: $out"
   printf '%s' "$out" | grep -q 'Not Found' \
     && fail "forge error: a 404 body was carried forward as the exact head: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_HEAD_UNOBSERVED' \
     || fail "forge error: not reported as an unobserved head: $out"
+  # A failed read is not evidence about the forge. The verdict must be the third
+  # value, not the defect one: nothing here establishes that no artifact exists.
+  printf '%s' "$out" | grep -q 'COULD NOT OBSERVE' \
+    || fail "forge error: an unobserved head was not sectioned as could-not-observe: $out"
   pass "forge error: an error payload is no observation, not a head"
 }
 
@@ -2080,7 +2246,10 @@ test_terminal_request_is_not_applicable
 test_request_requires_readable_correlation
 test_close_requires_resumed_work
 test_incomplete_binding_refuses_rather_than_emitting_vaguely
+test_exit_status_is_the_declared_fold_not_a_defect_shortcut
 test_unobservable_forge_is_not_a_pass
+test_unreadable_head_is_could_not_observe_not_an_absent_artifact
+test_no_unobserved_token_is_ever_rendered_as_a_defect
 test_detect_only_channel_refuses_to_emit
 test_independent_review_precedes_handoff_submission
 test_architecture_ruling_precedes_handoff_submission
