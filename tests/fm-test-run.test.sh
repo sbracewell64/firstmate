@@ -1138,6 +1138,10 @@ if action == "diverge":
         copied_match.group(1), timeout + 1, copied_match.group(3)
     )
     path.write_text("".join(lines), encoding="utf-8")
+elif action == "duplicate":
+    timeout_index, _, _ = field("tests-portable-serial", "timeout-minutes")
+    lines.insert(timeout_index, lines[timeout_index])
+    path.write_text("".join(lines), encoding="utf-8")
 elif action != "check":
     raise SystemExit("unknown action: %s" % action)
 elif timeout != copied_timeout:
@@ -1169,17 +1173,8 @@ test_serial_budget_control_refuses_a_foreign_timeout_literal() {
 
   duplicate="$tmp/duplicate.yml"
   cp "$ROOT/.github/workflows/ci.yml" "$duplicate"
-  python3 - "$duplicate" <<'PY'
-from pathlib import Path
-import sys
-
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8")
-needle = "    timeout-minutes: 15\n"
-if text.count(needle) != 1:
-    raise SystemExit("portable serial timeout fixture is not unique")
-path.write_text(text.replace(needle, needle + needle), encoding="utf-8")
-PY
+  fm_check_ci_serial_timeout_link "$duplicate" duplicate \
+    || fail "the workflow timeout link fixture must gain a duplicate field"
   set +e
   fm_check_ci_serial_timeout_link "$duplicate" >/dev/null 2>"$tmp/duplicate.err"
   rc=$?
