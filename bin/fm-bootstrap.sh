@@ -18,6 +18,10 @@
 #                  _scheduling.admission_control - <reason>",
 #                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",
 #                 "COMMITMENT: register unreadable - <reason>",
+#                 "OUTBOUND: <item> is waiting on <gate> with no applicable
+#                  durable artifact (<token>) - <evidence>",
+#                 "OUTBOUND: <item> artifact state COULD-NOT-OBSERVE (<token>) - <evidence>",
+#                 "OUTBOUND: sweep unevaluable - <reason>",
 #                 "FLEET_SYNC: <repo>: skipped|recovered|STUCK: <detail>",
 #                 "PR_CHECK_MIGRATION: <private remediation>",
 #                 "VALIDATION_DAEMON: down|unknown - <evidence>",
@@ -114,12 +118,17 @@
 #          wake_ledger_terminal_sweep mutates too and honours the same flag by
 #          switching to its dry run, so a read-only session still REPORTS the
 #          declared failures it declined to record.
+#          outbound_artifact_report mutates too - it reconciles missing
+#          sol-control requests onto the forge - and honours the same flag by
+#          running the detect-only sweep instead, so a read-only session still
+#          REPORTS every stranded item without emitting anything for it.
 #          The TANGLE line switches to advisory-only wording with no
 #          checkout command. Used by
 #          fm-session-start.sh's read-only path when another live session holds
 #          the fleet lock, so a second concurrent session never race-mutates
 #          PR-check artifacts, secondmate homes, pending handoff outboxes,
-#          X-mode artifacts, project clones, or repair instructions.
+#          X-mode artifacts, project clones, outbound control requests, or
+#          repair instructions.
 #          Unset/0 (the default) runs every sweep exactly as before - this flag
 #          is purely additive.
 #        fm-bootstrap.sh install <tool>...
@@ -962,6 +971,112 @@ commitment_register_report() {
   printf '%s\n' "$out"
 }
 
+# Relay every item waiting on an outbound artifact that does not exist.
+#
+# This is the structural half of the outbound transport invariant, and it is the
+# half that makes it an invariant rather than a command. The defect it reports -
+# work sitting in a waiting state that nobody ever asked anyone about - is
+# INVISIBLE by construction: it produces no failure, no error, and no wake, which
+# is exactly how four pull requests waited days for a review nobody had requested
+# and three finished branches were never offered to anyone. Nothing surfaced them
+# until a person went looking. Session start is where that stops being luck.
+#
+# A mutable locked session reconciles missing sol-control requests before
+# reporting, while a detect-only lock-refused session performs the same bounded
+# read without emitting. Pull-request waits remain detect-only in both paths.
+# It is never suppressed by age, count, or rate: quieting the question would hide
+# a genuine stranded item along with the noise, which is the failure it prevents.
+# bin/fm-outbound-artifact.sh owns the sweep, the verdicts, and the exact line
+# wording; this function only relays it.
+#
+# An ABSENT command is the one way this relay could go quietly vacuous, so it is
+# the loudest case here rather than the silent one. A home running a bin/ that
+# predates the invariant, or one whose exec bit a checkout dropped, would
+# otherwise report a clean fleet while nothing checked at all - which is the
+# reads-as-working-while-doing-nothing shape the whole mechanism refuses.
+#
+# THE DEADLINE HAS ITS OWN NAME. This bounds the WHOLE sweep - poll, sweep, every
+# emit, and the sweep again - while FM_OUTBOUND_TIMEOUT bounds ONE forge or git
+# observation inside it. They were the same variable, and a single name cannot
+# carry both: raising it to give the sweep room widened every individual probe by
+# the same factor, and leaving it at one probe's worth meant a single slow probe
+# could consume the entire sweep and the whole run was reported as unevaluable
+# with real defects already found and discarded. The default is deliberately
+# several probe timeouts wide so that relationship is visible in the numbers.
+# docs/vocabulary-collisions.md carries the ruling and its retirement point.
+outbound_artifact_report() {
+  local bin="$SCRIPT_DIR/fm-outbound-artifact.sh" out tmp deadline pid start elapsed child_rc
+  local monitor_was_on
+  if [ ! -x "$bin" ]; then
+    printf 'OUTBOUND: sweep unevaluable - %s is missing or not executable, so no waiting item could be checked\n' \
+      "bin/fm-outbound-artifact.sh"
+    return 0
+  fi
+  deadline=${FM_OUTBOUND_BOOTSTRAP_DEADLINE:-60}
+  case $deadline in
+    ''|*[!0-9]*|0) deadline=60 ;;
+  esac
+  tmp=$(mktemp "${TMPDIR:-/tmp}/fm-outbound-bootstrap.XXXXXX" 2>/dev/null) || {
+    printf 'OUTBOUND: sweep unevaluable - bootstrap could not allocate bounded sweep output\n'
+    return 0
+  }
+  monitor_was_on=0
+  case $- in *m*) monitor_was_on=1 ;; esac
+  set -m 2>/dev/null || true
+  if [ "${FM_BOOTSTRAP_DETECT_ONLY:-0}" = 1 ]; then
+    FM_HOME="$FM_HOME" "$bin" defects >"$tmp" 2>&1 &
+  else
+    FM_HOME="$FM_HOME" "$bin" reconcile >"$tmp" 2>&1 &
+  fi
+  pid=$!
+  start=$SECONDS
+  while jobs -r -p | grep -qx "$pid"; do
+    elapsed=$((SECONDS - start))
+    if [ "$elapsed" -ge "$deadline" ]; then
+      kill -TERM "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
+      wait "$pid" 2>/dev/null || true
+      [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+      # THE DEADLINE BOUNDS THE WORK, NEVER THE REPORT ABOUT WORK ALREADY DONE.
+      # Whatever the child had already established is relayed first and the
+      # incompleteness marker follows it, because the two halves say different
+      # things and neither substitutes for the other: findings without the
+      # marker read as a full sweep, and the marker without the findings throws
+      # away defects whose discovery already cost the probes.
+      # fleet_sync_bootstrap above already relays its partial output the same
+      # way before its own timeout line; this is that rule applied here.
+      out=$(cat "$tmp" 2>/dev/null || true)
+      rm -f "$tmp"
+      [ -z "$out" ] || printf '%s\n' "$out"
+      printf 'OUTBOUND: sweep unevaluable - bootstrap deadline expired after %ss; any OUTBOUND line above this one is what the sweep established before it was stopped, and the sweep is INCOMPLETE\n' "$deadline"
+      return 0
+    fi
+    sleep 0.1
+  done
+  wait "$pid" 2>/dev/null
+  child_rc=$?
+  [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+  out=$(cat "$tmp" 2>/dev/null || true)
+  rm -f "$tmp"
+  # WHAT THE CHILD'S STATUS MEANS, RESTATED HERE BECAUSE IT CHANGED.
+  # `reconcile` no longer stops at its first refusal: it attempts every selected
+  # item, renders the report on the way out regardless, and returns the WORST
+  # thing that happened rather than the place it stopped.
+  #
+  # The exactly-3 skip survives that change, but for a different reason than the
+  # one it was written for. It used to mean "3 is where it stopped, and the rows
+  # it did reach are in $out". It now means "3 is the worst outcome, and every
+  # defect that produced it is already an OUTBOUND: line in $out" - so a relay
+  # line here would restate what the operator can already read.
+  # 4 keeps its line: a could-not-observe can come from a phase whose reason is
+  # only in un-prefixed stderr, so without this line it would carry no token the
+  # bootstrap-diagnostics skill triggers on.
+  if [ "$child_rc" -ne 0 ] && [ "$child_rc" -ne 3 ]; then
+    printf 'OUTBOUND: sweep unevaluable - reconciliation exited %s while waiting items may remain without artifacts\n' "$child_rc"
+  fi
+  [ -n "$out" ] || return 0
+  printf '%s\n' "$out"
+}
+
 model_registry_validate() {
   local reg dispatch err drift routed
   reg="$CONFIG/models.json"
@@ -1373,6 +1488,7 @@ if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] && [ -n "$crew" ] && [ "$crew" != 
   echo "BOOTSTRAP_INFO: crew harness override active: $crew"
 fi
 commitment_register_report
+outbound_artifact_report
 crew_dispatch_validate
 model_registry_validate
 admission_control_validate

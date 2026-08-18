@@ -180,6 +180,37 @@ An absent file means the seam is unconfigured, which is the shipped default and 
 The seam reports `wiring: not-wired` until the platform projection resolves this home's fleet task ids: a reachable launcher that names none of this fleet's work is projecting other identities, so consuming it as fleet truth would be the same silent contradiction the surface exists to prevent.
 [`verification/decision-surface.md`](verification/decision-surface.md) records the dated probe evidence and the command that refreshes it.
 
+## Browser Sol control venue (config/sol-control.json)
+
+[`bin/fm-outbound-artifact-lib.sh`](../bin/fm-outbound-artifact-lib.sh) owns the outbound transport invariant, while `bin/fm-outbound-artifact.sh` enforces it.
+Detecting that condition needs no configuration and always runs.
+Creating the missing artifact on the `sol-control` channel needs to know where to address it, and that is what this optional local, gitignored file holds.
+
+The file is one JSON object with two required fields.
+
+```json
+{ "repo": "owner/name", "issue": 2 }
+```
+
+`repo` is the control repository in `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
+`issue` may be a number or a string; both are read the same way.
+
+An absent or incomplete file does not make a waiting item clear.
+It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND_TRANSPORT_UNCONFIGURED`, exit 4 - because the sweep genuinely cannot see the venue it would have to look at.
+Detection and emission are separated exactly so an unconfigured venue can never read as a satisfied invariant.
+The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
+
+`fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects and unevaluable observations at every session start so a stranded item or a blind sweep surfaces without anyone going looking.
+Configuring this file is therefore also what lets a session start POST: a session holding the fleet lock reconciles the missing sol-control requests it finds, while a lock-refused or detect-only session performs the same bounded read and emits nothing.
+`bin/fm-bootstrap.sh`'s header owns that mutating-sweep list.
+[`verification/outbound-transport-invariant.md`](verification/outbound-transport-invariant.md) records the dated watched-red evidence for each control and the commands that refresh it.
+
+Two timeouts bound that session-start relay, and they are deliberately separate names for separate things.
+`FM_OUTBOUND_TIMEOUT` (default 15) bounds **one** forge or git observation inside the sweep; `bin/fm-outbound-artifact.sh` owns it and never applies it to a whole run.
+`FM_OUTBOUND_BOOTSTRAP_DEADLINE` (default 60) bounds the **whole** sweep that `bin/fm-bootstrap.sh` starts, and must stay several probe timeouts wide so a single slow observation cannot consume the run.
+When the deadline expires the sweep is terminated and reported as unevaluable rather than partially believed, because a sweep that was cut short did not answer the question either way.
+[`vocabulary-collisions.md`](vocabulary-collisions.md) carries the ruling that split the two names and the condition under which the split retires.
+
 ## Gate defaults (.no-mistakes.yaml)
 
 The tracked `.no-mistakes.yaml` keeps test evidence outside the repo and pins `commands.lint` to `bin/fm-lint.sh` so local lint matches CI.

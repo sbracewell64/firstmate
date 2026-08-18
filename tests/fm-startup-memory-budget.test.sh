@@ -75,6 +75,7 @@ new_bootstrap_world() {
   root="$world/root"
   home="$world/home"
   mkdir -p "$home/config" "$home/data" "$home/state" "$root/bin"
+  : > "$home/data/projects.md"
   git init -q -b main "$root"
   printf '%s\n' 'config/' > "$root/.gitignore"
   printf '%s\n' '# Firstmate test root' > "$root/AGENTS.md"

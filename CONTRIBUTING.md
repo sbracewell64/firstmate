@@ -78,6 +78,8 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 - Changes to runtime session backends (`bin/fm-backend.sh`, `bin/backends/`, and the scripts that dispatch through them) keep current setup and limits in the relevant backend guide and active empirical evidence in [`docs/verification/runtime-backends.md`](docs/verification/runtime-backends.md).
 - [`docs/documentation-audiences.md`](docs/documentation-audiences.md) and its machine-consumed inventory own prose classification; run `bin/fm-doc-audience-check.sh` after documentation changes.
 - Run `bin/fm-retrieval-check.sh --check` after changing a remote-collection read; [`bin/fm-control-read.sh`](bin/fm-control-read.sh) owns the retrieval contract, and [`docs/verification/control-plane-retrieval.md`](docs/verification/control-plane-retrieval.md) records the audit evidence.
+- Run `bin/fm-dead-predicate-check.sh` after adding or removing a function in an enrolled `bin/` file, because CI runs it too and a function with no call site fails the build.
+  Its own header owns the enrolment marker, the accepted call forms, the `# unused-by-design:` keep mark, and why a could-not-observe verdict is red.
 - In Markdown, put each full sentence on its own line.
 - `README.md` stays a concise overview plus pointers: it never carries a wall of inline detail.
   Route detail to the most specific `docs/` file (architecture, configuration, or a backend guide) and link to it instead.

@@ -43,6 +43,11 @@ unset TMUX TMUX_PANE HERDR_ENV HERDR_PANE_ID HERDR_SESSION HERDR_SOCKET_PATH \
 # treehouse's `get --help` advertises --lease only when FM_FAKE_TREEHOUSE_LEASE_HELP=1.
 make_fake_toolchain() {
   local dir=$1 fakebin
+  # Generic bootstrap cases model an observed-empty fleet, not a home whose
+  # project universe is unreadable to the outbound inventory sweep.
+  mkdir -p "$dir/home/data" "$(dirname "$dir")/home/data"
+  : > "$dir/home/data/projects.md"
+  : > "$(dirname "$dir")/home/data/projects.md"
   fakebin=$(fm_fakebin "$dir")
   fm_fake_exit0 "$fakebin" tmux node chrome-devtools-axi lavish-axi
   cat > "$fakebin/gh-axi" <<'SH'
@@ -575,11 +580,22 @@ test_orca_backend_gates_orca_tool_only_when_selected() {
 # cases catch the old "everything but orca demands tmux" bug: with the buggy
 # TOOLS list a herdr/zellij/cmux home would report MISSING: tmux here.
 make_fake_toolchain_no_tmux() {  # <case-dir> <extra-cli...>
-  local dir=$1 fakebin
+  local dir=$1 fakebin real_jq
   shift
   fakebin=$(make_fake_toolchain "$dir")
   rm -f "$fakebin/tmux"
-  fm_fake_exit0 "$fakebin" jq "$@"
+  fm_fake_exit0 "$fakebin" "$@"
+  # jq is stubbed elsewhere only to satisfy a presence check, but bootstrap's
+  # outbound sweep actually RUNS it, and an exit-0 stub that prints nothing makes
+  # that sweep correctly report could-not-observe - which is a real diagnostic,
+  # not the silence this case asserts. A genuine dependency present means the
+  # genuine binary here.
+  real_jq=$(command -v jq 2>/dev/null || true)
+  if [ -n "$real_jq" ]; then
+    ln -sf "$real_jq" "$fakebin/jq"
+  else
+    fm_fake_exit0 "$fakebin" jq
+  fi
   printf '%s\n' "$fakebin"
 }
 
@@ -1419,6 +1435,127 @@ test_missing_commitment_interpreter_is_not_a_quiet_session_start() {
   pass "an absent commitment interpreter is reported, never silently skipped"
 }
 
+test_outbound_sweep_has_bootstrap_deadline() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-timeout"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+sleep 5
+printf 'OUTBOUND: late result must not escape\n'
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_OUTBOUND_BOOTSTRAP_DEADLINE=1 \
+    "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: sweep unevaluable - bootstrap deadline expired after 1s" \
+    "a stalled outbound sweep must fail closed within its bootstrap deadline"
+  assert_not_contains "$out" "late result must not escape" \
+    "a terminated outbound sweep must not relay post-deadline output"
+  pass "bootstrap bounds the outbound sweep and reports timeout as unevaluable"
+}
+
+test_outbound_deadline_relays_what_the_sweep_established() {
+  # A DEADLINE BOUNDS THE WORK, NOT THE REPORT ABOUT WORK ALREADY DONE. The
+  # child prints a real defect and then hangs. Discarding its output at the
+  # deadline throws away a finding whose discovery already cost the probes and
+  # tells the operator nothing was established, which is the same silence the
+  # reconcile fixes were about, reached through the enclosing deadline instead
+  # of through control flow. Both halves are asserted: the finding must survive,
+  # and the incompleteness marker must still be there, because a bounded report
+  # that reads as a complete one is the opposite failure.
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-deadline-partial"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'OUTBOUND: early-item is waiting on a gate with no applicable durable artifact\n'
+sleep 30
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_OUTBOUND_BOOTSTRAP_DEADLINE=1 \
+    "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: early-item is waiting on a gate with no applicable durable artifact" \
+    "a deadline must not discard the findings the sweep had already established"
+  assert_contains "$out" "bootstrap deadline expired after 1s" \
+    "a bounded report must still carry its incompleteness marker"
+  assert_contains "$out" "the sweep is INCOMPLETE" \
+    "a bounded report must say plainly that it is not a clean sweep"
+  pass "bootstrap relays what a deadlined sweep established, and still marks it incomplete"
+}
+
+test_outbound_reconcile_failure_is_reported() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-failure"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+exit 4
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: sweep unevaluable - reconciliation exited 4" \
+    "a failed automatic reconciliation must not disappear as an empty report"
+  pass "bootstrap preserves and reports automatic reconciliation failure"
+}
+
+test_outbound_defect_is_not_reclassified_as_unevaluable() {
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-defect"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'OUTBOUND: pull-request missing durable artifact\n'
+exit 3
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: pull-request missing durable artifact" \
+    "a definitive outbound defect must be relayed"
+  assert_not_contains "$out" "OUTBOUND: sweep unevaluable" \
+    "a definitive outbound defect must not also be called unevaluable"
+  pass "bootstrap preserves definitive outbound defect classification"
+}
+
 test_bootstrap_reporting
 test_no_mistakes_min_version
 test_gh_axi_min_version
@@ -1453,3 +1590,7 @@ test_validation_daemon_unused_root_is_silent
 test_wake_ledger_terminal_sweep_reports_only_durable_records
 test_open_commitment_denies_a_quiet_session_start
 test_missing_commitment_interpreter_is_not_a_quiet_session_start
+test_outbound_sweep_has_bootstrap_deadline
+test_outbound_deadline_relays_what_the_sweep_established
+test_outbound_reconcile_failure_is_reported
+test_outbound_defect_is_not_reclassified_as_unevaluable

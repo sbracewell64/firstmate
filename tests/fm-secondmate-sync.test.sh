@@ -45,6 +45,7 @@ new_world() {
   local name=$1 w
   w="$TMP_ROOT/$name"
   mkdir -p "$w/home/state" "$w/home/data"
+  : > "$w/home/data/projects.md"
   # Fresh watcher beacon keeps fm-guard quiet for the spawn path.
   touch "$w/home/state/.last-watcher-beat"
 
