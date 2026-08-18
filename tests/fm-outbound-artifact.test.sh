@@ -1090,6 +1090,36 @@ test_reconcile_reports_the_emit_status_it_produced() {
   pass "cadence: reconcile reports the emit's own verdict, never the next sweep's"
 }
 
+test_reconcile_reports_every_item_after_one_refuses() {
+  # EARLY EXIT MAY STOP WORK; IT MAY NEVER SUPPRESS THE REPORT ABOUT WORK ALREADY
+  # DONE. Two waiting items, the first of which exhausts its transport and
+  # refuses. Before this control the refusal exited the shell, so the final
+  # sweep and the whole OUTBOUND report never ran - and at status 3
+  # bin/fm-bootstrap.sh prints no relay line of its own, so session start showed
+  # an un-prefixed reason and no OUTBOUND: token at all, which is the token the
+  # handling skill is loaded on. One item's refusal must not blind the operator
+  # to every other item.
+  local dir out rc posts
+  dir=$(new_case cadence-partial)
+  jq '.backlog.records += [(.backlog.records[0] | .order = 3 | .id = "waiting-item-two")]' \
+    "$dir/snap.json" > "$dir/snap2.json"
+  mv "$dir/snap2.json" "$dir/snap.json"
+  printf '3\n' > "$dir/forge/fail_remaining"
+  out=$(run_ob "$dir" reconcile 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "cadence partial: worst-of status was $rc, not the refused emit's 4: $out"
+  printf '%s' "$out" | grep -q 'transport failed after' \
+    || fail "cadence partial: the refusal's own reason was lost: $out"
+  printf '%s' "$out" | grep -q 'OUTBOUND: reconciliation refused an emit (status 4)' \
+    || fail "cadence partial: the refusal produced no OUTBOUND-prefixed line: $out"
+  printf '%s' "$out" | grep -q '^OUTBOUND: waiting-item ' \
+    || fail "cadence partial: the report was suppressed by one item's refusal: $out"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 1 ] \
+    || fail "cadence partial: reconcile stopped instead of attempting the second item ($posts posts)"
+  pass "cadence partial: a refused emit still leaves a complete report for every other item"
+}
+
 test_reconcile_releases_every_emit_lock() {
   # cmd_emit takes a per-request lock. Under reconcile it is called once per
   # waiting item in ONE process, so a lock released only at process exit leaves
@@ -1494,6 +1524,18 @@ test_request_requires_readable_correlation() {
     || fail "correlation: sweep did not name the foreign keyed record as an identity refusal: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
     && fail "correlation: sweep reported a readable foreign record as unreadable: $out"
+  # This branch is reached only after the artifact was OBSERVED, so describing
+  # it as absent would be false in the same way the unreadable collapse was.
+  printf '%s' "$out" | grep -q 'artifact: comment/' \
+    || fail "correlation: the row rendered an observed artifact as none: $out"
+  out=$(run_ob "$dir" defects 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "correlation: the relay line did not carry the defect verdict, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'no applicable durable artifact' \
+    && fail "correlation: an observed artifact was relayed as missing: $out"
+  printf '%s' "$out" | grep -q 'has its artifact comment/' \
+    || fail "correlation: the relay did not name the artifact it observed: $out"
+  printf '%s' "$out" | grep -q 'names a DIFFERENT request' \
+    || fail "correlation: the relay did not say what was actually refused: $out"
   # A MISMATCH is not could-not-observe. This record is perfectly readable and
   # says plainly that it belongs to another request, which is a correlation
   # defect (exit 3) and not a failure to observe (exit 4). The distinction is not
@@ -1951,6 +1993,7 @@ test_dedupe_observation_failure_refuses_to_post
 test_reconcile_emits_sol_control_only
 test_reconcile_reports_the_emit_status_it_produced
 test_reconcile_releases_every_emit_lock
+test_reconcile_reports_every_item_after_one_refuses
 test_ruling_wakes_the_exact_item
 test_quoted_prior_verdict_makes_the_ruling_ambiguous
 test_single_verdict_is_read_and_no_verdict_refuses

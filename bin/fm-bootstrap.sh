@@ -1042,6 +1042,19 @@ outbound_artifact_report() {
   [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
   out=$(cat "$tmp" 2>/dev/null || true)
   rm -f "$tmp"
+  # WHAT THE CHILD'S STATUS MEANS, RESTATED HERE BECAUSE IT CHANGED.
+  # `reconcile` no longer stops at its first refusal: it attempts every selected
+  # item, renders the report on the way out regardless, and returns the WORST
+  # thing that happened rather than the place it stopped.
+  #
+  # The exactly-3 skip survives that change, but for a different reason than the
+  # one it was written for. It used to mean "3 is where it stopped, and the rows
+  # it did reach are in $out". It now means "3 is the worst outcome, and every
+  # defect that produced it is already an OUTBOUND: line in $out" - so a relay
+  # line here would restate what the operator can already read.
+  # 4 keeps its line: a could-not-observe can come from a phase whose reason is
+  # only in un-prefixed stderr, so without this line it would carry no token the
+  # bootstrap-diagnostics skill triggers on.
   if [ "$child_rc" -ne 0 ] && [ "$child_rc" -ne 3 ]; then
     printf 'OUTBOUND: sweep unevaluable - reconciliation exited %s while waiting items may remain without artifacts\n' "$child_rc"
   fi

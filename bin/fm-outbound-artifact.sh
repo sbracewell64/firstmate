@@ -27,7 +27,9 @@
 #       the invariant holds, and never silent when it could not be checked.
 #   fm-outbound-artifact.sh reconcile
 #       Emit every complete sol-control request found missing by one sweep.
-#       Pull-request rows remain detect-only.
+#       Pull-request rows remain detect-only. Every selected item is attempted
+#       and the report is rendered on the way out REGARDLESS, so one item's
+#       refusal never hides another item's defect.
 #   fm-outbound-artifact.sh emit <item-id> [--rationale-file <path>] [--dry-run]
 #       Create or adopt the durable artifact for one item, on an emit-capable
 #       channel. Idempotent on the request identity.
@@ -49,6 +51,16 @@
 #      exists, or a refusal that must not be worked around
 #   4  unevaluable - the sweep could not observe what it needed, so the invariant
 #      may not be asserted either way
+#
+# RECONCILE'S STATUS IS THE WORST THING THAT HAPPENED, NOT WHERE IT STOPPED.
+# `reconcile` runs a poll, a sweep, one emit per selected item, and a second
+# sweep. It does not stop at the first refusal, because stopping the WORK and
+# suppressing the REPORT about work already done are different things and an
+# early exit did both: the final render sits after the emit loop, so a single
+# refused item printed its own un-prefixed reason and nothing else, at the one
+# moment an operator is reading. Each phase's status is folded by the module's
+# severity order - 4 outranks 3 outranks 0 - and the fold is what is returned.
+# A refused emit therefore still leaves a complete report behind it.
 #
 # 3 AND 4 ARE NOT INTERCHANGEABLE. 3 says the fleet is provably wrong. 4 says the
 # question was not answered. Reporting 4 as 0 is the exact conversion that hid
@@ -872,7 +884,7 @@ sweep() {
         ;;
       6)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
-          defect "$FM_OUTBOUND_TOKEN_IDENTITY" "" "" "$stale" >> "$rows"
+          defect "$FM_OUTBOUND_TOKEN_IDENTITY" "" "comment/$present" "$stale" >> "$rows"
         ;;
       *)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
@@ -948,13 +960,35 @@ render_defects() {
     printf 'OUTBOUND: sweep unevaluable - %s\n' "$(printf '%s' "$SWEEP" | jq -r '.reason')"
     return
   fi
-  printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="defect") |
-    "OUTBOUND: \(.item) is waiting on \(.gate // "an untyped gate") with no applicable durable artifact (\(.token)) - head \(.head // "unobserved"), channel \(.channel // "unknown")"'
+  # An identity refusal is reached only after the artifact was OBSERVED, so it
+  # must never borrow the no-artifact sentence. The three answers stay audibly
+  # different: this one is missing, this one could not be read, this one is not
+  # about this work - and only the first is an absence.
+  printf '%s' "$SWEEP" | jq -r --arg identity "$FM_OUTBOUND_TOKEN_IDENTITY" \
+    '.rows[] | select(.verdict=="defect") |
+     if .token == $identity then
+       "OUTBOUND: \(.item) has its artifact \(.artifact // "unnamed") on the forge, but the correlation record filed under \(.request_id // "an unnamed request") names a DIFFERENT request (\(.token)) - the artifact is present and its identity is refused, so the wait is not satisfied"
+     else
+       "OUTBOUND: \(.item) is waiting on \(.gate // "an untyped gate") with no applicable durable artifact (\(.token)) - head \(.head // "unobserved"), channel \(.channel // "unknown")"
+     end'
   printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="unevaluable") |
     "OUTBOUND: \(.item) artifact state COULD-NOT-OBSERVE (\(.token)) - its waiting is neither confirmed legitimate nor confirmed defective"'
   if [ "$(printf '%s' "$SWEEP" | jq -r '.capped')" = "true" ]; then
     printf 'OUTBOUND: probe cap %s reached - this sweep did not check every waiting item\n' "$MAX_PROBES"
   fi
+}
+
+# The module's severity order, in one place. 4 outranks 3 outranks 0: a question
+# that was not answered outranks an answer that says the fleet is wrong, because
+# the unanswered one may be hiding something worse. cmd_poll already folds its
+# per-comment statuses this way; this is that rule with a name.
+outbound_worst_status() {  # <status> <status> -> the worse of the two
+  local a=$1 b=$2
+  case $a in ''|*[!0-9]*) a=4 ;; esac
+  case $b in ''|*[!0-9]*) b=4 ;; esac
+  if [ "$a" -eq 4 ] || [ "$b" -eq 4 ]; then printf '4\n'; return 0; fi
+  if [ "$a" -ne 0 ]; then printf '%s\n' "$a"; return 0; fi
+  printf '%s\n' "$b"
 }
 
 sweep_exit() {
@@ -1465,28 +1499,49 @@ case $CMD in
     cmd_poll
     POLL_RC=$?
     sweep || true
-    # The emit loop runs in THIS shell, reading the selected rows from a file
-    # rather than from the end of a pipeline. A pipeline stage is a subshell, so
-    # its status has to be recovered by position from PIPESTATUS - which
-    # silently credits the wrong stage the moment a stage is added, and did:
-    # index 1 named jq, not the loop, so every emit refusal was discarded and
-    # reported as whatever the next sweep happened to say. Bash also resets the
-    # EXIT trap inside that subshell, so a per-emit lock taken there was never
-    # released. One temporary file removes both hazards and leaves the status
-    # unambiguous: cmd_emit's own refusals exit this shell directly.
+    # The selected rows are read from a FILE rather than from the end of a
+    # pipeline. A pipeline stage is a subshell whose status has to be recovered
+    # by position from PIPESTATUS, which silently credits the wrong stage the
+    # moment a stage is added - and did: index 1 named jq, not the loop, so
+    # every emit refusal was discarded and reported as whatever the next sweep
+    # happened to say.
     RECONCILE_ITEMS="$SCRATCH/reconcile-items"
     printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="defect" and .channel=="sol-control" and .missing==null) | .item' \
       > "$RECONCILE_ITEMS" || die "the sweep rows could not be read for reconciliation" 4
     probe_budget_reset
+    EMIT_RC=0
     while IFS= read -r ITEM; do
       [ -n "$ITEM" ] || continue
-      cmd_emit "$ITEM" "" 0
+      # THIS LINE THREADS BETWEEN TWO HAZARDS THAT HAVE BOTH ALREADY BITTEN.
+      #
+      # It must not become `cmd_emit ... || exit $?`, and it must not rely on
+      # cmd_emit exiting the shell by itself either. Both are the same early
+      # exit, and the report below sits AFTER this loop: one item's refusal
+      # would take every other item's defect line with it, and at status 3
+      # bin/fm-bootstrap.sh prints no line of its own, so session start would
+      # show an un-prefixed reason and no OUTBOUND: token at all.
+      #
+      # It must also not leak the per-request lock. cmd_emit releases the lock
+      # on its own success paths, but its refusals exit, and a status can only
+      # be captured here by running it in a subshell - where the parent's EXIT
+      # trap does not fire and the parent can no longer see EMIT_LOCK. The
+      # subshell therefore carries its own release trap.
+      #
+      # So: subshell for an EXPLICIT status at this line, own trap for the lock,
+      # accumulator instead of control flow for the refusal.
+      ( trap release_emit_lock EXIT; cmd_emit "$ITEM" "" 0 )
+      ITEM_RC=$?
+      EMIT_RC=$(outbound_worst_status "$EMIT_RC" "$ITEM_RC")
     done < "$RECONCILE_ITEMS"
+    # cmd_emit's refusals are un-prefixed by design - they name a token, not a
+    # relay. bin/fm-bootstrap.sh and the bootstrap-diagnostics skill both key on
+    # the OUTBOUND: prefix, so a refusal that never produced one would be a
+    # refusal no handling procedure is loaded for.
+    [ "$EMIT_RC" -eq 0 ] || printf 'OUTBOUND: reconciliation refused an emit (status %s) - its named reason is printed above, and the sweep below still reports every other item\n' "$EMIT_RC"
     sweep || true
     render_defects
     sweep_exit; SWEEP_RC=$?
-    [ "$POLL_RC" -eq 0 ] || exit "$POLL_RC"
-    exit "$SWEEP_RC"
+    exit "$(outbound_worst_status "$(outbound_worst_status "$POLL_RC" "$EMIT_RC")" "$SWEEP_RC")"
     ;;
   poll)
     [ $# -eq 0 ] || die "poll takes no arguments"

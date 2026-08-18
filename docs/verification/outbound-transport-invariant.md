@@ -30,12 +30,13 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap preserves definitive outbound defect classification
 ```
 
-The 71 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases pass.
+The 72 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases pass.
 What follows is why that sentence is worth anything.
 
 The focused suites were re-run on 2026-08-17 at exact implementation head `3c21e711075a75daa930d186811144d675c6ca09` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
 The same focused suites were re-run on 2026-08-18 at exact implementation head `24a78c1b0cd8bda51210d12daaaff074dff42aca`; the command exited 0 after the final empty could-not-observe section control was added.
 The same focused suites were re-run on 2026-08-18 at exact implementation head `06e11d6e929f0dd0e02574cc7098d4cae006ff8f` plus the review round below; the command exited 0 after the reconcile status, emit-lock, sweep identity, and unparsable-lifecycle controls were added.
+The same focused suites were re-run on 2026-08-18 at exact implementation head `876a69c43cef4f9a47664231eeb701196d22dbf8` plus the review round below; the command exited 0 after the reconcile report-completeness and observed-artifact-naming controls were added.
 
 ## Watched-red evidence, one mutation per control
 
@@ -156,6 +157,8 @@ Each row states what the control actually establishes and what it does not. A kn
 | `emit-lock-release` | Every emit releases its own per-request lock during the run rather than at process exit, so a multi-item `reconcile` leaves none behind | Drop the explicit release and rely on the EXIT trap - observed red, one lock left behind | Does not cover a process killed between acquiring and releasing; that lock is reclaimed by the dead-pid steal, which is a separate mechanism |
 | `sweep-identity-distinct` | The sweep reports a readable record naming another request as an identity refusal and a defect, never as an unreadable record | Collapse the mismatch return back onto the unreadable return - observed red, exit 4 and `RECORD_UNREADABLE` | Does not cover a record that is both foreign and unparseable; the unparseable answer wins, correctly |
 | `unparsable-lifecycle-row` | A candidate row whose lifecycle state cannot be parsed is work-state-unobserved, not a lifecycle conflict | Drop the zero-state branch so zero collapses onto the disagreement branch - observed red | Does not widen what the parser accepts; an indented row is still unreadable, it is now reported as unreadable rather than as a disagreement |
+| `reconcile-report-completeness` | Every selected item is attempted, the report renders on the way out regardless, and the returned status is the worst outcome rather than the place it stopped | Restore `cmd_emit ... \|\| exit $?` - observed red, output collapsed to one un-prefixed `transport failed after 3 attempts` line with no `OUTBOUND:` token at all | Does not cover a refusal that kills the process outright; a SIGKILL mid-emit still loses the report, and bootstrap's own deadline line is what covers that |
+| `observed-artifact-is-named` | An identity refusal names the artifact it actually observed and the request id whose record disagrees, and never borrows the no-artifact sentence | Pass an empty artifact and drop the token's own sentence - observed red, the row rendered `artifact: none` for an artifact the sweep had just read | Does not verify the named comment is still on the forge at read time; it reports the id this sweep observed |
 | `branch-inventory` | A completed ship `fm/<item>` branch with unlanded work and no exact-head pull request is a defect; non-ship work is skipped; unknown or conflicting work state is could-not-observe; landed work is excluded | Remove branch enumeration - the anchor returns to zero defects at exit 0 | Covers registered non-local-only projects and the `fm/<item>` namespace only; historical completion evidence is not bound to the current branch head |
 
 ## One recurrence, four instances: a canonical thing that exists and is not consulted
