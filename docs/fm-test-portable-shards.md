@@ -105,6 +105,7 @@ The lane-drift bound carries the stable semantic verdict, while shard headroom i
 The shard-headroom bound detects dangerous imbalance independently of lane growth, before an overloaded shard reaches its timeout.
 
 A job cannot read its own `timeout-minutes`, so the workflow passes its literal through `FM_SERIAL_TIMEOUT_MINUTES` and the control refuses a value that disagrees with the one its bounds were derived against, the same way a lane name carrying the wrong shard count is refused.
+The regression suite locates both workflow fields within their named job structures using only Python's standard library and refuses disagreement between the timeout literal and its copied environment value.
 
 ## Coverage guard
 
