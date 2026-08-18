@@ -56,6 +56,30 @@ fm_nm_field() {  # <toon-output> <key>
   printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2:[[:space:]]*\(.*\)/\1/p" | head -1
 }
 
+# The tool's own refusal, read from captured `axi status` output $1, or nothing
+# when it reported none.
+#
+# The tool writes a refusal to stdout as a leading `error:` line, and does NOT
+# always exit non-zero for one: `repo not initialized` exits 0 (measured
+# 2026-08-18 against no-mistakes v1.40.3), which is the state of every checkout
+# the pipeline was never set up in. A caller judging only the exit status
+# therefore reads a refusal as a run record, and every field below reads as
+# absent from it, so this belongs beside them rather than in each caller.
+#
+# Only the FIRST non-empty line is read. That is where the tool puts its own
+# refusal, and a run record is free to carry an `error` field about the run it
+# describes; a field inside a record is a fact about that run rather than the
+# tool declining to report one, and the two must not share a branch.
+fm_nm_error_line() {  # <toon-output>
+  printf '%s\n' "${1:-}" | awk '
+    /^[ \t]*$/ { next }
+    {
+      if (match($0, /^[ \t]*error:[ \t]*/)) print substr($0, RSTART + RLENGTH)
+      exit
+    }
+  '
+}
+
 # Names of the steps a run has completed, one per line, read from the
 # steps[N]{step,status,...} table in captured `axi status` output $1. The table
 # ends at the next key line, so a scalar or a later block is never read as a row.

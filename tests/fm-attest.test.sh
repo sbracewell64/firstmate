@@ -562,9 +562,9 @@ test_write_surfaces_a_tool_failure_instead_of_reporting_no_run() {
   local repo out rc
   repo="$TMP_ROOT/write-tool-error"
   new_repo "$repo"
-  # The real tool reports its own errors on stdout and exits non-zero, so the
-  # captured output looks like a run record to anything that only checks for
-  # emptiness.
+  # The real tool reports its own errors on stdout, so the captured output looks
+  # like a run record to anything that only checks for emptiness. This is the
+  # case where it also exits non-zero; the case where it does not is below.
   install_pipeline_stub "$repo/stub" \
     "error: repo not initialized (run 'no-mistakes init' first)" 1
   out=$(write_out "$repo")
@@ -575,6 +575,49 @@ test_write_surfaces_a_tool_failure_instead_of_reporting_no_run() {
   assert_contains "$out" "$STUB_STDERR_NOTICE" "the tool's stderr was not surfaced as detail"
   assert_not_contains "$out" "no-run-record" "a failing tool was reported as an absent run"
   pass "fm-attest.sh: write surfaces a failing pipeline tool rather than reporting no run"
+}
+
+# The same refusal without the non-zero exit, which is what the real tool does:
+# `repo not initialized` is written to stdout and the tool exits 0 (measured
+# 2026-08-18 against v1.40.3). Judged on the exit status alone it is a run
+# record, every field reads as absent from it, and the refusal reached says this
+# transcription needs updating - which is a repair to the wrong thing, on the
+# one path a contributor takes to clear the `Require no-mistakes` check.
+test_write_reports_a_refusing_tool_that_exited_zero_as_a_refusing_tool() {
+  local repo head out rc
+  repo="$TMP_ROOT/write-tool-error-zero"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  install_pipeline_stub "$repo/stub" \
+    "error: repo not initialized (run 'no-mistakes init' first)" 0
+  out=$(write_out "$repo")
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an attestation was emitted while the pipeline tool was refusing"
+  assert_contains "$out" "run-record-unreadable" "a refusing tool was not reported distinctly"
+  assert_contains "$out" "repo not initialized" "the tool's own message was swallowed"
+  assert_not_contains "$out" "run-record-unparsed" \
+    "a tool that refused was reported as a run record this transcription cannot read"
+  assert_not_contains "$out" "no-run-record" "a refusing tool was reported as an absent run"
+
+  # A run record carrying an `error` field of its own is a fact about that run,
+  # not the tool declining to report one, so the record still attests. Without
+  # this the refusal above could be had by treating any `error` anywhere as the
+  # tool refusing, which would refuse every failed run's record.
+  install_pipeline_stub "$repo/stub" \
+    "$(run_status_toon fm/demo "${head:0:8}" completed)
+error: the review step reported 1 finding"
+  out=$(write_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a run record naming an error of its own was read as a refusing tool: $out"
+
+  # The matched control: the same call on the same repository, differing only in
+  # that the tool reported its record rather than a refusal.
+  git -C "$repo" update-ref -d "$NOTES_REF"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(write_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the same repository was refused when the tool reported a run: $out"
+  pass "fm-attest.sh: a pipeline tool that refused without a non-zero exit is a refusing tool"
 }
 
 test_write_reports_a_record_with_no_head_as_a_record_fault() {
@@ -2975,6 +3018,7 @@ test_write_emits_an_attestation_the_gate_accepts
 test_write_refuses_a_later_commit_on_the_same_branch
 test_write_refuses_without_a_run_record
 test_write_surfaces_a_tool_failure_instead_of_reporting_no_run
+test_write_reports_a_refusing_tool_that_exited_zero_as_a_refusing_tool
 test_write_reports_an_unreadable_run_record_distinctly
 test_write_reports_a_record_with_no_head_as_a_record_fault
 test_write_attests_on_a_host_with_no_timeout_utility
