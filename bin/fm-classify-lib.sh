@@ -777,9 +777,9 @@ _fm_decision_probe_fenced() {  # <decision-file>
   return 1
 }
 
-# 0 when a registered probe REFUSES this closure, printing why on stdout; 1 when
-# the closure may be accepted (no probe registered, the probe passed, or the
-# criterion is attested rather than probed).
+# Returns 1 when the closure may be accepted, 2 when an executable probe is
+# available but unspent, 3 when a probe observed failure, and 4 when the result
+# is could-not-observe. Every non-pass result prints its reason on stdout.
 #
 # A probe that cannot run refuses the closure: could-not-observe is never a pass,
 # and accepting a resolution on an unobserved criterion is the exact failure the
@@ -801,15 +801,24 @@ _fm_decision_probe_fenced() {  # <decision-file>
 # command substitution, so a global set here dies with the subshell.
 decision_close_refused() {  # <task-id> <key> [home] [execute]
   local task=$1 key=$2 home=${3:-${FM_HOME:-}} execute=${4:-0}
-  local bin=$FM_CLASSIFY_COMMITMENT_BIN out rc
+  local bin=$FM_CLASSIFY_COMMITMENT_BIN out rc cache_only=1
   local -a mode=(--cache-only)
-  [ -n "$task" ] && [ -n "$key" ] || return 1
-  [ -n "$home" ] || return 1
+  if [ -z "$task" ] || [ -z "$key" ]; then
+    printf 'the decision-close subject is incomplete, so the resolution is not accepted'
+    return 4
+  fi
+  if [ -z "$home" ]; then
+    printf 'the decision home is unavailable, so the resolution is not accepted'
+    return 4
+  fi
   # ENUMERATION IS NOT VERIFICATION above owns why the default is --cache-only
   # and who may pass execute=1. The flag is dropped rather than negated, because
   # there is no "run it after all" switch to get wrong: executing is the
   # interpreter's default and this only ever declines it.
-  [ "$execute" != 1 ] || mode=()
+  if [ "$execute" = 1 ]; then
+    mode=()
+    cache_only=0
+  fi
   # Cheap gate first: no decision file, no registered probe, no cost.
   [ -f "$home/data/$task/decision-$key.md" ] || return 1
   _fm_decision_probe_fenced "$home/data/$task/decision-$key.md" || return 1
@@ -821,9 +830,10 @@ decision_close_refused() {  # <task-id> <key> [home] [execute]
     # with the reason.
     printf 'a registered probe for this criterion could not be ruled out and %s is not available to evaluate it, so the resolution is not accepted' \
       "${bin##*/}"
-    return 0
+    return 4
   fi
-  out=$(FM_HOME="$home" FM_COMMITMENT_REPORT_PROBE_AVAILABILITY=1 \
+  out=$(FM_HOME="$home" FM_COMMITMENT_PROBE_CACHE_ONLY="$cache_only" \
+    FM_COMMITMENT_REPORT_PROBE_AVAILABILITY=1 \
     "$bin" "${mode[@]+"${mode[@]}"}" --closes "$task" "$key" 2>/dev/null)
   rc=$?
   # Either way the text becomes a field beside TAB-separated fold records, and it
@@ -837,8 +847,12 @@ decision_close_refused() {  # <task-id> <key> [home] [execute]
     printf '%s' "$out" | tr '\n\t' '  '
     return 2
   fi
+  if [ "$rc" -eq 3 ]; then
+    printf '%s' "${out:-a registered probe for this criterion did not pass}" | tr '\n\t' '  '
+    return 3
+  fi
   printf '%s' "${out:-a registered probe for this criterion did not pass}" | tr '\n\t' '  '
-  return 0
+  return 4
 }
 
 # The verb currently recorded for <key>, or empty when the key is not open. Used
@@ -896,7 +910,7 @@ EOF
 # path resolution rather than this directory-local glob.
 status_open_decisions() {  # <status-file>
   local f=$1 line verb key note resolve held open='' stripped task home refusal prior
-  local disposition probe_budget probes_spent=0 close_rc
+  local disposition probe_budget probes_spent=0 close_rc close_verdict
   if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
     printf 'CNO_DECISION_UNIVERSE\tCNO_DECISION_UNIVERSE\tCNO_DECISION_SUBJECT\tstatus log %s could not be read safely, so its decision universe is unknown\n' "${f##*/}"
     return 0
@@ -940,10 +954,20 @@ status_open_decisions() {  # <status-file>
             close_rc=$?
             probes_spent=$((probes_spent + 1))
           else
-            close_rc=0
+            close_rc=4
           fi
         fi
-        if [ "$close_rc" -eq 0 ]; then
+        # A path that clears, truncates or filters must say what it removed, and a tri-state result must name its unobserved value explicitly rather than folding it into a nonzero-means-yes test, because ABSENCE OF A REFUSAL IS NOT A VERDICT.
+        case "$close_rc" in
+          1) close_verdict=PASS ;;
+          3) close_verdict=FAIL ;;
+          2|4) close_verdict=COULD-NOT-OBSERVE ;;
+          *)
+            close_verdict=COULD-NOT-OBSERVE
+            refusal="${refusal:+$refusal; }unrecognized decision-close result $close_rc, so the resolution is not accepted"
+            ;;
+        esac
+        if [ "$close_verdict" != PASS ]; then
           prior=$(_fm_decision_verb "$open" "$key")
           open=$(_fm_decision_drop "$open" "$key")
           [ -n "$open" ] && open="${open}"$'\n'
