@@ -10,7 +10,6 @@ TMP_ROOT=$(fm_test_tmproot fm-sssf-planning-awareness)
 REPO='sbracewell64/inkwell-agent-sandboxes-and-software-factory'
 REF='planning/future-sssf'
 SNAPSHOT_SOURCE='1111111111111111111111111111111111111111'
-AWARE_SOURCE='2222222222222222222222222222222222222222'
 ACTIVE_SOURCE='3333333333333333333333333333333333333333'
 FEED_COMMIT='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
 FUTURE_BLOB='bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
