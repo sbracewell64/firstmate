@@ -43,7 +43,13 @@
 #     hints.open_decisions is the keyed open-decision set returned by
 #     fm-classify-lib.sh's authoritative status_open_decisions fold and reconciled
 #     against current_state; hints.pending_decision and hints.blocked_event are
-#     booleans derived from that set.
+#     booleans derived from that set. Each entry carries a `disposition` from
+#     FM_DECISION_DISPOSITION_VOCABULARY (fm-classify-lib.sh), which is total: an
+#     entry whose disposition could not be established carries
+#     CNO_DECISION_SUBJECT rather than a null or an absent field. The fold
+#     ENUMERATES and never executes a decision probe here, so this set is complete
+#     whatever any probe costs - see ENUMERATION IS NOT VERIFICATION in
+#     bin/fm-classify-lib.sh.
 #     endpoint.exists is the cheap backend endpoint-presence read.
 #     endpoint.agent_alive is populated for secondmates only, where it is useful
 #     return-channel supervision data; other tasks use "not_checked".
@@ -596,7 +602,7 @@ task_json_lines() {
     fi
     open_decisions_json=$(printf '%s' "$open_decisions_tsv" | jq -R -s '
       [ splits("\n") | select(length > 0)
-        | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<summary>.*)$")?)
+        | (capture("^(?<key>[^\t]*)\t(?<verb>[^\t]*)\t(?<disposition>[^\t]*)\t(?<summary>.*)$")?)
         | select(. != null) ]')
     pending_decision=$(printf '%s' "$open_decisions_json" | jq 'if any(.[]; .verb == "needs-decision") then 1 else 0 end')
     blocked_event=$(printf '%s' "$open_decisions_json" | jq 'if any(.[]; .verb == "blocked") then 1 else 0 end')

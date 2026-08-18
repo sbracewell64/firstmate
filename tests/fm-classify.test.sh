@@ -225,9 +225,112 @@ test_agent_liveness_verdict_is_fail_safe() {
   pass "agent liveness keeps three values and defaults an untaught state to escalate"
 }
 
+# --- the decision disposition vocabulary -------------------------------------
+#
+# THE PROPERTY: the vocabulary is CLOSED, TOTAL and NON-VACUOUS. Every member is
+# reachable from a real fixture, every input reaches exactly one member, and an
+# input whose disposition cannot be established reaches CNO_DECISION_SUBJECT -
+# a value in the set rather than an empty field. A declared vocabulary whose
+# members no input can reach is a list that reads as a contract and enforces
+# nothing, which is the failure class this fleet keeps hitting.
+disposition_home() {  # <name> -> prints home
+  local home="$TMP_ROOT/$1"
+  mkdir -p "$home/data" "$home/state"
+  printf '%s\n' "$home"
+}
+
+record_disposition() {  # <home> <task> <key> <value>
+  mkdir -p "$1/data/$2"
+  # shellcheck disable=SC2016  # the backticks are the literal fence the fold reads, not a substitution
+  printf '# decision\n\n```disposition\n%s\n```\n' "$4" > "$1/data/$2/decision-$3.md"
+}
+
+test_disposition_vocabulary_is_total_and_non_vacuous() {
+  local home member got reached=0 checked=0
+
+  home=$(disposition_home dispo)
+
+  # Every member reachable. Four are recorded-only by design (no structured fleet
+  # fact establishes them and prose is not evidence), so they are driven through
+  # the record; the rest are driven through the derivation as well, below.
+  for member in $FM_DECISION_DISPOSITION_VOCABULARY; do
+    record_disposition "$home" "rec$reached" k "$member"
+    got=$(decision_disposition "rec$reached" k needs-decision "$home")
+    [ "$got" = "$member" ] \
+      || fail "recorded disposition $member came back as $got, so that member is unreachable"
+    reached=$((reached + 1))
+  done
+  [ "$reached" -eq 8 ] \
+    || fail "the vocabulary has $reached members; every one must be driven, not counted"
+
+  # Derived, with no record at all. Absent metadata is the subject itself being
+  # unobservable, which is could-not-observe rather than a captain decision.
+  got=$(decision_disposition nometa k needs-decision "$home")
+  [ "$got" = CNO_DECISION_SUBJECT ] \
+    || fail "a decision whose task metadata is absent must be CNO_DECISION_SUBJECT, got $got"
+  checked=$((checked + 1))
+
+  printf 'worktree=%s\nyolo=0\n' "$home" > "$home/state/plain.meta"
+  got=$(decision_disposition plain k needs-decision "$home")
+  [ "$got" = CAPTAIN_REQUIRED_NONBLOCKING ] \
+    || fail "an open needs-decision on a live task must be CAPTAIN_REQUIRED_NONBLOCKING, got $got"
+  checked=$((checked + 1))
+  got=$(decision_disposition plain k blocked "$home")
+  [ "$got" = CAPTAIN_REQUIRED_AND_BLOCKING ] \
+    || fail "a blocked decision on a live task must be CAPTAIN_REQUIRED_AND_BLOCKING, got $got"
+  checked=$((checked + 1))
+
+  printf 'worktree=%s\nyolo=1\n' "$home" > "$home/state/auto.meta"
+  got=$(decision_disposition auto k needs-decision "$home")
+  [ "$got" = SELF_HANDLE ] \
+    || fail "standing routine authority makes the decision firstmate's own, got $got"
+  checked=$((checked + 1))
+
+  # A verb the fold could not classify is could-not-observe, never narrowed into
+  # either captain-required answer.
+  got=$(decision_disposition plain k a-verb-nobody-taught "$home")
+  [ "$got" = CNO_DECISION_SUBJECT ] \
+    || fail "an untaught verb was narrowed to $got rather than could-not-observe"
+  checked=$((checked + 1))
+
+  # A recorded value that is NOT a vocabulary member is could-not-observe, not a
+  # silent fall-through to the derivation: answering around an operator's own
+  # unreadable record would hide that the record is broken.
+  record_disposition "$home" plain garbage NOT_A_MEMBER
+  got=$(decision_disposition plain garbage needs-decision "$home")
+  [ "$got" = CNO_DECISION_SUBJECT ] \
+    || fail "an unreadable recorded disposition must be could-not-observe, got $got"
+  checked=$((checked + 1))
+
+  # A decision record that EXISTS and cannot be read may carry a disposition
+  # nobody here can see, so it is could-not-observe rather than an answer derived
+  # around it. Skipped when the tests run as a user no permission bit constrains.
+  record_disposition "$home" plain unreadable BROWSER_SOL
+  chmod 000 "$home/data/plain/decision-unreadable.md"
+  if [ ! -r "$home/data/plain/decision-unreadable.md" ]; then
+    got=$(decision_disposition plain unreadable needs-decision "$home")
+    [ "$got" = CNO_DECISION_SUBJECT ] \
+      || fail "an unreadable decision record must be could-not-observe, got $got"
+  fi
+  chmod 644 "$home/data/plain/decision-unreadable.md"
+
+  # Totality: every answer this function can give is a member.
+  [ "$checked" -eq 6 ] || fail "expected 6 derivation cases, drove $checked"
+  for got in \
+    "$(decision_disposition '' k needs-decision "$home")" \
+    "$(decision_disposition plain '' needs-decision "$home")" \
+    "$(decision_disposition 'not a slug' k needs-decision "$home")" \
+    "$(decision_disposition plain k needs-decision '')"; do
+    decision_disposition_is_known "$got" \
+      || fail "a malformed input produced '$got', which is outside the closed vocabulary"
+  done
+  pass "the decision disposition vocabulary is closed, total, and every member is reachable"
+}
+
 test_dead_agent_behind_live_shell_escalates
 test_unobserved_is_subject_to_dead_agent_pause_recovery
 test_liveness_open_membership_has_one_owner
 test_agent_liveness_verdict_is_fail_safe
+test_disposition_vocabulary_is_total_and_non_vacuous
 
 echo "all fm-classify tests passed"

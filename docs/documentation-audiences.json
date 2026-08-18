@@ -379,6 +379,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/decision-enumeration.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/decision-surface.md",
       "audience": "maintainer-verification"
     },

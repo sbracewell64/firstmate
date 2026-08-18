@@ -57,15 +57,16 @@ preserve_evidence() {  # <destination>
 }
 
 scan_open_blockers() {  # -> tab-separated blocker rows
-  local meta id status key verb summary clean_summary
+  local meta id status key verb disposition summary clean_summary
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     id=$(basename "$meta")
     id=${id%.meta}
     status="$STATE/$id.status"
     [ -f "$status" ] || continue
-    while IFS="$(printf '\t')" read -r key verb summary; do
+    while IFS="$(printf '\t')" read -r key verb disposition summary; do
       [ "$verb" = blocked ] || continue
+      : "$disposition"
       clean_summary=$(printf '%s' "$summary" | clean_field)
       printf 'blocker\t%s\t%s\t%s\n' "$id" "$key" "$clean_summary"
     done <<EOF

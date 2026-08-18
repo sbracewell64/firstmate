@@ -22,6 +22,8 @@
 #     --title <title> --reason <reason> [--repo <repo>]
 #   fm-decision-hold.sh complete <origin-id> (--none | <decision-key>...)
 #   fm-decision-hold.sh verify <origin-id>
+#   fm-decision-hold.sh disposition <origin-id> <decision-key> <DISPOSITION>
+#   fm-decision-hold.sh disposition <origin-id> <decision-key> --clear
 #   fm-decision-hold.sh resolve <origin-id> <decision-key> \
 #     --decision-file <path> --routed-to <task-id> [--routed-to <task-id>...] \
 #     [--from-ruling <path>:<line>]
@@ -38,6 +40,16 @@
 # It writes the captain decision and routed identities into the hold body, clears
 # those dependency edges, and only then marks the hold Done. A failure before the
 # final step leaves the captain hold open.
+#
+# `disposition` records WHOSE decision an open one is, from the closed vocabulary
+# bin/fm-classify-lib.sh owns (FM_DECISION_DISPOSITION_VOCABULARY). It writes one
+# fenced ```disposition block into the decision record this fleet already keeps at
+# $FM_HOME/data/<origin>/decision-<key>.md, beside the pinned probe block, so no
+# second store exists and the open-decision fold reads both in one pass. Repeating
+# it replaces the block; `--clear` removes it and returns the entry to derivation.
+# It is here rather than on the status envelope because that field set is closed
+# (bin/fm-status-event-lib.sh) precisely so a worker cannot declare a supervisor's
+# classification of it, and a disposition is exactly that class of claim.
 #
 # `--from-ruling <path>:<line>` records WHICH ruling document answered the hold,
 # and is verified rather than trusted. The captain ruled on 2026-08-06 that a
@@ -57,6 +69,22 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 # shellcheck source=bin/fm-classify-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-classify-lib.sh"
+
+# THIS SCRIPT IS THE VERIFYING CALLER. The open-decision fold enumerates by
+# default and executes no registered probe (ENUMERATION IS NOT VERIFICATION in
+# bin/fm-classify-lib.sh), which is right for every listing surface and wrong
+# here: "may this resolution close?" is the expensive question this script exists
+# to ask, and its inventory gates would otherwise refuse a closure whose probe
+# passes. So it grants the fold an explicit execution budget, which also stores
+# the observations every enumerating surface then serves. A COUNT, so the worst
+# case stays provable arithmetic: this many probes at the interpreter's own
+# per-probe bound. One origin's inventory is a handful of keys in practice; the
+# budget is the runaway bound, not the expected cost.
+#
+# A shell variable, never exported: the fold reads it in this process, and a
+# permissive budget that escaped into a subprocess would grant probe execution to
+# a caller that never asked for it.
+FM_CLASSIFY_DECISION_PROBE_MAX=${FM_CLASSIFY_DECISION_PROBE_MAX:-20}
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
@@ -347,7 +375,7 @@ EOF
   status_file="$STATE/$origin.status"
   raw_open=$(status_open_decisions "$status_file")
   open=$(origin_open_decisions "$origin")
-  while IFS=$'\t' read -r key _verb _summary; do
+  while IFS=$'\t' read -r key _verb _disposition _summary; do
     [ -n "$key" ] || continue
     list_has_key "$keys" "$key" \
       || fail "open structured decision $origin/$key has no captain-held inventory entry"
@@ -362,7 +390,7 @@ EOF
 
     # Transfer any still-open status decision to its durable backlog owner so the
     # live status fold does not duplicate the same Captain's Call item.
-    while IFS=$'\t' read -r key _verb _summary; do
+    while IFS=$'\t' read -r key _verb _disposition _summary; do
       [ -n "$key" ] || continue
       list_has_key "$keys" "$key" || continue
       printf 'captain-held [key=%s]: tracked by %s\n' "$key" "$(hold_id "$origin" "$key")" >> "$status_file"
@@ -394,7 +422,7 @@ $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
   fi
   open=$(origin_open_decisions "$origin")
-  while IFS=$'\t' read -r key _verb _summary; do
+  while IFS=$'\t' read -r key _verb _disposition _summary; do
     [ -n "$key" ] || continue
     list_has_key "$keys" "$key" \
       || fail "open structured decision $origin/$key is outside the reviewed inventory"
@@ -537,8 +565,50 @@ command_resolve() {
   printf 'resolved: %s -> %s\n' "$id" "$routed"
 }
 
+command_disposition() {  # <origin-id> <decision-key> <DISPOSITION>|--clear
+  local origin=${1:-} key=${2:-} value=${3:-} file dir tmp
+  [ "$#" -eq 3 ] || { usage >&2; exit 2; }
+  validate_slug origin-id "$origin"
+  validate_slug decision-key "$key"
+  if [ "$value" != --clear ]; then
+    decision_disposition_is_known "$value" \
+      || fail "disposition must be one of: $FM_DECISION_DISPOSITION_VOCABULARY"
+  fi
+  dir="$DATA/$origin"
+  file="$dir/decision-$key.md"
+  mkdir -p "$dir" || fail "could not create $dir"
+  [ ! -e "$file" ] || [ -w "$file" ] || fail "$file is not writable"
+  tmp=$(mktemp "$dir/.disposition.XXXXXX") || fail "could not stage the decision record"
+  # Rewrite without the existing block, then append the new one, so repeating the
+  # command is idempotent and never stacks two blocks the reader would have to
+  # choose between.
+  if [ -f "$file" ]; then
+    awk '
+      /^```disposition([[:space:]]|$)/ { skip = 1; next }
+      skip && /^```/ { skip = 0; next }
+      skip { next }
+      { print }
+    ' "$file" > "$tmp" || { rm -f -- "$tmp"; fail "could not read $file"; }
+  else
+    printf '# decision %s [key=%s]\n' "$origin" "$key" > "$tmp" \
+      || { rm -f -- "$tmp"; fail "could not stage the decision record"; }
+  fi
+  if [ "$value" != --clear ]; then
+    # shellcheck disable=SC2016 # The backticks are the literal markdown fence the fold reads, not a substitution.
+    printf '\n```disposition\n%s\n```\n' "$value" >> "$tmp" \
+      || { rm -f -- "$tmp"; fail "could not stage the decision record"; }
+  fi
+  mv -f "$tmp" "$file" || { rm -f -- "$tmp"; fail "could not write $file"; }
+  if [ "$value" = --clear ]; then
+    printf 'disposition: %s [key=%s] cleared, derived from now on\n' "$origin" "$key"
+  else
+    printf 'disposition: %s [key=%s] %s\n' "$origin" "$key" "$value"
+  fi
+}
+
 case "${1:-}" in
   id) shift; command_id "$@" ;;
+  disposition) shift; command_disposition "$@" ;;
   hold) shift; command_hold "$@" ;;
   complete) shift; command_complete "$@" ;;
   verify) shift; command_verify "$@" ;;
