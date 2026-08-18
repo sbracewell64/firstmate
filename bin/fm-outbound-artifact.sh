@@ -911,15 +911,24 @@ sweep() {
 # One verdict's rows under one heading, or a heading that says plainly that this
 # section is empty. Printing the heading either way is deliberate: a section that
 # vanishes when empty cannot be distinguished from a section nobody rendered.
-render_section() {  # <verdict> <heading>
-  local verdict=$1 heading=$2 n
-  n=$(printf '%s' "$SWEEP" | jq --arg v "$verdict" '[.rows[] | select(.verdict==$v)] | length')
+# The optional scope splits one verdict into the answers it actually contains.
+# `identity` selects the rows whose artifact was OBSERVED and whose local record
+# names another request; `not-identity` selects the rest. A heading has to be
+# true of every row beneath it, and one heading cannot be true of both an absent
+# artifact and a present one.
+render_section() {  # <verdict> <heading> [all|identity|not-identity]
+  local verdict=$1 heading=$2 scope=${3:-all} n
+  n=$(printf '%s' "$SWEEP" | jq --arg v "$verdict" --arg i "$FM_OUTBOUND_TOKEN_IDENTITY" \
+    --arg s "$scope" '[.rows[] | select(.verdict==$v)
+      | select($s == "all" or ($s == "identity") == (.token == $i))] | length')
   printf '\n%s (%s)\n' "$heading" "$n"
   if [ "$n" -eq 0 ]; then
     printf '  none\n'
     return
   fi
-  printf '%s' "$SWEEP" | jq -r --arg v "$verdict" '.rows[] | select(.verdict==$v) |
+  printf '%s' "$SWEEP" | jq -r --arg v "$verdict" --arg i "$FM_OUTBOUND_TOKEN_IDENTITY" \
+    --arg s "$scope" '.rows[] | select(.verdict==$v)
+    | select($s == "all" or ($s == "identity") == (.token == $i)) |
     "  \(.item)",
     "         gate: \(.gate // "UNTYPED") · channel: \(.channel // "unknown") · recognised: \(.tier)",
     "         head: \(.head // "unobserved") · artifact: \(.artifact // "none") · \(.token)",
@@ -944,7 +953,8 @@ render_human() {
   # answer that can be acted on differently - and it must never be omitted when
   # empty-looking, because "nothing here" and "we could not look" are the two
   # things this whole control exists to keep apart.
-  render_section defect 'DEFECT - waiting with no applicable durable artifact'
+  render_section defect 'DEFECT - waiting with no applicable durable artifact' not-identity
+  render_section defect 'DEFECT - the artifact exists, but the correlation record filed under its request id names a different request' identity
   render_section unevaluable 'COULD NOT OBSERVE - neither confirmed waiting legitimately nor confirmed defective'
   render_section satisfied 'SATISFIED'
   if [ "$(printf '%s' "$SWEEP" | jq -r '.capped')" = "true" ]; then
@@ -1529,7 +1539,18 @@ case $CMD in
       #
       # So: subshell for an EXPLICIT status at this line, own trap for the lock,
       # accumulator instead of control flow for the refusal.
-      ( trap release_emit_lock EXIT; cmd_emit "$ITEM" "" 0 )
+      #
+      # THE FORMATTING IS LOAD-BEARING. bin/fm-dead-predicate-check.sh reads call
+      # sites by anchored syntax, and its trap rule anchors `trap` to the start
+      # of a line. Written as `( trap release_emit_lock EXIT; cmd_emit ... )` the
+      # `(` precedes `trap`, this whole file becomes an UNCHECKED consumer, and
+      # every predicate whose only call site lives here goes could-not-observe.
+      # The one-statement-per-line form below is the shape the other 121 traps in
+      # bin/ already use; keep it.
+      (
+        trap release_emit_lock EXIT
+        cmd_emit "$ITEM" "" 0
+      )
       ITEM_RC=$?
       EMIT_RC=$(outbound_worst_status "$EMIT_RC" "$ITEM_RC")
     done < "$RECONCILE_ITEMS"

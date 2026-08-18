@@ -1528,6 +1528,14 @@ test_request_requires_readable_correlation() {
   # it as absent would be false in the same way the unreadable collapse was.
   printf '%s' "$out" | grep -q 'artifact: comment/' \
     || fail "correlation: the row rendered an observed artifact as none: $out"
+  # A heading has to be true of every row beneath it. Filing an observed
+  # artifact under a heading that asserts its absence puts the two renderers in
+  # contradiction about the same row, which is the misdescription this split
+  # exists to remove rather than to relocate.
+  printf '%s' "$out" | grep -q 'DEFECT - waiting with no applicable durable artifact (0)' \
+    || fail "correlation: an observed artifact was counted under the missing-artifact heading: $out"
+  printf '%s' "$out" | grep -q 'DEFECT - the artifact exists, but the correlation record filed under its request id names a different request (1)' \
+    || fail "correlation: the identity refusal had no heading true of it: $out"
   out=$(run_ob "$dir" defects 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "correlation: the relay line did not carry the defect verdict, exit $rc: $out"
   printf '%s' "$out" | grep -q 'no applicable durable artifact' \

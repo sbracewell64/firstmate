@@ -1464,6 +1464,45 @@ SH
   pass "bootstrap bounds the outbound sweep and reports timeout as unevaluable"
 }
 
+test_outbound_deadline_relays_what_the_sweep_established() {
+  # A DEADLINE BOUNDS THE WORK, NOT THE REPORT ABOUT WORK ALREADY DONE. The
+  # child prints a real defect and then hangs. Discarding its output at the
+  # deadline throws away a finding whose discovery already cost the probes and
+  # tells the operator nothing was established, which is the same silence the
+  # reconcile fixes were about, reached through the enclosing deadline instead
+  # of through control flow. Both halves are asserted: the finding must survive,
+  # and the incompleteness marker must still be there, because a bounded report
+  # that reads as a complete one is the opposite failure.
+  local case_dir fakebin home fakescripts f out
+  case_dir="$TMP_ROOT/outbound-deadline-partial"
+  home="$case_dir/home"
+  fakescripts="$case_dir/bin"
+  mkdir -p "$home/config" "$fakescripts"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  for f in "$ROOT"/bin/*; do
+    ln -sf "$f" "$fakescripts/${f##*/}"
+  done
+  rm "$fakescripts/fm-outbound-artifact.sh"
+  cat > "$fakescripts/fm-outbound-artifact.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'OUTBOUND: early-item is waiting on a gate with no applicable durable artifact\n'
+sleep 30
+SH
+  chmod +x "$fakescripts/fm-outbound-artifact.sh"
+  fakebin=$(make_fake_toolchain "$case_dir")
+
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 FM_OUTBOUND_BOOTSTRAP_DEADLINE=1 \
+    "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "OUTBOUND: early-item is waiting on a gate with no applicable durable artifact" \
+    "a deadline must not discard the findings the sweep had already established"
+  assert_contains "$out" "bootstrap deadline expired after 1s" \
+    "a bounded report must still carry its incompleteness marker"
+  assert_contains "$out" "the sweep is INCOMPLETE" \
+    "a bounded report must say plainly that it is not a clean sweep"
+  pass "bootstrap relays what a deadlined sweep established, and still marks it incomplete"
+}
+
 test_outbound_reconcile_failure_is_reported() {
   local case_dir fakebin home fakescripts f out
   case_dir="$TMP_ROOT/outbound-failure"
@@ -1552,5 +1591,6 @@ test_wake_ledger_terminal_sweep_reports_only_durable_records
 test_open_commitment_denies_a_quiet_session_start
 test_missing_commitment_interpreter_is_not_a_quiet_session_start
 test_outbound_sweep_has_bootstrap_deadline
+test_outbound_deadline_relays_what_the_sweep_established
 test_outbound_reconcile_failure_is_reported
 test_outbound_defect_is_not_reclassified_as_unevaluable

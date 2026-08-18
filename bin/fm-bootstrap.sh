@@ -1031,8 +1031,18 @@ outbound_artifact_report() {
       kill -TERM "-$pid" 2>/dev/null || kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
       [ "$monitor_was_on" -eq 1 ] || set +m 2>/dev/null || true
+      # THE DEADLINE BOUNDS THE WORK, NEVER THE REPORT ABOUT WORK ALREADY DONE.
+      # Whatever the child had already established is relayed first and the
+      # incompleteness marker follows it, because the two halves say different
+      # things and neither substitutes for the other: findings without the
+      # marker read as a full sweep, and the marker without the findings throws
+      # away defects whose discovery already cost the probes.
+      # fleet_sync_bootstrap above already relays its partial output the same
+      # way before its own timeout line; this is that rule applied here.
+      out=$(cat "$tmp" 2>/dev/null || true)
       rm -f "$tmp"
-      printf 'OUTBOUND: sweep unevaluable - bootstrap deadline expired after %ss\n' "$deadline"
+      [ -z "$out" ] || printf '%s\n' "$out"
+      printf 'OUTBOUND: sweep unevaluable - bootstrap deadline expired after %ss; any OUTBOUND line above this one is what the sweep established before it was stopped, and the sweep is INCOMPLETE\n' "$deadline"
       return 0
     fi
     sleep 0.1
