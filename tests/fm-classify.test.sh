@@ -327,10 +327,24 @@ test_disposition_vocabulary_is_total_and_non_vacuous() {
   pass "the decision disposition vocabulary is closed, total, and every member is reachable"
 }
 
+test_unreadable_status_is_in_band_universe_cno() {
+  local home got
+  home=$(disposition_home unreadable-status)
+  printf 'needs-decision [key=hidden]: must not disappear\n' > "$home/state/real.status"
+  ln -s real.status "$home/state/linked.status"
+  got=$(status_open_decisions "$home/state/linked.status")
+  case "$got" in
+    CNO_DECISION_UNIVERSE$'\t'CNO_DECISION_UNIVERSE$'\t'CNO_DECISION_SUBJECT$'\t'*) ;;
+    *) fail "a status log that cannot be read safely disappeared instead of reporting CNO_DECISION_UNIVERSE: $got" ;;
+  esac
+  pass "an unobservable status log reports decision-universe CNO in band"
+}
+
 test_dead_agent_behind_live_shell_escalates
 test_unobserved_is_subject_to_dead_agent_pause_recovery
 test_liveness_open_membership_has_one_owner
 test_agent_liveness_verdict_is_fail_safe
 test_disposition_vocabulary_is_total_and_non_vacuous
+test_unreadable_status_is_in_band_universe_cno
 
 echo "all fm-classify tests passed"

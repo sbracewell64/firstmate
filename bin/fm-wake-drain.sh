@@ -70,7 +70,7 @@ record_wake_ledger() {
 # so the universe stays complete even when one note does not fit.
 print_open_decisions_section() {
   local open task key verb disposition note line item_bytes global_bytes
-  local output='' used=0 shown=0 omitted=0 total=0 bytes suffix keep
+  local output='' used=0 shown=0 omitted=0 total=0 bytes suffix keep universe_cno=''
 
   item_bytes=${FM_WAKE_OPEN_DECISION_ITEM_BYTES:-260}
   case "$item_bytes" in ''|*[!0-9]*) item_bytes=260 ;; esac
@@ -82,6 +82,10 @@ print_open_decisions_section() {
 
   while IFS=$(printf '\t') read -r task key verb disposition note; do
     [ -n "$task" ] || continue
+    if [ "$key" = CNO_DECISION_UNIVERSE ]; then
+      universe_cno="${universe_cno}${task}: ${note}"$'\n'
+      continue
+    fi
     total=$((total + 1))
     line="$task"
     [ "$key" = default ] || line="$line [key=$key]"
@@ -104,13 +108,18 @@ print_open_decisions_section() {
 $open
 EOF
 
-  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || return 0
+  [ "$shown" -gt 0 ] || [ "$omitted" -gt 0 ] || [ -n "$universe_cno" ] || return 0
+  if [ -n "$universe_cno" ]; then
+    printf 'CNO_DECISION_UNIVERSE: one or more durable status logs could not be enumerated safely. This is an INSTRUMENT DEFECT, not an additional captain decision:\n%s' "$universe_cno"
+  fi
   if [ "$omitted" -gt 0 ]; then
     # Leads the section, because a reader who stops after the entries must not
     # come away believing they read the universe.
     printf 'CNO_DECISION_UNIVERSE: the open-decision universe could not be presented completely - %d of %d entries fit the %d-byte presentation bound and %d could not be shown. This is an INSTRUMENT DEFECT, not %d additional captain decisions: raise FM_WAKE_OPEN_DECISION_BYTES or read the complete set with bin/fm-fleet-snapshot.sh --json.\n' \
       "$shown" "$total" "$global_bytes" "$omitted" "$omitted"
     printf 'OPEN DECISIONS (%d of %d, INCOMPLETE - see CNO_DECISION_UNIVERSE above):\n' "$shown" "$total"
+  elif [ -n "$universe_cno" ]; then
+    printf 'OPEN DECISIONS (%d observed, INCOMPLETE - see CNO_DECISION_UNIVERSE above):\n' "$total"
   else
     printf 'OPEN DECISIONS (%d, complete, folded from the durable status logs - not just the latest line):\n' "$total"
   fi

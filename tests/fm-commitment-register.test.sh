@@ -1212,6 +1212,40 @@ run: true'
   pass "a registered probe with no interpreter refuses the closure rather than being waved through"
 }
 
+probe_budget_counts_only_executable_registered_probes() {
+  local home stub log out i
+  home=$(make_home executable-budget)
+  log="$TMP_ROOT/executable-budget.log"
+  stub="$TMP_ROOT/executable-budget-register.sh"
+  cat > "$stub" <<SH
+#!/usr/bin/env bash
+printf '%s\n' "\$*" >> "$log"
+exit 0
+SH
+  chmod +x "$stub"
+  : > "$home/state/budget.status"
+  for i in $(seq 1 20); do
+    mkdir -p "$home/data/budget"
+    printf '# legacy decision without a probe\n' > "$home/data/budget/decision-legacy$i.md"
+    printf 'needs-decision [key=legacy%s]: legacy\nresolved [key=legacy%s]: done\n' "$i" "$i" >> "$home/state/budget.status"
+  done
+  write_decision "$home" budget executable 'tier: executable
+run: true'
+  printf 'needs-decision [key=executable]: verify me\nresolved [key=executable]: done\n' >> "$home/state/budget.status"
+
+  out=$(FM_HOME="$home" FM_CLASSIFY_DECISION_PROBE_MAX=1 FM_CLASSIFY_COMMITMENT_BIN="$stub" bash -c '
+    . "$1/bin/fm-classify-lib.sh"
+    status_open_decisions "$2"
+  ' _ "$ROOT" "$home/state/budget.status")
+  [ -z "$out" ] || fail "the executable probe did not receive the budget after legacy resolutions: $out"
+  [ "$(wc -l < "$log" | tr -d ' ')" -eq 1 ] \
+    || fail "the budget was not charged exactly once to the executable registered probe: $(cat "$log")"
+  if grep -F -- '--cache-only' "$log" >/dev/null; then
+    fail "the executable probe was left cache-only after no-probe resolutions consumed its budget"
+  fi
+  pass "the verification budget counts only executable registered probes"
+}
+
 # --- session start executes no probe -----------------------------------------
 #
 # Read precisely: no probe of the kind that is a TRUST decision. Two kinds live
@@ -1818,3 +1852,4 @@ enumeration_executes_no_probe_and_still_completes
 cache_warms_because_its_bound_outlives_the_pass_that_fills_it
 fold_spends_no_subprocess_on_a_decision_without_a_probe
 fold_refuses_a_registered_probe_it_cannot_evaluate
+probe_budget_counts_only_executable_registered_probes
