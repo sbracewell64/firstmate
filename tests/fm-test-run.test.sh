@@ -1142,6 +1142,9 @@ elif action == "duplicate":
     timeout_index, _, _ = field("tests-portable-serial", "timeout-minutes")
     lines.insert(timeout_index, lines[timeout_index])
     path.write_text("".join(lines), encoding="utf-8")
+elif action == "duplicate-copy":
+    lines.insert(copied_index, lines[copied_index])
+    path.write_text("".join(lines), encoding="utf-8")
 elif action != "check":
     raise SystemExit("unknown action: %s" % action)
 elif timeout != copied_timeout:
@@ -1155,7 +1158,7 @@ PY
 }
 
 test_serial_budget_control_refuses_a_foreign_timeout_literal() {
-  local tmp rc declared fixture duplicate
+  local tmp rc declared fixture duplicate duplicate_copy
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-timeout.XXXXXX")
   fm_write_serial_fixture "$tmp/ok" 1000
 
@@ -1182,6 +1185,18 @@ test_serial_budget_control_refuses_a_foreign_timeout_literal() {
   [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse duplicate fields"
   assert_grep 'expected 1 match, saw 2' "$tmp/duplicate.err" \
     "the workflow timeout link refusal must identify ambiguous structure"
+
+  duplicate_copy="$tmp/duplicate-copy.yml"
+  cp "$ROOT/.github/workflows/ci.yml" "$duplicate_copy"
+  fm_check_ci_serial_timeout_link "$duplicate_copy" duplicate-copy \
+    || fail "the workflow timeout link fixture must gain a duplicate copied field"
+  set +e
+  fm_check_ci_serial_timeout_link "$duplicate_copy" >/dev/null 2>"$tmp/duplicate-copy.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse duplicate copied fields"
+  assert_grep 'expected 1 match, saw 2' "$tmp/duplicate-copy.err" \
+    "the workflow timeout link refusal must identify an ambiguous copied value"
 
   declared=$(fm_check_ci_serial_timeout_link "$ROOT/.github/workflows/ci.yml") \
     || fail "tests-portable-serial must pass its actual timeout to the budget check"
