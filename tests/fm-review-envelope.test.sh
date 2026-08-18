@@ -2672,10 +2672,35 @@ PYEOF
   assert_contains "$CAPTURED" 'record cites sha256:0000000000000000000000000000000000000000000000000000000000000000' \
     "a record citing a digest the artifact never measured must fail"
 
-  # A head offered as a replay coordinate has to resolve. This one does not,
-  # because the branch was rebased after the campaign ran - so the record labels
-  # it provenance-only, and stripping that label must be caught rather than
-  # silently reinstating an unreplayable citation.
+  # A head offered as a replay coordinate has to resolve. The condition is
+  # MANUFACTURED here rather than borrowed from whatever the record happens to
+  # cite: an earlier version of this control stripped the provenance-only label
+  # and relied on the cited head being stranded by a past rebase, so it went
+  # vacuous the moment the campaign was re-measured at a reachable head. A
+  # control that only refuses while an ambient fact happens to hold is not
+  # measuring the property it names.
+  python3 - "$record" "$mutant_record" <<'PYEOF'
+import re, sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+record = re.sub(
+    r"^Campaign head: `([0-9a-f]{7,40})`( \(provenance only\))?\.$",
+    "Campaign head: `deadbeefdeadbeefdeadbeefdeadbeefdeadbeef`.",
+    record,
+    flags=re.M,
+)
+open(target, "w", encoding="utf-8").write(record)
+PYEOF
+  if cmp -s "$record" "$mutant_record"; then
+    fail "the head mutant must actually replace the cited head"
+  fi
+  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head"
+  assert_contains "$CAPTURED" 'is not reachable from this branch' \
+    "a head offered as a replay coordinate that the branch does not carry must fail"
+
+  # NON-VACUITY: the refusal above must be about REACHABILITY, not about the
+  # label. The record's own head, unlabelled, resolves - so it is accepted.
+  # Without this the check could refuse every unlabelled head and still pass.
   python3 - "$record" "$mutant_record" <<'PYEOF'
 import re, sys
 source, target = sys.argv[1:]
@@ -2689,11 +2714,11 @@ record = re.sub(
 open(target, "w", encoding="utf-8").write(record)
 PYEOF
   if cmp -s "$record" "$mutant_record"; then
-    fail "the head mutant must actually strip the provenance-only label"
+    fail "the non-vacuity mutant must actually strip the provenance-only label"
   fi
-  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head"
-  assert_contains "$CAPTURED" 'is not reachable from this branch' \
-    "a head offered as a replay coordinate that the branch does not carry must fail"
+  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head-reachable"
+  expect_code 0 "$CAPTURED_CODE" \
+    "a reachable head cited without the provenance label is still accepted"
 
   python3 - "$artifact" "$mutant" missing <<'PYEOF'
 import json, sys
