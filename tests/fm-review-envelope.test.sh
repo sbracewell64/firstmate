@@ -822,7 +822,7 @@ document = json.load(open(path))
 head = subprocess.run(
     ["git", "-C", repo, "rev-parse", "candidate"], capture_output=True, text=True, check=True
 ).stdout.strip()
-for _ in document["ci"]["attempts"]:
+for attempt in document["ci"]["attempts"]:
     if attempt["head"] == "candidate":
         attempt["head"] = head
 for ruling in document["rulings"]:
