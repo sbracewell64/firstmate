@@ -1006,6 +1006,35 @@ PY
   [ "$rc" -eq 3 ] || fail "a contradictory gate-skip count must be could-not-observe (exit 3), got $rc"
   assert_contains "$out" "verdict=could-not-observe" "a contradictory gate-skip count must report could-not-observe"
 
+  # A serial lane's wall duration includes runner overhead and therefore may
+  # exceed the sum of its script durations. It cannot be shorter than that sum.
+  fm_write_serial_fixture "$tmp/wall-overhead" 1000
+  python3 - "$tmp/wall-overhead/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["duration_ms"] += 250
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  "$RUNNER" --check-budget "$tmp/wall-overhead"/shard-*.json >/dev/null 2>"$tmp/wall-overhead.err" \
+    || fail "serial wall-clock overhead must remain valid timing evidence: $(cat "$tmp/wall-overhead.err")"
+
+  fm_write_serial_fixture "$tmp/impossible-wall" 1000
+  python3 - "$tmp/impossible-wall/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["duration_ms"] -= 1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/impossible-wall"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a serial wall shorter than its scripts must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an impossible serial wall must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "an impossible serial wall must not report drifted"
+
   # A malformed extra artifact must not disappear as though it belonged to a
   # different lane and let an otherwise complete artifact set pass.
   fm_write_serial_fixture "$tmp/invalid-selection" 1000

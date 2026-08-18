@@ -999,7 +999,7 @@ for raw in sys.argv[7:]:
         summary["total"] != len(rows)
         or summary["failed"] != failed
         or summary["skipped_gate"] != skipped_gate
-        or summary["duration_ms"] != total
+        or summary["duration_ms"] < total
     ):
         unobserved(f"shard {idx} timing artifact summary disagrees with its script records")
     seen[idx] = (total, paths)
