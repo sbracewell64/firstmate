@@ -63,6 +63,14 @@ MAX_EVENT_BYTES=${FM_SSSF_PLANNING_MAX_EVENT_BYTES:-16384}
 # producer: authoritative_refs has no upper bound in the producer schema.
 MAX_REFS=${FM_SSSF_PLANNING_MAX_REFS:-32}
 MAX_INCREMENTS=${FM_SSSF_PLANNING_MAX_INCREMENTS:-32}
+# A wall-clock budget, because MAX_REFS bounds call count and not elapsed time.
+# The whole-check deadline stays below the watcher's FM_CHECK_TIMEOUT (30s) so
+# a hung endpoint surfaces as a typed could-not-observe line instead of the
+# watcher killing the check into empty output, which would read as "nothing
+# new". Each remote call is additionally bounded so no single connection can
+# consume the whole budget.
+DEADLINE_SECS=${FM_SSSF_PLANNING_DEADLINE:-20}
+CALL_TIMEOUT_SECS=${FM_SSSF_PLANNING_CALL_TIMEOUT:-8}
 # SHA-256 of the empty input. A constant, so an empty-cursor read cannot fail
 # for want of a writable temp directory.
 EMPTY_SHA256=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
@@ -104,27 +112,57 @@ have_tools() {
   command -v gh >/dev/null 2>&1 || return 1
   command -v jq >/dev/null 2>&1 || return 1
   command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 || return 1
+  command -v timeout >/dev/null 2>&1 || command -v gtimeout >/dev/null 2>&1 \
+    || command -v perl >/dev/null 2>&1 || return 1
 }
 
 state_dir_usable() { [ -d "$STATE" ] && [ ! -L "$STATE" ]; }
 
+# The feed is untrusted input interpolated into a request path, so this is a
+# character WHITELIST rather than a list of known-bad characters: a ref that
+# cannot express `?`, `&`, `%`, or `#` cannot inject a competing ref= query
+# parameter and cannot spell an encoded traversal past docs/. Dot-led,
+# doubled, and empty segments are refused on top of the character set.
 safe_doc_ref() {
-  case "$1" in docs/*) ;; *) return 1 ;; esac
-  case "$1" in *'//'*) return 1 ;; esac
-  case "/$1/" in */../*|*/./*) return 1 ;; esac
-  case "$1" in *\\*|*$'\n'*|*$'\r'*|*$'\t'*|*' '*) return 1 ;; esac
+  [[ "$1" =~ ^docs/[A-Za-z0-9._/-]+$ ]] || return 1
+  case "/$1/" in *'//'*|*'/.'*) return 1 ;; esac
   return 0
+}
+
+# Bound one subprocess in wall-clock time, the same way bin/fm-watch.sh bounds
+# a whole check: timeout(1), then gtimeout, then a perl alarm. Exit 124 means
+# the bound fired.
+run_bounded() { # <seconds> <command...>
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$@"
+  else
+    # shellcheck disable=SC2016  # single quotes are deliberate: Perl expands its own variables.
+    perl -e 'my $t = shift; my $pid = fork; die "fork failed" unless defined $pid; if (!$pid) { exec @ARGV; exit 127 } my $stop = sub { kill "TERM", $pid; select undef, undef, undef, 0.2; kill "KILL", $pid; waitpid $pid, 0; exit 124 }; local $SIG{ALRM} = $stop; alarm $t; waitpid $pid, 0; my $s = $?; exit(($s & 127) ? 128 + ($s & 127) : $s >> 8)' "$@"
+  fi
+}
+
+# Every remote call passes through here: bounded per call, and refused outright
+# once the whole-check deadline is spent. 124 in either shape means the clock
+# decided, and the caller must type it as could-not-observe, never as a verdict
+# about the thing that was not read.
+remote() { # <command...>
+  local left=$((DEADLINE_SECS - SECONDS))
+  [ "$left" -ge 1 ] || return 124
+  [ "$left" -le "$CALL_TIMEOUT_SECS" ] || left=$CALL_TIMEOUT_SECS
+  run_bounded "$left" "$@"
 }
 
 # Prove one repository path exists as a file at one exact commit. Reads the
 # bounded contents metadata rather than the blob: existence is the question, and
 # a metadata response cannot be made large by the thing it describes.
 ref_exists() { # <commit> <path>
-  gh api "repos/$REPO/contents/$2?ref=$1" --jq '.sha' >/dev/null 2>&1
+  remote gh api "repos/$REPO/contents/$2?ref=$1" --jq '.sha' >/dev/null 2>&1
 }
 
 commit_reachable() { # <commit>
-  gh api "repos/$REPO/commits/$1" --jq '.sha' >/dev/null 2>&1
+  remote gh api "repos/$REPO/commits/$1" --jq '.sha' >/dev/null 2>&1
 }
 
 # Download the feed with the transfer itself bounded, so an oversized or
@@ -132,7 +170,7 @@ commit_reachable() { # <commit>
 # one byte past the cap is what distinguishes "at the cap" from "over" it.
 fetch_feed() { # <destination>
   local status
-  gh api -H 'Accept: application/vnd.github.raw+json' \
+  remote gh api -H 'Accept: application/vnd.github.raw+json' \
     "repos/$REPO/contents/$FEED?ref=$REF" 2>/dev/null \
     | head -c "$((MAX_FEED_BYTES + 1))" > "$1"
   status=${PIPESTATUS[0]}
@@ -208,11 +246,15 @@ validate_event() { # <json-file>
     and .schema == "sssf-planning-event/v1"
     and (.event_id | type == "string")
     and (.source_commit | type == "string")
-    and (.sequence | type == "number" and . >= 1 and (. | floor) == .)
+    and (.sequence | type == "number" and . >= 1 and . <= 1e15 and (. | floor) == .)
     and (.authoritative_refs | type == "array" and length > 0)
   ' "$file" >/dev/null 2>&1 || return 1
   [[ "$(jq -r '.event_id' "$file")" =~ ^plan-[0-9]{8}-[0-9]{4}$ ]] || return 1
   [[ "$(jq -r '.source_commit' "$file")" =~ ^[0-9a-f]{40}$ ]] || return 1
+  # The sequence must extract in plain digit form: an exponent-form declaration
+  # is a malformed record, not a feed-continuity defect, and typing it here is
+  # what keeps the later ordering comparison an ordering comparison.
+  [[ "$(jq -r '.sequence' "$file")" =~ ^[0-9]+$ ]] || return 1
   jq -e --argjson n "$MAX_REFS" '.authoritative_refs | length <= $n' "$file" >/dev/null 2>&1 || return 1
   kind=$(jq -r '.kind // empty' "$file")
   action=$(jq -r '.actionability // empty' "$file")
@@ -257,16 +299,23 @@ validate_event() { # <json-file>
 }
 
 # Prove every named authoritative document exists at the exact named source
-# commit. Returns 0 proven, 1 observed missing, 2 could-not-observe. The
-# distinction is structural rather than a parse of the vendor's error text: a
-# ref that will not resolve at a commit that itself will not resolve says
-# nothing about the ref.
+# commit. Returns 0 proven, 1 observed missing, 2 could-not-observe, 3 the
+# deadline decided. The distinction is structural rather than a parse of the
+# vendor's error text: a ref that will not resolve at a commit that itself will
+# not resolve says nothing about the ref, and a call the clock stopped says
+# nothing about either.
 verify_authority_refs() { # <json-file>
-  local source ref
+  local source ref status
   source=$(jq -r '.source_commit' "$1")
   while IFS= read -r ref; do
-    ref_exists "$source" "$ref" && continue
-    commit_reachable "$source" || return 2
+    status=0
+    ref_exists "$source" "$ref" || status=$?
+    [ "$status" -ne 0 ] || continue
+    [ "$status" -ne 124 ] || return 3
+    status=0
+    commit_reachable "$source" || status=$?
+    [ "$status" -ne 124 ] || return 3
+    [ "$status" -eq 0 ] || return 2
     return 1
   done < <(jq -r '.authoritative_refs[]' "$1")
 }
@@ -325,6 +374,7 @@ cmd_check() (
   # so an oversized feed can surface as a transfer error that is not one.
   [ "$feed_size" -le "$MAX_FEED_BYTES" ] \
     || { emit "continuity failure=feed-too-large bytes=$feed_size"; exit 0; }
+  [ "$fetch_status" -ne 124 ] || unobserved deadline
   [ "$fetch_status" -eq 0 ] || unobserved "source-unreachable repo=$REPO ref=$REF"
 
   # Truncation and prefix mutation are the append-only contract breaking. Each
@@ -368,6 +418,7 @@ cmd_check() (
   case $? in
     0) ;;
     2) unobserved "authority-unreadable event_id=$event_id" ;;
+    3) unobserved deadline ;;
     *) emit "stale-or-missing-authority event_id=$event_id"; exit 0 ;;
   esac
 
@@ -410,13 +461,23 @@ cmd_install() {
   state_dir_usable || die "state directory is unavailable"
   chmod 700 "$STATE" 2>/dev/null || true
   [ ! -e "$CHECK" ] && [ ! -L "$CHECK" ] || die "planning check already exists; retire before reinstalling"
-  local adapter_hash tmp adapter_q
-  adapter_hash=$(sha256_file "$0") || die "cannot hash planning adapter"
-  adapter_q=$(printf '%q' "$0")
+  local adapter adapter_hash tmp adapter_q repo_q ref_q feed_q
+  # The baked path must be absolute: the watcher runs the check from its own
+  # working directory, and a path that resolves against a cwd would read as
+  # adapter drift on every poll.
+  adapter="$SCRIPT_DIR/${BASH_SOURCE[0]##*/}"
+  adapter_hash=$(sha256_file "$adapter") || die "cannot hash planning adapter"
+  adapter_q=$(printf '%q' "$adapter")
+  repo_q=$(printf '%q' "$REPO")
+  ref_q=$(printf '%q' "$REF")
+  feed_q=$(printf '%q' "$FEED")
   tmp=$(umask 077; mktemp "$STATE/${STAGING_PREFIX}check.XXXXXX") || die "cannot stage planning check"
   # The check the watcher runs is byte-bound to this adapter, so replacing the
   # adapter after registration cannot inherit the registration. The watcher
-  # separately binds the check file itself through fm-check-register.sh.
+  # separately binds the check file itself through fm-check-register.sh. The
+  # poll target is baked into the same bytes: the watcher's environment cannot
+  # move a registered check onto a different repo, ref, or feed, and
+  # retargeting requires retire, reinstall, and re-registration.
   cat > "$tmp" <<EOF
 #!/usr/bin/env bash
 set -u
@@ -430,13 +491,16 @@ else
   printf 'sssf-planning could-not-observe reason=adapter-hash-tool\n'; exit 0
 fi
 [ "\$ACTUAL" = "\$EXPECTED" ] || { printf 'sssf-planning security failure=adapter-drift\n'; exit 0; }
-exec "\$ADAPTER" check
+FM_SSSF_PLANNING_REPO=$repo_q \\
+FM_SSSF_PLANNING_REF=$ref_q \\
+FM_SSSF_PLANNING_FEED=$feed_q \\
+  exec "\$ADAPTER" check
 EOF
   chmod 700 "$tmp" || { rm -f -- "$tmp"; die "cannot secure planning check"; }
   mv -- "$tmp" "$CHECK" || die "cannot install planning check"
   FM_HOME="$FM_HOME" "$SCRIPT_DIR/fm-check-register.sh" "$ID" \
     || { rm -f -- "$CHECK"; die "planning check registration failed"; }
-  printf 'installed: state/%s.check.sh repo=%s ref=%s\n' "$ID" "$REPO" "$REF"
+  printf 'installed: state/%s.check.sh repo=%s ref=%s feed=%s\n' "$ID" "$REPO" "$REF" "$FEED"
 }
 
 # Retirement restores pre-bridge behavior exactly: the watcher stops seeing a

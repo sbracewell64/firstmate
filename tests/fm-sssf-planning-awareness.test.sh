@@ -60,16 +60,21 @@ for a in "$@"; do
   case "$a" in repos/*) request=$a; break ;; esac
 done
 [ -n "$request" ] || { printf 'fake gh: no repos/ request in: %s\n' "$*" >&2; exit 1; }
+[ -z "${FM_TEST_GH_LOG:-}" ] || printf '%s\n' "$request" >> "$FM_TEST_GH_LOG"
+# A hang holds the connection open far past any sane budget. The sleep's stdout
+# is detached so a killed fake gh cannot leave an orphan holding the pipe.
 case "$request" in
   repos/*/commits/*)
     [ "${FM_TEST_COMMIT_UNREACHABLE:-0}" = 1 ] && exit 1
     printf '%s\n' "${request##*/}"
     ;;
   *'/contents/'*'PLANNING_EVENTS.jsonl?ref='*)
+    [ "${FM_TEST_HANG_FEED:-0}" = 1 ] && { sleep 30 >/dev/null 2>&1; exit 1; }
     [ "${FM_TEST_FEED_UNREACHABLE:-0}" = 1 ] && exit 1
     cat "$FM_TEST_FEED"
     ;;
   *'/contents/'*'?ref='*)
+    [ "${FM_TEST_HANG_AUTHORITY:-0}" = 1 ] && { sleep 30 >/dev/null 2>&1; exit 1; }
     [ "${FM_TEST_COMMIT_UNREACHABLE:-0}" = 1 ] && exit 1
     path=${request#*/contents/}
     path=${path%%\?ref=*}
@@ -124,6 +129,11 @@ adapter_exec() { # <binary> <state> <args...>
   FM_TEST_MISSING_REF="${MISSING_REF:-}" \
   FM_TEST_FEED_UNREACHABLE="${FEED_UNREACHABLE:-0}" \
   FM_TEST_COMMIT_UNREACHABLE="${COMMIT_UNREACHABLE:-0}" \
+  FM_TEST_HANG_FEED="${HANG_FEED:-0}" \
+  FM_TEST_HANG_AUTHORITY="${HANG_AUTHORITY:-0}" \
+  FM_TEST_GH_LOG="${GH_LOG:-}" \
+  FM_SSSF_PLANNING_DEADLINE="${DEADLINE:-}" \
+  FM_SSSF_PLANNING_CALL_TIMEOUT="${CALL_TIMEOUT:-}" \
   FM_SSSF_PLANNING_ENABLE="${ENABLE:-0}" \
   FM_SSSF_PLANNING_REPO='fixture/sssf' \
   FM_SSSF_PLANNING_REF='fixture-ref' \
@@ -274,6 +284,8 @@ test_malformed_events_cannot_activate_work() {
     write_feed "$case_json"
     out=$(run_adapter "$state" check) || fail "$label check exited nonzero"
     assert_contains "$out" 'invalid-event' "$label must be refused as a malformed event"
+    assert_not_contains "$out" 'continuity failure' \
+      "$label is a malformed record, not a feed-continuity defect"
     assert_absent "$state/sssf-planning.pending" "$label created a pending generation"
     assert_absent "$state/sssf-planning.cursor" "$label advanced the cursor"
     assert_no_task_state "$state" "$label"
@@ -286,11 +298,16 @@ no-op transition edge|$(active_event plan-20260818-0100 1 | jq -c '.from="ACTIVE
 abbreviated source commit|$(active_event plan-20260818-0100 1 | jq -c '.source_commit="aaaaaaa"')
 traversing authoritative ref|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=["docs/../../etc/passwd"]')
 ungoverned authoritative ref|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=["etc/passwd"]')
+query-injecting authoritative ref|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=["docs/a?ref=main&x="]')
+percent-encoded traversal ref|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=["docs/%2e%2e/%2e%2e/etc/passwd"]')
+fragment-carrying authoritative ref|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=["docs/a#ref=main"]')
+dot-led authoritative ref segment|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=["docs/.git/config"]')
 empty authoritative refs|$(active_event plan-20260818-0100 1 | jq -c '.authoritative_refs=[]')
 malformed item identity|$(active_event plan-20260818-0100 1 | jq -c '.item_id="ROADMAP"')
 malformed event identity|$(active_event plan-20260818-0100 1 | jq -c '.event_id="plan-1"')
 missing declared sequence|$(active_event plan-20260818-0100 1 | jq -c 'del(.sequence)')
 fractional sequence|$(active_event plan-20260818-0100 1 | jq -c '.sequence=1.5')
+exponent-form sequence|$(active_event plan-20260818-0100 1 | jq -c '.sequence=1e100')
 bootstrap carrying an edge|$(bootstrap_event plan-20260818-0001 1 | jq -c '.to="ACTIVE"')
 bootstrap with no snapshot|$(bootstrap_event plan-20260818-0001 1 | jq -c 'del(.states)')
 bootstrap with unknown state|$(bootstrap_event plan-20260818-0001 1 | jq -c '.states={"FUT-003":"LAUNCH"}')
@@ -606,6 +623,106 @@ test_watcher_lifecycle_remains_single_owner() {
   pass "the check is a bounded single-line poll that starts no process and owns no watcher lifecycle state"
 }
 
+test_a_hung_endpoint_is_a_typed_deadline_before_the_watcher_kill() {
+  local state out before started elapsed
+  state=$(new_state)
+  write_feed "$(bootstrap_event plan-20260818-0001 1)"
+  run_adapter "$state" check >/dev/null || fail "seed check exited nonzero"
+  run_adapter "$state" acknowledge plan-20260818-0001 >/dev/null || fail "seed acknowledge failed"
+  before=$(cursor_fingerprint "$state")
+  [ "$before" != "ABSENT" ] || fail "seed did not establish a cursor"
+  write_feed "$(bootstrap_event plan-20260818-0001 1)" "$(active_event plan-20260818-0100 2)"
+
+  # NON-VACUITY and WATCHED RED partner in one: with a live endpoint this exact
+  # fixture speaks and is accepted, so the deadlines below are attributable to
+  # the hang and not to a dead adapter.
+  out=$(run_adapter "$state" check) || fail "live-endpoint control check exited nonzero"
+  assert_contains "$out" 'sssf-planning pending event_id=plan-20260818-0100' \
+    "the live-endpoint control must be accepted"
+  rm -f "$state/sssf-planning.pending"
+
+  # A hung authority endpoint. The adapter's own deadline must speak on stdout
+  # before the watcher's FM_CHECK_TIMEOUT (30s) could kill the check into empty
+  # output - a kill into silence is "could not look" rendered as "looked and
+  # found nothing", the exact conflation this adapter exists to eliminate.
+  started=$(date +%s)
+  out=$(HANG_AUTHORITY=1 DEADLINE=2 CALL_TIMEOUT=1 run_adapter "$state" check) \
+    || fail "hung-authority check exited nonzero"
+  elapsed=$(( $(date +%s) - started ))
+  [ -n "$out" ] || fail "a hung authority endpoint was rendered as silence"
+  assert_contains "$out" 'could-not-observe reason=deadline' \
+    "a hung authority endpoint must be a typed deadline"
+  assert_not_contains "$out" 'stale-or-missing-authority' \
+    "a hung authority endpoint must not be claimed as missing authority"
+  [ "$(printf '%s\n' "$out" | wc -l | tr -d ' ')" -eq 1 ] \
+    || fail "the deadline path emitted more than one wake line:"$'\n'"$out"
+  [ "$elapsed" -lt 30 ] \
+    || fail "the deadline wake took ${elapsed}s, not strictly inside FM_CHECK_TIMEOUT"
+  [ "$(cursor_fingerprint "$state")" = "$before" ] || fail "a deadline advanced the cursor"
+  assert_absent "$state/sssf-planning.pending" "a deadline created a pending generation"
+
+  # A hung feed transfer is the same third value: not silence, not unreachable,
+  # and never a continuity claim about a feed nothing finished reading.
+  started=$(date +%s)
+  out=$(HANG_FEED=1 DEADLINE=2 CALL_TIMEOUT=1 run_adapter "$state" check) \
+    || fail "hung-feed check exited nonzero"
+  elapsed=$(( $(date +%s) - started ))
+  assert_contains "$out" 'could-not-observe reason=deadline' \
+    "a hung feed transfer must be a typed deadline"
+  assert_not_contains "$out" 'continuity failure' \
+    "a hung feed transfer must not be claimed as a feed defect"
+  [ "$elapsed" -lt 30 ] \
+    || fail "the hung-feed deadline took ${elapsed}s, not strictly inside FM_CHECK_TIMEOUT"
+  [ "$(cursor_fingerprint "$state")" = "$before" ] || fail "a hung feed advanced the cursor"
+  assert_absent "$state/sssf-planning.pending" "a hung feed created a pending generation"
+  pass "a hung endpoint is a typed could-not-observe deadline before the watcher's kill and never advances the cursor"
+}
+
+test_the_installed_check_binds_its_poll_target_at_install() {
+  local state adapter_copy sandbox out log
+  state=$(new_state)
+  adapter_copy=$(adapter_sandbox)
+  sandbox=${adapter_copy%/*}
+  write_feed "$(bootstrap_event plan-20260818-0001 1)"
+
+  # Install through a RELATIVE invocation: the baked adapter path must come out
+  # absolute anyway, or the watcher's cwd at poll time would decide what gets
+  # hashed and every poll would read as adapter drift.
+  out=$(cd "$sandbox" && ENABLE=1 adapter_exec ./fm-sssf-planning-awareness.sh "$state" install) \
+    || fail "relative-path install failed"
+  assert_contains "$out" 'repo=fixture/sssf' "install must print the repo it actually bound"
+  assert_contains "$out" 'ref=fixture-ref' "install must print the ref it actually bound"
+  assert_grep "ADAPTER=$sandbox/fm-sssf-planning-awareness.sh" "$state/sssf-planning.check.sh" \
+    "the check must bake the absolute adapter path"
+  assert_grep 'FM_SSSF_PLANNING_REPO=fixture/sssf' "$state/sssf-planning.check.sh" \
+    "the check must carry its literal repo target"
+  assert_grep 'FM_SSSF_PLANNING_REF=fixture-ref' "$state/sssf-planning.check.sh" \
+    "the check must carry its literal ref target"
+  assert_grep 'FM_SSSF_PLANNING_FEED=docs/development/PLANNING_EVENTS.jsonl' "$state/sssf-planning.check.sh" \
+    "the check must carry its literal feed target"
+
+  # The registered check runs from a different cwd under a CONTRADICTING
+  # watcher environment. The target bound at install must win: retargeting
+  # requires retire, reinstall, and re-registration, never an env change.
+  log="$TMP/gh-requests.log"
+  : > "$log"
+  out=$(PATH="$FAKEBIN:$PATH" FM_STATE_OVERRIDE="$state" FM_TEST_FEED="$FEED" \
+    FM_TEST_GH_LOG="$log" \
+    FM_SSSF_PLANNING_REPO='attacker/production-sssf' \
+    FM_SSSF_PLANNING_REF='attacker-ref' \
+    FM_SSSF_PLANNING_FEED='docs/attacker-feed.jsonl' \
+    bash "$state/sssf-planning.check.sh")
+  assert_not_contains "$out" 'adapter-drift' \
+    "a relative-path install must not read as adapter drift at poll time"
+  assert_contains "$out" 'sssf-planning pending event_id=plan-20260818-0001' \
+    "the baked target must be polled and its event accepted"
+  assert_grep 'repos/fixture/sssf/contents/docs/development/PLANNING_EVENTS.jsonl?ref=fixture-ref' "$log" \
+    "the poll must reach the target bound at install"
+  assert_no_grep 'attacker' "$log" \
+    "a contradicting watcher environment retargeted the registered check"
+  pass "the installed check bakes an absolute adapter path and its poll target, and a contradicting environment cannot move either"
+}
+
 test_silence_is_observed_and_not_an_absent_observation
 test_bootstrap_synchronizes_and_creates_no_task
 test_every_non_active_state_is_awareness_only
@@ -618,6 +735,8 @@ test_duplicate_events_do_not_duplicate_effects
 test_registered_check_trust_boundary_holds
 test_retirement_restores_pre_bridge_behavior
 test_watcher_lifecycle_remains_single_owner
+test_a_hung_endpoint_is_a_typed_deadline_before_the_watcher_kill
+test_the_installed_check_binds_its_poll_target_at_install
 
 fm_test_contract "$0" || exit 1
 
