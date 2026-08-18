@@ -6,7 +6,7 @@ This record contains reusable version-scoped evidence for active runtime guarant
 The backend guides own current setup, safety boundaries, and limitations.
 Exact task chronology, branch names, temporary homes, local paths, process ids, thread ids, and delivery transcripts remain in private reports or PR evidence.
 
-The commit ids cited for upstream projects, `165dca45` and `a979916`, are UNRESOLVABLE - NAMING NO KNOWN OBJECT: they belong to an upstream repository's history and resolve to nothing here. Whether either survives upstream COULD NOT BE OBSERVED from here, so nothing is claimed either way. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
+The commit ids cited for upstream projects, `165dca45` and `a979916`, are UNRESOLVABLE - NAMING NO KNOWN OBJECT: they belong to an upstream repository's history and resolve to nothing here. Whether either survives upstream COULD NOT BE OBSERVED from here, so nothing is claimed either way. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary. The hex strings inside version banners such as `[9ed29d81a]` are tool build hashes, not commit ids.
 
 ## tmux
 

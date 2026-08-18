@@ -6,7 +6,7 @@ This record holds reusable evidence for one active guarantee of `bin/fm-outbound
 `bin/fm-outbound-artifact-lib.sh`'s header owns the invariant statement and the identity rule, `bin/fm-outbound-artifact.sh`'s header owns the command contract, [`../configuration.md`](../configuration.md) "Browser Sol control venue" owns the configuration, and `.agents/skills/bootstrap-diagnostics/SKILL.md` owns the handling procedure for a printed `OUTBOUND:` line.
 
 Commit-id citations in this record are NON-RETRIEVABLE PROVENANCE: they name real objects that the history shipped here cannot reach, because branches are replayed under fresh ids as they move through the gate. They record when a measurement was taken; they are not coordinates a reader is expected to resolve. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
-All ten ids cited below carry that label.
+Every commit id cited in this record carries that label; it is not tallied here, because a tally is a number that stops being true on the next edit. The `fm-ob-` request-id fragments in the control table are request ids, not commit ids.
 
 Verified on 2026-08-17 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1 and shellcheck 0.11.0.
 The watched-red controls below were exercised at implementation head `e083b9d011a2b081166662c9722bea1cb1215d99`.

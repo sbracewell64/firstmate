@@ -7,7 +7,7 @@ This record holds reusable evidence for two active guarantees of `bin/fm-decisio
 
 Verified on 2026-08-09 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1.
 
-The two commit ids cited below, `f0da880` and `4d995ff`, are UNRESOLVABLE - NAMING NO KNOWN OBJECT: they belong to the probed platform's own history, not to this repository, and resolve to nothing here. Whether either survives in the repository it came from COULD NOT BE OBSERVED from here, so nothing is claimed either way. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
+The commit ids cited below, `f0da880` and `4d995ff`, are UNRESOLVABLE - NAMING NO KNOWN OBJECT: they belong to the probed platform's own history, not to this repository, and resolve to nothing here. Whether either survives in the repository it came from COULD NOT BE OBSERVED from here, so nothing is claimed either way. [`review-envelope-controls.md`](review-envelope-controls.md) owns that vocabulary.
 
 ## The platform seam is reachable and still not wired
 

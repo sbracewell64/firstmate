@@ -1,5 +1,7 @@
 # Supervision integration verification
 
+This record cites no commit ids. The hex-shaped strings in it are process ids and tool build hashes inside version banners such as `grok 0.2.112 (9bbd559437aa)`, not commit references.
+
 Audience: maintainer verification.
 
 This record supports current session-start, turn-end, watcher-continuity, and wedge-alarm guarantees.

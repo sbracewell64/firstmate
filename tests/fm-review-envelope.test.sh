@@ -2780,15 +2780,43 @@ test_the_generated_contract_page_matches_the_catalog() {
 # number unconditionally is what once put an unmeasured number in the one
 # section reserved for what was measured - the record had no way to say "not
 # observed yet", so it said something nobody had seen.
-check_recorded_control_count() {  # <record> <actual-count>
+#
+# The deferral is not free-standing. It must NAME the stale subjects that make a
+# count unobservable, and those must be the stale subjects this tree actually
+# has - so the moment the campaign matches the shipped bytes again, the deferral
+# is refused and a number is required. A REMEDY STATE MUST CARRY THE CONDITION
+# THAT JUSTIFIES IT, CHECKED AGAINST THE WORLD, OR IT OUTLIVES IT.
+check_recorded_control_count() {  # <record> <actual-count> <artifact> <root>
   python3 - "$@" <<'PYEOF'
-import re, sys
+import hashlib, json, re, sys
 
-record_path, actual = sys.argv[1:]
+record_path, actual, artifact_path, root = sys.argv[1:]
 record = open(record_path, encoding="utf-8").read()
+try:
+    artifact = json.load(open(artifact_path, encoding="utf-8"))
+except (OSError, ValueError) as error:
+    sys.stderr.write("campaign artifact is unreadable: %s\n" % error)
+    sys.exit(1)
+
+# The world the pending state is pending ON. A remedy state that does not carry
+# its own condition outlives it: once the artifact matches the shipped bytes the
+# suite can reach its end, a count IS observable, and an honest "not measurable
+# yet" would quietly become "never measured".
+stale = []
+for path, recorded in sorted((artifact.get("subjects") or {}).items()):
+    try:
+        shipped = "sha256:" + hashlib.sha256(open(root + "/" + path, "rb").read()).hexdigest()
+    except OSError as error:
+        sys.stderr.write("measured subject is unreadable: %s\n" % error)
+        sys.exit(1)
+    if shipped != recorded:
+        stale.append((path, recorded, shipped))
+
 stated = re.findall(r"^([0-9]+) controls pass against the shipped scripts\.$", record, re.M)
-pending = re.findall(
-    r"^No control count is asserted at this head: (.+)$", record, re.M)
+pending = re.findall(r"^No control count is asserted at this head: (.+)$", record, re.M)
+declared = re.findall(
+    r"^- `([^`]+)` \u2014 artifact `(sha256:[0-9a-f]{64})`, shipped `(sha256:[0-9a-f]{64})`$",
+    record, re.M)
 if stated and pending:
     sys.stderr.write(
         "the record both states a control count and declares none asserted; one or the other\n")
@@ -2804,6 +2832,16 @@ if pending:
     if not pending[0].strip():
         sys.stderr.write("the no-count-asserted declaration carries no reason\n")
         sys.exit(1)
+    if not stale:
+        sys.stderr.write(
+            "the campaign artifact matches every shipped subject, so a run reaches the end of "
+            "the suite and the control count is observable; it must be stated, not deferred\n")
+        sys.exit(1)
+    if declared != stale:
+        sys.stderr.write(
+            "the pending declaration does not name the stale subjects it is pending on: "
+            "declared %r, observed %r\n" % (declared, stale))
+        sys.exit(1)
     sys.exit(0)
 if len(stated) > 1:
     sys.stderr.write("the record states more than one control count\n")
@@ -2818,12 +2856,14 @@ PYEOF
 
 test_the_verification_record_matches_the_executed_control_count() {
   local record=$ROOT/docs/verification/review-envelope-controls.md
+  local artifact=$ROOT/docs/verification/review-envelope-campaign.json
   local mutant=$TMP_ROOT/control-count-mutant.md
+  local fresh_artifact=$TMP_ROOT/control-count-fresh-artifact.json
   local executed actual
   executed=$(printf '%s' "$FM_TEST_PASSED_TESTS" | awk 'NF' | LC_ALL=C sort -u | wc -l)
   actual=$((executed + 1))
   [ "$actual" -gt 1 ] || fail "the control-count comparison must observe executed controls"
-  check_recorded_control_count "$record" "$actual" \
+  check_recorded_control_count "$record" "$actual" "$artifact" "$ROOT" \
     || fail "the verification record's control-count state is not one this suite can accept"
 
   # NON-VACUITY for the numeric branch, which the shipped record does not
@@ -2844,13 +2884,13 @@ PYEOF
   }
   count_mutant "$actual controls pass against the shipped scripts." \
     || fail "the correct-count mutant must build"
-  check_recorded_control_count "$mutant" "$actual" \
+  check_recorded_control_count "$mutant" "$actual" "$artifact" "$ROOT" \
     || fail "a record stating the count this run executed must be accepted"
 
   # THE CONTROL. Drift in the number is what this exists to catch.
   count_mutant "1 controls pass against the shipped scripts." \
     || fail "the wrong-count mutant must build"
-  capture check_recorded_control_count "$mutant" "$actual"
+  capture check_recorded_control_count "$mutant" "$actual" "$artifact" "$ROOT"
   expect_code 1 "$CAPTURED_CODE" "a record stating a count the suite did not execute must fail"
   assert_contains "$CAPTURED" 'but the suite executed' \
     "the failure must name both the stated and the executed count"
@@ -2858,7 +2898,7 @@ PYEOF
   # Neither state. An absent count must not read as a satisfied one.
   count_mutant "The record says nothing about how many controls ran." \
     || fail "the absent-count mutant must build"
-  capture check_recorded_control_count "$mutant" "$actual"
+  capture check_recorded_control_count "$mutant" "$actual" "$artifact" "$ROOT"
   expect_code 1 "$CAPTURED_CODE" "a record asserting no count and declaring none must fail"
   assert_contains "$CAPTURED" 'neither states a control count nor declares' \
     "the failure must say the record declared nothing"
@@ -2867,11 +2907,53 @@ PYEOF
   # reader take the number as measured and the control as satisfied.
   count_mutant "$actual controls pass against the shipped scripts."$'\n'"No control count is asserted at this head: measured subjects changed." \
     || fail "the both-states mutant must build"
-  capture check_recorded_control_count "$mutant" "$actual"
+  capture check_recorded_control_count "$mutant" "$actual" "$artifact" "$ROOT"
   expect_code 1 "$CAPTURED_CODE" "a record both stating and disclaiming a count must fail"
   assert_contains "$CAPTURED" 'both states a control count and declares none asserted' \
     "the failure must name the contradiction"
-  pass "the verification record states a control count this run executed, or explicitly declares none asserted"
+
+  # THE DEFERRAL'S EXIT CONDITION. Against an artifact that matches the shipped
+  # subjects, a run reaches the end of the suite and a count IS observable, so
+  # the pending state must be refused from that moment rather than standing on
+  # its own reasonableness. The artifact mutant is built here rather than
+  # borrowed, because the shipped one is stale by design and a control that only
+  # refuses while an ambient fact happens to hold measures nothing.
+  python3 - "$artifact" "$fresh_artifact" "$ROOT" <<'PYEOF'
+import hashlib, json, sys
+source, target, root = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+artifact["subjects"] = {
+    path: "sha256:" + hashlib.sha256(open(root + "/" + path, "rb").read()).hexdigest()
+    for path in artifact.get("subjects", {})
+}
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_recorded_control_count "$record" "$actual" "$fresh_artifact" "$ROOT"
+  expect_code 1 "$CAPTURED_CODE" "a deferred count must be refused once the campaign matches the tree"
+  assert_contains "$CAPTURED" 'it must be stated, not deferred' \
+    "the failure must say the count is observable again"
+
+  # And the deferral must name the stale subjects THIS TREE has, not a set it
+  # chose. A declaration naming nothing is a reason without a condition.
+  python3 - "$record" "$mutant" <<'PYEOF'
+import re, sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+rewritten, count = re.subn(
+    r"^- `[^`]+` \u2014 artifact `sha256:[0-9a-f]{64}`, shipped `sha256:[0-9a-f]{64}`$",
+    "- the subjects that make this unobservable are left unnamed",
+    record, flags=re.M)
+if not count:
+    sys.stderr.write("the record names no stale subject to strip\n")
+    sys.exit(1)
+open(target, "w", encoding="utf-8").write(rewritten)
+PYEOF
+  capture check_recorded_control_count "$mutant" "$actual" "$artifact" "$ROOT"
+  expect_code 1 "$CAPTURED_CODE" "a deferral that names no stale subject must fail"
+  assert_contains "$CAPTURED" 'does not name the stale subjects it is pending on' \
+    "the failure must say the condition was not declared"
+  pass "the verification record states a control count this run executed, or defers it on stale subjects this tree actually has"
 }
 
 # The mutation table is prose, and prose is not the evidence. Every row in it

@@ -1,5 +1,7 @@
 # Control-plane retrieval completeness verification
 
+This record cites no commit ids. The long digit strings in it are forge repository and issue identifiers and recorded field values, not commit references.
+
 Audience: maintainer verification.
 
 This record holds the audit and the reusable evidence for one active guarantee: no control-plane read in this tree reaches a negative conclusion over a source whose candidate universe was never enumerated.

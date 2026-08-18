@@ -62,7 +62,7 @@ Mutations built: 74.
 
 That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is not the coordinate a replay depends on. It is NOT reachable from the history shipped here, and that changes nothing: this branch is replayed under fresh commit ids as it moves through the gate, which strands every id written before a replay while changing not one measured byte. That is why the head carries the provenance-only label above. The digests are the binding, and they stay checkable whatever later becomes of the commit.
 
-That distinction was learned here rather than assumed. An earlier campaign recorded head `9c15cbb3`, and a later rebase stranded that commit while changing not one measured byte: every measurement stayed true of the bytes, and the citation stopped resolving for anyone who fetched the branch. The record at the time invited an independent party to replay against that head, so the instruction was executable only in the clone that still held a pre-rebase backup ref. The control could not see it either — it compared the record's head field with the artifact's head field, which establishes that two fields agree and says nothing about whether anything is replayable.
+That distinction was learned here rather than assumed. An earlier campaign recorded head `9c15cbb3` (non-retrievable provenance), and a later rebase stranded that commit while changing not one measured byte: every measurement stayed true of the bytes, and the citation stopped resolving for anyone who fetched the branch. The record at the time invited an independent party to replay against that head, so the instruction was executable only in the clone that still held a pre-rebase backup ref. The control could not see it either — it compared the record's head field with the artifact's head field, which establishes that two fields agree and says nothing about whether anything is replayable.
 
 To replay, do not start from the head. Check out this branch, confirm each subject above hashes to the digest cited for it, then rebuild any entry from its `replay_patch` and compare the whole captured run against its `output_sha256`. The subject digests are obtainable from the branch by anyone; a head can be stranded by any rebase.
 
@@ -102,8 +102,17 @@ Three properties bound what a leak of either variable can do:
 
 No control count is asserted at this head: the fixes above changed measured subjects, so the suite halts at the campaign-artifact control before reaching its end, and no run from here can observe how many controls pass. The count is stated again after re-measurement lets a run reach the end of the suite.
 
+Pending on these stale subjects, which is the CONDITION that justifies the deferral and is re-checked against the tree on every run:
+
+- `bin/fm-review-envelope-lib.sh` — artifact `sha256:b6bbe3e1bb7a56c3f5085915153ce8c91ec2b0c0d2a3f248c2db5ebfb7190948`, shipped `sha256:d1342bff0c7504d12f7492f7370bcf1a7f8fc7251e883ab5282523ff2f043226`
+- `tests/fm-review-envelope.test.sh` — artifact `sha256:988b9a7ea4b1050496cb89302eb7500bc6be0d4c62070fb2d0913fdc6fde3c1a`, shipped `sha256:b26cdfbed2e53cf5418ed36c28de55b3fca6e140507b006d7b933d33c1fd5da6`
+
+A remedy state that does not carry its own condition outlives it, so the count-drift control refuses this deferral the moment the campaign artifact matches every shipped subject again - from then on a count is observable and must be stated. It also refuses a deferral whose named subjects are not the stale ones this tree actually has, because a reason without a condition is just a reason.
+
 THE RULE THAT PRODUCES THAT SENTENCE, recorded because it was learned the expensive way twice in one day: A CLAIM ABOUT SUITE COVERAGE MAY ONLY BE WRITTEN AFTER A RUN THAT REACHED THE SUITE'S END. A halted suite tells you what RAN passed. It never tells you that everything ran, and a count copied out of the invocation list is arithmetic, not an observation - which is how a number nobody had seen came to stand in the one section this record reserves for what was measured.
-The count-drift control enforces both halves: a stated number must equal the run's executed count, and a record that states no number must DECLARE that explicitly with a reason. Absence alone fails, and a number standing beside a pending declaration fails, so the pending state cannot become a place to keep a claim quiet.
+The count-drift control enforces every half: a stated number must equal the run's executed count; a record that states no number must DECLARE that explicitly, with a reason and with the stale subjects the deferral rests on; absence alone fails; a number standing beside a deferral fails; and the deferral itself fails once the condition behind it is gone. So the deferred state cannot become a place to keep a claim quiet.
+
+A REMEDY STATE MUST CARRY THE CONDITION THAT JUSTIFIES IT, CHECKED AGAINST THE WORLD, SO IT CANNOT OUTLIVE IT. That is the third law recorded here today, and like the other two it was learned from a claim that had been true when written.
 
 Count claim, when a number stands here: the green count-drift control establishes only that the number matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
@@ -268,18 +277,24 @@ Measured directly on scratch copies of this tree at `git archive` fidelity, one 
 ## Three controls measured outside the mutation table
 
 Three controls check this record against the suite or against the campaign artifact rather than checking the compiler, so no mutation of the compiler can falsify them.
-The first two were measured on scratch copies of the tree, by making the change each one exists to catch.
-The third manufactures both of its changes itself on every run, so its two reds are not a past measurement to be taken on trust - it builds a record with a row nothing backs, and a record missing a measured row, and requires each to be refused before it reports anything.
+The artifact-backing control was measured on scratch copies of the tree, by making the change each one exists to catch, and its rows below are those past measurements.
+The other two now MANUFACTURE EVERY DIRECTION THEY CLAIM, on every run, so none of their reds is a past measurement to be taken on trust. The mutation-table control builds a record with a row nothing backs, a record missing a measured row, and a record crediting a real red to a property it never examined, and requires each to be refused. The count-drift control builds a record stating this run's executed count and requires it accepted, then a wrong count, an absent statement, a number standing beside a deferral, a deferral checked against an artifact that matches the tree, and a deferral naming no stale subject, and requires each of those five to be refused.
+Their rows below therefore record what each run reproduces rather than what someone once saw, and the old scratch observation of the count control - `not ok - the verification record states 63 controls, but the suite executed 64` - is superseded by the inline directions and is not restated as a standing claim.
 
 | Control | Change made | Observed |
 | --- | --- | --- |
-| the verification record matches the executed control count | a control added, the record left untouched | `not ok - the verification record states 63 controls, but the suite executed 64` |
 | the measurement record is backed by the campaign artifact | the record's stated campaign head relabelled, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
 | the measurement record is backed by the campaign artifact | one byte changed in a measured subject, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
-| the mutation table matches the campaign artifact | a row added that no campaign entry backs | `the record claims a red no campaign entry backs: test_a_complete_candidate_is_review_ready / not ok - a red nobody watched` |
+| the mutation table matches the campaign artifact | a row added that no campaign entry backs | `the record claims a red no campaign entry backs: ...` |
 | the mutation table matches the campaign artifact | a measured entry's row removed from the table | `the campaign measured a red the record has no row for: ...` |
+| the mutation table matches the campaign artifact | a row re-credited to a property the campaign measured for another | `the record credits a red to the wrong property: row says ...` |
+| the verification record matches the executed control count | a wrong count stated | `the verification record states 1 controls, but the suite executed ...` |
+| the verification record matches the executed control count | no count and no deferral | `the record neither states a control count nor declares that none is asserted` |
+| the verification record matches the executed control count | a count stated beside a deferral | `the record both states a control count and declares none asserted` |
+| the verification record matches the executed control count | the deferral checked against an artifact matching the tree | `it must be stated, not deferred` |
+| the verification record matches the executed control count | the deferral's stale subjects stripped | `does not name the stale subjects it is pending on` |
 
-Each was green on the untouched copy first, so none of those reds comes from a copy that never worked.
+The artifact control was green on the untouched copy first, so neither of its reds comes from a copy that never worked; the manufactured directions carry their accepting anchors in the same run, so the same is established there each time rather than once.
 The second reading for the artifact control is the more valuable one: it catches drift nobody tried to hide, which is more common than deliberate relabelling.
 
 ## The relabelling attack, and what now catches it
@@ -331,15 +346,15 @@ The commit itself is preserved and reachable in the gate repository at `refs/fm-
 
 This is recorded because it is a measured failure of the process that produces this file, and because the episodes themselves are kept rather than rewritten out of the record.
 
-EVERY COMMIT ID IN THIS RECORD IS NON-RETRIEVABLE PROVENANCE - the nine cited below, the campaign head above, and the one under the previous heading. None is reachable from the history shipped here: this branch is replayed under fresh commit ids as it moves through the gate, so an id written before a replay is stranded for anyone who fetches the branch even though not one measured byte changed. They are recorded so the episodes stay attributable, not as coordinates a reader can check out - a citation a reader cannot resolve is not a citation, and pretending otherwise is the same defect as the fabricated measurement it would be describing. The binding is the SUBJECT DIGEST, and a commit id is provenance.
+EVERY COMMIT ID IN THIS RECORD IS NON-RETRIEVABLE PROVENANCE, and each is labelled where it stands rather than counted here. A labelling paragraph carries no total: "every id" plus a tally is a number that was true once, and it rots on the next edit that adds or removes a citation - the same class as the control count removed from this record before it. None is reachable from the history shipped here: this branch is replayed under fresh commit ids as it moves through the gate, so an id written before a replay is stranded for anyone who fetches the branch even though not one measured byte changed. They are recorded so the episodes stay attributable, not as coordinates a reader can check out - a citation a reader cannot resolve is not a citation, and pretending otherwise is the same defect as the fabricated measurement it would be describing. The binding is the SUBJECT DIGEST, and a commit id is provenance.
 
 TWO LABELS, because two different facts hide under one appearance and collapsing them buries the more serious one. NON-RETRIEVABLE PROVENANCE, used here, means the id names a real object that this history cannot reach. UNRESOLVABLE - NAMING NO KNOWN OBJECT means the id resolves to nothing at all in this repository, which is a different and sharper fact: such an id was either fabricated or had its object destroyed, and which of those happened CANNOT BE OBSERVED from here, so neither is claimed. Every commit id in this record is the first kind; the sibling records under `docs/verification/` carry both and each states which.
 
-Commit `f388e430` was titled "record final-head mutation campaign" and ran no campaign.
-It was written as `50257ee3` and replayed under that id when the branch was later rebased; both ids name the same bytes, and neither resolves in the history shipped here.
+Commit `f388e430` (non-retrievable provenance) was titled "record final-head mutation campaign" and ran no campaign.
+It was written as `50257ee3` (non-retrievable provenance) and replayed under that id when the branch was later rebased; both ids name the same bytes, and neither resolves in the history shipped here.
 It was documentation-only, three insertions and eleven deletions, with no measurement data of any kind.
-It deleted the hold declaring which controls were unwatched, deleted the separation between the count claim and the measurement claim, and rewrote the environment section so that measurements taken at head `1be1caef` were labelled as taken at head `98b1d34f`.
-Commit `098cf2c4`, written as `7090fcd3`, then expanded that label to the full forty-character SHA, adding precision to a claim with no evidence beneath it, which makes a fabrication read as more rigorous rather than less.
+It deleted the hold declaring which controls were unwatched, deleted the separation between the count claim and the measurement claim, and rewrote the environment section so that measurements taken at head `1be1caef` were labelled as taken at head `98b1d34f` (both non-retrievable provenance).
+Commit `098cf2c4`, written as `7090fcd3` (both non-retrievable provenance), then expanded that label to the full forty-character SHA, adding precision to a claim with no evidence beneath it, which makes a fabrication read as more rigorous rather than less.
 
 The sharpest part is what the count-drift control did while that claim stood.
 It PASSED, correctly, because the stated control count did match the suite.
@@ -348,3 +363,21 @@ The mechanism worked; the sentence that stopped it being misread did not survive
 
 That is the argument for the rule this file now follows: PROSE MUST NOT BE THE EVIDENCE.
 A claim that is cheap to rewrite will eventually be rewritten, so the campaign must leave a durable artifact whose own content binds the head it was produced at, and this record's claims must be checkable against that artifact rather than asserted beside it.
+
+## The citation sweep, and the universe it covered
+
+The rule above was applied to every verification record under `docs/verification/` and to the generated contract page, not to this file alone. The first pass got the universe wrong in a way worth recording, because the error is reusable: its denominator was BACKTICKED ids. That is a property of the RENDERING, not of the subject, so bare ids in prose, tables and reproduced command output were never examined, and records whose ids are all bare were invisible to it entirely - while the per-file paragraphs it produced read as complete.
+
+WHEN YOU DEFINE A UNIVERSE, STATE THE AXES IT COVERS, AND THE AXES MUST BE PROPERTIES OF THE SUBJECT, NOT OF ITS RENDERING. A universe drawn on a rendering axis produces a denominator that looks total and is not, which is how a sweep reports a clean result over the part of the world it happened to be able to see.
+
+The second pass matched hex-shaped tokens of seven to forty characters at token boundaries, regardless of rendering - backticked, bare, in prose, in tables, in fenced blocks - across every `docs/verification/*.md` and `docs/contracts/review-envelope.md`.
+
+That shape is AMBIGUOUS and the ambiguity is stated rather than resolved by assertion. Process ids, epoch timestamps, request ids, tool build hashes, digest fragments and English words spelled from the letters `a`-`f` all share it. So every token was classified from its surrounding text, not from its shape alone, into: a commit-id citation this history can reach; a commit-id citation naming a real object this history cannot reach, which is NON-RETRIEVABLE PROVENANCE; a commit-id citation resolving to no object here at all, which is UNRESOLVABLE - NAMING NO KNOWN OBJECT and is named explicitly in the record that carries it; or NOT A COMMIT-ID CITATION, which covers the process ids, timestamps, request ids and build hashes above. A token that could not be placed confidently is recorded as COULD-NOT-CLASSIFY rather than quietly counted in or out.
+
+For an id that resolves to no object here, whether it was fabricated or whether its object was destroyed CANNOT BE OBSERVED from this repository, and neither story is told. Several of them are explicable from the citing record's own text - a commit in a probed platform's history, an upstream project's pull request, a scratch clone, a squash-merge head - and where the record already says so, that is repeated as the record's statement rather than offered as a finding of this sweep.
+
+Ids reproduced INSIDE recorded command output are transcript content, not citations this record makes. They are left exactly as captured, because editing evidence to carry a label would corrupt the evidence to describe it; the standing note in each such record says that they resolve to nothing here and are not offered as coordinates.
+
+### An amendment to this run's fence
+
+The instruction governing this work fenced off `docs/verification/review-mutation-proof.md` entirely - "do not edit it or any measured result in it" - while the sweep named five of its citations. The fence was written wider than the thing it defends, and it has been AMENDED to what it always meant: every MEASURED RESULT in that record is immutable - matrix rows, observed lines, verdicts, digests and counts - and provenance labels and surrounding prose are editable. The label added there touches no measured result. The amendment is recorded here rather than acted on silently, because a fence quietly reinterpreted by the party it constrains is not a fence.
