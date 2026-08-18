@@ -199,6 +199,10 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/sssf-planning-awareness/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/stow/SKILL.md",
       "audience": "agent-runtime"
     },
@@ -329,6 +333,10 @@
     {
       "path": "docs/sessionstart-nudge.md",
       "audience": "operator-current"
+    },
+    {
+      "path": "docs/sssf-planning-awareness.md",
+      "audience": "maintainer-architecture"
     },
     {
       "path": "docs/subagent-guard.md",
