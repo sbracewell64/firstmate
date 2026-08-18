@@ -2,7 +2,8 @@
   "_floors": {
     "F-FAST": "Narrow mechanical work: the cheapest profile that can still finish the edit.",
     "F-GEN": "Ordinary implementation and investigation work with a normal amount of ambiguity.",
-    "F-DEEP": "Work that needs many moving parts held at once, or that is risky to get wrong."
+    "F-DEEP": "Work that needs many moving parts held at once, or that is risky to get wrong.",
+    "_requires_capabilities_note": "An object floor may add \"requires_capabilities\": [\"<contract id>\"] naming capability contracts from qualifications/ that every candidate must hold a current QUALIFIED record for. Omitting it - as every floor above does - leaves the role qualification register unread, which is why copying this file switches nothing on. See docs/configuration.md \"Role qualification register\"."
   },
   "rules": [
     {

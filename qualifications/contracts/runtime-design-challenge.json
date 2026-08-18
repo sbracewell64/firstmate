@@ -1,0 +1,52 @@
+{
+  "qualification_schema_version": 1,
+  "id": "runtime-design-challenge",
+  "role": "RUNTIME_DESIGN_CHALLENGER",
+  "risk_class": "runtime-risk-v1",
+  "contract_version": "1.0.0",
+  "axis": "design_challenge",
+  "purpose": "A QUALIFIED record means this binding was observed to challenge a runtime DESIGN before any mutation exists - to find the wrong owner, the second state machine, the unbounded loop and the missing terminal state in a proposal, and to say so in consumable structured form rather than approving a plan it could not fault.",
+  "grants": "Eligibility as the PRE-MUTATION design challenger on a route whose floor declares this contract in requires_capabilities.",
+  "does_not_grant": [
+    "Eligibility to review the exact change that is later made; that is exact_change_review and needs its own record.",
+    "Eligibility to make the change.",
+    "Assignment independence from any particular maker, which is a separate axis decided per assignment.",
+    "Any statement about cost, entitlement, availability, capacity, or concurrency."
+  ],
+  "executable_predicate": {
+    "kind": "fixture_oracle",
+    "fixture": "runtime-maker-qualification-fixture-v1",
+    "fixture_version": "1.0.0",
+    "manifest_digest": "21c4b242bc6deb5cc9d69887240503cf1cdddae792d492389bfd3a1c245863cd",
+    "root": "home:data/runtime-maker-qualification-fixture-v1/fixture",
+    "integrity": "verify-integrity.sh",
+    "setup": "setup.sh evidence-adjudicator",
+    "verify": "verify.sh evidence-adjudicator",
+    "controls": "run-controls.sh",
+    "predicates_measured": [
+      "a reported success with no target-bound evidence is not accepted as one",
+      "a stale binding is distinguished from a generic failure",
+      "two individually incomplete attempts are never aggregated into a pass",
+      "a valid could-not-observe result stays could-not-observe rather than being converted",
+      "the required result vocabulary is emitted exactly, with no synonym"
+    ],
+    "red_controls_required": [
+      "independent mutations introducing false certainty, a stale or wrong binding, improper aggregation, an invalid conversion of could-not-observe, and malformed structured output must each be observed rejected"
+    ],
+    "why_this_predicate": "A design challenge and an evidence adjudication are measured by the same discriminator: whether the reader refuses to grant a conclusion the evidence in front of it does not support. Until a dedicated pre-mutation design fixture exists, this contract is deliberately bound to the adjudicator oracle and says so, rather than declaring a predicate nothing runs."
+  },
+  "adjudication": {
+    "required": true,
+    "adjudicator_contract": "qualification-evidence-adjudicator",
+    "independence_dimensions": ["binding"]
+  },
+  "required_freshness_dependencies": [
+    "file_digest",
+    "contract_version",
+    "harness_semantics",
+    "binding_semantics",
+    "native_effort_mapping",
+    "time_bound"
+  ],
+  "note": "This contract exists separately from runtime-change-review because challenging a plan and checking a diff are different jobs. A route needing both requires two QUALIFIED records, and one reviewer holding both may perform both on one assignment only while assignment independence from the maker still holds."
+}

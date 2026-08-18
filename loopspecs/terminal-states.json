@@ -192,6 +192,49 @@
           "note": "Could-not-observe, and the could-not-observe lands on the BOUND ITSELF rather than on a detail beside it. Nothing here says the pool was tried and found empty; what is established is that the record bounding the wait could not be written, so the bound was never enforceable. A bound you cannot observe is not a bound, so the wait stops rather than continuing on a warning - continuing is the fail-open shape. This is a defect in the instrument and the repair is to the recorder, not to the routing."
         }
       ]
+    },
+    {
+      "source": "role-qualification",
+      "owner": "bin/fm-qualification.sh resolve, recorded as terminal= in state/qualification/<activation-id>.activation",
+      "description": "How a BOUNDED QUALIFICATION WORKFLOW names why it stopped. Registered here because the register it feeds has five result values and only some of them end a workflow: QUALIFICATION_REQUIRED and QUALIFICATION_STALE are the reasons a workflow STARTS, and COULD_NOT_OBSERVE deliberately appears in no row below because it is nonterminal - it spends one attempt, records nothing against the binding, and leaves the workflow active. Listing it would make an unmade observation look like an ending, which is the exact collapse qualifications/schema.json refuses.",
+      "map": [
+        {
+          "state": "qualified",
+          "unified": "goal_met",
+          "consequence": "the evidence becomes reusable and the blocked work identity returns to normal eligibility unchanged",
+          "note": "Observed-good, and the only row that admits a binding. It unblocks the SAME work identity through the existing backlog owner: nothing is re-created, so identity, custody bases, attempt count and retry budget all survive."
+        },
+        {
+          "state": "failed",
+          "unified": "verification_failed",
+          "consequence": "the exclusion evidence is preserved and the next promising candidate is evaluated",
+          "note": "Observed-bad. The predicate ran and rejected this binding, which is a real finding worth keeping - a later record never deletes it. This is a statement about one binding against one contract version, never a score or a reputation, and re-qualifying it is lawful only on a directly evidenced material change."
+        },
+        {
+          "state": "no_candidate_can_satisfy",
+          "unified": "needs_ruling",
+          "consequence": "the route stops and escalates, because no candidate can be made eligible by qualifying it",
+          "note": "The ONLY row that reaches the captain. Every candidate is excluded by something a qualification workflow cannot fix - a floor axis it does not meet, a model-registry refusal, or a preserved FAILED record. Missing or stale qualification never lands here; routing it here is the recurrence the whole register exists to close."
+        },
+        {
+          "state": "attempt_budget_spent",
+          "unified": "budget_exhausted",
+          "consequence": "the workflow stops and the blocked work is left held for a decision",
+          "note": "Observed-bad on the BOUND: the workflow was tried its whole allowance and did not reach a result. The bound belongs to the workflow's own identity, never to the work it would unblock, so a qualification attempt can never spend a retry the real work is owed."
+        },
+        {
+          "state": "record_unwritable",
+          "unified": "blocked_by_evidence_integrity",
+          "consequence": "the workflow stops and the record that bounds it is reported as unwritten",
+          "note": "Could-not-observe, and it lands on the bound itself rather than on a detail beside it - exactly as the capacity wait above distinguishes its two stops. Nothing here says any binding was tried and found wanting; what is established is that the durable record could not be maintained, so continuing would be an unbounded loop that still looked correct step by step. The repair is to the recorder."
+        },
+        {
+          "state": "superseded",
+          "unified": "cancelled",
+          "consequence": "the workflow stops without a verdict because the route no longer needs it",
+          "note": "Neither good nor bad: an eligible candidate appeared, the floor stopped requiring the contract, or the blocked work was withdrawn. Deliberately not folded into goal_met - a workflow that never observed anything must not read as one that qualified a binding."
+        }
+      ]
     }
   ],
   "invariants": [

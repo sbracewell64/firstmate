@@ -2,7 +2,7 @@
 name: decision-surface
 description: >-
   Agent-only procedure for consuming the resolved operational decision surface instead of reconstructing operational truth.
-  Use before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact, before dispatching work that may already exist, and whenever a decision-surface check returns contradicted or unevaluable.
+  Use before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, role-qualification, or landing fact, before dispatching work that may already exist, and whenever a decision-surface check returns contradicted or unevaluable.
 user-invocable: false
 metadata:
   internal: true
@@ -38,6 +38,7 @@ Each answers one question - does structured state contradict the claim - and not
 | `check decision-pending <decision-id>` | "that decision is still with the captain" |
 | `check duplicate-dispatch <task-id>` | "dispatch this work" when the identity may already be live |
 | `check certified <task-id>` | "this work is certified" / "it passed review" / "it is verified" |
+| `check route-qualified <route-id>` | "no model can do this" / "this route needs a floor exception" / "there is nothing to run it on" |
 
 Build the decision id with `bin/fm-decision-hold.sh id <origin-id> <decision-key>`.
 
@@ -53,6 +54,20 @@ Read the verdict, not the exit status alone:
 - **unevaluable** - no landed owner could answer.
   The fact may not be asserted at all.
   Unevaluable is never a quiet pass: an unreadable census, an invalid admission policy, or an absent decision record each mean firstmate does not know, and saying so plainly is the correct captain-facing outcome.
+
+### Route qualification, and the one classification that escalates
+
+`bin/fm-route.sh zero-route` owns the classification; the check composes it.
+All four zero-route classifications come back CONTRADICTED, because in all of them "there is a qualified binding to run this" is false.
+What differs is the ACTION, and the evidence line carries it:
+
+- **`QUALIFICATION_REQUIRED`** - nobody has qualified a candidate yet, or the evidence went stale. Activate one bounded qualification workflow; this is work to do.
+- **`QUALIFICATION_COULD_NOT_OBSERVE`** - whether any candidate holds the capability could not be read. Repair the observation; nothing adverse was established about any binding.
+- **`AWAITING_AVAILABILITY`** - the qualified candidates are unreachable or out of capacity. A wait, owned by the availability hold and the capacity deferral.
+- **`NO_MODEL_CAN_SATISFY_ROUTE`** - nothing can be made eligible by qualifying it. The only one that carries `CAPTAIN_EXCEPTION_REQUIRED`.
+
+Never relay the first three as "no model can do this", and never ask for a floor exception on the strength of them.
+[`role-qualification`](../role-qualification/SKILL.md) owns what to do with each.
 
 ### Certification, and the two ways it is not certified
 

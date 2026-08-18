@@ -42,7 +42,7 @@ Hard rules, in priority order:
    `bin/fm-verify.sh` runs a declared verifier and returns that result; `bin/fm-verify-lib.sh` owns the type itself and its consumer and coercion rules.
 
 You may maintain this repo's private operational state directly.
-Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, `capabilities/`, `commitments/`, and public `skills/`.
+Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, `capabilities/`, `commitments/`, `qualifications/`, and public `skills/`.
 When any crewmate is live, delegate changes to shared tracked material rather than competing with supervision; when the fleet is empty, firstmate may change it directly.
 This repo is a shared template, while `.env`, `data/`, `state/`, `config/`, `projects/`, and `.no-mistakes/` are captain-private and gitignored.
 Ship shared tracked changes through this repo's no-mistakes pipeline and PR path, with the same merge authority as any other project.
@@ -67,8 +67,9 @@ README.md            public overview and development notes
 .claude/skills       symlink to .agents/skills for claude compatibility
 skills/              standalone public installer-facing skills, committed; not loaded by firstmate
 loopspecs/           canonical LoopSpec registry, committed: schema.json (field contract), triggers.json (the sixteen-trigger register), terminal-states.json (the unified terminal-state vocabulary and its total mapping from every source vocabulary), and one <id>.json per loop; bin/fm-loopspec.sh is their only interpreter (section 13)
-capabilities/        capability catalog, committed: catalog.json names the sixteen typed capabilities and their existing owners. Definitions only - no runtime reads it, nothing is bound, and the file itself certifies that it is a capability boundary and not a security boundary
+capabilities/        capability catalog, committed: catalog.json names the nineteen typed capabilities and their existing owners. Definitions only - no runtime reads it, nothing is bound, and the file itself certifies that it is a capability boundary and not a security boundary
 commitments/         canonical register of recorded-but-not-yet-real commitments, committed: schema.json (field contract, assurance tiers, refused keys) and one <id>.json per commitment; bin/fm-commitment-register.sh is their only interpreter, computes every state from a probe, and never stores one (section 7)
+qualifications/      role qualification register, committed: schema.json (field contract, the five-value vocabulary, the nine axes, the state computation), contracts/<id>.json per capability contract, and records/<id>.json per observed binding, with an optional home-private data/qualifications/records/ overlay; bin/fm-qualification-lib.sh and bin/fm-qualification.sh are their only interpreters, compute every state on read, and never store one (section 7)
 firstmate.bat        Windows-to-WSL launcher bridge, committed; docs/windows-launcher.md owns setup
 bin/                 helper scripts, committed; read each script's header before first use
 .env                 optional X-mode pairing token; LOCAL, gitignored; presence-gates section 14
@@ -124,6 +125,7 @@ state/               volatile runtime signals; gitignored
   x-watch.check.sh   generated X-mode relay poll shim; present only when opted in (section 14)
   model-health.json  narrow mode-0600 record of which models and providers the fleet currently cannot reach, written only by bin/fm-route-lib.sh through bin/fm-route.sh; availability only, never a demotion, and an absent file means no remembered cooldown rather than a healthy model
   loopspec/          persistent per-loop iteration state written only by bin/fm-loopspec.sh, plus the executions.log record of what actually ran written only by bin/fm-loop-actuate.sh; never hand-edited (section 13)
+  qualification/     inert parameters for durable bounded-qualification workflow incarnations, written only by bin/fm-qualification.sh; workflow liveness remains owned by the backlog, and each workflow is bounded by bin/fm-attempt.sh on its OWN identity and never on the identity it would unblock
   pending-replies/   parent-owned secondmate pending-reply records (correlation id, delivery vs reply, recovery, escalation); fm-pending-reply-lib.sh
   procevent/         registered process-to-event sources, one private record per canonical source id; written only by bin/fm-procevent.sh, and their presence alone keeps supervision required (section 13)
   procevent-inbox/   private captured results and their durable handled-acknowledgement markers; source output lives here and never in an event line
@@ -269,7 +271,7 @@ The delivery lifecycle is an always-loaded operational contract; referenced scri
 
 CODE resolves operational truth before firstmate reasons about work.
 `bin/fm-decision-surface.sh` composes the landed owners into that surface - capacity, live work, dependencies, open decisions, delivery state - and its `check` verdicts refuse a claim structured state contradicts.
-Never assert a capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact from memory or inference when that command answers it, and never state one it contradicts.
+Never assert a capacity, dependency, decision-status, in-flight, verifier, certification, role-qualification, or landing fact from memory or inference when that command answers it, and never state one it contradicts.
 An unevaluable verdict means the fact may not be asserted at all, not that the claim is safe.
 Its `owners` ledger names the deterministic work with no landed owner yet; that work remains firstmate's, and the instructions compensating for it stay in force until its owner lands.
 Load `decision-surface` before asserting any of those facts, before dispatching work that may already exist, and whenever a check returns contradicted or unevaluable.
@@ -321,6 +323,8 @@ Where this home's dispatch config carries routed pools, every ship and scout spa
 `fm-spawn` also consults admission before allocating anything, so a fleet that is not accepting work refuses the spawn and queues the request instead of starting it.
 It also consults current provider capacity before allocating anything, so a dispatch is never made into a pool whose every floor-meeting candidate is out of quota; that answer is three-valued, and an unmeasurable candidate stays eligible with its uncertainty disclosed rather than being read as either available or spent.
 When the whole floor-meeting pool is out, the work is deferred and resumes by itself once capacity returns, so never re-dispatch it by hand and never substitute a model below the floor: a required floor that is currently unavailable is a wait, not a weaker model (`bin/fm-capacity-retry.sh`).
+Where a route's floor declares required capability contracts, `fm-spawn` also refuses a binding the role qualification register does not currently record as `QUALIFIED` for each of them, and a route with no eligible candidate is classified rather than escalated: missing or stale qualification automatically activates one bounded qualification workflow for the cheapest promising candidate under the existing cost, entitlement, availability, effort, context, admission, duplicate-work and concurrency rules, an unobservable qualification is a repair to the observation, and only a route no candidate can satisfy by qualifying reaches the captain.
+Missing qualification is an engineering state and never a captain exception; load `role-qualification` before asserting that a route has no usable binding or acting on any of those classifications.
 After spawning, confirm the worker is processing the brief, handle any trust dialog through `harness-adapters`, and record ship or scout work as under way.
 A persistent secondmate is recorded in the secondmate registry and runtime state, never as a backlog work item.
 
@@ -554,12 +558,14 @@ It performs guarded fast-forward updates of firstmate and registered secondmate 
 These skills are not captain-invocable; load them only at their precise triggers.
 
 - `bootstrap-diagnostics` - load whenever the session-start digest's bootstrap section prints an actionable diagnostic line (`MISSING:`, `MISSING_MANUAL:`, `BACKEND_INVALID:`, `NEEDS_GH_AUTH`, `TANGLE:`, `STARTUP_MEMORY_BUDGET:`, `CREW_DISPATCH: invalid`, `MODEL_REGISTRY:`, `MODEL_PRICE:`, `MODEL_VERIFY:`, `ADMISSION_CONTROL:`, `WAKE_LEDGER:`, `TASK_AXIS_BACKFILL:`, `CAPACITY_DEFERRED:`, `CAPACITY_UNMEASURED:`, `FLEET_SYNC:`, `PR_CHECK_MIGRATION:`, `VALIDATION_DAEMON:`, `COMMITMENT:`, `SECONDMATE_SYNC:`, `SECONDMATE_LIVENESS:`, `SECONDMATE_HANDOFF:`, `NUDGE_SECONDMATES:`, or `FMX:`); silence and `BOOTSTRAP_INFO:` need no load.
-- `decision-surface` - load before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, or landing fact, before dispatching work that may already exist, and whenever a `bin/fm-decision-surface.sh check` returns contradicted or unevaluable.
+- `decision-surface` - load before asserting any capacity, dependency, decision-status, in-flight, verifier, certification, role-qualification, or landing fact, before dispatching work that may already exist, and whenever a `bin/fm-decision-surface.sh check` returns contradicted or unevaluable.
 - `diagnostic-reasoning` - load before scoping a reported bug and before acting on a diagnostic report.
 - `wrong-subject` - load before crediting any check, control, guard, or verifier with a property, whenever a green control or a refusing guard is surprising, and before writing or acting on a finding that a verdict established something it never examined.
 - `ask-user-authority` - load before deciding any ask-user finding, regardless of the project's `yolo` posture.
 - `quota-array-dispatch` - load before choosing among a matched crew-dispatch profile array from current quota-axi output.
 - `model-onboarding` - load before adding or changing a model in routing config, before probing a model, before acting on an entitlement or price-drift alarm, and before deciding a model promotion or demotion.
+- `role-qualification` - load before asserting that a route has no usable binding, before deciding whether a missing capability needs the captain, on any zero-route classification, before recording or resolving a qualification result, and before choosing a reviewer for work another binding made.
+  A binding is qualified only by an observation the register computes, never by its name; a maker never reviews its own candidate; and missing or stale evidence is work to do rather than a decision to escalate.
 - `fleet-admission` - load at intake before dispatching new work in a home with an active admission policy, and whenever an admission band other than preferred is returned, released, or overridden.
 - `harness-adapters` - load before spawning or recovering a crewmate or secondmate, handling a trust dialog, interrupting or exiting an agent, resuming an exited agent, or verifying a new harness adapter.
 - `firstmate-orca` - load before switching to Orca, spawning or supervising Orca-backed work, smoke-testing Orca backend behavior, debugging Orca task state, or reconciling Orca-backed task metadata.

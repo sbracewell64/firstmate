@@ -237,6 +237,10 @@ Promotion activation is a **config and data condition, never a code change**: th
 
 Do not build per-model capability scores or a provider-health abstraction layer without fresh evidence that the simpler mechanism failed.
 Quota-aware routed-pool eligibility is already owned by `bin/fm-route-lib.sh`; do not add a competing profile-array selector or router.
+
+**G5 is admission, not qualification, and the two are separate axes.**
+Whether a binding has been OBSERVED to do a job a specific route requires lives in the role qualification register, owned by [`role-qualification`](../role-qualification/SKILL.md) and `qualifications/schema.json`.
+Admitting a model to the fleet never qualifies it for a role, a `QUALIFIED` record never authorizes spend or asserts entitlement, and a missing record is an engineering state to resolve rather than a rejection to record here.
 Scoring a handful of models on several axes from a short suite manufactures precision the evidence cannot support; pass/fail against a floor is the honest granularity.
 
 ## Operating checklist

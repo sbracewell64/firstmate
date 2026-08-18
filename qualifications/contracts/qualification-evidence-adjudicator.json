@@ -1,0 +1,51 @@
+{
+  "qualification_schema_version": 1,
+  "id": "qualification-evidence-adjudicator",
+  "role": "QUALIFICATION_EVIDENCE_ADJUDICATOR",
+  "risk_class": "qualification-evidence-v1",
+  "contract_version": "1.0.0",
+  "axis": "exact_change_review",
+  "purpose": "A QUALIFIED record means this binding was observed to grade a qualification evidence package blind and correctly - emitting the exact required result vocabulary, refusing a reported success with no target-bound evidence, distinguishing stale evidence from failure, refusing to aggregate incomplete attempts, and preserving a valid could-not-observe.",
+  "grants": "Eligibility to be the assignment-distinct adjudicator named by another contract's adjudication.adjudicator_contract.",
+  "does_not_grant": [
+    "Eligibility to make any change.",
+    "Eligibility to review its own qualification evidence, or any package whose maker binding it shares.",
+    "Any other role, including maker, planner, security reviewer, architecture reviewer, or coordinator.",
+    "Any statement about cost, entitlement, availability, capacity, or concurrency."
+  ],
+  "executable_predicate": {
+    "kind": "fixture_oracle",
+    "fixture": "runtime-maker-qualification-fixture-v1",
+    "fixture_version": "1.0.0",
+    "manifest_digest": "21c4b242bc6deb5cc9d69887240503cf1cdddae792d492389bfd3a1c245863cd",
+    "root": "home:data/runtime-maker-qualification-fixture-v1/fixture",
+    "integrity": "verify-integrity.sh",
+    "setup": "setup.sh evidence-adjudicator",
+    "verify": "verify.sh evidence-adjudicator",
+    "controls": "run-controls.sh",
+    "predicates_measured": [
+      "reported success with no bound target evidence is graded could-not-observe",
+      "a stale or wrong binding is graded stale, not failed",
+      "two individually incomplete attempts are graded qualification-required, never combined into a pass",
+      "a valid could-not-observe result stays could-not-observe",
+      "a genuinely target-bound success is graded qualified",
+      "the strict structured output contract is met exactly"
+    ],
+    "red_controls_required": [
+      "independent mutations introducing false certainty, a stale or wrong binding, improper aggregation, an invalid conversion of could-not-observe, and malformed structured output must each be observed rejected"
+    ]
+  },
+  "adjudication": {
+    "required": false,
+    "why_not": "This predicate consumes no claim the candidate authored about itself: the oracle compares the candidate's emitted grades against expected grades it holds privately, so the grading is already outside the candidate. Requiring an adjudicator for the adjudicator contract would recurse without adding an observation."
+  },
+  "required_freshness_dependencies": [
+    "file_digest",
+    "contract_version",
+    "harness_semantics",
+    "binding_semantics",
+    "native_effort_mapping",
+    "time_bound"
+  ],
+  "note": "This is the one contract whose axis is exact_change_review while its subject is evidence rather than a diff: grading a package IS reviewing an exact identified artifact. It is registered separately from runtime-change-review because the artifact class and the predicate differ, and a binding qualified for one is not qualified for the other."
+}

@@ -1,0 +1,265 @@
+{
+  "qualification_schema_version": 1,
+  "description": "Canonical field contract for a ROLE QUALIFICATION: one capability contract naming an executable predicate, and one record of what a named binding was observed to do against it. bin/fm-qualification-lib.sh and bin/fm-qualification.sh are the only interpreters; their headers and --help own the mechanics. A record answers one question and only that question: on this exact binding, against this exact contract version, what was OBSERVED, and what would have to change materially before that observation stops applying.",
+  "why": "Missing qualification was being treated as a captain decision. It is an engineering state: a candidate that may satisfy a blocked route is qualified empirically through a bounded representative workflow and that evidence is reused, rather than a task-specific floor exception being requested every time. The 2026-08-13 captain ruling states it directly - model names are bindings to capability contracts, not capability contracts themselves.",
+  "why_not_the_model_registry": "config/models.json answers whether a model may be PAID FOR, REACHED, and RUN CONCURRENTLY, and it is local and gitignored because those are properties of one account on one machine. This register answers whether a binding was observed to DO a named job, which is a property of the binding against a contract and is worth shipping to every home. Folding the two would make an availability or billing fact able to grant a capability, and would make a capability record able to authorize spend. They are separate axes and axes below refuses collapsing them.",
+  "not_a_security_boundary": {
+    "statement": "A qualification record is a CAPABILITY record, not containment. It constrains which binding firstmate ROUTES a job to; it does not stop a binding that receives the job anyway from doing anything.",
+    "why": "Every crewmate is launched with permission enforcement disabled (capabilities/catalog.json states the same fact and why). Nothing here refuses at execution time.",
+    "consequence": "No decision may read a QUALIFIED record as a guarantee about a run. It records what was observed once, against named bytes, under named limitations."
+  },
+  "result_vocabulary": {
+    "_rule": "These five values are the whole vocabulary and no synonym is accepted. An unregistered word - inconclusive, unknown, pass, fail, true, false - makes a record INADMISSIBLE rather than being normalized, because the measured failure this register was built from was exactly a candidate emitting synonyms and an evaluator being tempted to read them charitably.",
+    "QUALIFIED": "The contract's executable predicate ran against this binding, returned its own pass, and the required assignment-distinct adjudication returned a pass. This is the only value that admits a candidate.",
+    "FAILED": "The predicate ran and rejected this binding. Observed-bad, and preserved as exclusion evidence; a later record never deletes it.",
+    "QUALIFICATION_REQUIRED": "No applicable observation exists yet for this exact tuple, or one exists but does not carry the required adjudication. Missing evidence, NOT incapability, and never FAILED.",
+    "QUALIFICATION_STALE": "An observation existed and a declared material freshness dependency changed, so it no longer applies. Stale evidence, NOT incapability, and never FAILED.",
+    "COULD_NOT_OBSERVE": "The predicate, the adjudication, or a declared freshness dependency could not be observed at all. Nonterminal evidence uncertainty. It is never a pass, it never records a negative against the binding, and it never becomes a reputation."
+  },
+  "derived_state_is_never_stored": {
+    "rule": "A record stores what was OBSERVED (`result`) and the dependencies that observation rests on. It never stores the state a reader should act on. The interpreter computes that state on every read from the record plus a fresh dependency observation.",
+    "why": "A stored state is a state that keeps reading correct after the thing under it moved. That is the whole failure mode this register exists inside: an assertion that outlived its evidence.",
+    "computation": [
+      "no applicable record for the tuple -> QUALIFICATION_REQUIRED, citing any near-miss record for the same contract and model under a different harness or native effort",
+      "result COULD_NOT_OBSERVE -> COULD_NOT_OBSERVE, whatever the dependencies say",
+      "result QUALIFICATION_REQUIRED -> QUALIFICATION_REQUIRED",
+      "result FAILED with every declared dependency unchanged -> FAILED; the exclusion stands",
+      "result FAILED with a declared dependency materially changed -> QUALIFICATION_REQUIRED, with the prior FAILED record cited rather than removed; the bounded-search law permits re-qualifying a FAILED tuple only on a directly evidenced material change, and this is that change",
+      "result QUALIFIED with a declared dependency materially changed -> QUALIFICATION_STALE",
+      "result QUALIFIED with a declared dependency unobservable -> COULD_NOT_OBSERVE",
+      "result QUALIFIED with every declared dependency observed unchanged -> QUALIFIED"
+    ]
+  },
+  "unrelated_bytes_are_not_a_dependency": {
+    "rule": "Freshness is computed ONLY from the dependencies a record declares. Nothing else invalidates it - not the repository head, not an unrelated tracked file, not a vendor or model label, not the passage of time unless the record declares a time bound.",
+    "why": "A register that goes stale on every commit is a register nobody can rely on, and the reflex repair is to stop checking it. The ruling names this explicitly: unrelated repository bytes do not invalidate qualification."
+  },
+  "axes": {
+    "_rule": "Nine independent axes. No axis may be read as another, and a contract declares exactly one. A capability that would grant a second axis is INADMISSIBLE rather than accepted with a note, because the collapse is the failure: an available model reading as a qualified one, or a qualified maker reading as an independent reviewer.",
+    "maker_qualification": {
+      "question": "Was this binding observed to DO the job?",
+      "owner": "qualifications/contracts/*.json with axis maker_qualification, interpreted by bin/fm-qualification-lib.sh"
+    },
+    "design_challenge": {
+      "question": "Was this binding observed to challenge a DESIGN before it is built?",
+      "owner": "qualifications/contracts/*.json with axis design_challenge",
+      "separate_because": "Challenging a plan and checking a diff are different jobs measured by different predicates. A route that requires both requires two records."
+    },
+    "exact_change_review": {
+      "question": "Was this binding observed to review the EXACT CHANGE after it is made?",
+      "owner": "qualifications/contracts/*.json with axis exact_change_review",
+      "separate_because": "Same reason as above, from the other side. One reviewer may perform both only when it holds a QUALIFIED record for each and assignment independence still holds."
+    },
+    "assignment_independence": {
+      "question": "Is the checker independent of the maker on THIS assignment?",
+      "owner": "bin/fm-qualification-lib.sh fm_qualification_independence, composing bin/fm-model-registry-lib.sh for the declared credential pool; bin/fm-independence-lib.sh owns the separate pipeline-derived per-run verdict",
+      "separate_because": "A binding can be perfectly qualified as a reviewer and still be the maker of the thing under review. Self-review is refused on this axis, never on the qualification axis."
+    },
+    "provider_account_pool_identity": {
+      "question": "Which provider, account and credential pool does this binding actually draw on?",
+      "owner": "bin/fm-model-registry-lib.sh (provider, limits.shared_quota_pool)",
+      "separate_because": "A harness name cannot answer it, and two bindings that differ by model can still share one billing window."
+    },
+    "availability": {
+      "question": "Can the fleet reach this binding right now?",
+      "owner": "bin/fm-route-lib.sh over state/model-health.json, and bin/fm-capacity-lib.sh over quota-axi",
+      "separate_because": "An unavailable binding is a WAIT. Reading unavailability as unqualified would make every outage permanently degrade the routing table; reading availability as qualification is the mistake the ruling names - one vendor being reachable is not evidence that runtime engineering can proceed, and it is not evidence that it cannot when another binding satisfies the same predicates."
+    },
+    "cost": {
+      "question": "Can this call cost money?",
+      "owner": "bin/fm-model-registry-lib.sh zero-budget decision over config/models.json",
+      "separate_because": "Cheapest and most capable are unrelated orderings, and a qualification record may never authorize spend."
+    },
+    "entitlement": {
+      "question": "Will this account actually get an answer?",
+      "owner": "bin/fm-model-verify.sh",
+      "separate_because": "A model can be entitled and billable, or unentitled and free-if-it-worked. A qualification run proves neither."
+    },
+    "attempt_custody_accounting": {
+      "question": "How many attempts has this work identity spent, and what are its custody bases?",
+      "owner": "bin/fm-attempt.sh over state/<id>.attempt, and bin/fm-task-base-lib.sh",
+      "separate_because": "A qualification workflow is its OWN work identity with its own bounded budget. It must never spend, reset or inherit the accounting of the work it unblocks."
+    }
+  },
+  "contract": {
+    "_description": "One capability contract: the reusable role and risk version a record binds to, and the executable predicate that decides it.",
+    "required": {
+      "qualification_schema_version": "must equal this file's qualification_schema_version",
+      "id": "stable slug, unique across contracts; must match the file basename",
+      "role": "UPPER_SNAKE role name, the reusable role half of the contract",
+      "risk_class": "slug, the reusable risk half; role plus risk_class is the narrowest reusable scope a record may claim",
+      "contract_version": "semantic version of THIS contract's own bytes. A record cites it, so a contract change is a freshness dependency rather than a silent redefinition.",
+      "axis": "exactly one key from axes above",
+      "purpose": "one sentence: what a QUALIFIED record on this contract means",
+      "grants": "one sentence: what routing decision a QUALIFIED record is allowed to unblock",
+      "does_not_grant": "non-empty array of one-sentence statements naming what it explicitly does not establish",
+      "executable_predicate": "one predicate object; see predicate_kinds"
+    },
+    "optional": {
+      "adjudication": "adjudication object; see adjudication. Absent means no assignment-distinct adjudication is required, which is only lawful for a contract whose predicate is fully deterministic with no candidate-authored claim.",
+      "required_freshness_dependencies": "array of freshness_dependency_kinds keys a record on this contract MUST declare. A record missing one is INADMISSIBLE.",
+      "note": "free prose for a reader; never consumed"
+    },
+    "vendor_neutrality": {
+      "rule": "A contract names a JOB, never who does it. The keys models, bindings, binding, providers, provider, vendors, vendor, harnesses, harness, and model are REFUSED outright, and no string value anywhere in a contract may equal a model or provider this home's routing config configures.",
+      "why": "The ruling's load-bearing sentence is that model names are bindings to capability contracts and not the contracts themselves. A contract that names a vendor is doctrine dressed as a predicate: it stops being re-runnable against the next candidate, which is the entire point of qualifying one.",
+      "enforced_by": "bin/fm-qualification.sh validate, and tests/fm-qualification.test.sh drives it red first"
+    }
+  },
+  "record": {
+    "_description": "One observation of one binding against one contract. Records live in qualifications/records/ when they are worth shipping to every home, and in the gitignored data/qualifications/records/ overlay when the binding or evidence is captain-private. The overlay's absence is silent; a tracked record that cannot be read is COULD_NOT_OBSERVE.",
+    "required": {
+      "qualification_schema_version": "must equal this file's qualification_schema_version",
+      "id": "stable slug, unique across the tracked register and the home overlay; must match the file basename",
+      "contract": "id of the contract this observation was made against",
+      "contract_version": "the contract_version observed. A record whose cited version differs from the contract's current one is STALE, not wrong.",
+      "role": "must equal the contract's role",
+      "risk_class": "must equal the contract's risk_class",
+      "binding": "binding object: provider, model (fully qualified provider/model-id), harness, harness_version, native_effort. The record KEY is exactly contract, model, harness and native_effort; provider is implied by the required fully qualified model. harness_version records context but is not a key axis because harness semantics cannot be probed at record-read time; drift is bounded only by a declared harness_semantics dependency and its required time_bound. A different harness or native effort is a different tuple, while a different harness version is a later observation of the same tuple and must use supersedes.",
+      "result": "one key from result_vocabulary",
+      "result_evidence": "one sentence naming what was observed to produce that result, and by which oracle",
+      "measured_context": "the context actually measured during the run, as a positive integer of tokens, or exactly COULD_NOT_OBSERVE. An estimate is never substituted for a measurement.",
+      "observed_at": "ISO date (YYYY-MM-DD) the observation was made",
+      "freshness_dependencies": "non-empty array of dependency objects; see freshness_dependency_kinds",
+      "known_limitations": "non-empty array of one-sentence statements. A record with nothing to declare here has not been examined; every real qualification run has a boundary."
+    },
+    "optional": {
+      "adjudication": "adjudication_result object recording who graded this run and what they returned. Required in effect for any contract that declares adjudication.required true: without it the derived state is QUALIFICATION_REQUIRED however good the predicate result was.",
+      "fixture": "fixture object: identity, version, manifest_digest. Required in effect by a fixture_oracle predicate.",
+      "evidence": "array of paths or URLs POINTING AT retained raw evidence. Never the evidence itself.",
+      "supersedes": "id of a record this one replaces for the same tuple. The superseded record is retained, because deleting an adverse observation is how a register launders a failure.",
+      "note": "free prose for a reader; never consumed"
+    },
+    "refused_keys": [
+      "state",
+      "current_state",
+      "derived_state",
+      "qualification_state",
+      "key",
+      "tuple_key",
+      "fresh",
+      "stale",
+      "eligible",
+      "score",
+      "reputation",
+      "rank",
+      "verdict"
+    ],
+    "refused_keys_why": "A hand-written state must not be able to answer the question the interpreter computes. The interpreter refuses a record carrying any of these outright rather than ignoring them, because an ignored field still reads to a human as the answer. `score` and `rank` are refused for a second reason: scoring a handful of bindings on several axes from a bounded suite manufactures precision the evidence cannot support, and pass-or-fail against a contract is the honest granularity."
+  },
+  "adjudication": {
+    "_description": "Declared on a contract, and recorded on a record.",
+    "contract_fields": {
+      "required": "boolean. True whenever the predicate consumes any claim the candidate itself authored.",
+      "adjudicator_contract": "id of the contract an adjudicator must itself hold a QUALIFIED record for. An adjudicator that is not itself qualified for the grading job cannot grade.",
+      "independence_dimensions": "array of independence dimensions that must hold between the maker binding and the adjudicator binding. binding is always required and is the self-review refusal; provider and pool are declared when the contract needs them."
+    },
+    "record_fields": {
+      "adjudicator_binding": "the adjudicator's fully qualified model, or null when no adjudication was performed",
+      "adjudicator_harness": "the adjudicator's harness, or null",
+      "adjudicator_result": "one key from result_vocabulary - what the adjudicator returned about the maker run",
+      "evidence": "one sentence or path pointing at the adjudication record"
+    },
+    "self_review_is_refused": "A record whose adjudicator_binding equals its own binding.model is INADMISSIBLE. No binding independently reviews its own mutation merely because it qualified as maker; the ruling says so outright, and a note in a report is not a mechanism.",
+    "a_contract_may_require_two_roles": "A route that requires both design_challenge and exact_change_review requires two QUALIFIED records. One reviewer may hold both, and may then perform both on one assignment, but only when assignment independence from the maker still holds for that assignment. Holding both records is never itself independence."
+  },
+  "predicate_kinds": {
+    "_rule": "A closed set. A contract naming any other kind is INADMISSIBLE. `executable` is the load-bearing word: a contract whose predicate is prose is a preference, and a preference cannot qualify anything.",
+    "fixture_oracle": {
+      "description": "A deterministic oracle outside the candidate's reach grades a candidate that ran in disposable state. The strongest kind available and the default.",
+      "args": {
+        "fixture": "fixture package identity",
+        "fixture_version": "package version",
+        "manifest_digest": "sha256 of the package manifest, so a record binds the exact bytes it was graded by",
+        "root": "where the package resolves: `home:<relative path>` under FM_HOME, or `code:<relative path>` under the tracked code root. An absolute path is refused, upward traversal is refused, and a symlinked target is refused wherever it points - the same target rule commitments/schema.json states, for the same reason.",
+        "integrity": "package-relative command that verifies package integrity before use",
+        "setup": "package-relative command that creates disposable candidate state",
+        "verify": "package-relative command that grades it and prints the result",
+        "controls": "package-relative command that proves the oracle is red-capable"
+      },
+      "absent_package_is_could_not_observe": "The package may live in a home's gitignored data/, so a tracked contract can name one this checkout does not have. That is COULD_NOT_OBSERVE - the predicate could not run - and never a pass and never a failure."
+    },
+    "declared_deterministic": {
+      "description": "The predicate is a named executable check inside this repository that needs no candidate at all.",
+      "args": {
+        "check": "path to the executable, resolved only under the tracked code root",
+        "expect": "the exact stdout token that means pass"
+      }
+    }
+  },
+  "freshness_dependency_kinds": {
+    "_rule": "A closed set, and every record declares its dependencies explicitly. A dependency kind the interpreter cannot probe is permitted, and is then ALWAYS MARKED as uncovered and never read as unchanged - but a record that declares an uncovered dependency must also declare a time_bound, or it is INADMISSIBLE.",
+    "_why_the_time_bound_rule_exists": "Two failures are available here and only one is survivable. Forcing every unprobeable dependency to COULD_NOT_OBSERVE makes every record permanently unusable, which defeats the ruling it implements. Letting one pass silently means a harness upgrade can change semantics under a QUALIFIED record and nothing notices. The rule takes the third option the ruling itself names: what cannot be probed is BOUNDED IN TIME instead, so the record expires on its own rather than either shouting forever or going quietly wrong.",
+    "file_digest": {
+      "description": "The sha256 of a named file. Probeable. This is how fixture bytes, oracle bytes and contract bytes are pinned.",
+      "args": {
+        "path": "resolved only under the tracked code root or under FM_HOME, by the same `code:`/`home:` prefix rule predicate_kinds states",
+        "digest": "the sha256 observed at qualification time"
+      },
+      "absent_file": "COULD_NOT_OBSERVE on this dependency. An absent file is not an unchanged one."
+    },
+    "contract_version": {
+      "description": "The contract's own declared version. Probeable from the contract file.",
+      "args": {
+        "version": "the contract_version observed at qualification time"
+      }
+    },
+    "time_bound": {
+      "description": "A justified expiry. Probeable against today's date.",
+      "args": {
+        "until": "ISO date (YYYY-MM-DD) after which this observation no longer applies",
+        "justification": "one sentence: why this bound, rather than a round number"
+      }
+    },
+    "harness_semantics": {
+      "description": "The harness's behavior relevant to this run, recorded as a version string. UNCOVERED: nothing here probes a harness version, because doing so is a harness-dependent check that would need a live per-harness guard to be worth anything, and a check that only confirms the assumption written into its own stub is worse than an honest gap.",
+      "observation": "declared-uncovered",
+      "args": {
+        "harness": "harness slug",
+        "version": "the version observed at qualification time"
+      }
+    },
+    "binding_semantics": {
+      "description": "The provider-side semantics of the exact model. UNCOVERED: providers publish no snapshot identifier this fleet can read, which every qualification run so far recorded as a limitation rather than papering over.",
+      "observation": "declared-uncovered",
+      "args": {
+        "model": "fully qualified provider/model-id",
+        "observed": "whatever identity the provider did expose, or COULD_NOT_OBSERVE"
+      }
+    },
+    "native_effort_mapping": {
+      "description": "That the named native effort still maps to the reasoning depth it did. UNCOVERED for the same reason as harness_semantics.",
+      "observation": "declared-uncovered",
+      "args": {
+        "effort": "band name",
+        "observed": "how it was established, or COULD_NOT_OBSERVE"
+      }
+    }
+  },
+  "route_integration": {
+    "requires_capabilities": "A route floor in config/crew-dispatch.json may declare `requires_capabilities`: an array of contract ids every candidate must hold a QUALIFIED record for. Absent means this register changes nothing for that route, which is how a home that never opted in stays exactly as capable as it was. Present means the gate fails CLOSED: an unreadable register, an absent record and an unobservable dependency all withhold the candidate, because a declared requirement whose evidence cannot be read has not been met.",
+    "why_this_gate_does_not_fail_open": "The quota gate deliberately fails toward dispatch because an unobserved quota can only ever REMOVE a candidate the policy already admitted. This one is the opposite shape: it is the requirement itself, so failing to observe it would admit a candidate on no evidence, which is the exact substitution the ruling forbids.",
+    "zero_route_classification": {
+      "_description": "When a route has no eligible candidate, the answer is not one fact. bin/fm-route-lib.sh classifies it deterministically from the per-candidate blocker sets, and only one classification escalates.",
+      "QUALIFICATION_REQUIRED": "At least one candidate is blocked SOLELY by missing or stale qualification. Engineering state: one bounded qualification workflow is activated for the cheapest promising candidate. Escalation NONE.",
+      "QUALIFICATION_COULD_NOT_OBSERVE": "No candidate is fixable by qualifying it, but at least one is blocked solely because its qualification could not be observed. Nonterminal: the repair is to the observation. Escalation NONE, and no negative is recorded against any binding.",
+      "AWAITING_AVAILABILITY": "Every remaining candidate is blocked only by an availability hold or spent capacity. A wait, owned by the existing availability and capacity-deferral paths. Escalation NONE.",
+      "NO_MODEL_CAN_SATISFY_ROUTE": "Every candidate is excluded by something qualifying it cannot fix: a floor axis it does not meet, a model-registry refusal, or a FAILED qualification whose dependencies have not changed. Escalation CAPTAIN_EXCEPTION_REQUIRED.",
+      "the_one_thing_this_must_never_do": "Missing qualification alone must never produce CAPTAIN_EXCEPTION_REQUIRED. That is the recurrence this whole register exists to close, and tests/fm-route-qualification.test.sh pins it with a mutation control."
+    },
+    "cheapest_promising_ordering": "Promising candidates are ordered by recorded price ascending, then by pool position. A candidate whose price cannot be observed sorts LAST rather than first: unmeasured cost must never read as cheap, which is the same rule the model registry already applies to an unclassified provider."
+  },
+  "bounded_workflow": {
+    "identity": "A deterministic tuple identity is derived from the whole record key - contract, model, harness and native effort - by an unambiguous encoding. At most one incarnation for that tuple may be open; after a prior incarnation is Done, requalification uses the next numeric incarnation so stale or materially changed evidence can activate again without colliding with retained backlog history.",
+    "the_workflow_is_a_backlog_task": "A bounded qualification workflow IS a work item, so it is registered as one through the existing backlog owner. That is what makes `tasks-axi block --by` meet its documented precondition that the blocker must already exist, rather than working around it.",
+    "one_durable_fact": "The workflow's backlog record is the ONLY fact about whether it is live. The blocked work's dependency on it is not a second copy: bin/fm-fleet-snapshot.sh recomputes unresolved_blocker_ids on every read and resolves a blocker exactly when its structured record is Done. The relationship is therefore DERIVED on read by an owner that already exists, exactly as qualification state is computed on read and expired availability holds are dropped on read rather than swept.",
+    "why_there_is_no_compensation_logic": "DELIBERATE, and this is the note a future reader should find instead of an absence. An earlier design stored the workflow's liveness in its own record AND mirrored it into a backlog edge. Five review rounds each found a different way for those two facts to disagree: a predecessor blocker left behind on advancement, a half-written block reported as active, an unblock that could not be retried after a terminal write failed. Intermediate states, transfer logic, compensation and retry reconciliation are all machinery that exists BECAUSE something is mirrored. Nothing is mirrored now, so those findings are closed BY CONSTRUCTION rather than patched, and there is nothing left for a reconciliation path to reconcile. Do not add one back without first re-introducing a second liveness fact, which is the thing to avoid.",
+    "the_defect_this_also_fixed": "tasks-axi block refuses a blocker that is not itself a task, and bin/fm-fleet-snapshot.sh leaves a blocker with no record open forever. The mirrored edge was therefore never written, and could never have resolved if it had been - the design did not function at all. Five rounds of review missed it because the test fixture's fake tasks-axi exited 0 unconditionally; tests/lib.sh's fm_fake_tasks_axi now reproduces the real refusals and a control pins it against the real binary.",
+    "bound": "bin/fm-attempt.sh over the ACTIVATION's own identity. The blocked work identity's attempt count, retry budget and custody bases are never read, spent or reset by a qualification workflow.",
+    "no_second_scheduler": "The worker is launched through bin/fm-spawn.sh, the one chokepoint, so route, admission, capacity, cost, entitlement and concurrency are all re-evaluated there and nowhere else.",
+    "bootstrap": "The CANDIDATE is the worker. It is dispatched on a bootstrap route it ALREADY qualifies for, whose floor meets the target floor's axes, and it runs the real work - so the register holds evidence about the candidate because the candidate is what executed. The already-qualified binding supplies the route the dispatch runs on; it is not the worker and never writes a record about a run it did not do. There is deliberately no exemption for the qualifying run: exempting it would weaken the standard it exists to establish, and a candidate with no bootstrap route is a stop-and-report rather than a licence to self-certify.",
+    "on_pass": "The workflow item is closed. THAT is what returns the blocked work to normal eligibility, because the blocker resolves when its record is Done. Its identity, custody and budget are untouched, and no unblock call exists to fail after the fact.",
+    "on_failure": "The FAILED record is retained as exclusion evidence. Every dependent identity is derived from the fleet snapshot's backlog edges, never copied into another store. The next promising candidate is activated FIRST for every dependent so the successor already holds every dependency, and only then is this item closed. Reversed, a successor that failed to register would leave work eligible with nothing qualified.",
+    "on_could_not_observe": "Nonterminal. One attempt is spent and no record of incapability is written. When the bound is exhausted, the item stays open and receives a parked hold through the backlog owner naming the Firstmate decision to raise the bound or abandon the qualification; it is never marked Done without an observed terminal outcome."
+  }
+}

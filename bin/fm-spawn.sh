@@ -316,6 +316,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-route-lib.sh"
 # shellcheck source=bin/fm-capacity-lib.sh
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-qualification-lib.sh
+. "$SCRIPT_DIR/fm-qualification-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
@@ -346,6 +348,12 @@ RESOLVED_PROFILE=
 # could not establish an answer. Those are different facts and must not collapse.
 CAPACITY_VERDICT=
 CAPACITY_EVIDENCE=
+# The role qualification this dispatch was checked against. Initialized empty for
+# the same reason and with the same meaning: an absent pair means no floor in this
+# home declared a capability contract, while a written state means the register was
+# consulted and this is what it said. Those are different facts.
+QUALIFICATION_STATE=
+QUALIFICATION_CONTRACTS=
 REASON_CODE_SET=0
 CAPABILITY_FLOOR_SET=0
 TOOLING_GAP_ITEM_SET=0
@@ -1527,6 +1535,42 @@ spawn_capacity_defer() {
   return 0
 }
 
+# Activate ONE bounded qualification workflow when a route is blocked purely
+# because nobody has qualified a candidate for the capability it requires.
+#
+# This is the automatic half of the 2026-08-13 ruling and it is the whole point:
+# missing qualification is an engineering state, so the fleet resolves it rather
+# than asking the captain for a floor exception for the same missing evidence
+# again. The classification is the route owner's, not this function's - it
+# activates only on QUALIFICATION_REQUIRED and refuses to spend a workflow on
+# anything else, because a candidate that also misses a floor axis is not made
+# eligible by qualifying it.
+#
+# It RECORDS and does not dispatch. A spawn refusal must not launch a spawn from
+# inside itself, and it does not need to: the activation record and the backlog
+# blocker are durable, and the existing dependency-driven blocker re-evaluation is
+# what brings the work back. A failure to record is reported rather than swallowed
+# - work that will not resume by itself must never look like work that will.
+spawn_qualification_activate() {
+  local out rc=0
+  [ -x "$FM_ROOT/bin/fm-qualification.sh" ] || return 0
+  out=$(FM_HOME="$FM_HOME" "$FM_ROOT/bin/fm-qualification.sh" activate \
+    --route "$ROUTE" --blocks "$ID" --subject-model "$MODEL" \
+    --harness "$HARNESS" --effort "$EFFORT" 2>&1) || rc=$?
+  case "$rc" in
+    0) printf '%s\n' "$out" >&2
+       echo "$ID is held until that qualification lands, and its identity, custody bases, attempt count and retry budget are untouched; the qualification workflow is bounded on its own identity" >&2 ;;
+    # The route owner classified this zero route as something a qualification
+    # workflow cannot fix, and its own message says which. Reported verbatim
+    # rather than under a blanket claim about resuming, because the four
+    # classifications resume differently: a wait clears itself through the
+    # availability and capacity owners, an unobservable qualification needs its
+    # observation repaired, and only an unsatisfiable route needs the captain.
+    *) echo "warning: no bounded qualification workflow was activated for $ID; the route owner classified this zero route otherwise and named why: $out" >&2 ;;
+  esac
+  return 0
+}
+
 # The registry verdict for every candidate in a route decision, as the
 # "<model><TAB><refusal>" lines bin/fm-route-lib.sh merges. Cost, reachability
 # and concurrency stay with bin/fm-model-registry-lib.sh and are asked here,
@@ -1644,6 +1688,55 @@ if [ "$KIND" != secondmate ]; then
   spawn_admission_gate || exit 1
 
   if [ "$ROUTE_ENFORCING" -eq 1 ]; then
+    # ELIGIBLE, ROLE QUALIFICATION half. The routing policy admits this model on
+    # every axis it can mechanically test - but a route may additionally require
+    # that a binding has been OBSERVED to do the job, and that question lives in
+    # its own register because no floor axis can answer it.
+    #
+    # Asked HERE, after ADMIT and before capacity, for two reasons. It creates
+    # durable state when it activates a bounded workflow, so ADMIT must have
+    # decided the fleet accepts this work at all first - the same argument the
+    # capacity deferral makes one paragraph down. And it precedes capacity because
+    # a candidate nobody has ever observed doing this job does not need its quota
+    # window discussed.
+    #
+    # THIS ONE FAILS CLOSED, unlike capacity. An unobserved quota can only remove
+    # a candidate the policy already admitted, so failing to observe it removes
+    # nothing. A capability requirement IS the admission, so admitting on unread
+    # evidence would route work on no evidence at all.
+    QUALIFICATION_LINES=
+    QUALIFICATION_RC=0
+    QUALIFICATION_MODELS=()
+    ROUTE_FLOOR_ID=$(printf '%s' "$ROUTE_DECISION" | jq -r '.floor // empty' 2>/dev/null || true)
+    while IFS= read -r qual_model; do
+      [ -n "$qual_model" ] || continue
+      QUALIFICATION_MODELS+=("$qual_model")
+    done <<EOF
+$(printf '%s' "$ROUTE_DECISION" | jq -r '.candidates[]?.model, (.subject.resolved // empty)' 2>/dev/null | sort -u)
+EOF
+    if [ -n "$ROUTE_FLOOR_ID" ] && [ "${#QUALIFICATION_MODELS[@]}" -gt 0 ]; then
+      QUALIFICATION_LINES=$(fm_qualification_route_lines \
+        "$(fm_route_config_path "$CONFIG")" "$ROUTE_FLOOR_ID" "$ROUTE" "$HARNESS" "$EFFORT" \
+        "$MODEL" \
+        "${QUALIFICATION_MODELS[@]}") || QUALIFICATION_RC=$?
+    else
+      QUALIFICATION_RC=1
+    fi
+    # rc 1 is the inert path: this floor declares no capability contract, so
+    # nothing is merged and nothing is recorded. rc 2 is a malformed declaration,
+    # which the route decision already refused by name against its exact config
+    # path, so it is not given a second wording here.
+    if [ "$QUALIFICATION_RC" -eq 0 ]; then
+      ROUTE_DECISION=$(fm_route_decision_with_qualification "$ROUTE_DECISION" "$QUALIFICATION_LINES")
+      QUALIFICATION_STATE=$(printf '%s' "$ROUTE_DECISION" | jq -r '.subject.qualification.state // ""' 2>/dev/null)
+      QUALIFICATION_CONTRACTS=$(printf '%s' "$ROUTE_DECISION" | jq -r '(.subject.qualification.contracts // []) | join(",")' 2>/dev/null)
+      if ! QUALIFICATION_REFUSAL=$(fm_route_qualification_refusal "$ROUTE" "$MODEL" "$ROUTE_DECISION"); then
+        echo "error: $QUALIFICATION_REFUSAL" >&2
+        spawn_qualification_activate
+        exit 1
+      fi
+    fi
+
     # ELIGIBLE, capacity half. The routing policy admits this model and the
     # availability record does not hold it; the remaining question is whether the
     # provider currently has anything left to spend. Asked HERE, after ADMIT and
@@ -3051,6 +3144,11 @@ fi
   # exact recurrence this closes.
   [ -z "$CAPACITY_VERDICT" ] || echo "capacity_observed=$CAPACITY_VERDICT"
   [ -z "$CAPACITY_EVIDENCE" ] || echo "capacity_evidence=$(printf '%s' "$CAPACITY_EVIDENCE" | tr '\n' ' ')"
+  # The role qualification this dispatch was admitted against. Written only where
+  # a floor declared a capability contract, so an absent pair says the home
+  # declared no requirement rather than that a requirement went unchecked.
+  [ -z "$QUALIFICATION_CONTRACTS" ] || echo "qualification_contracts=$QUALIFICATION_CONTRACTS"
+  [ -z "$QUALIFICATION_STATE" ] || echo "qualification_observed=$QUALIFICATION_STATE"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
   echo "tasktmp=$TASK_TMP"

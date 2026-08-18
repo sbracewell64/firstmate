@@ -1,0 +1,52 @@
+{
+  "qualification_schema_version": 1,
+  "id": "runtime-change-review",
+  "role": "RUNTIME_CHANGE_REVIEWER",
+  "risk_class": "runtime-risk-v1",
+  "contract_version": "1.0.0",
+  "axis": "exact_change_review",
+  "purpose": "A QUALIFIED record means this binding was observed to review the EXACT change that was made - bound to the identified bytes, refusing a green candidate-owned check as a substitute for an outside observation, refusing a reported success with no target-bound evidence, and preserving could-not-observe rather than converting it.",
+  "grants": "Eligibility as the POST-MUTATION exact-change reviewer on a route whose floor declares this contract in requires_capabilities.",
+  "does_not_grant": [
+    "Eligibility to challenge the design before it is built; that is design_challenge and needs its own record.",
+    "Eligibility to make the change.",
+    "Assignment independence from the maker of the change under review, which is a separate axis decided per assignment. A binding qualified here is still refused as the reviewer of its own mutation.",
+    "Any statement about cost, entitlement, availability, capacity, or concurrency."
+  ],
+  "executable_predicate": {
+    "kind": "fixture_oracle",
+    "fixture": "runtime-maker-qualification-fixture-v1",
+    "fixture_version": "1.0.0",
+    "manifest_digest": "21c4b242bc6deb5cc9d69887240503cf1cdddae792d492389bfd3a1c245863cd",
+    "root": "home:data/runtime-maker-qualification-fixture-v1/fixture",
+    "integrity": "verify-integrity.sh",
+    "setup": "setup.sh evidence-adjudicator",
+    "verify": "verify.sh evidence-adjudicator",
+    "controls": "run-controls.sh",
+    "predicates_measured": [
+      "a claim is graded against the exact identified bytes it names, not against its own summary",
+      "a reported success with no target-bound evidence is refused",
+      "a stale or wrong binding is named as stale rather than as a generic failure",
+      "incomplete attempts are never aggregated",
+      "a valid could-not-observe result is preserved",
+      "the required result vocabulary is emitted exactly"
+    ],
+    "red_controls_required": [
+      "independent mutations introducing false certainty, a stale or wrong binding, improper aggregation, an invalid conversion of could-not-observe, and malformed structured output must each be observed rejected"
+    ]
+  },
+  "adjudication": {
+    "required": true,
+    "adjudicator_contract": "qualification-evidence-adjudicator",
+    "independence_dimensions": ["binding"]
+  },
+  "required_freshness_dependencies": [
+    "file_digest",
+    "contract_version",
+    "harness_semantics",
+    "binding_semantics",
+    "native_effort_mapping",
+    "time_bound"
+  ],
+  "note": "Held together with runtime-design-challenge, this pair is what a runtime route means by mandatory review: one challenge before the mutation and one review of the exact change after it. Neither record grants the other, and neither grants independence."
+}

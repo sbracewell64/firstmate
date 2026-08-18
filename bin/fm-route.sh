@@ -10,13 +10,28 @@
 # bin/fm-route-lib.sh owns the decision itself; this file is its interface.
 #
 # Usage:
-#   fm-route.sh routes                       every route, its floor and its pool
+#   fm-route.sh routes [--json]              every route, its floor and its pool
 #   fm-route.sh check --route <id> --model <name> [--effort <band>]
 #                                            is this exact dispatch allowed?
 #   fm-route.sh eligible --route <id>        the route's pool filtered by the
 #                                            floor, the availability record, the
-#                                            model registry and current provider
-#                                            capacity, in pool order
+#                                            model registry, the role
+#                                            qualification register and current
+#                                            provider capacity, in pool order
+#   fm-route.sh zero-route --route <id>      WHY a route has no eligible
+#                                            candidate, as one of four
+#                                            classifications with four different
+#                                            actions: QUALIFICATION_REQUIRED
+#                                            (qualify the cheapest promising
+#                                            candidate), QUALIFICATION_COULD_NOT_
+#                                            OBSERVE (repair the observation),
+#                                            AWAITING_AVAILABILITY (wait), or
+#                                            NO_MODEL_CAN_SATISFY_ROUTE (the only
+#                                            one that escalates). Prints ELIGIBLE
+#                                            and exits 0 when the route is not a
+#                                            zero route at all
+#                         [--subject-model <name>] [--harness <name>]
+#                         [--effort <band>]  apply this tuple only to the subject
 #   fm-route.sh next --route <id> --after <model>
 #                                            the failover substitute: the next
 #                                            eligible candidate INSIDE the same
@@ -53,14 +68,28 @@
 #      answer that triggers the policy's terminal stop, and it is never a signal
 #      to lower the floor
 #
-# ELIGIBLE composes four landed owners rather than re-deciding them: the floor
+# On `zero-route` the status names the classification instead, because there the
+# distinction between them IS the answer:
+#   0  ELIGIBLE - not a zero route at all
+#   1  NO_MODEL_CAN_SATISFY_ROUTE - the one classification that escalates
+#   3  QUALIFICATION_REQUIRED, QUALIFICATION_COULD_NOT_OBSERVE, or
+#      AWAITING_AVAILABILITY - expected, actionable, and never a captain decision
+#
+# ELIGIBLE composes five landed owners rather than re-deciding them: the floor
 # and pool from the routing policy (this command), the availability record
 # (bin/fm-route-lib.sh), cost, routability and concurrency from the model
-# registry (bin/fm-model-registry-lib.sh), and current provider capacity from
-# quota-axi (bin/fm-capacity-lib.sh). The first three cost only reads. The
-# fourth costs one bounded quota-axi call per invocation of `eligible` or
-# `capacity`, which is what makes the answer current rather than remembered;
-# `check` and `routes` stay read-only.
+# registry (bin/fm-model-registry-lib.sh), whether a binding was observed to do
+# the job the floor requires (bin/fm-qualification-lib.sh), and current provider
+# capacity from quota-axi (bin/fm-capacity-lib.sh). The first four cost only
+# reads. The fifth costs one bounded quota-axi call per invocation of `eligible`
+# or `capacity`, which is what makes the answer current rather than remembered;
+# `check`, `zero-route` and `routes` stay read-only.
+#
+# The qualification term is inert unless a floor declares requires_capabilities,
+# so a home that never opted in reads exactly as it did before. Where a floor
+# does declare it, the term fails CLOSED - the requirement itself cannot be
+# admitted on unread evidence - which is the opposite of the capacity term and
+# deliberately so; bin/fm-qualification-lib.sh's header owns that asymmetry.
 #
 # Environment:
 #   FM_HOME  the firstmate home whose config/ and state/ are read
@@ -79,6 +108,8 @@ export STATE CONFIG
 . "$SCRIPT_DIR/fm-model-registry-lib.sh"
 # shellcheck source=bin/fm-capacity-lib.sh
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
+# shellcheck source=bin/fm-qualification-lib.sh
+. "$SCRIPT_DIR/fm-qualification-lib.sh"
 
 usage() {
   awk '
@@ -93,7 +124,9 @@ die() { printf 'error: %s\n' "$1" >&2; exit 2; }
 JSON=0
 ROUTE=
 MODEL=
+SUBJECT_MODEL=
 EFFORT=
+HARNESS=
 AFTER=
 HOLD_STATE=
 HOLD_SECONDS=
@@ -109,8 +142,12 @@ while [ $# -gt 0 ]; do
     --route=*) ROUTE=${1#--route=} ;;
     --model) shift; [ $# -gt 0 ] || die "--model needs a value"; MODEL=$1 ;;
     --model=*) MODEL=${1#--model=} ;;
+    --subject-model) shift; [ $# -gt 0 ] || die "--subject-model needs a value"; SUBJECT_MODEL=$1 ;;
+    --subject-model=*) SUBJECT_MODEL=${1#--subject-model=} ;;
     --effort) shift; [ $# -gt 0 ] || die "--effort needs a value"; EFFORT=$1 ;;
     --effort=*) EFFORT=${1#--effort=} ;;
+    --harness) shift; [ $# -gt 0 ] || die "--harness needs a value"; HARNESS=$1 ;;
+    --harness=*) HARNESS=${1#--harness=} ;;
     --after) shift; [ $# -gt 0 ] || die "--after needs a value"; AFTER=$1 ;;
     --after=*) AFTER=${1#--after=} ;;
     --state) shift; [ $# -gt 0 ] || die "--state needs a value"; HOLD_STATE=$1 ;;
@@ -170,6 +207,37 @@ EOF
   fm_route_decision_with_registry "$decision" "$verdicts"
 }
 
+# The route decision plus, per candidate, whether it holds every capability
+# contract the route's floor declares. Inert when the floor declares none, which
+# is what keeps this whole term absent from a home that never opted in.
+#
+# A MALFORMED declaration is deliberately NOT a second failure path here. The
+# decision program already refuses `requires_capabilities_malformed` by name
+# against the exact config path, so every candidate carries that violation and the
+# terminal report names it. Adding a separate refusal would give one input two
+# wordings, and the operator would have to reconcile them.
+enrich_qualification() {  # <decision-json>
+  local decision=$1 floor rc=0 lines
+  local -a models=()
+  floor=$(printf '%s' "$decision" | jq -r '.floor // empty' 2>/dev/null)
+  [ -n "$floor" ] || { printf '%s' "$decision"; return 0; }
+  while IFS= read -r m; do
+    [ -n "$m" ] || continue
+    models+=("$m")
+  done <<EOF
+$(printf '%s' "$decision" | jq -r '.candidates[]?.model, (.subject.resolved // empty)' 2>/dev/null | sort -u)
+EOF
+  [ "${#models[@]}" -gt 0 ] || { printf '%s' "$decision"; return 0; }
+  lines=$(fm_qualification_route_lines "$CONFIG_FILE" "$floor" \
+    "$(printf '%s' "$decision" | jq -r '.route // ""')" \
+    "$(printf '%s' "$decision" | jq -r '.harness_effective // ""')" \
+    "$(printf '%s' "$decision" | jq -r '.effort_effective // ""')" \
+    "$SUBJECT_MODEL" \
+    "${models[@]}") || rc=$?
+  [ "$rc" -eq 0 ] || { printf '%s' "$decision"; return 0; }
+  fm_route_decision_with_qualification "$decision" "$lines"
+}
+
 # The registry verdict for the ONE model a dispatch names, read off the record
 # that already carries it. A route's own candidate rows are where a verdict
 # lives, so asking the three owners a second time for the same model would let
@@ -211,6 +279,9 @@ terminal_report() {  # <decision-json>
                + .held.subject
                + (if .held.until != null then " until epoch " + (.held.until | tostring) else " until released" end)
           elif .registry_refusal != null then .registry_refusal
+          elif ((.qualification.state // "QUALIFIED") != "QUALIFIED")
+          then (.qualification.state // "") + " for capability contract "
+               + ((.qualification.contracts // []) | join(", ")) + " - " + (.qualification.evidence // "")
           elif (.capacity.verdict // "") == "exhausted" then "out of capacity - " + .capacity.evidence
           else "eligible"
                + (if (.capacity.verdict // "") == "could_not_observe"
@@ -226,7 +297,32 @@ terminal_report() {  # <decision-json>
         | .capacity.until | select(. != null)) ] | min
     | if . == null then "  earliest known recovery: none of the rejections names one"
       else "  earliest known recovery: epoch " + (. | tostring) end'
-  printf '  do not lower the floor and do not substitute a model outside this pool: stop, report, and queue the work.\n'
+  # The classification is what makes this report actionable rather than a
+  # mystery, and it is the difference between four situations that used to print
+  # one sentence. In particular a route stopped only because nobody has qualified
+  # a candidate yet is NOT a stop, and telling an operator to "stop and report"
+  # there is what produced repeated captain floor-exception requests for evidence
+  # a bounded workflow could have produced.
+  local zero
+  zero=$(fm_route_zero_route_classification "$d") || zero=
+  if [ -n "$zero" ]; then
+    printf '%s' "$zero" | jq -r '
+      "  classification: \(.classification) · escalation: \(.escalation)",
+      (if (.promising | length) > 0
+       then "  qualify the cheapest promising candidate first: " +
+            ([ .promising[] | .model + " (contracts " + ((.contracts // []) | join(", ")) +
+               ", cost rank " + ((.cost_rank // "unobserved") | tostring) + ")" ] | join(" then "))
+       else empty end),
+      (if .classification == "QUALIFICATION_REQUIRED"
+       then "  action: run one bounded qualification workflow (bin/fm-qualification.sh activate --route \(.route)). Missing or stale qualification is an engineering state; it is never a reason to ask for a floor exception."
+       elif .classification == "QUALIFICATION_COULD_NOT_OBSERVE"
+       then "  action: repair the qualification observation. Nothing adverse was established about any binding and no negative is recorded."
+       elif .classification == "AWAITING_AVAILABILITY"
+       then "  action: wait. The availability hold or the capacity deferral owns this; a required floor that is currently unavailable is a wait, not a weaker model."
+       else "  action: stop and report. Every candidate is excluded by something qualifying it cannot fix, so this is the one classification that escalates."
+       end)'
+  fi
+  printf '  do not lower the floor and do not substitute a model outside this pool.\n'
 }
 
 case "$CMD" in
@@ -234,6 +330,16 @@ case "$CMD" in
     # Every route this home defines, from the one place bin/fm-route-lib.sh says
     # a route may be defined. A listing that omits a route `check` enforces and
     # `fm-spawn.sh` demands is what makes a route look like a typo.
+    if [ "$JSON" -eq 1 ]; then
+      jq -c "$FM_ROUTE_ENTRIES_JQ"'
+        [ route_entries[] ] as $all
+        | ([ $all[] | select(.source == "rule") ]) as $rules
+        | ([ $rules[] | .id ]) as $rule_ids
+        | $rules + [ $all[] | select(.source == "default")
+                     | . as $e | select(($rule_ids | index($e.id)) == null) ]
+      ' "$(fm_route_config_path "$CONFIG")" 2>/dev/null || exit 2
+      exit 0
+    fi
     jq -r "$FM_ROUTE_ENTRIES_JQ"'
       def profiles($v): if ($v|type) == "array" then $v elif ($v|type) == "object" then [$v] else [] end;
       [ route_entries[] ] as $all
@@ -257,7 +363,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "check needs --route"
     [ -n "$MODEL" ] || die "check needs --model"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "$MODEL" "$EFFORT" "$STATE" "$HARNESS") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf '%s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -283,10 +389,22 @@ case "$CMD" in
     # a candidate of its own route, so its verdict is recorded on the record and
     # read back from there rather than computed a second time.
     resolved=$(printf '%s' "$DECISION" | jq -r '.subject.resolved // empty')
+    SUBJECT_MODEL=$resolved
     refusal=
     if [ -n "$resolved" ]; then
       DECISION=$(enrich "$DECISION" "$resolved")
       refusal=$(subject_registry_refusal "$DECISION" "$resolved")
+    fi
+    # Role qualification is the last local axis, and it is asked here rather than
+    # only at the spawn chokepoint so an operator can see the answer before
+    # spending a dispatch on it. Cost, reachability and concurrency come first
+    # because a model that may not be paid for at all does not need its
+    # capability discussed.
+    if [ -z "$refusal" ]; then
+      DECISION=$(enrich_qualification "$DECISION")
+      if ! qual_refusal=$(fm_route_qualification_refusal "$ROUTE" "$MODEL" "$DECISION"); then
+        refusal=$qual_refusal
+      fi
     fi
     if [ "$JSON" -eq 1 ]; then
       printf '%s\n' "$DECISION"
@@ -303,7 +421,7 @@ case "$CMD" in
     [ -n "$ROUTE" ] || die "$CMD needs --route"
     [ "$CMD" != next ] || [ -n "$AFTER" ] || die "next needs --after <model>"
     DECISION_RC=0
-    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE") || DECISION_RC=$?
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS" "$SUBJECT_MODEL") || DECISION_RC=$?
     if [ "$DECISION_RC" -ne 0 ]; then
       printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
       exit 2
@@ -311,6 +429,11 @@ case "$CMD" in
     # Every candidate's registry verdict IS the answer here: the eligible list
     # this command prints is the registry-checked one its own header promises.
     DECISION=$(enrich "$DECISION")
+    # And so is its qualification, where the floor declares one. A list that
+    # named a candidate nobody has ever observed doing this job is the
+    # substitution the governing ruling forbids, and it costs only local reads to
+    # avoid.
+    DECISION=$(enrich_qualification "$DECISION")
     # And so is its capacity. A list that named a model whose provider window is
     # spent would send an operator straight into the failure this seam exists to
     # avoid, and the deferral refusal points them at this command by name.
@@ -349,6 +472,65 @@ case "$CMD" in
     [ "$JSON" -eq 1 ] || printf '%s\n' "$ELIGIBLE"
     ;;
 
+  zero-route)
+    # WHY the eligible set is empty, as one classification with one action. Read
+    # by bin/fm-qualification.sh activate, which refuses to spend a bounded
+    # workflow on anything but QUALIFICATION_REQUIRED, and printed here so an
+    # operator sees the same answer the automatic path acts on.
+    [ -n "$ROUTE" ] || die "zero-route needs --route"
+    if { [ -n "$HARNESS" ] || [ -n "$EFFORT" ]; } && [ -z "$SUBJECT_MODEL" ]; then
+      die "zero-route requires --subject-model when --harness or --effort names a subject tuple"
+    fi
+    DECISION_RC=0
+    DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "$EFFORT" "$STATE" "$HARNESS" "$SUBJECT_MODEL") || DECISION_RC=$?
+    if [ "$DECISION_RC" -ne 0 ]; then
+      printf 'error: %s\n' "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")" >&2
+      exit 2
+    fi
+    [ "$(printf '%s' "$DECISION" | jq -r '.route_known')" = true ] \
+      || die "route $ROUTE is not defined by $CONFIG_FILE"
+    DECISION=$(enrich "$DECISION")
+    DECISION=$(enrich_qualification "$DECISION")
+    CAPACITY=$(fm_capacity_observe "$CONFIG_FILE" \
+      "$(printf '%s' "$DECISION" | jq -r '.candidates[]?.model')")
+    DECISION=$(fm_route_decision_with_capacity "$DECISION" "$(fm_capacity_lines "$CAPACITY")")
+    ZERO=$(fm_route_zero_route_classification "$DECISION") \
+      || die "the zero-route classification could not be computed for route $ROUTE"
+    if [ "$JSON" -eq 1 ]; then
+      printf '%s\n' "$ZERO"
+    else
+      printf '%s' "$ZERO" | jq -r '
+        "route \(.route) (floor \(.floor // "unconfigured"))",
+        "  classification: \(.classification)",
+        "  escalation:     \(.escalation)",
+        "  requires:       \((.floor_requires_capabilities // []) | if length == 0 then "no capability contract" else join(", ") end)",
+        "  qualification:  \(if .qualification_checked then "checked against the register" else "not checked - this floor declares no capability contract" end)",
+        (if (.eligible | length) > 0 then "  eligible:       \(.eligible | join(", "))" else empty end),
+        (if (.promising | length) > 0
+         then "  promising, cheapest first:",
+              (.promising[] | "    \(.position). \(.model) · \(.state) · cost rank \((.cost_rank // "unobserved") | tostring) · \(.evidence)")
+         else empty end),
+        (if (.unobserved | length) > 0
+         then "  qualification unobservable:",
+              (.unobserved[] | "    \(.position). \(.model) · \(.evidence)")
+         else empty end),
+        (if (.excluded | length) > 0
+         then "  excluded:",
+              (.excluded[] | "    \(.position). \(.model) · \(.blockers | join("+"))")
+         else empty end)'
+    fi
+    # Exit status is the answer, so a caller that ignores stdout still acts
+    # correctly. Only the classification that genuinely needs a captain gets a
+    # refusal code; the two qualification classifications are engineering states
+    # and exit 3, the same code every other "expected, actionable, not a pass"
+    # answer in this command uses.
+    case "$(printf '%s' "$ZERO" | jq -r '.classification')" in
+      ELIGIBLE) exit 0 ;;
+      NO_MODEL_CAN_SATISFY_ROUTE) exit 1 ;;
+      *) exit 3 ;;
+    esac
+    ;;
+
   capacity)
     # The observation the spawn chokepoint reads, printed rather than acted on.
     # Every routed model is listed, including the ones this fleet cannot measure,
@@ -358,7 +540,7 @@ case "$CMD" in
       || die "the routed pools could not be read from $CONFIG_FILE"
     if [ -n "$ROUTE" ]; then
       DECISION_RC=0
-      DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE") || DECISION_RC=$?
+      DECISION=$(fm_route_decision "$CONFIG" "$ROUTE" "" "" "$STATE" "$HARNESS") || DECISION_RC=$?
       [ "$DECISION_RC" -eq 0 ] \
         || die "$(fm_route_undetermined_refusal "$DECISION_RC" "$CONFIG" "$STATE")"
       [ "$(printf '%s' "$DECISION" | jq -r '.route_known')" = true ] \

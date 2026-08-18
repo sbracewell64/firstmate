@@ -434,6 +434,11 @@ A missing input is a refusal and never a skipped check: a dispatch that names no
 An axis value the vocabulary does not contain is the same refusal, on every axis: a misspelled `tool_loop`, a non-numeric `context_ceiling` and an `effort_floor` outside the band list are each refused by name with the value that could not be interpreted, because an axis that silently enforces nothing is a floor an operator believes is armed.
 A model or provider the availability record currently holds is refused at the same point, naming the held state, the scope, the subject and its recorded expiry, so `check` and `eligible` can never give opposite answers about one model.
 
+An object floor may additionally declare `requires_capabilities`: an array of capability-contract ids from the role qualification register that every candidate must hold a current `QUALIFIED` record for.
+That axis is not checked against `_models`, because no per-model field can answer "was this binding ever observed to do this job"; ["Role qualification register"](#role-qualification-register-qualifications) below owns it.
+An absent `requires_capabilities` leaves the register unread and changes nothing, which is how a home that never opted in stays exactly as capable as it was.
+A present one that is not a non-empty array of non-empty strings is refused as `requires_capabilities_malformed` against its exact config path, by the same rule every other axis follows: a floor that silently enforces nothing is a floor an operator believes is armed.
+
 Every production selection of Luna has one accepted invocation binding: profile `luna-max`, exact model `openai-codex/gpt-5.6-luna`, harness `pi` or `pi-signed`, and effective effort `max`.
 `fm-spawn.sh` applies that binding even when routed pools are not configured and refuses a provider-default, `high`, unknown, noncanonical-model, or unsupported-harness Luna invocation before launch; OpenCode is not a supported Luna Max harness.
 In a routed config, the Luna model record must also carry `effort_lock: "max"` and include `max` in `effort_expressible`, while the selected route must resolve to an object floor with `effort_floor: "max"` and a matching `use` profile whose effort is `max` and whose harness is `pi` or `pi-signed`.
@@ -690,6 +695,81 @@ Bootstrap reports registry problems as `MODEL_REGISTRY: invalid config/models.js
 Valid, current registries stay silent.
 See [`docs/examples/models.json`](examples/models.json) for a starting point to copy into local `config/models.json`, and `bin/fm-model-verify.sh --help` for the probe and drift mechanics.
 Rollback is deleting the file: every check becomes a no-op.
+
+## Role qualification register (qualifications/)
+
+`qualifications/` is a committed register answering one question a route floor cannot: has this exact binding been OBSERVED to do the job this route requires, and does that observation still apply?
+It exists because missing capability evidence and incapability used to be the same value, so a route whose one plausible candidate had no evidence could only produce a captain floor-exception request - repeatedly, for the same missing evidence.
+The captain ruling of 2026-08-13 separates them: missing qualification is an engineering state to resolve, and model names are bindings to capability contracts rather than the contracts themselves.
+
+`qualifications/schema.json` is the single owner of the field contract, the five-value vocabulary, the state computation and every closed vocabulary in it.
+`bin/fm-qualification-lib.sh` owns the decision, `bin/fm-qualification.sh --help` owns the mechanics, and [`role-qualification`](../.agents/skills/role-qualification/SKILL.md) owns what firstmate does with each answer.
+
+- `qualifications/contracts/<id>.json` is one capability contract: the reusable role and risk version, exactly one of the nine axes the schema declares, and an executable predicate. A contract names a JOB and never who does it - the validator refuses a vendor-bearing key and refuses any value equal to a model or provider this home's routing config configures, because a contract naming a vendor cannot be re-run against the next candidate.
+- `qualifications/records/<id>.json` is one observation of one binding against one contract, keyed by contract, fully qualified model, harness and native effort; provider is implied by the required fully qualified model and remains recorded as binding evidence. Harness version is recorded context rather than a key axis because its semantics cannot be probed on read, so that drift is bounded only by the declared `harness_semantics` dependency and its required `time_bound`; a later harness-version observation supersedes the earlier record for the same binding.
+- `data/qualifications/records/` is an optional home-private overlay with the same schema, for a binding or an evidence trail a home must not publish into a shared template repo. Its absence is silent; a tracked register that exists and cannot be read is could-not-observe.
+
+A record stores what was OBSERVED and the dependencies that observation rests on.
+It never stores the state a reader acts on: the interpreter computes that on every read, and a record carrying `state`, `verdict`, `score` or any other hand-written status word is refused outright.
+Five values are distinguished and none may collapse into another.
+
+| state | meaning | effect on eligibility |
+| --- | --- | --- |
+| `QUALIFIED` | the predicate passed and the required assignment-distinct adjudication agreed | eligible |
+| `FAILED` | the predicate ran and rejected this binding | excluded, with the evidence preserved |
+| `QUALIFICATION_REQUIRED` | no applicable observation exists, or one exists without its adjudication | withheld; one bounded workflow resolves it |
+| `QUALIFICATION_STALE` | a declared material dependency changed since the observation | withheld; one bounded workflow resolves it |
+| `COULD_NOT_OBSERVE` | the predicate, the adjudication or a dependency could not be observed | withheld, with nothing recorded against the binding |
+
+Freshness is computed only from the dependencies a record declares - a named file's digest, the contract's own version, and a justified time bound.
+Unrelated repository bytes, a new commit, and a vendor or model label are explicitly not dependencies, because a register that went stale on every commit is one nobody can rely on.
+Some dependencies cannot be probed at all: harness semantics, provider-side binding semantics and the native effort mapping have no reader this fleet can trust, so they are always marked uncovered and a record declaring one is INADMISSIBLE without a `time_bound`.
+What cannot be probed is bounded in time instead, which is the third option between shouting forever and going quietly wrong.
+A `FAILED` record reopens as `QUALIFICATION_REQUIRED` when a declared dependency materially changes, and the adverse record is retained rather than deleted.
+
+Unlike the quota gate, this gate fails CLOSED where a floor declares a requirement, and the asymmetry is a property of the input rather than a preference.
+An unobserved quota can only remove a candidate the policy already admitted, so failing to observe it removes nothing; a capability requirement IS the admission, so admitting on unread evidence would route work on no evidence at all.
+
+### Zero-route classification and the bounded workflow
+
+`bin/fm-route.sh zero-route --route <id>` says WHY a route has no eligible candidate, as one of four classifications with four different actions, derived from the per-candidate blocker sets.
+`bin/fm-decision-surface.sh check route-qualified <route-id>` composes the same answer as a refusal, so firstmate never reconstructs it.
+
+| classification | action | exit | escalates |
+| --- | --- | --- | --- |
+| `QUALIFICATION_REQUIRED` | activate one bounded workflow for the cheapest promising candidate | 3 | no |
+| `QUALIFICATION_COULD_NOT_OBSERVE` | repair the observation; nothing is recorded against any binding | 3 | no |
+| `AWAITING_AVAILABILITY` | wait; the availability hold and capacity deferral own it | 3 | no |
+| `NO_MODEL_CAN_SATISFY_ROUTE` | stop and report | 1 | `CAPTAIN_EXCEPTION_REQUIRED` |
+
+A candidate is promising only when its ONLY blocker is missing or stale qualification: one that also misses a floor axis is not made eligible by qualifying it.
+Promising candidates are ordered by recorded price ascending and then by pool position, and a candidate whose price cannot be observed sorts LAST rather than first - unmeasured cost is never read as cheap.
+
+`bin/fm-qualification.sh activate --route <id> --blocks <work-id>` creates or reuses ONE bounded workflow for that candidate.
+It refuses every classification other than `QUALIFICATION_REQUIRED`, derives a deterministic tuple identity from the whole record key so two distinct tuples can never collide, suppresses activation while any incarnation for that tuple remains open, and allocates the next numeric incarnation after a prior workflow is Done so stale or materially changed evidence can be qualified again.
+
+**The workflow is a backlog task, and that is the whole design.**
+A bounded qualification run is a work item, so it is registered as one through the existing backlog owner - which is what makes `tasks-axi block --by` meet its documented precondition that the blocker must already exist, rather than working around it.
+Its backlog record is then the ONLY fact about whether it is live: the blocked work's dependency is not a second copy, because `unresolved_blocker_ids` is recomputed on every read and resolves a blocker exactly when its structured record is Done.
+The relationship is therefore derived on read by an owner that already exists, exactly as qualification state is computed on read and expired availability holds are dropped on read rather than swept.
+`state/qualification/<activation-id>.activation` holds the workflow's inert parameters and no state at all.
+
+There is deliberately **no transfer, compensation or reconciliation logic**, and a reader who goes looking for it should find this paragraph rather than an absence.
+An earlier design mirrored the workflow's liveness into both its own record and a backlog edge, and every defect it produced was a different way for those two facts to disagree.
+That machinery exists only because something is mirrored; nothing is mirrored now, so those failures are closed by construction and there is nothing left to reconcile.
+Do not add a compensation path back without first re-introducing a second liveness fact, which is the thing to avoid.
+
+No second scheduler, router, issue store, event system or polling loop exists: `bin/fm-qualification.sh dispatch` launches the worker through `bin/fm-spawn.sh`, the one chokepoint, and the bound is `bin/fm-attempt.sh` over the ACTIVATION's own identity - a qualification workflow never reads, spends or resets the accounting of the work it would release.
+The CANDIDATE is the worker, dispatched on a bootstrap route it already qualifies for whose floor meets the target floor's axes; the already-qualified binding supplies only the route, never the run, and a candidate with no bootstrap route is a stop-and-report rather than a licence to self-certify.
+
+`bin/fm-qualification.sh resolve <activation-id> --result <RESULT>` closes it.
+`QUALIFIED` is verified against the register before it is accepted and then closes the workflow item - and closing it is what returns the same work identity to normal eligibility, with its identity, custody and budget unchanged and no unblock call that could fail afterwards.
+`FAILED` preserves the exclusion, derives every dependent identity from the fleet snapshot's backlog edges, activates the next promising candidate FIRST for each dependent so the successor already holds every dependency, and only then closes this item.
+`COULD_NOT_OBSERVE` is nonterminal: it spends one attempt, records nothing against the binding, and leaves the item open.
+`loopspecs/terminal-states.json` carries these outcomes as source `role-qualification`, and deliberately gives could-not-observe no row, because an unmade observation is not an ending; an exhausted qualification bound leaves the workflow open under a `parked` backlog hold whose reason assigns Firstmate the operational decision to raise the bound or abandon the qualification.
+
+Every ship and scout dispatch through a floor that declares a capability records `qualification_contracts=` and `qualification_observed=` in `state/<id>.meta`.
+An absent pair means no floor in this home declared a requirement, which is a different fact from a requirement that went unchecked.
 
 ## Fleet admission control (`_scheduling.admission_control`)
 

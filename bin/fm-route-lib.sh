@@ -20,13 +20,21 @@
 #                               reads quota, fleet load, or an outage.
 #   ADMIT     bin/fm-admission.sh  whether the fleet accepts another task at all.
 #   ELIGIBLE  this library      the route's pool filtered by the floor, by the
-#                               availability record, and by the caller's quota
-#                               observation, in pool order. It reads records and
-#                               merges what the caller hands it; it never probes
-#                               a provider itself, so the shape of this seam is
-#                               unchanged - bin/fm-capacity-lib.sh owns the
-#                               observation exactly as the model registry owns
-#                               cost and reachability.
+#                               availability record, by the caller's quota
+#                               observation, and by the caller's role-
+#                               qualification observation, in pool order. It reads
+#                               records and merges what the caller hands it; it
+#                               never probes a provider itself, so the shape of
+#                               this seam is unchanged - bin/fm-capacity-lib.sh
+#                               owns the observation exactly as the model registry
+#                               owns cost and reachability and
+#                               bin/fm-qualification-lib.sh owns whether a binding
+#                               was observed to do the job a floor requires.
+#   ZERO-ROUTE this library     WHY the filtered set is empty, as one of four
+#                               classifications with four different actions. Only
+#                               NO_MODEL_CAN_SATISFY_ROUTE escalates; missing
+#                               qualification never does, because it is an
+#                               engineering state and not a captain decision.
 #   FAILOVER  this library      the ONLY writer of availability state, and it
 #                               writes availability alone. A model that keeps
 #                               failing is recorded UNAVAILABLE, never demoted;
@@ -130,6 +138,24 @@ FM_ROUTE_TOKEN_HELD=FM_SPAWN_ROUTE_MODEL_HELD
 FM_ROUTE_TOKEN_NO_CANDIDATE=FM_ROUTE_NO_CANDIDATE
 FM_ROUTE_TOKEN_HEALTH_STATE=FM_ROUTE_HEALTH_STATE_UNKNOWN
 FM_ROUTE_TOKEN_HOLD_SUBJECT=FM_ROUTE_HOLD_SUBJECT_UNRESOLVED
+FM_ROUTE_TOKEN_QUALIFICATION=FM_ROUTE_QUALIFICATION_REQUIRED
+FM_ROUTE_TOKEN_QUALIFICATION_UNREADABLE=FM_ROUTE_QUALIFICATION_UNREADABLE
+}
+
+# The zero-route classifications, and the ONE of them that escalates. A route
+# with no eligible candidate is not one fact, and treating it as one is the
+# recurrence this vocabulary closes: "we have no evidence for this candidate"
+# used to arrive at the captain as "no model can do this", which asked for a
+# floor exception nobody should have been asked for.
+# shellcheck disable=SC2034 # Contract constants are consumed by sourcing callers.
+{
+FM_ROUTE_ZERO_QUALIFICATION_REQUIRED=QUALIFICATION_REQUIRED
+FM_ROUTE_ZERO_QUALIFICATION_CNO=QUALIFICATION_COULD_NOT_OBSERVE
+FM_ROUTE_ZERO_AWAITING_AVAILABILITY=AWAITING_AVAILABILITY
+FM_ROUTE_ZERO_NO_MODEL=NO_MODEL_CAN_SATISFY_ROUTE
+FM_ROUTE_ZERO_ELIGIBLE=ELIGIBLE
+FM_ROUTE_ESCALATION_NONE=NONE
+FM_ROUTE_ESCALATION_CAPTAIN=CAPTAIN_EXCEPTION_REQUIRED
 }
 
 # Where a route may be defined, spelled ONCE so every reader agrees. A route id
@@ -255,13 +281,18 @@ fm_route_policy_digest() {  # [<config-dir>]
 # A misspelling - `verified_agentic` for `verified-agentic` - is the likeliest
 # way a floor ever reaches this code, and an axis that silently enforces nothing
 # for it is a floor an operator believes is armed.
+# The closed floor ordering is owned here and shared by every route comparison.
 # shellcheck disable=SC2016 # jq program, not shell expansion.
-FM_ROUTE_DECISION_JQ="$FM_ROUTE_ENTRIES_JQ"'
+FM_ROUTE_FLOOR_RANK_JQ='
 def bands: ["low","medium","high","xhigh","max","ultra"];
 def rank($b): (if ($b | type) == "string" then (bands | index($b)) else null end);
 def loop_rank($v): (if ($v | type) == "string"
                     then {"not-required":0,"required":1,"verified-agentic":2}[$v]
                     else null end);
+'
+
+# shellcheck disable=SC2016 # jq program, not shell expansion.
+FM_ROUTE_DECISION_JQ="$FM_ROUTE_ENTRIES_JQ$FM_ROUTE_FLOOR_RANK_JQ"'
 def provider_of($m): (if ($m | test("/")) then ($m | split("/") | .[0]) else null end);
 def luna_max_profile:
   {name:"luna-max", model:"openai-codex/gpt-5.6-luna", effort:"max",
@@ -341,6 +372,17 @@ def effective_route_profile($rule; $path; $model; $harness):
     | ($floor.tool_loop? // null) as $tl_raw
     | (if (loop_rank($tl_raw) != null) then $tl_raw else null end) as $tl
     | (($tl_raw != null) and ($tl == null)) as $tl_malformed
+    # The capability requirement is DECLARED here and EVALUATED in
+    # fm_route_decision_with_qualification, exactly as capacity is declared by
+    # the caller and merged: this program cannot read the qualification register
+    # and must not pretend to. What it owns is the same thing it owns for every
+    # other axis - refusing a declaration it cannot interpret, by name, rather
+    # than enforcing nothing while an operator believes the floor is armed.
+    | ($floor.requires_capabilities? // null) as $rc_raw
+    | (if (($rc_raw | type) == "array") and (($rc_raw | length) > 0)
+          and (all($rc_raw[]; (type == "string") and (length > 0)))
+       then $rc_raw else null end) as $rcaps
+    | (($rc_raw != null) and ($rcaps == null)) as $rcaps_malformed
     | (($floor.selectable_by_crew_rule? // true) == false) as $unselectable
     | ($models[luna_max_model]? // {}) as $luna_record
     | def luna_profile_violations($profile):
@@ -438,6 +480,11 @@ def effective_route_profile($rule; $path; $model; $harness):
            then {rule:"tool_loop_malformed", config_path:($floor_path + "/tool_loop"),
                  configured:($tl_raw | tostring), observed:"unreadable"}
            else empty end),
+          (if ($rcaps_malformed)
+           then {rule:"requires_capabilities_malformed", config_path:($floor_path + "/requires_capabilities"),
+                 configured:($rc_raw | tostring),
+                 observed:"unreadable: requires_capabilities must be a non-empty array of contract ids, so a floor that declares one nobody can interpret is refused rather than left enforcing nothing"}
+           else empty end),
           (if ($tl != null) and (loop_rank($tl) > 0)
            then ($models[$m].tool_loop? // null) as $mt
              | if (loop_rank($mt) == null)
@@ -463,7 +510,8 @@ def effective_route_profile($rule; $path; $model; $harness):
      route:$route, route_known:true, route_path:$route_path,
      floor:$floor_id, floor_path:$floor_path, floor_defined:($floor_undefined | not),
      floor_axes:{effort_floor:$ef, effort_waived:$ef_waived, context_ceiling:$ctx,
-                 tool_loop:$tl, selectable:($unselectable | not)},
+                 tool_loop:$tl, selectable:($unselectable | not),
+                 requires_capabilities:$rcaps},
      models_recorded:($models != null),
      pool:$pool, pool_path:$pool_path, pool_configured:(($pool | length) > 0),
      use:($rule.use? // null),
@@ -480,12 +528,20 @@ def effective_route_profile($rule; $path; $model; $harness):
                                           observed:"no model named on this dispatch, so pool membership and every floor axis are unverifiable"}]
                                    else [] end)} ),
      effort_effective:$eeff,
+     harness_effective:$harness,
      candidates:[ $pool | to_entries[]
                   | .value as $c
                   | (effective_route_profile($rule; $route_path; $c; "")) as $candidate_profile
+                  | (if (($subject_model | length) > 0)
+                       then (if $c == $subject_model and ($effort | length) > 0
+                             then $effort else ($candidate_profile.profile.effort? // "") end)
+                       else (if ($eeff | length) > 0 then $eeff else ($ef // "") end) end) as $candidate_effort
+                  | (if (($subject_model | length) > 0) and $c == $subject_model and ($harness | length) > 0
+                     then $harness else ($candidate_profile.profile.harness? // "") end) as $candidate_harness
                   | (held($c)) as $h
-                  | (violations($c; (if ($eeff | length) > 0 then $eeff else ($ef // "") end); $candidate_profile)) as $v
+                  | (violations($c; $candidate_effort; $candidate_profile)) as $v
                   | {model:$c, position:(.key + 1), profile:(if $c == luna_max_model then luna_max_profile.name else null end),
+                     harness_effective:$candidate_harness, effort_effective:$candidate_effort,
                      held:$h, violations:$v,
                      effort_expressible:($models[$c].effort_expressible? // null),
                      floor_met:(($v | length) == 0),
@@ -493,7 +549,23 @@ def effective_route_profile($rule; $path; $model; $harness):
   end
 '
 
-# fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>] [<harness>]
+fm_route_floor_meets() {  # <config-file> <candidate-floor> <target-floor>
+  local file=$1 candidate=$2 target=$3
+  jq -e --arg candidate "$candidate" --arg target "$target" "$FM_ROUTE_FLOOR_RANK_JQ"'
+    (._floors[$candidate] // null) as $candidate_floor
+    | (._floors[$target] // null) as $target_floor
+    | select(($candidate_floor | type) == "object" and ($target_floor | type) == "object")
+    | select(rank($candidate_floor.effort_floor) != null and rank($target_floor.effort_floor) != null)
+    | select(loop_rank($candidate_floor.tool_loop) != null and loop_rank($target_floor.tool_loop) != null)
+    | (rank($candidate_floor.effort_floor) >= rank($target_floor.effort_floor))
+      and (($candidate_floor.context_ceiling | type) == "number")
+      and (($target_floor.context_ceiling | type) == "number")
+      and ($candidate_floor.context_ceiling >= $target_floor.context_ceiling)
+      and (loop_rank($candidate_floor.tool_loop) >= loop_rank($target_floor.tool_loop))
+  ' "$file" >/dev/null 2>&1
+}
+
+# fm_route_decision <config-dir> <route> <model> <effort> [<state-dir>] [<harness>] [<subject-model>]
 # Print the decision record for one route. Return non-zero when the decision
 # could not be made at all, so a caller can tell "no policy" from "policy says
 # no" - and WHICH input it could not read, because the two live in different
@@ -506,13 +578,14 @@ def effective_route_profile($rule; $path; $model; $harness):
 # parses perfectly while the truncated model-health.json goes unmentioned, which
 # is the same misdirection class as naming a substitute nothing checked.
 fm_route_decision() {
-  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} harness=${6:-} file holds now
+  local cfg=$1 route=$2 model=${3:-} effort=${4:-} state=${5:-} harness=${6:-} subject_model=${7:-} file holds now
   file=$(fm_route_config_path "$cfg")
   [ -f "$file" ] || return 2
   command -v jq >/dev/null 2>&1 || return 2
   now=$(date -u +%s)
   holds=$(fm_route_health_active "$state" "$now") || return 3
   jq -c --arg route "$route" --arg model "$model" --arg effort "$effort" --arg harness "$harness" \
+     --arg subject_model "$subject_model" \
      --argjson holds "$holds" \
      "$FM_ROUTE_DECISION_JQ" "$file" 2>/dev/null || return 2
 }
@@ -547,6 +620,7 @@ fm_route_decision_with_registry() {  # <decision-json> <verdict-lines>
                         and ($c.held == null)
                         and ($rr == null)
                         and ($c.band_expressible != false)
+                        and (($c.qualification.state // "QUALIFIED") == "QUALIFIED")
                         and (($c.capacity.verdict // "could_not_observe") != "exhausted"))} ]' \
     || { printf '%s' "$decision"; return 1; }
 }
@@ -611,6 +685,7 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
                           and (.held == null)
                           and ((.registry_refusal // null) == null)
                           and .band_expressible
+                          and ((.qualification.state // "QUALIFIED") == "QUALIFIED")
                           and (($c.verdict // "could_not_observe") != "exhausted"))};
       (.subject.resolved // "") as $subject
     | .candidates = [ .candidates[]? | with_cap(.) ]
@@ -618,6 +693,173 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
         + {capacity: (first($cap[] | select(.model == $subject)) // null)})
     | .capacity_merged = true' \
     || { printf '%s' "$decision"; return 1; }
+}
+
+# fm_route_decision_with_qualification <decision-json> <qualification-lines>
+# Record the CALLER's role-qualification observations on a decision record and
+# recompute eligibility with them. <qualification-lines> is one
+# "<model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><evidence>" line per
+# candidate, exactly the shape bin/fm-qualification-lib.sh emits and the same
+# merge shape the registry verdicts and the capacity observation already use.
+#
+# This library asks the qualification register nothing, for the same reason it
+# asks the model registry and quota-axi nothing: ROUTE owns which models a route
+# may use and what floor it requires, and ELIGIBLE reads records the caller
+# already holds. What this owns is the SHAPE - one merge - so a refusal can tell
+# a candidate list that was checked against the register from one that was not.
+#
+# ONLY QUALIFIED KEEPS A CANDIDATE. This is the opposite of the capacity merge,
+# where could_not_observe leaves eligibility untouched, and the asymmetry is a
+# property of the input rather than a preference. Capacity can only ever SUBTRACT
+# from a set the policy already admitted, so failing to observe it removes
+# nothing. A capability requirement IS the admission: admitting a candidate whose
+# qualification could not be read would route work on no evidence, which is
+# exactly the substitution the governing ruling forbids. So an absent record, an
+# unreadable register and an unobservable dependency all withhold the candidate,
+# and each is recorded under its own state so the ACTION stays distinguishable -
+# qualify it, repair the observation, or stop.
+fm_route_decision_with_qualification() {  # <decision-json> <qualification-lines>
+  local decision=$1 lines=${2:-} merged
+  command -v jq >/dev/null 2>&1 || { printf '%s' "$decision"; return 0; }
+  merged=$(printf '%s' "$lines" | jq -R -s -c '
+    [ split("\n")[] | select(length > 0) | (. / "\t")
+      | {model: .[0],
+         state: (.[1] // "COULD_NOT_OBSERVE"),
+         contracts: (if (((.[2] // "") | length) > 0) then (.[2] / ",") else [] end),
+         cost_rank: (((.[3] // "") | tonumber?) // null),
+         evidence: (.[4] // "")} ]') \
+    || { printf '%s' "$decision"; return 1; }
+  printf '%s' "$decision" | jq -c --argjson qual "$merged" '
+      def with_qual($row):
+        (first($qual[] | select(.model == $row.model)) // null) as $q
+        | $row + {qualification: $q, qualification_checked: ($q != null)}
+        | . + {eligible: (.floor_met
+                          and (.held == null)
+                          and ((.registry_refusal // null) == null)
+                          and (.band_expressible != false)
+                          and ((.qualification.state // "QUALIFIED") == "QUALIFIED")
+                          and ((.capacity.verdict // "could_not_observe") != "exhausted"))};
+      (.subject.resolved // "") as $subject
+    | .candidates = [ .candidates[]? | with_qual(.) ]
+    | .subject = (.subject
+        + {qualification: (first($qual[] | select(.model == $subject)) // null)})
+    | .qualification_merged = true' \
+    || { printf '%s' "$decision"; return 1; }
+}
+
+# fm_route_zero_route_classification <decision-json>
+# WHY a route has no eligible candidate, as one fm-zero-route.v1 record, derived
+# from the per-candidate blocker sets and nothing else.
+#
+# The classification is chosen by the ACTION each answer demands, in a fixed
+# order, because the whole point is that these are four different situations that
+# used to be one:
+#
+#   QUALIFICATION_REQUIRED          at least one candidate is blocked SOLELY by
+#                                   missing or stale qualification. Qualify it.
+#   QUALIFICATION_COULD_NOT_OBSERVE nothing is fixable by qualifying, but at
+#                                   least one candidate is blocked solely because
+#                                   its qualification could not be read. Repair
+#                                   the observation. No negative is recorded.
+#   AWAITING_AVAILABILITY           what is left is blocked only by an
+#                                   availability hold or spent capacity. Wait;
+#                                   the existing deferral path owns it.
+#   NO_MODEL_CAN_SATISFY_ROUTE      every candidate is excluded by something
+#                                   qualifying it cannot fix. Only this one
+#                                   escalates.
+#
+# "SOLELY" is load-bearing. A candidate that also misses a floor axis is not made
+# eligible by qualifying it, so it is not promising and must not be the thing a
+# bounded workflow is spent on. `promising` therefore carries exactly the
+# candidates whose ONLY blocker is fixable qualification, ordered cheapest first
+# with an unobservable cost sorting last.
+fm_route_zero_route_classification() {  # <decision-json>
+  local decision=$1
+  command -v jq >/dev/null 2>&1 || return 2
+  printf '%s' "$decision" | jq -c '
+    def blockers($c):
+      [ (if (($c.violations // []) | length) > 0 then "floor" else empty end),
+        (if ($c.held // null) != null then "availability" else empty end),
+        (if ($c.registry_refusal // null) != null then "registry" else empty end),
+        (if ($c.band_expressible == false) then "band" else empty end),
+        (if (($c.capacity.verdict // "could_not_observe") == "exhausted") then "capacity" else empty end),
+        (($c.qualification.state // "QUALIFIED") as $s
+         | if $s == "QUALIFIED" then empty
+           elif $s == "FAILED" then "qualification_failed"
+           elif $s == "COULD_NOT_OBSERVE" then "qualification_cno"
+           else "qualification_missing" end) ];
+    . as $d
+    | [ $d.candidates[]? | . + {blockers: blockers(.)} ] as $rows
+    | [ $rows[] | select((.blockers | length) == 0) ] as $eligible
+    | [ $rows[] | select(.blockers == ["qualification_missing"]) ] as $promising
+    | [ $rows[] | select(.blockers == ["qualification_cno"]) ] as $unobserved
+    | [ $rows[] | select(((.blockers | length) > 0)
+                         and (((.blockers - ["availability","capacity"]) | length) == 0)) ] as $waiting
+    | (if ($eligible | length) > 0 then "ELIGIBLE"
+       elif ($promising | length) > 0 then "QUALIFICATION_REQUIRED"
+       elif ($unobserved | length) > 0 then "QUALIFICATION_COULD_NOT_OBSERVE"
+       elif ($waiting | length) > 0 then "AWAITING_AVAILABILITY"
+       else "NO_MODEL_CAN_SATISFY_ROUTE" end) as $class
+    | {schema: "fm-zero-route.v1",
+       route: $d.route,
+       floor: ($d.floor // null),
+       floor_requires_capabilities: ($d.floor_axes.requires_capabilities // null),
+       qualification_checked: (($d.qualification_merged // false) == true),
+       classification: $class,
+       escalation: (if $class == "NO_MODEL_CAN_SATISFY_ROUTE"
+                    then "CAPTAIN_EXCEPTION_REQUIRED" else "NONE" end),
+       eligible: [ $eligible[] | .model ],
+       promising: [ $promising[]
+                    | {model, position,
+                       contracts: (.qualification.contracts // []),
+                       state: (.qualification.state // null),
+                       cost_rank: (.qualification.cost_rank // null),
+                       evidence: (.qualification.evidence // "")} ]
+                  | sort_by([ (.cost_rank // 999999999), .position ]),
+       unobserved: [ $unobserved[]
+                     | {model, position, evidence: (.qualification.evidence // "")} ]
+                   | sort_by(.position),
+       excluded: [ $rows[] | select((.blockers | length) > 0)
+                   | {model, position, blockers,
+                      qualification_state: (.qualification.state // null),
+                      qualification_evidence: (.qualification.evidence // "")} ]
+                 | sort_by(.position)}' 2>/dev/null
+}
+
+# fm_route_qualification_refusal <route> <model> <decision-json>
+# The verdict for the ONE model a dispatch names, once qualification has been
+# merged. Returns 0 when the dispatch may proceed, and 1 with the refusal on
+# stdout when the named model does not hold the capability its route requires.
+#
+# The refusal names the STATE, because the state names the action, and the four
+# actions have nothing in common. In particular a missing record is never
+# reported as an exclusion: the ruling's whole point is that missing evidence is
+# an engineering state to resolve, so the wording says so and points at the
+# bounded workflow rather than at the captain.
+fm_route_qualification_refusal() {  # <route> <model> <decision-json>
+  local route=$1 model=$2 decision=$3 state evidence contracts substitutes
+  state=$(printf '%s' "$decision" | jq -r '.subject.qualification.state // "QUALIFIED"' 2>/dev/null)
+  [ "$state" != QUALIFIED ] || return 0
+  evidence=$(printf '%s' "$decision" | jq -r '.subject.qualification.evidence // "no qualification evidence was recorded"' 2>/dev/null)
+  contracts=$(printf '%s' "$decision" | jq -r '(.subject.qualification.contracts // []) | join(", ")' 2>/dev/null)
+  substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")' 2>/dev/null)
+  case "$state" in
+    QUALIFICATION_REQUIRED|QUALIFICATION_STALE)
+      printf '%s: route %s requires the capability contract %s and %s has no current qualification for it (%s) - %s. Missing or stale qualification is an engineering state, not a captain decision: one bounded qualification workflow resolves it and the evidence is then reused. %s Never lower the floor and never substitute outside this pool\n' \
+        "$FM_ROUTE_TOKEN_QUALIFICATION" "$route" "$contracts" "$model" "$state" "$evidence" \
+        "$( [ -n "$substitutes" ] && printf 'A candidate that already holds it is available now, in pool order: %s.' "$substitutes" \
+             || printf 'No candidate in this pool holds it yet.' )"
+      ;;
+    COULD_NOT_OBSERVE)
+      printf '%s: route %s requires the capability contract %s and whether %s holds it COULD NOT BE OBSERVED - %s. That is neither a pass nor a finding against this binding: repair the observation. A declared requirement whose evidence cannot be read has not been met, so the candidate is withheld rather than admitted on no evidence\n' \
+        "$FM_ROUTE_TOKEN_QUALIFICATION_UNREADABLE" "$route" "$contracts" "$model" "$evidence"
+      ;;
+    *)
+      printf '%s: route %s requires the capability contract %s and %s is recorded FAILED against it - %s. This is preserved exclusion evidence and re-qualifying it is lawful only on a directly evidenced material change to its binding, harness, or the contract itself\n' \
+        "$FM_ROUTE_TOKEN_QUALIFICATION" "$route" "$contracts" "$model" "$evidence"
+      ;;
+  esac
+  return 1
 }
 
 # fm_route_capacity_refusal <route> <model> <decision-json>
