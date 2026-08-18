@@ -123,10 +123,16 @@ reap() {
 }
 
 test_reap_bounds_cleanup_that_ignores_term() {
-  local pid started elapsed
-  bash -c 'trap "" TERM; while :; do sleep 1; done' &
+  local ready="$TMP_ROOT/reap-term-ready" pid started elapsed i=0
+  rm -f "$ready"
+  bash -c 'trap "" TERM; : > "$1"; while :; do sleep 1; done' bash "$ready" &
   pid=$!
-  sleep 0.1
+  while [ ! -f "$ready" ] && [ "$i" -lt 30 ]; do
+    is_live_non_zombie "$pid" || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -f "$ready" ] || { fm_test_reap "$pid"; fail "TERM-ignoring cleanup fixture did not become ready"; }
   started=$(date +%s)
   reap "$pid"
   elapsed=$(( $(date +%s) - started ))
