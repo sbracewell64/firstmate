@@ -1,7 +1,8 @@
 # Review envelope controls
 
 Maintainer-verification record for [`bin/fm-review-envelope.sh`](../../bin/fm-review-envelope.sh) and [`bin/fm-review-envelope-lib.sh`](../../bin/fm-review-envelope-lib.sh), the `review-envelope/v1` contract, its compiler and its classifier.
-The mutation evidence below covers 56 properties with targeted mutations of the kinds actually recorded: single-guard removals; inverted mutations that turn red when an accepting path breaks; and one redundantly enforced property that no single-guard mutation can falsify, measured with both independent guards removed.
+The mutation evidence below is one targeted mutation per recorded row, each a real edit aimed at the property its row names; the kinds recorded include single-guard removals and inverted mutations that turn red when an accepting path breaks.
+No property count stands in this sentence: the campaign artifact and the mutation table own the inventory, and a summary count restated here is arithmetic that rots on the next edit.
 
 The library header owns the contract itself, and [`docs/contracts/review-envelope.md`](../contracts/review-envelope.md) is generated from its field catalog.
 This file records only what was measured, and when.
