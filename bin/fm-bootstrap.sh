@@ -971,8 +971,9 @@ EOF
 #
 # So the status is captured, the stderr is kept, and anything that is not one of
 # the register's own verdicts (0 satisfied, 3 unmet, 4 unobserved) is reported
-# as unevaluable. A non-zero verdict that produced no line is reported the same
-# way: a verdict nobody can read is not a verdict. outbound_artifact_report
+# as unevaluable. A non-zero verdict that produced no COMMITMENT: line -
+# whether it printed nothing at all or only stderr diagnostics - is reported the
+# same way: a verdict nobody can read is not a verdict. outbound_artifact_report
 # below already relays its child this way; this is that shape applied here.
 commitment_register_report() {
   local bin="$SCRIPT_DIR/fm-commitment-register.sh" out rc
@@ -985,8 +986,12 @@ commitment_register_report() {
   rc=$?
   case $rc in
     0|3|4)
-      if [ "$rc" -ne 0 ] && [ -z "$out" ]; then
-        printf 'COMMITMENT: register unevaluable - the register exited %s and reported nothing, so no recorded commitment could be checked\n' "$rc"
+      if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q '^COMMITMENT: '; then
+        if [ -z "$out" ]; then
+          printf 'COMMITMENT: register unevaluable - the register exited %s and reported nothing, so no recorded commitment could be checked\n' "$rc"
+        else
+          printf 'COMMITMENT: register unevaluable - the register exited %s without a verdict line, so no recorded commitment could be checked\n' "$rc"
+        fi
       fi
       ;;
     *)

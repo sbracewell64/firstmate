@@ -102,6 +102,9 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Read a `TIMEOUT:` evidence line as a probe to fix rather than as an ordinary open item, because could-not-observe cannot close a key and a probe that always times out blocks its closure forever.
 - `COMMITMENT: register unreadable - <reason>` - the commitment register itself could not be read, so no commitment was checked at all.
   Treat it as the register failing rather than as an empty register, and repair it before trusting any session-start silence about recorded commitments.
+- `COMMITMENT: register unevaluable - the register exited <rc>, so no recorded commitment could be checked` - the register is present and ran, and it failed to answer: it exited a status that is not one of its own verdicts, or (the `and reported nothing` and `without a verdict line` variants) exited a verdict status without printing any `COMMITMENT:` line.
+  Treat it exactly like `register unreadable`: the register failed, not the commitments, and no recorded commitment was checked; the register's own diagnostics, when it produced any, are relayed un-prefixed below this line and name what to repair.
+  Repair the register before trusting any session-start silence about recorded commitments.
 - `OUTBOUND: <item> is waiting on <gate> with no applicable durable artifact (<token>) - <evidence>` - the item's durable state says it is waiting for something outside the fleet, and the thing it is waiting for was never created or no longer applies to its current head.
   This is a CONTROL-TRANSPORT DEFECT, not an external wait: nobody is considering that work, and nothing will ever arrive to unblock it, so it does not clear by waiting longer and no amount of patience is the right response.
   Do not re-hold the item, extend its wait, or describe it to the captain as blocked on an external party - by this evidence there is no external party involved yet.

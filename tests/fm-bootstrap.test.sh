@@ -1497,6 +1497,23 @@ SH
   assert_contains "$out" "reported nothing" \
     "the line must say the register produced no report"
 
+  # A verdict status whose only words are stderr diagnostics is still not a
+  # verdict anyone can read: the noise is relayed, but never as an answer.
+  cat > "$stub" <<'SH'
+#!/usr/bin/env bash
+printf 'fm-commitment-register: probe cache directory is not writable\n' >&2
+exit 3
+SH
+  chmod +x "$stub"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$fakescripts/fm-bootstrap.sh")
+  assert_contains "$out" "COMMITMENT: register unevaluable" \
+    "a verdict status that spoke only diagnostics must not pass as reported"
+  assert_contains "$out" "without a verdict line" \
+    "the line must say the register reached no readable verdict"
+  assert_contains "$out" "probe cache directory is not writable" \
+    "the register's own diagnostics must survive the relay"
+
   # NON-VACUITY: a register that runs and reaches a verdict still renders that
   # verdict, and gains no unevaluable line on top of it.
   cat > "$stub" <<'SH'
