@@ -34,6 +34,7 @@ The 68 outbound-artifact cases, 33 dead-predicate cases, and the bootstrap integ
 What follows is why that sentence is worth anything.
 
 The focused suites were re-run on 2026-08-17 at exact implementation head `3c21e711075a75daa930d186811144d675c6ca09` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
+The same focused suites were re-run on 2026-08-18 at exact implementation head `24a78c1b0cd8bda51210d12daaaff074dff42aca`; the command exited 0 after the final empty could-not-observe section control was added.
 
 ## Watched-red evidence, one mutation per control
 
