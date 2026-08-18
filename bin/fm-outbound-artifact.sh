@@ -493,7 +493,9 @@ head_already_landed() {  # <clone-dir> <sha>
 #                 absence of a pull request is correct rather than a defect.
 #                 An investigation produces a report; it never has one.
 #   exit 2 - COULD NOT OBSERVE: no record names this work, the record names no
-#                 deliverable, records disagree, or a source could not be read.
+#                 deliverable, deliverable records disagree, the only record is
+#                 unfinished, or a source could not be read.
+#   exit 3 - COULD NOT OBSERVE: lifecycle records disagree.
 #
 # WHY THIS IS THE PRIMARY SIGNAL AND NOT A FOOTNOTE, for this control above all
 # others. This pass exists because three items sat with finished work and no
@@ -521,8 +523,23 @@ head_already_landed() {  # <clone-dir> <sha>
 # has no structured reader at all, and the two files carry the same row format
 # because the archive IS the backlog's rotated rows. One parser over both beats
 # two parsers that can drift apart on the same line.
+#
+# An archived completion says the work was finished AT SOME POINT. It does not
+# say that the head being inspected IS that finished work. This catches the
+# REOPENED case, where a completion row and an open row coexist. It does NOT
+# catch new commits landing on a branch after completion, where no reopening
+# occurs and the historical completion row still certifies the current head.
+# Closing that needs completion evidence bound to an exact head, which the
+# corpus cannot supply today: almost none of the archived completion rows record
+# one, so REQUIRING a head would push nearly the whole fleet into
+# could-not-observe. That is not a safety win - it is the instrument going dark,
+# and a check that can never pass is the same defect as a check that can never
+# fail, inverted. The path forward is for new completion rows to record their
+# head so the corpus becomes bindable going forward while historical rows
+# degrade to the treatment above. That belongs to the completion writer, not to
+# this module, and is filed separately.
 finished_work_evidence() {  # <project> <item>
-  local project=$1 item=$2 backlog archive lines kinds count
+  local project=$1 item=$2 backlog archive lines states kinds count
   backlog="${FM_OUTBOUND_BACKLOG_FILE:-$DATA/backlog.md}"
   archive="${FM_OUTBOUND_DONE_ARCHIVE:-$DATA/done-archive.md}"
   [ -n "$project" ] && [ -n "$item" ] || return 2
@@ -534,7 +551,7 @@ finished_work_evidence() {  # <project> <item>
     return 2
   fi
   lines=$(cat "$backlog" "$archive" 2>/dev/null \
-    | grep -F -- "- [x] $item " ; true)
+    | grep -F -e "- [x] $item " -e "- [ ] $item " ; true)
   [ -n "$lines" ] || return 2
   # Identity is (project, work item), never the item name alone - the same
   # collapse the sweep dedupe was fixed for. Project names are compared
@@ -542,6 +559,13 @@ finished_work_evidence() {  # <project> <item>
   lines=$(printf '%s\n' "$lines" \
     | grep -iF -- "(repo: $project)" ; true)
   [ -n "$lines" ] || return 2
+  states=$(printf '%s\n' "$lines" \
+    | sed -n 's/^- \[x\] .*/completed/p; s/^- \[ \] .*/unfinished/p' | sort -u)
+  count=$(printf '%s\n' "$states" | grep -c . || true)
+  case $count in ''|*[!0-9]*) count=0 ;; esac
+  # Disagreeing lifecycle records are ambiguous identity, not a menu to choose from.
+  [ "$count" -eq 1 ] || return 3
+  [ "$states" = completed ] || return 2
   kinds=$(printf '%s\n' "$lines" | grep -o '(kind: [^)]*)' | sort -u)
   [ -n "$kinds" ] || return 2
   count=$(printf '%s\n' "$kinds" | grep -c . || true)
@@ -630,6 +654,9 @@ branch_inventory_rows() {  # appends row_json lines to $1
       case $rc in
         0) : ;;
         1) continue ;;
+        3) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_WORK_LIFECYCLE_CONFLICT" "" "" 0 >> "$out"
+           continue ;;
         *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_WORK_STATE_UNOBSERVED" "" "" 0 >> "$out"
            continue ;;

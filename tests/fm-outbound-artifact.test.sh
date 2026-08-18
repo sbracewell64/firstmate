@@ -458,6 +458,23 @@ test_inventory_unfinished_work_is_not_a_defect() {
   pass "unfinished: an in-progress branch is could-not-observe, not a defect"
 }
 
+test_inventory_conflicting_lifecycle_is_could_not_observe() {
+  local dir out rc
+  dir=$(inventory_case cinv-reopened reopened-work)
+  printf -- '- [x] reopened-work - once finished (repo: demo) (kind: ship) (done 2026-08-15)\n- [ ] reopened-work - reopened for more work (repo: demo) (kind: ship)\n' \
+    > "$dir/home/data/backlog.md"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "lifecycle conflict: expected could-not-observe, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WORK_LIFECYCLE_CONFLICT' \
+    || fail "lifecycle conflict: the conflicting records were not named: $out"
+  printf '%s' "$out" | grep -q 'DEFECT - waiting with no applicable durable artifact (0)' \
+    || fail "lifecycle conflict: reopened work was reported as a defect: $out"
+  printf '%s' "$out" | grep -q 'SATISFIED (0)' \
+    || fail "lifecycle conflict: reopened work was reported as clean: $out"
+  pass "lifecycle conflict: completed and open records are could-not-observe"
+}
+
 test_inventory_non_ship_work_is_not_a_defect() {
   local dir out rc
   # An investigation produces a report and never a pull request, so its branch
@@ -1878,6 +1895,7 @@ test_binding_refuses_a_vague_head
 test_forge_observed_head_need_not_exist_locally
 test_forge_head_provenance_survives_record_lifecycle
 test_inventory_unfinished_work_is_not_a_defect
+test_inventory_conflicting_lifecycle_is_could_not_observe
 test_inventory_non_ship_work_is_not_a_defect
 test_inventory_reads_the_rotated_archive
 test_inventory_unreadable_archive_is_could_not_observe
