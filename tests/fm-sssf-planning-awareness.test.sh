@@ -15,7 +15,6 @@ pass() { printf 'ok - %s\n' "$1"; }
 
 command -v jq >/dev/null 2>&1 || { printf 'skip - jq unavailable\n'; exit 0; }
 
-SOURCE=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 BOOT='{"actionability":"awareness","authoritative_refs":["docs/development/FUTURE_CANDIDATES.md"],"event_id":"plan-20260818-0001","increments":["FP-001","FM-FP-001"],"kind":"bootstrap","schema":"sssf-planning-event/v1","sequence":1,"source_commit":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","states":{"FUT-003":"ACTIVE"}}'
 printf '%s\n' "$BOOT" > "$FEED"
 
@@ -68,7 +67,7 @@ out=$(run_adapter check) || fail "unchanged-feed check returned nonzero"
 pass "unchanged feed is silent"
 
 cp "$STATE/sssf-planning.cursor" "$TMP/cursor.before"
-printf 'X' | dd of="$FEED" bs=1 seek=0 conv=notrunc status=none 2>/dev/null 
+printf 'X' | dd of="$FEED" bs=1 seek=0 conv=notrunc 2>/dev/null
 out=$(run_adapter check) || fail "prefix-mutation check returned nonzero"
 printf '%s' "$out" | grep -q 'continuity failure=prefix-changed' \
   || fail "prefix mutation was not refused: $out"
@@ -84,7 +83,7 @@ out=$(run_adapter check) || fail "ACTIVE check returned nonzero"
 printf '%s' "$out" | grep -q 'event_id=plan-20260818-0002 kind=transition to=ACTIVE actionability=engineering' \
   || fail "ACTIVE did not surface as engineering-intake eligible: $out"
 [ -f "$STATE/sssf-planning.pending" ] || fail "ACTIVE event was not retained pending handling"
-[ "$(find "$STATE" -maxdepth 1 -name '*.meta' -o -name '*.status' | wc -l | tr -d ' ')" -eq 0 ] \
+[ "$(find "$STATE" -maxdepth 1 \( -name '*.meta' -o -name '*.status' \) -print | wc -l | tr -d ' ')" -eq 0 ] \
   || fail "planning adapter created task state directly"
 pass "ACTIVE surfaces intake eligibility but adapter creates no task or status record"
 
