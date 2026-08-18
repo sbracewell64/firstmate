@@ -250,7 +250,6 @@ A head proposed nowhere has no check to re-evaluate, and `write` reports exactly
 `tests/fm-attest.test.sh` pins every refusal and its matched positive control through the executable interface, for `bin/fm-attest.sh` and for the workflow's own step scripts, which it lifts out of the workflow by step name and runs as the workflow runs them.
 The two live in one suite because what the check tells a contributor is decided jointly by the verifier's exit status and the step's reading of it, and splitting them lets the two drift apart.
 Each negative fixture differs from the passing one by exactly one property, because a verifier that refused everything would satisfy red-only assertions and would be a worse defect than the honour-system check it replaces.
-
 The window's cases are about **when** a verdict is reached, because what the verdict is remains `verify`'s and is pinned separately.
 They run against real local repositories standing in for the head repository, the base repository and the job's workspace, and they assert elapsed time, because a window that was honoured and a window that was skipped differ in nothing else.
 One of them pins the correspondence the window rests on directly: every state `verify` reports as an absent attestation is waited through, and every other refusal is reached at once, so a reason added on one side and not the other fails there rather than quietly widening what gets graced.
@@ -264,3 +263,5 @@ The suite proves that the ledger lock is taken before the count and that a holde
 It does not directly prove that two invocations racing for the last budget slot cannot both take it; mutual exclusion between holders is inherited from the atomicity of POSIX `mkdir`.
 It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
 The stale-attempt merge reduction is separately owned and proved by `bin/fm-pr-merge.sh` and `tests/fm-pr-merge.test.sh`.
+
+The suite was refreshed on 2026-08-16 with `bash tests/fm-attest.test.sh`, which measured 46 of 46 passing attestation cases.

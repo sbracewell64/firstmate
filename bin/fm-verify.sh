@@ -50,6 +50,12 @@
 #       result for the same reason: the proof owner commissioned the three
 #       executions the answer is derived from, so it is the only thing that
 #       observed them.
+#   review-envelope <envelope> <repo-dir> <evidence-root>
+#       Validates one review-envelope/v1 artifact against the repository and
+#       its evidence, and reports whether that candidate is review-ready. It
+#       transports bin/fm-review-envelope.sh's result rather than forming its
+#       own, and requires the evidence root because that script deliberately
+#       refuses to guess whether the bound evidence should be re-read.
 #
 # Output is exactly one record on stdout, in every case:
 #
@@ -109,7 +115,7 @@ usage() {
   ' "$0"
 }
 
-VERIFIERS=(browser pr-checks merge-clean review-exec review-mutation)
+VERIFIERS=(browser pr-checks merge-clean review-exec review-mutation review-envelope)
 
 RESULT=
 REASON=
@@ -414,6 +420,43 @@ verify_review_mutation() {
   set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
 }
 
+# --- review-envelope --------------------------------------------------------
+
+# bin/fm-review-envelope.sh already answers in this script's three values, and
+# it re-derives the answer from the envelope's bound facts and a fresh look at
+# the repository on every call. So this adapter transports a result rather than
+# forming one, and never reads the stored envelope itself: an envelope carries
+# facts, and the readiness verdict is not one of them.
+#
+# The evidence root is required rather than optional. Validation refuses to
+# guess whether to re-read the bytes behind the bound digests, and an adapter
+# that quietly chose the cheaper answer for its callers would be making exactly
+# the narrowing decision the envelope contract puts in the caller's hands.
+verify_review_envelope() {
+  local envelope repo evidence_root
+  [ "$#" -eq 3 ] || refuse usage_error
+  envelope=$1
+  repo=$2
+  evidence_root=$3
+  [ -x "$SCRIPT_DIR/fm-review-envelope.sh" ] || {
+    set_result NO_VERIFIER_RAN verifier_unavailable
+    return 0
+  }
+  run_verifier "$SCRIPT_DIR/fm-review-envelope.sh" validate \
+    --envelope "$envelope" --repo "$repo" --evidence-root "$evidence_root" || {
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  }
+  # The record is the LAST two lines of that script's output, after the
+  # classification it prints first, so the parse is pointed at the tail rather
+  # than at the first line it happens to find.
+  if ! fm_verify_parse "$(printf '%s\n' "$VERIFIER_OUT" | tail -2)"; then
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  fi
+  set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
+}
+
 # --- dispatch ---------------------------------------------------------------
 
 case "$VERIFIER" in
@@ -422,6 +465,7 @@ case "$VERIFIER" in
   merge-clean) verify_merge_clean "$@" ;;
   review-exec) verify_review_exec "$@" ;;
   review-mutation) verify_review_mutation "$@" ;;
+  review-envelope) verify_review_envelope "$@" ;;
   *) refuse verifier_undeclared ;;
 esac
 

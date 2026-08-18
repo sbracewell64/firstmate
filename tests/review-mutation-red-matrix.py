@@ -261,14 +261,30 @@ def d17(s, v, r):
 
 def d18(s, v, r):
     """The wrapper narrows any transported result to PASS."""
-    return s, sub(v, '''  set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
+    return s, sub(v, '''  run_verifier "$SCRIPT_DIR/fm-review-mutation.sh" result "$dir" || {
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  }
+  if ! fm_verify_parse "$VERIFIER_OUT"; then
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  fi
+  set_result "$FM_VERIFY_RESULT" "$FM_VERIFY_REASON"
 }
 
-# --- dispatch ---------------------------------------------------------------''',
-                  '''  set_result PASS verified
+# --- review-envelope --------------------------------------------------------''',
+                  '''  run_verifier "$SCRIPT_DIR/fm-review-mutation.sh" result "$dir" || {
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  }
+  if ! fm_verify_parse "$VERIFIER_OUT"; then
+    set_result NO_VERIFIER_RAN no_evidence
+    return 0
+  fi
+  set_result PASS verified
 }
 
-# --- dispatch ---------------------------------------------------------------'''), r
+# --- review-envelope --------------------------------------------------------'''), r
 
 
 def d19(s, v, r):
