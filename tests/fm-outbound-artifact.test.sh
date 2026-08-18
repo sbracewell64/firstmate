@@ -405,11 +405,16 @@ test_branch_inventory_dedupes_duplicate_refs_before_probing() {
   git -C "$repo" -c commit.gpgsign=false commit -qm unique
   git -C "$repo" checkout -q master
   jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  # Both enumerated branches are completed ship work. Without these durable
+  # records Option C correctly classifies them as could-not-observe, so the
+  # fixture would never reach the duplicate-ref probe-budget behavior it owns.
+  printf -- '- [x] duplicate - duplicate work (repo: demo) (kind: ship) (done 2026-08-16)\n- [x] unique - unique work (repo: demo) (kind: ship) (done 2026-08-16)\n' \
+    > "$dir/home/data/backlog.md"
   out=$(FM_OUTBOUND_MAX_PROBES=2 run_ob "$dir" check 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "inventory duplicate refs: unique heads did not fit two probes, exit $rc: $out"
-  [ "$(printf '%s' "$out" | grep -c '^  DEFECT  duplicate$')" -eq 1 ] \
+  [ "$(printf '%s' "$out" | grep -c '^  duplicate$')" -eq 1 ] \
     || fail "inventory duplicate refs: duplicate identity produced multiple findings: $out"
-  printf '%s' "$out" | grep -q '^  DEFECT  unique$' \
+  printf '%s' "$out" | grep -q '^  unique$' \
     || fail "inventory duplicate refs: duplicate refs hid the unique head: $out"
   printf '%s' "$out" | grep -q 'PROBE CAP REACHED' \
     && fail "inventory duplicate refs: duplicate refs exhausted the probe budget: $out"

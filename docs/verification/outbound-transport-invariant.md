@@ -30,10 +30,10 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap bounds the outbound sweep and reports timeout as unevaluable
 ```
 
-The 59 outbound-artifact cases, 33 dead-predicate cases, and the bootstrap integration cases pass.
+The 68 outbound-artifact cases, 33 dead-predicate cases, and the bootstrap integration cases pass.
 What follows is why that sentence is worth anything.
 
-The focused suites were re-run on 2026-08-17 at exact implementation head `b77ec4d674fe77212a05c07de42c12868ef98bcd` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
+The focused suites were re-run on 2026-08-17 at exact implementation head `3c21e711075a75daa930d186811144d675c6ca09` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
 
 ## Watched-red evidence, one mutation per control
 
@@ -62,10 +62,15 @@ That is the three-value collapse the whole mechanism exists to prevent, reproduc
 ## Branch inventory non-vacuity
 
 A recognizer that matches nothing is the failure mode this invariant is most exposed to, because a clean report and a blind one are the same output.
-The anchor control creates real work on an `fm/<item>` branch while its backlog row says nothing about submission, then proves the sweep reports `recognised: inventory` and exits 3.
+The anchor control creates completed ship work on an `fm/<item>` branch with no pull request, then proves the sweep reports `recognised: inventory` and exits 3.
 Before branch enumeration, that same fixture reported zero defects at exit 0, so the control establishes that the finding comes from enumerating refs rather than from an annotation.
+Candidate scoping is three-valued: only a durable completed `kind: ship` record can make the missing pull request a defect, a durable non-ship record is skipped because its deliverable is not a pull request, and missing, incomplete, unreadable, unfinished, or conflicting lifecycle evidence is could-not-observe.
+Could-not-observe is the primary signal for this control because released tasks are the population most likely to have lost their live records; it has its own count and headed section, and every section prints even when empty so an empty result cannot look like an omitted observation.
+Retention does not bound the observation because completed entries rotate into the append-only, unpruned archive.
+Record completeness and home locality do: records are per-home, so this home cannot establish the lifecycle of a branch produced by a secondmate from that secondmate's record, and an archive that exists but cannot be read makes the candidate could-not-observe even if the backlog alone appears sufficient.
+The measured three-project population was 42 branches, of which 34 joined to a durable record and 8 did not.
 Its negative controls prove that work already contained in the landing target, including squash-landed content, is excluded rather than reported forever.
-The observation-gap controls make an absent project registry, unreadable project posture, failed ref or object-width read, unresolved landing target, and failed candidate-ref enumeration exit 4 with the affected item or project named.
+They also prove in-progress and non-ship work are not defects, while the observation-gap controls make an absent project registry, unreadable project posture or completion archive, conflicting lifecycle, failed ref or object-width read, unresolved landing target, and failed candidate-ref enumeration exit 4 with the affected item or project named.
 
 ## Three defects this found in itself, against live data
 
@@ -102,7 +107,9 @@ Captain ruling 2026-08-16: filesystem location is a locator, not proof of semant
 
 Retrieval now recomputes the identity from the record's own fields rather than comparing the stored string, so a record whose id was rewritten to match its filename is still caught by its content. The consumer that owns `WAITING_FOR_RULING -> RULING_AVAILABLE` fetches the ruling comment and requires its body to carry every identity field exactly, so a comment id - which only says where to look - cannot satisfy a wait on its own.
 
-A ruling body must contain exactly one `verdict:` line.
+A ruling body must first establish its sender with exactly one `from:` line whose whole trimmed value is the closed-enum inbound role `browser-sol`.
+Missing, duplicate, unknown, self-claimed, or prefix-only sender values refuse before verdict parsing and wake nothing.
+A ruling body must then contain exactly one `verdict:` line.
 Zero verdict lines or more than one are ambiguous and refuse while naming the observed count; neither first-match nor last-match position is treated as identity or intent.
 
 The verdict is three-valued, and the two refusals are not interchangeable:
@@ -141,8 +148,9 @@ Each row states what the control actually establishes and what it does not. A kn
 | `identity-mismatch-distinct` | A readable record naming another request refuses as a mismatch, NOT as unreadable | Collapse the two verdicts into one return - this is the defect that shipped | Does not cover a record whose non-identity fields are wrong |
 | `head-object-id-width` | A 64-character value is refused for a sha1 repository; an abbreviation is refused; an unresolvable well-shaped id is refused; undeterminable format refuses | Accept any 7-40 hex, or a bare 40-or-64 - observed red | **No sha256 repository was available.** Acceptance of a 64-character head in a sha256 repository is UNPROVEN |
 | `unambiguous-ruling-verdict` | Exactly one verdict line is required, and ambiguity refuses while naming its count | Add a quoted prior verdict beside the decided verdict | Does not decide which verdict was intended when a ruling contains more than one |
+| `inbound-sender-boundary` | An inbound ruling needs exactly one whole-value `from: browser-sol`, checked before its verdict, and any other sender wakes nothing | Supply the live prefix-shaped malformed sender or claim the `firstmate` role | Does not authenticate the forge account that authored the comment |
 | `dead-predicate` | A function in an enrolled file with no call site in its complete possible-caller universe is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review. `DEAD` is issued only when every possible caller is parseable; an unparseable file that does not even loosely mention that predicate is outside its property-scoped universe, while a loose mention can only make the verdict could-not-observe and can never confirm a call |
-| `branch-inventory` | An unannotated `fm/<item>` branch with unlanded work and no exact-head pull request is a defect; landed work is excluded; owned read failures are observation gaps | Remove branch enumeration - the anchor returns to zero defects at exit 0 | Covers registered non-local-only projects and the `fm/<item>` namespace only |
+| `branch-inventory` | A completed ship `fm/<item>` branch with unlanded work and no exact-head pull request is a defect; non-ship work is skipped; unknown or conflicting work state is could-not-observe; landed work is excluded | Remove branch enumeration - the anchor returns to zero defects at exit 0 | Covers registered non-local-only projects and the `fm/<item>` namespace only; historical completion evidence is not bound to the current branch head |
 
 ## One recurrence, four instances: a canonical thing that exists and is not consulted
 
