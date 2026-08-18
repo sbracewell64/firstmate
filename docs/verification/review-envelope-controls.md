@@ -52,18 +52,20 @@ A control fails when a subject's shipped bytes differ from the bytes measured, o
 
 A record about a subject NAMES THE SUBJECT. The citation for this campaign is therefore these three digests, and nothing else:
 
-- `bin/fm-review-envelope-lib.sh` — `sha256:e952abd6bb0ec8633dfe52f68ed87b411edac4d90546803f7c99bb7e44e7a7a7`
+- `bin/fm-review-envelope-lib.sh` — `sha256:b6bbe3e1bb7a56c3f5085915153ce8c91ec2b0c0d2a3f248c2db5ebfb7190948`
 - `bin/fm-review-envelope.sh` — `sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a`
-- `tests/fm-review-envelope.test.sh` — `sha256:625358e42e8ba76daeca51d1ffcef03cf6b5056957656b58e27c7ac5df6e34db`
+- `tests/fm-review-envelope.test.sh` — `sha256:ab67406c9dc73dea297b7fe19de3821e82920eb7103554f61eb96ef4353128d2`
 
-Campaign head: `9c15cbb31bc9baf9cd78ef5deb01c004b9a864a7` (provenance only).
+Campaign head: `0a6857d38fa48748b3e32905425d3e08756963e1` (provenance only).
 Mutations built: 73.
 
-That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is explicitly NOT a coordinate anyone is expected to resolve, and it is not reachable from this branch - the branch was rebased after the campaign ran, which stranded the commit while changing not one measured byte. It survives in this clone only under a local pre-rebase backup ref, which is why the control asks about REACHABILITY FROM THE BRANCH rather than whether the object happens to be present: the second question answers yes here and no for everyone who fetches the branch, which is precisely the defect. A rebase strands heads and leaves measurements verifiable, which is exactly what happened here; re-stamping the record against a reachable commit would buy a label that goes stale again on the next rebase, and writing a commit where the measurement was not taken is the relabelling this record exists to refuse.
+That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is not the coordinate a replay depends on. It happens to be reachable from this branch today, and that is convenience rather than the binding — the digests above are the binding, and they stay checkable whatever later becomes of the commit.
 
-To replay, do not go looking for that commit. Check out this branch, confirm each subject above hashes to the digest cited for it, then rebuild any entry from its `replay_patch` and compare the whole captured run against its `output_sha256`. The subject digests are obtainable from the branch; the head is not, and no measurement here ever rested on it.
+That distinction was learned here rather than assumed. An earlier campaign recorded head `9c15cbb3`, and a later rebase stranded that commit while changing not one measured byte: every measurement stayed true of the bytes, and the citation stopped resolving for anyone who fetched the branch. The record at the time invited an independent party to replay against that head, so the instruction was executable only in the clone that still held a pre-rebase backup ref. The control could not see it either — it compared the record's head field with the artifact's head field, which establishes that two fields agree and says nothing about whether anything is replayable.
 
-The control enforces exactly that. It requires all three subjects to be recorded, requires each to still hash to the digest cited, requires this prose to cite the digests the artifact measured, and requires any cited head to be either reachable from this branch or carry the provenance-only label above. Comparing the record's head field with the artifact's head field - which is all it used to do - establishes only that two fields agree, not that anything is replayable.
+To replay, do not start from the head. Check out this branch, confirm each subject above hashes to the digest cited for it, then rebuild any entry from its `replay_patch` and compare the whole captured run against its `output_sha256`. The subject digests are obtainable from the branch by anyone; a head can be stranded by any rebase.
+
+The control enforces exactly that. It requires all three subjects to be recorded, requires each to still hash to the digest cited, requires this prose to cite the digests the artifact measured, and requires any cited head to be either reachable from this branch or carry the provenance-only label above.
 
 ## Commands
 
@@ -214,7 +216,7 @@ That rewrite removed the overlap. The two guards now cover DISJOINT cases: the l
 
 This is a strengthening of the measurement rather than a weakening of the guard. Containment itself is stricter than before; what disappeared is the redundancy that made one guard's removal undetectable.
 
-## Three properties measured directly rather than through the suite
+## Four properties measured directly rather than through the suite
 
 The suite halts at its first failing assertion, and three properties are asserted after an earlier assertion in the same test function that the same mutation also breaks.
 For those, the suite's first red belongs to the earlier assertion, so the property itself was measured directly against the same defect build by reproducing the fixture and exercising only the assertion in question.
@@ -226,6 +228,18 @@ For those, the suite's first red belongs to the earlier assertion, so the proper
 | a correct claim with intact digests validates | INVERTED: an intact outer digest is made to refuse | `matching-claim-intact-digests-validates exit=1 (expected 0)` |
 
 Against the tracked build the same three measurements read `exit=1`, `exit=0` and `exit=0` respectively, so each is a real change of behaviour and not a constant.
+
+A fourth property is occluded differently, and the difference is worth stating because it is not the same mechanism. The three above are hidden by an earlier assertion inside the SAME test function. This one is hidden by an EARLIER CONTROL:
+
+| Property under test | Mutation injected | Observed directly |
+| --- | --- | --- |
+| a crashed compiler cannot reach a verdict | the CLI's no-result fallback reads `PASS` instead of `NO_VERIFIER_RAN` | `not ok - a compiler that produced no result is could-not-observe: expected exit 2, got 0` |
+
+`test_a_malformed_but_parseable_inputs_document_is_could_not_observe` and `test_a_crashed_compiler_cannot_reach_a_verdict` both exercise that one CLI fallback, and the first of them runs earlier in the file. The suite halts at its first failing control, so through the suite this mutation reddens the malformed-document control and never reaches the crashed-compiler one. The campaign's own check caught that: it records `target_control` and `observed_control` separately and refuses when they disagree, which is how a property that had quietly lost its only witness was found rather than shipped.
+
+The mutation was REMOVED from the campaign table rather than retargeted at the control that happened to catch it. Retargeting after seeing the observation would pick the target to match the result, and an entry that is guaranteed to agree with itself demonstrates nothing.
+
+Measured directly on scratch copies of this tree at `git archive` fidelity, one carrying only this defect: the defect build reddens the control with the line above, and the tracked build passes it with `ok - a compiler that reaches no readable result is could-not-observe, whatever its exit status was`. Both runs exit 1 overall, because a suite reduced to one control fails its own record-inventory checks, so the EXIT CODE IS NOT THE OBSERVATION HERE - the control's own assertion is, and it is what is reported.
 
 ## Two controls measured outside the mutation table
 
