@@ -492,6 +492,8 @@ test_inventory_non_ship_work_is_not_a_defect() {
   printf '%s' "$out" | grep -q 'an-investigation' \
     && fail "non-ship: an investigation branch was reported at all: $out"
   [ "$rc" -eq 0 ] || fail "non-ship: expected a clean sweep, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'COULD NOT OBSERVE.*(0)' \
+    || fail "non-ship: the empty could-not-observe section vanished: $out"
   pass "non-ship: a completed investigation branch is neither a defect nor a gap"
 }
 
