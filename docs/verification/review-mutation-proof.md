@@ -5,6 +5,7 @@ The guarantee measured here is narrow and exact: no label, marker, or caller-sup
 An earlier version of this record described only the pinned `43b78b12` subject and its 32-control, 30-defect inventory, but that scope was superseded by the measurement at `fe9efa50`.
 The `fe9efa50` scope covered a 35-control, 33-defect inventory, including the three source-adjacent output guards added after the earlier measurement, but it was itself superseded when catalogue argv decoding was corrected.
 That gap has since been closed by re-measurement: the watched-red evidence below describes the pinned `015301ea` subject and its 35-control, 33-single-defect inventory, measured after the argv correction.
+That scope was superseded by the quiet-window measurement at `6269ffb4`; the watched-red evidence below now describes its 40-control, 34-single-defect inventory.
 Each supersession is recorded rather than overwritten, because a record that shows when its own evidence stopped applying is more credible than one that only ever states its latest figures.
 
 The script's own header owns the law, the fold, the twenty-two bound dimensions, and the mechanics.
@@ -23,7 +24,7 @@ The catalogue that defines them is tracked in [`tests/review-mutation-red-matrix
 Every defect identifier used in this record is defined by that tracked catalogue and remains replayable whether or not this record currently carries a matrix.
 
 The controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
-A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the other thirty-four, which is a coverage claim resting on an observation that was never made.
+A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the other thirty-nine, which is a coverage claim resting on an observation that was never made.
 Running each control separately produces a complete matrix, including the row that matters most: **controls no defect reddened**, which is reported rather than left to be inferred from a table that happens to look full.
 
 ### What this measurement caught in its own controls
@@ -154,10 +155,8 @@ inventory_sha256: tests/review-mutation-red-matrix.py 1917504e3326bbdb38182b2f41
 ```
 
 The same digests, recorded as the bytes the matrix below was actually measured against.
-They are written only by a measurement run, so a repin that is not a re-measurement cannot
-move them, and `tests/fm-review-mutation.test.sh` fails when they diverge from the current
-subject. Without this the inventory could be made current while the measurement silently
-described bytes that no longer exist.
+They are written only by a measurement run, so a repin that is not a re-measurement cannot move them, and `tests/fm-review-mutation.test.sh` fails when they diverge from the current subject.
+Without this the inventory could be made current while the measurement silently described bytes that no longer exist.
 
 ```
 measured_at: 6269ffb4
@@ -167,15 +166,12 @@ measured_sha256: tests/fm-review-mutation.test.sh 092b1fb90a77ab8e330627c552b250
 measured_sha256: tests/review-mutation-red-matrix.py 1917504e3326bbdb38182b2f41d61038c8709c03c84516e4f6422eb81602f668
 ```
 
-This is an inventory claim only: it says these files and this control count agree with the
-suite that runs today. `tests/fm-review-mutation.test.sh` enforces it and fails when they
-drift, counting from the suite's own declared control array - which needs no execution, so it
-cannot credit another control's failure by construction. A full run separately binds those
-declared controls to the identities that actually executed, via `fm_test_contract`.
+This is an inventory claim only: it says these files and this control count agree with the suite that runs today.
+`tests/fm-review-mutation.test.sh` enforces it and fails when they drift, counting from the suite's own declared control array - which needs no execution, so it cannot credit another control's failure by construction.
+A full run separately binds those declared controls to the identities that actually executed, via `fm_test_contract`.
 
-**Passing this inventory claim is NOT evidence for the measurement claim below.** A green
-inventory sitting on top of unmeasured rows is the collapse this separation exists to
-prevent, so the two are stated apart and never folded together.
+**Passing this inventory claim is NOT evidence for the measurement claim below.**
+A green inventory sitting on top of unmeasured rows is the collapse this separation exists to prevent, so the two are stated apart and never folded together.
 
 ### Measurement claim
 
@@ -185,28 +181,22 @@ Measured at `6269ffb4`. The green pass ran all 40 controls against the shipped s
 **Every defect build reddened at least one control, so no catalogued defect is inert.**
 That is a separate claim from control coverage above, and neither implies the other.
 
-The measurement pinned the inventory digests before and after the run and they were identical,
-so all of it describes one build rather than a moving one.
+The measurement pinned the inventory digests before and after the run and they were identical, so all of it describes one build rather than a moving one.
 
-Controls are run one at a time rather than as a suite, because the suite stops at its first
-failing control. A suite-at-a-time measurement reports each defect reddening exactly one
-control and says nothing about the rest, which is a coverage claim resting on an observation
-that was never made.
+Controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
+A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the rest, which is a coverage claim resting on an observation that was never made.
 
 ### Replaying an entry
 
-Every row is reproducible from the tracked catalogue in
-[`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py):
+Every row is reproducible from the tracked catalogue in [`tests/review-mutation-red-matrix.py`](../../tests/review-mutation-red-matrix.py):
 
 ```
 tests/review-mutation-red-matrix.py replay <defect> <control>
 ```
 
-It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256
-alongside the outcome. Compare the digest with the defect table below before comparing
-outcomes: a digest that does not reproduce means the row describes a build that is not the
-one in front of you. A replay is a new execution and cannot establish that the historical run
-happened - what it removes is the need to take this record's word for it.
+It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256 alongside the outcome.
+Compare the digest with the defect table below before comparing outcomes: a digest that does not reproduce means the row describes a build that is not the one in front of you.
+A replay is a new execution and cannot establish that the historical run happened - what it removes is the need to take this record's word for it.
 
 ### The defect builds
 
@@ -249,9 +239,8 @@ happened - what it removes is the need to take this record's word for it.
 
 ### The matrix
 
-Each row is one control, every defect build that reddened it, the exact failing line the
-first of those produced, and the head it was measured at. The head is recorded per row: one
-global label would let a single relabelling silently re-attribute every row.
+Each row is one control, every defect build that reddened it, the exact failing line the first of those produced, and the head it was measured at.
+The head is recorded per row: one global label would let a single relabelling silently re-attribute every row.
 
 | Control | Reddened by | Observed red | Measured at |
 | --- | --- | --- | --- |
