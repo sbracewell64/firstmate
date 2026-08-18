@@ -486,6 +486,72 @@ head_already_landed() {  # <clone-dir> <sha>
   return 1
 }
 
+# Does a durable record say this branch is FINISHED SHIP WORK?
+#
+#   exit 0 - yes: a record names this work and its deliverable is a ship.
+#   exit 1 - no:  a record names it and its deliverable is NOT a ship, so the
+#                 absence of a pull request is correct rather than a defect.
+#                 An investigation produces a report; it never has one.
+#   exit 2 - COULD NOT OBSERVE: no record names this work, the record names no
+#                 deliverable, records disagree, or a source could not be read.
+#
+# WHY THIS IS THE PRIMARY SIGNAL AND NOT A FOOTNOTE, for this control above all
+# others. This pass exists because three items sat with finished work and no
+# pull request anywhere. Those three were RELEASED tasks: the live records had
+# already been cleaned up when the defect was found. So the population this
+# control was commissioned for is exactly the population most likely to land in
+# could-not-observe - and if could-not-observe is rendered as a footnote, folded
+# into a clean result, or dropped, this control goes quiet about precisely the
+# case it was built for. That is why the caller gives it its own count and its
+# own section, and why a sweep carrying any of it cannot exit clean.
+#
+# WHAT BOUNDS IT, established by measurement rather than assumed:
+#   - Retention does NOT bound it. The backlog keeps a fixed number of completed
+#     entries and rotates the rest into the archive, which is append-only and
+#     unpruned, so this evidence survives release indefinitely.
+#   - RECORD COMPLETENESS bounds it. Entries that name no deliverable cannot
+#     answer the question and are could-not-observe by construction.
+#   - HOME LOCALITY bounds it, and this is the larger one. Records are per-home,
+#     so a branch produced by a secondmate has its record in THAT home and is
+#     invisible here. Measured live: one project matched none of its branches
+#     for exactly this reason. Those are could-not-observe, never clean.
+#
+# Both durable sources are read as TEXT rather than through the structured fleet
+# reader, on purpose: the archive holds the large majority of the evidence and
+# has no structured reader at all, and the two files carry the same row format
+# because the archive IS the backlog's rotated rows. One parser over both beats
+# two parsers that can drift apart on the same line.
+finished_work_evidence() {  # <project> <item>
+  local project=$1 item=$2 backlog archive lines kinds count
+  backlog="${FM_OUTBOUND_BACKLOG_FILE:-$DATA/backlog.md}"
+  archive="${FM_OUTBOUND_DONE_ARCHIVE:-$DATA/done-archive.md}"
+  [ -n "$project" ] && [ -n "$item" ] || return 2
+  [ -r "$backlog" ] || return 2
+  # An archive that EXISTS but cannot be read compromises the candidate set, so
+  # it is could-not-observe even when the backlog alone would have answered. An
+  # archive that does not exist yet is simply a smaller corpus, not a failure.
+  if [ -e "$archive" ] && [ ! -r "$archive" ]; then
+    return 2
+  fi
+  lines=$(cat "$backlog" "$archive" 2>/dev/null \
+    | grep -F -- "- [x] $item " ; true)
+  [ -n "$lines" ] || return 2
+  # Identity is (project, work item), never the item name alone - the same
+  # collapse the sweep dedupe was fixed for. Project names are compared
+  # case-insensitively because the records carry both cases for one project.
+  lines=$(printf '%s\n' "$lines" \
+    | grep -iF -- "(repo: $project)" ; true)
+  [ -n "$lines" ] || return 2
+  kinds=$(printf '%s\n' "$lines" | grep -o '(kind: [^)]*)' | sort -u)
+  [ -n "$kinds" ] || return 2
+  count=$(printf '%s\n' "$kinds" | grep -c . || true)
+  case $count in ''|*[!0-9]*) count=0 ;; esac
+  # Disagreeing records are ambiguous identity, not a menu to choose from.
+  [ "$count" -eq 1 ] || return 2
+  [ "$kinds" = "(kind: ship)" ] || return 1
+  return 0
+}
+
 branch_inventory_rows() {  # appends row_json lines to $1
   local out=$1 project dir venue ref sha item present rc projects mode refs width identity
   local seen="$SCRATCH/inventory-identities"
@@ -545,6 +611,27 @@ branch_inventory_rows() {  # appends row_json lines to $1
         1) : ;;
         *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_LANDING_UNOBSERVED" "" "" 0 >> "$out"
+           continue ;;
+      esac
+      # Is this finished work at all? An unlanded branch with no pull request is
+      # only a transport defect if the work was FINISHED and was the kind of work
+      # that produces one. Without this, an ordinary in-progress branch is a
+      # standing defect at every startup, and a control that cries wolf on every
+      # run gets discounted - which is the same silence as reporting nothing,
+      # reached more slowly.
+      #
+      # The three outcomes stay genuinely three. Only recorded ship work can be
+      # a defect; recorded non-ship work is skipped because its missing pull
+      # request is correct; and work whose state cannot be established is
+      # could-not-observe BY NAME. That last one is not the safe default - it is
+      # the answer for the population this pass exists to catch, so it is
+      # reported, counted and sectioned rather than quietly passed over.
+      finished_work_evidence "$project" "$item"; rc=$?
+      case $rc in
+        0) : ;;
+        1) continue ;;
+        *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_WORK_STATE_UNOBSERVED" "" "" 0 >> "$out"
            continue ;;
       esac
       if [ -z "$venue" ]; then
@@ -732,6 +819,25 @@ sweep() {
 
 # --- rendering and verdict ---------------------------------------------------
 
+# One verdict's rows under one heading, or a heading that says plainly that this
+# section is empty. Printing the heading either way is deliberate: a section that
+# vanishes when empty cannot be distinguished from a section nobody rendered.
+render_section() {  # <verdict> <heading>
+  local verdict=$1 heading=$2 n
+  n=$(printf '%s' "$SWEEP" | jq --arg v "$verdict" '[.rows[] | select(.verdict==$v)] | length')
+  printf '\n%s (%s)\n' "$heading" "$n"
+  if [ "$n" -eq 0 ]; then
+    printf '  none\n'
+    return
+  fi
+  printf '%s' "$SWEEP" | jq -r --arg v "$verdict" '.rows[] | select(.verdict==$v) |
+    "  \(.item)",
+    "         gate: \(.gate // "UNTYPED") · channel: \(.channel // "unknown") · recognised: \(.tier)",
+    "         head: \(.head // "unobserved") · artifact: \(.artifact // "none") · \(.token)",
+    (if .missing then "         incomplete binding, missing: \(.missing)" else empty end),
+    (if .superseded_records > 0 then "         \(.superseded_records) earlier request(s) bound to a different head" else empty end)'
+}
+
 render_human() {
   local defects unevaluable satisfied
   if [ "$(printf '%s' "$SWEEP" | jq -r '.readable')" != "true" ]; then
@@ -741,14 +847,17 @@ render_human() {
   defects=$(printf '%s' "$SWEEP" | jq '[.rows[] | select(.verdict=="defect")] | length')
   unevaluable=$(printf '%s' "$SWEEP" | jq '[.rows[] | select(.verdict=="unevaluable")] | length')
   satisfied=$(printf '%s' "$SWEEP" | jq '[.rows[] | select(.verdict=="satisfied")] | length')
-  printf 'outbound artifacts: %s satisfied, %s defect, %s unevaluable\n\n' \
+  printf 'outbound artifacts: %s satisfied, %s defect, %s could-not-observe\n' \
     "$satisfied" "$defects" "$unevaluable"
-  printf '%s' "$SWEEP" | jq -r '.rows[] |
-    "  \(.verdict | ascii_upcase)  \(.item)",
-    "         gate: \(.gate // "UNTYPED") · channel: \(.channel // "unknown") · recognised: \(.tier)",
-    "         head: \(.head // "unobserved") · artifact: \(.artifact // "none") · \(.token)",
-    (if .missing then "         incomplete binding, missing: \(.missing)" else empty end),
-    (if .superseded_records > 0 then "         \(.superseded_records) earlier request(s) bound to a different head" else empty end)'
+  # THREE SECTIONS, never one list. A could-not-observe rendered inline among
+  # defects reads as a defect, and a reader who learns to discount the noisy
+  # list discounts both. Rendered as its own section it stays a distinct third
+  # answer that can be acted on differently - and it must never be omitted when
+  # empty-looking, because "nothing here" and "we could not look" are the two
+  # things this whole control exists to keep apart.
+  render_section defect 'DEFECT - waiting with no applicable durable artifact'
+  render_section unevaluable 'COULD NOT OBSERVE - neither confirmed waiting legitimately nor confirmed defective'
+  render_section satisfied 'SATISFIED'
   if [ "$(printf '%s' "$SWEEP" | jq -r '.capped')" = "true" ]; then
     printf '\nPROBE CAP REACHED at %s observations - this sweep did not check every item.\n' "$MAX_PROBES"
   fi
@@ -1122,6 +1231,26 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
       printf '%s: comment %s does not carry the exact request identity\n' \
         "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
       exit 3
+  fi
+  # THE SENDER, before the verdict. A body that does not establish who sent it
+  # cannot be read for what it decided, so this refuses ahead of any verdict
+  # parsing rather than after it.
+  #
+  # This is not hypothetical hardening. A live malformed sender demonstrated that
+  # discovery by prefix lets a body addressed to someone else wake this fleet, so
+  # the test is exactly one `from:` line whose WHOLE trimmed value equals the one
+  # role an inbound ruling may carry. Prefix, substring, duplicate, unknown, and
+  # a body claiming to come from firstmate itself are all invalid.
+  #
+  # An invalid sender is COULD-NOT-OBSERVE, not a defect and not a rejection of
+  # the ruling's content: we did not learn that the ruling is wrong, we learned
+  # that we cannot tell who sent it. It wakes nothing, which is the only safe
+  # thing an unidentified instruction can be allowed to do.
+  if ! fm_outbound_sender_valid "$body" "$FM_OUTBOUND_INBOUND_SENDER"; then
+    printf '%s: comment %s does not carry exactly one "from: %s" sender line\n' \
+      "$FM_OUTBOUND_TOKEN_SENDER_INVALID" "$comment" "$FM_OUTBOUND_INBOUND_SENDER" >&2
+    printf 'Refusing rather than guessing the sender. Nothing is woken by a body whose origin is ambiguous.\n' >&2
+    exit 3
   fi
   # EXACTLY ONE verdict line, or refuse. Not the first, and not the last: both
   # resolve ambiguity by POSITION, which is a guess wearing the clothes of a

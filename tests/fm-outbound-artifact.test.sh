@@ -220,10 +220,16 @@ SH
   chmod +x "$1/bin/gh"
 }
 
-write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>]
-  local dir=$1 rid=$2 comment=$3 verdict=${4:-approved}
+# A ruling body is derived from the request it answers, so any sender the
+# REQUEST carried is stripped before the responder's own is added. A canonical
+# writer states its own role and never inherits the other side's - and leaving
+# the original in would make every fixture carry two `from:` lines, which is
+# itself invalid.
+write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>] [<sender>]
+  local dir=$1 rid=$2 comment=$3 verdict=${4:-approved} sender=${5:-browser-sol}
   sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
-    > "$dir/forge/ruling_body"
+    | grep -v '^from:' > "$dir/forge/ruling_body"
+  printf 'from: %s\n' "$sender" >> "$dir/forge/ruling_body"
   printf 'verdict: %s\n' "$verdict" >> "$dir/forge/ruling_body"
   printf '%s\n' "$comment" > "$dir/forge/ruling_id"
 }
@@ -231,7 +237,8 @@ write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>]
 write_foreign_ruling() {  # <case-dir> <request-id> <comment-id>
   local dir=$1 rid=$2 comment=$3
   sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
-    > "$dir/forge/foreign_ruling_body"
+    | grep -v '^from:' > "$dir/forge/foreign_ruling_body"
+  printf 'from: browser-sol\n' >> "$dir/forge/foreign_ruling_body"
   printf 'verdict: rejected\n' >> "$dir/forge/foreign_ruling_body"
   printf '%s\n' "$comment" > "$dir/forge/foreign_ruling_id"
 }
@@ -316,9 +323,15 @@ test_branch_inventory_finds_an_unannotated_unsubmitted_branch() {
   git -C "$repo" checkout -q main
   # A row with no hold, no annotation, nothing to recognise from prose.
   jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[
-    {order:1,state:"queued",structured:true,id:"never-submitted",title:"ordinary queued work",
+    {order:1,state:"done",structured:true,id:"never-submitted",title:"finished work",
      hold_kind:null,hold_reason:null,repo:"demo",pr_url:null,body_excerpt:null,
-     raw:"- [ ] never-submitted - ordinary queued work (repo: demo)"}]}}' > "$dir/snap.json"
+     raw:"- [x] never-submitted - finished work (repo: demo)"}]}}' > "$dir/snap.json"
+  # The durable completion record. This is what makes the branch a DEFECT rather
+  # than could-not-observe: it establishes the work was finished and was ship
+  # work, so a missing pull request is a real transport failure. Without it the
+  # honest answer is that we cannot tell, which its own control asserts below.
+  printf -- '- [x] never-submitted - finished work (repo: demo) (kind: ship) (done 2026-08-16)\n' \
+    > "$dir/home/data/backlog.md"
   out=$(run_ob "$dir" check 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "inventory: an unannotated unsubmitted branch was not found, exit $rc: $out"
   printf '%s' "$out" | grep -q 'never-submitted' \
@@ -359,6 +372,12 @@ test_branch_inventory_dedupes_only_complete_identity() {
       | .backlog.records[0].repo = "demo"' \
     "$dir/snap.json" > "$dir/snap2.json"
   mv "$dir/snap2.json" "$dir/snap.json"
+  # Completion records for BOTH projects' identically named branches. They share
+  # an item name and differ only by project, which is the whole point of the
+  # control: the evidence lookup must join on (project, item) exactly as the
+  # dedupe does, or one project's record answers for the other's branch.
+  printf -- '- [x] shared-item - demo work (repo: demo) (kind: ship) (done 2026-08-16)\n- [x] shared-item - other work (repo: other) (kind: ship) (done 2026-08-16)\n' \
+    > "$dir/home/data/backlog.md"
   out=$(run_ob "$dir" check 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "inventory identity: other project's unsubmitted branch was hidden, exit $rc: $out"
   printf '%s' "$out" | grep -q 'recognised: inventory' \
@@ -395,6 +414,201 @@ test_branch_inventory_dedupes_duplicate_refs_before_probing() {
   printf '%s' "$out" | grep -q 'PROBE CAP REACHED' \
     && fail "inventory duplicate refs: duplicate refs exhausted the probe budget: $out"
   pass "inventory: duplicate local and remote refs consume one probe"
+}
+
+# Build a project with one unlanded, unsubmitted fm/<item> branch and no pull
+# request, so the only thing under test is what the durable record says.
+inventory_case() {  # <case-name> <item> -> prints case dir
+  local dir repo item=$2
+  dir=$(new_case "$1")
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  rm -rf "$repo"; mkdir -p "$repo"
+  git -C "$repo" init -q
+  git -C "$repo" config user.email fixture@example.com
+  git -C "$repo" config user.name Fixture
+  printf 'base\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm base
+  git -C "$repo" branch -M main
+  git -C "$repo" remote add origin https://github.com/o/demo.git
+  git -C "$repo" checkout -q -b "fm/$item"
+  printf 'work\n' > "$repo/f"; git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm 'work on a branch'
+  git -C "$repo" checkout -q main
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+  printf '%s\n' "$dir"
+}
+
+test_inventory_unfinished_work_is_not_a_defect() {
+  local dir out rc
+  # THE FINDING THAT PRODUCED OPTION C. An ordinary in-progress branch has no
+  # pull request and should not, so calling it a transport defect would make this
+  # control fire on every startup for every active branch - and a control that
+  # cries wolf is discounted, which is the same silence as reporting nothing.
+  dir=$(inventory_case cinv-wip in-progress)
+  printf -- '- [ ] in-progress - still being worked on (repo: demo) (kind: ship)\n' \
+    > "$dir/home/data/backlog.md"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  printf '%s' "$out" | grep -q 'DEFECT - waiting with no applicable durable artifact (0)' \
+    || fail "unfinished: in-progress work was reported as a transport defect: $out"
+  [ "$rc" -eq 4 ] \
+    || fail "unfinished: expected could-not-observe rather than clean or defect, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WORK_STATE_UNOBSERVED' \
+    || fail "unfinished: the reason was not named: $out"
+  pass "unfinished: an in-progress branch is could-not-observe, not a defect"
+}
+
+test_inventory_non_ship_work_is_not_a_defect() {
+  local dir out rc
+  # An investigation produces a report and never a pull request, so its branch
+  # having none is CORRECT. This is the exclusion that pays for reading the
+  # record at all: without it every completed investigation is a false defect.
+  dir=$(inventory_case cinv-scout an-investigation)
+  printf -- '- [x] an-investigation - looked into it (repo: demo) (kind: scout) (done 2026-08-16)\n' \
+    > "$dir/home/data/backlog.md"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  printf '%s' "$out" | grep -q 'an-investigation' \
+    && fail "non-ship: an investigation branch was reported at all: $out"
+  [ "$rc" -eq 0 ] || fail "non-ship: expected a clean sweep, exit $rc: $out"
+  pass "non-ship: a completed investigation branch is neither a defect nor a gap"
+}
+
+test_inventory_reads_the_rotated_archive() {
+  local dir out rc
+  # The backlog keeps only a fixed number of completed entries and rotates the
+  # rest into the archive, which holds the large majority of them. Reading only
+  # the backlog would make everything older than that handful could-not-observe
+  # and would collapse this control to almost nothing.
+  dir=$(inventory_case cinv-archive long-since-done)
+  : > "$dir/home/data/backlog.md"
+  printf -- '- [x] long-since-done - finished ages ago (repo: demo) (kind: ship) (done 2026-07-01)\n' \
+    > "$dir/home/data/done-archive.md"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "archive: rotated completion evidence was not read, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'long-since-done' \
+    || fail "archive: the unsubmitted branch was not named: $out"
+  pass "archive: completion evidence rotated out of the backlog is still read"
+}
+
+test_inventory_unreadable_archive_is_could_not_observe() {
+  local dir out rc
+  # An archive that exists but cannot be read leaves the candidate set
+  # incomplete. Answering from the backlog alone would be a confident verdict
+  # built on a corpus we know we could not finish reading.
+  dir=$(inventory_case cinv-archive-unreadable some-work)
+  printf -- '- [x] some-work - finished (repo: demo) (kind: ship) (done 2026-08-16)\n' \
+    > "$dir/home/data/backlog.md"
+  printf -- '- [x] other - x (repo: demo) (kind: ship)\n' > "$dir/home/data/done-archive.md"
+  chmod 000 "$dir/home/data/done-archive.md"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  chmod 644 "$dir/home/data/done-archive.md"
+  if [ "$(id -u)" -eq 0 ]; then
+    pass "archive unreadable: skipped, root can read anything"
+    return
+  fi
+  [ "$rc" -eq 4 ] \
+    || fail "archive unreadable: an unreadable corpus produced a confident verdict, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WORK_STATE_UNOBSERVED' \
+    || fail "archive unreadable: the gap was not named: $out"
+  pass "archive unreadable: an incomplete corpus is could-not-observe, not a verdict"
+}
+
+test_could_not_observe_has_its_own_section() {
+  local dir out defect_body gap_body
+  # If could-not-observe renders inline among defects it reads as a defect; if
+  # it is dropped or folded into clean it disappears. Its own headed, counted
+  # section is what keeps the third answer a third answer - and for THIS control
+  # it is the primary signal, because released work with no record lands here.
+  dir=$(inventory_case cinv-sections unknown-state)
+  : > "$dir/home/data/backlog.md"
+  out=$(run_ob "$dir" check 2>&1) || true
+  printf '%s' "$out" | grep -q 'COULD NOT OBSERVE' \
+    || fail "sections: could-not-observe has no section of its own: $out"
+  printf '%s' "$out" | grep -q 'DEFECT - waiting with no applicable durable artifact (0)' \
+    || fail "sections: the gap was counted as a defect: $out"
+  printf '%s' "$out" | grep -q 'could-not-observe' \
+    || fail "sections: the summary line does not count it separately: $out"
+  # Headings existing is not the property. The property is WHICH SECTION THE ROW
+  # LANDS IN, so read the section bodies and check membership. An earlier version
+  # of this control only asserted that the headings were present, and a mutation
+  # that rendered the gap under the defect heading as well passed it unchanged.
+  defect_body=$(printf '%s\n' "$out" | awk '/^DEFECT - /{f=1;next} /^COULD NOT OBSERVE/{f=0} f')
+  printf '%s' "$defect_body" | grep -q 'unknown-state' \
+    && fail "sections: the gap was rendered inside the defect section: $out"
+  gap_body=$(printf '%s\n' "$out" | awk '/^COULD NOT OBSERVE/{f=1;next} /^SATISFIED/{f=0} f')
+  printf '%s' "$gap_body" | grep -q 'unknown-state' \
+    || fail "sections: the gap was not rendered in its own section: $out"
+  # The empty sections must still print, or "nothing here" and "nobody looked"
+  # become the same output.
+  printf '%s' "$out" | grep -q 'SATISFIED (0)' \
+    || fail "sections: an empty section vanished instead of reporting zero: $out"
+  pass "sections: could-not-observe is counted and sectioned apart from defects"
+}
+
+test_inbound_sender_must_be_exactly_one_closed_value() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  # Watched red in both directions. The malformed value from the live incident
+  # carries the valid role as a PREFIX, so anything less than whole-value
+  # equality accepts it and lets a body addressed elsewhere wake this fleet.
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    for body in \
+      'from: browser-sol' \
+      'from:   browser-sol   '
+    do
+      fm_outbound_sender_valid "$body" browser-sol || printf 'REJECTED-VALID:%s\n' "$body"
+    done
+    for body in \
+      'from: browser-sol-recipient: firstmate' \
+      'from: browser-solo' \
+      'from: firstmate' \
+      'from: nobody' \
+      'verdict: approved' \
+      'from: browser-sol
+from: firstmate' \
+      'from: browser-sol
+from: browser-sol'
+    do
+      fm_outbound_sender_valid "$body" browser-sol && printf 'ACCEPTED-INVALID:%s\n' "$body"
+    done
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -q 'REJECTED-VALID' \
+    && fail "sender: a well-formed sender was refused: $out"
+  printf '%s' "$out" | grep -q 'ACCEPTED-INVALID' \
+    && fail "sender: an invalid sender was accepted: $out"
+  printf '%s' "$out" | grep -q '^done$' \
+    || fail "sender: the control did not run to completion: $out"
+  pass "sender: exactly one whole-value closed-enum sender, prefix and duplicate refused"
+}
+
+test_inbound_ruling_with_wrong_sender_wakes_nothing() {
+  local dir rid out rc state
+  # End to end, not just the predicate: a ruling whose sender is firstmate must
+  # not advance the request. An unidentified instruction waking nothing is the
+  # only safe thing it can do.
+  dir=$(new_case csender)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "sender e2e: emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 563 approved firstmate
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "sender e2e: a firstmate-sent ruling was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_SENDER_INVALID' \
+    || fail "sender e2e: the refusal was not named: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "emitted" ] \
+    || fail "sender e2e: the request advanced to '$state' despite an invalid sender"
+  # The non-vacuity half: the SAME request accepts a correctly-sent ruling, so
+  # this control cannot pass by refusing everything.
+  write_ruling "$dir" "$rid" 564 approved
+  run_ob "$dir" ruling --request "$rid" --comment 564 --issue 2 >/dev/null 2>&1 \
+    || fail "sender e2e: a correctly-sent ruling was also refused"
+  [ "$(run_ob "$dir" show "$rid" | jq -r '.state')" = "ruled" ] \
+    || fail "sender e2e: a valid ruling did not advance the request"
+  pass "sender e2e: a wrong sender wakes nothing, a right one still does"
 }
 
 test_branch_inventory_excludes_landed_work() {
@@ -1663,5 +1877,12 @@ test_identity_binds_every_named_axis
 test_binding_refuses_a_vague_head
 test_forge_observed_head_need_not_exist_locally
 test_forge_head_provenance_survives_record_lifecycle
+test_inventory_unfinished_work_is_not_a_defect
+test_inventory_non_ship_work_is_not_a_defect
+test_inventory_reads_the_rotated_archive
+test_inventory_unreadable_archive_is_could_not_observe
+test_could_not_observe_has_its_own_section
+test_inbound_sender_must_be_exactly_one_closed_value
+test_inbound_ruling_with_wrong_sender_wakes_nothing
 
 printf '\nall fm-outbound-artifact tests passed\n'

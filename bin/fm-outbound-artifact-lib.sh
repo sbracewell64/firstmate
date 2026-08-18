@@ -180,6 +180,48 @@ FM_OUTBOUND_TOKEN_DETECT_ONLY=FM_OUTBOUND_CHANNEL_DETECT_ONLY
 FM_OUTBOUND_TOKEN_IN_FLIGHT=FM_OUTBOUND_EMIT_IN_FLIGHT
 FM_OUTBOUND_TOKEN_SATISFIED=FM_OUTBOUND_SATISFIED
 FM_OUTBOUND_TOKEN_IDENTITY=FM_OUTBOUND_IDENTITY_REFUSED
+FM_OUTBOUND_TOKEN_WORK_STATE_UNOBSERVED=FM_OUTBOUND_WORK_STATE_UNOBSERVED
+FM_OUTBOUND_TOKEN_ARCHIVE_UNREADABLE=FM_OUTBOUND_DONE_ARCHIVE_UNREADABLE
+FM_OUTBOUND_TOKEN_SENDER_INVALID=FM_OUTBOUND_SENDER_INVALID
+}
+
+# The closed sender enum. A `from:` value is compared WHOLE against this list,
+# never by prefix and never by substring: a live incident showed that prefix
+# discovery lets a body address someone else and still wake this fleet. A
+# malformed, duplicated, unknown, or prefix-matching sender is INVALID, and an
+# invalid sender wakes nothing at all rather than waking the wrong work.
+FM_OUTBOUND_SENDERS='firstmate
+browser-sol'
+
+# Which sender a given direction is allowed to have. Canonical writers hardcode
+# their own role, so an inbound ruling claiming to come from firstmate is not a
+# self-message to be honoured - it is a body that failed to be what it claims.
+# shellcheck disable=SC2034  # contract constant consumed by the sourcing command
+FM_OUTBOUND_INBOUND_SENDER='browser-sol'
+
+# Is this body's sender exactly the role we require? Returns 0 only when the
+# body carries EXACTLY ONE `from:` line whose entire trimmed value equals the
+# expected role, and that role is itself in the closed enum.
+#
+# Counting first, then comparing, is the whole point. Reading "the from line"
+# by first match is what makes a second, attacker-chosen `from:` free: the
+# reader takes the honest one and the body still carries the other. Two sender
+# lines is not a body with a sender, it is a body whose sender is ambiguous,
+# and ambiguous identity is could-not-observe rather than a value to pick from.
+fm_outbound_sender_valid() {  # <body> <expected-role>
+  local body=$1 expected=$2 count value
+  [ -n "$expected" ] || return 1
+  printf '%s\n' "$FM_OUTBOUND_SENDERS" | grep -qxF -- "$expected" || return 1
+  count=$(printf '%s\n' "$body" | grep -c '^from:' || true)
+  case $count in ''|*[!0-9]*) count=0 ;; esac
+  [ "$count" -eq 1 ] || return 1
+  value=$(printf '%s\n' "$body" | sed -n 's/^from://p' | tr -d '\r')
+  # Trim surrounding whitespace WITHOUT globbing the value itself.
+  value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  # Whole-value equality. Never a prefix test, never a substring test: the
+  # malformed `from: browser-sol-recipient: firstmate` from the live incident
+  # has `browser-sol` as a PREFIX and must still be refused.
+  [ "$value" = "$expected" ]
 }
 
 # --- digest ------------------------------------------------------------------
