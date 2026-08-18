@@ -541,6 +541,12 @@ test_inventory_unreadable_archive_is_could_not_observe() {
   # An archive that exists but cannot be read leaves the candidate set
   # incomplete. Answering from the backlog alone would be a confident verdict
   # built on a corpus we know we could not finish reading.
+  #
+  # It is named as an UNREADABLE ARCHIVE rather than as an unobserved work
+  # state, because the two carry different repairs. No record is a gap in the
+  # corpus with nothing to do; an unreadable archive is a permissions or I/O
+  # fault someone can go and fix. Reported as the former, an operator hunts for
+  # missing data that was present the whole time.
   dir=$(inventory_case cinv-archive-unreadable some-work)
   printf -- '- [x] some-work - finished (repo: demo) (kind: ship) (done 2026-08-16)\n' \
     > "$dir/home/data/backlog.md"
@@ -554,8 +560,10 @@ test_inventory_unreadable_archive_is_could_not_observe() {
   fi
   [ "$rc" -eq 4 ] \
     || fail "archive unreadable: an unreadable corpus produced a confident verdict, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_DONE_ARCHIVE_UNREADABLE' \
+    || fail "archive unreadable: the unreadable archive was not named: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_WORK_STATE_UNOBSERVED' \
-    || fail "archive unreadable: the gap was not named: $out"
+    && fail "archive unreadable: a readable-but-absent corpus was claimed instead: $out"
   pass "archive unreadable: an incomplete corpus is could-not-observe, not a verdict"
 }
 
@@ -1300,6 +1308,13 @@ test_poll_requires_exactly_one_ruling_marker() {
   [ "$rc" -eq 3 ] || fail "poll marker count: two markers returned $rc: $out"
   printf '%s' "$out" | grep -q '2 ruling marker lines' \
     || fail "poll marker count: refusal did not name the count: $out"
+  # AMBIGUITY, not a mismatch. A mismatch says the one candidate found is not
+  # about this work; ambiguity says several were found and none can be chosen.
+  # Told it was a mismatch, an operator asks why a ruling was misaddressed.
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_AMBIGUOUS_CANDIDATES' \
+    || fail "poll marker count: several candidates were not classified as ambiguous: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RULING_IDENTITY_MISMATCH' \
+    && fail "poll marker count: ambiguity was reported as a misaddressed ruling: $out"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
   [ "$state" = "emitted" ] || fail "poll marker count: ambiguous marker advanced state to $state"
 
@@ -1726,6 +1741,13 @@ test_pull_request_probe_refuses_multiple_exact_head_matches() {
   [ "$rc" -eq 4 ] || fail "PR duplicate head: multiple exact-head PRs returned $rc: $out"
   printf '%s' "$out" | grep -q 'has 2 open pull requests' \
     || fail "PR duplicate head: ambiguity did not name the count: $out"
+  # Named as ambiguity rather than as an unobserved artifact. Both refuse, but
+  # only one is true: the forge answered, and it answered with two candidates.
+  # Reported as a gap, the operator debugs a probe that worked fine.
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_AMBIGUOUS_CANDIDATES' \
+    || fail "PR duplicate head: several candidates were not classified as ambiguous: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_ARTIFACT_UNOBSERVED' \
+    && fail "PR duplicate head: a readable forge was reported as unobserved: $out"
   pass "PR detection refuses multiple exact-head matches and names the count"
 }
 

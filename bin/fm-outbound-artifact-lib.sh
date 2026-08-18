@@ -156,6 +156,15 @@ superseded'
 
 # Stable classification and refusal tokens. Callers and tests match these rather
 # than prose, so wording can improve without breaking a consumer.
+#
+# EVERY TOKEN HERE MUST HAVE AN EMIT SITE. This block reads as the closed
+# vocabulary of answers the mechanism can give, so a token nothing emits
+# documents a classification that cannot occur - and two of them did, while the
+# conditions they name were detected at live sites and reported under a
+# neighbouring token instead. The dead-predicate control scans function
+# definitions, so it cannot see this: an unemitted constant is outside its
+# universe by construction. When a token has no emitter, decide whether the
+# condition is reachable and label it, rather than deleting the better name.
 # shellcheck disable=SC2034  # contract constants consumed by sourcing callers
 {
 FM_OUTBOUND_TOKEN_NO_ARTIFACT=FM_OUTBOUND_NO_ARTIFACT

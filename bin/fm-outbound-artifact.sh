@@ -420,6 +420,11 @@ sol_artifact_present() {  # <request-id> <record-json> -> comment id
   return 1
 }
 
+# Exit 0 with the number, 1 for absent, 2 could-not-observe, 3 no venue, and 7
+# for AMBIGUOUS: an exact head carrying more than one open pull request. That
+# last one gets its own code because "several candidates and none choosable" is
+# a different fact from "the forge could not be read", and an operator told the
+# generic gap goes looking for a broken probe instead of two open requests.
 pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
   local venue=$1 sha=$2 out count
   [ -n "$venue" ] || return 3
@@ -431,9 +436,12 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
     --jq ".[] | select(.state == \"open\" and .head.sha == \"$sha\") | .number") || return 2
   [ -n "$out" ] || return 1
   count=$(printf '%s\n' "$out" | grep -c . || true)
+  # Refuse rather than take one by position. Naming the count is what makes the
+  # report actionable: the repair is to close or retarget the extra request, and
+  # picking the first would bind the invariant to whichever the forge listed.
   if [ "$count" -ne 1 ]; then
     printf 'exact head %s has %s open pull requests in %s\n' "$sha" "$count" "$venue" >&2
-    return 2
+    return 7
   fi
   printf '%s\n' "$out"
   return 0
@@ -533,8 +541,15 @@ head_already_landed() {  # <clone-dir> <sha>
 #                 An investigation produces a report; it never has one.
 #   exit 2 - COULD NOT OBSERVE: no record names this work, the record names no
 #                 deliverable, deliverable records disagree, the only record is
-#                 unfinished, or a source could not be read.
+#                 unfinished, or the backlog could not be read.
 #   exit 3 - COULD NOT OBSERVE: lifecycle records disagree.
+#   exit 4 - COULD NOT OBSERVE: the done-archive exists and cannot be read.
+#
+# The last two are split out from exit 2 because they are ACTIONABLE and exit 2
+# is not. No record is a gap in the corpus with nothing to do about it; an
+# unreadable archive is a permissions or I/O fault someone can go and repair.
+# Reporting the second as the first sends an operator hunting for missing data
+# that is present all along.
 #
 # WHY THIS IS THE PRIMARY SIGNAL AND NOT A FOOTNOTE, for this control above all
 # others. This pass exists because three items sat with finished work and no
@@ -586,8 +601,9 @@ finished_work_evidence() {  # <project> <item>
   # An archive that EXISTS but cannot be read compromises the candidate set, so
   # it is could-not-observe even when the backlog alone would have answered. An
   # archive that does not exist yet is simply a smaller corpus, not a failure.
+  # Its own exit code, because the repair differs from every other gap here.
   if [ -e "$archive" ] && [ ! -r "$archive" ]; then
-    return 2
+    return 4
   fi
   lines=$(cat "$backlog" "$archive" 2>/dev/null \
     | grep -F -e "- [x] $item " -e "- [ ] $item " ; true)
@@ -703,6 +719,9 @@ branch_inventory_rows() {  # appends row_json lines to $1
         3) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_WORK_LIFECYCLE_CONFLICT" "" "" 0 >> "$out"
            continue ;;
+        4) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_ARCHIVE_UNREADABLE" "" "" 0 >> "$out"
+           continue ;;
         *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_WORK_STATE_UNOBSERVED" "" "" 0 >> "$out"
            continue ;;
@@ -717,6 +736,8 @@ branch_inventory_rows() {  # appends row_json lines to $1
         0) : ;;
         1) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" defect "$FM_OUTBOUND_TOKEN_NO_ARTIFACT" "" "" 0 >> "$out" ;;
+        7) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
+             "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "" "" 0 >> "$out" ;;
         *) row_json "$item" CONTRIBUTION_SUBMISSION_REQUIRED inventory pull-request "$project" \
              "$venue" "$sha" "" unevaluable "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED" "" "" 0 >> "$out" ;;
       esac
@@ -885,6 +906,10 @@ sweep() {
       6)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
           defect "$FM_OUTBOUND_TOKEN_IDENTITY" "" "comment/$present" "$stale" >> "$rows"
+        ;;
+      7)
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
+          unevaluable "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "" "" "$stale" >> "$rows"
         ;;
       *)
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "$rid" \
@@ -1427,9 +1452,13 @@ cmd_poll() {
       | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \($FM_OUTBOUND_REQUEST_ID_PATTERN\)$/\1/p")
     marker_count=$(printf '%s\n' "$rid" | grep -c . || true)
     [ "$marker_count" -ne 0 ] || continue
+    # AMBIGUOUS, not MISMATCH. A mismatch says the one candidate found is not
+    # about this work; ambiguity says several were found and none can be chosen.
+    # Labelling this a mismatch sends the operator asking why a ruling was
+    # misaddressed when the truth is that one comment carried two markers.
     if [ "$marker_count" -gt 1 ]; then
       printf '%s: comment %s carries %s ruling marker lines, so which request it rules is ambiguous\n' \
-        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$marker_count" >&2
+        "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$marker_count" >&2
       printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own request once.\n' >&2
       [ "$failed" -ne 0 ] || failed=3
       continue

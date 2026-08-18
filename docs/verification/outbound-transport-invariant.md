@@ -38,6 +38,7 @@ The same focused suites were re-run on 2026-08-18 at exact implementation head `
 The same focused suites were re-run on 2026-08-18 at exact implementation head `06e11d6e929f0dd0e02574cc7098d4cae006ff8f` plus the review round below; the command exited 0 after the reconcile status, emit-lock, sweep identity, and unparsable-lifecycle controls were added.
 The same focused suites were re-run on 2026-08-18 at exact implementation head `876a69c43cef4f9a47664231eeb701196d22dbf8` plus the review round below; the command exited 0 after the reconcile report-completeness and observed-artifact-naming controls were added.
 The same focused suites were re-run on 2026-08-18 at exact implementation head `617f794d8c34f874bc4fb81e15871abc2a4a99bb` plus the review round below; the command exited 0 after the bootstrap-deadline relay and defect-heading controls were added.
+The same focused suites were re-run on 2026-08-18 at exact implementation head `e32e4f7e87503ad56e8cc73e53cf21b77cf61e7b` plus the review round below; the command exited 0 after the two unemitted classification tokens were wired to the live sites that had been reporting under a neighbouring token.
 
 ## Watched-red evidence, one mutation per control
 
@@ -72,6 +73,7 @@ Candidate scoping is three-valued: only a durable completed `kind: ship` record 
 Could-not-observe is the primary signal for this control because released tasks are the population most likely to have lost their live records; it has its own count and headed section, and every section prints even when empty so an empty result cannot look like an omitted observation.
 Retention does not bound the observation because completed entries rotate into the append-only, unpruned archive.
 Record completeness and home locality do: records are per-home, so this home cannot establish the lifecycle of a branch produced by a secondmate from that secondmate's record, and an archive that exists but cannot be read makes the candidate could-not-observe even if the backlog alone appears sufficient.
+That last one is reported as `FM_OUTBOUND_DONE_ARCHIVE_UNREADABLE` rather than folded into the unobserved-work-state token, because the two carry different repairs: no record is a gap in the corpus with nothing to do, while an unreadable archive is a permissions or I/O fault someone can go and fix.
 The measured three-project population was 42 branches, of which 34 joined to a durable record and 8 did not.
 Its negative controls prove that work already contained in the landing target, including squash-landed content, is excluded rather than reported forever.
 They also prove in-progress and non-ship work are not defects, while the observation-gap controls make an absent project registry, unreadable project posture or completion archive, conflicting lifecycle, failed ref or object-width read, unresolved landing target, and failed candidate-ref enumeration exit 4 with the affected item or project named.
@@ -115,6 +117,10 @@ A ruling body must first establish its sender with exactly one `from:` line whos
 Missing, duplicate, unknown, self-claimed, or prefix-only sender values refuse before verdict parsing and wake nothing.
 A ruling body must then contain exactly one `verdict:` line.
 Zero verdict lines or more than one are ambiguous and refuse while naming the observed count; neither first-match nor last-match position is treated as identity or intent.
+
+Ambiguity and mismatch are separate classifications, not two spellings of one refusal.
+A mismatch says the one candidate found is not about this work; ambiguity says several were found and none can be chosen.
+So a comment carrying more than one ruling marker, and an exact head carrying more than one open pull request, are reported as `FM_OUTBOUND_AMBIGUOUS_CANDIDATES` with their observed count rather than as a misaddressed ruling or an unread forge - both refuse either way, but only one of the two labels sends the reader to the condition that actually holds.
 
 The verdict is three-valued, and the two refusals are not interchangeable:
 
@@ -163,18 +169,23 @@ Each row states what the control actually establishes and what it does not. A kn
 | `bounded-report-survives-its-deadline` | A sweep stopped by `FM_OUTBOUND_BOOTSTRAP_DEADLINE` relays every finding it had already established AND still marks itself incomplete | Discard the child's output at the deadline - observed red, a real defect line vanished and only the deadline line remained | Does not recover a line the child was mid-write on when it was killed; the incompleteness marker is what covers that |
 | `defect-heading-is-true-of-its-rows` | An observed artifact whose record names another request is filed under its own heading, never under the missing-artifact one, and the relay and human view agree | Put both under one heading - observed red, `artifact: comment/<id>` sat beneath a heading asserting no artifact exists | Does not split the could-not-observe section, whose rows share one honest heading |
 | `branch-inventory` | A completed ship `fm/<item>` branch with unlanded work and no exact-head pull request is a defect; non-ship work is skipped; unknown or conflicting work state is could-not-observe; landed work is excluded | Remove branch enumeration - the anchor returns to zero defects at exit 0 | Covers registered non-local-only projects and the `fm/<item>` namespace only; historical completion evidence is not bound to the current branch head |
+| `ambiguity-is-not-its-neighbour` | Several candidates and none choosable is classified as ambiguity, never as a misaddressed ruling or an unread forge: a comment with two ruling markers and an exact head with two open pull requests each name their count under the ambiguity token | Restore the neighbouring token at either site - observed red twice, `poll marker count: several candidates were not classified as ambiguous: FM_OUTBOUND_RULING_IDENTITY_MISMATCH: comment 570 carries 2 ruling marker lines` and the same assertion on the duplicate-head probe | Does not choose among the candidates; both sites still refuse and both still print their count, so only the label is under test |
+| `unreadable-archive-is-named` | An existing done-archive that cannot be read is reported as an unreadable archive, not as an unobserved work state, because one is a repairable fault and the other is an empty corpus | Return the generic gap code from the unreadable-archive branch - observed red, `archive unreadable: the unreadable archive was not named: outbound artifacts: 0 satisfied, 0 defect, 1 could-not-observe` | Root can read anything, so the case self-skips under uid 0; it does not cover an archive that reads but is truncated |
 
-## One recurrence, four instances: a canonical thing that exists and is not consulted
+## One recurrence, five instances: a canonical thing that exists and is not consulted
 
-Four separate review findings in this module were the same defect, and naming the shape matters more than the four fixes:
+Five separate review findings in this module were the same defect, and naming the shape matters more than the five fixes:
 
 - `fm_outbound_applicability` - written correct, zero call sites, so no applicability test ran at all.
 - `fm_outbound_record_state_valid` - defined once, consulted nowhere.
 - `record_read` - a three-valued verdict collapsed back to a boolean at five call sites, so a readable record belonging to another request reported as merely unreadable.
 - the typed `outbound-gate.json` declaration - authoritative in name, outranked by prose, so a stale sentence could route a detect-only item onto the emitting channel.
+- `FM_OUTBOUND_TOKEN_AMBIGUOUS` and `FM_OUTBOUND_TOKEN_ARCHIVE_UNREADABLE` - declared in a block the header presents as the closed gate vocabulary, emitted by nothing, while the conditions they name were already detected at three live sites and reported there under a NEIGHBOURING token.
 
 In each case the artifact existed, read correctly, and was not consulted - which is why reading the code proves nothing and only exercising it does.
-The dead-predicate control catches the first two shapes and explicitly does not catch the second two; that boundary is stated in its own header rather than inferred.
+The dead-predicate control catches the first two shapes and explicitly does not catch the last three; that boundary is stated in its own header rather than inferred.
+The fifth is the shape one level below the control's reach: it scans function definitions for call sites, so a CONSTANT that is declared and never emitted is outside its universe by construction.
+That instance was resolved by emitting both tokens rather than by deleting them, because a token whose condition is reachable and mislabelled is a reporting defect, and deleting it would have preserved the wrong label while removing the evidence that a better one was intended.
 
 ## Two standing laws this surface now applies
 
