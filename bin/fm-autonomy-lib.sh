@@ -45,8 +45,8 @@ FM_AUTONOMY_STATE_VOCABULARY="$FM_AUTONOMY_STATE_SELF $FM_AUTONOMY_STATE_CAPTAIN
 # 0 if <value> is a member of that vocabulary.
 fm_autonomy_state_is_known() {  # <value>
   [ -n "${1-}" ] || return 1
-  case " $FM_AUTONOMY_STATE_VOCABULARY " in
-    *" $1 "*) return 0 ;;
+  case "$1" in
+    "$FM_AUTONOMY_STATE_SELF" | "$FM_AUTONOMY_STATE_CAPTAIN") return 0 ;;
   esac
   return 1
 }

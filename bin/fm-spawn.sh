@@ -864,7 +864,7 @@ spawn_remote_secondmate() {
     echo "kind=secondmate"
     fm_task_axes_emit secondmate
     echo "mode=secondmate"
-    echo "yolo=off"
+    echo "yolo=$FM_AUTONOMY_STATE_CAPTAIN"
     echo "tasktmp="
     echo "model=${model#-}"
     echo "effort=${effort#-}"
@@ -886,7 +886,7 @@ spawn_remote_secondmate() {
     echo "error: remote secondmate $id launched, but its reply source could not be armed; endpoint metadata is preserved" >&2
     return 1
   fi
-  echo "spawned $id harness=$harness kind=secondmate mode=secondmate yolo=off window=remote:$id worktree=$home remote=$host backend=$remote_backend"
+  echo "spawned $id harness=$harness kind=secondmate mode=secondmate yolo=$FM_AUTONOMY_STATE_CAPTAIN window=remote:$id worktree=$home remote=$host backend=$remote_backend"
   return 0
 }
 
