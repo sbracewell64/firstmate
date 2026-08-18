@@ -822,7 +822,7 @@ document = json.load(open(path))
 head = subprocess.run(
     ["git", "-C", repo, "rev-parse", "candidate"], capture_output=True, text=True, check=True
 ).stdout.strip()
-for attempt in document["ci"]["attempts"]:
+for _ in document["ci"]["attempts"]:
     if attempt["head"] == "candidate":
         attempt["head"] = head
 for ruling in document["rulings"]:
@@ -1489,7 +1489,7 @@ PY
 }
 
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading() {
-  local case_dir seam prepare_pid prepare_code attempt
+  local case_dir seam prepare_pid prepare_code
   case_dir=$(make_case evidence-symlink-escape)
   printf 'external bytes that must not be read\n' > "$case_dir/outside.log"
   ln -s "$case_dir/outside.log" "$case_dir/evidence/linked.log"
@@ -1544,7 +1544,7 @@ PY
   ) > "$case_dir/seam.out" 2>&1 &
   prepare_pid=$!
   fm_test_reap "$prepare_pid"
-  for attempt in $(seq 1 200); do
+  for _ in $(seq 1 200); do
     [ -f "$seam.opened" ] && break
     sleep 0.01
   done
@@ -1552,7 +1552,7 @@ PY
   mv "$case_dir/evidence/linked.log" "$case_dir/evidence/opened.log"
   cp "$case_dir/outside.log" "$case_dir/evidence/linked.log"
   printf 'continue\n' > "$seam.continue"
-  for attempt in $(seq 1 200); do
+  for _ in $(seq 1 200); do
     [ -f "$seam.hashed" ] && break
     sleep 0.01
   done
@@ -2604,6 +2604,10 @@ source, target = sys.argv[1:]
 artifact = json.load(open(source, encoding="utf-8"))
 artifact["control_order"] = ["matching-control"]
 for entry in artifact["mutations"]:
+    # Red-shaped by construction, so the expectation is normalised with it: an
+    # entry declaring green while carrying a failure is the fixture's
+    # contradiction, not the validator's.
+    entry["expected"] = "red"
     entry["captured_output"] = "not ok - matching control\n"
     entry["output_sha256"] = "sha256:" + __import__("hashlib").sha256(entry["captured_output"].encode()).hexdigest()
     entry["target_control"] = entry["observed_control"] = "matching-control"
