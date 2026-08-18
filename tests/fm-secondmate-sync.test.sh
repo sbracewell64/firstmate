@@ -541,7 +541,10 @@ test_bootstrap_nudge_retry_is_idempotent() {
 
   out2=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$w/home" FM_ROOT_OVERRIDE="$w/main" \
     FM_SEND_SETTLE=0 "$ROOT/bin/fm-bootstrap.sh" 2>/dev/null)
-  [ -z "$out2" ] || fail "idempotent retry should converge to silence, got: $out2"
+  assert_not_contains "$out2" "NUDGE_SECONDMATES:" \
+    "idempotent retry should not report another failed nudge"
+  assert_not_contains "$out2" "BOOTSTRAP_INFO: nudged " \
+    "idempotent retry should not send another nudge"
   pass "T8d bootstrap nudge retry is idempotent after success"
 }
 

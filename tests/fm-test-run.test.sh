@@ -669,6 +669,569 @@ assert len(doc["scripts"])==3
   pass "aggregate-json merges lane timing artifacts"
 }
 
+# Write one fixture timing artifact per serial shard, spreading a requested wall
+# evenly across whatever scripts that shard currently holds.
+#
+# Durations are constructed from the requested wall, never read from the runner's
+# weight hints: the hints are an implementation detail that changes whenever the
+# suite is remeasured, and a fixture built from them would silently re-derive the
+# very numbers under test.
+#   $1 dir  $2 wall in ms for every shard  $3 optional script to omit
+#   $4 optional shard index given $5 instead of $2
+fm_write_serial_fixture() {
+  local dir=$1 wall=$2 drop=${3:-} heavy=${4:-0} heavy_wall=${5:-0} count k target
+  count=$("$RUNNER" --list-lanes | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+  mkdir -p "$dir"
+  k=1
+  while [ "$k" -le "$count" ]; do
+    "$RUNNER" --list --lane "portable-serial-${k}of${count}" >"$dir/members.$k"
+    target=$wall
+    [ "$k" = "$heavy" ] && target=$heavy_wall
+    python3 - "$dir/shard-$k.json" "$k" "$count" "$target" "$drop" "$dir/members.$k" <<'PY'
+import json, sys
+
+out, k, count, target, drop, members = sys.argv[1:7]
+k, count, target = int(k), int(count), int(target)
+
+paths = [l.strip() for l in open(members, encoding="utf-8") if l.strip() and l.strip() != drop]
+if not paths:
+    raise SystemExit("shard %d fixture would be empty" % k)
+
+# Spread the requested wall evenly, giving the first script the remainder so the
+# shard total is exactly the wall this fixture claims to represent.
+each, rest = divmod(target, len(paths))
+rows = []
+for i, p in enumerate(paths):
+    rows.append({
+        "path": p,
+        "duration_ms": each + (rest if i == 0 else 0),
+        "exit": 0,
+        "family": "fixture",
+        "gate_skip": False,
+        "expected_gate_skip": "none",
+    })
+json.dump({
+    "selection": "lane=portable-serial-%dof%d" % (k, count),
+    "run_id": "fixture",
+    "scripts": rows,
+    "summary": {
+        "total": len(rows), "failed": 0, "skipped_gate": 0,
+        "duration_ms": sum(r["duration_ms"] for r in rows),
+    },
+}, open(out, "w", encoding="utf-8"))
+PY
+    k=$((k + 1))
+  done
+}
+
+# Read the control's own declared bounds off its published output rather than out
+# of the script that defines them, so these tests keep working when the budget is
+# re-derived and fail only if the control's behavior actually changes.
+#   echoes: <shards> <budget_ms> <allowed_ms> <headroom_ms>
+fm_serial_budget_bounds() {
+  local tmp line shards budget allowed headroom
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-bounds.XXXXXX")
+  fm_write_serial_fixture "$tmp/probe" 1000
+  line=$("$RUNNER" --check-budget "$tmp/probe"/shard-*.json 2>/dev/null) \
+    || { rm -rf "$tmp"; fail "the budget control must publish its bounds on a trivial lane"; }
+  rm -rf "$tmp"
+  shards=$(printf '%s\n' "$line" | sed -n 's/.*shards=\([0-9]*\).*/\1/p')
+  budget=$(printf '%s\n' "$line" | sed -n 's/.*budget_ms=\([0-9]*\).*/\1/p')
+  allowed=$(printf '%s\n' "$line" | sed -n 's/.*allowed_ms=\([0-9]*\).*/\1/p')
+  headroom=$(printf '%s\n' "$line" | sed -n 's/.*headroom_ms=\([0-9]*\).*/\1/p')
+  [ -n "$shards" ] && [ -n "$budget" ] && [ -n "$allowed" ] && [ -n "$headroom" ] \
+    || fail "FM_TEST_BUDGET must publish shards, budget_ms, allowed_ms and headroom_ms: $line"
+  printf '%s %s %s %s\n' "$shards" "$budget" "$allowed" "$headroom"
+}
+
+# The recurrence control for serial-lane budget drift. The property that matters
+# is three-valued: a lane inside its bound passes, a lane that actually grew
+# fails, and a run whose artifacts are missing or unreadable is could-not-observe
+# rather than either. Ordinary runner jitter must stay on the passing side, or
+# the control gets ignored and stops protecting anything.
+test_serial_budget_control_verdicts() {
+  local tmp rc out bounds shards budget allowed
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget.XXXXXX")
+  bounds=$(fm_serial_budget_bounds)
+  shards=$(printf '%s' "$bounds" | cut -d' ' -f1)
+  budget=$(printf '%s' "$bounds" | cut -d' ' -f2)
+  allowed=$(printf '%s' "$bounds" | cut -d' ' -f3)
+
+  # Exactly at the declared budget.
+  fm_write_serial_fixture "$tmp/ok" $((budget / shards))
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/ok"/shard-*.json 2>"$tmp/ok.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "a lane at its declared budget must pass, got $rc: $(cat "$tmp/ok.err")"
+  assert_contains "$out" "FM_TEST_BUDGET verdict=ok" "a passing lane must report verdict=ok"
+
+  # Jitter control: just inside the allowance is a slow runner, not a defect,
+  # and reporting it as one is how a control gets ignored.
+  fm_write_serial_fixture "$tmp/jitter" $(((allowed - allowed / 50) / shards))
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/jitter"/shard-*.json 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "a lane inside its drift allowance must not fail, got $rc: $out"
+
+  # Just past the allowance is the signal this exists for. The two fixtures
+  # differ by about 4% of the lane, so the boundary is where it is claimed to be
+  # rather than somewhere convenient.
+  fm_write_serial_fixture "$tmp/grown" $(((allowed + allowed / 50) / shards + 1))
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/grown"/shard-*.json 2>"$tmp/grown.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a lane past its drift allowance must fail (exit 1), got $rc"
+  assert_contains "$out" "verdict=drifted" "a grown lane must report verdict=drifted"
+  assert_grep 'lane grew to' "$tmp/grown.err" "the failure must name lane growth"
+  [ "$allowed" -gt "$budget" ] || fail "the allowance must sit above the declared budget"
+
+  rm -rf "$tmp"
+  pass "serial budget control passes at budget, absorbs jitter, and fails just past its allowance"
+}
+
+# The incident shape: the lane total stayed unremarkable while one shard carried
+# the imbalance to the edge of its hang tripwire and cancelled whole runs. A
+# control that only watched the lane total would have called that healthy.
+test_serial_budget_control_catches_a_single_shard_near_the_tripwire() {
+  local tmp rc out bounds shards budget allowed headroom rest lane
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-shard.XXXXXX")
+  bounds=$(fm_serial_budget_bounds)
+  shards=$(printf '%s' "$bounds" | cut -d' ' -f1)
+  budget=$(printf '%s' "$bounds" | cut -d' ' -f2)
+  allowed=$(printf '%s' "$bounds" | cut -d' ' -f3)
+  headroom=$(printf '%s' "$bounds" | cut -d' ' -f4)
+  [ "$shards" -ge 2 ] || fail "this test needs at least two shards to skew one"
+
+  # Every shard's scripts stay comfortably inside the lane budget, while one
+  # shard's wall clock carries enough runner overhead to cross the headroom
+  # bound. Only the wall-clock shard rule can fail this.
+  rest=$((budget / shards))
+  [ "$rest" -gt 0 ] || fail "the declared budget leaves no room to build this fixture"
+  fm_write_serial_fixture "$tmp/skew" "$rest"
+  python3 - "$tmp/skew/shard-2.json" "$headroom" <<'PY'
+import json, sys
+p, headroom = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["duration_ms"] = headroom + headroom // 20
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/skew"/shard-*.json 2>"$tmp/skew.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a shard past its headroom bound must fail (exit 1), got $rc: $out"
+  assert_grep 'hang tripwire' "$tmp/skew.err" "the failure must name the tripwire it approached"
+  assert_contains "$out" "worst_shard=2" "the verdict must name which shard carried the load"
+  assert_contains "$out" "verdict=drifted" "an over-headroom shard must report verdict=drifted"
+
+  # Prove the lane rule stayed silent, so this really is the shard rule firing.
+  assert_no_grep 'lane grew to' "$tmp/skew.err" "the lane bound must not be what failed here"
+  lane=$(printf '%s\n' "$out" | sed -n 's/.*lane_ms=\([0-9]*\).*/\1/p')
+  [ "$lane" -le "$allowed" ] || fail "fixture lane total $lane must stay inside the allowance $allowed"
+
+  rm -rf "$tmp"
+  pass "serial budget control fails one shard near its tripwire while the lane looks healthy"
+}
+
+# Could-not-observe is the third value and is never a pass. A shard cancelled at
+# its timeout uploads no timing artifact, which is exactly this state, so a
+# control that read a missing artifact as success would go quiet during the very
+# failure it exists to catch.
+test_serial_budget_control_reports_could_not_observe() {
+  local tmp rc out count
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-unobserved.XXXXXX")
+  count=$("$RUNNER" --list-lanes | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+
+  fm_write_serial_fixture "$tmp/gap" 1000
+  rm -f "$tmp/gap/shard-2.json"
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/gap"/shard-*.json 2>"$tmp/gap.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a missing shard artifact must be could-not-observe (exit 3), got $rc"
+  [ "$rc" -ne 0 ] || fail "could-not-observe must never be reported as a pass"
+  assert_contains "$out" "verdict=could-not-observe" "a missing shard must report could-not-observe"
+  assert_grep 'shard(s) 2' "$tmp/gap.err" "the reason must name the unobserved shard"
+
+  # An unreadable artifact is the same third value, not a failure of the lane.
+  fm_write_serial_fixture "$tmp/bad" 1000
+  printf 'not json at all\n' >"$tmp/bad/shard-1.json"
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/bad"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "an unreadable artifact must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an unreadable artifact must report could-not-observe"
+
+  # Artifacts from a run built for a different shard count say nothing about
+  # this head's lane, so they are unobserved rather than compared anyway.
+  fm_write_serial_fixture "$tmp/stale" 1000
+  python3 - "$tmp/stale/shard-1.json" "$count" <<'PY'
+import json, sys
+p, count = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = "lane=portable-serial-1of%d" % (count + 1)
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/stale"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a foreign shard count must be could-not-observe (exit 3), got $rc"
+
+  fm_write_serial_fixture "$tmp/out-of-range" 1000
+  cp "$tmp/out-of-range/shard-1.json" "$tmp/out-of-range/shard-0.json"
+  python3 - "$tmp/out-of-range/shard-0.json" "$count" <<'PY'
+import json, sys
+p, count = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = "lane=portable-serial-0of%d" % count
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/out-of-range"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "an out-of-range shard index must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an out-of-range shard index must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "an out-of-range shard index must not report drifted"
+
+  fm_write_serial_fixture "$tmp/unconvertible" 1000
+  python3 - "$tmp/unconvertible/shard-1.json" "$count" <<'PY'
+import json, sys
+p, count = sys.argv[1], int(sys.argv[2])
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = "lane=portable-serial-%sof%d" % ("9" * 5000, count)
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/unconvertible"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "unconvertible numeric shard metadata must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "unconvertible numeric shard metadata must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "unconvertible numeric shard metadata must not report drifted"
+
+  # A malformed negative timing can shrink the total enough to manufacture an
+  # apparently healthy lane, so it is unreadable evidence rather than a pass.
+  fm_write_serial_fixture "$tmp/negative" 1000
+  python3 - "$tmp/negative/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["scripts"][0]["duration_ms"] = -1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/negative"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a negative duration must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a negative duration must report could-not-observe"
+
+  fm_write_serial_fixture "$tmp/boolean" 1000
+  python3 - "$tmp/boolean/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["scripts"][0]["duration_ms"] = True
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/boolean"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a boolean duration must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a boolean duration must report could-not-observe"
+
+  # Valid JSON can still be structurally invalid. It must reach the same third
+  # value instead of crashing into CI's lane-drift branch.
+  fm_write_serial_fixture "$tmp/invalid-path" 1000
+  python3 - "$tmp/invalid-path/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["scripts"][0]["path"] = None
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/invalid-path"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "an invalid script path must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an invalid script path must report could-not-observe"
+
+  # The summary is part of the timing artifact's structure. A syntactically
+  # valid object with a malformed summary must not reach the drift arithmetic.
+  fm_write_serial_fixture "$tmp/invalid-summary" 1000
+  python3 - "$tmp/invalid-summary/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"] = {"total": "unknown"}
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/invalid-summary"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a structurally invalid summary must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an invalid summary must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "an invalid summary must not report drifted"
+
+  fm_write_serial_fixture "$tmp/contradictory-failed" 1000
+  python3 - "$tmp/contradictory-failed/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["failed"] = 1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/contradictory-failed"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a contradictory failed count must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a contradictory failed count must report could-not-observe"
+
+  fm_write_serial_fixture "$tmp/contradictory-skips" 1000
+  python3 - "$tmp/contradictory-skips/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["skipped_gate"] = doc["summary"]["total"] + 1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/contradictory-skips"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a contradictory gate-skip count must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a contradictory gate-skip count must report could-not-observe"
+
+  # A serial lane's wall duration includes runner overhead and therefore may
+  # exceed the sum of its script durations. It cannot be shorter than that sum.
+  fm_write_serial_fixture "$tmp/wall-overhead" 1000
+  python3 - "$tmp/wall-overhead/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["duration_ms"] += 250
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  "$RUNNER" --check-budget "$tmp/wall-overhead"/shard-*.json >/dev/null 2>"$tmp/wall-overhead.err" \
+    || fail "serial wall-clock overhead must remain valid timing evidence: $(cat "$tmp/wall-overhead.err")"
+
+  fm_write_serial_fixture "$tmp/impossible-wall" 1000
+  python3 - "$tmp/impossible-wall/shard-1.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["summary"]["duration_ms"] -= 1
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/impossible-wall"/shard-*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a serial wall shorter than its scripts must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "an impossible serial wall must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "an impossible serial wall must not report drifted"
+
+  # A malformed extra artifact must not disappear as though it belonged to a
+  # different lane and let an otherwise complete artifact set pass.
+  fm_write_serial_fixture "$tmp/invalid-selection" 1000
+  cp "$tmp/invalid-selection/shard-1.json" "$tmp/invalid-selection/malformed.json"
+  python3 - "$tmp/invalid-selection/malformed.json" <<'PY'
+import json, sys
+p = sys.argv[1]
+doc = json.load(open(p, encoding="utf-8"))
+doc["selection"] = {"lane": "portable-serial-1of8"}
+json.dump(doc, open(p, "w", encoding="utf-8"))
+PY
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/invalid-selection"/*.json 2>/dev/null)
+  rc=$?
+  set -e
+  [ "$rc" -eq 3 ] || fail "a structurally invalid selection must be could-not-observe (exit 3), got $rc"
+  assert_contains "$out" "verdict=could-not-observe" "a structurally invalid selection must report could-not-observe"
+  assert_not_contains "$out" "verdict=drifted" "a structurally invalid selection must not report drifted"
+
+  rm -rf "$tmp"
+  pass "serial budget control reports could-not-observe instead of passing on absent or invalid evidence"
+}
+
+# The partition half. A run that quietly executed fewer scripts than the lane
+# declares is a coverage defect, and it would otherwise look like a lane that
+# comfortably beat its budget.
+test_serial_budget_control_checks_the_partition_it_measured() {
+  local tmp rc out dropped count
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-partition.XXXXXX")
+  count=$("$RUNNER" --list-lanes | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+  dropped=$("$RUNNER" --list --lane "portable-serial-1of${count}" | head -1)
+  [ -n "$dropped" ] || fail "could not pick a script to omit"
+
+  fm_write_serial_fixture "$tmp/partial" 1000 "$dropped"
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/partial"/shard-*.json 2>"$tmp/partial.err")
+  rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "an unrun declared script must fail (exit 1), got $rc"
+  assert_contains "$out" "verdict=drifted" "a broken partition must not report ok"
+  assert_grep "$dropped" "$tmp/partial.err" "the failure must name the script no shard ran"
+
+  rm -rf "$tmp"
+  pass "serial budget control refuses a run that skipped part of the declared lane"
+}
+
+# The workflow's hang tripwire cannot be read from inside its own job, so it is
+# passed in and checked. Silent disagreement would leave the derived bounds
+# describing a timeout that is no longer set.
+fm_check_ci_serial_timeout_link() {
+  python3 - "$1" "${2:-check}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+action = sys.argv[2]
+lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+
+def job_block(name):
+    pattern = re.compile(r"^(\s*)" + re.escape(name) + r"\s*:\s*(?:#.*)?(?:\r?\n)?$")
+    matches = [(i, match) for i, line in enumerate(lines) if (match := pattern.match(line))]
+    if len(matches) != 1:
+        raise SystemExit("job %s: expected 1 match, saw %d" % (name, len(matches)))
+    start, match = matches[0]
+    indent = match.group(1)
+    sibling = re.compile(r"^" + re.escape(indent) + r"[^\s#][^:]*\s*:")
+    end = next((i for i in range(start + 1, len(lines)) if sibling.match(lines[i])), len(lines))
+    return start + 1, end
+
+
+def field(job, key):
+    start, end = job_block(job)
+    pattern = re.compile(
+        r"^(\s*" + re.escape(key) + r"\s*:\s*)([^#\r\n]*?)(\s*(?:#.*)?(?:\r?\n)?)$"
+    )
+    matches = [(i, match) for i in range(start, end) if (match := pattern.match(lines[i]))]
+    if len(matches) != 1:
+        raise SystemExit("%s.%s: expected 1 match, saw %d" % (job, key, len(matches)))
+    index, match = matches[0]
+    value = match.group(2).strip()
+    if not re.fullmatch(r"[1-9][0-9]*", value):
+        raise SystemExit("%s.%s must be a positive integer" % (job, key))
+    return index, match, int(value)
+
+
+_, _, timeout = field("tests-portable-serial", "timeout-minutes")
+copied_index, copied_match, copied_timeout = field(
+    "tests-timing-aggregate", "FM_SERIAL_TIMEOUT_MINUTES"
+)
+if action == "diverge":
+    lines[copied_index] = "%s%d%s" % (
+        copied_match.group(1), timeout + 1, copied_match.group(3)
+    )
+    path.write_text("".join(lines), encoding="utf-8")
+elif action == "duplicate":
+    timeout_index, _, _ = field("tests-portable-serial", "timeout-minutes")
+    lines.insert(timeout_index, lines[timeout_index])
+    path.write_text("".join(lines), encoding="utf-8")
+elif action == "duplicate-copy":
+    lines.insert(copied_index, lines[copied_index])
+    path.write_text("".join(lines), encoding="utf-8")
+elif action != "check":
+    raise SystemExit("unknown action: %s" % action)
+elif timeout != copied_timeout:
+    raise SystemExit(
+        "tests-portable-serial timeout-minutes %r disagrees with "
+        "FM_SERIAL_TIMEOUT_MINUTES %r" % (timeout, copied_timeout)
+    )
+else:
+    print(timeout)
+PY
+}
+
+test_serial_budget_control_refuses_a_foreign_timeout_literal() {
+  local tmp rc declared fixture duplicate duplicate_copy
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-timeout.XXXXXX")
+  fm_write_serial_fixture "$tmp/ok" 1000
+
+  fixture="$tmp/ci.yml"
+  cp "$ROOT/.github/workflows/ci.yml" "$fixture"
+  fm_check_ci_serial_timeout_link "$fixture" diverge \
+    || fail "the workflow timeout link fixture must be made divergent"
+  set +e
+  fm_check_ci_serial_timeout_link "$fixture" >/dev/null 2>"$tmp/link.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse divergent values"
+  assert_grep 'disagrees with FM_SERIAL_TIMEOUT_MINUTES' "$tmp/link.err" \
+    "the workflow timeout link refusal must name both linked values"
+
+  duplicate="$tmp/duplicate.yml"
+  cp "$ROOT/.github/workflows/ci.yml" "$duplicate"
+  fm_check_ci_serial_timeout_link "$duplicate" duplicate \
+    || fail "the workflow timeout link fixture must gain a duplicate field"
+  set +e
+  fm_check_ci_serial_timeout_link "$duplicate" >/dev/null 2>"$tmp/duplicate.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse duplicate fields"
+  assert_grep 'expected 1 match, saw 2' "$tmp/duplicate.err" \
+    "the workflow timeout link refusal must identify ambiguous structure"
+
+  duplicate_copy="$tmp/duplicate-copy.yml"
+  cp "$ROOT/.github/workflows/ci.yml" "$duplicate_copy"
+  fm_check_ci_serial_timeout_link "$duplicate_copy" duplicate-copy \
+    || fail "the workflow timeout link fixture must gain a duplicate copied field"
+  set +e
+  fm_check_ci_serial_timeout_link "$duplicate_copy" >/dev/null 2>"$tmp/duplicate-copy.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse duplicate copied fields"
+  assert_grep 'expected 1 match, saw 2' "$tmp/duplicate-copy.err" \
+    "the workflow timeout link refusal must identify an ambiguous copied value"
+
+  declared=$(fm_check_ci_serial_timeout_link "$ROOT/.github/workflows/ci.yml") \
+    || fail "tests-portable-serial must pass its actual timeout to the budget check"
+
+  set +e
+  FM_SERIAL_TIMEOUT_MINUTES=$((declared + 5)) \
+    "$RUNNER" --check-budget "$tmp/ok"/shard-*.json >/dev/null 2>"$tmp/err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 2 ] || fail "a disagreeing timeout literal must refuse (exit 2), got $rc"
+  assert_grep 'reconcile both' "$tmp/err" "the refusal must ask for both to be reconciled"
+
+  # The workflow's own value must agree, so CI does not carry a latent refusal.
+  set +e
+  FM_SERIAL_TIMEOUT_MINUTES=$declared \
+    "$RUNNER" --check-budget "$tmp/ok"/shard-*.json >/dev/null 2>&1
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the timeout ci.yml declares must be the one the bounds assume, got $rc"
+
+  rm -rf "$tmp"
+  pass "serial budget control refuses a timeout literal that disagrees with its bounds"
+}
+
+# The shard count only protects the lane if the CI matrix actually runs every
+# shard the runner composes. These are two files and they drift silently.
+test_ci_matrix_runs_every_composed_serial_shard() {
+  local count matrix
+  count=$("$RUNNER" --list-lanes | grep -c '^portable-serial-[0-9]*of[0-9]*$')
+  matrix=$(grep -E '^ *shard: \[' "$ROOT/.github/workflows/ci.yml" | head -1 | grep -o '[0-9]\+' | wc -l | tr -d ' ')
+  [ "$matrix" = "$count" ] \
+    || fail "ci.yml runs $matrix serial shards but the runner composes $count"
+  pass "the CI serial matrix runs exactly the shards the runner composes"
+}
+
 test_list_all_exact_suite_coverage
 test_family_selection
 test_single_script_selection
@@ -686,3 +1249,9 @@ test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
 test_jobs_parallel_scheduler_and_failure_propagation
 test_aggregate_json
+test_serial_budget_control_verdicts
+test_serial_budget_control_catches_a_single_shard_near_the_tripwire
+test_serial_budget_control_reports_could_not_observe
+test_serial_budget_control_checks_the_partition_it_measured
+test_serial_budget_control_refuses_a_foreign_timeout_literal
+test_ci_matrix_runs_every_composed_serial_shard
