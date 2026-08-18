@@ -30,7 +30,7 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap preserves definitive outbound defect classification
 ```
 
-The 72 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases pass.
+The 73 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases pass.
 What follows is why that sentence is worth anything.
 
 The focused suites were re-run on 2026-08-17 at exact implementation head `3c21e711075a75daa930d186811144d675c6ca09` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
@@ -39,6 +39,7 @@ The same focused suites were re-run on 2026-08-18 at exact implementation head `
 The same focused suites were re-run on 2026-08-18 at exact implementation head `876a69c43cef4f9a47664231eeb701196d22dbf8` plus the review round below; the command exited 0 after the reconcile report-completeness and observed-artifact-naming controls were added.
 The same focused suites were re-run on 2026-08-18 at exact implementation head `617f794d8c34f874bc4fb81e15871abc2a4a99bb` plus the review round below; the command exited 0 after the bootstrap-deadline relay and defect-heading controls were added.
 The same focused suites were re-run on 2026-08-18 at exact implementation head `e32e4f7e87503ad56e8cc73e53cf21b77cf61e7b` plus the review round below; the command exited 0 after the two unemitted classification tokens were wired to the live sites that had been reporting under a neighbouring token.
+The same focused suites were re-run on 2026-08-18 at exact implementation head `e54aa8108c726e5ec9a31e0fc9983fd6e5314fdf` plus the review round below; the command exited 0 after the token-vocabulary control was added to enforce the block's own emit-site rule.
 
 ## Watched-red evidence, one mutation per control
 
@@ -171,6 +172,7 @@ Each row states what the control actually establishes and what it does not. A kn
 | `branch-inventory` | A completed ship `fm/<item>` branch with unlanded work and no exact-head pull request is a defect; non-ship work is skipped; unknown or conflicting work state is could-not-observe; landed work is excluded | Remove branch enumeration - the anchor returns to zero defects at exit 0 | Covers registered non-local-only projects and the `fm/<item>` namespace only; historical completion evidence is not bound to the current branch head |
 | `ambiguity-is-not-its-neighbour` | Several candidates and none choosable is classified as ambiguity, never as a misaddressed ruling or an unread forge: a comment with two ruling markers and an exact head with two open pull requests each name their count under the ambiguity token | Restore the neighbouring token at either site - observed red twice, `poll marker count: several candidates were not classified as ambiguous: FM_OUTBOUND_RULING_IDENTITY_MISMATCH: comment 570 carries 2 ruling marker lines` and the same assertion on the duplicate-head probe | Does not choose among the candidates; both sites still refuse and both still print their count, so only the label is under test |
 | `unreadable-archive-is-named` | An existing done-archive that cannot be read is reported as an unreadable archive, not as an unobserved work state, because one is a repairable fault and the other is an empty corpus | Return the generic gap code from the unreadable-archive branch - observed red, `archive unreadable: the unreadable archive was not named: outbound artifacts: 0 satisfied, 0 defect, 1 could-not-observe` | Root can read anything, so the case self-skips under uid 0; it does not cover an archive that reads but is truncated |
+| `declared-token-has-an-emitter` | Every `FM_OUTBOUND_TOKEN_*` declared in the lib's closed vocabulary is expanded somewhere in this module, and every violation is named in one failure | Declare two tokens that nothing emits - observed red, `token vocabulary: declared and never emitted: FM_OUTBOUND_TOKEN_PROBE_ONE FM_OUTBOUND_TOKEN_PROBE_TWO`; indenting the whole block out of the reader's sight - observed red, `no token declarations were read` | Bounded to this module's two files: it proves a token is expanded, not that the expansion reaches an operator, and it says nothing about declared vocabularies elsewhere in the repository |
 
 ## One recurrence, five instances: a canonical thing that exists and is not consulted
 
@@ -186,6 +188,8 @@ In each case the artifact existed, read correctly, and was not consulted - which
 The dead-predicate control catches the first two shapes and explicitly does not catch the last three; that boundary is stated in its own header rather than inferred.
 The fifth is the shape one level below the control's reach: it scans function definitions for call sites, so a CONSTANT that is declared and never emitted is outside its universe by construction.
 That instance was resolved by emitting both tokens rather than by deleting them, because a token whose condition is reachable and mislabelled is a reporting defect, and deleting it would have preserved the wrong label while removing the evidence that a better one was intended.
+It is also the only one of the five with a mechanical guard: the `declared-token-has-an-emitter` control above reads this module's declarations and refuses an unemitted one, so the rule the lib header states is enforced rather than re-verified by hand.
+That guard is deliberately module-local; the general form - every declared vocabulary in the repository - belongs with the dead-predicate control and is filed separately as `dead-token-detection`.
 
 ## Two standing laws this surface now applies
 

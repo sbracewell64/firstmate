@@ -1993,6 +1993,47 @@ test_forge_head_provenance_survives_record_lifecycle() {
   pass "forge record: provenance survives dedupe, sweep, ruling, and resume"
 }
 
+# --- vocabulary properties ----------------------------------------------------
+
+test_every_declared_token_has_an_emit_site() {
+  # The lib presents its FM_OUTBOUND_TOKEN_* block as the closed vocabulary of
+  # answers this mechanism can give, and its header states that every token in
+  # the block has an emit site. This is what makes that statement true rather
+  # than aspirational.
+  #
+  # Nothing else can check it. The dead-predicate control scans function
+  # definitions for call sites, so a CONSTANT that is declared and never
+  # expanded is outside its universe by construction, not by oversight - and two
+  # tokens were already dead this way while the conditions they name were being
+  # reported under a neighbouring token, so the classification was wrong rather
+  # than merely missing.
+  #
+  # Deliberately module-local: it reads THIS block out of THIS lib and searches
+  # only the two files that implement this mechanism. The general form - every
+  # declared vocabulary in the repository - belongs with the dead-predicate
+  # control and is filed separately as dead-token-detection.
+  local lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  local cmd="$ROOT/bin/fm-outbound-artifact.sh"
+  local names name count dead=
+  names=$(sed -n 's/^\(FM_OUTBOUND_TOKEN_[A-Z0-9_]*\)=.*/\1/p' "$lib")
+  # An empty vocabulary would pass the loop below while measuring nothing, which
+  # is the vacuous-control failure this suite exists to refuse.
+  [ -n "$names" ] \
+    || fail "token vocabulary: no token declarations were read from $lib, so this control measured nothing"
+  for name in $names; do
+    # An emit site is an EXPANSION - $NAME or ${NAME} - so a declaration can
+    # never satisfy its own check, and the trailing boundary keeps one token
+    # from being satisfied by a longer token that starts with its name.
+    grep -qE '\$\{?'"$name"'([^A-Za-z0-9_]|$)' "$lib" "$cmd" || dead="$dead $name"
+  done
+  # Every violation by name in one failure: a reader learns the full set from a
+  # single run rather than rediscovering it one token per run.
+  [ -z "$dead" ] \
+    || fail "token vocabulary: declared and never emitted:$dead"
+  count=$(printf '%s\n' "$names" | wc -l | tr -d ' ')
+  pass "token vocabulary: all $count declared tokens have an emit site"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
@@ -2067,5 +2108,6 @@ test_inventory_unreadable_archive_is_could_not_observe
 test_could_not_observe_has_its_own_section
 test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
+test_every_declared_token_has_an_emit_site
 
 printf '\nall fm-outbound-artifact tests passed\n'

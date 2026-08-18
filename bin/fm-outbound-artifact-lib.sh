@@ -165,6 +165,9 @@ superseded'
 # definitions, so it cannot see this: an unemitted constant is outside its
 # universe by construction. When a token has no emitter, decide whether the
 # condition is reachable and label it, rather than deleting the better name.
+# The rule is enforced, not merely stated: tests/fm-outbound-artifact.test.sh's
+# `token vocabulary` case reads these declarations and refuses any token this
+# module never expands.
 # shellcheck disable=SC2034  # contract constants consumed by sourcing callers
 {
 FM_OUTBOUND_TOKEN_NO_ARTIFACT=FM_OUTBOUND_NO_ARTIFACT
