@@ -1151,7 +1151,7 @@ PY
 }
 
 test_serial_budget_control_refuses_a_foreign_timeout_literal() {
-  local tmp rc declared fixture
+  local tmp rc declared fixture duplicate
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget-timeout.XXXXXX")
   fm_write_serial_fixture "$tmp/ok" 1000
 
@@ -1166,6 +1166,27 @@ test_serial_budget_control_refuses_a_foreign_timeout_literal() {
   [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse divergent values"
   assert_grep 'disagrees with FM_SERIAL_TIMEOUT_MINUTES' "$tmp/link.err" \
     "the workflow timeout link refusal must name both linked values"
+
+  duplicate="$tmp/duplicate.yml"
+  cp "$ROOT/.github/workflows/ci.yml" "$duplicate"
+  python3 - "$duplicate" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+needle = "    timeout-minutes: 15\n"
+if text.count(needle) != 1:
+    raise SystemExit("portable serial timeout fixture is not unique")
+path.write_text(text.replace(needle, needle + needle), encoding="utf-8")
+PY
+  set +e
+  fm_check_ci_serial_timeout_link "$duplicate" >/dev/null 2>"$tmp/duplicate.err"
+  rc=$?
+  set -e
+  [ "$rc" -ne 0 ] || fail "the workflow timeout link check must refuse duplicate fields"
+  assert_grep 'expected 1 match, saw 2' "$tmp/duplicate.err" \
+    "the workflow timeout link refusal must identify ambiguous structure"
 
   declared=$(fm_check_ci_serial_timeout_link "$ROOT/.github/workflows/ci.yml") \
     || fail "tests-portable-serial must pass its actual timeout to the budget check"
