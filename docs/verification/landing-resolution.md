@@ -6,7 +6,7 @@ This record holds the evidence that the exercised landing-library entry points n
 
 [`../../bin/fm-landed-lib.sh`](../../bin/fm-landed-lib.sh) owns the contract, the exit-status vocabulary, and the rule that a proven negative needs a successful read.
 [`../../tests/fm-landed-lib.test.sh`](../../tests/fm-landed-lib.test.sh) owns the controls, including the class control that sweeps every read by index.
-The exercised consumer directions are owned by [`../../tests/fm-teardown.test.sh`](../../tests/fm-teardown.test.sh) case (w2), [`../../tests/fm-worktree-guard.test.sh`](../../tests/fm-worktree-guard.test.sh) case (o9), and [`../../tests/fm-task-base.test.sh`](../../tests/fm-task-base.test.sh).
+The exercised consumer directions are owned by [`../../tests/fm-teardown.test.sh`](../../tests/fm-teardown.test.sh) case (w2), [`../../tests/fm-worktree-guard.test.sh`](../../tests/fm-worktree-guard.test.sh) case (o9), [`../../tests/fm-task-base.test.sh`](../../tests/fm-task-base.test.sh), and [`../../tests/fm-slot-reservation.test.sh`](../../tests/fm-slot-reservation.test.sh) cases (6) and (20) through (22).
 
 Verified on 2026-08-17 with git 2.53.0 and ShellCheck 0.11.0 on Linux 6.18.33.2-microsoft-standard-WSL2.
 Re-run the commands below rather than trusting the recorded output.
@@ -85,6 +85,8 @@ Established per consumer rather than assumed, because the safe direction is not 
 | [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_upstream_ref` | report `unresolved` | unread remotes cannot justify collapsing the slot and contribution bases |
 | [`../../bin/fm-task-base-lib.sh`](../../bin/fm-task-base-lib.sh) `task_base_venue` | refuse | an unread push url cannot be replaced with the fetch url without potentially naming the wrong forge |
 | [`../../bin/fm-decision-surface.sh`](../../bin/fm-decision-surface.sh) | delegate to the landing owner | the surface names the library as owner and does not call it directly |
+| [`../../bin/fm-slot-reservation-lib.sh`](../../bin/fm-slot-reservation-lib.sh) `fm_slot_reservation_read` | report `unobservable` and withhold nothing | a candidate universe read short cannot support the negative that the trunk has not moved, and a slot withheld on a reservation nobody can read is the permanent hold that record exists to avoid |
+| [`../../bin/fm-slot-reservation.sh`](../../bin/fm-slot-reservation.sh) `open --trunk-ref` | refuse the ref | a ref whose membership in the landing set was never established would record a head no candidate ref can be shown to have advanced past |
 
 The `bin/fm-outbound-artifact.sh` pass named alongside these consumers was never renamed, has never existed in this branch's history, and exists only on the unlanded sibling branch `fm/control-plane-outbound-transport-invariant`.
 

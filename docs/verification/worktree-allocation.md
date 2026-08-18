@@ -2,11 +2,11 @@
 
 Audience: maintainer verification.
 
-This record supports the pre-allocation guard in `bin/fm-worktree-guard.sh` and its call site in `bin/fm-spawn.sh`.
-It records only the treehouse behavior the guard's placement and shape depend on, so a treehouse version bump can be re-checked against it.
+This record supports the pre-allocation guard in `bin/fm-worktree-guard.sh`, its call site in `bin/fm-spawn.sh`, and the slot reservation that guard applies (`bin/fm-slot-reservation.sh`, `bin/fm-slot-reservation-lib.sh`, `bin/fm-pool-lib.sh`).
+It records the treehouse behavior the guard's placement and shape depend on, so a treehouse version bump can be re-checked against it, and the properties that reservation must keep.
 Incident chronology and delivery evidence stay in private reports or PR evidence.
 
-The regression coverage is `tests/fm-worktree-guard.test.sh`.
+The regression coverage is `tests/fm-worktree-guard.test.sh`, plus `tests/fm-slot-reservation.test.sh` for the reservation.
 
 ## Why the guard runs before `treehouse get`, not after
 
