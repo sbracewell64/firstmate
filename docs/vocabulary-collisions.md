@@ -19,7 +19,7 @@ The vocabulary of this column follows the platform's Register 3 precedent.
 
 ## Rows
 
-Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal.
+Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation`, ruled on 2026-08-18 when its second sense was built.
 
 ### `axi`
 
@@ -159,6 +159,27 @@ Its retirement condition is therefore: **stop writing `kind=`, migrate the `acti
 Until then it is a dual-written deprecated alias with exactly one owner, and a metadata record whose `kind=` disagrees with its explicit axes is refused rather than silently resolved, so a stale writer that flips the old field alone cannot desynchronize a task's identity.
 
 **Where it bites:** [`bin/fm-task-axis-lib.sh`](../bin/fm-task-axis-lib.sh); the metadata field list in [`AGENTS.md`](../AGENTS.md) section 2; [`docs/architecture.md`](architecture.md); the `active_workers.count` evidence detail in [`bin/fm-admission.sh`](../bin/fm-admission.sh); the `kind` wire fields of [`bin/fm-fleet-snapshot.sh`](../bin/fm-fleet-snapshot.sh) and [`bin/fm-bearings-snapshot.sh`](../bin/fm-bearings-snapshot.sh).
+
+### `reservation`
+
+| | |
+|---|---|
+| **Disposition** | QUALIFY |
+| **Admission sense** | admission control's distributed reservations - the `reservations` policy key and the `reservation_pressure` signal, owned by [`bin/fm-admission-lib.sh`](../bin/fm-admission-lib.sh) and documented in [`docs/configuration.md`](configuration.md), dormant until a second intake authority or a remote node registers |
+| **Slot sense** | one queued trunk repair holding the NEXT free worktree slot in a pool, owned by [`bin/fm-slot-reservation-lib.sh`](../bin/fm-slot-reservation-lib.sh) and applied by [`bin/fm-worktree-guard.sh`](../bin/fm-worktree-guard.sh) |
+
+NO-CONTACT was not available, and the measurement says why.
+[`bin/fm-spawn.sh`](../bin/fm-spawn.sh) is the contact point: one dispatch consults admission through `spawn_admission_gate` and the slot reservation through `fm-worktree-guard.sh select --for`, both in the same allocation path and both before anything is allocated, so the two senses meet at one decision point in one file.
+The resemblance is not superficial either, which is what makes the confusion durable rather than passing: both senses carry a TTL and stated release conditions, so a reader who knows one of them recognizes the shape of the other and reads the wrong owner.
+
+Write `admission reservation` for the first sense and `slot reservation` for the second.
+Bare `reservation` is unacceptable in either sense wherever both could be meant.
+
+The dormant admission config keys are exempt, because this is a writing rule and not a migration.
+Do not rename `reservations`, `reservation_pressure`, or any policy key, and do not touch the schema in [`docs/configuration.md`](configuration.md).
+Nothing in the slot sense is renamed either: `FM_SLOT_RESERVATION_*`, `fm_slot_reservation_*`, `reservation-<key>.state`, and the `reservation[1]{...}` record already carry `slot` in their own names or paths.
+
+**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 7; the slot-reservation rows of [`docs/scripts.md`](scripts.md); the slot-reservation section of [`docs/verification/worktree-allocation.md`](verification/worktree-allocation.md); the admission paragraph of [`docs/architecture.md`](architecture.md); the operator-facing refusals of [`bin/fm-worktree-guard.sh`](../bin/fm-worktree-guard.sh) and [`bin/fm-slot-reservation.sh`](../bin/fm-slot-reservation.sh).
 
 ## Maintaining this file
 

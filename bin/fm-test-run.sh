@@ -432,6 +432,12 @@ list_portable_serial() {
 # only: the shard partition stays complete and disjoint whatever they say, so a
 # stale hint costs balance rather than coverage. That doc owns the refresh
 # procedure.
+#
+# A suite added since the last artifact is seeded from a local measurement of
+# that suite rather than left on PORTABLE_SERIAL_DEFAULT_WEIGHT_MS, because the
+# default is a mean and a suite far above it packs onto an already-loaded shard
+# every run. The next refresh replaces the whole table from CI, which is where a
+# hint's authoritative value comes from.
 portable_serial_weight_hints() {
   cat <<'EOF'
 tests/fm-admission.test.sh 9068
@@ -523,6 +529,7 @@ tests/fm-session-lock-ancestry.test.sh 1216
 tests/fm-session-start.test.sh 66070
 tests/fm-sessionstart-nudge.test.sh 274
 tests/fm-shared-captain-inheritance.test.sh 4615
+tests/fm-slot-reservation.test.sh 31683
 tests/fm-spawn-dispatch-profile.test.sh 51982
 tests/fm-spawn-worktree-settle.test.sh 13775
 tests/fm-startup-memory-budget.test.sh 6509

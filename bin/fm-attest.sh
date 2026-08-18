@@ -1039,6 +1039,25 @@ cmd_write() {
   status_err=$(cat "$status_err_file" 2>/dev/null || true)
   rm -f "$status_err_file" 2>/dev/null || true
 
+  # A tool that refused is judged before a tool that exited non-zero, because
+  # the two are not the same set: the tool writes its refusal to stdout and does
+  # not always exit non-zero for one, and `repo not initialized` - the state of
+  # every checkout the pipeline was never set up in - exits 0 with that line and
+  # nothing else. Read only from the exit status, such a refusal reaches the
+  # unparsed-record refusal below, which says this transcription needs updating.
+  # That sends a reader to repair a transcription that was never broken, over a
+  # tool that was never asked about a run, and they hit the identical message
+  # again: the exact class of mistake this file's error model exists to prevent.
+  # The refusal is read through bin/fm-nm-run-lib.sh, which owns this tool's
+  # output shape, and is quoted back in the tool's own words.
+  status_error=$(fm_nm_error_line "$status")
+  [ -z "$status_error" ] || refuse run-record-unreadable \
+    "no-mistakes reported an error instead of a pipeline run: $status_error" \
+    "It exited $status_rc." \
+    "Its stdout: ${status:-(nothing)}" \
+    "Its stderr: ${status_err:-(nothing)}" \
+    "That is a tool or setup failure rather than a missing run; fix it and re-run." \
+    "A checkout the pipeline was never set up in reports exactly this, so attest from the checkout it validated rather than from one it has never run in."
   [ "$status_rc" -eq 0 ] || refuse run-record-unreadable \
     "no-mistakes exited $status_rc instead of reporting a pipeline run." \
     "Its stdout: ${status:-(nothing)}" \

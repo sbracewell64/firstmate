@@ -75,13 +75,29 @@
 # live process whose cwd is inside the slot. Only when none of them holds does
 # a mismatched identity read "dead".
 #
+# THE ONE SLOT A QUEUED TRUNK REPAIR MAY BE HELD
+# A pool may carry one SLOT RESERVATION, which withholds a single demonstrably
+# empty slot from everything except the one task it names. The qualifier is
+# required rather than decorative: admission control's `reservations` are a
+# different thing under the same word, and docs/vocabulary-collisions.md owns
+# that ruling. bin/fm-slot-reservation-lib.sh owns this record, what may open
+# one, and its release conditions; this file only applies it, and applies it
+# strictly AFTER the emptiness test above, so a slot reservation can never hand
+# out a slot this guard would otherwise have refused and never touches a running
+# lane. It withholds ONE slot, so a pool with a second empty slot still hands
+# that one to ordinary work.
+#
+# A call that names no task is an inspection, not an allocation. It reports the
+# slot reservation and withholds nothing, because a caller that is not taking a
+# slot cannot be the holder and denying it would deny the holder its own slot.
+#
 # Usage:
-#   fm-worktree-guard.sh check <project-dir>
+#   fm-worktree-guard.sh check <project-dir> [--for <task-id>]
 #       Exit 0 when the pool can be allocated from safely: some available slot
 #       is demonstrably empty, or every available slot that is not is covered by
 #       explicit operator authority. Exit 1 with an actionable per-slot refusal
 #       on stderr otherwise.
-#   fm-worktree-guard.sh select <project-dir>
+#   fm-worktree-guard.sh select <project-dir> [--for <task-id>]
 #       The same decision as `check`, and on success additionally print
 #       "<slot-name><TAB><worktree-path>" for the demonstrably empty slot the
 #       caller should acquire by name. Prints nothing when the pool offers no
@@ -90,6 +106,10 @@
 #       Print the worktree_owner_pid= and worktree_owner_identity= meta lines
 #       for an accepted worktree. Both values are empty when no occupant is
 #       resolvable, which reads UNRESOLVED at check time.
+#   --for <task-id> names the task the allocation is for. It is what a held slot
+#       reservation is matched against, and `select` consumes that reservation
+#       at the moment it hands that task the slot. Without it no slot is
+#       withheld.
 #
 # FM_WORKTREE_RECLAIM_OK=<path>[:<path>...] is explicit operator authority for
 # exactly the listed worktree paths. It is path-scoped on purpose so it cannot
@@ -103,6 +123,10 @@ FM_GUARD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 . "$FM_GUARD_DIR/fm-backend.sh"
 # shellcheck source=bin/fm-landed-lib.sh
 . "$FM_GUARD_DIR/fm-landed-lib.sh"
+# shellcheck source=bin/fm-pool-lib.sh
+. "$FM_GUARD_DIR/fm-pool-lib.sh"
+# shellcheck source=bin/fm-slot-reservation-lib.sh
+. "$FM_GUARD_DIR/fm-slot-reservation-lib.sh"
 
 usage() {
   awk '/^# Usage:/ { on = 1 } on { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' \
@@ -465,16 +489,109 @@ slot_refusal_block() {  # <name> <worktree-real> <evidence>
   esac
 }
 
+# Apply this pool's slot reservation to the empty slots the pool offered, and
+# print the slot the caller may take on RESERVATION_GRANT. Exit 1 when the
+# reservation withholds the only empty slot from this caller.
+#
+# Every input is passed in rather than read out of the caller's locals: a
+# function that reaches into its caller's scope reads a stale or empty value the
+# moment the caller renames or reorders a variable, and here that would silently
+# hand out a withheld slot.
+#
+# The three-valued read is the point of this function's shape. "No reservation"
+# and "the reservation could not be read" reach DIFFERENT branches with different
+# output, and neither is allowed to become the other: an absent reservation is
+# silent because nothing is being withheld, while an unobservable one withholds
+# nothing AND says so, because a slot silently withheld on a record nobody can
+# read is exactly the invisible permanent hold this design exists to prevent.
+RESERVATION_GRANT=
+reservation_apply() {  # <mode> <pool-real> <requester> <chosen> <chosen-second>
+  local mode=$1 pool=$2 requester=$3 first=$4 second=$5 now
+  RESERVATION_GRANT=$first
+  now=$(date +%s 2>/dev/null) || now=
+  fm_slot_reservation_read "$pool" "$now"
+  case "$FM_SLOT_RESERVATION_STATE" in
+    absent)
+      return 0
+      ;;
+    released)
+      printf 'worktree guard: the slot reserved for %s is no longer held (%s: %s); this pool allocates normally\n' \
+        "$FM_SLOT_RESERVATION_TASK" "$FM_SLOT_RESERVATION_REASON" "$FM_SLOT_RESERVATION_DETAIL" >&2
+      return 0
+      ;;
+    unobservable)
+      printf 'worktree guard: this pool'"'"'s slot reservation could not be observed (%s: %s). No slot is withheld. This is a reservation that could not be read, which is not the same fact as no reservation.\n' \
+        "$FM_SLOT_RESERVATION_REASON" "$FM_SLOT_RESERVATION_DETAIL" >&2
+      return 0
+      ;;
+  esac
+  # Held from here on.
+  if [ -z "$requester" ]; then
+    printf 'worktree guard: this pool holds a slot for %s (%s); nothing is withheld from a call that names no task\n' \
+      "$FM_SLOT_RESERVATION_TASK" "$FM_SLOT_RESERVATION_DETAIL" >&2
+    return 0
+  fi
+  if [ "$requester" = "$FM_SLOT_RESERVATION_TASK" ]; then
+    # The reservation has done its whole job the moment its holder is handed the
+    # slot, so `select` - the mode that actually hands one over - consumes it
+    # here. `check` decides nothing and consumes nothing.
+    if [ "$mode" = select ]; then
+      "$FM_GUARD_DIR/fm-slot-reservation.sh" claim "$requester" --project "$pool" >/dev/null 2>&1 \
+        || printf 'worktree guard: %s was handed its reserved slot, but the slot reservation could not be consumed; it keeps withholding a slot until it expires\n' \
+             "$requester" >&2
+    fi
+    printf 'worktree guard: handing %s the slot reserved for it (%s)\n' \
+      "$requester" "$FM_SLOT_RESERVATION_DETAIL" >&2
+    return 0
+  fi
+  if [ -n "$second" ]; then
+    RESERVATION_GRANT=$second
+    return 0
+  fi
+  RESERVATION_GRANT=
+  {
+    echo "error: refusing to spawn - this pool's only empty slot is reserved for $FM_SLOT_RESERVATION_TASK."
+    printf '  reserved: %s\n' "$FM_SLOT_RESERVATION_DETAIL"
+    printf '  admitted by: %s reporting FAIL (evidence %s)\n' \
+      "${FM_SLOT_RESERVATION_VERIFIER:-an unrecorded verifier}" \
+      "${FM_SLOT_RESERVATION_EVIDENCE:-none recorded}"
+    # The strength of that admission, beside it, because an operator denied a
+    # slot is owed how strong the evidence that denied them was. The vocabulary
+    # is bin/fm-slot-reservation-lib.sh's; a held reservation always carries a
+    # valid one, since a record that does not reads unreadable_record.
+    printf '  evidence tier: %s\n' "$FM_SLOT_RESERVATION_EVIDENCE_TIER"
+    echo "    Nothing was reset, cleaned, or discarded, and no running lane was touched. This spawn simply did not run."
+    echo "    The slot reservation releases when $FM_SLOT_RESERVATION_TASK takes the slot, when the trunk advances past $FM_SLOT_RESERVATION_TRUNK_HEAD on any of its landing refs, or when it expires."
+    echo "    Release it early only if that repair is no longer wanted:"
+    echo "      bin/fm-slot-reservation.sh release --project $pool --for $FM_SLOT_RESERVATION_TASK"
+    echo "    Run this guard's check with no --for to see the rest of the pool."
+  } >&2
+  return 1
+}
+
 # The pool decision, shared by `check` and `select` so the policy has one owner.
 # With <mode> = select, the chosen slot is printed to stdout.
-cmd_pool() {  # <mode> <project-dir>
+cmd_pool() {  # <mode> <project-dir> [--for <task-id>]
   local mode proj proj_real raw total rows refusals=0 name path wt evidence
-  local chosen='' report='' authorized=''
+  local chosen='' chosen_second='' report='' authorized='' requester=''
 
   mode=$1
   shift
-  [ $# -eq 1 ] || { usage >&2; return 2; }
+  [ $# -ge 1 ] || { usage >&2; return 2; }
   proj=$1
+  shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --for)
+        # An option with no value refuses rather than `shift 2 || true`: that
+        # shift fails without consuming anything, so this loop never advances.
+        [ $# -ge 2 ] || { usage >&2; return 2; }
+        requester=$2
+        shift 2
+        ;;
+      *) usage >&2; return 2 ;;
+    esac
+  done
   if ! proj_real=$(cd "$proj" 2>/dev/null && pwd -P); then
     echo "error: worktree guard cannot read project directory '$proj'" >&2
     return 1
@@ -539,8 +656,14 @@ cmd_pool() {  # <mode> <project-dir>
     # only a refusal if no empty slot is found anywhere in the pool, and pool
     # order decides nothing.
     if ! evidence=$(worktree_evidence "$wt"); then
-      if [ -z "$chosen" ] && slot_parked_shape "$name" "$wt"; then
-        chosen=$(printf '%s\t%s' "$name" "$wt")
+      # Two empty slots are remembered, not one: a reservation withholds a
+      # single slot, so ordinary work still needs the next one to be reachable.
+      if slot_parked_shape "$name" "$wt"; then
+        if [ -z "$chosen" ]; then
+          chosen=$(printf '%s\t%s' "$name" "$wt")
+        elif [ -z "$chosen_second" ]; then
+          chosen_second=$(printf '%s\t%s' "$name" "$wt")
+        fi
       fi
       continue
     fi
@@ -558,7 +681,8 @@ EOF
   # way: an occupied one is skipped untouched rather than reset or refused, and
   # authority no operator had to give is neither needed nor announced.
   if [ -n "$chosen" ]; then
-    [ "$mode" = select ] && printf '%s\n' "$chosen"
+    reservation_apply "$mode" "$proj_real" "$requester" "$chosen" "$chosen_second" || return 1
+    [ "$mode" = select ] && printf '%s\n' "$RESERVATION_GRANT"
     return 0
   fi
 
@@ -573,6 +697,9 @@ EOF
       printf '%s' "$report"
       echo "    Nothing was reset, cleaned, or discarded. This spawn simply did not run."
       echo "    Authorize one exact slot with FM_WORKTREE_RECLAIM_OK=<worktree-path> only after its work is safe."
+      echo "    If this refused dispatch is a trunk repair, hold the NEXT slot to free for it rather than racing later dispatches for one:"
+      echo "      bin/fm-slot-reservation.sh open <task-id> --project $proj_real --verdict <bin/fm-verify.sh record>"
+      echo "    That creates no capacity and preempts nothing; it only decides who the next empty slot goes to."
     } >&2
     return 1
   fi

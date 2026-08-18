@@ -318,7 +318,7 @@ Codex App support is recorded in `docs/codex-app-backend.md`; it is not selectab
 ## Worktrees, not branches in your checkout
 
 Crewmates never intentionally touch your project clone; [treehouse](https://github.com/kunchenguid/treehouse) pools clean worktrees for tmux, herdr, zellij, and cmux tasks, while Orca creates its own worktrees for `backend=orca`.
-Before asking Treehouse to allocate, `fm-spawn.sh` inspects the slots Treehouse reports available, enters a demonstrably empty one by name while skipping occupied slots, and refuses only when no available slot is demonstrably empty; [`verification/worktree-allocation.md`](verification/worktree-allocation.md) owns the supporting Treehouse behavior and regression entry point.
+Before asking Treehouse to allocate, `fm-spawn.sh` inspects the slots Treehouse reports available, enters a demonstrably empty one by name while skipping occupied slots, and refuses when no available slot is demonstrably empty, or when the pool's one empty slot is reserved for a queued trunk repair; [`verification/worktree-allocation.md`](verification/worktree-allocation.md) owns the supporting Treehouse behavior and regression entry point.
 For ship and scout work, `fm-spawn.sh` refuses to launch unless the resolved task path is a real git worktree root that is distinct from the project primary checkout.
 Each reusable clean task worktree is placed at the project's local default-branch tip so reads and citations match the code the fleet runs, while a ship branch may be cut from a distinct contribution target such as an upstream trunk so fleet-only commits do not enter the contribution.
 [`bin/fm-task-base-lib.sh`](../bin/fm-task-base-lib.sh) owns resolution of those two references and the branch-pollution guard, and `fm-spawn.sh` records the resolved pair in task metadata.
@@ -377,7 +377,7 @@ The mechanism is deliberately small.
 `bin/fm-admission.sh` composes the existing read-only fleet snapshot into named signals, each with its own validity, and combines them into a `preferred`, `soft`, or `hard` band whose every threshold and mapping is read from configuration.
 Missing or contradictory required evidence maps to the configured `unknown_band` rather than resolving to `preferred`.
 Backlog consistency is a separate signal from worker-census integrity, because a backlog row that contradicts task metadata is a bookkeeping fault to repair, not evidence that the fleet is physically saturated, and one aggregate health bit would close the fleet for the wrong reason.
-The existing per-home session lock is the single-primary admission authority, so admission adds no process, daemon, reservation store, or second queue: admission-deferred and admission-refused requests stay in the owning backlog under a `load` hold, and admission is re-examined at exactly two existing seams, successful cleanup and session start.
+The existing per-home session lock is the single-primary admission authority, so admission adds no process, daemon, admission reservation store, or second queue: admission-deferred and admission-refused requests stay in the owning backlog under a `load` hold, and admission is re-examined at exactly two existing seams, successful cleanup and session start.
 
 Nothing numeric enforces.
 Only the deterministic safety conditions - admission authority, census integrity, and snapshot freshness - can set a band, and the schema refuses a configuration that tries to enable a threshold whose predictive value is unmeasured.

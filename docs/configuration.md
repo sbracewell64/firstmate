@@ -86,7 +86,8 @@ For spawn-capable adapters, the runtime session-provider backend controls where 
 Treehouse remains the worktree provider for tmux, herdr, zellij, and cmux, since herdr, zellij, and cmux are session providers only; Orca provides both the task worktree and terminal endpoint.
 Every Treehouse-backed crewmate or scout spawn inspects Treehouse's pool status before allocation, and allocates only a pool slot that is demonstrably empty.
 It prefers `treehouse status --json`, which needs `jq`; on Treehouse builds older than v2.1.0, which have no `--json` flag, it reads the human-readable table instead and needs no `jq`.
-A slot that still holds work is skipped, by entering the chosen empty slot by name; the spawn is refused only when no available slot is empty, because `treehouse get` would then hand out one of them.
+A slot that still holds work is skipped, by entering the chosen empty slot by name; the spawn is refused when no available slot is empty, because `treehouse get` would then hand out one of them.
+A pool can additionally hold its next free slot for one queued trunk repair, so any dispatch other than the one task that hold names is refused that slot until the holder takes it or the hold releases; `bin/fm-slot-reservation.sh` owns opening, reading, and releasing one.
 The guard never releases, resets, or cleans a slot, and leaves release decisions to `fm-teardown.sh`; [`verification/worktree-allocation.md`](verification/worktree-allocation.md) owns the empirical Treehouse behavior behind that boundary.
 New spawns choose the backend in this order: an explicit `--backend` flag that current authority for that exact task alone has authorized (a present captain instruction or the task's own accepted brief; never later-task precedent by analogy), then `FM_BACKEND`, then the first non-empty line of local gitignored `config/backend`, then runtime auto-detection from `$TMUX`, `HERDR_ENV=1`, or cmux runtime signals, then default `tmux`.
 If more than one runtime marker is present, detection resolves innermost-first: `$TMUX` is checked before `HERDR_ENV=1`, which is checked before cmux's primary `CMUX_WORKSPACE_ID` marker and its documented fallback signals - tmux or herdr started from inside a cmux terminal is the innermost, currently-executing layer, while cmux itself (a terminal application, not a nestable multiplexer) is always checked last.
@@ -910,7 +911,7 @@ When a limit is configured and the snapshot's age cannot be measured, the freshn
 `coordination_debt`, `host_resources`, and `reservation_pressure` have no collector in this home yet and must stay `enabled: false`; enabling one would record an invented value instead of an observation.
 
 `authority` accepts only `mode: "single-primary"`.
-The existing per-home session lock supplies that authority, so admission adds no new process, daemon, or reservation store; a session that does not hold the lock is not the admission authority and gets `unreachable_band`.
+The existing per-home session lock supplies that authority, so admission adds no new process, daemon, or admission reservation store; a session that does not hold the lock is not the admission authority and gets `unreachable_band`.
 `reservations` must stay disabled until a second intake authority or a remote node is registered; its durations exist so the distributed contract is settled in advance, not so it can be switched on early.
 `queue` pins the substrate and the two release triggers, and names the known already-empty-fleet gap that is deliberately left to session start rather than cured with a timer.
 `telemetry` names the sink for decision records; while admission is enabled, `record_every_decision` and `credentials_forbidden` must both be true.
@@ -1193,6 +1194,8 @@ FM_CERTIFY_PR_VERIFIER= # alternate pull-request check verifier, default bin/fm-
 FM_CERTIFY_LEDGER=      # alternate terminal-record reader, default bin/fm-wake-ledger.sh; read for a task whose task-local state teardown already removed (bin/fm-certify.sh)
 FM_LOCK_STALE_AFTER=2   # seconds before dead-pid lock records can be reclaimed; mid-acquire locks keep at least 2s grace
 FM_SPAWN_POOL_LOCK_POLLS=1200   # 0.1s attempts fm-spawn.sh waits for the cross-home worktree pool slot-selection lock before refusing the spawn
+FM_SLOT_RESERVATION_LOCK_POLLS=1200   # 0.1s attempts fm-slot-reservation.sh open waits for that same pool slot-selection lock before refusing with could-not-observe (bin/fm-slot-reservation.sh)
+FM_POOL_NAMESPACE_DIR=  # alternate root for one worktree pool's machine-private state, default /tmp/firstmate-worktree-pool; it changes where, never whether, since the same this-user mode-700 validation runs against the override (bin/fm-pool-lib.sh)
 FM_GUARD_GRACE=300      # seconds before guard warnings, arm health checks, and the primary turn-end guard treat a watcher beacon as stale
 FM_CLAUDE_AUTOARM_ATTEMPTS=2   # bounded Stop-owned arm attempts per Claude auto-arm cycle; accepted values are 1, 2, or 3
 FM_CLAUDE_AUTOARM_SYNC_WAIT_MS=800   # milliseconds the --claude turn-end guard waits for watcher health, a role-verified Stop auto-arm claim, or a fresh epoch before deciding recovery ownership or failure progression
