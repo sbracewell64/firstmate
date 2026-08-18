@@ -167,7 +167,7 @@ record_identity_cno() { printf '%s\n' "$FM_OUTBOUND_IDENTITY_CNO"; }
 # caller then cannot tell a foreign record from an unreadable one, and those need
 # different repairs.
 record_identity_verdict() {  # <record-json> <expected-id>
-  local raw=$1 expected=$2 state stored gate project repo item pr head computed
+  local raw=$1 expected=$2 state stored gate project repo item pr head head_source computed
   printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
     '.schema == $s' >/dev/null 2>&1 || { record_identity_cno; return 0; }
   state=$(printf '%s' "$raw" | jq -er '.state // empty') || { record_identity_cno; return 0; }
@@ -179,9 +179,12 @@ record_identity_verdict() {  # <record-json> <expected-id>
   item=$(printf '%s' "$raw" | jq -er '.identity.item // empty') || { record_identity_cno; return 0; }
   pr=$(printf '%s' "$raw" | jq -r '.identity.pr // "-"') || { record_identity_cno; return 0; }
   head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || { record_identity_cno; return 0; }
+  head_source=$(printf '%s' "$raw" | jq -r '.identity.head_source // ""') \
+    || { record_identity_cno; return 0; }
+  case $head_source in ""|declared|forge|local) ;; *) record_identity_cno; return 0 ;; esac
   # An identity that cannot be bound cannot be compared: that is an absent
   # identity, not one naming something else.
-  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" \
+  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" \
     >/dev/null 2>&1 || { record_identity_cno; return 0; }
   computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head") \
     || { record_identity_cno; return 0; }
@@ -647,7 +650,7 @@ sweep() {
       present=$(pr_artifact_present "$venue" "$head"); rc=$?
     else
       existing=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$repo" \
-        "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+        "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
       present=$(sol_artifact_present "$rid" "$existing"); rc=$?
       if [ "$rc" -eq 0 ]; then
         if existing=$(record_read "$rid"); then
@@ -881,7 +884,7 @@ cmd_emit() {
 
   if [ "$dry" = "1" ]; then
     record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-      "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+      "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
     fm_outbound_request_body "$record" "$rationale"
     return 0
   fi
@@ -906,7 +909,7 @@ cmd_emit() {
   # and the crash-recovery path, because they are the same question: does an
   # artifact carrying this id already exist?
   record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-    "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+    "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
   found=$(sol_artifact_present "$rid" "$record"); dedupe_rc=$?
   if [ "$dedupe_rc" -eq 0 ]; then
     existing=$(record_read "$rid"); record_rc=$?
@@ -937,7 +940,7 @@ cmd_emit() {
     case $record_rc in
       1)
         record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-          "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)")
+          "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
         ;;
       5) die "$FM_OUTBOUND_TOKEN_IDENTITY: correlation record $rid belongs to another request" 3 ;;
       *) die "$FM_OUTBOUND_TOKEN_UNREADABLE: correlation record $rid could not be validated" 4 ;;

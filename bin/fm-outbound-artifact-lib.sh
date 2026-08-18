@@ -493,18 +493,19 @@ fm_outbound_applicability() {  # <stored-head> <observed-head> <record-state>
 
 # --- record construction -----------------------------------------------------
 
-fm_outbound_record_new() {  # <id> <gate> <channel> <project> <repo> <item> <pr> <head> <venue> <now>
+fm_outbound_record_new() {  # <id> <gate> <channel> <project> <repo> <item> <pr> <head> <venue> <now> [<head-source>]
   jq -n \
     --arg schema "$FM_OUTBOUND_RECORD_SCHEMA" \
     --arg request_id "$1" --arg gate "$2" --arg channel "$3" \
     --arg project "$4" --arg repo "$5" --arg item "$6" \
     --arg pr "$7" --arg head "$8" --arg venue "$9" --arg now "${10}" \
+    --arg head_source "${11:-}" \
     '{schema:$schema,
       request_id:$request_id,
       channel:$channel,
       identity:{gate:$gate,project:$project,repo:$repo,item:$item,
                 pr:(if $pr == "" or $pr == "-" then null else $pr end),
-                head:$head},
+                head:$head,head_source:$head_source},
       venue:$venue,
       state:"emitting",
       comment_id:null,

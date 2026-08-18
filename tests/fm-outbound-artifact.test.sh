@@ -1542,6 +1542,31 @@ test_forge_observed_head_need_not_exist_locally() {
   pass "forge head: authoritative PR heads keep strict width without local resolution"
 }
 
+test_forge_head_provenance_survives_record_lifecycle() {
+  local dir remote_head rid rec out rc
+  dir=$(new_case forge-record-head)
+  remote_head=$(printf '%040d' 0 | tr 0 d)
+  set_head "$dir" "$remote_head"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+    || fail "forge record: initial emit rejected the unfetched PR head"
+  rid=$(emitted_request_id "$dir")
+  rec=$(run_ob "$dir" show "$rid") \
+    || fail "forge record: persisted correlation could not be reread"
+  [ "$(printf '%s' "$rec" | jq -r '.identity.head_source')" = forge ] \
+    || fail "forge record: persisted correlation lost forge provenance"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] && printf '%s' "$out" | grep -q 'already requested' \
+    || fail "forge record: deduplication could not reread the correlation: $out"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "forge record: sweep rejected the correlation: $out"
+  write_ruling "$dir" "$rid" 556
+  run_ob "$dir" ruling --request "$rid" --comment 556 --issue 2 >/dev/null 2>&1 \
+    || fail "forge record: ruling could not reread the correlation"
+  run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 \
+    || fail "forge record: resume could not reread the correlation"
+  pass "forge record: provenance survives dedupe, sweep, ruling, and resume"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
@@ -1602,5 +1627,6 @@ test_untyped_gate_is_reported_as_untyped
 test_identity_binds_every_named_axis
 test_binding_refuses_a_vague_head
 test_forge_observed_head_need_not_exist_locally
+test_forge_head_provenance_survives_record_lifecycle
 
 printf '\nall fm-outbound-artifact tests passed\n'
