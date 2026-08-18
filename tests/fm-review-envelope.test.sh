@@ -1522,7 +1522,7 @@ PY
 }
 
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading() {
-  local case_dir seam prepare_pid prepare_code seam_polls seam_deadline_seconds
+  local case_dir seam seam_dir prepare_pid prepare_code seam_polls seam_deadline_seconds
   seam_deadline_seconds=$(seam_deadline)
   [ -n "$seam_deadline_seconds" ] \
     || fail "the library must publish one synchronization seam deadline"
@@ -1577,8 +1577,11 @@ PY
   # fraction of the deadline it is synchronizing against reports a slow machine
   # as a broken property.
   seam_polls=$((seam_deadline_seconds * 100))
-  seam=$(seam_root)/opened-$$
-  mkdir -p "$(dirname "$seam")"
+  seam_dir=$(seam_root)
+  [ -n "$seam_dir" ] \
+    || fail "the seam_root helper could not read SEAM_DIRECTORY out of the library under test"
+  seam=$seam_dir/opened-$$
+  mkdir -p "$seam_dir"
   rm -f "$seam".*
   run_prepare_with_seam "$case_dir" seam-engaged "$seam" linked.log \
     > "$case_dir/seam.out" 2>&1 &
@@ -1634,7 +1637,7 @@ PY
 # could-not-observe: a seam that answers a refusal with a traceback is a hole in
 # the three-valued promise rather than a measurement affordance.
 test_a_synchronization_seam_outside_its_root_refuses() {
-  local case_dir seam
+  local case_dir seam seam_dir
   case_dir=$(make_case seam-outside-root)
   write_inputs "$case_dir"
   seam=$case_dir/caller-directed-seam
@@ -1648,7 +1651,25 @@ test_a_synchronization_seam_outside_its_root_refuses() {
   if [ -e "$seam.opened" ] || [ -e "$seam.hashed" ]; then
     fail "a refused seam must write nothing at the path it was pointed at"
   fi
-  pass "a synchronization seam pointed outside its confinement root refuses"
+
+  # The confinement root itself is not inside the confinement root. A seam
+  # pointed exactly at it would put its signal files alongside the directory
+  # rather than in it, which is the containment claim failing on its own
+  # boundary.
+  seam_dir=$(seam_root)
+  [ -n "$seam_dir" ] \
+    || fail "the seam_root helper could not read SEAM_DIRECTORY out of the library under test"
+  rm -f "$seam_dir.opened" "$seam_dir.hashed"
+  capture run_prepare_with_seam "$case_dir" root-exact "$seam_dir" baseline.log
+  expect_code 2 "$CAPTURED_CODE" \
+    "a synchronization seam pointed at the confinement root is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved evidence_seam_unusable' \
+    "the boundary refusal must name the seam in the contract's own closed vocabulary"
+  if [ -e "$seam_dir.opened" ] || [ -e "$seam_dir.hashed" ]; then
+    rm -f "$seam_dir.opened" "$seam_dir.hashed"
+    fail "a seam pointed at the confinement root must not write siblings of it"
+  fi
+  pass "a synchronization seam not strictly inside its confinement root refuses"
 }
 
 # The contract promises three values on EVERY path. An inputs document that

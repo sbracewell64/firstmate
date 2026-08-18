@@ -269,10 +269,12 @@ def seam_root():
     """The one directory this library will let the synchronization seam use.
 
     The seam is a measurement affordance, so the only thing an ambient
-    environment variable may choose about it is a name inside a location this
-    code owns. A seam pointed anywhere else is refused rather than followed,
-    because a leaked variable must never be able to make this program write at
-    a path its caller picked.
+    environment variable may choose about it is a name STRICTLY INSIDE a
+    directory this code owns. Anything else - including the directory itself,
+    whose signal files would be siblings of it rather than entries in it - is
+    refused rather than followed. The directory's own parent is whatever the
+    process's temporary directory is, which is the ordinary contract every
+    program on the machine already honours.
     """
     return os.path.realpath(os.path.join(tempfile.gettempdir(), SEAM_DIRECTORY))
 
@@ -283,10 +285,10 @@ def seam_prefix():
         return None
     root = seam_root()
     resolved = os.path.realpath(configured)
-    if resolved != root and not resolved.startswith(root + os.sep):
+    if not resolved.startswith(root + os.sep):
         raise Unobservable(
             "evidence_seam_unusable",
-            "the evidence synchronization seam is confined to " + root,
+            "the evidence synchronization seam is confined to names inside " + root,
             str(configured),
         )
     return resolved

@@ -91,9 +91,9 @@ It replaced a scheduler-dependent control that could pass without ever reaching 
 
 Three properties bound what a leak of either variable can do:
 
-- The seam is confined to one directory this library owns, `SEAM_DIRECTORY` under the system temporary directory. A seam pointed anywhere else is refused before anything is written, so an ambient variable can never make this program write at a path its caller picked.
+- The seam is confined to one directory this library owns, `SEAM_DIRECTORY` under the process's temporary directory. A seam must resolve STRICTLY INSIDE that directory or it is refused before anything is written - including a seam pointed at the directory itself, whose signal files would land beside it rather than in it, which is the containment failing on its own boundary. So what a leak of the seam variable can still choose is a name inside that one directory, and nothing about where the directory is. The directory's parent is the process's temporary directory as `tempfile.gettempdir()` resolves it, which honours `TMPDIR`, `TEMP` and `TMP` - the ordinary temporary-directory contract every program on the machine already follows, stated here because the confinement rests on it rather than replacing it.
 - Both halves of the handshake are bounded by `SEAM_DEADLINE_SECONDS`, one number in the library that the test reads out of the build under test rather than restating. A leak costs that bound once, and the two halves of one handshake cannot drift into disagreeing about how long it lasts.
-- Every way it can refuse - a seam outside its root, a signal it could not write, a handshake that did not complete - is the contract's own could-not-observe under `evidence_seam_unusable`. A seam that answers a refusal with a traceback is a hole in the three-valued promise rather than a measurement affordance.
+- Every way it can refuse - a seam not strictly inside its root, a signal it could not write, a handshake that did not complete - is the contract's own could-not-observe under `evidence_seam_unusable`. A seam that answers a refusal with a traceback is a hole in the three-valued promise rather than a measurement affordance.
 
 ## What was measured
 
