@@ -137,7 +137,7 @@ Both drive the suite through four seams, each read only by the test file and eac
 | `FM_REVIEW_MUTATION_RECORD` | this record | the drift control's subject is the RECORD, not the binary, so no defect build could otherwise reach it - it would be the one control that could never be watched red |
 | `FM_REVIEW_MUTATION_ONLY` | which control runs | refuses a name not in `FM_CONTROLS` rather than running nothing, because selecting a control that does not exist would otherwise report a clean run having observed nothing at all |
 
-For the superseded measurement, each defect build was confirmed to differ from the tracked script and to parse before it was run.
+For the current measurement, each defect build was confirmed to differ from the tracked script and to parse before it was run.
 That confirmation matters because a build that fails to parse fails every control unconditionally, corroborating whatever it was pointed at while measuring nothing.
 
 ## Observed red and green
