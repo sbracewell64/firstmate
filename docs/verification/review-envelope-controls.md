@@ -59,7 +59,7 @@ A record about a subject NAMES THE SUBJECT. The citation for this campaign is th
 Campaign head: `3d37b6998beed3ca37180752f91773e2866d2434` (provenance only).
 Mutations built: 74.
 
-That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is not the coordinate a replay depends on. It happens to be reachable from this branch today, and that is convenience rather than the binding — the digests above are the binding, and they stay checkable whatever later becomes of the commit.
+That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is not the coordinate a replay depends on. It is NOT reachable from the history shipped here, and that changes nothing: this branch is replayed under fresh commit ids as it moves through the gate, which strands every id written before a replay while changing not one measured byte. That is why the head carries the provenance-only label above. The digests are the binding, and they stay checkable whatever later becomes of the commit.
 
 That distinction was learned here rather than assumed. An earlier campaign recorded head `9c15cbb3`, and a later rebase stranded that commit while changing not one measured byte: every measurement stayed true of the bytes, and the citation stopped resolving for anyone who fetched the branch. The record at the time invited an independent party to replay against that head, so the instruction was executable only in the clone that still held a pre-rebase backup ref. The control could not see it either — it compared the record's head field with the artifact's head field, which establishes that two fields agree and says nothing about whether anything is replayable.
 
@@ -99,7 +99,7 @@ Three properties bound what a leak of either variable can do:
 
 ## What was measured
 
-78 controls pass against the shipped scripts.
+81 controls pass against the shipped scripts.
 Count claim: the green count-drift control establishes only that the number stated above matches the suite's actual executed control count.
 It says nothing about whether any control was ever watched red, and it is not evidence of mutation measurement.
 
@@ -109,6 +109,7 @@ Coverage is counted per property rather than per test function, because a named 
 There is no non-red in this campaign, and the reason that changed is recorded below rather than left as a silently uniform table.
 
 Every expected-red entry's target control and observed control agree: 73 of 73.
+The mutation table below carries exactly one row per expected-red entry, and a control compares the two in BOTH directions: a row no entry backs fails, and an entry with no row fails. That comparison was added because both directions had drifted - one row outlived its mutation's removal from the campaign, and two measured entries had no row - and nothing was checking.
 
 The campaign also carries its OWN non-vacuity control, and it is the seventy-fourth entry. A campaign in which every mutation reddens cannot show that this harness is able to report green at all - which is the vacuous-pass defect inverted, since a suite that fails on everything produces a perfect-looking record and proves nothing, exactly as a suite reporting zero failures over zero executed tests does. So one mutation is chosen such that GREEN is the correct answer: a semantics-preserving edit that binds a sorted result to a name before returning it, a real change to a real code path that alters no behaviour. It is judged against that expectation rather than exempted from judgement, must carry a captured run containing no failure, and must name no control.
 
@@ -182,7 +183,6 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | declining the evidence recheck cannot reach review ready | a declined evidence recheck no longer blocks review-ready | `test_declining_the_evidence_recheck_cannot_reach_review_ready` | `not ok - a declined evidence recheck cannot pass: expected exit 2, got 0` |
 | validate rechecks evidence bytes | the evidence recheck arm never runs | `test_validate_rechecks_evidence_bytes` | `not ok - evidence replaced after compilation refuses at validation: expected exit 1, got 0` |
 | the generated contract page matches the catalog | the generated contract page's section heading changes | `test_the_generated_contract_page_matches_the_catalog` | `not ok - docs/contracts/review-envelope.md is stale; regenerate it with bin/fm-review-envelo` |
-| a crashed compiler cannot reach a verdict | an unreadable compiler result is read as a pass | `test_a_crashed_compiler_cannot_reach_a_verdict` | `not ok - a compiler that produced no result is could-not-observe: expected exit 2, got 0` |
 | symlink out of root refused before any byte is read or digested | the final open stops refusing to follow a symlink | `test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading` | `not ok - a symlink outside the evidence root refuses: expected exit 1, got 0` |
 | duplicate disposition refused, order A (later duplicate wins) | duplicate dispositions resolve by last-one-wins | `test_duplicate_dispositions_refuse_in_both_orders` | `not ok - duplicate dispositions refuse in preserved-first order: expected exit 1, got 0` |
 | duplicate disposition refused, order B (earlier duplicate wins) | duplicate dispositions resolve by first-one-wins | `test_duplicate_dispositions_refuse_in_both_orders` | `not ok - the duplicate refusal must not depend on disposition order (missing: 'refusal oblig` |
@@ -204,6 +204,8 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | verification applicability must be declared explicitly | the applicability declaration becomes optional again | `test_verification_applicability_must_be_declared_explicitly` | `not ok - the absent applicability declaration must be named (missing: 'unobserved verificati` |
 | an explicit no-contracts declaration is accepted | an explicit no-contracts declaration stops being accepted | `test_no_verification_contracts_requires_an_explicit_reason` | `not ok - an explicit reason may declare that no contracts are required: expected exit 0, got` |
 | requested decisions accept only uppercase tokens | the requested-decision token format stops being enforced | `test_requested_decision_is_an_uppercase_token` | `not ok - a malformed requested decision refuses: expected exit 1, got 0` |
+| a synchronization seam outside its root refuses | the confinement boundary accepts the root directory itself | `test_a_synchronization_seam_outside_its_root_refuses` | `not ok - a seam pointed at the confinement root must not write siblings of it` |
+| a malformed but parseable inputs document is could-not-observe | prepare's generic exception guard narrows to one exception class | `test_a_malformed_but_parseable_inputs_document_is_could_not_observe` | `not ok - a malformed inputs document must never answer with a traceback (unexpected: 'Traceb` |
 | the harness reports GREEN when a change alters no behaviour | a sorted result is bound to a name before being returned; identical behaviour, real code path | `(none)` | **GREEN, and that is the correct answer** - the campaign's own non-vacuity control |
 
 ## The redundancy that used to hide a guard, and why it is gone
@@ -241,16 +243,19 @@ The mutation was REMOVED from the campaign table rather than retargeted at the c
 
 Measured directly on scratch copies of this tree at `git archive` fidelity, one carrying only this defect: the defect build reddens the control with the line above, and the tracked build passes it with `ok - a compiler that reaches no readable result is could-not-observe, whatever its exit status was`. Both runs exit 1 overall, because a suite reduced to one control fails its own record-inventory checks, so the EXIT CODE IS NOT THE OBSERVATION HERE - the control's own assertion is, and it is what is reported.
 
-## Two controls measured outside the mutation table
+## Three controls measured outside the mutation table
 
-Two controls check this record against the suite rather than checking the compiler, so no mutation of the compiler can falsify them.
-They were measured on scratch copies of the tree, by making the change each one exists to catch.
+Three controls check this record against the suite or against the campaign artifact rather than checking the compiler, so no mutation of the compiler can falsify them.
+The first two were measured on scratch copies of the tree, by making the change each one exists to catch.
+The third manufactures both of its changes itself on every run, so its two reds are not a past measurement to be taken on trust - it builds a record with a row nothing backs, and a record missing a measured row, and requires each to be refused before it reports anything.
 
 | Control | Change made | Observed |
 | --- | --- | --- |
 | the verification record matches the executed control count | a control added, the record left untouched | `not ok - the verification record states 63 controls, but the suite executed 64` |
 | the measurement record is backed by the campaign artifact | the record's stated campaign head relabelled, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
 | the measurement record is backed by the campaign artifact | one byte changed in a measured subject, nothing re-run | `not ok - the measurement record is not backed by the campaign artifact` |
+| the mutation table matches the campaign artifact | a row added that no campaign entry backs | `the record claims a red no campaign entry backs: test_a_complete_candidate_is_review_ready / not ok - a red nobody watched` |
+| the mutation table matches the campaign artifact | a measured entry's row removed from the table | `the campaign measured a red the record has no row for: ...` |
 
 Each was green on the untouched copy first, so none of those reds comes from a copy that never worked.
 The second reading for the artifact control is the more valuable one: it catches drift nobody tried to hide, which is more common than deliberate relabelling.
@@ -291,7 +296,7 @@ Any accepting-only control would leave its guard's deletion undetected and would
 
 ## One commit's content was deliberately not carried forward
 
-The validation gate repository held a commit, `6fb084c6` "record tracked suite result", on a lineage this branch no longer has.
+The validation gate repository held a commit, `6fb084c6` (provenance only) "record tracked suite result", on a lineage this branch no longer has.
 It added a recorded suite result - a passing control line and a suite-contract line - for a head that has since been superseded.
 
 Its content was NOT carried into this record, and the omission is deliberate rather than an oversight.
@@ -302,10 +307,12 @@ The commit itself is preserved and reachable in the gate repository at `refs/fm-
 
 ## A prior commit relabelled measurements it did not take
 
-This is recorded because it is a measured failure of the process that produces this file, and because the commits that caused it are preserved in history rather than rewritten out of it.
+This is recorded because it is a measured failure of the process that produces this file, and because the episodes themselves are kept rather than rewritten out of the record.
+
+EVERY COMMIT ID BELOW IS HISTORICAL PROVENANCE THAT NO LONGER RESOLVES. None of them is reachable from the history shipped here, and neither is the campaign head above: this branch is replayed under fresh commit ids as it moves through the gate, so an id written before a replay is stranded for anyone who fetches the branch even though not one measured byte changed. They are recorded so the episodes stay attributable, not as coordinates a reader can check out - a citation a reader cannot resolve is not a citation, and pretending otherwise is the same defect as the fabricated measurement it would be describing. The binding is the SUBJECT DIGEST, and a commit id is provenance.
 
 Commit `f388e430` was titled "record final-head mutation campaign" and ran no campaign.
-It was written as `50257ee3` and replayed under this id when the branch was later rebased; both ids name the same bytes, and this one is the one reachable in the history shipped here.
+It was written as `50257ee3` and replayed under that id when the branch was later rebased; both ids name the same bytes, and neither resolves in the history shipped here.
 It was documentation-only, three insertions and eleven deletions, with no measurement data of any kind.
 It deleted the hold declaring which controls were unwatched, deleted the separation between the count claim and the measurement claim, and rewrote the environment section so that measurements taken at head `1be1caef` were labelled as taken at head `98b1d34f`.
 Commit `098cf2c4`, written as `7090fcd3`, then expanded that label to the full forty-character SHA, adding precision to a claim with no evidence beneath it, which makes a fabrication read as more rigorous rather than less.

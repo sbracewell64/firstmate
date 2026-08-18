@@ -1474,9 +1474,20 @@ def classify_repository(problems, envelope, repo):
             candidate["base_ref"],
             "the base trails the trunk by " + str(behind) + ", policy allows " + str(allowed),
         )
-    if is_ancestor(repo, candidate["base_commit"], main_now) is False:
+    # Three values, explicitly. `git merge-base --is-ancestor` answers yes, no,
+    # or nothing at all, and the third answer is not the second: an ancestry git
+    # could not compute is unobserved, never silently read as one that does not
+    # contradict readiness.
+    base_on_main_line = is_ancestor(repo, candidate["base_commit"], main_now)
+    if base_on_main_line is False:
         problems.refuse(
             "base_not_on_main_line", candidate["base_ref"], "the base is not an ancestor of the trunk"
+        )
+    elif base_on_main_line is not True:
+        problems.unobserve(
+            "repository_unreadable",
+            "base_is_ancestor_of_main",
+            "the base-to-trunk ancestry could not be read",
         )
 
 
@@ -1534,11 +1545,18 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
             "the declared root commit is not one of this repository's",
         )
 
-    if envelope["applicability"].get("base_is_ancestor_of_head") is False:
+    base_is_ancestor_of_head = envelope["applicability"].get("base_is_ancestor_of_head")
+    if base_is_ancestor_of_head is False:
         problems.refuse(
             "base_not_ancestor_of_candidate",
             candidate["base_ref"],
             "the candidate does not descend from its base",
+        )
+    elif base_is_ancestor_of_head is not True:
+        problems.unobserve(
+            "repository_unreadable",
+            "base_is_ancestor_of_head",
+            "the base-to-candidate ancestry was never observed",
         )
 
     if candidate["changed_file_count"] == 0:
@@ -1580,20 +1598,23 @@ def classify(envelope, repo, evidence_root, recheck_evidence):
         problems.refuse(
             "ruling_id_ambiguous", ruling_id, "more than one ruling carries this stable id"
         )
-    ruling_index = {
-        str(ruling.get("id")): ruling
-        for ruling in envelope["rulings"]
-        if str(ruling.get("id") or "").strip()
-        and str(ruling.get("id")) not in ambiguous_ruling_ids
-    }
+    # Applicability is RE-DERIVED here rather than read from the stored fields,
+    # and the derivation is kept beside the envelope rather than written into
+    # it. Classification identifies its subject by digest, so a classifier that
+    # edited the body it is about would report a digest for bytes nobody holds.
+    ruling_index = {}
     for ruling in envelope["rulings"]:
         applies_to = ruling.get("applies_to") if isinstance(ruling.get("applies_to"), dict) else {}
         established, mismatches = ruling_applicability(
             applies_to, envelope, current_envelope_digest
         )
-        ruling["applicability_established"] = established
-        ruling["applicable"] = established and not mismatches
-        ruling["mismatches"] = mismatches
+        ruling_id = str(ruling.get("id") or "")
+        if ruling_id.strip() and ruling_id not in ambiguous_ruling_ids:
+            ruling_index[str(ruling.get("id"))] = {
+                "applicability_established": established,
+                "applicable": established and not mismatches,
+                "mismatches": mismatches,
+            }
         if not established:
             problems.unobserve(
                 "ruling_applicability_unestablished",

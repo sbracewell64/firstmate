@@ -2496,6 +2496,177 @@ test_a_base_the_candidate_does_not_descend_from_refuses() {
   pass "a contribution measured from a base the candidate does not descend from refuses"
 }
 
+# Rewrite one part of a compiled envelope's BODY and re-seal every digest that
+# covers it. Without this a case cannot present a body the compiler would never
+# emit: the body digest, the request identity and the outer integrity digest all
+# refuse first, and the case would never reach the property it is aimed at.
+reseal_envelope() {  # <envelope.json> <python statements over `body`>
+  python3 - "$1" "$2" <<'PY' || fail "reseal_envelope could not rewrite the envelope"
+import hashlib, json, sys
+
+path, statements = sys.argv[1:]
+document = json.load(open(path))
+body = document["envelope"]
+exec(statements, {}, {"body": body})
+
+
+def digest(value):
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode()
+    return "sha256:" + hashlib.sha256(encoded).hexdigest()
+
+
+body_digest = digest(body)
+document["digest"]["value"] = body_digest
+document["request_identity"] = digest({
+    "project": {
+        "id": body["identity"]["project"]["id"],
+        "root_commits": body["identity"]["project"]["root_commits"],
+    },
+    "work": {
+        "id": body["identity"]["work"]["id"],
+        "forge_request": body["identity"]["work"].get("request"),
+    },
+    "candidate_head_commit": body["candidate"]["head_commit"],
+    "envelope_digest": body_digest,
+    "policy_version": body["identity"]["policy"]["version"],
+})
+document["outer_digest"]["value"] = digest({
+    "compiled_at": document.get("compiled_at"),
+    "compiler": document.get("compiler"),
+    "body_digest": body_digest,
+    "request_identity": document.get("request_identity"),
+    "declared_request_identity": document.get("declared_request_identity"),
+})
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+}
+
+# Validate <out> and require the digest the classification REPORTS to recompute
+# from the body the classification READ. The comparison is against the bytes on
+# disk rather than against the document's own stored digest field, so a
+# classifier that edited its subject in flight cannot satisfy it by agreeing
+# with a field it also rewrote.
+assert_reported_digest_names_the_body() {  # <case-dir> <out-name> <message>
+  local case_dir=$1 out=$2 message=$3
+  capture run_validate "$case_dir" "$out" --json
+  python3 - "$case_dir/$out/envelope.json" "$CAPTURED" <<'PY' || fail "$message"$'\n'"--- output ---"$'\n'"$CAPTURED"
+import hashlib, json, sys
+
+path, output = sys.argv[1:]
+body = json.load(open(path))["envelope"]
+encoded = json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+recomputed = "sha256:" + hashlib.sha256(encoded).hexdigest()
+# The entrypoint appends its own verify record after the JSON document, so the
+# object is decoded from the start of the stream rather than from the whole of
+# it.
+start = output.find("{")
+try:
+    classification, _ = json.JSONDecoder().raw_decode(output[start:] if start >= 0 else output)
+except ValueError:
+    sys.stderr.write("the classification was not readable JSON\n")
+    sys.exit(1)
+reported = classification.get("envelope_digest")
+if reported != recomputed:
+    sys.stderr.write(
+        "the classification reports %s for a body that digests to %s\n" % (reported, recomputed))
+    sys.exit(1)
+PY
+}
+
+# The contract binds by digest, so a classification's digest has to name the
+# body it classified. A classifier that annotated the envelope in place before
+# digesting it would report an identity for bytes that exist nowhere: not the
+# input whose digest was just validated, and not anything on disk.
+test_the_classification_digest_names_the_envelope_it_classified() {
+  local case_dir head
+  case_dir=$(make_case classification-digest-subject)
+  head=$(git -C "$case_dir/repo" rev-parse candidate)
+  write_inputs "$case_dir" '{"rulings": [
+      {"id": "R-1", "source": "captain", "disposition": "APPROVE", "relied_upon": true,
+       "applies_to": {"head": "'"$head"'"}}]}'
+  capture run_prepare "$case_dir" env
+  expect_code 0 "$CAPTURED_CODE" "the envelope under this case must compile"
+
+  # NON-VACUITY. An untouched envelope reports its own digest, so the assertion
+  # below is not one that rejects every classification it is shown.
+  assert_reported_digest_names_the_body "$case_dir" env \
+    "an untouched envelope's classification must report that envelope's digest"
+
+  # THE CONTROL. The stored applicability is made to DISAGREE with what
+  # classification re-derives, which is the only state in which annotating the
+  # body in place changes its digest - and is exactly the state an envelope
+  # compiled by an older build arrives in. Re-derivation itself is required and
+  # is not what this measures; what it measures is that re-deriving does not
+  # silently rewrite the subject whose identity is being reported.
+  reseal_envelope "$case_dir/env/envelope.json" '
+body["rulings"][0]["applicability_established"] = False
+body["rulings"][0]["applicable"] = False
+body["rulings"][0]["mismatches"] = ["work_id"]
+'
+  assert_reported_digest_names_the_body "$case_dir" env \
+    "a classification must never report a digest for a body it rewrote in flight"
+  pass "the digest a classification reports is the digest of the envelope it classified"
+}
+
+# git answers an ancestry question with yes, no, or nothing at all. The third
+# answer is not the second: an ancestry that could not be computed is
+# could-not-observe, and reading it as "does not contradict readiness" is
+# absence read as satisfaction on an axis this compiler exists to refuse.
+test_an_unreadable_ancestry_is_could_not_observe() {
+  local case_dir real_git
+  case_dir=$(make_case unreadable-ancestry)
+  write_inputs "$case_dir"
+
+  # NON-VACUITY, taken first so the shim below cannot be what makes it pass: a
+  # readable ancestry still reaches review-ready.
+  capture run_prepare "$case_dir" readable
+  expect_code 0 "$CAPTURED_CODE" "a readable ancestry must still reach a verdict"
+  assert_contains "$CAPTURED" 'review-envelope: REVIEW_READY' \
+    "an ancestry git can answer must remain accepted"
+
+  # THE CONTROL, first consumer: the base-to-trunk ancestry re-derived at
+  # classification time. The shim refuses only `--is-ancestor` and delegates
+  # every other command to the real git, so the ancestry answer is the single
+  # thing the case changes.
+  real_git=$(command -v git) || fail "this case needs a real git to delegate to"
+  cat > "$case_dir/fakebin/git" <<EOF
+#!/usr/bin/env bash
+for arg in "\$@"; do
+  if [ "\$arg" = --is-ancestor ]; then
+    exit 128
+  fi
+done
+exec "$real_git" "\$@"
+EOF
+  chmod +x "$case_dir/fakebin/git"
+  capture run_prepare "$case_dir" unreadable
+  expect_code 2 "$CAPTURED_CODE" "an ancestry git could not answer is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved repository_unreadable subject=base_is_ancestor_of_main' \
+    "the unreadable base-to-trunk ancestry must be named as unobserved"
+  assert_not_contains "$CAPTURED" 'REVIEW_READY' \
+    "an ancestry nobody could read cannot support a review-ready verdict"
+  rm -f "$case_dir/fakebin/git"
+
+  # THE CONTROL, second consumer: the base-to-candidate ancestry BOUND at
+  # compile time and read back at validation. A fix at one consumer leaves the
+  # other authoritative, so this half runs against a real git and manufactures
+  # the unread answer in the stored body instead.
+  capture run_prepare "$case_dir" unread-binding
+  expect_code 0 "$CAPTURED_CODE" "the envelope for the second consumer must compile"
+  reseal_envelope "$case_dir/unread-binding/envelope.json" '
+body["applicability"]["base_is_ancestor_of_head"] = None
+'
+  capture run_validate "$case_dir" unread-binding
+  expect_code 2 "$CAPTURED_CODE" "an unread base-to-candidate ancestry is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved repository_unreadable subject=base_is_ancestor_of_head' \
+    "the unread base-to-candidate ancestry must be named as unobserved"
+  assert_not_contains "$CAPTURED" 'REVIEW_READY' \
+    "an ancestry bound as unread cannot support a review-ready verdict"
+  pass "an ancestry git could not answer is could-not-observe at both consumers"
+}
+
 test_a_declared_repository_identity_this_is_not_refuses() {
   local case_dir
   case_dir=$(make_case wrong-repository)
@@ -2613,6 +2784,106 @@ test_the_verification_record_matches_the_executed_control_count() {
   [ "$recorded" -eq "$actual" ] \
     || fail "the verification record states $recorded controls, but the suite executed $actual"
   pass "the verification record matches the suite's executed control count"
+}
+
+# The mutation table is prose, and prose is not the evidence. Every row in it
+# claims a red somebody watched, so every row must correspond to an expected-red
+# entry in the campaign artifact and every expected-red entry must have a row.
+# Nothing checked that, and both directions had already drifted: one row outlived
+# its mutation's REMOVAL from the campaign, and two measured entries had no row
+# at all. A reader believes whichever of the two the record reaches them with.
+check_mutation_table() {  # <artifact> <record>
+  python3 - "$@" <<'PYEOF'
+import json, re, sys
+
+artifact_path, record_path = sys.argv[1:]
+try:
+    artifact = json.load(open(artifact_path, encoding="utf-8"))
+except (OSError, ValueError) as error:
+    sys.stderr.write("campaign artifact is unreadable: %s\n" % error)
+    sys.exit(1)
+record = open(record_path, encoding="utf-8").read()
+
+# Only the four-column mutation rows. The direct-measurement and record-control
+# tables carry three columns and make a different claim, which is why they are
+# separate tables rather than more rows here.
+ROW = re.compile(
+    r"^\| .*? \| .*? \| `(test_[a-z0-9_]+)` \| `(.*)` \|$", re.M)
+rows = [match.groups() for match in ROW.finditer(record)]
+if not rows:
+    sys.stderr.write("the record carries no mutation-table rows to check\n")
+    sys.exit(1)
+
+# The record's observed cell is the artifact's observed line truncated to the
+# table's width, so a row is backed when its cell is a PREFIX of a measured
+# line on the same control. Matching on the prefix keeps this checking the claim
+# the record makes rather than assuming a truncation width.
+unmatched = [
+    (entry.get("observed_control"), entry.get("observed") or "")
+    for entry in artifact.get("mutations", [])
+    if entry.get("expected", "red") == "red"
+]
+status = 0
+for control, observed in rows:
+    for index, (measured_control, measured_observed) in enumerate(unmatched):
+        if measured_control == control and measured_observed.startswith(observed):
+            unmatched.pop(index)
+            break
+    else:
+        sys.stderr.write(
+            "the record claims a red no campaign entry backs: %s / %s\n" % (control, observed))
+        status = 1
+for control, observed in unmatched:
+    sys.stderr.write(
+        "the campaign measured a red the record has no row for: %s / %s\n" % (control, observed))
+    status = 1
+sys.exit(status)
+PYEOF
+}
+
+test_the_mutation_table_matches_the_campaign_artifact() {
+  local artifact=$ROOT/docs/verification/review-envelope-campaign.json
+  local record=$ROOT/docs/verification/review-envelope-controls.md
+  local mutant_record=$TMP_ROOT/mutation-table-mutant.md
+  [ -f "$artifact" ] || fail "the campaign artifact is absent, so no table row is checkable"
+  check_mutation_table "$artifact" "$record" \
+    || fail "the mutation table does not match the campaign artifact"
+
+  # A row the campaign never measured. This is the direction that already
+  # happened: a mutation was removed from the campaign and its row was left.
+  python3 - "$record" "$mutant_record" <<'PYEOF'
+import sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+row = "| a property nobody measured | a mutation nobody built | `test_a_complete_candidate_is_review_ready` | `not ok - a red nobody watched` |\n"
+marker = "| Property under test | Mutation injected | Control observed red | Observed result |\n"
+if marker not in record:
+    sys.stderr.write("the mutation table header was not found\n")
+    sys.exit(1)
+head, _, tail = record.partition(marker)
+open(target, "w", encoding="utf-8").write(head + marker + tail.split("\n", 1)[0] + "\n" + row + tail.split("\n", 1)[1])
+PYEOF
+  capture check_mutation_table "$artifact" "$mutant_record"
+  expect_code 1 "$CAPTURED_CODE" "a row no campaign entry backs must fail"
+  assert_contains "$CAPTURED" 'the record claims a red no campaign entry backs' \
+    "the failure must name the unbacked row"
+
+  # A measured red with no row. This is the other direction, and it drifted too.
+  python3 - "$record" "$mutant_record" <<'PYEOF'
+import re, sys
+source, target = sys.argv[1:]
+record = open(source, encoding="utf-8").read()
+rows = re.findall(r"^\| .*? \| .*? \| `test_[a-z0-9_]+` \| `.*` \|$", record, re.M)
+if not rows:
+    sys.stderr.write("the mutation table carries no row to drop\n")
+    sys.exit(1)
+open(target, "w", encoding="utf-8").write(record.replace(rows[0] + "\n", "", 1))
+PYEOF
+  capture check_mutation_table "$artifact" "$mutant_record"
+  expect_code 1 "$CAPTURED_CODE" "a measured red with no row must fail"
+  assert_contains "$CAPTURED" 'the campaign measured a red the record has no row for' \
+    "the failure must name the measured entry with no row"
+  pass "every mutation-table row is backed by a campaign entry, and every entry has a row"
 }
 
 # The measurement record's claims are checked against a durable artifact rather
@@ -3173,12 +3444,15 @@ test_excluded_scope_is_bound_explicitly
 test_a_contribution_that_changes_nothing_refuses
 test_a_base_the_candidate_does_not_descend_from_refuses
 test_a_declared_repository_identity_this_is_not_refuses
+test_the_classification_digest_names_the_envelope_it_classified
+test_an_unreadable_ancestry_is_could_not_observe
 test_a_check_that_names_no_head_cannot_cover_a_required_platform
 test_validate_refuses_to_guess_about_evidence
 test_declining_the_evidence_recheck_cannot_reach_review_ready
 test_validate_rechecks_evidence_bytes
 test_a_crashed_compiler_cannot_reach_a_verdict
 test_the_generated_contract_page_matches_the_catalog
+test_the_mutation_table_matches_the_campaign_artifact
 test_the_measurement_record_is_backed_by_the_campaign_artifact
 test_the_verification_record_matches_the_executed_control_count
 fm_test_contract "${BASH_SOURCE[0]}"
