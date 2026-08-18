@@ -2711,24 +2711,49 @@ PYEOF
     "a head offered as a replay coordinate that the branch does not carry must fail"
 
   # NON-VACUITY: the refusal above must be about REACHABILITY, not about the
-  # label. The record's own head, unlabelled, resolves - so it is accepted.
-  # Without this the check could refuse every unlabelled head and still pass.
-  python3 - "$record" "$mutant_record" <<'PYEOF'
+  # label. An unlabelled head that IS reachable is accepted; without this the
+  # check could refuse every unlabelled head and still pass. This condition is
+  # MANUFACTURED for the same reason its refusing twin is: an earlier version
+  # stripped the label off the record's own head and relied on that head still
+  # being an ancestor of HEAD, which any rebase ends, so the anchor passed or
+  # failed on where the campaign happened to be measured rather than on the
+  # check. HEAD is reachable from HEAD under every lineage, so the pair is
+  # rewritten to cite it - record and artifact together, per entry included,
+  # since a head/artifact disagreement would refuse before reachability is ever
+  # reached.
+  local current_head
+  current_head=$(git -C "$ROOT" rev-parse HEAD) \
+    || fail "the reachable-head case needs this branch's head to manufacture its condition"
+  python3 - "$record" "$mutant_record" "$current_head" <<'PYEOF'
 import re, sys
-source, target = sys.argv[1:]
+source, target, head = sys.argv[1:]
 record = open(source, encoding="utf-8").read()
-record = re.sub(
-    r"^Campaign head: `([0-9a-f]{7,40})` \(provenance only\)\.$",
-    r"Campaign head: `\1`.",
+record, replaced = re.subn(
+    r"^Campaign head: `[0-9a-f]{7,40}`( \(provenance only\))?\.$",
+    "Campaign head: `%s`." % head,
     record,
     flags=re.M,
 )
+if replaced != 1:
+    sys.stderr.write("expected exactly one campaign head line, rewrote %d\n" % replaced)
+    sys.exit(1)
 open(target, "w", encoding="utf-8").write(record)
 PYEOF
-  if cmp -s "$record" "$mutant_record"; then
-    fail "the non-vacuity mutant must actually strip the provenance-only label"
+  if grep -q 'provenance only' "$mutant_record" \
+    || ! grep -qF "Campaign head: \`$current_head\`." "$mutant_record"; then
+    fail "the non-vacuity mutant must cite this branch's head with no provenance-only label"
   fi
-  capture check_campaign_artifact "$artifact" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head-reachable"
+  python3 - "$artifact" "$mutant" "$current_head" <<'PYEOF'
+import json, sys
+source, target, head = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+artifact["head"] = head
+for entry in artifact["mutations"]:
+    entry["head"] = head
+json.dump(artifact, open(target, "w", encoding="utf-8"), indent=2, sort_keys=True)
+PYEOF
+  FM_REVIEW_ENVELOPE_SKIP_CAMPAIGN_REPLAY=1 \
+    capture check_campaign_artifact "$mutant" "$mutant_record" "$ROOT" "$TMP_ROOT/campaign-head-reachable"
   expect_code 0 "$CAPTURED_CODE" \
     "a reachable head cited without the provenance label is still accepted"
 
