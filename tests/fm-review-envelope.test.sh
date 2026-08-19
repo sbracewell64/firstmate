@@ -2915,8 +2915,10 @@ PYEOF
   # THE DEFERRAL'S EXIT CONDITION. Against an artifact that matches the shipped
   # subjects, a run reaches the end of the suite and a count IS observable, so
   # the pending state must be refused from that moment rather than standing on
-  # its own reasonableness. The artifact mutant is built here rather than
-  # borrowed, because the shipped one is stale by design and a control that only
+  # its own reasonableness. BOTH halves of the condition are built here rather
+  # than borrowed: the artifact mutant because the shipped one is stale by
+  # design, and the pending record mutant because the shipped record leaves the
+  # pending state the moment the campaign is re-measured - a control that only
   # refuses while an ambient fact happens to hold measures nothing.
   python3 - "$artifact" "$fresh_artifact" "$ROOT" <<'PYEOF'
 import hashlib, json, sys
@@ -2929,27 +2931,39 @@ artifact["subjects"] = {
 with open(target, "w", encoding="utf-8") as handle:
     json.dump(artifact, handle)
 PYEOF
-  capture check_recorded_control_count "$record" "$actual" "$fresh_artifact" "$ROOT"
+  count_mutant "No control count is asserted at this head: measured subjects changed." \
+    || fail "the deferred-count mutant must build"
+  capture check_recorded_control_count "$mutant" "$actual" "$fresh_artifact" "$ROOT"
   expect_code 1 "$CAPTURED_CODE" "a deferred count must be refused once the campaign matches the tree"
   assert_contains "$CAPTURED" 'it must be stated, not deferred' \
     "the failure must say the count is observable again"
 
   # And the deferral must name the stale subjects THIS TREE has, not a set it
-  # chose. A declaration naming nothing is a reason without a condition.
-  python3 - "$record" "$mutant" <<'PYEOF'
+  # chose. A declaration naming nothing is a reason without a condition. The
+  # condition is MANUFACTURED whole: a pending record carrying no subject
+  # bullets, against an artifact made stale by construction, so the case holds
+  # whichever state the shipped record and campaign happen to be in.
+  count_mutant "No control count is asserted at this head: measured subjects changed." \
+    || fail "the unnamed-subjects mutant must build"
+  python3 - "$mutant" <<'PYEOF'
 import re, sys
-source, target = sys.argv[1:]
-record = open(source, encoding="utf-8").read()
-rewritten, count = re.subn(
-    r"^- `[^`]+` \u2014 artifact `sha256:[0-9a-f]{64}`, shipped `sha256:[0-9a-f]{64}`$",
-    "- the subjects that make this unobservable are left unnamed",
-    record, flags=re.M)
-if not count:
-    sys.stderr.write("the record names no stale subject to strip\n")
-    sys.exit(1)
-open(target, "w", encoding="utf-8").write(rewritten)
+path = sys.argv[1]
+record = open(path, encoding="utf-8").read()
+record = re.sub(
+    r"^- `[^`]+` \u2014 artifact `sha256:[0-9a-f]{64}`, shipped `sha256:[0-9a-f]{64}`\n",
+    "", record, flags=re.M)
+open(path, "w", encoding="utf-8").write(record)
 PYEOF
-  capture check_recorded_control_count "$mutant" "$actual" "$artifact" "$ROOT"
+  python3 - "$artifact" "$fresh_artifact" <<'PYEOF'
+import json, sys
+source, target = sys.argv[1:]
+artifact = json.load(open(source, encoding="utf-8"))
+subject = sorted(artifact.get("subjects", {}))[0]
+artifact["subjects"][subject] = "sha256:" + "0" * 64
+with open(target, "w", encoding="utf-8") as handle:
+    json.dump(artifact, handle)
+PYEOF
+  capture check_recorded_control_count "$mutant" "$actual" "$fresh_artifact" "$ROOT"
   expect_code 1 "$CAPTURED_CODE" "a deferral that names no stale subject must fail"
   assert_contains "$CAPTURED" 'does not name the stale subjects it is pending on' \
     "the failure must say the condition was not declared"
@@ -3218,7 +3232,11 @@ if replaced != 1:
     sys.exit(1)
 open(target, "w", encoding="utf-8").write(record)
 PYEOF
-  if grep -q 'provenance only' "$mutant_record" \
+  # The label assertion is scoped to the campaign-head line, because the label
+  # this guard is about lives there; the record legitimately labels other
+  # citations provenance-only, and a whole-document grep would fail on prose
+  # this control makes no claim about.
+  if grep -E '^Campaign head: ' "$mutant_record" | grep -q 'provenance only' \
     || ! grep -qF "Campaign head: \`$current_head\`." "$mutant_record"; then
     fail "the non-vacuity mutant must cite this branch's head with no provenance-only label"
   fi

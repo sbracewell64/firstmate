@@ -106,7 +106,7 @@ No control count is asserted at this head: the fixes above changed measured subj
 Pending on these stale subjects, which is the CONDITION that justifies the deferral and is re-checked against the tree on every run:
 
 - `bin/fm-review-envelope-lib.sh` — artifact `sha256:b6bbe3e1bb7a56c3f5085915153ce8c91ec2b0c0d2a3f248c2db5ebfb7190948`, shipped `sha256:d1342bff0c7504d12f7492f7370bcf1a7f8fc7251e883ab5282523ff2f043226`
-- `tests/fm-review-envelope.test.sh` — artifact `sha256:988b9a7ea4b1050496cb89302eb7500bc6be0d4c62070fb2d0913fdc6fde3c1a`, shipped `sha256:b26cdfbed2e53cf5418ed36c28de55b3fca6e140507b006d7b933d33c1fd5da6`
+- `tests/fm-review-envelope.test.sh` — artifact `sha256:988b9a7ea4b1050496cb89302eb7500bc6be0d4c62070fb2d0913fdc6fde3c1a`, shipped `sha256:fc7f344aba17d6e3cea0caa3910390202f24c0f8c3e15073b5f7d7e2551294ee`
 
 A remedy state that does not carry its own condition outlives it, so the count-drift control refuses this deferral the moment the campaign artifact matches every shipped subject again - from then on a count is observable and must be stated. It also refuses a deferral whose named subjects are not the stale ones this tree actually has, because a reason without a condition is just a reason.
 
