@@ -1,8 +1,8 @@
 # Verification: the one-use, head-bound landing authorization
 
 Audience: maintainer-verification.
-Subject: `bin/fm-landing-authorization.sh` and `bin/fm-landing-authorization-lib.sh`.
-Regression owner: `tests/fm-landing-authorization.test.sh`.
+Subject: `bin/fm-landing-authorization.sh` and `bin/fm-landing-authorization-lib.sh`, and the seam that consumes them - `bin/fm-landing-seam-lib.sh` inside `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`.
+Regression owners: `tests/fm-landing-authorization.test.sh` for the authority layer, `tests/fm-landing-seam.test.sh` for the seam.
 
 ## What is claimed
 
@@ -31,10 +31,12 @@ A correlation record that is internally consistent but forged, and a ruling edit
 The head shape check accepts either a 40- or 64-character object id because this mechanism never clones the target repository and so cannot determine its object format.
 That is weaker than the outbound owner's resolvable-object rule, and it is sound here only because the shape is a prefilter: the property is carried by equality against an independently observed head, not by the shape.
 
-**This mechanism is not yet wired into a landing path.**
-Nothing in `bin/fm-pr-merge.sh` or `bin/fm-merge-local.sh` calls it, and the correlation records it consumes are created by an outbound emitter that has not landed.
-What is verified below is the authority layer itself against correlation records supplied as data in the published schema.
-Verified-and-unwired is a real state and is recorded here rather than left for a reader to assume either way.
+The authority layer is verified against correlation records supplied as data in the published schema; it does not create them, and the outbound emitter that does is verified separately by `tests/fm-outbound-artifact.test.sh`.
+
+This mechanism WAS verified-and-unwired until 2026-08-19.
+Nothing in `bin/fm-pr-merge.sh` or `bin/fm-merge-local.sh` called it, so every property above was true and load-bearing for nothing.
+That state is recorded here rather than deleted, because it is the failure this document now has to keep closed: a control can be complete, correct, and green in its own suite while the production route walks around it, and no amount of testing the control detects that.
+The seam and its own claims are in ["The seam"](#the-seam-the-authority-is-consumed-by-the-real-mutation-path) below.
 
 ## Red calibration
 
@@ -162,6 +164,125 @@ FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 fm-doc-audience-check: ok surfaces=83 local_links=291
 fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
 ```
+
+## The seam: the authority is consumed by the real mutation path
+
+Date: 2026-08-19.
+Subject: `bin/fm-landing-seam-lib.sh`, wired into `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`.
+Regression owner: `tests/fm-landing-seam.test.sh`.
+
+### What is claimed
+
+A Browser-Sol-governed landing candidate cannot reach either mutation path's merge command without consuming a valid, head-bound, one-use authorization, and a candidate no ruling governs lands through the ordinary gates and says so.
+
+1. A governed candidate with no approving ruling is refused by the real `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`, and no merge is performed.
+2. A spent authority presented again is refused, and the second attempt performs no merge.
+3. Non-vacuity, landing: a governed candidate under an approving ruling lands, and the authority is recorded spent.
+4. Non-vacuity, not-applicable: an ungoverned candidate lands normally, and the not-applicable observation is reported on the command's own output.
+5. Governance survives a moved head. A ruling bound to another head refuses rather than falling through as ungoverned, because falling through would make moving the head the cheapest way to shed a ruling.
+6. The seam composes with the pre-existing merge guards and never replaces them: a red check rollup still refuses under a valid authority, and leaves that authority unspent.
+7. Two live requests claiming the same item at the same head are ambiguous and refuse, rather than one of them being picked.
+8. Governance ends. A closed request no longer governs, and a gate outside the landing-governing set never did, so neither can make an item permanently unlandable.
+
+Claims 3, 4, and 8 are not courtesies.
+Claims 1, 2, 5, 6, and 7 are all refusals, and a merge gate that refused everything would satisfy every one of them at once.
+
+### What is NOT claimed
+
+The seam does not decide whether a ruling approves.
+`bin/fm-landing-authorization.sh` owns minting, the closed approving-verdict set, the exactly-once spend, and the head re-observation; the seam selects the request to hand it and refuses to guess when the selection is not unique.
+
+It does not correlate a ruling to a request, and it does not create correlation records.
+Both are owned by `bin/fm-outbound-artifact.sh`.
+
+It establishes nothing about whether a head is green, mergeable, or unblocked by review.
+
+Which gates govern a landing is a decision, not an observation: every `sol-control` gate governs except `ARCHITECTURE_RULING_REQUIRED`, whose subject is a design question rather than this head's fitness to land.
+The exclusion is stated as an exclusion so that a gate added to the outbound vocabulary later governs a landing until somebody decides otherwise.
+
+### The act is counted, never assumed
+
+`spend` exits 0 on two different outcomes: the act ran and the authority is now spent, or the authority was already spent and no act was performed.
+Reading only the exit status turns the second into a merge gate reporting success while merging nothing, which is the double-land this whole mechanism exists to prevent.
+So the act is wrapped in a prologue that records having been entered, and a landing counts as performed only when that receipt says the act was reached.
+Defect 06 below is that control's own red.
+
+The suite counts the same way. A merge is observed by counting the `pr merge` invocations the fake forge recorded, and a local landing by comparing the default branch's own commit, and both counts are printed in the passing line - because zero merges is also what a completely broken gate produces.
+
+### Red calibration
+
+Every control was observed failing for its intended reason.
+Each run stages a copy of `bin/` and `tests/`, injects exactly one defect, and runs `bash tests/fm-landing-seam.test.sh`.
+`00-no-defect` is the harness's own control: an unpatched staged copy must be green, or a red below would be evidence about the staging rather than about the defect it names.
+`passed=` is how many cases reported success before the suite stopped at its first failure.
+
+| # | Injected defect | Observed result |
+| - | --------------- | --------------- |
+| 00 | none - the staging control | `GREEN (passed=19)` |
+| 01 | the pull-request merge site ignores the seam and always merges | `not ok - governed-ruled: expected exactly one spent authorization, got [fm-auth-a5062494976aa3f7c0e0583bb85b1885 granted]` |
+| 02 | the governed branch lands directly instead of inside the spend | `not ok - governed-ruled: expected exactly one spent authorization, got [fm-auth-a5062494976aa3f7c0e0583bb85b1885 granted]` |
+| 03 | the local merge site lands outside the spend | `not ok - local-governed-unruled: an unruled review gate must refuse the fast-forward, got exit 0` |
+| 04 | not-applicable is decided and never reported | `not ok - ungoverned: expected 'FM_LANDING_NOT_APPLICABLE' in the command's own output` |
+| 05 | a head no ruling approved is reported as ungoverned | `not ok - governed-moved-head: a head the ruling never approved must refuse, got exit 0` |
+| 06 | the spend's exit status is read without the act receipt | `not ok - governed-replay: a spent authority must refuse the second landing, got exit 0` |
+| 07 | an unreadable correlation record is skipped instead of refusing | `not ok - unreadable-record: an unreadable record must refuse, got exit 0` |
+| 08 | live governance with no configured venue reads as ungoverned | `not ok - governed-no-venue: live governance with no venue must refuse, got exit 0` |
+| 09 | the caller's head replaces the forge's re-observed one | `not ok - reobserved-head: a moved forge head must refuse, got exit 0` |
+| 10 | an unruled request is allowed to grant an authorization | `not ok - governed-unruled: expected 'FM_LANDING_AUTHORIZATION_REFUSED' in the command's own output` |
+| 11 | LA-1 as found: the pull-request gate asks and does not enforce the answer | `not ok - governed-unruled: an unruled review gate must refuse the merge, got exit 0` |
+| 12 | LA-1 as found: the local gate never asks | `not ok - local-governed-unruled: an unruled review gate must refuse the fast-forward, got exit 0` |
+| 13 | a closed request keeps governing | `not ok - closed-request: a closed request must not govern, got exit 1: ... FM_LANDING_AUTHORIZATION_REFUSED` |
+| 14 | the non-landing gate exclusion is emptied, so every gate governs | `not ok - nongoverning-gate: a non-landing gate must not block, got exit 1: ... FM_LANDING_AUTHORIZATION_REFUSED` |
+| 15 | two claims on one head resolve to the last one seen | `not ok - ambiguous-authority: two claims on one head must refuse, got exit 0` |
+
+Defects 11 and 12 are the finding this work closes, reproduced deliberately: the authority layer is present and correct in both copies, and the landing path routes around it.
+Defect 11 keeps the not-applicable report intact so its red is attributable to the unenforced answer rather than to a missing observation, which defect 04 covers on its own.
+
+Defect 09 is the one the head binding rests on, and it is injected into `bin/fm-landing-authorization.sh` rather than into the seam on purpose: it proves the seam actually reaches the authority layer's independent head observation, and is not satisfied by the head the merge gate itself verified.
+
+Defects 13 and 14 are the inverse direction, and they matter as much as the refusals.
+Both decision sets - which record states are live, and which gates govern a landing - are stated positively so they can be over-applied, and an over-applied set makes an item permanently unlandable.
+Those two defects are what keeps this control from being repaired into a different failure.
+
+### Green run
+
+```
+$ bash tests/fm-landing-seam.test.sh
+ok - an ungoverned pull request lands through fm-pr-merge and reports not-applicable (merges executed: 1)
+ok - a home with no control venue lands and names the missing venue (merges executed: 1)
+ok - an unruled Browser Sol review gate refuses the real fm-pr-merge path (merges executed: 0)
+ok - an approved ruling lands through fm-pr-merge and spends its authority (merges executed: 1, authorizations spent: 1)
+ok - a spent landing authority refuses a replayed fm-pr-merge (merges executed across two attempts: 1)
+ok - a head no ruling approved refuses fm-pr-merge rather than falling through as ungoverned (merges executed: 0)
+ok - a rejecting ruling refuses the real fm-pr-merge path (merges executed: 0)
+ok - a ruling verdict this fleet cannot classify refuses fm-pr-merge (merges executed: 0)
+ok - an unreadable correlation record refuses rather than reading as an absence of rulings (merges executed: 0)
+ok - a home holding live rulings and no control venue refuses rather than reading as ungoverned (merges executed: 0)
+ok - a valid landing authority composes with the check-rollup guard and never replaces it (merges executed: 0)
+ok - the head is re-observed at the moment of use and a moved one refuses (merges executed: 0)
+ok - two live requests claiming one head refuse rather than one being picked (merges executed: 0)
+ok - a closed Browser Sol request no longer governs, and the item lands (merges executed: 1)
+ok - a gate outside the landing-governing set does not block a landing (merges executed: 1)
+ok - an ungoverned local-only task lands through fm-merge-local and reports not-applicable (fast-forwards executed: 1)
+ok - an unruled Browser Sol review gate refuses the real fm-merge-local path (fast-forwards executed: 0)
+ok - an approved ruling lands through fm-merge-local and spends its authority (fast-forwards executed: 1, authorizations spent: 1)
+ok - a spent landing authority refuses a replayed fm-merge-local (fast-forwards executed across two attempts: 1)
+FM_TEST_CONTRACT suite=fm-landing-seam.test.sh status=pass
+```
+
+The pre-existing suites for both landing paths were re-run unchanged on the same tree, because the seam must not have altered any refusal they already owned:
+
+```
+$ bash tests/fm-pr-merge.test.sh | grep -c '^ok'
+45
+$ bash tests/fm-merge-local.test.sh | grep -c '^ok'
+27
+```
+
+### Refreshing this record
+
+Re-run both suites after any change to the seam, either merge gate's merge site, or the authority layer.
+Re-run the red calibration - not just the green suites - after any change to the applicability rule, the governing-gate set, the live-state set, or the act receipt, because those are the four places where this control can go quietly vacuous while staying green.
 
 ## The restart window, stated precisely
 

@@ -59,6 +59,11 @@
 #                the index. It must refuse, naming only the pointer, and must
 #                merge once that single path is settled - the cure can no longer
 #                be locked behind the symptom.
+#
+# Every case runs against its own empty data and config directories, so the
+# ruling-governed landing seam bin/fm-merge-local.sh now consults reads an
+# absence it can observe rather than whatever the developer's own home happens to
+# hold. tests/fm-landing-seam.test.sh owns the governed cases.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -136,6 +141,8 @@ run_merge_local() {
   shift
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
   PATH="${FM_TEST_PATH_PREFIX:-}${FM_TEST_PATH_PREFIX:+:}$PATH" \
     "$MERGE_LOCAL" "$TASK_ID" "$@"
 }

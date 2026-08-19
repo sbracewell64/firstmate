@@ -105,6 +105,23 @@
 # and --subject and silently drops other flags. Adopting the precondition later
 # therefore requires changing the single gh-axi invocation at the end.
 #
+# THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
+# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
+# bin/fm-landing-authorization.sh owns the authority itself. What this file adds
+# is that the merge command RUNS INSIDE the spend when one governs, so an
+# applicable pull request cannot reach `gh-axi pr merge` without consuming a
+# valid, head-bound, one-use authorization. A pull request no ruling governs
+# lands through exactly the gates above and says so with a reported
+# not-applicable observation, because a silent ungoverned landing is
+# indistinguishable from an authorised one.
+#
+# One vocabulary constraint applies to THIS FILE ONLY, and it is not a style
+# preference. A source grep in tests/fm-pr-check-security.test.sh pins a
+# withdrawn head-comparison gate out of this file by the bare name that gate's
+# own variable carried, so no line here - comment included - may use that word.
+# The test names it; `bin/fm-landing-seam-lib.sh` is unconstrained and uses it
+# freely for the same idea.
+#
 # A task released before its pull request lands keeps a durable landing record
 # instead of a meta, and this path lands it through that record. A task released
 # before landing records existed keeps neither, so its record is rebuilt from a
@@ -122,11 +139,23 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-verify-lib.sh
 . "$SCRIPT_DIR/fm-verify-lib.sh"
+# The landing seam needs the outbound gate register and the authorization
+# layer's own identity predicates; both are sourced here so it can consult its
+# owners rather than restate them.
+# shellcheck source=bin/fm-outbound-artifact-lib.sh
+. "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
+# shellcheck source=bin/fm-landing-authorization-lib.sh
+. "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-landing-seam-lib.sh
+. "$SCRIPT_DIR/fm-landing-seam-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -480,9 +509,12 @@ verify_current_head() {
 }
 
 MERGE_META_TMP=
+LANDING_RECEIPT=
 merge_meta_cleanup() {
   [ -z "$MERGE_META_TMP" ] || rm -f -- "$MERGE_META_TMP"
   MERGE_META_TMP=
+  [ -z "$LANDING_RECEIPT" ] || rm -f -- "$LANDING_RECEIPT"
+  LANDING_RECEIPT=
 }
 trap merge_meta_cleanup EXIT
 trap 'exit 1' HUP INT TERM
@@ -491,7 +523,7 @@ trap 'exit 1' HUP INT TERM
 # pr=/pr_head= lines so fm_pr_metadata_identity_parse, which refuses any unknown
 # key after pr=, still accepts the file at every instant.
 record_merge_verification() {
-  local status=$1 head=$2 waived=$3 line state_device meta_device
+  local status=$1 head=$2 waived=$3 landing=$4 line state_device meta_device
   state_device=$(fm_pr_file_device "$STATE") || return 1
   meta_device=$(fm_pr_file_device "$META") || return 1
   [ "$meta_device" = "$state_device" ] || return 1
@@ -499,13 +531,15 @@ record_merge_verification() {
   {
     while IFS= read -r line || [ -n "$line" ]; do
       case "$line" in
-        merge_verification=*|merge_verified_head=*|merge_waived_check=*|pr=*|pr_head=*) ;;
+        merge_verification=*|merge_verified_head=*|merge_waived_check=*) ;;
+        landing_authorization=*|pr=*|pr_head=*) ;;
         *) printf '%s\n' "$line" ;;
       esac
     done < "$META"
     printf 'merge_verification=%s\n' "$status"
     [ -z "$head" ] || printf 'merge_verified_head=%s\n' "$head"
     [ -z "$waived" ] || printf 'merge_waived_check=%s\n' "$waived"
+    [ -z "$landing" ] || printf 'landing_authorization=%s\n' "$landing"
     while IFS= read -r line || [ -n "$line" ]; do
       case "$line" in
         pr=*|pr_head=*) printf '%s\n' "$line" ;;
@@ -517,6 +551,47 @@ record_merge_verification() {
   fm_pr_regular_destination_on_device_or_absent "$META" "$state_device" || return 1
   mv -f -- "$MERGE_META_TMP" "$META" || return 1
   MERGE_META_TMP=
+}
+
+# --- the ruling-derived landing authority -------------------------------------
+#
+# Resolved from the durable correlation store, never from anything the caller
+# asserts, and reported either way. `not-applicable` is printed to stdout as an
+# observation about this landing rather than left silent, because a home that
+# says nothing about governance is indistinguishable from one that checked.
+#
+# LANDING_AUTHORIZATION carries exactly one of two values past this point: the
+# literal `not-applicable`, or a valid authorization id. Every other outcome has
+# already refused, and the merge site refuses again on anything else rather than
+# treating an unexpected value as permission.
+LANDING_AUTH_ID=
+LANDING_AUTHORIZATION=
+resolve_landing_authority() {  # <head>
+  local head=$1
+  if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL"; then
+    printf 'error: refusing to merge head %s: %s: %s\n' \
+      "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+    return 1
+  fi
+  printf '%s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON"
+  case "$FM_LANDING_SEAM_VERDICT" in
+    not-applicable)
+      LANDING_AUTHORIZATION=not-applicable
+      return 0 ;;
+    governed) ;;
+    *)
+      printf 'error: refusing to merge head %s: the landing seam answered "%s", which this gate does not know\n' \
+        "$head" "$FM_LANDING_SEAM_VERDICT" >&2
+      return 1 ;;
+  esac
+  if ! fm_landing_seam_mint "$SCRIPT_DIR/fm-landing-authorization.sh" "$FM_LANDING_SEAM_REQUEST"; then
+    printf 'error: refusing to merge head %s: %s: %s\n' \
+      "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+    return 1
+  fi
+  LANDING_AUTH_ID=$FM_LANDING_SEAM_AUTH_ID
+  LANDING_AUTHORIZATION=$LANDING_AUTH_ID
+  return 0
 }
 
 # This fork carries a released task's landing record as well as a live task's
@@ -593,6 +668,10 @@ grep -qxF "pr=$URL" "$RECORD" || {
 
 VERIFIED_HEAD=
 verify_current_head || exit 1
+# The head the final verification actually read, kept whether or not a check was
+# waived: the waiver narrows what was verified about the head, not which head is
+# about to land, and the landing authority binds to the head.
+LANDING_HEAD=$VERIFIED_HEAD
 if [ -n "$WAIVED_CHECK" ]; then
   # One check on this head was waived rather than verified, so the merge records
   # the waiver and no verified head: the head as a whole was never verified.
@@ -602,7 +681,9 @@ else
   MERGE_VERIFICATION=verified
 fi
 
-record_merge_verification "$MERGE_VERIFICATION" "$VERIFIED_HEAD" "$WAIVED_CHECK" || {
+resolve_landing_authority "$LANDING_HEAD" || exit 1
+
+record_merge_verification "$MERGE_VERIFICATION" "$VERIFIED_HEAD" "$WAIVED_CHECK" "$LANDING_AUTHORIZATION" || {
   echo "error: merge verification metadata could not be recorded" >&2
   exit 1
 }
@@ -614,13 +695,43 @@ grep -qxF "merge_verification=$MERGE_VERIFICATION" "$META" || {
   echo "error: merge verification metadata could not be recorded" >&2
   exit 1
 }
+grep -qxF "landing_authorization=$LANDING_AUTHORIZATION" "$META" || {
+  echo "error: merge verification metadata could not be recorded" >&2
+  exit 1
+}
 
 merge_args=()
 if ! caller_has_merge_method "$@"; then
   merge_args=(--squash)
 fi
 
-gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "${merge_args[@]+"${merge_args[@]}"}" "$@"  # fm-retrieval-audit: write - the merge itself, which is an action and has no observation type
+# The merge command is built once and performed by exactly one of the two paths
+# below, so the argv a governed landing performs is byte-identical to the argv an
+# ungoverned one performs. A governed landing reaches it only from inside the
+# spend: there is no branch here that lands a governed pull request without one.
+# fm-retrieval-audit: write - the merge itself, which is an action and has no observation type
+merge_command=(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "${merge_args[@]+"${merge_args[@]}"}" "$@")
+
+case "$LANDING_AUTHORIZATION" in
+  not-applicable)
+    "${merge_command[@]}"
+    ;;
+  fm-auth-*)
+    LANDING_RECEIPT=$(mktemp "${TMPDIR:-/tmp}/fm-landing-act.XXXXXX") || {
+      echo "error: refusing to merge: the landing act receipt could not be created" >&2
+      exit 1
+    }
+    fm_landing_seam_spend "$SCRIPT_DIR/fm-landing-authorization.sh" \
+      "$LANDING_AUTH_ID" "$LANDING_HEAD" "$LANDING_RECEIPT" "${merge_command[@]}" || {
+      printf 'error: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+      exit 1
+    }
+    ;;
+  *)
+    echo "error: refusing to merge: the landing authority was not resolved, so this merge is unauthorised" >&2
+    exit 1
+    ;;
+esac
 
 # The landing record exists only so a released task's pull request can still be
 # landed here, so it is spent once that merge succeeds. It is retained while a

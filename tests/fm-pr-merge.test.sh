@@ -56,6 +56,11 @@
 #   (w) a PR that resolves to nothing at its forge is still refused
 #   (x) a landing record naming another PR refuses before any forge or merge read
 #   (y) a malformed landing record refuses without being reconstructed
+#
+# Every case runs against its own empty data and config directories, so the
+# ruling-governed landing seam bin/fm-pr-merge.sh now consults reads an absence
+# it can observe rather than whatever the developer's own home happens to hold.
+# tests/fm-landing-seam.test.sh owns the governed cases.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -240,6 +245,8 @@ run_pr_merge() {
   head=$(cat "$case_dir/head" 2>/dev/null || printf '%s' "$GREEN_HEAD")
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
+  FM_DATA_OVERRIDE="$case_dir/data" \
+  FM_CONFIG_OVERRIDE="$case_dir/config" \
   FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" \
   FM_TEST_GH_LOG="$case_dir/gh.log" \
   FM_TEST_GH_HEAD="$head" \
