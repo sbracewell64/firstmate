@@ -199,6 +199,16 @@
 #   venue and pull request the lane already recorded are carried onto the new
 #   metadata rather than re-derived. On success the record moves from pending to
 #   active. Refused on --secondmate, which owns a home rather than a lane.
+#   REFUSED on an orca-backed lane with its own exit status (3, distinct from a
+#   generic failure and from an argument error, because refusing a dispatch is
+#   an outcome rather than a crash): orca owns its task worktree, and orca-side
+#   worktree custody reuse is UNVERIFIED, so a successor dispatch cannot yet
+#   prove it would inherit the lane's worktree instead of allocating a fresh
+#   one - the one outcome the replacement contract forbids. The refusal leaves
+#   the lane completely untouched: no worktree is created, no metadata is
+#   rewritten, and the sanctioned successor record stays exactly as `replace`
+#   minted it. The condition is unverified reuse, not permanent unsupport; it
+#   clears when follow-up item orca-successor-worktree-reuse lands.
 #   --scout records deliverable=scout in the task's meta (report deliverable, scratch
 #   worktree; see AGENTS.md task lifecycle); --secondmate records role=secondmate and
 #   launches in a provisioned firstmate home; the default is a commissioned crew ship
@@ -945,6 +955,17 @@ if [ "$BACKEND" = orca ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=orca does not support --secondmate spawns yet" >&2
   exit 1
 fi
+# A refused successor dispatch is an OUTCOME, not a failure: its status is its
+# own, so a caller can tell "this dispatch was refused and the lane is exactly
+# as it was" apart from an argument error (2) and a crash (1).
+SPAWN_SUCCEED_REFUSED_EXIT=3
+spawn_succeed_refuse_orca() {
+  echo "error: REFUSED - --succeed-execution on an orca-backed lane. Orca owns its own task worktree, and orca-side worktree custody reuse is unverified, so a successor dispatch cannot yet prove it would inherit the lane's worktree instead of allocating a fresh one. Nothing was created and nothing was rewritten: the lane, its worktree and its sanctioned successor record are exactly as bin/fm-attempt.sh replace left them. This refusal clears when follow-up item orca-successor-worktree-reuse verifies the reuse path." >&2
+  exit "$SPAWN_SUCCEED_REFUSED_EXIT"
+}
+if [ "$BACKEND" = orca ] && [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+  spawn_succeed_refuse_orca
+fi
 if [ "$BACKEND" = cmux ] && [ "$KIND" = secondmate ]; then
   echo "error: backend=cmux does not support --secondmate spawns yet" >&2
   exit 1
@@ -1259,6 +1280,9 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
     echo "error: --succeed-execution needs $ID's existing task record at $STATE/$ID.meta; there is no lane here to succeed" >&2
     exit 1
   }
+  if [ "$(fm_meta_get "$STATE/$ID.meta" backend)" = orca ]; then
+    spawn_succeed_refuse_orca
+  fi
   SUCCEED_EXEC_ID=$(fm_meta_get "$STATE/$ID.attempt" execution_id)
   SUCCEED_EXEC_BINDING=$(fm_meta_get "$STATE/$ID.attempt" execution_binding)
   SUCCEED_EXEC_EFFORT=$(fm_meta_get "$STATE/$ID.attempt" execution_effort)

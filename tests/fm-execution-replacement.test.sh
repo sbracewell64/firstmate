@@ -203,7 +203,7 @@ replace_lane() {  # <case-dir> <id> [extra args...]
 # CONTROL 1: an exhausted primary plus a qualified alternate continues on the
 # SAME slot. CONTROL 2: the replacement asks the allocator for nothing.
 test_c01_c02_the_lane_continues_on_its_own_slot_and_asks_for_no_other() {
-  local rec case_dir id wt out rc first_alloc
+  local rec case_dir id wt out rc first_alloc pre_head
   rec=$(make_lane c01)
   IFS='|' read -r _ _ wt _ case_dir id <<EOF
 $rec
@@ -221,6 +221,7 @@ EOF
 
   : > "$case_dir/treehouse.log"
   : > "$case_dir/tmux.log"
+  pre_head=$(git -C "$wt" rev-parse HEAD)
   out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
     --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
     --succeed-execution); rc=$?
@@ -229,6 +230,8 @@ EOF
   [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
     || fail "the successor must hold the SAME worktree, got $(meta_field "$case_dir" "$id" worktree)"
   [ -f "$wt/work.txt" ] || fail "the lane's committed work must still be in the slot"
+  [ "$(git -C "$wt" rev-parse HEAD)" = "$pre_head" ] \
+    || fail "a branch-sitting lane's successor must open on the predecessor's exact head"
 
   assert_not_contains "$(cat "$case_dir/treehouse.log")" "status" \
     "the successor must not consult the allocator at all"
@@ -610,13 +613,17 @@ EOF
     "the refusal must name the state it is preventing"
 
   # An in-progress replacement holds a lock, so a concurrent one cannot mint a
-  # second successor behind its back.
+  # second successor behind its back. The fixture lock is pid-stamped the way
+  # the lock library's own writer stamps it - this test process is alive, so
+  # the lock is genuinely HELD rather than a bare directory the staleness
+  # recovery would steal once it ages past FM_LOCK_STALE_AFTER.
   mkdir "$case_dir/home/state/$id.attempt.lock"
+  printf '%s\n' "$$" > "$case_dir/home/state/$id.attempt.lock/pid"
   out=$(replace_lane "$case_dir" "$id"); rc=$?
   [ "$rc" -eq 4 ] || fail "a concurrent replacement must be could-not-observe, got rc=$rc"$'\n'"$out"
   [ "$(rec_field "$case_dir" "$id" execution_id)" = "$id/e3" ] \
     || fail "a refused concurrent replacement must mint nothing"
-  rmdir "$case_dir/home/state/$id.attempt.lock"
+  rm -rf "$case_dir/home/state/$id.attempt.lock"
   pass "control 13: a crash or a concurrent attempt still leaves exactly one active execution"
 }
 
@@ -666,6 +673,96 @@ EOF
   [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
     || fail "a refused successor launch must leave the sanctioned record untouched"
   pass "a successor launches only onto the binding its gate admitted"
+}
+
+# And only at the effort a gate admitted, so all three axes of the sanctioned
+# binding - harness, model, effort - are pinned by the one door that launches.
+test_a_successor_may_only_launch_at_the_admitted_effort() {
+  local rec case_dir id out rc
+  rec=$(make_lane effortpin)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the replacement must be sanctioned"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_effort)" = medium ] \
+    || fail "the sanctioned successor must carry the admitted effort, got $(rec_field "$case_dir" "$id" execution_effort)"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort low \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "launching a successor at an effort no gate admitted must be refused"$'\n'"$out"
+  assert_contains "$out" "Only the effort a gate admitted may be launched" \
+    "the refusal must name the pinned axis"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "a refused successor launch must leave the sanctioned record untouched"
+  pass "a successor launches only at the effort its gate admitted"
+}
+
+# The head the successor opens on is the predecessor's exact head. A clean lane
+# DETACHED at its own committed head is exactly the shape an ordinary pool slot
+# is left in, and the one shape where a slot-base placement would silently
+# orphan the predecessor's commits to the reflog - so the invariant is pinned
+# both ways: the head is unchanged, and the predecessor's head remains an
+# ancestor of (or equal to) the lane head after placement. The branch-sitting
+# partner assertion lives in control 1+2, so neither shape is vacuous.
+test_a_detached_lane_keeps_the_predecessors_exact_head() {
+  local rec case_dir id wt out rc pre_head post_head
+  rec=$(make_lane detached)
+  IFS='|' read -r _ _ wt _ case_dir id <<EOF
+$rec
+EOF
+  git -C "$wt" checkout --quiet --detach
+  pre_head=$(git -C "$wt" rev-parse HEAD)
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "a clean detached lane must be replaceable"$'\n'"$out"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || fail "the successor dispatch on a detached lane must succeed"$'\n'"$out"
+  post_head=$(git -C "$wt" rev-parse HEAD)
+  [ "$post_head" = "$pre_head" ] \
+    || fail "the successor must open on the predecessor's exact head: $pre_head became $post_head"
+  git -C "$wt" merge-base --is-ancestor "$pre_head" HEAD 2>/dev/null \
+    || git -C "$wt" merge-base --is-ancestor "$pre_head" "$post_head" \
+    || fail "the predecessor's head must remain reachable from the lane head"
+  pass "a successor on a clean detached lane opens on the predecessor's exact head"
+}
+
+# An orca-backed lane refuses succession as a TYPED outcome - its own exit
+# status, a named condition (unverified custody reuse), and the item that lifts
+# it - and the refusal touches nothing: no worktree, no metadata, and the
+# sanctioned record stays exactly as replace minted it.
+test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified() {
+  local rec case_dir id wt out rc
+  rec=$(make_lane orcalane)
+  IFS='|' read -r _ _ wt _ case_dir id <<EOF
+$rec
+EOF
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the replacement must be sanctioned"$'\n'"$out"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --backend orca --succeed-execution); rc=$?
+  [ "$rc" -eq 3 ] || fail "an orca successor dispatch must be refused with its own status, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "REFUSED" "the refusal must present as an outcome, not a crash"
+  assert_contains "$out" "unverified" \
+    "the refusal must name the condition rather than reading as permanent unsupport"
+  assert_contains "$out" "orca-successor-worktree-reuse" \
+    "the refusal must name what lifts it"
+  [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
+    || fail "a refused orca succession must leave the lane's recorded worktree untouched"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "a refused orca succession must leave the sanctioned successor exactly as replace minted it"
+
+  # The refusal wedged nothing: the very same successor still launches end to
+  # end on the default backend.
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || fail "the same successor on the default backend must still launch"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = active ] \
+    || fail "the launched successor must be recorded active"
+  pass "an orca lane refuses succession as unverified custody reuse, and the lane is untouched"
 }
 
 # And a successor dispatch with nothing sanctioned is refused outright, so the
@@ -841,6 +938,9 @@ test_c06_unresolved_questions_and_obligations_survive
 test_c13_a_crash_during_replacement_leaves_at_most_one_active_attempt
 test_an_ordinary_relaunch_may_not_rebind_the_lane
 test_a_successor_may_only_launch_on_the_admitted_binding
+test_a_successor_may_only_launch_at_the_admitted_effort
+test_a_detached_lane_keeps_the_predecessors_exact_head
+test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified
 test_a_successor_dispatch_without_a_sanctioned_successor_is_refused
 test_only_a_confirmed_launch_is_protected_from_rebinding
 test_a_reviewing_lane_refuses_a_replacement_that_is_not_independent_of_its_maker

@@ -13,7 +13,7 @@ The regression coverage is [`../../tests/fm-execution-replacement.test.sh`](../.
 
 Measured 2026-08-19 on Linux 6.18 (WSL2), bash 5.2, git 2.53.0, shellcheck 0.11.0.
 
-The suite runs **16 test functions covering the 14 declared controls plus two boundary rules**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
+The suite runs **19 test functions covering the 14 declared controls, the boundary rules the implementation created, and three review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
 Nothing asserts implementation source bytes.
 
 ```
@@ -30,15 +30,22 @@ ok - control 6: unresolved questions and active obligations survive replacement
 ok - control 13: a crash or a concurrent attempt still leaves exactly one active execution
 ok - the only door: an ordinary relaunch cannot rebind a lane
 ok - a successor launches only onto the binding its gate admitted
+ok - a successor launches only at the effort its gate admitted
+ok - a successor on a clean detached lane opens on the predecessor's exact head
+ok - an orca lane refuses succession as unverified custody reuse, and the lane is untouched
 ok - a successor dispatch cannot skip the gate that sanctions it
 ok - only a confirmed launch is protected from rebinding; an unstarted one produced nothing
 ok - a reviewing lane refuses a replacement that is not independent of its maker
 ok - the execution ledger retires with the attempt record
 ```
 
-That is a POSITIVE EXECUTED COUNT - sixteen assertion groups reported, listed rather than summarized - and not an absence of failures.
+That is a POSITIVE EXECUTED COUNT - nineteen assertion groups reported, listed rather than summarized - and not an absence of failures.
 A run that executed nothing would print nothing here, which is the reason the list is recorded at all.
-The suite takes about 60 seconds; the recorded portable-serial weight hint in `bin/fm-test-run.sh` is seeded from that measurement.
+The suite takes about 70 seconds; the recorded portable-serial weight hint in `bin/fm-test-run.sh` is seeded from that measurement.
+
+Three of the nineteen are review-regression cases added after the initial implementation was reviewed, each named for the defect it guards: the effort axis of the sanctioned binding left unpinned at the launch door, a clean DETACHED lane's head silently reset to the slot base by the successor dispatch (unreachable from the original fixtures, which all sat on a named branch), and an orca-backed lane's succession silently allocating a fresh worktree instead of refusing.
+The orca case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the follow-up item `orca-successor-worktree-reuse` that lifts it, and the lane - worktree, metadata and sanctioned record - untouched afterwards.
+These three were authored against defects that existed in the reviewed tree, but they have not been through the defect-build watch below; what they establish is bounded to the assertions they print.
 
 ## Each control watched RED against its own defect build
 
