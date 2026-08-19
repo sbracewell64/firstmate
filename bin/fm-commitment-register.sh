@@ -1626,15 +1626,16 @@ evaluate_json_entry() {  # <id> <path>
   # an empty field stays an empty field. Both characters are stripped from every
   # value first, so nothing an entry carries can move a field boundary.
   #
-  # A malformed unobserved_conditions is inadmissible below; this read only has
-  # to avoid putting jq's complaint about it on the caller's stderr meanwhile,
-  # so it is caught inside jq and the whole read falls back to empty fields
-  # rather than to half-set ones.
+  # A malformed unobserved_conditions or probes is inadmissible below; this read
+  # only has to keep jq's complaint about either off the caller's stderr and off
+  # the other nine fields meanwhile - the human fixing an inadmissible entry
+  # still needs its recorded/authority/note shown - so each is caught inside jq
+  # and only its own field goes empty rather than the whole read.
   if ! entry_fields=$(printf '%s' "$doc" | jq -j --arg sep "$ENTRY_FIELD_SEP" '
     def flat: tostring | gsub("[\n\u001f]"; " ");
     [ .recorded // "", .authority // "", .unmet_state // "", .satisfied_when // "",
       .assurance // "",
-      ([ (.probes // [.probe])[] | .kind // empty ] | join("+")),
+      (try ([ (.probes // [.probe])[] | .kind // empty ] | join("+")) catch ""),
       .control // "", .deadline // "", .note // "",
       (try ((.unobserved_conditions // []) | join("; ")) catch "")
     ] | map(flat) | join($sep)' 2>/dev/null); then
