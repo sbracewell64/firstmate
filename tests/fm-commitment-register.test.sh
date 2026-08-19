@@ -1817,6 +1817,304 @@ JSON
   pass "a mention in a comment or a usage string is not a runtime caller"
 }
 
+# --- a catalog row is read for what it NAMES, and the name is resolved --------
+#
+# The commitment this probe kind was added for is satisfied when a capability row
+# names an owner and a verifier. A name pointing at nothing is the
+# recorded-but-not-real shape this whole register refuses, so the name is
+# resolved rather than merely read - and the PASS control is asserted first, so
+# every refusal below is evidence the probe fires rather than evidence it can
+# never pass.
+#
+# Every case declares its OWN catalog path, so one register run answers all of
+# them. Each register invocation costs real subprocesses, and two decision probes
+# pinned against this suite run it twice inside one 60s bound - a case that spends
+# a run it does not need spends it out of that bound.
+capability_row_owned_resolves_what_the_row_names() {
+  local dir home out id state evidence
+  local REG_ROOT
+  dir=$(make_register caprow)
+  home=$(make_home caprow)
+  REG_ROOT=$(make_code_root caprow)
+  mkdir -p "$REG_ROOT/capabilities" "$REG_ROOT/bin" "$REG_ROOT/tests"
+  printf '#!/usr/bin/env bash\n' > "$REG_ROOT/bin/fm-owner.sh"
+  printf '#!/usr/bin/env bash\n' > "$REG_ROOT/tests/fm-owner.test.sh"
+
+  # <id> <rows-json> - one entry probing one catalog of its own, so the whole
+  # table below is answered by a single run.
+  write_case() {
+    printf '{"capabilities": %s}\n' "$2" > "$REG_ROOT/capabilities/$1.json"
+    cat > "$dir/$1.json" <<JSON
+{
+  "commitment_schema_version": 1,
+  "id": "$1",
+  "recorded": "the catalog names who owns this capability and what pins them",
+  "authority": "tests/fm-commitment-register.test.sh",
+  "unmet_state": "RULED-NOT-ENFORCED",
+  "satisfied_when": "the row names an owner and a verifier that both exist",
+  "assurance": "executable",
+  "probe": {"kind": "capability_row_owned",
+            "catalog": "capabilities/$1.json",
+            "capability": "net.request"}
+}
+JSON
+  }
+
+  write_case owned '[{"name": "net.request", "owner": "bin/fm-owner.sh", "verifier": "tests/fm-owner.test.sh"}]'
+  write_case unowned '[{"name": "net.request", "owner": null, "verifier": null}]'
+  write_case noverifier '[{"name": "net.request", "owner": "bin/fm-owner.sh", "verifier": null}]'
+  write_case ownergone '[{"name": "net.request", "owner": "bin/fm-not-there.sh", "verifier": "tests/fm-owner.test.sh"}]'
+  write_case verifiergone '[{"name": "net.request", "owner": "bin/fm-owner.sh", "verifier": "tests/fm-not-there.test.sh"}]'
+  write_case ownerescapes '[{"name": "net.request", "owner": "/etc/passwd", "verifier": "tests/fm-owner.test.sh"}]'
+  write_case rowabsent '[{"name": "other.capability", "owner": "bin/fm-owner.sh", "verifier": "tests/fm-owner.test.sh"}]'
+  write_case rowtwice '[{"name": "net.request", "owner": "bin/fm-owner.sh", "verifier": "tests/fm-owner.test.sh"}, {"name": "net.request", "owner": null, "verifier": null}]'
+  write_case unparseable '[]'
+  printf 'not json at all\n' > "$REG_ROOT/capabilities/unparseable.json"
+  write_case catalogabsent '[]'
+  rm -f "$REG_ROOT/capabilities/catalogabsent.json"
+
+  out=$(run_reg "$dir" "$home" --json)
+  state_of() { printf '%s' "$out" | jq -r --arg i "$1" '.entries[] | select(.id==$i) | .state'; }
+  evidence_of() { printf '%s' "$out" | jq -r --arg i "$1" '.entries[] | select(.id==$i) | .probe_evidence'; }
+
+  # THE CONTROL: a row naming an owner and a verifier that both exist satisfies
+  # the entry, so every refusal below is a verdict rather than a probe that can
+  # never pass.
+  state=$(state_of owned)
+  [ "$state" = SATISFIED ] \
+    || fail "control: a row naming an owner and a verifier that both exist must satisfy the entry, got $state"
+
+  state=$(state_of unowned)
+  [ "$state" = UNMET ] || fail "a row with owner null and verifier null must be UNMET, got $state"
+  assert_contains "$(evidence_of unowned)" "owner null and verifier null" \
+    "the evidence must say what the row actually records"
+
+  [ "$(state_of noverifier)" = UNMET ] || fail "a row naming an owner but no verifier must be UNMET"
+
+  state=$(state_of ownergone)
+  [ "$state" = UNMET ] || fail "a row naming an owner that does not exist must be UNMET, got $state"
+  assert_contains "$(evidence_of ownergone)" "no such file exists" \
+    "a named owner that is not there is an observed absence, and the evidence must say so"
+
+  [ "$(state_of verifiergone)" = UNMET ] || fail "a row naming a verifier that does not exist must be UNMET"
+
+  # A row whose owner escapes the tracked code root names something this register
+  # never audited, so it is not an owner in this repository.
+  state=$(state_of ownerescapes)
+  [ "$state" = UNMET ] || fail "a row naming an absolute path as its owner must be UNMET, got $state"
+  assert_contains "$(evidence_of ownerescapes)" "not a file in this repository" \
+    "an owner outside the code root must be refused by name, not silently resolved"
+
+  state=$(state_of rowabsent)
+  [ "$state" = UNMET ] || fail "a catalog carrying no such row must be UNMET, got $state"
+  assert_contains "$(evidence_of rowabsent)" "no net.request row at all" \
+    "an absent row must be reported as absent rather than as unreadable"
+
+  state=$(state_of rowtwice)
+  [ "$state" = UNMET ] || fail "duplicated rows must be UNMET rather than answered from the first, got $state"
+  assert_contains "$(evidence_of rowtwice)" "2 rows named net.request" \
+    "duplicated rows must be reported, because no single row states who owns it"
+
+  # Could-not-observe, proven distinct from both verdicts above.
+  state=$(state_of unparseable)
+  [ "$state" = UNOBSERVED ] || fail "an unparseable catalog must be could-not-observe, got $state"
+  assert_contains "$(evidence_of unparseable)" "does not parse as a capability catalog" \
+    "an unparseable catalog must say so rather than reading as an unowned row"
+
+  state=$(state_of catalogabsent)
+  [ "$state" = UNOBSERVED ] || fail "an absent catalog must be could-not-observe, got $state"
+
+  unset -f write_case state_of evidence_of
+  pass "a capability row is read for what it names, and a name that resolves to nothing is observed rather than accepted"
+}
+
+# --- several probes are composed by three-valued AND -------------------------
+#
+# A commitment with more than one half is satisfied only when every half is
+# observed good, so the composition is Kleene strong AND. Every one of its three
+# outcomes is driven here, and each is paired with the composition that differs
+# from it by exactly one probe - otherwise a case could pass because a probe
+# failed rather than because the composition ruled.
+#
+# The halves are catalog rows because that kind reaches all three values without
+# spawning a bounded subprocess per probe. Which kind produces a result is not
+# what this case is about: the composition law is over the three values, and the
+# cheapest kind that reaches all three is the right instrument for it.
+probes_compose_by_three_valued_and() {
+  local dir home out state evidence
+  local REG_ROOT
+  dir=$(make_register compose)
+  home=$(make_home compose)
+  REG_ROOT=$(make_code_root compose)
+  mkdir -p "$REG_ROOT/capabilities" "$REG_ROOT/bin"
+  printf '#!/usr/bin/env bash\n' > "$REG_ROOT/bin/fm-owner.sh"
+  # good: PASS. bad: FAIL, an unowned row. missing: could-not-observe, a catalog
+  # that is not there at all - deliberately never created.
+  printf '{"capabilities": [{"name": "c", "owner": "bin/fm-owner.sh", "verifier": "bin/fm-owner.sh"}]}\n' \
+    > "$REG_ROOT/capabilities/good.json"
+  printf '{"capabilities": [{"name": "c", "owner": null, "verifier": null}]}\n' \
+    > "$REG_ROOT/capabilities/bad.json"
+
+  write_pair() {  # <id> <first-catalog> <second-catalog>
+    cat > "$dir/$1.json" <<JSON
+{
+  "commitment_schema_version": 1,
+  "id": "$1",
+  "recorded": "two halves must both hold",
+  "authority": "tests/fm-commitment-register.test.sh",
+  "unmet_state": "RULED-NOT-ENFORCED",
+  "satisfied_when": "both catalogs name an owner and a verifier that exist",
+  "assurance": "executable",
+  "probes": [
+    {"kind": "capability_row_owned", "catalog": "capabilities/$2.json", "capability": "c"},
+    {"kind": "capability_row_owned", "catalog": "capabilities/$3.json", "capability": "c"}
+  ]
+}
+JSON
+  }
+
+  write_pair bothpass good good
+  write_pair passfail good bad
+  write_pair failmissing bad missing
+  write_pair passmissing good missing
+
+  out=$(run_reg "$dir" "$home" --json)
+  state_of() { printf '%s' "$out" | jq -r --arg i "$1" '.entries[] | select(.id==$i) | .state'; }
+
+  state=$(state_of bothpass)
+  [ "$state" = SATISFIED ] || fail "every half observed good must be SATISFIED, got $state"
+
+  state=$(state_of passfail)
+  [ "$state" = UNMET ] || fail "a passing half must not carry a failing one to SATISFIED, got $state"
+  evidence=$(printf '%s' "$out" | jq -r '.entries[] | select(.id=="passfail") | .probe_evidence')
+  assert_contains "$evidence" "good.json" "the composed evidence must name the half that answered"
+  assert_contains "$evidence" "bad.json" "the composed evidence must name the half that did not"
+
+  # False dominates unknown: one half observed unreal settles the commitment even
+  # though the other could not be observed at all.
+  state=$(state_of failmissing)
+  [ "$state" = UNMET ] \
+    || fail "a failing half must settle the entry even beside an unobservable one, got $state"
+
+  # The control for that rule, differing by exactly one probe: with the failing
+  # half replaced by a passing one, the unobservable half now rules and the entry
+  # is could-not-observe rather than either verdict.
+  state=$(state_of passmissing)
+  [ "$state" = UNOBSERVED ] \
+    || fail "control: an unobservable half beside a passing one must be could-not-observe, got $state"
+
+  out=$(run_reg "$dir" "$home" --open)
+  assert_not_contains "$out" "COMMITMENT: bothpass" \
+    "an entry whose every half passed must retire with no hand edit"
+  assert_contains "$out" "COMMITMENT: passmissing COULD-NOT-OBSERVE" \
+    "a half nobody could observe must keep the entry surfaced"
+
+  unset -f write_pair state_of
+  pass "several probes compose by three-valued AND, and every outcome is driven against the composition that differs by one probe"
+}
+
+# --- probes is validated, and every probe in it is a probe target ------------
+#
+# probes can WITHHOLD satisfaction the way unobserved_conditions can, so a
+# malformed one would observe fewer halves than the entry declares - and fewer
+# observed halves is exactly how a partial answer reaches SATISFIED. The target
+# guard is walked here too, driven on the SECOND probe: a guard that checked only
+# the first would go vacuous for every other half the day an entry declared one.
+probes_shape_and_every_target_are_validated() {
+  local dir home out state shape err i=0 id
+  local REG_ROOT
+  dir=$(make_register probesshape)
+  home=$(make_home probesshape)
+  REG_ROOT=$(make_code_root probesshape)
+  printf '#!/usr/bin/env bash\nprintf "answered\\n"\n' > "$REG_ROOT/owner.sh"
+  chmod +x "$REG_ROOT/owner.sh"
+  err="$TMP_ROOT/probesshape/stderr"
+
+  write_probes() {  # <id> <raw-json-for-the-probes-field>
+    cat > "$dir/$1.json" <<JSON
+{
+  "commitment_schema_version": 1,
+  "id": "$1",
+  "recorded": "two halves must both hold",
+  "authority": "tests/fm-commitment-register.test.sh",
+  "unmet_state": "RULED-NOT-ENFORCED",
+  "satisfied_when": "both halves hold",
+  "assurance": "executable",
+  "probes": $2
+}
+JSON
+  }
+
+  for shape in \
+    '{"kind": "command_answers", "command": "owner.sh"}' \
+    '[]' \
+    '[{"kind": "command_answers", "command": "owner.sh"}]' \
+    '[{"kind": "command_answers", "command": "owner.sh"}, {"command": "owner.sh"}]' \
+    '[{"kind": "command_answers", "command": "owner.sh"}, null]' \
+    '"owner.sh"'; do
+    i=$((i + 1))
+    write_probes "malformed$i" "$shape"
+  done
+
+  # An entry declaring both spellings has two declarations and no single one.
+  cat > "$dir/bothspellings.json" <<'JSON'
+{
+  "commitment_schema_version": 1,
+  "id": "bothspellings",
+  "recorded": "two halves must both hold",
+  "authority": "tests/fm-commitment-register.test.sh",
+  "unmet_state": "RULED-NOT-ENFORCED",
+  "satisfied_when": "both halves hold",
+  "assurance": "executable",
+  "probe": {"kind": "command_answers", "command": "owner.sh"},
+  "probes": [{"kind": "command_answers", "command": "owner.sh"},
+             {"kind": "command_answers", "command": "owner.sh"}]
+}
+JSON
+
+  # The target guard, driven on the SECOND probe, and its control: the same entry
+  # with that second target inside the code root reaches a verdict, so the
+  # refusal is the guard firing rather than a two-probe entry being unusable.
+  write_probes secondescapes '[{"kind": "command_answers", "command": "owner.sh"}, {"kind": "command_answers", "command": "/bin/echo"}]'
+  write_probes secondinroot '[{"kind": "command_answers", "command": "owner.sh"}, {"kind": "command_answers", "command": "owner.sh"}]'
+
+  out=$(run_reg "$dir" "$home" --json 2>"$err")
+  state_of() { printf '%s' "$out" | jq -r --arg i "$1" '.entries[] | select(.id==$i) | .state'; }
+  evidence_of() { printf '%s' "$out" | jq -r --arg i "$1" '.entries[] | select(.id==$i) | .probe_evidence'; }
+
+  i=0
+  while [ "$i" -lt 6 ]; do
+    i=$((i + 1))
+    id="malformed$i"
+    state=$(state_of "$id")
+    [ "$state" = UNOBSERVED ] \
+      || fail "$id reached $state instead of being refused as malformed"
+    assert_contains "$(evidence_of "$id")" "probes must be an array of two or more objects" \
+      "the refusal must name the malformed field"
+  done
+  [ ! -s "$err" ] || fail "a malformed probes leaked a parser complaint to the caller: $(cat "$err")"
+
+  state=$(state_of bothspellings)
+  [ "$state" = UNOBSERVED ] || fail "an entry declaring both probe and probes reached $state"
+  assert_contains "$(evidence_of bothspellings)" "declares both probe and probes" \
+    "the refusal must say which two declarations disagree"
+
+  state=$(state_of secondescapes)
+  [ "$state" = UNOBSERVED ] \
+    || fail "an absolute target in the second probe reached $state instead of being refused"
+  assert_contains "$(evidence_of secondescapes)" "is an absolute path" \
+    "the refusal must name the target that escapes the code root"
+
+  state=$(state_of secondinroot)
+  [ "$state" = SATISFIED ] \
+    || fail "control: a well-formed two-probe entry with in-root targets must reach a verdict, got $state"
+  assert_not_contains "$(evidence_of secondinroot)" "probes must be an array of two or more objects" \
+    "a well-formed probes must not be refused as malformed"
+
+  unset -f write_probes state_of evidence_of
+  pass "probes is validated as a shape, and every probe it declares is a constrained target"
+}
+
 red_capable_then_retires
 three_values_are_distinct
 status_word_cannot_satisfy
@@ -1841,6 +2139,9 @@ typed_probe_target_outside_the_code_root_is_refused
 path_bearing_probe_fields_are_derived_from_the_schema
 absolute_path_target_is_refused_verbatim
 malformed_unobserved_conditions_is_inadmissible
+capability_row_owned_resolves_what_the_row_names
+probes_compose_by_three_valued_and
+probes_shape_and_every_target_are_validated
 symbol_called_does_not_count_a_mention
 fold_keeps_refused_resolution_open
 enumeration_executes_no_probe_and_still_completes

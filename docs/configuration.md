@@ -243,7 +243,8 @@ An absent tracked registry is could-not-observe and is reported, because that di
 An absent overlay is silent, because most homes have no private commitments.
 
 `bin/fm-commitment-register.sh` is the only interpreter, and its header and `--help` own the mechanics.
-Every state it prints is computed from that entry's probe on the spot and is never stored, so an entry retires by itself when its commitment becomes real, and no hand-written status word can satisfy one.
+Every state it prints is computed from that entry's probes on the spot and is never stored, so an entry retires by itself when its commitment becomes real, and no hand-written status word can satisfy one.
+A commitment with more than one half declares more than one probe and is satisfied only when every half is observed good, so a half nobody could observe withholds satisfaction rather than being carried by the halves that passed.
 
 The one thing it writes is `state/commitment-probe-cache/`, and only for the probes pinned into decision files, which are consulted on the open-decision fold's hot path rather than once per session.
 That cache is an accelerator for an answer and never a substitute for one: a stored result carries its observation time into whatever reads it, and past `FM_COMMITMENT_PROBE_CACHE_TTL` seconds (default 3600, `0` to disable) it is not served at all.

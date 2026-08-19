@@ -67,6 +67,22 @@
 #                  declares no probe, and NEVER reaches SATISFIED: it stays marked
 #                  and visible rather than being read as verified.
 #
+# A COMMITMENT WITH MORE THAN ONE HALF DECLARES MORE THAN ONE PROBE. A JSON entry
+# spells one half `probe` and several `probes`, never both, and the answer is
+# composed by Kleene strong three-valued AND: every PASS is PASS; any FAIL is
+# FAIL even when another half could not be observed, because one half observed
+# unreal settles that the commitment is not real; otherwise, with no FAIL and a
+# half unobserved, could-not-observe. That is the SAME law unobserved_conditions
+# already applies with a constant-unknown operand, so an entry's halves are not
+# ruled one way when probed and another way when only declared.
+#
+# unobserved_conditions is now the WEAKER of those two and is for a half with
+# nothing to probe at all. It carries prose saying why no probe is possible, and
+# prose ages: the first entry ever to use it declared a catalog unprobeable that
+# had already landed as tracked code the day before, so the register printed that
+# falsehood as evidence at every session start until someone read it. A half that
+# gains a landed artifact moves to `probes` and the declaration goes away.
+#
 # NO BACK-FILLING. A decision key ruled before 2026-08-10 carries no probe block,
 # and none is invented for it: it simply has no registered probe, so the fold
 # below behaves for it exactly as it always did, and this register reports its
@@ -558,6 +574,93 @@ probe_launch_permission_enforced() {  # <probe-json>
   probe_answer PASS verified "every launchable harness composes a session with permission enforcement active"
 }
 
+# Does a named row in the capability catalog name an owner and a verifier that
+# both exist? The commitment this answers is satisfied when the row NAMES them,
+# and a name pointing at nothing is the recorded-but-not-real shape this whole
+# register refuses - so the name is resolved rather than merely read, exactly as
+# probe_command_answers treats a declared owner that is not there as an OBSERVED
+# absence rather than an unobservable one.
+#
+# Nothing here is executed. The row's owner and verifier are tested for existence
+# only, and each goes through probe_target_fault first, because those two paths
+# come out of a catalog file rather than out of the entry this register already
+# validated - the same reason the entry's own targets are constrained.
+#
+# A PASS here is not containment. capabilities/catalog.json certifies itself a
+# capability boundary and not a security one, and reading a named owner as
+# enforcement would be the wrong subject: this probe observes what the catalog
+# RECORDS, and the launch posture is what observes what a session actually does.
+probe_capability_row_owned() {  # <probe-json>
+  local probe=$1 rel name path rows owner verifier fault
+  rel=$(printf '%s' "$probe" | jq -r '.catalog // ""')
+  name=$(printf '%s' "$probe" | jq -r '.capability // ""')
+  if [ -z "$rel" ] || [ -z "$name" ]; then
+    probe_answer NO_VERIFIER_RAN usage_error "probe declares no catalog or no capability"
+    return 0
+  fi
+  fault=$(probe_target_fault catalog "$rel")
+  if [ -n "$fault" ]; then
+    probe_answer NO_VERIFIER_RAN usage_error "refusing to run this probe: $fault"
+    return 0
+  fi
+  path="$FM_ROOT/$rel"
+  if [ ! -r "$path" ]; then
+    probe_answer NO_VERIFIER_RAN verification_unreachable \
+      "the capability catalog $rel is not readable, so what its $name row names could not be read"
+    return 0
+  fi
+  if ! jq -e '(.capabilities | type) == "array" and (.capabilities | length) > 0' "$path" >/dev/null 2>&1; then
+    probe_answer NO_VERIFIER_RAN verification_unreachable \
+      "$rel does not parse as a capability catalog with a non-empty capabilities list, so its $name row could not be read"
+    return 0
+  fi
+  rows=$(jq --arg n "$name" '[.capabilities[] | select(.name == $n)] | length' "$path" 2>/dev/null) || rows=
+  case "$rows" in
+    1) ;;
+    0)
+      probe_answer FAIL verifier_reported_failure \
+        "$rel carries no $name row at all, so nothing there names an owner or a verifier for it"
+      return 0
+      ;;
+    '')
+      probe_answer NO_VERIFIER_RAN verification_unreachable \
+        "the $name rows in $rel could not be counted, so what that row names could not be read"
+      return 0
+      ;;
+    *)
+      probe_answer FAIL verifier_reported_failure \
+        "$rel carries $rows rows named $name, so no single row states who owns it"
+      return 0
+      ;;
+  esac
+  owner=$(jq -r --arg n "$name" '[.capabilities[] | select(.name == $n)][0].owner // ""' "$path" 2>/dev/null) || owner=
+  verifier=$(jq -r --arg n "$name" '[.capabilities[] | select(.name == $n)][0].verifier // ""' "$path" 2>/dev/null) || verifier=
+  if [ -z "$owner" ] || [ -z "$verifier" ]; then
+    probe_answer FAIL verifier_reported_failure \
+      "$rel records $name with owner $(printf '%s' "${owner:-null}") and verifier $(printf '%s' "${verifier:-null}"), so the row names no owner, no verifier, or neither"
+    return 0
+  fi
+  fault=$(probe_target_fault "the $name row's owner" "$owner")
+  [ -n "$fault" ] || fault=$(probe_target_fault "the $name row's verifier" "$verifier")
+  if [ -n "$fault" ]; then
+    probe_answer FAIL verifier_reported_failure \
+      "$rel names $name's owner and verifier, but $fault, so what it names is not a file in this repository"
+    return 0
+  fi
+  if [ ! -e "$FM_ROOT/$owner" ]; then
+    probe_answer FAIL verifier_reported_failure \
+      "$rel names $owner as $name's owner and no such file exists, so the row names an owner that is not there"
+    return 0
+  fi
+  if [ ! -e "$FM_ROOT/$verifier" ]; then
+    probe_answer FAIL verifier_reported_failure \
+      "$rel names $verifier as $name's verifier and no such file exists, so the row names a verifier that is not there"
+    return 0
+  fi
+  probe_answer PASS verified \
+    "$rel records $name with owner $owner and verifier $verifier, and both exist"
+}
+
 # --- typed-probe targets live under the tracked code root --------------------
 #
 # The probe KINDS are a closed set; the TARGETS they run are not. command, test
@@ -902,6 +1005,7 @@ run_probe() {  # <probe-json>
     test_passes) probe_test_passes "$1" ;;
     symbol_called) probe_symbol_called "$1" ;;
     work_owned) probe_work_owned "$1" ;;
+    capability_row_owned) probe_capability_row_owned "$1" ;;
     *) probe_answer NO_VERIFIER_RAN usage_error "unknown probe kind \"$kind\"" ;;
   esac
 }
@@ -1203,9 +1307,24 @@ read_schema() {
   return 0
 }
 
+# One compact probe per line, whichever way the entry spelled them. A commitment
+# with one half declares `probe`; one with several declares `probes`. Everything
+# downstream reads this list rather than either field, so the two spellings cannot
+# be validated, bounded, or run differently.
+entry_probe_list() {  # <entry-json>
+  local doc=$1
+  if printf '%s' "$doc" | jq -e '(.probes | type) == "array"' >/dev/null 2>&1; then
+    printf '%s' "$doc" | jq -c '.probes[]' 2>/dev/null
+    return 0
+  fi
+  if printf '%s' "$doc" | jq -e '(.probe | type) == "object"' >/dev/null 2>&1; then
+    printf '%s' "$doc" | jq -c '.probe' 2>/dev/null
+  fi
+}
+
 # Prints one refusal reason, or nothing when the entry is admissible.
 entry_inadmissible_reason() {  # <entry-json> <expected-id>
-  local doc=$1 want=$2 key got tier fault
+  local doc=$1 want=$2 key got tier fault probe
   printf '%s' "$doc" | jq -e 'type == "object"' >/dev/null 2>&1 \
     || { printf 'entry is not a JSON object'; return 0; }
   got=$(printf '%s' "$doc" | jq -r '.id // ""')
@@ -1237,9 +1356,17 @@ EOF
     printf 'unknown assurance tier "%s"' "$tier"
     return 0
   fi
+  # A required key containing "|" names ALTERNATIVES and any one of them
+  # satisfies it. The split is generic and the alternatives live in the schema,
+  # so a tier's requirement is never half-stated here: `probe|probes` is one
+  # requirement - that the entry declares something that observes it - spelled
+  # two ways for one half and for several.
   while IFS= read -r key; do
     [ -n "$key" ] || continue
-    if ! printf '%s' "$doc" | jq -e --arg k "$key" '(.[$k] // "") != "" or ((.[$k] | type) == "object")' >/dev/null 2>&1; then
+    if ! printf '%s' "$doc" | jq -e --arg ks "$key" '
+      . as $doc
+      | ($ks | split("|")) as $alts
+      | any($alts[]; (($doc[.] // "") != "") or (($doc[.] | type) == "object"))' >/dev/null 2>&1; then
       printf 'assurance tier "%s" requires %s, and the entry has none' "$tier" "$key"
       return 0
     fi
@@ -1251,22 +1378,51 @@ EOF
       return 0
     fi
   done < <(jq -r --arg t "$tier" '.forbidden_by_assurance[$t][]? ' "$SCHEMA_PATH")
+  # An entry carrying both spellings declares two answers and no single one, so
+  # it is refused rather than resolved by preferring either - picking one would
+  # invent the entry's meaning, which is what the parser of the pinned decision
+  # block refuses a second probe block for.
+  if printf '%s' "$doc" | jq -e 'has("probe") and has("probes")' >/dev/null 2>&1; then
+    printf 'entry declares both probe and probes; one commitment has one set of probes, and choosing between two declarations would invent which'
+    return 0
+  fi
+  # probes is validated the same way unobserved_conditions is, and for the same
+  # reason: a malformed one would silently observe fewer halves than the entry
+  # declares, and fewer observed halves is exactly how a partial answer reaches
+  # SATISFIED. Two or more, because an entry with one half declares `probe` and
+  # two spellings of one thing drift.
+  if printf '%s' "$doc" | jq -e 'has("probes")' >/dev/null 2>&1; then
+    printf '%s' "$doc" | jq -e '
+      (.probes | type) == "array"
+      and (.probes | length) >= 2
+      and all(.probes[]; (type == "object") and ((.kind // "") != ""))' >/dev/null 2>&1 \
+      || { printf 'probes must be an array of two or more objects each carrying a non-empty kind; a malformed one would observe fewer halves than the entry declares, and an entry with one probe declares it as probe'; return 0; }
+  fi
   if [ "$tier" != attested ]; then
-    printf '%s' "$doc" | jq -e '(.probe | type) == "object" and ((.probe.kind // "") != "")' >/dev/null 2>&1 \
+    [ -n "$(entry_probe_list "$doc")" ] \
       || { printf 'entry declares no probe; an entry without one cannot be admitted'; return 0; }
+    printf '%s' "$doc" | jq -e 'all((.probes // [.probe])[]; (.kind // "") != "")' >/dev/null 2>&1 \
+      || { printf 'entry declares a probe with no kind; an entry without one cannot be admitted'; return 0; }
   fi
   # Every path field a probe kind can carry, refused HERE rather than only inside
   # each kind, so the entry is reported inadmissible before anything is run. The
   # set comes from the schema (see PROBE_PATH_KEYS above), so a kind added later
   # is constrained the moment its arg description carries the marker rather than
-  # the moment someone remembers to edit this file.
-  while IFS= read -r key; do
-    [ -n "$key" ] || continue
-    got=$(printf '%s' "$doc" | jq -r --arg k "$key" '.probe[$k] // ""' 2>/dev/null) || got=
-    fault=$(probe_target_fault "probe.$key" "$got")
-    [ -z "$fault" ] || { printf 'inadmissible probe target: %s' "$fault"; return 0; }
-  done <<EOF
+  # the moment someone remembers to edit this file. EVERY declared probe is
+  # walked, not the first: a guard that checked one of an entry's probes would go
+  # vacuous for the rest the day an entry declared more than one.
+  while IFS= read -r probe; do
+    [ -n "$probe" ] || continue
+    while IFS= read -r key; do
+      [ -n "$key" ] || continue
+      got=$(printf '%s' "$probe" | jq -r --arg k "$key" '.[$k] // ""' 2>/dev/null) || got=
+      fault=$(probe_target_fault "probe.$key" "$got")
+      [ -z "$fault" ] || { printf 'inadmissible probe target: %s' "$fault"; return 0; }
+    done <<EOF
 $PROBE_PATH_KEYS
+EOF
+  done <<EOF
+$(entry_probe_list "$doc")
 EOF
   # unobserved_conditions is the only field that can WITHHOLD satisfaction, so a
   # malformed one is the one malformation that would let a passing probe retire a
@@ -1369,6 +1525,9 @@ on_fail() { ENTRY_STATE=UNMET; }
 # shellcheck disable=SC2329
 on_unverified() { ENTRY_STATE=UNOBSERVED; }
 
+# The field separator the single-jq entry read splits on: US (0x1f), which is
+# deliberately not IFS whitespace, so an entry's empty fields survive the read.
+ENTRY_FIELD_SEP=$'\037'
 E_ID='' E_RECORDED='' E_AUTHORITY='' E_UNMET_STATE='' E_SATISFIED_WHEN='' E_TIER='' E_KIND=''
 E_CONTROL='' E_DEADLINE='' E_NOTE='' E_OVERDUE=0 E_SOURCE='' E_UNOBSERVED_CONDITIONS=''
 
@@ -1391,28 +1550,99 @@ settle_entry_state() {  # <id>
   fi
 }
 
+# Run every probe the entry declares and compose one answer from them.
+#
+# SATISFIED requires every half observed-good, so the composition is Kleene
+# strong three-valued AND: all PASS is PASS; any FAIL is FAIL even when another
+# half could not be observed, because one half observed unreal settles that the
+# commitment is not real; otherwise, with no FAIL and at least one half
+# unobserved, the answer is could-not-observe.
+#
+# That is deliberately the SAME law unobserved_conditions applies below with a
+# constant-unknown operand - it turns a PASS into could-not-observe and leaves a
+# FAIL a FAIL - so a commitment's halves cannot be ruled one way when they are
+# probed and another way when one of them is only declared.
+#
+# Evidence is joined rather than reduced, because a reader has to be able to see
+# WHICH half answered what; one verdict standing in for several is how a partial
+# answer starts reading as a whole one.
+run_entry_probes() {  # <entry-json>
+  local doc=$1 probe first=1 result=PASS reason=verified evidence='' n=0
+  while IFS= read -r probe; do
+    [ -n "$probe" ] || continue
+    n=$((n + 1))
+    run_probe "$probe"
+    if [ "$first" -eq 1 ]; then
+      evidence=$PROBE_EVIDENCE
+      first=0
+    else
+      evidence="$evidence; and $PROBE_EVIDENCE"
+    fi
+    case "$PROBE_RESULT" in
+      PASS) ;;
+      FAIL)
+        # False dominates: once one half is observed unreal, a later half that
+        # could not be observed cannot make the commitment observable again.
+        if [ "$result" != FAIL ]; then
+          result=FAIL
+          reason=$PROBE_REASON
+        fi
+        ;;
+      *)
+        if [ "$result" = PASS ]; then
+          result=NO_VERIFIER_RAN
+          reason=$PROBE_REASON
+        fi
+        ;;
+    esac
+  done <<EOF
+$(entry_probe_list "$doc")
+EOF
+  if [ "$n" -eq 0 ]; then
+    probe_answer NO_VERIFIER_RAN usage_error "the entry declares no probe to run"
+    return 0
+  fi
+  probe_answer "$result" "$reason" "$evidence"
+}
+
 evaluate_json_entry() {  # <id> <path>
-  local id=$1 path=$2 doc reason
+  local id=$1 path=$2 doc reason entry_fields
   if ! doc=$(cat "$path" 2>/dev/null) || ! printf '%s' "$doc" | jq -e . >/dev/null 2>&1; then
     ENTRY_STATE=UNOBSERVED
     probe_answer NO_VERIFIER_RAN usage_error "entry file $path could not be read as JSON"
     return 0
   fi
   reason=$(entry_inadmissible_reason "$doc" "$id")
-  E_RECORDED=$(printf '%s' "$doc" | jq -r '.recorded // ""')
-  E_AUTHORITY=$(printf '%s' "$doc" | jq -r '.authority // ""')
-  E_UNMET_STATE=$(printf '%s' "$doc" | jq -r '.unmet_state // ""')
-  E_SATISFIED_WHEN=$(printf '%s' "$doc" | jq -r '.satisfied_when // ""')
-  E_TIER=$(printf '%s' "$doc" | jq -r '.assurance // ""')
-  E_KIND=$(printf '%s' "$doc" | jq -r '.probe.kind // ""')
-  E_CONTROL=$(printf '%s' "$doc" | jq -r '.control // ""')
-  E_DEADLINE=$(printf '%s' "$doc" | jq -r '.deadline // ""')
-  E_NOTE=$(printf '%s' "$doc" | jq -r '.note // ""')
-  # A malformed field is already inadmissible below; this read only has to avoid
-  # putting jq's complaint about it on the caller's stderr in the meantime.
-  E_UNOBSERVED_CONDITIONS=$(printf '%s' "$doc" \
-    | jq -r '(.unobserved_conditions // []) | join("; ")' 2>/dev/null) \
-    || E_UNOBSERVED_CONDITIONS=''
+  # ONE jq for every reported field rather than one per field. The register
+  # evaluates every entry on every read, this runs at every session start in
+  # every home, and a pinned cited-control probe runs this file's suite twice
+  # inside one bounded run - so a spawn per field per entry is paid many times
+  # over for nothing.
+  #
+  # The separator is US (0x1f) rather than a newline because read collapses runs
+  # of IFS WHITESPACE: with newline as the separator, two adjacent empty fields -
+  # an entry with no control and no deadline, which is most of them - merge, and
+  # every field after them lands in the wrong variable. US is not whitespace, so
+  # an empty field stays an empty field. Both characters are stripped from every
+  # value first, so nothing an entry carries can move a field boundary.
+  #
+  # A malformed unobserved_conditions is inadmissible below; this read only has
+  # to avoid putting jq's complaint about it on the caller's stderr meanwhile,
+  # so it is caught inside jq and the whole read falls back to empty fields
+  # rather than to half-set ones.
+  if ! entry_fields=$(printf '%s' "$doc" | jq -j --arg sep "$ENTRY_FIELD_SEP" '
+    def flat: tostring | gsub("[\n\u001f]"; " ");
+    [ .recorded // "", .authority // "", .unmet_state // "", .satisfied_when // "",
+      .assurance // "",
+      ([ (.probes // [.probe])[] | .kind // empty ] | join("+")),
+      .control // "", .deadline // "", .note // "",
+      (try ((.unobserved_conditions // []) | join("; ")) catch "")
+    ] | map(flat) | join($sep)' 2>/dev/null); then
+    entry_fields=''
+  fi
+  IFS=$ENTRY_FIELD_SEP read -r E_RECORDED E_AUTHORITY E_UNMET_STATE E_SATISFIED_WHEN \
+    E_TIER E_KIND E_CONTROL E_DEADLINE E_NOTE E_UNOBSERVED_CONDITIONS \
+    <<<"$entry_fields" || true
   if [ -n "$reason" ]; then
     # Inadmissible is could-not-observe, and loudly so: an entry this file cannot
     # interpret is an entry whose commitment it cannot judge.
@@ -1426,7 +1656,7 @@ evaluate_json_entry() {  # <id> <path>
       "attested, not probed: $(printf '%s' "$doc" | jq -r '.reason // "no reason recorded"')"
     return 0
   fi
-  run_probe "$(printf '%s' "$doc" | jq -c '.probe')"
+  run_entry_probes "$doc"
   if [ "$E_TIER" = cited-control ] && [ "$PROBE_RESULT" = PASS ]; then
     probe_answer PASS verified \
       "$PROBE_EVIDENCE, with $(control_citation "$E_CONTROL") cited as the control watched to fail first"
