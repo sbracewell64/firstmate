@@ -225,6 +225,7 @@ fm_isolation_shared_state_for() {
   # shellcheck disable=SC2016 # Detectors match the literal text in the subject's bytes.
   case "$all" in *'$HOME'*|*'${HOME'*) found="$found home-env" ;; esac
   case "$stripped" in *'/tmp/'*|*'"/tmp"'*) found="$found literal-tmp" ;; esac
+  # fm-retrieval-audit: not-a-read - a detector naming network tools in the subject's bytes; nothing is read on this line
   case "$all" in *'curl '*|*'wget '*|*'gh api'*|*'gh pr'*) found="$found network-tool" ;; esac
   case "$all" in *'fm_test_tmproot'*|*'mktemp'*) found="$found private-tmproot" ;; esac
   # shellcheck disable=SC2016 # Detectors match the literal text in the subject's bytes.
