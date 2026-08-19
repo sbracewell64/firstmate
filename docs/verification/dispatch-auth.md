@@ -1,5 +1,7 @@
 # Dispatch authentication verification
 
+This record cites no commit ids. The hex-shaped string in it is a tool build hash inside a version banner, not a commit reference.
+
 Audience: maintainer verification.
 
 This record supports the dispatch judgment rules in `.agents/skills/quota-array-dispatch/SKILL.md` and the bounded vendor probe in `bin/fm-vendor-auth-probe.sh`.

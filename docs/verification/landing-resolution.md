@@ -1,5 +1,7 @@
 # Landing-resolution three-valuedness verification
 
+This record cites no commit ids. The one commit-shaped string in it is a deliberately invalid value a transcript writes into a ref to manufacture a broken repository, not a commit reference.
+
 Audience: maintainer verification.
 
 This record holds the evidence that the exercised landing-library entry points never turn a single failed read into a definite negative, plus the safe-direction controls for their exercised consumers.
