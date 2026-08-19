@@ -158,11 +158,11 @@ remote() { # <command...>
 # bounded contents metadata rather than the blob: existence is the question, and
 # a metadata response cannot be made large by the thing it describes.
 ref_exists() { # <commit> <path>
-  remote gh api "repos/$REPO/contents/$2?ref=$1" --jq '.sha' >/dev/null 2>&1
+  remote gh api "repos/$REPO/contents/$2?ref=$1" --jq '.sha' >/dev/null 2>&1  # fm-retrieval-audit: not-a-collection - one named path's contents metadata at one exact commit; there is no extent to enumerate
 }
 
 commit_reachable() { # <commit>
-  remote gh api "repos/$REPO/commits/$1" --jq '.sha' >/dev/null 2>&1
+  remote gh api "repos/$REPO/commits/$1" --jq '.sha' >/dev/null 2>&1  # fm-retrieval-audit: not-a-collection - one commit object's reachability; there is no extent to enumerate
 }
 
 # Download the feed with the transfer itself bounded, so an oversized or
@@ -170,6 +170,7 @@ commit_reachable() { # <commit>
 # one byte past the cap is what distinguishes "at the cap" from "over" it.
 fetch_feed() { # <destination>
   local status
+  # fm-retrieval-audit: not-a-collection - one named feed file at one ref fetched whole to a file; the caller judges the cap and types over-cap as a continuity failure, never as absence
   remote gh api -H 'Accept: application/vnd.github.raw+json' \
     "repos/$REPO/contents/$FEED?ref=$REF" 2>/dev/null \
     | head -c "$((MAX_FEED_BYTES + 1))" > "$1"
