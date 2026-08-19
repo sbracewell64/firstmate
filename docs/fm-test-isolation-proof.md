@@ -74,7 +74,7 @@ An empty set would silently reroute every proven script into the serial lane and
 - Result: `FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=298803`
 - Consumer: `bin/fm-test-run.sh --check-coverage` then reports
   `FM_ISOLATION_FRESHNESS PROVEN subjects=24 proven=24 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=0`
-  followed by `FM_TEST_COVERAGE ok total=169 parallel=24 serial=134 serial_shards=8 herdr=11 proof_fresh=24`.
+  followed by `FM_TEST_COVERAGE ok total=170 parallel=24 serial=135 serial_shards=8 herdr=11 proven=24`.
 
 Drift measured against the previous proof (`run_id fm-isolation-1785367157179-18165`, taken 2026-07-29T23:21:46Z) at the moment this one was recorded:
 

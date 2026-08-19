@@ -431,6 +431,18 @@ wait_one_slot() {
   if [ -f "$work/out/exit" ]; then
     rc=$(cat "$work/out/exit")
     duration=$(cat "$work/out/duration_ms" 2>/dev/null || echo 0)
+    # A present but non-numeric exit record is could-not-observe, the same as an
+    # absent one: exit -1 keeps the subject out of the proven set instead of
+    # letting it slip past both the proven and the failed counters.
+    case "${rc#-}" in
+      ''|*[!0-9]*)
+        log "could not measure (unreadable exit record): $script"
+        rc=-1
+        ;;
+    esac
+    case "$duration" in
+      ''|*[!0-9]*) duration=0 ;;
+    esac
   else
     rc=-1
     duration=0

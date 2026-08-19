@@ -390,8 +390,9 @@ EOF
 #   meta<TAB><schema_version><TAB><concurrency><TAB><contract_digest>
 #   subject<TAB><path><TAB><digest><TAB><exit><TAB><fixture pairs>
 # Returns 3 when the artifact is missing, unreadable, not JSON, not an isolation
-# proof, or written to a schema without freshness bindings, and 4 when python3
-# is unavailable. Both are could-not-observe; neither is an empty proof.
+# proof, written to a schema without freshness bindings, or missing an integer
+# concurrency, and 4 when python3 is unavailable. Both are could-not-observe;
+# neither is an empty proof.
 fm_isolation_proof_read() {
   local proof=$1
   [ -f "$proof" ] && [ -r "$proof" ] || return 3
@@ -411,10 +412,13 @@ if doc.get("schema_version") != 2:
 contract = doc.get("isolation_contract")
 if not isinstance(contract, dict) or not contract.get("digest"):
     sys.exit(1)
+concurrency = doc.get("concurrency")
+if not isinstance(concurrency, int) or isinstance(concurrency, bool) or concurrency < 1:
+    sys.exit(1)
 scripts = doc.get("scripts")
 if not isinstance(scripts, list) or not scripts:
     sys.exit(1)
-out = ["meta\t%s\t%s\t%s" % (doc["schema_version"], doc.get("concurrency"), contract["digest"])]
+out = ["meta\t%s\t%s\t%s" % (doc["schema_version"], concurrency, contract["digest"])]
 for s in scripts:
     if not isinstance(s, dict):
         sys.exit(1)
@@ -437,12 +441,18 @@ PY
 # The proven-isolated set: every subject a recorded proof observed passing under
 # concurrency. This is the artifact's authority over lane membership; the paths
 # are not maintained anywhere else.
+#
+# An artifact in which no recorded subject passed is returned as could-not-observe
+# (3), never as an empty set: it is a proof that could not be used, and an empty
+# set would read as a successful selection of nothing.
 fm_isolation_proven_paths() {
-  local proof=$1 tsv rc
+  local proof=$1 tsv rc passing
   tsv=$(fm_isolation_proof_read "$proof")
   rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
-  printf '%s\n' "$tsv" | awk -F'\t' '$1 == "subject" && $4 == "0" { print $2 }' | LC_ALL=C sort -u
+  passing=$(printf '%s\n' "$tsv" | awk -F'\t' '$1 == "subject" && $4 == "0" { print $2 }' | LC_ALL=C sort -u)
+  [ -n "$passing" ] || return 3
+  printf '%s\n' "$passing"
 }
 
 # ---------------------------------------------------------------------------

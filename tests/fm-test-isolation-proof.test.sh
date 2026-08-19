@@ -338,6 +338,79 @@ test_freshness_refuses_an_unparseable_lane_jobs_value() {
   pass "an unreadable lane --jobs value is could-not-observe, never one"
 }
 
+# Echoes a minimal proof artifact holding exactly one recorded subject with the
+# given exit code. Only the reader's schema checks matter here, so the digests
+# are placeholders: fm_isolation_proven_paths never verifies bytes, it only
+# reports what the artifact recorded.
+mk_proof_artifact_with_exit() {
+  local exit_code=$1 out
+  out=$(fm_test_tmproot fm-isolation-proven-paths)/proof.json
+  cat >"$out" <<FIXTURE
+{
+  "kind": "isolation-proof",
+  "schema_version": 2,
+  "concurrency": 4,
+  "isolation_contract": {"digest": "sha256:fixture"},
+  "scripts": [
+    {"path": "tests/mini.test.sh", "digest": "sha256:fixture", "exit": $exit_code, "fixtures": []}
+  ]
+}
+FIXTURE
+  printf '%s\n' "$out"
+}
+
+test_proven_paths_refuse_a_proof_with_no_passing_subject() {
+  local artifact out rc
+
+  # Watched red: every recorded subject failed, so there is no proven set to
+  # hand out. An empty set here would let --proven-isolated select nothing and
+  # read as a successful run of nothing.
+  artifact=$(mk_proof_artifact_with_exit 1)
+  rc=0
+  out=$(fm_isolation_proven_paths "$artifact") || rc=$?
+  [ "$rc" -eq 3 ] || fail "a proof with no passing subject must return 3, got rc=$rc"
+  [ -z "$out" ] || fail "a refused proven set must print nothing, got: $out"
+
+  # Non-vacuity: the same artifact with exit 0 lists that subject, so the
+  # refusal above can only be about the exit code.
+  artifact=$(mk_proof_artifact_with_exit 0)
+  rc=0
+  out=$(fm_isolation_proven_paths "$artifact") || rc=$?
+  [ "$rc" -eq 0 ] || fail "a proof with a passing subject must return 0, got rc=$rc"
+  [ "$out" = "tests/mini.test.sh" ] || fail "the passing subject must be listed, got: $out"
+  pass "a proof in which nothing passed is could-not-observe, never an empty set"
+}
+
+test_reader_refuses_a_non_integer_concurrency() {
+  local artifact out rc
+
+  # Watched red: a proof without an integer concurrency cannot be compared
+  # against the observed lane concurrency, so the reader must return
+  # could-not-observe instead of letting "None" reach the -le comparison and be
+  # misreported as a definite STALE finding.
+  artifact=$(mk_proof_artifact_with_exit 0)
+  python3 - "$artifact" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as fh:
+    doc = json.load(fh)
+del doc["concurrency"]
+with open(sys.argv[1], "w", encoding="utf-8") as fh:
+    json.dump(doc, fh)
+PY
+  rc=0
+  out=$(fm_isolation_proof_read "$artifact") || rc=$?
+  [ "$rc" -eq 3 ] || fail "a proof without concurrency must return 3, got rc=$rc"
+
+  rc=0
+  out=$(fm_isolation_check_freshness "$(dirname "$artifact")" "$artifact" 4 2>&1) || rc=$?
+  [ "$rc" -eq 3 ] || fail "freshness over a proof without concurrency must return 3, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "FM_ISOLATION_DEPENDENCY COULD-NOT-OBSERVE name=proof-artifact" \
+    "an unreadable proof is could-not-observe, not a definite finding"
+  assert_not_contains "$out" "FM_ISOLATION_DEPENDENCY STALE" \
+    "an unreadable input must never be narrowed into a definite STALE"
+  pass "a non-integer concurrency is could-not-observe, never a definite finding"
+}
+
 test_proven_set_comes_from_the_proof_artifact() {
   local from_proof from_runner cap proven_concurrency
   from_proof=$("$PROOF" --list-proven | LC_ALL=C sort -u)
@@ -369,4 +442,6 @@ test_freshness_refuses_concurrency_above_the_proof
 test_freshness_refuses_changed_isolation_semantics
 test_freshness_reports_could_not_observe_instead_of_passing
 test_freshness_refuses_an_unparseable_lane_jobs_value
+test_proven_paths_refuse_a_proof_with_no_passing_subject
+test_reader_refuses_a_non_integer_concurrency
 test_proven_set_comes_from_the_proof_artifact

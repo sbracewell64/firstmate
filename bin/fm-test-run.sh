@@ -712,6 +712,7 @@ select_lane() {
       done < <(list_portable_parallel_2)
       ;;
     portable-serial)
+      resolve_proven_isolated || die "cannot select lane '$want' without a readable isolation proof"
       while IFS= read -r s; do
         [ -n "$s" ] || continue
         add_script "$s"
@@ -721,6 +722,7 @@ select_lane() {
     portable-serial-*)
       # One separate-runner shard of the same remainder, still serial in itself.
       shard=$(portable_serial_shard_index "$want")
+      resolve_proven_isolated || die "cannot select lane '$want' without a readable isolation proof"
       while IFS=$'\t' read -r idx s; do
         [ -n "$s" ] || continue
         if [ "$idx" = "$shard" ]; then
@@ -891,7 +893,7 @@ run_coverage_guard() {
   esac
   grep '^FM_ISOLATION_FRESHNESS ' "$tmp/freshness" || true
 
-  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial_shards=%s herdr=%s proof_fresh=%s\n' \
+  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial_shards=%s herdr=%s proven=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
     "$(wc -l <"$tmp/shards_union" | tr -d ' ')" \
     "$(wc -l <"$tmp/serial" | tr -d ' ')" \
