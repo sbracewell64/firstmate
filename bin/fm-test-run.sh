@@ -524,6 +524,7 @@ tests/fm-context-statusline.test.sh 571
 tests/fm-daemon.test.sh 32092
 tests/fm-decision-surface.test.sh 7820
 tests/fm-documentation-audiences.test.sh 702
+tests/fm-execution-replacement.test.sh 72275
 tests/fm-fleet-snapshot-view.test.sh 81131
 tests/fm-fleet-sync.test.sh 17638
 tests/fm-gate-refuse.test.sh 4007

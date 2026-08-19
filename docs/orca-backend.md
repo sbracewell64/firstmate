@@ -68,6 +68,7 @@ It never raw-deletes an Orca worktree.
 - The app must be running and report ready.
 - Secondmate spawns are unsupported.
 - Escape is unsupported.
+- Same-lane execution-attempt succession (`fm-spawn.sh --succeed-execution`) is refused with its own exit status until orca-side worktree custody reuse is verified; the contract is owned by `bin/fm-spawn.sh`'s header and the verification by [`verification/execution-attempt-replacement.md`](verification/execution-attempt-replacement.md).
 - Orca exposes no stable CLI version or protocol marker, so readiness is the compatibility gate rather than a version floor.
 - Only the verified terminal-handle and worktree result fields are accepted; speculative response shapes are rejected.
 

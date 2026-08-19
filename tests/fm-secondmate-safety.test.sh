@@ -2657,6 +2657,175 @@ test_secondmate_force_teardown_discards_child_work
 test_secondmate_force_teardown_refuses_child_quarantine_symlink
 test_secondmate_force_teardown_preserves_child_on_unproven_lock
 test_secondmate_force_teardown_allows_operational_dir_symlinks_inside_home
+
+# --- remote control-state reclaim guards ------------------------------------
+#
+# The remote retire path runs a teardown whose own state override points INSIDE
+# the home it deletes, so it deletes the home while standing in it and leaves
+# `<home>/state/parent-route` behind. Reclaiming that residue is a RECURSIVE
+# REMOVAL on a remote host, built from a variable - the shape that has destroyed
+# a checkout in this fleet before - so each of its four guards is measured on its
+# own here, against a constructed path, rather than only through the end-to-end
+# path that happens to produce a well-formed one.
+
+# Source the control script for its functions without dispatching a command, and
+# run one reclaim call. Echoes the refusal text; the status is the answer.
+# The control script sets -e when sourced, which would abort the subshell on the
+# first refusal and swallow the very status these cases measure. Clearing it
+# AFTER the source is what keeps a refusal observable instead of fatal.
+reclaim_guard() {  # <fm-home> <recorded-home> <residue> -> prints output
+  (
+    FM_HOME="$1" . "$ROOT/bin/fm-remote-secondmate-control.sh" >/dev/null 2>&1
+    set +e
+    retire_control_state_residue "$2" "$3" ios 2>&1 || true
+  )
+}
+
+reclaim_rc() {  # <fm-home> <recorded-home> <residue> -> prints the status
+  (
+    FM_HOME="$1" . "$ROOT/bin/fm-remote-secondmate-control.sh" >/dev/null 2>&1
+    set +e
+    retire_control_state_residue "$2" "$3" ios >/dev/null 2>&1
+    printf '%s' "$?"
+  )
+}
+
+# Guard 1: the path must be non-empty, absolute, and end in the exact directory
+# this script creates. A variable that came back empty must never reach `rm`.
+test_remote_reclaim_refuses_a_malformed_residue_path() {
+  local case_dir case_home out
+  case_dir="$TMP_ROOT/reclaim-shape"
+  case_home="$case_dir/home"
+  mkdir -p "$case_home/state/parent-route"
+
+  out=$(reclaim_guard "$case_home" "$case_home" "")
+  [ "$(reclaim_rc "$case_home" "$case_home" "")" -ne 0 ] || fail "an empty residue path must be refused"
+  assert_contains "$out" "path is empty" "the refusal must name the empty path"
+
+  out=$(reclaim_guard "$case_home" "$case_home" "state/parent-route")
+  [ "$(reclaim_rc "$case_home" "$case_home" "state/parent-route")" -ne 0 ] || fail "a relative residue path must be refused"
+  assert_contains "$out" "not an absolute path" "the refusal must name the relative path"
+
+  out=$(reclaim_guard "$case_home" "$case_home" "$case_home/state/other")
+  [ "$(reclaim_rc "$case_home" "$case_home" "$case_home/state/other")" -ne 0 ] || fail "a path not ending in state/parent-route must be refused"
+  assert_contains "$out" "does not end in state/parent-route" "the refusal must name the required suffix"
+
+  assert_present "$case_home/state/parent-route" "no refusal may remove anything"
+  pass "remote reclaim: an empty, relative, or wrong-suffix residue path is refused and removes nothing"
+}
+
+# Guard 2: the prefix is the RECORDED home, compared literally. A residue path
+# that named a different home would otherwise authorize itself.
+test_remote_reclaim_refuses_a_residue_outside_the_recorded_home() {
+  local case_dir case_home other out
+  case_dir="$TMP_ROOT/reclaim-prefix"
+  case_home="$case_dir/home"
+  other="$case_dir/other"
+  mkdir -p "$case_home/state/parent-route" "$other/state/parent-route"
+
+  out=$(reclaim_guard "$case_home" "$other" "$case_home/state/parent-route")
+  [ "$(reclaim_rc "$case_home" "$other" "$case_home/state/parent-route")" -ne 0 ] \
+    || fail "a residue whose prefix is not the recorded home must be refused"
+  assert_contains "$out" "is not the control state of the recorded home" \
+    "the refusal must name the recorded home it was measured against"
+
+  out=$(reclaim_guard "$case_home" "" "$case_home/state/parent-route")
+  [ "$(reclaim_rc "$case_home" "" "$case_home/state/parent-route")" -ne 0 ] \
+    || fail "an empty recorded home must be refused"
+
+  assert_present "$case_home/state/parent-route" "no refusal may remove anything"
+  assert_present "$other/state/parent-route" "and least of all the other home"
+  pass "remote reclaim: a residue outside the recorded home, or with no recorded home, is refused"
+}
+
+# Guard 3: judged again AFTER resolution, because a symlink makes every literal
+# check pass while pointing somewhere else entirely.
+test_remote_reclaim_refuses_a_residue_that_resolves_away() {
+  local case_dir case_home outside out
+  case_dir="$TMP_ROOT/reclaim-resolve"
+  case_home="$case_dir/home"
+  outside="$case_dir/outside"
+  mkdir -p "$case_home/state" "$outside/keepme"
+
+  ln -s "$outside" "$case_home/state/parent-route"
+  out=$(reclaim_guard "$case_home" "$case_home" "$case_home/state/parent-route")
+  [ "$(reclaim_rc "$case_home" "$case_home" "$case_home/state/parent-route")" -ne 0 ] \
+    || fail "a residue resolving outside the recorded home must be refused"
+  assert_contains "$out" "outside the recorded home" "the refusal must say where it resolved to"
+  assert_present "$outside/keepme" "the target of the escaping symlink must be untouched"
+  rm -f "$case_home/state/parent-route"
+
+  ln -s "$HOME" "$case_home/state/parent-route"
+  out=$(reclaim_guard "$case_home" "$case_home" "$case_home/state/parent-route")
+  [ "$(reclaim_rc "$case_home" "$case_home" "$case_home/state/parent-route")" -ne 0 ] \
+    || fail "a residue resolving to the operator's home directory must be refused"
+  assert_contains "$out" "resolves to" "the refusal must name what it resolved to"
+  [ -d "$HOME" ] || fail "the operator's home directory must still exist"
+  rm -f "$case_home/state/parent-route"
+  pass "remote reclaim: a residue that resolves outside the home, or onto \$HOME, is refused"
+}
+
+# Guard 3, the could-not-observe half: a recorded home that cannot be RESOLVED
+# leaves the containment judgment unestablished, and a destructive guard never
+# defaults an unestablished condition to permitted. The shadowed `cd` constructs
+# the one shape the filesystem makes hard to hold still - the residue resolves
+# while the recorded home does not - so the refusal is measured on its own.
+test_remote_reclaim_refuses_an_unresolvable_recorded_home() {
+  local case_dir case_home out rc
+  case_dir="$TMP_ROOT/reclaim-cno"
+  case_home="$case_dir/home"
+  mkdir -p "$case_home/state/parent-route"
+
+  out=$(
+    (
+      FM_HOME="$case_home" . "$ROOT/bin/fm-remote-secondmate-control.sh" >/dev/null 2>&1
+      set +e
+      cd() { [ "${1-}" != "$case_home" ] || return 1; builtin cd "$@"; }
+      retire_control_state_residue "$case_home" "$case_home/state/parent-route" ios 2>&1
+      printf 'rc=%s\n' "$?"
+    )
+  )
+  rc=${out##*rc=}
+  [ "$rc" -ne 0 ] || fail "an unresolvable recorded home must refuse, not default to permitted"$'\n'"$out"
+  assert_contains "$out" "the recorded home" "the refusal must name which path could not be resolved"
+  assert_contains "$out" "could not be resolved" "the refusal must say the condition was unestablished"
+  assert_present "$case_home/state/parent-route" "a refused reclaim removes nothing"
+  pass "remote reclaim: an unresolvable recorded home refuses and removes nothing"
+}
+
+# Guard 4: only after the home deletion actually succeeded. A home still
+# carrying its seed marker was not deleted, so there is nothing of ours to
+# reclaim and the removal must not run at all.
+test_remote_reclaim_refuses_until_the_home_deletion_succeeded() {
+  local case_dir case_home out
+  case_dir="$TMP_ROOT/reclaim-order"
+  case_home="$case_dir/home"
+  mkdir -p "$case_home/state/parent-route"
+  printf 'ios\n' > "$case_home/.fm-secondmate-home"
+
+  out=$(reclaim_guard "$case_home" "$case_home" "$case_home/state/parent-route")
+  [ "$(reclaim_rc "$case_home" "$case_home" "$case_home/state/parent-route")" -ne 0 ] \
+    || fail "reclaim must refuse while the home still carries its seed marker"
+  assert_contains "$out" "still carries its secondmate home marker" \
+    "the refusal must say the home was not deleted"
+  assert_present "$case_home/state/parent-route" "a refused reclaim removes nothing"
+
+  # And once the deletion HAS happened, the same call reclaims the residue and
+  # the emptied home with it. Without this the four refusals above would pass
+  # against a function that never removes anything.
+  rm -f "$case_home/.fm-secondmate-home"
+  [ "$(reclaim_rc "$case_home" "$case_home" "$case_home/state/parent-route")" -eq 0 ] \
+    || fail "reclaim must succeed once the home deletion has happened"
+  assert_absent "$case_home/state/parent-route" "the residue must be gone"
+  assert_absent "$case_home" "and the home it was the last thing in"
+
+  # An absent residue is the ordinary case when the deletion reached it, and is
+  # a success rather than an error.
+  [ "$(reclaim_rc "$case_dir/gone" "$case_dir/gone" "$case_dir/gone/state/parent-route")" -eq 0 ] \
+    || fail "an already-absent residue must be a no-op success"
+  pass "remote reclaim: runs only after the home deletion, then reclaims the residue and the emptied home"
+}
+
 test_secondmate_force_teardown_refuses_operational_dir_symlink_outside_home
 test_secondmate_teardown_refuses_registered_nested_home
 test_secondmate_teardown_refuses_child_registry_nested_home
@@ -2669,3 +2838,8 @@ test_secondmate_idle_pane_is_not_stale
 test_secondmate_charter_brief_is_idle_by_default
 test_backlog_handoff_aborts_safely
 test_backlog_handoff_refuses_done_items_and_non_secondmate_homes
+test_remote_reclaim_refuses_a_malformed_residue_path
+test_remote_reclaim_refuses_a_residue_outside_the_recorded_home
+test_remote_reclaim_refuses_a_residue_that_resolves_away
+test_remote_reclaim_refuses_an_unresolvable_recorded_home
+test_remote_reclaim_refuses_until_the_home_deletion_succeeded

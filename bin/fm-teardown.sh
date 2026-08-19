@@ -51,6 +51,9 @@
 # under --force, which additionally RECORDS that the attempt ended, because
 # discarded work makes a re-dispatch a genuine retry and this cleanup removes
 # the status log that would otherwise carry that evidence.
+# The task's execution lineage (state/<task-id>.lineage) is that record's
+# append-only ledger of which worker incarnation produced which evidence, and it
+# retires and survives on exactly the same terms, through the same owner.
 # A ship task released while its PR is still open leaves state/<task-id>.landing
 # behind: a minimal durable record (pr, pr_head, project) that keeps the PR
 # landable through bin/fm-pr-merge.sh and rearmable through bin/fm-pr-check.sh
@@ -297,6 +300,27 @@ remote_outbox_cleanup() {
     [ -f "$ID.outbox.md" ] && [ ! -L "$ID.outbox.md" ] || exit 1
     rm -f -- "$ID.outbox.md"
   )
+}
+
+# Defined HERE, above its first use, and not beside the other retirement helpers.
+# remote_secondmate_teardown below runs from the top-level dispatch, which
+# executes long before those helpers are defined, so a definition further down
+# made this call fail with `command not found` on every remote teardown - the
+# branch's own cleanup step, silently skipped. Measured: fixing this alone does
+# NOT make tests/fm-remote-secondmate-lifecycle-e2e.test.sh pass, so it is a real
+# defect on that path rather than the cause of that failure.
+
+retire_commitment_probe_cache() {
+  local dir safe f
+  dir=${FM_COMMITMENT_PROBE_CACHE_DIR:-$STATE/commitment-probe-cache}
+  [ -d "$dir" ] || return 0
+  safe=$(printf '%s' "$ID" | tr -c 'A-Za-z0-9._-' '_')
+  [ -n "$safe" ] || return 0
+  for f in "$dir/${safe}__"*; do
+    [ -e "$f" ] || continue
+    rm -f -- "$f" 2>/dev/null || true
+  done
+  return 0
 }
 
 remote_secondmate_teardown() {
@@ -697,6 +721,9 @@ write_landing_record_if_unlanded() {
 # --force is the opposite case and KEEPS the record: the work was deliberately
 # discarded, a re-dispatch of that id is a genuine retry, and clearing the count
 # here would make the budget unbounded by simply discarding between attempts.
+#
+# The execution lineage ledger rides with the record either way, because that
+# owner retires the two together; nothing here removes it separately.
 retire_attempt_record() {
   if [ "$FORCE" = "--force" ]; then
     # The discard ENDS the open attempt, and this cleanup deletes the status log
@@ -731,18 +758,6 @@ retire_capacity_deferral() {
 # observation until the fingerprint check happened to reject it. Best-effort: a
 # cache that cannot be reaped costs a probe run, never a wrong answer, so it never
 # fails a teardown.
-retire_commitment_probe_cache() {
-  local dir safe f
-  dir=${FM_COMMITMENT_PROBE_CACHE_DIR:-$STATE/commitment-probe-cache}
-  [ -d "$dir" ] || return 0
-  safe=$(printf '%s' "$ID" | tr -c 'A-Za-z0-9._-' '_')
-  [ -n "$safe" ] || return 0
-  for f in "$dir/${safe}__"*; do
-    [ -e "$f" ] || continue
-    rm -f -- "$f" 2>/dev/null || true
-  done
-  return 0
-}
 
 # Reported after cleanup so the released PR is not silently forgotten: the task
 # is gone from the fleet, but its PR still needs landing.

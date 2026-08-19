@@ -395,6 +395,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/execution-attempt-replacement.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/landing-resolution.md",
       "audience": "maintainer-verification"
     },

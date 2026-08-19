@@ -102,6 +102,13 @@
 #       "<slot-name><TAB><worktree-path>" for the demonstrably empty slot the
 #       caller should acquire by name. Prints nothing when the pool offers no
 #       such slot, which leaves the allocation to `treehouse get`.
+#   fm-worktree-guard.sh owner-state <worktree>
+#       Print "<state><TAB><task-id><TAB><detail>" for who apparently owns an
+#       occupied worktree: alive, dead, unresolved, or unclaimed. It is the same
+#       derivation `check` and `select` refuse on, published so a caller that
+#       must NOT allocate - one deciding whether a lane's own execution attempt
+#       is quiescent - reads the answer instead of re-deriving it. It allocates
+#       nothing, withholds nothing, and consumes no slot reservation.
 #   fm-worktree-guard.sh owner-fields <worktree>
 #       Print the worktree_owner_pid= and worktree_owner_identity= meta lines
 #       for an accepted worktree. Both values are empty when no occupant is
@@ -388,6 +395,11 @@ slot_parked_shape() {  # <slot-name> <worktree-real>
   [ -n "$branch" ] || return 0
   default=$(fm_landed_default_branch_name "$wt") || return 1
   [ "$branch" = "$default" ]
+}
+
+cmd_owner_state() {  # <worktree>
+  [ $# -eq 1 ] || { usage >&2; return 2; }
+  resolve_owner "$(real_or_raw "$1")"
 }
 
 cmd_owner_fields() {  # <worktree>
@@ -710,6 +722,7 @@ case "${1:-}" in
   check) shift; cmd_pool check "$@" ;;
   select) shift; cmd_pool select "$@" ;;
   owner-fields) shift; cmd_owner_fields "$@" ;;
+  owner-state) shift; cmd_owner_state "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;
 esac
