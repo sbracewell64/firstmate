@@ -1,12 +1,12 @@
 # Firstmate portable test shards
 
 `bin/fm-test-run.sh` owns portable lane composition and execution.
-`bin/fm-test-isolation-proof.sh` owns the proven-isolated candidate set.
+`bin/fm-test-isolation-proof.sh` owns the parallel candidate set it measures; `docs/fm-test-isolation-proof.json` owns the proven-isolated set the lanes consume.
 
 ## Verification inputs
 
-The current candidate timings came from the 2026-07-29 concurrent proof recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md).
-The proof ran 24 candidates with four workers and no failures.
+The candidate timings below came from the 2026-07-29 concurrent proof run (`run_id fm-isolation-1785367157179-18165`), which ran 24 candidates with four workers and no failures.
+That run has since been superseded as the isolation proof by the re-measurement recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md); this table preserves the measured durations the current lane balance was derived from.
 
 | duration_ms | script |
 |---:|---|

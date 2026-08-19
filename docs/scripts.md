@@ -39,7 +39,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-install-treehouse.sh`| Install CI's exact-version Treehouse pin for real-Herdr E2E that needs spawn worktrees |
 | `fm-herdr-ci-cleanup.sh` | Snapshot and tear down only job-owned `fm-lab-*` sessions in the Herdr CI lane       |
 | `fm-test-run.sh`         | Behavior-test runner: selection, portable lanes, proven-isolated `--jobs`, coverage guard, timing/JSON |
-| `fm-test-isolation-proof.sh` | Concurrent isolation proof and proven-isolated candidate set owner |
+| `fm-test-isolation-proof.sh` | Concurrent isolation proof harness: measures the candidate set it owns and records the proven set into `docs/fm-test-isolation-proof.json` |
+| `fm-test-isolation-lib.sh` | Single owner of the isolation measurement contract and the proof freshness model: what a proof binds to and when it has gone stale |
 | `fm-ensure-agents-md.sh` | Ensure a project's real `AGENTS.md`, its `CLAUDE.md` symlink, and the canonical self-governance section |
 | `fm-attest.sh`           | Emit and verify the head-bound no-mistakes attestation the `Require no-mistakes` check reads (docs/no-mistakes-attestation.md) |
 | `fm-guard.sh`            | Warn on primary-checkout tangles, pending queued wakes, and unhealthy supervision    |
