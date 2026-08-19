@@ -13,7 +13,7 @@ The regression coverage is [`../../tests/fm-execution-replacement.test.sh`](../.
 
 Measured 2026-08-19 on Linux 6.18 (WSL2), bash 5.2, git 2.53.0, shellcheck 0.11.0.
 
-The suite runs **19 test functions covering the 14 declared controls, the boundary rules the implementation created, and three review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
+The suite runs **21 test functions covering the 14 declared controls, the boundary rules the implementation created, and five review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
 Nothing asserts implementation source bytes.
 
 ```
@@ -31,6 +31,8 @@ ok - control 13: a crash or a concurrent attempt still leaves exactly one active
 ok - the only door: an ordinary relaunch cannot rebind a lane
 ok - a successor launches only onto the binding its gate admitted
 ok - a successor launches only at the effort its gate admitted
+ok - replace refuses an unstated effort sanction; a stated one is recorded, pinned, and launches
+ok - a successor against a record carrying no effort sanction is refused, never adopted
 ok - a successor on a clean detached lane opens on the predecessor's exact head
 ok - an orca lane refuses succession as unverified custody reuse, and the lane is untouched
 ok - a successor dispatch cannot skip the gate that sanctions it
@@ -39,11 +41,12 @@ ok - a reviewing lane refuses a replacement that is not independent of its maker
 ok - the execution ledger retires with the attempt record
 ```
 
-That is a POSITIVE EXECUTED COUNT - nineteen assertion groups reported, listed rather than summarized - and not an absence of failures.
+That is a POSITIVE EXECUTED COUNT - twenty-one assertion groups reported, listed rather than summarized - and not an absence of failures.
 A run that executed nothing would print nothing here, which is the reason the list is recorded at all.
 The suite takes about 70 seconds; the recorded portable-serial weight hint in `bin/fm-test-run.sh` is seeded from that measurement.
 
-Three of the nineteen are review-regression cases added after the initial implementation was reviewed, each named for the defect it guards: the effort axis of the sanctioned binding left unpinned at the launch door, a clean DETACHED lane's head silently reset to the slot base by the successor dispatch (unreachable from the original fixtures, which all sat on a named branch), and an orca-backed lane's succession silently allocating a fresh worktree instead of refusing.
+Five of the twenty-one are review-regression cases added after the initial implementation was reviewed, each named for the defect it guards: the effort axis of the sanctioned binding left unpinned at the launch door, a clean DETACHED lane's head silently reset to the slot base by the successor dispatch (unreachable from the original fixtures, which all sat on a named branch), an orca-backed lane's succession silently allocating a fresh worktree instead of refusing, and - from the second review round - an UNSTATED effort sanction (an empty or `default` recorded band) accepted instead of refused, measured at both of its doors: `replace` refuses to mint a successor carrying no band and points at `--alternate-effort`, and the successor gate refuses a sanctioned record carrying none rather than adopting whatever the launch declared.
+The second round also moved the ordinary-relaunch rebind refusal ahead of allocation: it previously fired only at `fm-attempt.sh open`, after a pool slot was selected (and reset) and a window's pane had entered it, so every refused rebind leaked a live window occupying a slot. The rebind case now also asserts that a refused rebind creates no window.
 The orca case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the pointer to this record as where a verified reuse path would be recorded, and the lane - worktree, metadata and sanctioned record - untouched afterwards.
 The lift condition is self-contained: the refusal stands exactly until a verified orca custody-reuse path lands and its verification is recorded here, at which point the refusal, its case, and this paragraph all retire together.
 These three were authored against defects that existed in the reviewed tree, but they have not been through the defect-build watch below; what they establish is bounded to the assertions they print.
@@ -186,9 +189,13 @@ remote, and built from a variable, and each refuses loudly rather than skipping 
 the path must be non-empty, absolute and end literally in `state/parent-route`; its prefix
 must be the RECORDED home, never one recomputed from the residue; it must not resolve to
 `/`, to `$HOME`, or outside the recorded home once symlinks are followed; and it runs only
-after the deletion actually succeeded, proven by the home's seed marker being gone. Each
-guard has its own case in `tests/fm-secondmate-safety.test.sh`, including the symlink escape
-and the `$HOME` target, each asserting that the protected content still exists afterwards.
+after the deletion actually succeeded, proven by the home's seed marker being gone. A
+recorded home that cannot itself be resolved leaves the containment judgment unestablished,
+and that is a refusal too, never a skipped check - the second review round found the guard
+defaulting to permitted there. Each guard has its own case in
+`tests/fm-secondmate-safety.test.sh`, including the symlink escape, the `$HOME` target and
+the unresolvable recorded home, each asserting that the protected content still exists
+afterwards.
 
 `bin/fm-teardown.sh` also called `retire_commitment_probe_cache` about 360 lines before its
 definition, inside the remote branch that runs from the top-level dispatch, so that cleanup

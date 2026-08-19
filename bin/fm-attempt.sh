@@ -1226,6 +1226,12 @@ cmd_replace() {
   if [ -z "$effort" ]; then
     effort=$(attempt_field "$meta" effort)
     [ "$effort" != default ] || effort=''
+    # An empty band here is an UNSTATED sanction, and the successor gate pins
+    # effort exactly as it pins harness and model - a pin against nothing would
+    # accept whatever the launch declared, which is the silent depth change the
+    # gate exists to prevent. Choosing the band is firstmate's routing decision,
+    # so it is stated here, deliberately, at replace time.
+    [ -n "$effort" ] || replace_unobserved "the effort axis of $id's successor is unstated: the lane's recorded effort is '$(attempt_field "$meta" effort)' and this replace supplied no --alternate-effort, so the band the successor gate would pin cannot be established. Choosing the band is firstmate's routing decision; state it with --alternate-effort <low|medium|high|xhigh|max>"
   fi
   binding=$harness
   [ -z "$binding" ] || binding="$binding/"
@@ -1262,6 +1268,14 @@ cmd_replace() {
   trap "fm_lock_release '$lockdir' 2>/dev/null || true" EXIT
   have=$(attempt_exec_n "$id")
   next=$((have + 1))
+  # The close is written BEFORE the successor is committed, and that ordering is
+  # a chosen tradeoff: a commit that fails leaves this append-only ledger
+  # carrying a close for an execution the record still holds open, and a retried
+  # replace then appends a second close for the same ordinal. Committing first
+  # would instead risk a crash leaving a successor whose predecessor's close was
+  # never written at all. The .attempt record is the stated authority on which
+  # execution is open either way, so the ledger tolerates a spurious close
+  # rather than a missing one.
   attempt_lineage_append "$id" "event=closed" "execution=$id/e$have" \
     "ts=$(date +%s)" "disposition=replaced" "successor=$id/e$next" "reason=$reason" \
     || replace_unobserved "the close of $id/e$have could not be recorded at $STATE/$id.lineage, and an execution whose end was never written cannot be told apart from one still running"

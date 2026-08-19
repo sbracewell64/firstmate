@@ -2765,6 +2765,34 @@ test_remote_reclaim_refuses_a_residue_that_resolves_away() {
   pass "remote reclaim: a residue that resolves outside the home, or onto \$HOME, is refused"
 }
 
+# Guard 3, the could-not-observe half: a recorded home that cannot be RESOLVED
+# leaves the containment judgment unestablished, and a destructive guard never
+# defaults an unestablished condition to permitted. The shadowed `cd` constructs
+# the one shape the filesystem makes hard to hold still - the residue resolves
+# while the recorded home does not - so the refusal is measured on its own.
+test_remote_reclaim_refuses_an_unresolvable_recorded_home() {
+  local case_dir home out rc
+  case_dir="$TMP_ROOT/reclaim-cno"
+  home="$case_dir/home"
+  mkdir -p "$home/state/parent-route"
+
+  out=$(
+    (
+      FM_HOME="$home" . "$ROOT/bin/fm-remote-secondmate-control.sh" >/dev/null 2>&1
+      set +e
+      cd() { [ "${1-}" != "$home" ] || return 1; builtin cd "$@"; }
+      retire_control_state_residue "$home" "$home/state/parent-route" ios 2>&1
+      printf 'rc=%s\n' "$?"
+    )
+  )
+  rc=${out##*rc=}
+  [ "$rc" -ne 0 ] || fail "an unresolvable recorded home must refuse, not default to permitted"$'\n'"$out"
+  assert_contains "$out" "the recorded home" "the refusal must name which path could not be resolved"
+  assert_contains "$out" "could not be resolved" "the refusal must say the condition was unestablished"
+  assert_present "$home/state/parent-route" "a refused reclaim removes nothing"
+  pass "remote reclaim: an unresolvable recorded home refuses and removes nothing"
+}
+
 # Guard 4: only after the home deletion actually succeeded. A home still
 # carrying its seed marker was not deleted, so there is nothing of ours to
 # reclaim and the removal must not run at all.
@@ -2813,4 +2841,5 @@ test_backlog_handoff_refuses_done_items_and_non_secondmate_homes
 test_remote_reclaim_refuses_a_malformed_residue_path
 test_remote_reclaim_refuses_a_residue_outside_the_recorded_home
 test_remote_reclaim_refuses_a_residue_that_resolves_away
+test_remote_reclaim_refuses_an_unresolvable_recorded_home
 test_remote_reclaim_refuses_until_the_home_deletion_succeeded

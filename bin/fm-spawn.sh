@@ -1294,15 +1294,19 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   }
   # The sanctioned effort is part of the admitted binding, so it is pinned
   # exactly as harness/model are: a declared band that differs from the recorded
-  # one is refused, and an undeclared one adopts the record rather than falling
-  # back to this spawn's own resolution.
-  if [ -n "$SUCCEED_EXEC_EFFORT" ]; then
-    if [ -n "$EFFORT" ] && [ "$EFFORT" != "$SUCCEED_EXEC_EFFORT" ]; then
-      echo "error: $ID's sanctioned successor $SUCCEED_EXEC_ID is recorded at effort $SUCCEED_EXEC_EFFORT and this launch declares $EFFORT. Only the effort a gate admitted may be launched; run bin/fm-attempt.sh replace $ID --alternate <model> --alternate-effort <band> --reason <text> for the one you want." >&2
-      exit 1
-    fi
-    EFFORT=$SUCCEED_EXEC_EFFORT
+  # one is refused, an undeclared one adopts the record rather than falling back
+  # to this spawn's own resolution, and a record carrying NO band is an UNSTATED
+  # sanction that refuses outright - accepting whatever this launch declared
+  # would be exactly the silent depth change the pin exists to prevent.
+  if [ -z "$SUCCEED_EXEC_EFFORT" ]; then
+    echo "error: $ID's sanctioned successor $SUCCEED_EXEC_ID records no effort sanction, so the effort axis of this launch is unstated and cannot be pinned. bin/fm-attempt.sh replace $ID --alternate <model> --alternate-effort <band> --reason <text> is what records one; run it rather than launching a band no gate admitted." >&2
+    exit 1
   fi
+  if [ -n "$EFFORT" ] && [ "$EFFORT" != "$SUCCEED_EXEC_EFFORT" ]; then
+    echo "error: $ID's sanctioned successor $SUCCEED_EXEC_ID is recorded at effort $SUCCEED_EXEC_EFFORT and this launch declares $EFFORT. Only the effort a gate admitted may be launched; run bin/fm-attempt.sh replace $ID --alternate <model> --alternate-effort <band> --reason <text> for the one you want." >&2
+    exit 1
+  fi
+  EFFORT=$SUCCEED_EXEC_EFFORT
   SUCCEED_WT=$(fm_meta_get "$STATE/$ID.meta" worktree)
   [ -n "$SUCCEED_WT" ] && [ -d "$SUCCEED_WT" ] || {
     echo "error: $ID's recorded worktree '${SUCCEED_WT:-none}' is not present, so there is no custody for a successor to inherit" >&2
@@ -1664,6 +1668,21 @@ spawn_route_registry_verdicts() {  # <decision-json>
 $(printf '%s' "$1" | jq -r '.candidates[]?.model' 2>/dev/null)
 EOF
 }
+
+# The rebind refusal, HERE, where the binding is first final and nothing has
+# been created yet. bin/fm-attempt.sh open re-runs the same guard at metadata
+# publication, but that call happens after a pool slot is selected (and reset)
+# and a window's pane has entered it, so a refusal there would leave a live
+# window whose shell occupies the slot. Refusing here leaves nothing behind,
+# like every other pre-allocation gate in this script. A successor launch skips
+# this: its binding is pinned against the sanctioned record below, with its own
+# refusal, before its slot is entered.
+if [ "$KIND" != secondmate ] && [ "$SUCCEED_EXECUTION" -eq 0 ]; then
+  SPAWN_BINDING=$HARNESS
+  [ -z "$MODEL" ] || SPAWN_BINDING="$HARNESS/$MODEL"
+  "$FM_ROOT/bin/fm-attempt.sh" check "$ID" --binding "$SPAWN_BINDING" \
+    "${ATTEMPT_FLAGS[@]+"${ATTEMPT_FLAGS[@]}"}" >/dev/null || exit 1
+fi
 
 # ROUTE, ADMIT, ELIGIBLE - the routing policy's own intake order
 # (`_interfaces.order_at_intake`), enforced at the one point where HARNESS,

@@ -632,12 +632,13 @@ EOF
 # A lane is not rebound by relaunching it with a different model. That refusal is
 # what makes `replace` - and therefore every control above - the only way in.
 test_an_ordinary_relaunch_may_not_rebind_the_lane() {
-  local rec case_dir id out rc
+  local rec case_dir id out rc windows_before
   rec=$(make_lane rebind)
   IFS='|' read -r _ _ _ _ case_dir id <<EOF
 $rec
 EOF
   rm -f "$case_dir/home/state/$id.meta"
+  windows_before=$(grep -c 'new-window' "$case_dir/tmux.log" 2>/dev/null || true)
   out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
     --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
   [ "$rc" -ne 0 ] || fail "an ordinary relaunch onto a different model must be refused"$'\n'"$out"
@@ -645,6 +646,10 @@ EOF
     "the refusal must point at the verb that does sanction a rebind"
   [ "$(rec_field "$case_dir" "$id" execution_binding)" = "codex/$PRIMARY" ] \
     || fail "a refused relaunch must leave the recorded producer alone"
+  # Refused BEFORE anything is created: a refusal that fired only at metadata
+  # publication would leave a live window whose shell occupies a pool slot.
+  [ "$(grep -c 'new-window' "$case_dir/tmux.log" 2>/dev/null || true)" = "$windows_before" ] \
+    || fail "a refused rebind must not create a window"
 
   # A relaunch on the SAME binding is an ordinary recovery and continues.
   out=$(spawn_in "$case_dir" "$id" --harness codex --model "$PRIMARY" --effort medium \
@@ -705,6 +710,66 @@ EOF
   [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
     || fail "a refused successor launch must leave the sanctioned record untouched"
   pass "a successor launches only at the effort its gate admitted"
+}
+
+# An empty recorded effort is an UNSTATED sanction, and an unstated condition is
+# one that could not be established - so replace refuses to mint a successor
+# carrying no band, and the dispatcher states one with --alternate-effort. The
+# stated band is then recorded and pinned exactly as an inherited one is.
+test_replace_refuses_an_unstated_effort_sanction() {
+  local rec case_dir id out rc
+  rec=$(make_lane effortcno)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  sed -i 's/^effort=.*/effort=default/' "$case_dir/home/state/$id.meta"
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a replace against a lane whose effort is unstated must refuse"$'\n'"$out"
+  assert_contains "$out" "unstated" "the refusal must name the unstated axis"
+  assert_contains "$out" "--alternate-effort" \
+    "the refusal must tell the dispatcher how to state the band"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" != sanctioned ] \
+    || fail "a refused replace must not have minted a successor"
+
+  # Stated explicitly, the band is recorded, pinned, and the lane launches.
+  out=$(replace_lane "$case_dir" "$id" --alternate-effort medium); rc=$?
+  [ "$rc" -eq 0 ] || fail "a replace that states the band must be sanctioned"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_effort)" = medium ] \
+    || fail "the stated band must be recorded, got '$(rec_field "$case_dir" "$id" execution_effort)'"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort low \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "the stated band must be pinned against a different declared one"$'\n'"$out"
+  assert_contains "$out" "Only the effort a gate admitted may be launched" \
+    "the refusal must name the pinned axis"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || fail "a successor at the stated band must launch normally"$'\n'"$out"
+  pass "replace refuses an unstated effort sanction; a stated one is recorded, pinned, and launches"
+}
+
+# The launch-side half of the same rule: a sanctioned record that carries no
+# band - the shape a record minted before this rule existed can have - refuses
+# at the successor gate rather than accepting whatever the launch declared.
+test_a_successor_with_no_effort_sanction_refuses_at_launch() {
+  local rec case_dir id out rc
+  rec=$(make_lane effortempty)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the replacement must be sanctioned"$'\n'"$out"
+  sed -i '/^execution_effort=/d' "$case_dir/home/state/$id.attempt"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort low \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "a successor against a record with no effort sanction must be refused"$'\n'"$out"
+  assert_contains "$out" "records no effort sanction" \
+    "the refusal must name the unstated axis"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "a refused successor launch must leave the sanctioned record untouched"
+  pass "a successor against a record carrying no effort sanction is refused, never adopted"
 }
 
 # The head the successor opens on is the predecessor's exact head. A clean lane
@@ -951,6 +1016,8 @@ test_c13_a_crash_during_replacement_leaves_at_most_one_active_attempt
 test_an_ordinary_relaunch_may_not_rebind_the_lane
 test_a_successor_may_only_launch_on_the_admitted_binding
 test_a_successor_may_only_launch_at_the_admitted_effort
+test_replace_refuses_an_unstated_effort_sanction
+test_a_successor_with_no_effort_sanction_refuses_at_launch
 test_a_detached_lane_keeps_the_predecessors_exact_head
 test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified
 test_a_successor_dispatch_without_a_sanctioned_successor_is_refused

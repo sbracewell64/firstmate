@@ -326,16 +326,18 @@ retire_control_state_residue() {  # <recorded-home> <control-state> <id>
     printf 'error: refusing to reclaim remote control state for %s: %s resolves to %s\n' "$id" "$residue" "$resolved" >&2
     return 1
   fi
-  home_resolved=$(cd "$home" 2>/dev/null && pwd -P) || home_resolved=
-  if [ -n "$home_resolved" ]; then
-    case "$resolved" in
-      "$home_resolved"/*) ;;
-      *)
-        printf 'error: refusing to reclaim remote control state for %s: %s resolves to %s, outside the recorded home %s\n' \
-          "$id" "$residue" "$resolved" "$home_resolved" >&2
-        return 1 ;;
-    esac
-  fi
+  home_resolved=$(cd "$home" 2>/dev/null && pwd -P) || {
+    printf 'error: refusing to reclaim remote control state for %s: the recorded home %s could not be resolved, so whether %s lies inside it cannot be established\n' \
+      "$id" "$home" "$resolved" >&2
+    return 1
+  }
+  case "$resolved" in
+    "$home_resolved"/*) ;;
+    *)
+      printf 'error: refusing to reclaim remote control state for %s: %s resolves to %s, outside the recorded home %s\n' \
+        "$id" "$residue" "$resolved" "$home_resolved" >&2
+      return 1 ;;
+  esac
   rm -rf -- "$residue"
   # What is left of the home now exists only because our state was in it. rmdir
   # removes a directory only when it is already empty, so anything else still in
