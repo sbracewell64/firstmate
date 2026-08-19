@@ -16,6 +16,13 @@
 # owners that produce it in the fleet rather than from a constant restated here.
 set -u
 
+# fail() inside a command substitution kills only the subshell, so an aborting
+# make_lane hands its caller an empty string and the suite keeps going - and then
+# exits on its LAST case's status, which the runner reads as a pass. The identity
+# contract closes that: every declared test must have reported success by the
+# end, so a case that never reached its pass() is a nonzero exit rather than a
+# `not ok` nobody's exit status carried.
+FM_TEST_IDENTITY_CONTRACT=1
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -948,6 +955,190 @@ test_an_ended_attempt_admits_a_fresh_execution_on_any_binding() {
   pass "an ended attempt closes its execution and admits a fresh-execution retry on any binding"
 }
 
+# --- The lane the capability's own first day locked out ---------------------
+
+# The record shape of a lane dispatched BEFORE the execution lineage existed:
+# an attempt count, a budget, and none of the fields that era never wrote.
+# Produced by REMOVING them from a real dispatch rather than by hand-writing a
+# record, so the fixture stays the shape a live pre-schema lane actually carries.
+strip_lineage() {  # <case-dir> <id>
+  local rec="$1/home/state/$2.attempt"
+  LC_ALL=C grep -v '^execution' "$rec" > "$rec.pre" && mv -f "$rec.pre" "$rec"
+  rm -f "$1/home/state/$2.lineage"
+}
+
+# The residue an adoption interrupted between its two writes leaves behind, and
+# the same record in each of the states it must NOT be read as.
+set_execution_state() {  # <case-dir> <id> <dispatch-state>
+  local rec="$1/home/state/$2.attempt"
+  {
+    LC_ALL=C grep -v '^execution' "$rec"
+    printf 'execution=1\nexecution_id=%s/e1\nexecution_binding=codex/%s\n' "$2" "$PRIMARY"
+    printf 'execution_effort=medium\nexecution_dispatch=%s\n' "$3"
+  } > "$rec.new" && mv -f "$rec.new" "$rec"
+}
+
+# THE LIVE RED. Every lane dispatched before this lineage existed carries a
+# record with no execution at all, and the reader-side rule "no recorded
+# execution attempt, so there is nothing to replace" refused every one of them -
+# on the day the capability landed, to its first production use. The lane's
+# producer is a durable record the fleet already wrote, so `replace` reads it
+# back rather than refusing, and the successor proceeds through every gate the
+# ordinary path uses.
+test_a_prelineage_lane_adopts_its_recorded_binding_and_replaces() {
+  local rec case_dir id wt out rc before_attempt ledger
+  rec=$(make_lane preline)
+  IFS='|' read -r _ _ wt _ case_dir id <<EOF
+$rec
+EOF
+  before_attempt=$(rec_field "$case_dir" "$id" attempt)
+  strip_lineage "$case_dir" "$id"
+  [ -z "$(rec_field "$case_dir" "$id" execution)" ] \
+    || fail "the fixture must carry no execution lineage"
+  assert_contains "$(attempt_in "$case_dir" execution "$id")" "execution=0" \
+    "a pre-lineage lane reads as execution=0 - could-not-observe about its producer"
+
+  # The check accounts for the adoption, so it names the execution the mint will
+  # actually produce rather than the one bare ordinal arithmetic implies.
+  out=$(replace_lane "$case_dir" "$id" --check); rc=$?
+  [ "$rc" -eq 0 ] || fail "a pre-lineage lane must be replaceable, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "successor=$id/e2" \
+    "the check must name the successor the adoption produces, not e1"
+  assert_contains "$out" "adopting=$id/e1" "the check must say what it would adopt"
+  assert_contains "$out" "adopted_binding=codex/$PRIMARY" \
+    "the check must name the binding the adoption reads out of the lane's own record"
+  [ -z "$(rec_field "$case_dir" "$id" execution)" ] || fail "--check must commit nothing"
+  [ ! -f "$case_dir/home/state/$id.lineage" ] || fail "--check must write no ledger"
+
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the replacement of a pre-lineage lane must be sanctioned"$'\n'"$out"
+
+  # The successor is e2, on the alternate, sanctioned and waiting - the ordinary
+  # shape, reached from a record that had no lineage at all.
+  [ "$(rec_field "$case_dir" "$id" execution_id)" = "$id/e2" ] \
+    || fail "the successor must be e2, got '$(rec_field "$case_dir" "$id" execution_id)'"
+  [ "$(rec_field "$case_dir" "$id" execution_binding)" = "codex/$ALTERNATE" ] \
+    || fail "the successor must carry the admitted alternate binding"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "the successor must be sanctioned and unlaunched"
+  [ "$(rec_field "$case_dir" "$id" attempt)" = "$before_attempt" ] \
+    || fail "an adoption spends no attempt: the work did not fail"
+
+  # The adopted producer is on the ledger, named as adopted, and says plainly
+  # that nobody watched it launch. A line a reader could mistake for a
+  # launch-confirmed execution would attribute an observation nobody made.
+  ledger=$(cat "$case_dir/home/state/$id.lineage")
+  assert_contains "$ledger" "event=opened execution=$id/e1" \
+    "the adopted predecessor must have its own opened line"
+  assert_contains "$ledger" "disposition=adopted-from-meta" \
+    "the adopted line must carry its own provenance disposition"
+  assert_contains "$ledger" "launch=unobserved" \
+    "the adopted line must never claim its launch was observed"
+  assert_contains "$ledger" "evidence_source=state/$id.meta" \
+    "the adopted line must name the durable record its binding came from"
+  assert_contains "$ledger" "binding=codex/$PRIMARY" \
+    "the adopted line must name the binding that produced the work already here"
+  assert_contains "$ledger" "event=closed execution=$id/e1" \
+    "the adopted predecessor must be superseded in the same mint"
+  assert_contains "$ledger" "successor=$id/e2" "the close must name its successor"
+  assert_contains "$ledger" "predecessor=$id/e1" \
+    "the successor's line must name what it replaced"
+  [ "$(printf '%s\n' "$ledger" | grep -c 'event=opened')" -eq 2 ] \
+    || fail "the ledger must record exactly two openings, got $(printf '%s\n' "$ledger" | grep -c 'event=opened')"
+
+  # And the successor launches: the whole point of the adoption is that the lane
+  # keeps its slot, its worktree and its committed work.
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || fail "the sanctioned successor of an adopted lane must launch"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = active ] \
+    || fail "a confirmed launch must be recorded active, got '$(rec_field "$case_dir" "$id" execution_dispatch)'"
+  [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
+    || fail "the adopted lane must keep its own worktree"
+  [ -f "$wt/work.txt" ] || fail "the lane's committed work must survive the adoption"
+  [ "$(meta_field "$case_dir" "$id" model)" = "$ALTERNATE" ] \
+    || fail "the lane's live record must name the model actually running it"
+  pass "a pre-lineage lane adopts its recorded binding, replaces, and launches its successor"
+}
+
+# The adoption reads a durable record and never guesses. Metadata that names no
+# binding leaves the producer of the work already in this lane unnameable, and
+# an unnameable producer is could-not-observe, not a blank one to invent.
+test_a_prelineage_lane_without_a_recorded_binding_refuses() {
+  local rec case_dir id out rc
+  rec=$(make_lane prelinenobind)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  strip_lineage "$case_dir" "$id"
+  LC_ALL=C grep -v '^model=' "$case_dir/home/state/$id.meta" > "$case_dir/meta.new" \
+    && mv -f "$case_dir/meta.new" "$case_dir/home/state/$id.meta"
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 4 ] || fail "a lane whose binding cannot be read must be COULD_NOT_OBSERVE, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "COULD_NOT_OBSERVE" "the refusal must name which of the three values it reached"
+  assert_contains "$out" "model='none'" "the refusal must name the field it could not read"
+  [ -z "$(rec_field "$case_dir" "$id" execution)" ] \
+    || fail "a refused adoption must commit nothing"
+  [ ! -f "$case_dir/home/state/$id.lineage" ] || fail "a refused adoption must write no ledger"
+
+  # The whole metadata missing is the same answer for a stronger reason, and it
+  # is the refusal that already owned this case.
+  rm -f "$case_dir/home/state/$id.meta"
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 4 ] || fail "a lane with no metadata at all must be COULD_NOT_OBSERVE, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "no task metadata" "the absent-metadata refusal must keep its own words"
+  pass "an adoption with no readable binding refuses could-not-observe and writes nothing"
+}
+
+# An adopted execution is the opposite of an unstarted one. Its launch was never
+# observed, but the evidence in the lane is ALREADY attributed to it, so the
+# permission an unconfirmed `launching` execution has - to be re-pointed onto
+# another binding without a gate - must not extend to it. The divergence is
+# asserted here so the case cannot go quietly vacuous: the SAME record in
+# `launching` is admitted, and only the adopted token is refused.
+test_an_adopted_execution_is_not_re_pointed_like_an_unstarted_one() {
+  local rec case_dir id out rc
+  rec=$(make_lane adoptedtoken)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  strip_lineage "$case_dir" "$id"
+
+  set_execution_state "$case_dir" "$id" adopted
+  out=$(attempt_in "$case_dir" check "$id" --binding "codex/$ALTERNATE"); rc=$?
+  [ "$rc" -ne 0 ] || fail "an ADOPTED execution must not be re-pointed onto another binding"$'\n'"$out"
+  assert_contains "$out" "adopted execution attempt" \
+    "the refusal must name the state it is protecting"
+  assert_contains "$out" "bin/fm-attempt.sh replace" \
+    "the refusal must point at the one verb that mints a successor"
+  [ "$(rec_field "$case_dir" "$id" execution_binding)" = "codex/$PRIMARY" ] \
+    || fail "a refused rebind must leave the adopted producer alone"
+
+  # THE DIVERGENCE. The same record, differing only in the token, is admitted -
+  # so the refusal above is controlled by the token and not by the fixture.
+  set_execution_state "$case_dir" "$id" launching
+  out=$(attempt_in "$case_dir" check "$id" --binding "codex/$ALTERNATE"); rc=$?
+  [ "$rc" -eq 0 ] || fail "an unconfirmed launch produced nothing and must stay re-pointable"$'\n'"$out"
+
+  # A same-binding relaunch of an adopted execution is ordinary recovery and
+  # continues, so the strict reading never becomes a second deadlock.
+  set_execution_state "$case_dir" "$id" adopted
+  out=$(attempt_in "$case_dir" check "$id" --binding "codex/$PRIMARY"); rc=$?
+  [ "$rc" -eq 0 ] || fail "recovering an adopted lane on its own binding must continue"$'\n'"$out"
+
+  # And the residue is recoverable rather than a deadlock of its own: `replace`
+  # sees an ordinary lineage-bearing lane and advances it, adopting nothing a
+  # second time.
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "an interrupted adoption must still be replaceable"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_id)" = "$id/e2" ] \
+    || fail "the successor of an adopted execution must be e2"
+  [ "$(grep -c 'disposition=adopted-from-meta' "$case_dir/home/state/$id.lineage" || true)" -eq 0 ] \
+    || fail "a record that already carries an execution must never be adopted again"
+  pass "an adopted execution is refused a rebind an unstarted one is allowed, and stays replaceable"
+}
+
 # --- Assignment independence, which no record grants ------------------------
 
 # A route whose floor requires an ADJUDICATED capability contract is a reviewing
@@ -1071,4 +1262,9 @@ test_a_successor_dispatch_without_a_sanctioned_successor_is_refused
 test_only_a_confirmed_launch_is_protected_from_rebinding
 test_an_ended_attempt_admits_a_fresh_execution_on_any_binding
 test_a_reviewing_lane_refuses_a_replacement_that_is_not_independent_of_its_maker
+test_a_prelineage_lane_adopts_its_recorded_binding_and_replaces
+test_a_prelineage_lane_without_a_recorded_binding_refuses
+test_an_adopted_execution_is_not_re_pointed_like_an_unstarted_one
 test_the_lineage_retires_with_the_attempt_record
+
+fm_test_contract "$0" || exit 1
