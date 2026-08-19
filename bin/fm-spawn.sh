@@ -1241,6 +1241,7 @@ SPAWN_TASK_LOCK_HELD=1
 # already opened must not be dropped from the metadata this spawn rewrites.
 SUCCEED_EXEC_ID=
 SUCCEED_EXEC_BINDING=
+SUCCEED_EXEC_EFFORT=
 SUCCEED_WT=
 SUCCEED_SLOT_BASE=
 SUCCEED_CONTRIB_TARGET=
@@ -1260,10 +1261,22 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   }
   SUCCEED_EXEC_ID=$(fm_meta_get "$STATE/$ID.attempt" execution_id)
   SUCCEED_EXEC_BINDING=$(fm_meta_get "$STATE/$ID.attempt" execution_binding)
+  SUCCEED_EXEC_EFFORT=$(fm_meta_get "$STATE/$ID.attempt" execution_effort)
   [ "$(fm_meta_get "$STATE/$ID.attempt" execution_dispatch)" = sanctioned ] || {
     echo "error: $ID holds no PENDING successor execution. bin/fm-attempt.sh replace is what sanctions one, and it is the only thing that does: it establishes that the execution now open is quiescent, that this lane's worktree custody is known, that no operation is in flight, and that the alternate is admissible. Run it first." >&2
     exit 1
   }
+  # The sanctioned effort is part of the admitted binding, so it is pinned
+  # exactly as harness/model are: a declared band that differs from the recorded
+  # one is refused, and an undeclared one adopts the record rather than falling
+  # back to this spawn's own resolution.
+  if [ -n "$SUCCEED_EXEC_EFFORT" ]; then
+    if [ -n "$EFFORT" ] && [ "$EFFORT" != "$SUCCEED_EXEC_EFFORT" ]; then
+      echo "error: $ID's sanctioned successor $SUCCEED_EXEC_ID is recorded at effort $SUCCEED_EXEC_EFFORT and this launch declares $EFFORT. Only the effort a gate admitted may be launched; run bin/fm-attempt.sh replace $ID --alternate <model> --alternate-effort <band> --reason <text> for the one you want." >&2
+      exit 1
+    fi
+    EFFORT=$SUCCEED_EXEC_EFFORT
+  fi
   SUCCEED_WT=$(fm_meta_get "$STATE/$ID.meta" worktree)
   [ -n "$SUCCEED_WT" ] && [ -d "$SUCCEED_WT" ] || {
     echo "error: $ID's recorded worktree '${SUCCEED_WT:-none}' is not present, so there is no custody for a successor to inherit" >&2
@@ -2291,6 +2304,14 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   fi
   WT_SLOT_REAL=$(real_path_or_raw "$SUCCEED_WT")
   WT_SLOT_NAME=$(basename "$WT_SLOT_REAL")
+  # A lane sanctioned for replacement is process-free by the custody gate, so
+  # until the pane's own shell enters the slot nothing occupies it and another
+  # home's `treehouse get` could acquire-and-RESET it over the lane's work. The
+  # same holder the select branch uses occupies it across that window.
+  if [ "$BACKEND" != orca ]; then
+    ( cd "$WT_SLOT_REAL" 2>/dev/null && exec sleep 300 ) >/dev/null 2>&1 &
+    SLOT_HOLDER_PID=$!
+  fi
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_pool_select_lock_acquire "$PROJ_ABS_REAL" || exit 1
   # --for names this task, which is what a pool's slot reservation is matched
@@ -2824,7 +2845,12 @@ fi
 # about THIS directory: a slot carrying uncommitted work, or sitting on a task
 # branch, may hold work that was never landed. Either one is left untouched and
 # launched as-is with a loud notice rather than reset over.
-if [ "$KIND" != secondmate ] && [ -n "$WT" ] && [ -n "$SLOT_BASE" ]; then
+#
+# A successor dispatch never places: the slot it enters is the lane's own, and
+# its branch, head and content - committed or not - are exactly what the
+# replacement contract preserves. Whatever state the predecessor left is what
+# the successor opens on.
+if [ "$SUCCEED_EXECUTION" -eq 0 ] && [ "$KIND" != secondmate ] && [ -n "$WT" ] && [ -n "$SLOT_BASE" ]; then
   slot_head=$(git -C "$WT" rev-parse --verify --quiet HEAD 2>/dev/null || true)
   if [ "$slot_head" = "$SLOT_BASE" ]; then
     :
@@ -3275,7 +3301,16 @@ fi
 # never started produced nothing, which is what lets the capacity owner retry
 # the same dispatch on the next model in the pool.
 SPAWN_EXEC_ID=
-[ "$KIND" = secondmate ] || SPAWN_EXEC_ID=$(fm_meta_get "$STATE/$ID.attempt" execution_id)
+# A successor dispatch confirms the execution the gate verified at the top of
+# this spawn, never a re-read: a replace that minted a newer successor in the
+# meantime would otherwise be confirmed as the producer of a worker that
+# carries the earlier binding, and `dispatched` refusing the stale id is the
+# loud form of that race.
+if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+  SPAWN_EXEC_ID=$SUCCEED_EXEC_ID
+elif [ "$KIND" != secondmate ]; then
+  SPAWN_EXEC_ID=$(fm_meta_get "$STATE/$ID.attempt" execution_id)
+fi
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")

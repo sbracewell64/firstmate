@@ -1201,6 +1201,10 @@ cmd_replace() {
   done
   [ -n "$alternate" ] || die "replace needs --alternate <model>"
   [ -n "$reason" ] || die "replace needs --reason <text>: a replacement nobody can read the cause of is one nobody can audit"
+  case "$effort" in
+    ''|low|medium|high|xhigh|max) ;;
+    *) die "--alternate-effort must be one of low, medium, high, xhigh, max" ;;
+  esac
   reason=$(attempt_clean_signature "$reason")
 
   meta="$STATE/$id.meta"
@@ -1252,10 +1256,10 @@ cmd_replace() {
   # for recovery to launch. There is no window in which two executions are open,
   # because there is no state in which two are recorded.
   lockdir="$STATE/$id.attempt.lock"
-  mkdir "$lockdir" 2>/dev/null \
-    || replace_unobserved "another replacement of $id is already in progress (holding $lockdir); whether it has already minted a successor is unestablished from here"
+  fm_lock_try_acquire "$lockdir" \
+    || replace_unobserved "another replacement of $id is already in progress (holding $lockdir${FM_LOCK_HELD_PID:+, pid $FM_LOCK_HELD_PID}); whether it has already minted a successor is unestablished from here"
   # shellcheck disable=SC2064
-  trap "rmdir -- '$lockdir' 2>/dev/null || true" EXIT
+  trap "fm_lock_release '$lockdir' 2>/dev/null || true" EXIT
   have=$(attempt_exec_n "$id")
   next=$((have + 1))
   attempt_lineage_append "$id" "event=closed" "execution=$id/e$have" \
@@ -1302,7 +1306,9 @@ cmd_retire() {
   shift
   [ "$#" -eq 0 ] || die "retire takes only a task id"
   rm -f -- "$STATE/$id.attempt" "$STATE/$id.lineage"
-  rmdir -- "$STATE/$id.attempt.lock" 2>/dev/null || true
+  if fm_lock_try_acquire "$STATE/$id.attempt.lock" 2>/dev/null; then
+    fm_lock_release "$STATE/$id.attempt.lock" 2>/dev/null || true
+  fi
 }
 
 attempt_is_count "$ATTEMPT_BUDGET_DEFAULT" && [ "$ATTEMPT_BUDGET_DEFAULT" -gt 0 ] \
