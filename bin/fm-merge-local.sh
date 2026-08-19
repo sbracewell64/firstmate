@@ -433,7 +433,7 @@ before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 # --quiet rather than a stdout redirection, because the act is passed to the
 # spend as an argv and a redirection is not part of one. It leaves this command's
 # own reporting exactly as it was: silent on success, and its stderr on failure.
-merge_command=(git -C "$PROJ" merge --ff-only --quiet "$BRANCH")
+merge_command=(git -C "$PROJ" merge --ff-only --quiet "$LANDING_HEAD")
 
 case "$FM_LANDING_SEAM_VERDICT" in
   not-applicable)
