@@ -94,7 +94,7 @@ When any diagnostic needs captain attention, report the plain consequence and re
   Do not treat this as down and do not treat it as alive: inspect the named path, and settle the daemon's actual state before either alarming the captain or dispatching validation-dependent work.
 - `COMMITMENT: <id> UNMET (<label>) - <evidence>` - something was recorded as a commitment, and the probe registered for it says it is not real yet.
   The line is not a reminder to re-file the commitment; it is the evidence that the thing the record promises is not happening.
-  Read the named evidence, decide with the captain whether closing it is work worth dispatching now, and record that decision - but never edit or delete the entry to quiet the line, because the entry retires by itself the moment its probe passes, and one removed by hand takes the gap with it.
+  Read the named evidence, decide with the captain whether closing it is work worth dispatching now, and record that decision - but never edit or delete the entry to quiet the line, because the entry retires by itself the moment every probe it declares passes, and one removed by hand takes the gap with it.
   This is deliberately not suppressed by age, count, or rate: a quieter question hides a genuine unmet commitment along with the noise.
 - `COMMITMENT: <id> COULD-NOT-OBSERVE - <evidence>` - the probe reached no verdict, or the entry is inadmissible, or it is an attested criterion that cannot execute.
   This is the third value and it is never read as enforced: the commitment may or may not be real, and until the probe can answer, no one may say it is.
