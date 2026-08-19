@@ -67,6 +67,22 @@
 # the original defect, so an unreadable backlog, an unreachable forge, an
 # unconfigured venue, and an unobservable head all reach 4 and never 0.
 #
+# THAT PARAGRAPH WAS TRUE OF THE RULE AND FALSE OF THE CODE, IN TWO PLACES, AND
+# BOTH ARE FIXED HERE. This is the second way the originating incident happens:
+# the first way was a waiting item nobody ever asked about, and the second is a
+# verdict that answers a question this sweep never looked at.
+#   1. sweep_exit tested `defects` first and returned, so the fold named
+#      directly above it was skipped and a sweep holding 22 defects and 19
+#      could-not-observes exited 3 - the fleet is provably wrong - when the
+#      module's own order makes the honest answer 4.
+#   2. An item whose exact head could not be READ was classified as a defect
+#      under FM_OUTBOUND_HEAD_UNOBSERVED and rendered as "no applicable durable
+#      artifact", a positive claim about the forge derived from a failed local
+#      read, while three sibling tokens naming the identical condition all
+#      reached 4.
+# Neither repair quiets anything: a structurally unbindable item is still a
+# defect, still drives the exit, and still renders as one.
+#
 # WHAT THIS COMMAND WILL NOT DO
 #
 # It does not open pull requests. The pull-request channel is detect-only: the
@@ -831,12 +847,33 @@ sweep() {
     # Fail closed on an incomplete binding BEFORE anything else. An item whose
     # binding cannot be constructed cannot have an exact-head-bound artifact, so
     # it is a defect regardless of what happens to be on the forge.
+    #
+    # THAT ARGUMENT IS SOUND FOR ONE OF THE TWO CONDITIONS THIS BRANCH COVERS.
+    # A binding missing a STRUCTURAL field - an untyped gate, no project, no
+    # repo, no item - is unbindable by construction: no exact-head-bound
+    # artifact can exist for it, so defect is right and stays right.
+    # A binding missing ONLY its head is a failed OBSERVATION. observe_head
+    # asked the declaration, the forge and the clone, and none answered. The
+    # head exists, an artifact bound to it may well exist on the forge, and this
+    # sweep did not look. Calling that a defect derives a positive claim about
+    # the forge from a failed local read, which is the conversion this whole
+    # module exists to remove - and it did so while LANDING_TARGET_UNOBSERVED,
+    # WORK_STATE_UNOBSERVED and CLONE_UNREADABLE, three tokens naming the
+    # identical epistemic condition, all reached unevaluable.
+    #
+    # An item that is BOTH untyped and headless keeps the stronger verdict: the
+    # gate is a read that succeeded and found nothing, so the item is provably
+    # unbindable whatever the head turns out to be.
     missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
     if [ -n "$missing" ]; then
-      if [ -z "$head" ]; then token=$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED
-      else token=$FM_OUTBOUND_TOKEN_INCOMPLETE; fi
-      row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
-        defect "$token" "$(printf '%s' "$missing" | tr '\n' ',' | sed 's/,$//')" "" 0 >> "$rows"
+      if [ "$missing" = head ]; then
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
+          unevaluable "$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED" "$missing" "" 0 >> "$rows"
+      else
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
+          defect "$FM_OUTBOUND_TOKEN_INCOMPLETE" \
+          "$(printf '%s' "$missing" | tr '\n' ',' | sed 's/,$//')" "" 0 >> "$rows"
+      fi
       continue
     fi
 
@@ -952,12 +989,15 @@ render_section() {  # <verdict> <heading> [all|identity|not-identity]
     return
   fi
   printf '%s' "$SWEEP" | jq -r --arg v "$verdict" --arg i "$FM_OUTBOUND_TOKEN_IDENTITY" \
+    --arg h "$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED" \
     --arg s "$scope" '.rows[] | select(.verdict==$v)
     | select($s == "all" or ($s == "identity") == (.token == $i)) |
     "  \(.item)",
     "         gate: \(.gate // "UNTYPED") · channel: \(.channel // "unknown") · recognised: \(.tier)",
     "         head: \(.head // "unobserved") · artifact: \(.artifact // "none") · \(.token)",
-    (if .missing then "         incomplete binding, missing: \(.missing)" else empty end),
+    (if .token == $h then
+       "         the exact head could not be READ from the declaration, the forge or the clone, so no artifact was looked for"
+     elif .missing then "         incomplete binding, missing: \(.missing)" else empty end),
     (if .superseded_records > 0 then "         \(.superseded_records) earlier request(s) bound to a different head" else empty end)'
 }
 
@@ -1006,8 +1046,17 @@ render_defects() {
      else
        "OUTBOUND: \(.item) is waiting on \(.gate // "an untyped gate") with no applicable durable artifact (\(.token)) - head \(.head // "unobserved"), channel \(.channel // "unknown")"
      end'
-  printf '%s' "$SWEEP" | jq -r '.rows[] | select(.verdict=="unevaluable") |
-    "OUTBOUND: \(.item) artifact state COULD-NOT-OBSERVE (\(.token)) - its waiting is neither confirmed legitimate nor confirmed defective"'
+  # A *_UNOBSERVED token must never be handed a sentence that asserts absence.
+  # The head case gets its own words because the generic one leaves the operator
+  # to guess WHAT could not be observed, and the repair for an unreadable head -
+  # make the head readable - is nothing like the repair for a missing artifact.
+  printf '%s' "$SWEEP" | jq -r --arg h "$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED" \
+    '.rows[] | select(.verdict=="unevaluable") |
+     if .token == $h then
+       "OUTBOUND: \(.item) - its exact head could not be read from the declaration, the forge or the clone (\(.token)), so this sweep did not look for an artifact and is NOT reporting that none exists"
+     else
+       "OUTBOUND: \(.item) artifact state COULD-NOT-OBSERVE (\(.token)) - its waiting is neither confirmed legitimate nor confirmed defective"
+     end'
   if [ "$(printf '%s' "$SWEEP" | jq -r '.capped')" = "true" ]; then
     printf 'OUTBOUND: probe cap %s reached - this sweep did not check every waiting item\n' "$MAX_PROBES"
   fi
@@ -1026,16 +1075,34 @@ outbound_worst_status() {  # <status> <status> -> the worse of the two
   printf '%s\n' "$b"
 }
 
+# THE EXIT IS THAT FOLD, NOT A LADDER THAT SHORT-CIRCUITS ABOVE IT. This tested
+# `defects` first and returned, so a sweep holding both answers never reached
+# `unevaluable` at all and reported 3 where the order directly above says 4. The
+# header invites a caller to read the exit status alone, and that caller was
+# being told the fleet is provably wrong at the exact moment the honest answer
+# was that the question had not been answered - the direction the module's own
+# reasoning calls the one that hides the worse condition. Both counts are folded
+# now, so the exit status and the declared order cannot disagree.
+#
+# A count that could not be read is itself could-not-observe, never zero: an
+# unreadable count is exactly the input that would otherwise certify a sweep
+# nobody measured.
 sweep_exit() {
-  local defects unevaluable
+  local defects unevaluable defect_status unevaluable_status
   [ "$(printf '%s' "$SWEEP" | jq -r '.readable')" = "true" ] || return 4
   defects=$(printf '%s' "$SWEEP" | jq '[.rows[] | select(.verdict=="defect")] | length')
   unevaluable=$(printf '%s' "$SWEEP" | jq '[.rows[] | select(.verdict=="unevaluable")] | length')
-  [ "$defects" -eq 0 ] || return 3
+  case $defects in ''|*[!0-9]*) return 4 ;; esac
+  case $unevaluable in ''|*[!0-9]*) return 4 ;; esac
+  if [ "$defects" -eq 0 ]; then defect_status=0; else defect_status=3; fi
   # A capped sweep did not look at everything, so it cannot certify the whole
   # fleet even when everything it did look at was fine.
-  { [ "$unevaluable" -eq 0 ] && ! probes_capped; } || return 4
-  return 0
+  if [ "$unevaluable" -eq 0 ] && ! probes_capped; then
+    unevaluable_status=0
+  else
+    unevaluable_status=4
+  fi
+  return "$(outbound_worst_status "$defect_status" "$unevaluable_status")"
 }
 
 # --- emit --------------------------------------------------------------------

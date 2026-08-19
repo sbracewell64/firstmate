@@ -18,6 +18,9 @@
 #                  _scheduling.admission_control - <reason>",
 #                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",
 #                 "COMMITMENT: register unreadable - <reason>",
+#                 "COMMITMENT: register unevaluable - the register exited <rc>
+#                  [and reported nothing|without a verdict line], so no recorded
+#                  commitment could be checked",
 #                 "OUTBOUND: <item> is waiting on <gate> with no applicable
 #                  durable artifact (<token>) - <evidence>",
 #                 "OUTBOUND: <item> artifact state COULD-NOT-OBSERVE (<token>) - <evidence>",
@@ -952,21 +955,52 @@ EOF
 # bin/fm-commitment-register.sh owns the register, the probes, and the exact line
 # wording; this function only relays it.
 #
-# An ABSENT interpreter is the one way this relay could go quietly vacuous, so it
-# is the loudest case here rather than the silent one. The register already
+# An ABSENT interpreter is one way this relay could go quietly vacuous, so it
+# is a loud case here rather than the silent one. The register already
 # reports an unreadable register rather than an empty one; a home running a bin/
 # that predates it, or one whose exec bit a checkout dropped, would otherwise
 # report "silent - all good" while every recorded commitment went unchecked -
 # which is the reads-as-protection-while-protecting-nothing shape this whole
 # mechanism exists to refuse.
+#
+# A PRESENT INTERPRETER THAT FAILS IS THE SECOND WAY, AND IT WAS THE OPEN ONE.
+# The absence guard answers "is the interpreter there?" and its green was being
+# credited with "did the interpreter answer?" - two different questions. The
+# call discarded both the child's stderr and its exit status, so a register that
+# ran and CRASHED - a malformed commitments/schema.json, an absent jq, an
+# unreadable home-private overlay - printed nothing at all, and per AGENTS.md
+# section 13 a silent COMMITMENT section means no action is needed. Exactly the
+# shape the paragraph above refuses, reached through the door it did not cover.
+#
+# So the status is captured, the stderr is kept, and anything that is not one of
+# the register's own verdicts (0 satisfied, 3 unmet, 4 unobserved) is reported
+# as unevaluable. A non-zero verdict that produced no COMMITMENT: line -
+# whether it printed nothing at all or only stderr diagnostics - is reported the
+# same way: a verdict nobody can read is not a verdict. outbound_artifact_report
+# below already relays its child this way; this is that shape applied here.
 commitment_register_report() {
-  local bin="$SCRIPT_DIR/fm-commitment-register.sh" out
+  local bin="$SCRIPT_DIR/fm-commitment-register.sh" out rc
   if [ ! -x "$bin" ]; then
     printf 'COMMITMENT: register unreadable - %s is missing or not executable, so no recorded commitment could be checked\n' \
       "bin/fm-commitment-register.sh"
     return 0
   fi
-  out=$(FM_HOME="$FM_HOME" "$bin" --open 2>/dev/null || true)
+  out=$(FM_HOME="$FM_HOME" "$bin" --open 2>&1)
+  rc=$?
+  case $rc in
+    0|3|4)
+      if [ "$rc" -ne 0 ] && ! printf '%s\n' "$out" | grep -q '^COMMITMENT: '; then
+        if [ -z "$out" ]; then
+          printf 'COMMITMENT: register unevaluable - the register exited %s and reported nothing, so no recorded commitment could be checked\n' "$rc"
+        else
+          printf 'COMMITMENT: register unevaluable - the register exited %s without a verdict line, so no recorded commitment could be checked\n' "$rc"
+        fi
+      fi
+      ;;
+    *)
+      printf 'COMMITMENT: register unevaluable - the register exited %s, so no recorded commitment could be checked\n' "$rc"
+      ;;
+  esac
   [ -n "$out" ] || return 0
   printf '%s\n' "$out"
 }
