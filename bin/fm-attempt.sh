@@ -142,17 +142,23 @@
 #   execution_id=<id>/e<k>   the stamp evidence is attributed to.
 #   execution_binding=<h>/<m>  the harness/model binding it runs on.
 #   execution_effort=<band>  its recorded effort band, empty when unstated.
-#   execution_dispatch=<launching|active|sanctioned|ended>  where this execution
-#                            stands. `launching` was minted by an ordinary spawn
-#                            whose launch has not been confirmed; `active` has a
-#                            confirmed launch; `sanctioned` was minted by
-#                            `replace` and is waiting for its successor dispatch;
-#                            `ended` was closed by `end` because the work attempt
-#                            it ran under ended without landing. `end` closes the
-#                            open execution before it records the ended flag, so
+#   execution_dispatch=<launching|active|sanctioned|adopted|ended>  where this
+#                            execution stands. `launching` was minted by an
+#                            ordinary spawn whose launch has not been confirmed;
+#                            `active` has a confirmed launch; `sanctioned` was
+#                            minted by `replace` and is waiting for its successor
+#                            dispatch; `adopted` was reconstructed from task
+#                            metadata for a lane that predates this lineage, and
+#                            its launch was never observed at all; `ended` was
+#                            closed by `end` because the work attempt it ran
+#                            under ended without landing. `end` closes the open
+#                            execution before it records the ended flag, so
 #                            ended=1 and an executing dispatch state are mutually
 #                            exclusive by construction, not by convention.
-#   execution_head=<sha>     the branch head observed when it was minted.
+#   execution_head=<sha>     the branch head observed when it was minted. Empty
+#                            on an `adopted` execution, because the head its run
+#                            began at was never observed and inventing one would
+#                            bind the predecessor's evidence to a head nobody saw.
 #
 # A REPLACEMENT MOVES THE EXECUTION AND LEAVES THE WORK ALONE. `replace` mints
 # a successor execution in the SAME lane - same task id, same slot, same
@@ -187,6 +193,40 @@
 # possible is a genuine retry, not a rebind: it opens a FRESH ordinal on
 # whatever binding it declares, never a continuation of the discarded run, so
 # the discarded evidence keeps its own producer and the retry gets its own.
+#
+# A LANE THAT PREDATES THIS LINEAGE IS ADOPTED, NOT REFUSED. Every lane
+# dispatched before these fields existed carries an .attempt record with no
+# execution at all, and the reader-side rule above - "no recorded execution
+# attempt, so there is nothing to replace" - is a refusal aimed at a record its
+# own writer era never produced. It locked every pre-schema lane out of the
+# capability on the day the capability landed.
+#
+# So `replace` on a record with execution=0 ADOPTS the lane's recorded binding
+# as execution 1 before minting the successor. The binding comes from
+# state/<id>.meta's harness= and model= - a durable record of what the fleet
+# dispatched, not a guess - and a meta that is absent or names neither is a
+# COULD_NOT_OBSERVE refusal, because a producer that cannot be named cannot be
+# the one the earlier evidence is attributed to.
+#
+# The adoption never claims the predecessor's launch was seen. It is recorded
+# with its own dispatch state, `adopted`, and its own ledger disposition,
+# `adopted-from-meta`, carrying `launch=unobserved` and the file the binding was
+# read out of; an `adopted` execution therefore satisfies nothing that requires a
+# CONFIRMED launch, and is never re-pointable the way an unconfirmed `launching`
+# one is - it produced the evidence this lane already holds. What the adoption
+# records is who that evidence belongs to, which is exactly what the metadata
+# already says.
+#
+# The adoption is written BEFORE the successor is minted and under the same lock,
+# ledger line first and record second - the same direction the successor mint
+# takes. A crash after both leaves execution 1 recorded as adopted with its own
+# opened line, and a retried `replace` then sees an ordinary lineage-bearing lane
+# and simply advances it. A crash between them leaves the ledger carrying an
+# adoption the record does not, and the retry adopts again and appends a second
+# opened line for that one ordinal - the same spurious-line tolerance the
+# successor mint below already states, and for the same reason: a recorded
+# execution whose producer was never written is the one shape this ledger exists
+# to make impossible.
 #
 # THE RESIDUE, STATED RATHER THAN CLOSED. `active` is recorded after the launch
 # is confirmed, by a separate call. If that call fails - the state directory
@@ -277,6 +317,10 @@
 #       recorded harness and effort, because a replacement states what MOVES;
 #       inheriting an axis is never admitting it, and the route is re-checked
 #       against the whole resulting binding either way.
+#       A lane with NO recorded execution - one dispatched before this lineage
+#       existed - has its recorded binding adopted as execution 1 first, so the
+#       successor is e2 and the earlier evidence keeps a named producer. The
+#       adoption is refused could-not-observe when the metadata names no binding.
 #   fm-attempt.sh dispatched <id> --execution <execution-id>
 #       Record that a spawn CONFIRMED the launch of that exact execution, moving
 #       it to active. bin/fm-spawn.sh's hook; refuses any id but
@@ -349,6 +393,14 @@ ATTEMPT_REPLACE_HELD_EXIT=3
 ATTEMPT_REPLACE_UNOBSERVED_EXIT=4
 # The schema tag of one line of state/<id>.lineage.
 FM_ATTEMPT_LINEAGE_SCHEMA=fm-execution-lineage.v1
+# The dispatch state and the ledger disposition of an execution RECONSTRUCTED
+# from task metadata for a lane that predates this lineage. Two names rather
+# than one reused: a reader of the record and a reader of the append-only ledger
+# each have to be able to tell an adopted producer from a launch anyone watched,
+# and a token shared with `launching` or `active` would make exactly that
+# distinction unavailable to one of them.
+FM_ATTEMPT_ADOPTED_STATE=adopted
+FM_ATTEMPT_ADOPTED_DISPOSITION=adopted-from-meta
 # Set to 1 only by the one path that mints or advances an execution; every other
 # writer preserves the lineage it finds. Defaulted here so `set -u` cannot make
 # an ordinary write depend on whether a replacement ran first in this process.
@@ -952,6 +1004,18 @@ attempt_exec_guard() {  # <id> <binding-or-empty> <succeeding-0-or-1>
   recorded=$(attempt_field "$STATE/$id.attempt" execution_binding)
   [ -n "$recorded" ] || return 0
   [ "$binding" != "$recorded" ] || return 0
+  # An ADOPTED execution is the opposite of an unconfirmed one and is refused
+  # first, before the permissive reading below can be reached by a later edit
+  # that lengthens that list. Its launch was never observed, but the evidence in
+  # this lane is ALREADY attributed to it, so re-pointing that ordinal onto
+  # another binding would hand one producer's work to a different producer -
+  # precisely what the ordinal exists to prevent.
+  if [ "$state" = "$FM_ATTEMPT_ADOPTED_STATE" ]; then
+    printf 'error: %s holds an adopted execution attempt (%s on %s, reconstructed from this lane'"'"'s own metadata) and this launch declares %s. An adopted producer is not an unstarted one: the work already in this lane is attributed to it. Run bin/fm-attempt.sh replace %s --alternate <model> --reason <text>, which mints a successor identity so that evidence keeps its own producer.\n' \
+      "$id" "$(attempt_field "$STATE/$id.attempt" execution_id)" "$recorded" \
+      "$binding" "$id" >&2
+    exit "$ATTEMPT_REPLACE_REFUSED_EXIT"
+  fi
   # A launch that never completed produced nothing, so there is no producer to
   # preserve and the ordinal may simply be re-recorded onto the new binding.
   [ "$state" != launching ] || return 0
@@ -996,11 +1060,14 @@ attempt_exec_open() {  # <id> <binding-or-empty> <effort-or-empty> <succeeding>
   # A sanctioned successor is left exactly as the gate minted it; its dispatch is
   # confirmed separately, so nothing here may quietly declare it running.
   [ "$state" != sanctioned ] || return 0
-  # Otherwise: adopt this launch's binding onto the open ordinal. That is a
+  # Otherwise: RECORD this launch's binding onto the open ordinal. That is a
   # no-op for a continuation on the same binding, fills in a producer a record
   # predating this never had, and re-points an execution whose launch never
   # completed - the three cases the guard above has already separated from a
-  # rebind it must refuse.
+  # rebind it must refuse. Deliberately not called adopting: `adopted` is a
+  # defined dispatch state above, and this path is not it - it records the
+  # binding a launch DECLARED, while an adoption reconstructs the binding a
+  # PREDECESSOR ran on.
   if [ -n "$binding" ] && [ "$binding" != "$recorded" ]; then
     attempt_exec_commit "$id" "$have" "$binding" "$effort" launching \
       "$(attempt_field "$STATE/$id.attempt" execution_head)" \
@@ -1239,6 +1306,7 @@ EOF
 cmd_replace() {
   local id=${1-} alternate='' harness='' effort='' maker='' reason='' check=0
   local rec meta wt backend target route binding have head lockdir next
+  local adopt_binding='' adopt_harness='' adopt_model='' adopt_effort=''
   require_id "$id"
   shift
   while [ "$#" -gt 0 ]; do
@@ -1291,9 +1359,25 @@ cmd_replace() {
   [ -z "$binding" ] || binding="$binding/"
   binding="$binding$alternate"
 
+  # A lane with NO recorded execution is one dispatched before this lineage
+  # existed, not one with nothing to replace. Its producer is reconstructed from
+  # the metadata the fleet already wrote - and only from there, so an adoption is
+  # a durable record read back rather than an inference. Resolved HERE, before
+  # any gate runs and before anything is created, so a metadata that names no
+  # producer refuses without touching the lane.
   have=$(attempt_exec_n "$id")
-  [ "$have" -gt 0 ] \
-    || replace_unobserved "$id has no recorded execution attempt, so there is nothing to replace and no predecessor to attribute its evidence to"
+  if [ "$have" -eq 0 ]; then
+    adopt_harness=$(attempt_field "$meta" harness)
+    adopt_model=$(attempt_field "$meta" model)
+    [ -n "$adopt_harness" ] && [ -n "$adopt_model" ] \
+      || replace_unobserved "$id has no recorded execution attempt, and its metadata names harness='${adopt_harness:-none}' model='${adopt_model:-none}', so the binding that produced the work already in this lane cannot be established and there is no predecessor to attribute that evidence to"
+    adopt_binding="$adopt_harness/$adopt_model"
+    # The lane's OWN recorded effort, never the successor's. --alternate-effort
+    # states what the successor runs at; carrying it onto the predecessor would
+    # record a band the predecessor was never dispatched with.
+    adopt_effort=$(attempt_field "$meta" effort)
+    [ "$adopt_effort" != default ] || adopt_effort=''
+  fi
 
   replace_custody_gate "$id" "$wt"
   replace_agent_gate "$id" "$backend" "$target"
@@ -1304,6 +1388,13 @@ cmd_replace() {
   replace_independence_gate "$id" "$route" "$alternate" "$maker"
 
   if [ "$check" -eq 1 ]; then
+    # An adoption moves the successor's ordinal, so a check that ignored it
+    # would name an execution the real mint will never produce.
+    if [ -n "$adopt_binding" ]; then
+      printf 'sanctioned successor=%s/e2 binding=%s head=%s adopting=%s/e1 adopted_binding=%s disposition=%s (checked only; nothing was committed)\n' \
+        "$id" "$binding" "$head" "$id" "$adopt_binding" "$FM_ATTEMPT_ADOPTED_DISPOSITION"
+      return 0
+    fi
     printf 'sanctioned successor=%s/e%s binding=%s head=%s (checked only; nothing was committed)\n' \
       "$id" "$((have + 1))" "$binding" "$head"
     return 0
@@ -1321,6 +1412,30 @@ cmd_replace() {
   # shellcheck disable=SC2064
   trap "fm_lock_release '$lockdir' 2>/dev/null || true" EXIT
   have=$(attempt_exec_n "$id")
+  # The adoption is written under this same lock and BEFORE the successor, so a
+  # crash after it leaves ONE adopted execution open with its own opened line,
+  # and a retried replace then sees an ordinary lineage-bearing lane. The head is
+  # left EMPTY: the head this producer's run began at was never observed, and
+  # writing the head observed now would bind the predecessor's evidence to a
+  # commit nobody saw it start from.
+  if [ "$have" -eq 0 ] && [ -n "$adopt_binding" ]; then
+    # Ledger first, record second - the same direction the successor mint below
+    # takes, and for the same reason: a retried adoption appending a second
+    # opened line for one ordinal is tolerable, while a recorded execution whose
+    # producer was never written is exactly the attribution this ledger exists
+    # to make impossible.
+    attempt_lineage_append "$id" "event=opened" "execution=$id/e1" "ordinal=1" \
+      "attempt=$(attempt_prior "$id")" "binding=$adopt_binding" \
+      "effort=${adopt_effort:-unstated}" "ts=$(date +%s)" \
+      "disposition=$FM_ATTEMPT_ADOPTED_DISPOSITION" "launch=unobserved" \
+      "head=unobserved" "evidence_source=state/$id.meta" \
+      "reason=this lane predates the execution lineage; its recorded binding is adopted so the evidence already here keeps a named producer" \
+      || replace_unobserved "the adopted producer of $id/e1 could not be recorded at $STATE/$id.lineage, and evidence whose producer was never written cannot be attributed at all"
+    attempt_exec_commit "$id" 1 "$adopt_binding" "$adopt_effort" \
+      "$FM_ATTEMPT_ADOPTED_STATE" '' \
+      || replace_unobserved "the adopted producer of $id/e1 could not be recorded at $STATE/$id.attempt; nothing was launched"
+    have=1
+  fi
   next=$((have + 1))
   # The close is written BEFORE the successor is committed, and that ordering is
   # a chosen tradeoff: a commit that fails leaves this append-only ledger
