@@ -26,6 +26,23 @@
 # fails - refuses instead of proceeding, naming the operation it found and how to
 # conclude or abandon it, ahead of the divergence that operation's own commits
 # caused, since rebasing is not what settles it.
+#
+# THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
+# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
+# bin/fm-landing-authorization.sh owns the authority itself. What this file adds
+# is that the fast-forward RUNS INSIDE the spend when one governs, so an
+# applicable candidate cannot reach `git merge --ff-only` without consuming a
+# valid, head-bound, one-use authorization. A candidate no ruling governs lands
+# through exactly the guards above and says so with a reported not-applicable
+# observation, because a silent ungoverned landing is indistinguishable from an
+# authorised one.
+#
+# A local-only item under Sol review is governed by a ruling on a PUBLISHED head,
+# because a published head is the only one an outside reviewer could ever have
+# seen. The authorization layer therefore re-observes that pull request's head at
+# the moment of use, and this branch head must be the same commit. A ruling that
+# names no pull request grants nothing, and that refusal comes from the
+# authorization layer in its own words.
 # Usage: fm-merge-local.sh <task-id>
 set -eu
 
@@ -33,6 +50,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
+
+# The landing seam needs the outbound gate register and the authorization
+# layer's own identity predicates; both are sourced here so it can consult its
+# owners rather than restate them.
+# shellcheck source=bin/fm-outbound-artifact-lib.sh
+. "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
+# shellcheck source=bin/fm-landing-authorization-lib.sh
+. "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-landing-seam-lib.sh
+. "$SCRIPT_DIR/fm-landing-seam-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=${1:?usage: fm-merge-local.sh <task-id>}
 META="$STATE/$ID.meta"
@@ -168,7 +198,10 @@ fi
 # why they never collide.
 
 GUARD_TMP=
+LANDING_RECEIPT=
 guard_tmp_cleanup() {
+  [ -z "$LANDING_RECEIPT" ] || rm -f -- "$LANDING_RECEIPT"
+  LANDING_RECEIPT=
   [ -n "$GUARD_TMP" ] || return 0
   rm -rf "$GUARD_TMP"
   GUARD_TMP=
@@ -375,7 +408,57 @@ if [ "${#COLLISIONS[@]}" -gt 0 ]; then
 fi
 guard_tmp_cleanup
 
+# --- the ruling-derived landing authority -------------------------------------
+#
+# The head is read from the branch this fast-forward would land, never asserted
+# by the caller, and the answer is reported either way: `not-applicable` is an
+# observation about this landing rather than a silence, because a home that says
+# nothing about governance is indistinguishable from one that checked.
+LANDING_HEAD=$(git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH^{commit}") || {
+  echo "error: the head of $BRANCH in $PROJ could not be read, so whether a ruling governs this landing could not be asked" >&2
+  exit 1
+}
+if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" -; then
+  printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+  exit 1
+fi
+printf '%s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON"
+
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
-git -C "$PROJ" merge --ff-only "$BRANCH" >/dev/null
+# The fast-forward is written once and performed by exactly one of the two paths
+# below, so a governed landing runs the byte-identical command an ungoverned one
+# does. A governed landing reaches it only from inside the spend: there is no
+# branch here that lands a governed candidate without one.
+#
+# --quiet rather than a stdout redirection, because the act is passed to the
+# spend as an argv and a redirection is not part of one. It leaves this command's
+# own reporting exactly as it was: silent on success, and its stderr on failure.
+merge_command=(git -C "$PROJ" merge --ff-only --quiet "$LANDING_HEAD")
+
+case "$FM_LANDING_SEAM_VERDICT" in
+  not-applicable)
+    "${merge_command[@]}"
+    ;;
+  governed)
+    if ! fm_landing_seam_mint "$SCRIPT_DIR/fm-landing-authorization.sh" "$FM_LANDING_SEAM_REQUEST"; then
+      printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+      exit 1
+    fi
+    LANDING_RECEIPT=$(mktemp "${TMPDIR:-/tmp}/fm-landing-act.XXXXXX") || {
+      echo "REFUSED: the landing act receipt could not be created" >&2
+      exit 1
+    }
+    if ! fm_landing_seam_spend "$SCRIPT_DIR/fm-landing-authorization.sh" \
+      "$FM_LANDING_SEAM_AUTH_ID" "$LANDING_HEAD" "$LANDING_RECEIPT" \
+      "${merge_command[@]}"; then
+      printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "REFUSED: the landing authority was not resolved, so this merge is unauthorised" >&2
+    exit 1
+    ;;
+esac
 after=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 echo "merged $BRANCH into local $DEFAULT ($before -> $after) in $PROJ"

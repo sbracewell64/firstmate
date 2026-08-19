@@ -200,6 +200,10 @@ It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND
 Detection and emission are separated exactly so an unconfigured venue can never read as a satisfied invariant.
 The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
 
+The same venue is what makes a landing ruling-governed.
+[`bin/fm-landing-seam-lib.sh`](../bin/fm-landing-seam-lib.sh) reads this file and the correlation store at both merge chokepoints, so a candidate a live Sol review request governs cannot land without consuming the one-use authorization that request's ruling grants, while a candidate no ruling governs lands through the ordinary gates and reports that explicitly.
+A home holding live Sol requests with this file absent is a contradiction rather than an ungoverned home, and both landing paths refuse it as could-not-observe.
+
 `fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects and unevaluable observations at every session start so a stranded item or a blind sweep surfaces without anyone going looking.
 Configuring this file is therefore also what lets a session start POST: a session holding the fleet lock reconciles the missing sol-control requests it finds, while a lock-refused or detect-only session performs the same bounded read and emits nothing.
 `bin/fm-bootstrap.sh`'s header owns that mutating-sweep list.

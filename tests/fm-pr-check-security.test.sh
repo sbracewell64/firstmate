@@ -3894,6 +3894,13 @@ test_teardown_removes_poll_artifacts
 # asserts the structural facts rather than reconstructing the old precondition:
 # intake emits no comparison verdict, the merge path carries no comparison
 # residue at all, and the merge actually reaches the forge.
+#
+# The residue check is a source grep because the withdrawn mechanism left no
+# artifact to perturb: what is pinned is that its code is gone, and there is no
+# behavioural surface that distinguishes gone from present. That makes it a
+# SPELLING pin as well as a residue one - `bin/fm-pr-merge.sh` must not contain
+# the word `candidate` in any position, comment included - and that file's own
+# header records the constraint so the next author is not left guessing.
 test_head_comparison_never_blocks_a_merge() {
   local dir state
   dir=$(make_case head-comparison-never-blocks)
