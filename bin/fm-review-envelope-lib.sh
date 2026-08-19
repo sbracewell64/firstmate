@@ -362,6 +362,11 @@ def now_utc():
 
 # --- the field catalog, from which the human contract is generated ----------
 
+# The closed verifier result vocabulary, published here so the refusal that
+# enforces it points at an enumeration a producer can read. A closed set that
+# is not enumerated is undisclosed rather than closed.
+VERIFIER_RESULT_TOKENS = ("PASS", "FAIL", "COULD_NOT_OBSERVE")
+
 CATALOG = {
     "schema": SCHEMA,
     "inputs_schema": INPUTS_SCHEMA,
@@ -488,7 +493,9 @@ CATALOG = {
                 {"name": "contracts", "source": "declared", "required": True,
                  "description": "Contract references by id, version and digest, plus their declared execution worlds."},
                 {"name": "results", "source": "declared", "required": True,
-                 "description": "One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration."},
+                 "description": "One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration. The result token vocabulary is closed and enumerated: "
+                 + ", ".join(VERIFIER_RESULT_TOKENS)
+                 + ", or absent, which is could-not-observe; any other token refuses as required_verifier_result_unrecognized. NO_VERIFIER_RAN, the transport spelling this contract itself emits for an unobserved classification, is deliberately excluded rather than accepted as a synonym: it names a classification outcome, not a verifier's own answer, and one meaning must have one spelling inside a digested body, so a transport translates its token and the contract does not collect synonyms."},
             ],
         },
         {
@@ -584,7 +591,7 @@ CATALOG = {
         {"code": "verification_result_contract_mismatch", "meaning": "A verifier result does not bind the selected contract's exact digest."},
         {"code": "verifier_identity_unpinned", "meaning": "A required result names no verifier id and digest, so what ran is not identified."},
         {"code": "required_verifier_failed", "meaning": "A required verifier reached an adverse verdict."},
-        {"code": "required_verifier_result_unrecognized", "meaning": "A required verifier returned a token outside the closed result vocabulary."},
+        {"code": "required_verifier_result_unrecognized", "meaning": "A required verifier returned a token outside the result vocabulary enumerated on verification.results."},
         {"code": "required_verifier_wrong_head", "meaning": "A required verifier result binds a head or tree that is not the candidate's."},
         {"code": "missing_red_calibration", "meaning": "A required passing verifier was never observed failing."},
         {"code": "red_calibration_not_adverse", "meaning": "A red calibration records something other than an observed failure."},
@@ -1795,11 +1802,12 @@ def classify_result(problems, label, result, candidate, evidence_root, recheck_e
             "required_verifier_unproven", label, "the verifier returned " + (outcome or "no result")
         )
         return
-    if outcome != "PASS":
+    if outcome not in VERIFIER_RESULT_TOKENS:
         problems.refuse(
             "required_verifier_result_unrecognized",
             label,
-            "the verifier returned " + outcome + ", which is not in the result vocabulary",
+            "the verifier returned " + outcome + "; the enumerated result vocabulary is "
+            + ", ".join(VERIFIER_RESULT_TOKENS) + ", or absent",
         )
         return
     check_evidence(problems, label, result.get("evidence"), evidence_root, recheck_evidence)

@@ -263,6 +263,16 @@ The fix instruction for the ancestry axis said to make the unreadable case REFUS
 
 That is the correct half. A refusal asserts the candidate IS bad; an ancestry git could not compute is precisely not knowing, and deciding against a candidate from an absent observation is the shape this increment exists to refuse. The invariant the instruction was defending - an unreadable ancestry must never pass as satisfied - holds under could-not-observe, which is why the fix is sound even though the instruction was not. It is recorded here rather than silently reinterpreted, because the next reader comparing the instruction with the code should find the disagreement already noticed and settled.
 
+## A refusal was commissioned before its vocabulary was published
+
+A review round added `required_verifier_result_unrecognized`, at the operator's instruction that unknown in a closed vocabulary is a violation. The instruction was right about the violation and incomplete about the vocabulary: it required the refusal without requiring that the set it enforces be published. The refusal shipped naming "a token outside the closed result vocabulary" while that vocabulary was enumerated nowhere a producer could read - the catalog's `verification.results` field did not state the accepted tokens, and the exclusion of `NO_VERIFIER_RAN`, the transport spelling this contract itself emits for an unobserved classification, was indistinguishable from an oversight. So the contract refused tokens for falling outside a set nobody had disclosed.
+
+The rule, recorded verbatim: A CLOSED SET THAT IS NOT ENUMERATED IS UNDISCLOSED RATHER THAN CLOSED.
+
+The vocabulary is now enumerated in the field catalog on `verification.results` - `PASS`, `FAIL`, `COULD_NOT_OBSERVE`, or absent, which is could-not-observe - from one constant that the refusing consumer also enforces and cites, so the published set and the enforced set cannot drift apart. The exclusion of `NO_VERIFIER_RAN` is stated there with its reason - it names a classification outcome rather than a verifier's own answer, and one meaning must have one spelling inside a digested body, so a transport translates its token rather than the contract collecting synonyms - because an excluded value that is merely missing from a list reads as an oversight, and the next person to meet it would assume the oversight.
+
+This episode sits beside the corrected instructions above deliberately: the gap came from the instruction that commissioned the refusal, not from the implementation that followed it, and an instruction ledger that only contains the implementer's misses is a partial record of how the work went.
+
 ## The redundancy that used to hide a guard, and why it is gone
 
 Earlier campaigns recorded one deliberate non-red: removing the lexical parent-traversal guard alone left the suite green, because evidence-root containment was then enforced twice over the same case - lexically, and again by a real-path comparison. No single-guard mutation could falsify that control.

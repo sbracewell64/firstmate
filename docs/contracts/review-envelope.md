@@ -98,7 +98,7 @@ Verification contracts by identity and digest, and their exact-head results.
 | `applicability_rules` | `declared` | yes | Either non-empty rules mapping changed paths to required contract ids, including a mandatory rule, or an explicit none with a reason; absence or an empty list is could-not-observe. |
 | `required_contract_ids` | `computed` | yes | The contracts this candidate must satisfy, computed from the observed changed files against those rules. |
 | `contracts` | `declared` | yes | Contract references by id, version and digest, plus their declared execution worlds. |
-| `results` | `declared` | yes | One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration. |
+| `results` | `declared` | yes | One result per contract and world, each binding its contract id and digest, verifier id and digest, the head it ran against, its evidence locator and digest, and its red calibration. The result token vocabulary is closed and enumerated: PASS, FAIL, COULD_NOT_OBSERVE, or absent, which is could-not-observe; any other token refuses as required_verifier_result_unrecognized. NO_VERIFIER_RAN, the transport spelling this contract itself emits for an unobserved classification, is deliberately excluded rather than accepted as a synonym: it names a classification outcome, not a verifier's own answer, and one meaning must have one spelling inside a digested body, so a transport translates its token and the contract does not collect synonyms. |
 
 ## capabilities
 
@@ -180,7 +180,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `verification_result_contract_mismatch` | A verifier result does not bind the selected contract's exact digest. |
 | `verifier_identity_unpinned` | A required result names no verifier id and digest, so what ran is not identified. |
 | `required_verifier_failed` | A required verifier reached an adverse verdict. |
-| `required_verifier_result_unrecognized` | A required verifier returned a token outside the closed result vocabulary. |
+| `required_verifier_result_unrecognized` | A required verifier returned a token outside the result vocabulary enumerated on verification.results. |
 | `required_verifier_wrong_head` | A required verifier result binds a head or tree that is not the candidate's. |
 | `missing_red_calibration` | A required passing verifier was never observed failing. |
 | `red_calibration_not_adverse` | A red calibration records something other than an observed failure. |
