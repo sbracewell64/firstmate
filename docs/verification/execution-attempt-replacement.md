@@ -116,3 +116,97 @@ It measures this gate's handling of an adjudicated contract - refusing a maker a
 The defect builds are not committed; they are a development instrument, and a committed defect is a defect.
 To repeat the watch, remove one control from the implementation, run the suite, and confirm the case that names that control fails - then restore the file from git before doing anything else.
 Confirm the mutation actually changed the file first: a mutation that silently matched nothing produces a green run that reads exactly like a control nothing can break.
+
+## The fixture vacuity this work was caught by, twice
+
+Both defects that reached review on the success path were invisible to a green suite for
+the same reason, one level above the assertions: **the fixture could not reach the
+defect's precondition.**
+
+The head-reset defect - a successor dispatch resetting a clean lane to its slot base and
+orphaning the predecessor's commits - was found by a reviewer tracing the placement code,
+not by any of the sixteen assertion groups then passing. Every `make_lane` worktree sits on
+a NAMED BRANCH, because `fm_git_worktree` creates one, and the defect only fires on a clean
+DETACHED lane. No assertion was wrong; the shape that would have failed was never built.
+A suite whose fixtures cannot construct the failing precondition reports green for the same
+reason a correct one does, which is the vacuity class this record already names one level
+down, applied to fixtures rather than to assertions.
+
+`test_a_detached_lane_keeps_the_predecessors_exact_head` builds that shape deliberately,
+and control 1+2 keeps the branch-sitting shape beside it, so neither is now the only one
+measured.
+
+## Defence in depth, and what that costs a defect build
+
+Two axes of the successor binding are pinned in TWO places: the spawn-side gate that
+compares the sanctioned binding, and `attempt_exec_guard` in the attempt record, which
+refuses a rebind of an execution that is not `launching`. A defect build that removes only
+the spawn-side comparison therefore leaves the suite GREEN - the second layer still
+refuses - and that is not a vacuous test, it is a redundantly enforced control.
+
+Measured, so the record says which it is: with only the spawn-side model comparison
+removed, the model axis is still refused by the attempt-record guard; with only the
+spawn-side harness comparison removed, the harness axis is likewise still refused. The
+honest defect build for either axis removes it from BOTH layers, and then the case goes red:
+
+```
+harness axis, both layers removed:
+not ok - launching a successor onto a harness no gate admitted must be refused
+```
+
+A reader who watched only the single-layer build red-fail would have concluded the wrong
+subject: that the spawn-side gate is what pins the axis. It is one of two things that do.
+
+## What this change exposed in remote-secondmate teardown, and the bounded fix
+
+This capability's branch deterministically failed
+`tests/fm-remote-secondmate-lifecycle-e2e.test.sh`, which it does not touch. The
+characterization took **16 executions** of that suite:
+
+| Configuration | Result |
+| --- | --- |
+| this branch | FAIL 2/2 |
+| `origin/main` | PASS 2/2 |
+| this branch's `fm-spawn.sh` + main's `fm-attempt.sh` | PASS 2/2 |
+| main's `fm-spawn.sh` + this branch's `fm-attempt.sh` | FAIL 2/2 |
+
+The matrix isolates `bin/fm-attempt.sh`, and a trace of every invocation proves that file is
+**never executed** during the test. The effect is therefore timing, not behavior: the larger
+file shifts the interleaving of a concurrent teardown and respawn.
+
+A dispatch trace then pinned the mechanism. `fm-remote-secondmate-control.sh retire` runs a
+teardown whose own `FM_STATE_OVERRIDE` is `CONTROL_STATE`, which is
+`<home>/state/parent-route` - INSIDE the home it deletes. It deletes the home while standing
+in it, and leaves exactly that directory. The defect class is **standing inside the object
+you delete**, and the residue is the deleting process's own working state.
+
+The fix is bounded to reclaiming that residue: after the home deletion succeeds, the remote
+side removes the control state it created. Four guards protect a removal that is recursive,
+remote, and built from a variable, and each refuses loudly rather than skipping silently:
+the path must be non-empty, absolute and end literally in `state/parent-route`; its prefix
+must be the RECORDED home, never one recomputed from the residue; it must not resolve to
+`/`, to `$HOME`, or outside the recorded home once symlinks are followed; and it runs only
+after the deletion actually succeeded, proven by the home's seed marker being gone. Each
+guard has its own case in `tests/fm-secondmate-safety.test.sh`, including the symlink escape
+and the `$HOME` target, each asserting that the protected content still exists afterwards.
+
+`bin/fm-teardown.sh` also called `retire_commitment_probe_cache` about 360 lines before its
+definition, inside the remote branch that runs from the top-level dispatch, so that cleanup
+step failed with `command not found` on every remote teardown. The definition is moved above
+its first use. **Measured: fixing that alone does NOT make the e2e pass** - it was applied on
+its own and the suite stayed red - so it is a real defect on the same path rather than the
+cause.
+
+Executed counts after the fix: the e2e passes **3 of 3** runs on this branch, where it failed
+2 of 2 before. Non-vacuity: `fm-teardown`, `fm-secondmate-lifecycle-e2e`,
+`fm-secondmate-safety`, `fm-execution-replacement` and `fm-remote-reply` ran with **0
+failures**, so the ordinary local teardown path is untouched. The reclaim runs whenever the
+remote branch completes, so it does not depend on the interleaving that exposed the residue -
+which is what closes `main`'s latent exposure, since `main` avoided the path only by timing.
+
+**The candidate long-term shape, left to the owner.** Placing the control state OUTSIDE the
+home would stop the residue existing at all, rather than reclaiming it afterwards. That moves
+where every reader of the remote protocol looks for that state, so it is a change to the
+remote-secondmate lifecycle rather than cleanup of what one script created, and it is
+deliberately not done here.
+

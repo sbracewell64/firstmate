@@ -302,6 +302,27 @@ remote_outbox_cleanup() {
   )
 }
 
+# Defined HERE, above its first use, and not beside the other retirement helpers.
+# remote_secondmate_teardown below runs from the top-level dispatch, which
+# executes long before those helpers are defined, so a definition further down
+# made this call fail with `command not found` on every remote teardown - the
+# branch's own cleanup step, silently skipped. Measured: fixing this alone does
+# NOT make tests/fm-remote-secondmate-lifecycle-e2e.test.sh pass, so it is a real
+# defect on that path rather than the cause of that failure.
+
+retire_commitment_probe_cache() {
+  local dir safe f
+  dir=${FM_COMMITMENT_PROBE_CACHE_DIR:-$STATE/commitment-probe-cache}
+  [ -d "$dir" ] || return 0
+  safe=$(printf '%s' "$ID" | tr -c 'A-Za-z0-9._-' '_')
+  [ -n "$safe" ] || return 0
+  for f in "$dir/${safe}__"*; do
+    [ -e "$f" ] || continue
+    rm -f -- "$f" 2>/dev/null || true
+  done
+  return 0
+}
+
 remote_secondmate_teardown() {
   local remote_host remote_root remote_home route_host route_root route_home out rc tmp rec phase task_id
   remote_host=$(fm_meta_get "$META" remote_host)
@@ -737,18 +758,6 @@ retire_capacity_deferral() {
 # observation until the fingerprint check happened to reject it. Best-effort: a
 # cache that cannot be reaped costs a probe run, never a wrong answer, so it never
 # fails a teardown.
-retire_commitment_probe_cache() {
-  local dir safe f
-  dir=${FM_COMMITMENT_PROBE_CACHE_DIR:-$STATE/commitment-probe-cache}
-  [ -d "$dir" ] || return 0
-  safe=$(printf '%s' "$ID" | tr -c 'A-Za-z0-9._-' '_')
-  [ -n "$safe" ] || return 0
-  for f in "$dir/${safe}__"*; do
-    [ -e "$f" ] || continue
-    rm -f -- "$f" 2>/dev/null || true
-  done
-  return 0
-}
 
 # Reported after cleanup so the released PR is not silently forgotten: the task
 # is gone from the fleet, but its PR still needs landing.

@@ -261,6 +261,89 @@ cmd_update() {
   cmd_sync "$id"
 }
 
+
+# The remote teardown this script runs below is handed its own state override
+# pointing at CONTROL_STATE, which lives INSIDE the home it deletes. It therefore
+# deletes the home while standing in it and leaves exactly that directory behind.
+# Reclaiming it here is this script cleaning up its OWN working state after a
+# deletion that succeeded - not remote-secondmate lifecycle work.
+#
+# THE DEEPER FIX, DELIBERATELY NOT DONE HERE. Placing the control state OUTSIDE
+# the home would stop the residue existing at all. That moves where every reader
+# of the remote protocol looks for this state, so it is the owner's call and a
+# larger change than reclaiming what this script created.
+#
+# EVERY GUARD REFUSES LOUDLY AND REMOVES NOTHING. This deletion is recursive and
+# runs on the remote host, against a path built from a variable. A path built
+# from a variable that turned out empty has destroyed a checkout in this fleet
+# before, which is why the suffix and the prefix are ASSERTED here rather than
+# assumed, and why a refusal is a reported defect instead of a quiet skip.
+retire_control_state_residue() {  # <recorded-home> <control-state> <id>
+  local home=$1 residue=$2 id=$3 resolved home_resolved
+  # (4) Only after the home deletion actually succeeded, and only here, on the
+  # branch that created the residue. A home still carrying its seed marker was
+  # not deleted, so there is nothing of ours to reclaim and this must not run.
+  if [ -e "$home/.fm-secondmate-home" ]; then
+    printf 'error: refusing to reclaim remote control state for %s: %s still carries its secondmate home marker, so the home was not deleted\n' \
+      "$id" "$home" >&2
+    return 1
+  fi
+  # (1) Non-empty, absolute, and literally ending in the one directory this
+  # script creates.
+  if [ -z "$residue" ]; then
+    printf 'error: refusing to reclaim remote control state for %s: the recorded control-state path is empty\n' "$id" >&2
+    return 1
+  fi
+  case "$residue" in
+    /*) ;;
+    *)
+      printf 'error: refusing to reclaim remote control state for %s: %s is not an absolute path\n' "$id" "$residue" >&2
+      return 1 ;;
+  esac
+  case "$residue" in
+    */state/parent-route) ;;
+    *)
+      printf 'error: refusing to reclaim remote control state for %s: %s does not end in state/parent-route\n' "$id" "$residue" >&2
+      return 1 ;;
+  esac
+  # (2) The prefix is the RECORDED home this run was given, compared literally.
+  # Never recomputed from the residue path, because a path that lies about where
+  # it lives would then authorize itself.
+  if [ -z "$home" ] || [ "$residue" != "$home/state/parent-route" ]; then
+    printf 'error: refusing to reclaim remote control state for %s: %s is not the control state of the recorded home %s\n' \
+      "$id" "$residue" "${home:-<empty>}" >&2
+    return 1
+  fi
+  # An already-absent residue is the ordinary case when the deletion reached it.
+  [ -e "$residue" ] || return 0
+  # (3) Judged again after resolution, because a symlink can make every literal
+  # check above pass and still point somewhere else.
+  resolved=$(cd "$residue" 2>/dev/null && pwd -P) || {
+    printf 'error: refusing to reclaim remote control state for %s: %s could not be resolved\n' "$id" "$residue" >&2
+    return 1
+  }
+  if [ "$resolved" = / ] || { [ -n "${HOME:-}" ] && [ "$resolved" = "$HOME" ]; }; then
+    printf 'error: refusing to reclaim remote control state for %s: %s resolves to %s\n' "$id" "$residue" "$resolved" >&2
+    return 1
+  fi
+  home_resolved=$(cd "$home" 2>/dev/null && pwd -P) || home_resolved=
+  if [ -n "$home_resolved" ]; then
+    case "$resolved" in
+      "$home_resolved"/*) ;;
+      *)
+        printf 'error: refusing to reclaim remote control state for %s: %s resolves to %s, outside the recorded home %s\n' \
+          "$id" "$residue" "$resolved" "$home_resolved" >&2
+        return 1 ;;
+    esac
+  fi
+  rm -rf -- "$residue"
+  # What is left of the home now exists only because our state was in it. rmdir
+  # removes a directory only when it is already empty, so anything else still in
+  # there stops this and stays.
+  rmdir "$home/state" 2>/dev/null || true
+  rmdir "$home" 2>/dev/null || true
+}
+
 cmd_retire() {
   local id=$1 force=${2:-} rc
   validate_id "$id"
@@ -273,18 +356,28 @@ cmd_retire() {
   remote_endpoint_require "$id"
   FM_HOME="$TARGET_HOME" FM_ROOT_OVERRIDE="$FM_ROOT" FM_STATE_OVERRIDE="$TARGET_HOME/state" \
     FM_CONFIG_OVERRIDE="$TARGET_HOME/config" "$SCRIPT_DIR/fm-guard.sh" || true
+  local td_rc=0
   if [ -n "$force" ]; then
     FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
       FM_STATE_OVERRIDE="$CONTROL_STATE" FM_DATA_OVERRIDE="$CONTROL_DATA" \
       FM_CONFIG_OVERRIDE="$TARGET_HOME/config" FM_TEARDOWN_GUARD_DONE=1 \
-      "$SCRIPT_DIR/fm-teardown.sh" "$id" --force
+      "$SCRIPT_DIR/fm-teardown.sh" "$id" --force || td_rc=$?
   else
     FM_HOME="$FM_ROOT" FM_ROOT_OVERRIDE="$FM_ROOT" \
       FM_STATE_OVERRIDE="$CONTROL_STATE" FM_DATA_OVERRIDE="$CONTROL_DATA" \
       FM_CONFIG_OVERRIDE="$TARGET_HOME/config" FM_TEARDOWN_GUARD_DONE=1 \
-      "$SCRIPT_DIR/fm-teardown.sh" "$id"
+      "$SCRIPT_DIR/fm-teardown.sh" "$id" || td_rc=$?
   fi
+  [ "$td_rc" -eq 0 ] || return "$td_rc"
+  retire_control_state_residue "$TARGET_HOME" "$CONTROL_STATE" "$id"
 }
+
+# Sourcing this file defines its functions and dispatches nothing, so the
+# destructive reclaim guard above can be driven directly by its tests. Executing
+# it behaves exactly as before.
+if [ "${BASH_SOURCE[0]}" != "${0}" ]; then
+  return 0
+fi
 
 case "${1:-}" in
   launch) shift; [ "$#" -ge 5 ] && [ "$#" -le 6 ] || usage; cmd_launch "$@" ;;

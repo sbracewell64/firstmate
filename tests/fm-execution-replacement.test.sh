@@ -670,6 +670,15 @@ EOF
   [ "$rc" -ne 0 ] || fail "launching a successor onto a binding no gate admitted must be refused"$'\n'"$out"
   assert_contains "$out" "Only the binding a gate admitted may be launched" \
     "the refusal must say what it is protecting"
+
+  # The HARNESS half of the binding, measured separately. A binding is
+  # harness/model, and a case that only ever varies the model leaves the harness
+  # half unexercised - a defect that compared just the model would pass the whole
+  # suite. Both halves are pinned, so both are measured.
+  out=$(spawn_in "$case_dir" "$id" --harness pi --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "launching a successor onto a harness no gate admitted must be refused"$'\n'"$out"
   [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
     || fail "a refused successor launch must leave the sanctioned record untouched"
   pass "a successor launches only onto the binding its gate admitted"

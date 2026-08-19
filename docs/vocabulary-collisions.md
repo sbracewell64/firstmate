@@ -19,7 +19,7 @@ The vocabulary of this column follows the platform's Register 3 precedent.
 
 ## Rows
 
-Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation` and `attempt`, each ruled on 2026-08-18 when its second sense was built, and any row that states its own later ruling date.
+Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation`, ruled on 2026-08-18 when its second sense was built, and any row that states its own later ruling date.
 
 ### `axi`
 
@@ -205,6 +205,8 @@ Until then both names are live and neither may be read as the other.
 **Where it bites:** the environment table in [`bin/fm-outbound-artifact.sh`](../bin/fm-outbound-artifact.sh); `outbound_artifact_report` in [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh); the Browser Sol control venue section of [`configuration.md`](configuration.md).
 
 ### `attempt`
+
+Ruled 2026-08-18 under the project's standing autonomy when the second sense was built, not by a captain ruling; the decision record is this fleet's own, and the row is recorded here so the disposition is findable rather than re-derived.
 
 | | |
 |---|---|
