@@ -1,36 +1,461 @@
 {
   "concurrency": 4,
-  "finished_at": "2026-07-29T23:21:46Z",
+  "finished_at": "2026-08-19T07:24:50Z",
   "fm_test_run_jobs_enabled": false,
+  "isolation_contract": {
+    "digest": "sha256:d995377e1f35ff66cb2271ba1ce0958a671cb7e1051354e13202bd0872d4bb5e"
+  },
   "kind": "isolation-proof",
+  "lane_concurrency": {
+    "lanes": [
+      {
+        "jobs": 1,
+        "lane": "portable-parallel-1"
+      },
+      {
+        "jobs": 1,
+        "lane": "portable-parallel-2"
+      }
+    ],
+    "observation": "observed",
+    "observed_max": 4,
+    "runner_jobs_max": 4
+  },
   "production_sharding_enabled": false,
-  "run_id": "fm-isolation-1785367157179-18165",
+  "run_id": "fm-isolation-1787123991027-2733060",
+  "schema_version": 2,
   "scripts": [
-    {"duration_ms": 46788, "exit": 0, "path": "tests/fm-arm-pretool-check.test.sh", "worker": 1},
-    {"duration_ms": 48294, "exit": 0, "path": "tests/fm-backend-herdr.test.sh", "worker": 2},
-    {"duration_ms": 2224, "exit": 0, "path": "tests/fm-brief.test.sh", "worker": 3},
-    {"duration_ms": 34207, "exit": 0, "path": "tests/fm-cd-pretool-check.test.sh", "worker": 4},
-    {"duration_ms": 9065, "exit": 0, "path": "tests/fm-composer-ghost.test.sh", "worker": 5},
-    {"duration_ms": 64, "exit": 0, "path": "tests/fm-composer-lib.test.sh", "worker": 6},
-    {"duration_ms": 25365, "exit": 0, "path": "tests/fm-crew-state.test.sh", "worker": 7},
-    {"duration_ms": 30771, "exit": 0, "path": "tests/fm-decision-hold-lifecycle.test.sh", "worker": 8},
-    {"duration_ms": 581, "exit": 0, "path": "tests/fm-ensure-agents-md.test.sh", "worker": 9},
-    {"duration_ms": 6251, "exit": 0, "path": "tests/fm-grok-harness.test.sh", "worker": 10},
-    {"duration_ms": 15422, "exit": 0, "path": "tests/fm-herdr-lab.test.sh", "worker": 11},
-    {"duration_ms": 5237, "exit": 0, "path": "tests/fm-lint.test.sh", "worker": 12},
-    {"duration_ms": 2945, "exit": 0, "path": "tests/fm-pi-primary-types.test.sh", "worker": 13},
-    {"duration_ms": 8564, "exit": 0, "path": "tests/fm-pr-merge.test.sh", "worker": 14},
-    {"duration_ms": 2875, "exit": 0, "path": "tests/fm-review-diff.test.sh", "worker": 15},
-    {"duration_ms": 5644, "exit": 0, "path": "tests/fm-send-popup-settle.test.sh", "worker": 16},
-    {"duration_ms": 2911, "exit": 0, "path": "tests/fm-send-settle.test.sh", "worker": 17},
-    {"duration_ms": 2747, "exit": 0, "path": "tests/fm-send-strict.test.sh", "worker": 18},
-    {"duration_ms": 855, "exit": 0, "path": "tests/fm-spawn-batch.test.sh", "worker": 19},
-    {"duration_ms": 703, "exit": 0, "path": "tests/fm-supervision-instructions.test.sh", "worker": 20},
-    {"duration_ms": 15674, "exit": 0, "path": "tests/fm-test-run.test.sh", "worker": 21},
-    {"duration_ms": 4816, "exit": 0, "path": "tests/fm-tmux-submit-busy.test.sh", "worker": 22},
-    {"duration_ms": 248, "exit": 0, "path": "tests/fm-transition-lib.test.sh", "worker": 23},
-    {"duration_ms": 52939, "exit": 0, "path": "tests/fm-x-mode.test.sh", "worker": 24}
+    {
+      "digest": "sha256:49ab87eb6d004e9a8467ff42bd3c9b0eafabb541780ff12e1fa036a82eeea818",
+      "duration_ms": 57530,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-arm-pretool-check.test.sh",
+      "shared_state": [
+        "home-env",
+        "literal-tmp",
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 1
+    },
+    {
+      "digest": "sha256:e74f87206503083790182934bdc8666fb44590c68cb4db3ac31d72fec0253f02",
+      "duration_ms": 17734,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:5070181449618e50f7cf1a3346e05494810423a0c6b564f2bfcb887c57e106c8",
+          "path": "tests/herdr-test-safety.sh"
+        },
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-backend-herdr.test.sh",
+      "shared_state": [
+        "home-env",
+        "literal-tmp",
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 2
+    },
+    {
+      "digest": "sha256:57fa5399f9fe03a245cb89b6cc0fba6210596f0368fa72d7233f92777a27efd3",
+      "duration_ms": 1968,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-brief.test.sh",
+      "shared_state": [
+        "literal-tmp",
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 3
+    },
+    {
+      "digest": "sha256:2d3b856ac3b19b3b10fa776cc9df4e5c2ae4b901cdeb03439980845dd92bbed2",
+      "duration_ms": 28737,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-cd-pretool-check.test.sh",
+      "shared_state": [
+        "literal-tmp",
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 4
+    },
+    {
+      "digest": "sha256:de5cacd07394e22e4285448d62abe006bdc7096cdbaf3183cf171cbee3ee8b23",
+      "duration_ms": 1583,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-composer-ghost.test.sh",
+      "shared_state": [
+        "literal-tmp",
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 5
+    },
+    {
+      "digest": "sha256:a2ff98851bc17949c7a5f8561e1e68c9163d9c631eb291a501d7aa2ba2405633",
+      "duration_ms": 114,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-composer-lib.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 6
+    },
+    {
+      "digest": "sha256:cdd394e5e90e67fa9c4549bc527c6ba70463657a500b8ed978d9e02393a67677",
+      "duration_ms": 41016,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-crew-state.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 7
+    },
+    {
+      "digest": "sha256:03b27851706ef7b469289caf8ec27371880cea9e9109543da429bb50e2480675",
+      "duration_ms": 42606,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-decision-hold-lifecycle.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 8
+    },
+    {
+      "digest": "sha256:c747ae60035b65430f5083ac887e1d4485b4becea68b1b020e73d891ebe9de11",
+      "duration_ms": 227,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-ensure-agents-md.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 9
+    },
+    {
+      "digest": "sha256:ee3b9c776f8c844bd30ad78ef8fb66f90fcc033bb0d4809a690927f9e38980b4",
+      "duration_ms": 6532,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-grok-harness.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 10
+    },
+    {
+      "digest": "sha256:6cee889411c9bf492faf27a75b4bf2deed77210591e06b6e158f950fb94ab167",
+      "duration_ms": 7120,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-herdr-lab.test.sh",
+      "shared_state": [
+        "literal-tmp",
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 11
+    },
+    {
+      "digest": "sha256:7cb6667b8636591af9bc9a041f4b56eddbe490d23b85d4214b01e98018bda3be",
+      "duration_ms": 1145,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-lint.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 12
+    },
+    {
+      "digest": "sha256:e735e9ed1506d39ce4b374588153031c1c9bf2f0935bfeefdf92e7f1f8ee95f3",
+      "duration_ms": 81,
+      "exit": 0,
+      "fixtures": [],
+      "path": "tests/fm-pi-primary-types.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 13
+    },
+    {
+      "digest": "sha256:452e9b57fd0087df75508cec4e66b3a69b0027a674d0e619fb9894e38e2f5dc0",
+      "duration_ms": 19612,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-pr-merge.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 14
+    },
+    {
+      "digest": "sha256:c618c4e83fada59483f45ca5311d213d2489887786e1c20511b972a063149948",
+      "duration_ms": 950,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-review-diff.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 15
+    },
+    {
+      "digest": "sha256:d1c2cda97878035fb755cf002ee6b35e1868a0de5f31acb9dbcaf0fc66577ef5",
+      "duration_ms": 1428,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-send-popup-settle.test.sh",
+      "shared_state": [
+        "home-env",
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 16
+    },
+    {
+      "digest": "sha256:4330258558495c012190128c6308226cf052c336d0ff8cb0231cfcaf7528bcf0",
+      "duration_ms": 681,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-send-settle.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 17
+    },
+    {
+      "digest": "sha256:0cdbb1d55f8022c95758b97a83d95351faf9eee4391a7387fbd313d01d51bd66",
+      "duration_ms": 827,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-send-strict.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 18
+    },
+    {
+      "digest": "sha256:a9293dc6b821e91d1d47f51c6b2adb532784aa3e8a3d44ba7c76b9117f696b23",
+      "duration_ms": 1363,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-spawn-batch.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 19
+    },
+    {
+      "digest": "sha256:4061d5face721164258f5aebe5e6271081e901ab6a512e0f47fab7bccf941e99",
+      "duration_ms": 268,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-supervision-instructions.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 20
+    },
+    {
+      "digest": "sha256:b8c562151ab89c8420f4d794892a6e48d08785fa74faf1494cb7d38900228d16",
+      "duration_ms": 179268,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-test-run.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 21
+    },
+    {
+      "digest": "sha256:72751d894273fcde160c6783c5bde2301c9de24ff72fa63710a531c6171f6bd7",
+      "duration_ms": 1421,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-tmux-submit-busy.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 22
+    },
+    {
+      "digest": "sha256:1c53ed596e088343fd51d10e766d0935ce6ab0415f7816809e12b258d9f16e6d",
+      "duration_ms": 107,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-transition-lib.test.sh",
+      "shared_state": [
+        "private-tmproot",
+        "repo-worktree"
+      ],
+      "worker": 23
+    },
+    {
+      "digest": "sha256:d905c60ec14a27ef553e64210f544d70875b2177983e6e6c3852110b004cf258",
+      "duration_ms": 39746,
+      "exit": 0,
+      "fixtures": [
+        {
+          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "path": "tests/lib.sh"
+        }
+      ],
+      "path": "tests/fm-x-mode.test.sh",
+      "shared_state": [
+        "network-tool",
+        "private-tmproot",
+        "repo-worktree",
+        "tmux-server"
+      ],
+      "worker": 24
+    }
   ],
-  "started_at": "2026-07-29T23:19:17Z",
-  "summary": {"duration_ms": 149010, "failed": 0, "total": 24}
+  "started_at": "2026-08-19T07:19:51Z",
+  "summary": {
+    "duration_ms": 299923,
+    "failed": 0,
+    "total": 24
+  }
 }

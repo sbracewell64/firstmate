@@ -2,10 +2,14 @@
 # fm-test-isolation-proof.sh - bounded concurrent isolation proof for portable
 # behavior-test candidates (Phase 2 pre-shard gate).
 #
-# This is the single owner of the proven parallel candidate set, the concurrent
-# proof run, and the isolation checks that admitted that set. Production
-# portable CI shards and bounded local fm-test-run.sh --jobs for this exact set
-# are owned by bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
+# This is the single owner of the parallel CANDIDATE set, the concurrent proof
+# run, and the isolation checks that admit a candidate. The PROVEN set - the
+# subjects a run actually observed passing, and the only set production lanes
+# consume - is owned by the artifact this writes, docs/fm-test-isolation-proof.json.
+# Candidates are the input to a proof run and the proven set is its output; the
+# coverage guard refuses when the two disagree. Production portable CI shards
+# and bounded local fm-test-run.sh --jobs over the proven set are owned by
+# bin/fm-test-run.sh (docs/fm-test-portable-shards.md).
 #
 # It does NOT:
 #   - compose production CI shard membership (fm-test-run.sh owns that partition)
@@ -15,23 +19,41 @@
 # Usage:
 #   fm-test-isolation-proof.sh [--jobs N] [--json path] [--list]
 #   fm-test-isolation-proof.sh --list-exclusions
+#   fm-test-isolation-proof.sh --list-proven [--proof path]
+#   fm-test-isolation-proof.sh --print-contract
+#   fm-test-isolation-proof.sh --check-freshness [--proof path] [--root dir]
+#                                                [--runner-jobs-max N]
 #   fm-test-isolation-proof.sh -h | --help
 #
 # Options:
 #   --jobs N     max concurrent workers (default: 4; min 1)
 #   --json path  write a machine-readable proof artifact after the run
-#   --list       print the proven candidate paths (one per line) and exit 0
+#   --list       print the candidate paths this harness would measure, and exit 0
+#   --list-proven
+#                print the paths a recorded proof actually observed passing, and
+#                exit 0. This is the set production lanes consume; --list is the
+#                input to a proof run, --list-proven is its output.
+#   --print-contract
+#                print the isolation contract every worker sandbox is built from
+#   --check-freshness
+#                judge a recorded proof against the code that is here now, and
+#                exit 0 proven / 1 stale / 3 could-not-observe
+#   --proof path proof artifact to read (default: docs/fm-test-isolation-proof.json)
+#   --root dir   repository root the proof is judged against (default: this one)
+#   --runner-jobs-max N
+#                concurrency cap the runner declares for the proven set
+#                (default: bin/fm-test-run.sh --print-jobs-max, its owner)
 #   --list-exclusions
 #                print basename + reason for scripts deliberately kept serial
 #                relative to the scout-proposed parallel pool, then exit 0
 #   -h, --help   print this header
 #
-# Isolation contract for each concurrent worker:
-#   - distinct mode-0700 temporary root under a proof-owned parent
-#   - TMPDIR/TMP point only at that root so mktemp/fm_test_tmproot stay private
-#   - ambient FM_HOME / FM_*_OVERRIDE cleared so no shared home is reused
-#   - no global git config mutation (snapshot before/after)
-#   - no production sharding and no retry-until-green
+# The isolation contract each concurrent worker is built from - sandbox mode,
+# private TMPDIR, cleared ambient overrides, global-git treatment, worktree, and
+# retry policy - is owned by bin/fm-test-isolation-lib.sh and printed verbatim by
+# --print-contract. That library also owns the freshness model: what a recorded
+# proof binds to, and when it has gone stale. Read its header before changing
+# what a proof means.
 #
 # Markers (stdout):
 #   FM_ISOLATION_BEGIN <iso8601> concurrency=<n> candidates=<n>
@@ -48,10 +70,19 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# shellcheck source=bin/fm-test-isolation-lib.sh
+. "$ROOT/bin/fm-test-isolation-lib.sh"
+
 JOBS=4
 JSON_PATH=
 LIST_ONLY=0
 LIST_EXCLUSIONS=0
+LIST_PROVEN=0
+PRINT_CONTRACT=0
+CHECK_FRESHNESS=0
+PROOF_PATH=
+CHECK_ROOT=
+RUNNER_JOBS_MAX=
 
 usage() {
   awk '
@@ -203,59 +234,11 @@ fm-quota-array-dispatch-live-e2e.test.sh
 EOF
 }
 
-dir_mode() {
-  local path=$1
-  if stat -f %Lp "$path" >/dev/null 2>&1; then
-    stat -f %Lp "$path"
-  else
-    stat -c %a "$path"
-  fi
-}
-
 global_git_snapshot() {
   # Empty string when no global config is present or git cannot read it.
   git config --global --list 2>/dev/null | LC_ALL=C sort || true
 }
 
-write_json_artifact() {
-  local out=$1 started=$2 finished=$3 run_id=$4 total=$5 failed=$6 concurrency=$7 duration=$8 records=$9
-  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$concurrency" "$duration" "$records" <<'PY'
-import json, sys
-out, started, finished, run_id, total, failed, concurrency, duration, records_path = sys.argv[1:10]
-scripts = []
-with open(records_path, encoding="utf-8") as fh:
-    for line in fh:
-        line = line.rstrip("\n")
-        if not line:
-            continue
-        path, exit_s, dur_s, worker = line.split("\t")
-        scripts.append({
-            "path": path,
-            "exit": int(exit_s),
-            "duration_ms": int(dur_s),
-            "worker": int(worker),
-        })
-scripts.sort(key=lambda s: s["path"])
-doc = {
-    "run_id": run_id,
-    "started_at": started,
-    "finished_at": finished,
-    "kind": "isolation-proof",
-    "concurrency": int(concurrency),
-    "summary": {
-        "total": int(total),
-        "failed": int(failed),
-        "duration_ms": int(duration),
-    },
-    "scripts": scripts,
-    "production_sharding_enabled": False,
-    "fm_test_run_jobs_enabled": False,
-}
-with open(out, "w", encoding="utf-8") as fh:
-    json.dump(doc, fh, indent=2, sort_keys=True)
-    fh.write("\n")
-PY
-}
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -285,6 +268,45 @@ while [ "$#" -gt 0 ]; do
       LIST_EXCLUSIONS=1
       shift
       ;;
+    --list-proven)
+      LIST_PROVEN=1
+      shift
+      ;;
+    --print-contract)
+      PRINT_CONTRACT=1
+      shift
+      ;;
+    --check-freshness)
+      CHECK_FRESHNESS=1
+      shift
+      ;;
+    --proof)
+      [ "$#" -gt 1 ] || die "--proof requires a path"
+      PROOF_PATH=$2
+      shift 2
+      ;;
+    --proof=*)
+      PROOF_PATH=${1#--proof=}
+      shift
+      ;;
+    --root)
+      [ "$#" -gt 1 ] || die "--root requires a directory"
+      CHECK_ROOT=$2
+      shift 2
+      ;;
+    --root=*)
+      CHECK_ROOT=${1#--root=}
+      shift
+      ;;
+    --runner-jobs-max)
+      [ "$#" -gt 1 ] || die "--runner-jobs-max requires a positive integer"
+      RUNNER_JOBS_MAX=$2
+      shift 2
+      ;;
+    --runner-jobs-max=*)
+      RUNNER_JOBS_MAX=${1#--runner-jobs-max=}
+      shift
+      ;;
     -h|--help)
       usage
       exit 0
@@ -303,9 +325,52 @@ case "$JOBS" in
 esac
 [ "$JOBS" -ge 1 ] || die "--jobs must be >= 1"
 
+if [ "$PRINT_CONTRACT" -eq 1 ]; then
+  fm_isolation_print_contract
+  exit 0
+fi
+
 if [ "$LIST_EXCLUSIONS" -eq 1 ]; then
   list_exclusions_for_report
   exit 0
+fi
+
+# Where a recorded proof lives, and the root it is judged against. Both default
+# to this repository, so the ordinary invocation needs no arguments.
+CHECK_ROOT=${CHECK_ROOT:-$ROOT}
+PROOF_PATH=${PROOF_PATH:-$CHECK_ROOT/docs/fm-test-isolation-proof.json}
+
+if [ "$LIST_PROVEN" -eq 1 ]; then
+  set +e
+  proven_out=$(fm_isolation_proven_paths "$PROOF_PATH")
+  proven_rc=$?
+  set -e
+  if [ "$proven_rc" -ne 0 ]; then
+    log "could not read the proven set from $PROOF_PATH (could-not-observe, not an empty set)"
+    exit 3
+  fi
+  printf '%s\n' "$proven_out"
+  exit 0
+fi
+
+if [ "$CHECK_FRESHNESS" -eq 1 ]; then
+  if [ -z "$RUNNER_JOBS_MAX" ]; then
+    # bin/fm-test-run.sh owns its own cap; read it through its public interface
+    # rather than restating the number here.
+    RUNNER_JOBS_MAX=$("$ROOT/bin/fm-test-run.sh" --print-jobs-max 2>/dev/null || echo)
+  fi
+  case "$RUNNER_JOBS_MAX" in
+    ''|*[!0-9]*)
+      printf 'FM_ISOLATION_FRESHNESS COULD-NOT-OBSERVE subjects=0 proven=0 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=1\n'
+      log "could not read the runner concurrency cap; pass --runner-jobs-max N"
+      exit 3
+      ;;
+  esac
+  set +e
+  fm_isolation_check_freshness "$CHECK_ROOT" "$PROOF_PATH" "$RUNNER_JOBS_MAX"
+  freshness_rc=$?
+  set -e
+  exit "$freshness_rc"
 fi
 
 CANDIDATES=()
@@ -349,7 +414,7 @@ declare -a WORKER_PIDS=()
 declare -a WORKER_IDX=()
 
 wait_one_slot() {
-  local pid idx work rc duration script mode
+  local pid idx work rc duration script mode record
   # Wait for the oldest launched worker still recorded.
   pid=${WORKER_PIDS[0]}
   idx=${WORKER_IDX[0]}
@@ -360,11 +425,45 @@ wait_one_slot() {
   set -e
   work="$PROOF_ROOT/w$idx"
   script=${CANDIDATES[$((idx - 1))]}
-  rc=$(cat "$work/out/exit" 2>/dev/null || echo 1)
-  duration=$(cat "$work/out/duration_ms" 2>/dev/null || echo 0)
+  # An absent exit file means the sandbox could not be built to contract, so the
+  # subject was never measured. That is could-not-observe, and exit -1 keeps it
+  # out of the proven set instead of letting it read as an ordinary failure.
+  if [ -f "$work/out/exit" ]; then
+    rc=$(cat "$work/out/exit")
+    duration=$(cat "$work/out/duration_ms" 2>/dev/null || echo 0)
+    # A present but non-numeric exit record is could-not-observe, the same as an
+    # absent one: exit -1 keeps the subject out of the proven set instead of
+    # letting it slip past both the proven and the failed counters.
+    case "${rc#-}" in
+      ''|*[!0-9]*)
+        log "could not measure (unreadable exit record): $script"
+        rc=-1
+        ;;
+    esac
+    case "$duration" in
+      ''|*[!0-9]*) duration=0 ;;
+    esac
+  else
+    rc=-1
+    duration=0
+    log "could not measure (sandbox not built to contract): $script"
+  fi
+  # The binding is built here, from the bytes that were just executed, by the
+  # library's one recorder. A subject whose binding cannot be built is recorded
+  # unmeasured rather than proven on evidence its dependencies were not read.
+  if [ "$rc" -eq 0 ]; then
+    if record=$(fm_isolation_record_subject "$ROOT" "$script" "$rc" "$duration" "$idx"); then
+      printf '%s\n' "$record" >>"$RECORDS"
+    else
+      log "could not bind proof dependencies (unresolved fixture or no digest tool): $script"
+      rc=-1
+      printf '%s\t\t-1\t%s\t%s\t\t\n' "$script" "$duration" "$idx" >>"$RECORDS"
+    fi
+  else
+    printf '%s\t\t%s\t%s\t%s\t\t\n' "$script" "$rc" "$duration" "$idx" >>"$RECORDS"
+  fi
   printf 'FM_ISOLATION_CANDIDATE_END %s %s exit=%s duration_ms=%s worker=%s\n' \
     "$(now_iso)" "$script" "$rc" "$duration" "$idx"
-  printf '%s\t%s\t%s\t%s\n' "$script" "$rc" "$duration" "$idx" >>"$RECORDS"
   if [ "$rc" -ne 0 ]; then
     FAILED=$((FAILED + 1))
     AGG_RC=1
@@ -379,7 +478,7 @@ wait_one_slot() {
     fi
   fi
   # Isolation: worker root must remain mode 0700 and under the proof parent.
-  mode=$(dir_mode "$work")
+  mode=$(fm_isolation_dir_mode "$work")
   case "$mode" in
     700|0700) ;;
     *)
@@ -401,44 +500,15 @@ idx=0
 for script in "${CANDIDATES[@]}"; do
   idx=$((idx + 1))
   work="$PROOF_ROOT/w$idx"
-  # Create then chmod: mkdir -m can still be umask-adjusted on some platforms.
-  mkdir -p "$work/tmp" "$work/out"
-  chmod 0700 "$work" "$work/tmp" "$work/out" \
-    || die "could not chmod 0700 worker roots under $work"
-  mode=$(dir_mode "$work")
-  case "$mode" in
-    700|0700) ;;
-    *) die "failed to create mode-0700 worker root at $work (mode=$mode)" ;;
-  esac
-  mode=$(dir_mode "$work/tmp")
-  case "$mode" in
-    700|0700) ;;
-    *) die "failed to create mode-0700 TMPDIR at $work/tmp (mode=$mode)" ;;
-  esac
 
   printf 'FM_ISOLATION_CANDIDATE_BEGIN %s %s worker=%s\n' \
     "$(now_iso)" "$script" "$idx"
 
-  (
-    set +e
-    export TMPDIR="$work/tmp"
-    export TMP="$work/tmp"
-    # Clear ambient fleet overrides so candidates cannot share a live home.
-    unset FM_HOME FM_STATE_OVERRIDE FM_DATA_OVERRIDE FM_ROOT_OVERRIDE \
-      FM_PROJECTS_OVERRIDE FM_CONFIG_OVERRIDE FM_BACKEND 2>/dev/null || true
-    cd "$ROOT" || exit 1
-    begin_ms=$(now_ms)
-    bash "$script" >"$work/out/stdout" 2>"$work/out/stderr"
-    rc=$?
-    end_ms=$(now_ms)
-    duration=$((end_ms - begin_ms))
-    if [ "$duration" -lt 0 ]; then
-      duration=0
-    fi
-    printf '%s\n' "$rc" >"$work/out/exit"
-    printf '%s\n' "$duration" >"$work/out/duration_ms"
-    exit 0
-  ) &
+  # One measurement path, owned by bin/fm-test-isolation-lib.sh and shared with
+  # this harness's own regression tests, so a proof run and a re-measurement
+  # mean the same thing. It builds the sandbox from the contract and refuses to
+  # run a subject it could not build one for.
+  ( fm_isolation_run_subject "$ROOT" "$work" "$script" || exit 1 ) &
   WORKER_PIDS+=("$!")
   WORKER_IDX+=("$idx")
 
@@ -486,9 +556,32 @@ if [ -n "$JSON_PATH" ]; then
   mkdir -p "$(dirname "$JSON_PATH")"
   # Stable record order for the artifact.
   sort -t$'\t' -k1,1 "$RECORDS" -o "$RECORDS"
-  write_json_artifact "$JSON_PATH" \
+
+  # The proof-wide material dependencies, captured at proof time: the isolation
+  # semantics every worker was built from, and the concurrency this repository
+  # currently runs the proven set at. An unobservable lane inventory is written
+  # as such rather than as a concurrency of zero.
+  CONTRACT_DIGEST=$(fm_isolation_contract_digest) \
+    || die "could not digest the isolation contract; refusing to record an unbound proof"
+  LANES_FILE="$PROOF_ROOT/lanes.txt"
+  : >"$LANES_FILE"
+  set +e
+  fm_isolation_lane_concurrency "$ROOT" >"$LANES_FILE"
+  LANES_RC=$?
+  set -e
+  if [ "$LANES_RC" -ne 0 ]; then
+    log "could not observe CI lane concurrency; recording it as could-not-observe"
+    : >"$LANES_FILE"
+  fi
+  RUNNER_CAP=$("$ROOT/bin/fm-test-run.sh" --print-jobs-max 2>/dev/null || echo)
+  case "$RUNNER_CAP" in
+    ''|*[!0-9]*) die "could not read the runner concurrency cap; refusing to record an unbound proof" ;;
+  esac
+
+  fm_isolation_write_proof "$JSON_PATH" \
     "$RUN_STARTED_ISO" "$RUN_FINISHED_ISO" "$RUN_ID" \
-    "$TOTAL" "$FAILED" "$JOBS" "$RUN_DURATION" "$RECORDS"
+    "$TOTAL" "$FAILED" "$JOBS" "$RUN_DURATION" "$RECORDS" \
+    "$CONTRACT_DIGEST" "$LANES_FILE" "$RUNNER_CAP"
   log "wrote isolation proof artifact: $JSON_PATH"
 fi
 

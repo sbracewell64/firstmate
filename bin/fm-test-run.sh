@@ -19,7 +19,11 @@
 #   fm-test-run.sh --list --lane portable-parallel-1
 #   fm-test-run.sh --list-families
 #   fm-test-run.sh --list-lanes
+#   fm-test-run.sh --print-jobs-max
 #   fm-test-run.sh --check-coverage
+#     Also judges docs/fm-test-isolation-proof.json against this code and
+#     refuses a stale or unjudgeable proof. Exits 0 ok, 1 a stated invariant
+#     broke, 3 could-not-observe.
 #
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
@@ -52,8 +56,10 @@
 #   --jobs N        run the selected scripts with up to N concurrent workers.
 #                   Default is 1 (serial). N>1 is allowed only when every
 #                   selected script is in the proven-isolated set
-#                   (bin/fm-test-isolation-proof.sh --list). Cap is 8. Stateful
-#                   families never schedule under --jobs.
+#                   (bin/fm-test-isolation-proof.sh --list-proven). The cap is
+#                   the concurrency the proof measured, printed by
+#                   --print-jobs-max. Stateful families never schedule under
+#                   --jobs.
 #   -h, --help      print this header
 #
 # Per-script machine-parseable markers (stdout):
@@ -70,9 +76,12 @@
 # matching ^skip:) remain successful and are counted as skipped_gate.
 #
 # Family labels, the changed-file map, and production portable-shard composition
-# live in this script only (one owner). The proven-isolated candidate set remains
-# owned by bin/fm-test-isolation-proof.sh; portable parallel shards are a
-# duration-balanced partition of that exact set (see docs/fm-test-portable-shards.md).
+# live in this script only (one owner). The proven-isolated set is owned by
+# docs/fm-test-isolation-proof.json, the proof that measured it, and this script
+# is a consumer of that artifact rather than a second copy of the list; the
+# candidate set that proof run takes as input stays with
+# bin/fm-test-isolation-proof.sh. Portable parallel shards are a duration-balanced
+# partition of the proven set (see docs/fm-test-portable-shards.md).
 #
 # portable-serial stays strictly serial. Its CI shards (portable-serial-<k>of<n>)
 # split it across separate runners, so two of its stateful scripts still never
@@ -85,11 +94,19 @@ set -eu
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT" || exit 1
 
+# shellcheck source=bin/fm-test-isolation-lib.sh
+. "$ROOT/bin/fm-test-isolation-lib.sh"
+
+# The proof artifact this runner consumes. It owns the proven-isolated set and
+# the freshness bindings that say whether that set is still about this code.
+ISOLATION_PROOF_PATH="$ROOT/docs/fm-test-isolation-proof.json"
+
 MODE=
 LIST_ONLY=0
 LIST_FAMILIES=0
 LIST_LANES=0
 CHECK_COVERAGE=0
+PRINT_JOBS_MAX=0
 AGGREGATE_OUT=
 FAMILY=
 LANE=
@@ -99,7 +116,15 @@ SCRIPTS=()
 EXCLUDE_FAMILIES=()
 FAIL_ON_GATE_SKIP=
 JOBS=1
-JOBS_MAX=8
+
+# Maximum concurrent workers --jobs will schedule over the proven-isolated set.
+# This is a licence, not a preference: it may not exceed the concurrency the
+# proof actually measured, and bin/fm-test-isolation-lib.sh's freshness check
+# refuses when it does. It was 8 against a proof taken at 4 - the runner was
+# handing out twice the concurrency anyone had evidence for - and it is now
+# stated against that evidence. Raising it means re-running the proof at the
+# higher concurrency first, never the other way round.
+JOBS_MAX=4
 
 # Declared serial-lane budget, and the shard count and drift bounds derived from
 # it. This block is the one owner of every number the recurrence control checks;
@@ -115,6 +140,14 @@ JOBS_MAX=8
 # This replaces a 2026-08-02 basis of 69 scripts and 1143762 ms. The lane did not
 # drift within a stale budget; it grew to 2.07x of it, so the budget is re-derived
 # from what the suite now is rather than restored to what it used to be.
+#
+# That rule is not local to this number. The isolation proof reached the same
+# state from the same cause - its subjects moved while the recorded evidence
+# stayed put - and is repaired the same way: re-MEASURE against what the code now
+# is, never restamp the old evidence to match. The difference is that this budget
+# had a consumer that could notice and the proof did not, which is what
+# bin/fm-test-isolation-lib.sh now supplies. Read that file's header for the
+# freshness model; this comment is only the cross-reference to it.
 PORTABLE_SERIAL_BUDGET_MS=2366725
 
 # How many separate-runner shards the portable serial remainder splits into.
@@ -328,40 +361,51 @@ list_known_lanes() {
   printf '%s\n' real-herdr-gated
 }
 
-# Exact proven-isolated candidate set (same paths as
-# bin/fm-test-isolation-proof.sh --list). Do not expand without a new concurrent
-# isolation proof archive.
+# The proven-isolated set, read from the proof that measured it. This used to be
+# a hand-maintained heredoc here, which made the runner a second owner of a claim
+# the proof document was supposed to hold: the two agreed only by luck, and
+# nothing compared them. There is now one owner - the artifact - and this is a
+# consumer of it.
+#
+# An unreadable proof is could-not-observe and stops the run. It is never an
+# empty proven set, because an empty set would silently reroute every proven
+# script into the serial lane and read as a successful selection.
+PROVEN_ISOLATED_CACHE=
+PROVEN_ISOLATED_RESOLVED=0
+
+# Resolves the proven set once and caches it. Returns non-zero, having said why,
+# when the artifact cannot be read.
+#
+# The status matters more than the text. An earlier draft of this had
+# list_proven_isolated call die() directly, which looked fail-closed and was not:
+# every call site consumes it through a pipeline or a process substitution, so
+# die() killed only the subshell and the guard carried on with an empty set - and
+# then reported a shard-partition mismatch, which is a true statement about the
+# wrong subject. Callers below check this status themselves for that reason.
+resolve_proven_isolated() {
+  local rc
+  [ "$PROVEN_ISOLATED_RESOLVED" -eq 1 ] && return 0
+  set +e
+  PROVEN_ISOLATED_CACHE=$(fm_isolation_proven_paths "$ISOLATION_PROOF_PATH")
+  rc=$?
+  set -e
+  if [ "$rc" -ne 0 ]; then
+    log "could not read the proven-isolated set from $ISOLATION_PROOF_PATH"
+    log "that is could-not-observe, not an empty set; re-measure with: bin/fm-test-isolation-proof.sh --jobs $JOBS_MAX --json $ISOLATION_PROOF_PATH"
+    return 1
+  fi
+  PROVEN_ISOLATED_RESOLVED=1
+  return 0
+}
+
 list_proven_isolated() {
-  cat <<'EOF'
-tests/fm-arm-pretool-check.test.sh
-tests/fm-backend-herdr.test.sh
-tests/fm-brief.test.sh
-tests/fm-cd-pretool-check.test.sh
-tests/fm-composer-ghost.test.sh
-tests/fm-composer-lib.test.sh
-tests/fm-crew-state.test.sh
-tests/fm-decision-hold-lifecycle.test.sh
-tests/fm-ensure-agents-md.test.sh
-tests/fm-grok-harness.test.sh
-tests/fm-herdr-lab.test.sh
-tests/fm-lint.test.sh
-tests/fm-pi-primary-types.test.sh
-tests/fm-pr-merge.test.sh
-tests/fm-review-diff.test.sh
-tests/fm-send-popup-settle.test.sh
-tests/fm-send-settle.test.sh
-tests/fm-send-strict.test.sh
-tests/fm-spawn-batch.test.sh
-tests/fm-supervision-instructions.test.sh
-tests/fm-test-run.test.sh
-tests/fm-tmux-submit-busy.test.sh
-tests/fm-transition-lib.test.sh
-tests/fm-x-mode.test.sh
-EOF
+  resolve_proven_isolated || return 1
+  printf '%s\n' "$PROVEN_ISOLATED_CACHE"
 }
 
 # Portable parallel shard 1: LPT balance of the proven-isolated set using the
-# current concurrent-proof durations in docs/fm-test-isolation-proof.json.
+# 2026-07-29 concurrent-proof durations, now known-stale for balance pending
+# parallel-lane-split-rebalance (see docs/fm-test-portable-shards.md).
 # Execution order is longest first so wall-clock stays near the balanced sum.
 list_portable_parallel_1() {
   cat <<'EOF'
@@ -400,6 +444,9 @@ EOF
 
 is_proven_isolated_script() {
   local want=$1 line
+  # Resolve first so the artifact's readability is checked where the status can
+  # still be acted on; the listing below then cannot fail silently.
+  resolve_proven_isolated || die "cannot classify $want without a readable isolation proof"
   while IFS= read -r line; do
     [ "$line" = "$want" ] && return 0
   done < <(list_proven_isolated)
@@ -640,6 +687,7 @@ portable_serial_shard_index() {
 
 select_proven_isolated() {
   local s
+  resolve_proven_isolated || die "cannot select the proven-isolated lane without a readable isolation proof"
   while IFS= read -r s; do
     [ -n "$s" ] || continue
     add_script "$s"
@@ -664,6 +712,7 @@ select_lane() {
       done < <(list_portable_parallel_2)
       ;;
     portable-serial)
+      resolve_proven_isolated || die "cannot select lane '$want' without a readable isolation proof"
       while IFS= read -r s; do
         [ -n "$s" ] || continue
         add_script "$s"
@@ -673,6 +722,7 @@ select_lane() {
     portable-serial-*)
       # One separate-runner shard of the same remainder, still serial in itself.
       shard=$(portable_serial_shard_index "$want")
+      resolve_proven_isolated || die "cannot select lane '$want' without a readable isolation proof"
       while IFS=$'\t' read -r idx s; do
         [ -n "$s" ] || continue
         if [ "$idx" = "$shard" ]; then
@@ -693,10 +743,15 @@ select_lane() {
 }
 
 run_coverage_guard() {
-  local tmp missing extra a b shard
+  local tmp missing extra a b shard freshness_rc
   local -a saved_scripts=()
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-coverage.XXXXXX")
 
+  if ! resolve_proven_isolated; then
+    log "coverage guard: the proven-isolated set COULD NOT BE OBSERVED"
+    rm -rf "$tmp"
+    return 3
+  fi
   all_repo_tests | LC_ALL=C sort -u >"$tmp/all"
   list_proven_isolated | LC_ALL=C sort -u >"$tmp/proven"
   list_portable_parallel_1 | LC_ALL=C sort -u >"$tmp/s1"
@@ -796,22 +851,55 @@ run_coverage_guard() {
     return 1
   fi
 
+  # Every candidate the proof harness would measure must be a script the proof
+  # actually proved, and vice versa. Candidates are the input to a proof run and
+  # the proven set is its output, so a difference here means a measured set that
+  # nobody re-recorded, not a formatting drift.
   if [ -x "$ROOT/bin/fm-test-isolation-proof.sh" ]; then
     "$ROOT/bin/fm-test-isolation-proof.sh" --list | LC_ALL=C sort -u >"$tmp/proof_list"
     if ! cmp -s "$tmp/proven" "$tmp/proof_list"; then
-      log "coverage guard: embedded proven-isolated set diverges from bin/fm-test-isolation-proof.sh --list"
+      log "coverage guard: proven-isolated set diverges from the harness candidate set (bin/fm-test-isolation-proof.sh --list)"
       comm -3 "$tmp/proven" "$tmp/proof_list" >&2 || true
       rm -rf "$tmp"
       return 1
     fi
   fi
 
-  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial_shards=%s herdr=%s\n' \
+  # The mandatory refusing consumer this artifact never had. A proven script
+  # whose bytes moved, a fixture that moved under it, changed isolation
+  # semantics, or a lane now running the proven set wider than the proof
+  # measured all stop here. Failing to READ any of that stops here too: a proof
+  # that cannot be judged is not a proof that passed.
+  set +e
+  fm_isolation_check_freshness "$ROOT" "$ISOLATION_PROOF_PATH" "$JOBS_MAX" >"$tmp/freshness" 2>&1
+  freshness_rc=$?
+  set -e
+  case "$freshness_rc" in
+    0) ;;
+    1)
+      log "coverage guard: the isolation proof is STALE for this code"
+      cat "$tmp/freshness" >&2
+      log "re-measure it: bin/fm-test-isolation-proof.sh --jobs $JOBS_MAX --json $ISOLATION_PROOF_PATH"
+      log "re-measure means running the subjects again; never restamp digests onto old evidence"
+      rm -rf "$tmp"
+      return 1
+      ;;
+    *)
+      log "coverage guard: the isolation proof's freshness COULD NOT BE OBSERVED"
+      cat "$tmp/freshness" >&2
+      rm -rf "$tmp"
+      return 3
+      ;;
+  esac
+  grep '^FM_ISOLATION_FRESHNESS ' "$tmp/freshness" || true
+
+  printf 'FM_TEST_COVERAGE ok total=%s parallel=%s serial=%s serial_shards=%s herdr=%s proven=%s\n' \
     "$(wc -l <"$tmp/all" | tr -d ' ')" \
     "$(wc -l <"$tmp/shards_union" | tr -d ' ')" \
     "$(wc -l <"$tmp/serial" | tr -d ' ')" \
     "$PORTABLE_SERIAL_SHARDS" \
-    "$(wc -l <"$tmp/herdr" | tr -d ' ')"
+    "$(wc -l <"$tmp/herdr" | tr -d ' ')" \
+    "$(wc -l <"$tmp/proven" | tr -d ' ')"
   rm -rf "$tmp"
   return 0
 }
@@ -1639,6 +1727,10 @@ while [ "$#" -gt 0 ]; do
       LIST_LANES=1
       shift
       ;;
+    --print-jobs-max)
+      PRINT_JOBS_MAX=1
+      shift
+      ;;
     --check-coverage)
       CHECK_COVERAGE=1
       shift
@@ -1701,6 +1793,11 @@ while [ "$#" -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$PRINT_JOBS_MAX" -eq 1 ]; then
+  printf '%s\n' "$JOBS_MAX"
+  exit 0
+fi
 
 if [ "$LIST_FAMILIES" -eq 1 ]; then
   list_known_families
