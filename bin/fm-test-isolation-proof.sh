@@ -436,8 +436,6 @@ wait_one_slot() {
     duration=0
     log "could not measure (sandbox not built to contract): $script"
   fi
-  printf 'FM_ISOLATION_CANDIDATE_END %s %s exit=%s duration_ms=%s worker=%s\n' \
-    "$(now_iso)" "$script" "$rc" "$duration" "$idx"
   # The binding is built here, from the bytes that were just executed, by the
   # library's one recorder. A subject whose binding cannot be built is recorded
   # unmeasured rather than proven on evidence its dependencies were not read.
@@ -446,13 +444,14 @@ wait_one_slot() {
       printf '%s\n' "$record" >>"$RECORDS"
     else
       log "could not bind proof dependencies (unresolved fixture or no digest tool): $script"
-      AGG_RC=1
-      FAILED=$((FAILED + 1))
+      rc=-1
       printf '%s\t\t-1\t%s\t%s\t\t\n' "$script" "$duration" "$idx" >>"$RECORDS"
     fi
   else
     printf '%s\t\t%s\t%s\t%s\t\t\n' "$script" "$rc" "$duration" "$idx" >>"$RECORDS"
   fi
+  printf 'FM_ISOLATION_CANDIDATE_END %s %s exit=%s duration_ms=%s worker=%s\n' \
+    "$(now_iso)" "$script" "$rc" "$duration" "$idx"
   if [ "$rc" -ne 0 ]; then
     FAILED=$((FAILED + 1))
     AGG_RC=1

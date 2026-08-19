@@ -303,6 +303,41 @@ test_freshness_reports_could_not_observe_instead_of_passing() {
   pass "unreadable inputs return could-not-observe rather than a pass"
 }
 
+test_freshness_refuses_an_unparseable_lane_jobs_value() {
+  local root
+  root=$(mk_freshness_fixture) || fail "could not build the freshness fixture"
+  [ -n "$root" ] && [ -d "$root" ] || fail "freshness fixture root is empty"
+  remeasure_freshness_fixture "$root" || fail "could not measure the fixture subject"
+
+  # Watched red: the lane carries a --jobs token whose value is not a literal
+  # integer, so the concurrency the proven set runs at was not observed. Only
+  # the absence of a --jobs token may read as the runner's default of 1.
+  # shellcheck disable=SC2016 # The literal unexpanded $FM_JOBS is the unparseable value under test.
+  sed 's|--lane portable-parallel-1|--lane portable-parallel-1 --jobs "$FM_JOBS"|' \
+    "$root/.github/workflows/ci.yml" >"$root/.github/workflows/ci.yml.new"
+  mv "$root/.github/workflows/ci.yml.new" "$root/.github/workflows/ci.yml"
+  freshness_verdict "$root" 4
+  [ "$FRESHNESS_RC" -eq 3 ] || fail "an unparseable --jobs value must return 3, got rc=$FRESHNESS_RC"$'\n'"$FRESHNESS_OUT"
+  assert_contains "$FRESHNESS_OUT" \
+    "FM_ISOLATION_DEPENDENCY COULD-NOT-OBSERVE name=concurrency" \
+    "an unreadable lane concurrency is stated as such"
+  assert_not_contains "$FRESHNESS_OUT" "FM_ISOLATION_FRESHNESS PROVEN" \
+    "could-not-observe must never be narrowed into a pass"
+
+  # Non-vacuity: the same lane with a literal --jobs value is observed rather
+  # than refused, so the refusal above can only be about parseability.
+  # shellcheck disable=SC2016 # Matches the literal $FM_JOBS written above.
+  sed 's|--jobs "$FM_JOBS"|--jobs 2|' \
+    "$root/.github/workflows/ci.yml" >"$root/.github/workflows/ci.yml.new"
+  mv "$root/.github/workflows/ci.yml.new" "$root/.github/workflows/ci.yml"
+  freshness_verdict "$root" 4
+  [ "$FRESHNESS_RC" -eq 0 ] || fail "a literal --jobs 2 must be observed as PROVEN, got rc=$FRESHNESS_RC"$'\n'"$FRESHNESS_OUT"
+  assert_contains "$FRESHNESS_OUT" \
+    "FM_ISOLATION_DEPENDENCY OBSERVED name=lane-concurrency lane=portable-parallel-1 jobs=2" \
+    "a literal jobs value is observed with its lane"
+  pass "an unreadable lane --jobs value is could-not-observe, never one"
+}
+
 test_proven_set_comes_from_the_proof_artifact() {
   local from_proof from_runner cap proven_concurrency
   from_proof=$("$PROOF" --list-proven | LC_ALL=C sort -u)
@@ -333,4 +368,5 @@ test_freshness_refuses_a_fixture_that_moved_under_a_subject
 test_freshness_refuses_concurrency_above_the_proof
 test_freshness_refuses_changed_isolation_semantics
 test_freshness_reports_could_not_observe_instead_of_passing
+test_freshness_refuses_an_unparseable_lane_jobs_value
 test_proven_set_comes_from_the_proof_artifact

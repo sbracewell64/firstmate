@@ -269,8 +269,15 @@ fm_isolation_lane_concurrency() {
     esac
     lane=$(printf '%s\n' "$line" | sed -n 's/.*--lane[[:space:]]\{1,\}\(portable-parallel[A-Za-z0-9-]*\).*/\1/p')
     [ -n "$lane" ] || continue
-    jobs=$(printf '%s\n' "$line" | sed -n 's/.*--jobs[[:space:]=]\{1,\}\([0-9]\{1,\}\).*/\1/p')
-    [ -n "$jobs" ] || jobs=1
+    case "$line" in
+      *'--jobs'*)
+        jobs=$(printf '%s\n' "$line" | sed -n 's/.*--jobs[[:space:]=]\{1,\}\([^[:space:]]\{1,\}\).*/\1/p')
+        case "$jobs" in
+          ''|*[!0-9]*) return 3 ;;
+        esac
+        ;;
+      *) jobs=1 ;;
+    esac
     printf 'lane=%s jobs=%s\n' "$lane" "$jobs"
     count=$((count + 1))
   done <<EOF
