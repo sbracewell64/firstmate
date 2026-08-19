@@ -2,7 +2,7 @@
 
 Audience: maintainer verification.
 
-This record supports the execution-attempt lineage and the replacement gate in [`../../bin/fm-attempt.sh`](../../bin/fm-attempt.sh), the `--succeed-execution` dispatch in [`../../bin/fm-spawn.sh`](../../bin/fm-spawn.sh), and the `owner-state` verb in [`../../bin/fm-worktree-guard.sh`](../../bin/fm-worktree-guard.sh).
+This record supports the execution-attempt lineage and the replacement gate in [`../../bin/fm-attempt.sh`](../../bin/fm-attempt.sh), the `--succeed-execution` dispatch in [`../../bin/fm-spawn.sh`](../../bin/fm-spawn.sh), the `owner-state` verb in [`../../bin/fm-worktree-guard.sh`](../../bin/fm-worktree-guard.sh), and the endpoint-absent and no-run readings of `bin/fm-crew-state.sh`'s structured answer in [`../../bin/fm-classify-lib.sh`](../../bin/fm-classify-lib.sh), which the gate composes.
 It records what was measured about the controls on that transition, and the limits of what the measurement establishes.
 Throughout, `attempt` is written in its qualified form; [`../vocabulary-collisions.md`](../vocabulary-collisions.md) owns that ruling.
 Incident chronology and delivery evidence stay in private reports or PR evidence.
@@ -14,6 +14,7 @@ The regression coverage is [`../../tests/fm-execution-replacement.test.sh`](../.
 Measured 2026-08-19 on Linux 6.18 (WSL2), bash 5.2, git 2.53.0, shellcheck 0.11.0.
 
 The suite runs **the test functions enumerated below - the 14 declared controls, the boundary rules the implementation created, and the review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
+One case additionally drives the real `bin/fm-crew-state.sh` rather than the suite's stub, which is what binds the gate's enumeration to the answers its producer actually emits.
 Nothing asserts implementation source bytes.
 
 ```
@@ -43,6 +44,9 @@ ok - a pre-lineage lane adopts its recorded binding, replaces, and launches its 
 ok - an adoption with no readable binding refuses could-not-observe and writes nothing
 ok - an adopted execution is refused a rebind an unstarted one is allowed, and stays replaceable
 ok - the execution ledger retires with the attempt record
+ok - a dead-endpoint lane composes quiescence, replaces, and launches its successor
+ok - every unknown but the composed one still refuses replacement
+ok - the real current-state reader emits the composition the gate admits
 FM_TEST_CONTRACT suite=fm-execution-replacement.test.sh status=pass
 ```
 
@@ -53,7 +57,7 @@ The closing `FM_TEST_CONTRACT` line is what makes that count enforceable rather 
 `fail` inside a command substitution kills only the subshell, so an aborting `make_lane` handed its caller an empty string and the suite kept running, then exited on its LAST case's status - and `bin/fm-test-run.sh` grades a suite by its exit code alone, so a `not ok` printed that way was read as a pass.
 The suite now opts into `tests/lib.sh`'s identity contract, which compares the declared `test_` functions against the ones that reported success and exits nonzero on any difference.
 Measured against a build with every invocation but the first removed: `exit=1`, naming each declared case that never reported.
-The suite takes about 92 seconds on the machine above (`exit=0 duration_s=92`), up from about 70 before the pre-lineage cases.
+The suite takes about 102 seconds on the machine above (`real 1m42.202s`), up from about 92 before the door-3 cases and about 70 before the pre-lineage ones.
 The portable-serial weight hint in `bin/fm-test-run.sh` still reads 72275 and is deliberately NOT restamped with this local number: that table is derived from CI timing artifacts, its own header says the next refresh replaces it wholesale from CI, and a locally measured value mixed into a CI-derived table is the restamped-evidence failure that file's budget comment warns against.
 The hint is a balance hint only, so the staleness costs shard balance and never coverage.
 
@@ -64,6 +68,7 @@ The review-regression cases, each added after a review round of this branch and 
 - `test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified` - an orca-backed lane's succession silently allocating a fresh worktree instead of refusing. The case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the pointer to this record as where a verified reuse path would be recorded, and the lane - worktree, metadata and sanctioned record - untouched afterwards. The lift condition is self-contained: the refusal stands exactly until a verified orca custody-reuse path lands and its verification is recorded here, at which point the refusal, its case, and this bullet all retire together.
 - `test_replace_refuses_an_unstated_effort_sanction` and `test_a_successor_with_no_effort_sanction_refuses_at_launch` - an UNSTATED effort sanction (an empty or `default` recorded band) accepted instead of refused, measured at both of its doors: `replace` refuses to mint a successor carrying no band and points at `--alternate-effort`, and the successor gate refuses a sanctioned record carrying none rather than adopting whatever the launch declared.
 - `test_a_prelineage_lane_adopts_its_recorded_binding_and_replaces`, `test_a_prelineage_lane_without_a_recorded_binding_refuses` and `test_an_adopted_execution_is_not_re_pointed_like_an_unstarted_one` - the zero-lineage deadlock this capability's FIRST production use hit, and the two boundaries the fix creates. The first drives the whole adopted path end to end: `--check` naming the successor the adoption will actually produce, the mint, the ledger's adopted-provenance line, and the `--succeed-execution` launch that follows. The second pins the adoption to a durable record, refusing could-not-observe and writing nothing when the metadata names no binding and when it is absent entirely. The third pins the adopted token itself, asserting the DIVERGENCE - the same record differing only in that token is admitted as `launching` and refused as `adopted` - so the case cannot go quietly vacuous.
+- `test_a_dead_endpoint_lane_composes_quiescence_and_replaces`, `test_every_other_unknown_still_refuses_replacement` and `test_the_real_reader_emits_the_composition_the_gate_admits` - the dead-endpoint deadlock, its boundaries, and the producer it is bound to. The first drives the composed path end to end: the `--check` that names the composition before anything is committed, the mint, the `inflight=` disposition on the ledger line that closes the predecessor, and the `--succeed-execution` launch onto the same slot, worktree and committed work. The second asserts the DIVERGENCE rather than the pass - the same lane and the same gate refusing an unknown from a live endpoint, an unknown selected by a rule that is not endpoint-absent, an endpoint-absent unknown that still has a run attributed to it, and an in-flight run with the endpoint gone underneath it - and then sanctions the composed one, so the refusals cannot all be a gate that refuses everything. The third takes the stub away entirely: the real `bin/fm-crew-state.sh` reads the real lane with its endpoint removed, its emitted tokens are asserted, the same lane with a LIVE endpoint is asserted NOT to read endpoint-gone, and the same real reader is then handed to the gate.
 - `test_an_ended_attempt_admits_a_fresh_execution_on_any_binding` - a force-discarded task deadlocked out of retrying on a different binding: the ended record still carried an `active` execution, so the rebind refusal fired with nothing executing, while `replace` refused on the discarded lane's missing custody. `end` now closes the execution it ends (reader and writer both: the guard exempts an ended record, `open` mints the retry a fresh execution, and no record can carry ended=1 with an executing dispatch again), with the live-record refusal asserted beside it so the exemption stays bounded.
 
 The second review round also moved the ordinary-relaunch rebind refusal ahead of allocation: it previously fired only at `fm-attempt.sh open`, after a pool slot was selected (and reset) and a window's pane had entered it, so every refused rebind leaked a live window occupying a slot. The rebind case now also asserts that a refused rebind creates no window.
@@ -79,7 +84,9 @@ A mutation that matched nothing is reported `MUTATION-DID-NOT-APPLY`, and one th
 A defect build that left the suite green is reported `DEFECT-NOT-CAUGHT`, and that is a finding about the test rather than about the code.
 All three outcomes were reached during development and each was repaired before this record was written: one anchor stopped matching after a refactor, one defect build was survived because the control had a second enforcing path the defect did not remove, and one case was found to be passing on the wrong subject - it was asserting against a missing-metadata refusal rather than against the ownership record it claimed to measure.
 
-Measured 2026-08-19 against the implementation as committed. Nineteen defect builds, nineteen watched reds, **19 of 19**:
+Twenty-six defect builds, twenty-six watched reds, **26 of 26** - but measured in two passes, and the difference matters.
+The nineteen rows above the door-3 block were measured 2026-08-19 against the tree they landed in; they were NOT re-run against this change, so what their cases establish here is that the assertions still execute and still pass, not that each removed clause is still the only thing controlling its verdict.
+The seven door-3 and wiring rows were measured 2026-08-19 against the implementation as committed here, each mutation applied to the committed file, the suite re-run, and the file restored before the next build.
 
 | Control | Defect build | Observed red |
 | --- | --- | --- |
@@ -102,20 +109,36 @@ Measured 2026-08-19 against the implementation as committed. Nineteen defect bui
 | pre-lineage - the adoption reads a durable record and never invents one | the adoption stops requiring a named binding | `a lane whose binding cannot be read must be COULD_NOT_OBSERVE, got rc=0` |
 | pre-lineage - the adopted token is never read as an unstarted launch | the adopted state falls into the `launching` permissive reading | `an ADOPTED execution must not be re-pointed onto another binding` |
 | pre-lineage - the adopted producer's provenance is on the ledger | the adopted ledger line drops its disposition and unobserved-launch fields | `the adopted line must carry its own provenance disposition (missing: 'disposition=adopted-from-meta')` |
+| door 3 - a dead endpoint with no run is OBSERVED quiescence | the composition is removed and the landed refusal restored | `a dead-endpoint lane must be replaceable, got rc=4`, on `COULD_NOT_OBSERVE - ... reported deadep-a1 as 'unknown', which is precisely the absence of usable evidence about what is in flight` |
+| door 3 - only an ENDPOINT-ABSENT unknown composes | the precedence conjunct is dropped, so every unknown composes | `an unknown from a live endpoint must be COULD_NOT_OBSERVE, got rc=0` - and the defect build prints its own false composition, naming `busy-signal-unusable` as an endpoint that is not there |
+| door 3 - an attributed run refuses whatever the endpoint is doing | the no-run conjunct is dropped | `an attributed run must refuse even under an endpoint-absent rule, got rc=0` |
+| door 3 - the composition needs custody established first | the gates are reordered so the composition runs before custody is established | `a dead-endpoint lane must be replaceable, got rc=4`, on `... and its worktree custody was established as 'unestablished' rather than dead` |
+| door 3 - the composition is durable, not only printed | the `inflight=` field is dropped from the line that closes the predecessor | `the close must record that the in-flight condition was composed, not observed idle (missing: 'inflight=observed-quiescent-endpoint-absent')` |
+| the gate is asked in the shape that produces the states it enumerates | the landed `<id> --json` argument order restored | the suite dies on its FIRST case, `an exhausted primary with a qualified alternate must be sanctioned`, on `COULD_NOT_OBSERVE - ... could not report what c01-a1 is currently doing` - the stub refuses the prose order, so nothing downstream runs |
+| the wrong-subject build - the stub cannot certify the wiring | the same argument order, with the stub's argument-order refusal removed | 27 of 28 cases GREEN and only `the gate must compose the REAL reader's answer, got rc=4`, on `COULD_NOT_OBSERVE - ... reported no state for realep-a1` |
 
 The first pre-lineage row is the LIVE red: its defect build restores exactly the refusal that shipped, and the message it prints is the one the platform lane hit in production.
 Its watched red is therefore a reproduction of the reported failure and not only a mutation of the fix.
+The first door-3 row is the same kind of red for door 3: its defect build restores the landed `unknown` refusal verbatim, and the case fails on that refusal's own text.
+
+The LAST row is the one that matters most about this suite rather than about the code.
+It is the only build in the table that leaves the implementation defective and the fixtures untouched, and it shows 27 of 28 cases reporting green over a gate that could not read its source at all.
+That is the measurement of how much a stub can certify: everything except whether the thing under test is wired to the thing it is specified against.
+The real-reader case is what closed that gap, and it is what found the argument-order defect in the first place.
 
 NON-VACUITY FOR THE ORDINARY PATH, measured the same day.
-The adoption fires only on a record holding no execution, so a lane that HAS one must be untouched.
-Every case above it passes unchanged, and the neighbouring suites that execute `bin/fm-attempt.sh` and the dispatch chain ran with zero failures and positive executed counts: `fm-attempt` 10, `fm-capacity-retry` 20, `fm-teardown` 87, `fm-route-enforcement` 51, `fm-spawn-dispatch-profile` 27.
+The adoption fires only on a record holding no execution, and the quiescence composition fires only on an endpoint-absent unknown with no attributed run, so a lane that has an execution and an ordinary observed state must be untouched by both.
+Every case above them passes unchanged, and the neighbouring suites that execute `bin/fm-attempt.sh`, the current-state reader it now composes, and the dispatch chain ran with zero failures and positive executed counts: `fm-attempt` 10, `fm-classify` 8, `fm-crew-state` 78, `fm-capacity-retry` 20, `fm-teardown` 87, `fm-route-enforcement` 51, `fm-spawn-dispatch-profile` 27, `fm-exact-head-green-one-owner` 14.
 Those are counts of assertions that RAN, not an absence of reported failures.
+`fm-classify` and `fm-crew-state` are in that list because the endpoint-absent reading and the token extraction it uses live in `bin/fm-classify-lib.sh`, which `bin/fm-crew-state.sh` itself sources.
 `bin/fm-lint.sh` passes on the pinned ShellCheck 0.11.0.
 
-Two defect builds reach a different wrong answer rather than a false pass, which the cases still catch but which bounds what they establish.
+Four defect builds reach a different wrong answer rather than a false pass, which the cases still catch but which bounds what they establish.
 Control 3's build reaches could-not-observe, because removing the `alive` refusal leaves the remaining `dead` requirement unsatisfied.
 The boundary build fails the earlier "only door" case before reaching the case named for it.
-In both, the assertion is demonstrably controlled by the removed clause; what neither run establishes is that the clause is the ONLY thing standing between that input and a sanctioned replacement.
+The argument-order build fails the suite's FIRST case rather than the case named for it, because the stub refuses that call for every case at once; the un-stubbed variant in the last row is the one that isolates it.
+The gate-reordering build reaches its red through the composition's custody conjunct, which is the only way to reach that conjunct at all - see the limitation recorded below.
+In all four, the assertion is demonstrably controlled by the removed clause; what none of the runs establishes is that the clause is the ONLY thing standing between that input and a sanctioned replacement.
 
 ## The regression this capability caused, and why the state model has three values
 
@@ -135,33 +158,53 @@ A fourth value, `adopted`, was added for the pre-lineage lane below.
 It is neither of the two readings that already existed and must not collapse into either: its launch was never observed, so it satisfies nothing that requires a confirmed one, and the evidence in its lane is already attributed to it, so it is not re-pointable the way an unconfirmed `launching` execution is.
 [`../../bin/fm-attempt.sh`](../../bin/fm-attempt.sh)'s header owns the full vocabulary; what is measured here is that the two readings diverge on the same record.
 
-## The failure class this is the third instance of
+## The three-door class
 
-**A reader-side guard meeting a record state its writer era never produced.**
+**A reader-side gate meeting a state its own design did not enumerate.**
 
-A new guard is written against the record states its own writer emits.
-The states left by an EARLIER writer era, or by an interrupted write, are outside that set, so they fall through to the guard's strictest branch - which is the correct default and the wrong answer.
-Strictness is not the defect; an incomplete enumeration of what the record can hold is.
+A gate is written against the states its author had in mind.
+Every other state its sources can actually produce falls through to the strictest branch - which is the correct default and the wrong answer.
+Strictness is not the defect; an incomplete enumeration of what the gate's sources can emit is.
 
-Three instances, all on this one record:
+THREE DOORS, all in this one capability, all found the same way: by taking ONE live lane - the platform lane - through its first real replacement, one door at a time.
+Each was invisible until the door before it opened, which is why they arrived as three separate findings rather than one.
 
-| Instance | The record state | The guard that met it |
-| --- | --- | --- |
-| ended-attempt deadlock | `ended=1` with an execution still recorded `active` | the rebind refusal fired with nothing executing, and `replace` refused on the discarded lane's missing custody |
-| contradictory-record writer | the writer that could produce that pair at all | `end` recorded the flag without closing the execution it ended |
-| zero lineage | `execution=0`, every lineage field absent | `replace` refused "no recorded execution attempt, so there is nothing to replace" |
+| Door | The state the gate met | The gate that met it | Where it came from |
+| --- | --- | --- | --- |
+| 1 - ended attempt | `ended=1` with an execution still recorded `active` | the rebind refusal fired with nothing executing, and `replace` refused on the discarded lane's missing custody | a writer that could produce that pair at all |
+| 2 - zero lineage | `execution=0`, every lineage field absent | `replace` refused "no recorded execution attempt, so there is nothing to replace" | an earlier writer era, before these fields existed |
+| 3 - dead endpoint | `unknown` under the `endpoint-gone` precedence, with no run attributed | `replace` read it as could-not-observe about what is in flight and refused | the current-state owner, working exactly as designed |
 
-The third reached PRODUCTION, on the capability's first use, because every lane dispatched before the lineage landed carries exactly that record - so the population the refusal locked out was every lane that existed when it shipped.
+Door 1 came with its own writer defect, fixed beside it: `end` recorded the flag without closing the execution it ended, so the contradictory record could keep being written.
+Door 2 reached PRODUCTION on the capability's first use, because every lane dispatched before the lineage landed carries exactly that record.
+Door 3 reached production on the very next step of the very same lane.
 
-The check the class implies, for any guard added over a durable record: enumerate the states the record CAN hold, not the states the new writer produces.
-Pre-schema records, partially written records, and records left by an interrupted write are all in that set, and each needs its own answer rather than the fall-through.
-This fix adds one such state deliberately - `adopted`, which an interrupted adoption can leave - and gives it its own reading rather than letting it fall through, which is the same enumeration applied to the fix itself.
+DOOR 3 WIDENS THE CLASS, and that is the reason it is recorded rather than merely fixed.
+Doors 1 and 2 were states a writer era never MEANT to produce - stale shapes, and the fix was to enumerate them.
+Door 3 is a state its owner produces DELIBERATELY and correctly: `bin/fm-crew-state.sh` reports `unknown` for a run-less lane whose backend target is gone precisely so that a possibly-stale status log is never read as a live crew's current state.
+Nothing was wrong with the producer.
+What was wrong was the consumer's reading: it took one owner's narrow "I will not answer THIS question from THIS evidence" as "nothing is known here", when two other owners had each established a fact that, composed, answered the question positively.
+So the class is not only about old records.
+It is about a gate enumerating the states its own design imagined instead of the states its sources actually emit - and a designed, documented, current state is as easy to leave out of that enumeration as a stale one.
+
+A THIRD VARIANT, found by the control that binds this gate to its real producer.
+`replace` asked the current-state reader as `<id> --json`, and that reader recognizes `--json` in position 1 only, treating anything else as the task id.
+So it answered in PROSE, the gate's extraction matched nothing, and every real replacement refused could-not-observe here - the enumeration was not merely incomplete, the gate had never once been asked in the shape that produces the states it enumerates.
+It has been that way since the capability landed (`4956aefc`), so which of the two refusals the platform lane actually printed is not observable from this record; both are at this one gate, and both are fixed here.
+Every case in this suite passed throughout, because the stub ignored its arguments and answered structured JSON to a call the real script renders as prose.
+That is the same class one level up: the gate was written against the states its SOURCE can emit, and then wired to a source that could not emit them at all.
+The stub now refuses that argument order, so the wiring is asserted rather than assumed.
+
+The check the class implies, for any gate added over an owner's answer: enumerate the states the SOURCE can emit, not the states the new consumer expects, and prove the enumeration against the real source rather than a fixture written from the same expectation.
+Pre-schema records, partially written records, records left by an interrupted write, and states the owner produces deliberately are all in that set, and each needs its own answer rather than the fall-through.
+This fix adds two such states deliberately - `adopted`, which an interrupted adoption can leave, and the composed `observed-quiescent-endpoint-absent` disposition - and gives each its own token rather than letting either collapse into a neighbour, which is the same enumeration applied to the fix itself.
 
 ## What this record does not establish
 
 It establishes that each named control is load-bearing for its case's verdict, and that the suite executes the assertions it prints.
 It does not establish that the control set is COMPLETE.
-The fourteen are the ones the commissioning brief declared, plus the two boundaries the implementation itself created; a fifteenth failure mode nobody named would pass every case here.
+The fourteen are the ones the commissioning brief declared, plus the boundaries the implementation itself created and the three doors found by taking one live lane through a real replacement; a failure mode nobody named would pass every case here.
+Three of those doors were found that way and none of them by the control set, which is the strongest available evidence that the set is incomplete rather than merely unproven.
 
 It also does not establish anything about the owners this gate composes.
 Route eligibility, provider capacity, role qualification, agent liveness and current run state are each measured by their own suites; what is measured here is that this gate ASKS them, honours all three of their values, and refuses on the third.
@@ -174,6 +217,16 @@ What that does not establish is that no OTHER pre-lineage record differs in some
 
 The adopted-token case constructs that record state directly rather than reaching it through an interrupted write.
 It therefore measures the READER on a state the writer can leave, and not how likely the writer is to leave it.
+
+THE CUSTODY CONJUNCT OF THE QUIESCENCE COMPOSITION IS NOT INDEPENDENTLY REACHABLE through the command line as the gates are ordered today.
+`replace_custody_gate` runs first and exits on every verdict but `dead`, so by the time the composition reads the published custody state it can only be `dead`.
+The conjunct is kept because it makes the composition explicit and fails closed if that order ever changes, and the red watch measures exactly that: the reordered defect build is the only way to reach it, and it goes red there.
+What that establishes is that the conjunct is load-bearing under a reordering, not that the CLI can present an unestablished custody to it today.
+
+The dead-endpoint composition is measured against the real `bin/fm-crew-state.sh` in one case and against a stub in the rest.
+The real-reader case establishes that the producer emits the four tokens the gate composes, for a run-less lane whose endpoint is gone, on this machine and this backend.
+It does not establish that every backend's endpoint removal reaches the same precedence: `no-backend-target`, the second endpoint-absent rule the gate admits, is exercised only through the stub, because the fixture always records a target.
+It also does not establish anything about a lane whose endpoint is gone while a run it started is still executing somewhere else - the reader answers that from its run path, which the gate refuses, and the refusal is asserted from the stub rather than from a constructed live run.
 
 The independence case drives a stubbed routing and qualification reader.
 It measures this gate's handling of an adjudicated contract - refusing a maker as its own reviewer, and refusing outright when no maker is known - and not the qualification register's own verdicts, which `tests/fm-qualification.test.sh` and `tests/fm-route-qualification.test.sh` own.

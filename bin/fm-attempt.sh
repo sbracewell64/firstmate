@@ -255,6 +255,19 @@
 # proves nothing about any other process, lane or slot, so nothing here kills,
 # reclaims, resets or releases anything - it refuses instead.
 #
+# AN UNOBSERVED CONDITION AND A COMPOSED ONE ARE DIFFERENT ANSWERS. One of those
+# owners answers `unknown` about a lane whose ENDPOINT IS GONE, deliberately, so
+# that a stale status log is never read as a live crew's current state. Taken as
+# could-not-observe, that made the fully dead lane the one lane whose binding
+# could never move - the primary case this capability exists for. Three owners
+# each establish a fact there, and the conjunction is positive rather than
+# absent: dead worktree custody, an endpoint-absent unknown, and no run
+# attributed to the lane. The in-flight condition is then OBSERVED QUIESCENT, the
+# composition is stated in the gate's reason and recorded on the ledger line that
+# closes the predecessor (`inflight=`), and every other unknown still refuses.
+# replace_inflight_gate below owns the rule; it is a composition of owners'
+# facts, never a fourth value.
+#
 # Usage:
 #   fm-attempt.sh show <id>
 #       Print "attempt=<n> attempt_budget=<b>" for the resolved prior count.
@@ -321,6 +334,11 @@
 #       existed - has its recorded binding adopted as execution 1 first, so the
 #       successor is e2 and the earlier evidence keeps a named producer. The
 #       adoption is refused could-not-observe when the metadata names no binding.
+#       A lane whose ENDPOINT IS GONE reports an unknown current state by
+#       design. Composed with dead worktree custody and no attributed run, that
+#       unknown is OBSERVED QUIESCENCE rather than could-not-observe; the
+#       composition is printed and recorded on the ledger line that closes the
+#       predecessor (inflight=). Every other unknown still refuses.
 #   fm-attempt.sh dispatched <id> --execution <execution-id>
 #       Record that a spawn CONFIRMED the launch of that exact execution, moving
 #       it to active. bin/fm-spawn.sh's hook; refuses any id but
@@ -401,6 +419,13 @@ FM_ATTEMPT_LINEAGE_SCHEMA=fm-execution-lineage.v1
 # distinction unavailable to one of them.
 FM_ATTEMPT_ADOPTED_STATE=adopted
 FM_ATTEMPT_ADOPTED_DISPOSITION=adopted-from-meta
+# The ledger token for an in-flight condition established by COMPOSING three
+# owners' facts rather than read off one observed state. It is its own word for
+# the same reason `adopted` is: a reader of the ledger has to be able to tell a
+# lane that was observed idle from a lane whose quiescence was composed, and the
+# composed one carries an assumption the observed one does not - that no owner
+# outside those three holds an effect in this lane.
+FM_ATTEMPT_QUIESCENT_DISPOSITION=observed-quiescent-endpoint-absent
 # Set to 1 only by the one path that mints or advances an execution; every other
 # writer preserves the lineage it finds. Defaulted here so `set -u` cannot make
 # an ordinary write depend on whether a replacement ran first in this process.
@@ -1138,6 +1163,13 @@ replace_proc_readable() {
   return 1
 }
 
+# The custody verdict replace_custody_gate ESTABLISHED, published for the one
+# downstream gate that composes with it rather than re-asking its owner.
+REPLACE_CUSTODY_STATE=''
+# How the in-flight condition was ANSWERED, recorded on the ledger line that
+# closes the predecessor so the composition is durable rather than only printed.
+REPLACE_INFLIGHT_DISPOSITION=''
+
 # The lane's worktree custody AND whether anything still lives in it, from the
 # one owner that already answers both. Its four words map onto exactly the three
 # values this gate needs, and none of them is narrowed:
@@ -1171,6 +1203,11 @@ replace_custody_gate() {  # <id> <worktree>
     || replace_refuse "$id's execution attempt is not quiescent: ${line##*$'\t'}. Replacement resumes only once the process holding this lane is gone"
   [ "$state" = dead ] \
     || replace_unobserved "bin/fm-worktree-guard.sh reported $wt as '$state', which this gate has no rule for"
+  # PUBLISHED, not re-derived. The in-flight gate below composes with this
+  # verdict, and asking the owner a second time could get a different answer
+  # from a table read a moment later. Empty means this gate never reached a
+  # verdict, and the composition below treats that as no fact at all.
+  REPLACE_CUSTODY_STATE=$state
 }
 
 # The endpoint's own agent, which the worktree cannot answer for: a backend that
@@ -1197,21 +1234,83 @@ replace_agent_gate() {  # <id> <backend> <target>
 # under it duplicates ownership of a push, a pull request, or a merge. Read
 # through the one owner of a crew's current state; its own words are used, and
 # no step name is enumerated here, because a vocabulary this file restated would
-# drift the moment that owner added a step.
+# drift the moment that owner added a step. The typed fields are read through
+# bin/fm-classify-lib.sh, which owns the extraction and the endpoint-absent
+# reading, so nothing here matches on that reader's prose.
+#
+# ONE UNKNOWN IS AN ANSWER, AND IT IS THE ONE THIS CAPABILITY EXISTS FOR.
+# bin/fm-crew-state.sh reports `unknown` for a run-less lane whose backend target
+# is gone, by design: it will not read a possibly-stale status log as the current
+# state of a crew that is no longer there. Read as could-not-observe, that made a
+# FULLY DEAD lane the one lane whose binding could never be changed - and a dead
+# runtime plus a binding change is a primary case this gate exists for. It is not
+# could-not-observe. Three owners have each established a fact, and together they
+# compose a positive one:
+#
+#   bin/fm-worktree-guard.sh   owner-state=dead - no pid, no env-bound process,
+#                              no occupant in the lane's worktree.
+#   bin/fm-crew-state.sh       unknown under an ENDPOINT-ABSENT precedence - the
+#                              endpoint is not there, rather than unreadable.
+#   bin/fm-crew-state.sh       no run attributed - a run-holding lane never
+#                              reaches that fallback at all.
+#
+# Nothing owns an effect in the worktree, nothing answers at the endpoint, and no
+# run owns the branch: the in-flight condition is OBSERVED QUIESCENT, and the
+# gate records which composition established it. The unknown's protection is
+# unweakened, because it protects a LIVENESS read against a stale log and this
+# composition asserts no liveness. EVERY OTHER unknown - an unusable busy signal,
+# an unrecognized verb, absent metadata, a torn-down worktree, an unreadable
+# reader - still refuses, and so does this one the moment any single conjunct is
+# missing.
 replace_inflight_gate() {  # <id>
   local id=$1 json state bin
   bin=${FM_CREW_STATE_BIN:-$FM_ROOT/bin/fm-crew-state.sh}
-  json=$("$bin" "$id" --json 2>/dev/null) \
+  # --json FIRST: that reader recognizes the flag in position 1 only and treats
+  # every other argument as the task id, so a trailing flag silently returns the
+  # PROSE rendering - which this gate would then read as "no state reported" and
+  # refuse. The stub in the regression suite refuses that argument order for the
+  # same reason.
+  json=$("$bin" --json "$id" 2>/dev/null) \
     || replace_unobserved "bin/fm-crew-state.sh could not report what $id is currently doing, so whether an operation is in flight is unestablished"
-  state=$(printf '%s' "$json" | LC_ALL=C sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  # shellcheck source=bin/fm-classify-lib.sh disable=SC1091
+  . "$FM_ROOT/bin/fm-classify-lib.sh"
+  state=$(crew_state_json_token "$json" state) || state=''
   case "$state" in
     working|parked)
       replace_refuse "$id has a validation run in flight (state $state). It owns this lane's branch, and a push, pull request or merge it is midway through cannot be made not to have happened by replacing the worker" ;;
     '')
       replace_unobserved "bin/fm-crew-state.sh reported no state for $id, so whether an operation is in flight is unestablished" ;;
-    stale|unknown)
+    stale)
       replace_unobserved "bin/fm-crew-state.sh reported $id as '$state', which is precisely the absence of usable evidence about what is in flight" ;;
+    unknown)
+      replace_quiescence_composed "$id" "$json" \
+        || replace_unobserved "bin/fm-crew-state.sh reported $id as 'unknown' and $REPLACE_INFLIGHT_DISPOSITION, so what is in flight is unestablished" ;;
   esac
+  [ -n "$REPLACE_INFLIGHT_DISPOSITION" ] \
+    || REPLACE_INFLIGHT_DISPOSITION="crew-state-$state"
+}
+
+# The composition itself, and the reason it records. Returns 0 only when all
+# three conjuncts hold; on any other outcome it sets the disposition to the
+# conjunct that failed, so the refusal above names WHY this unknown was not the
+# quiescent one rather than repeating that unknown is unusable.
+replace_quiescence_composed() {  # <id> <json>
+  local id=$1 json=$2
+  if ! crew_state_endpoint_absent "$json"; then
+    REPLACE_INFLIGHT_DISPOSITION="the rule that selected it was '$(crew_state_json_token "$json" precedence_applied)', which is not one of the endpoint-absent rules ($FM_CREW_STATE_ENDPOINT_ABSENT_PRECEDENCE) that report an endpoint which is not there"
+    return 1
+  fi
+  if ! crew_state_no_run_attributed "$json"; then
+    REPLACE_INFLIGHT_DISPOSITION="a validation run is still attributed to the lane (source $(crew_state_json_token "$json" source)), which owns this lane's branch whatever state the endpoint is in"
+    return 1
+  fi
+  if [ "$REPLACE_CUSTODY_STATE" != dead ]; then
+    REPLACE_INFLIGHT_DISPOSITION="its worktree custody was established as '${REPLACE_CUSTODY_STATE:-unestablished}' rather than dead, so something may still own an effect in the lane"
+    return 1
+  fi
+  REPLACE_INFLIGHT_DISPOSITION=$FM_ATTEMPT_QUIESCENT_DISPOSITION
+  printf 'note: OBSERVED_QUIESCENT - %s reports unknown because its endpoint is not there to be read (%s), no run is attributed to the lane, and bin/fm-worktree-guard.sh established its worktree custody as dead. Nothing owns an effect here, so the in-flight condition is observed quiescent rather than unobserved, and the replacement proceeds.\n' \
+    "$id" "$(crew_state_json_token "$json" precedence_applied)" >&2
 }
 
 # What the successor inherits, observed rather than assumed. The worktree is
@@ -1446,7 +1545,8 @@ cmd_replace() {
   # execution is open either way, so the ledger tolerates a spurious close
   # rather than a missing one.
   attempt_lineage_append "$id" "event=closed" "execution=$id/e$have" \
-    "ts=$(date +%s)" "disposition=replaced" "successor=$id/e$next" "reason=$reason" \
+    "ts=$(date +%s)" "disposition=replaced" "successor=$id/e$next" \
+    "inflight=$REPLACE_INFLIGHT_DISPOSITION" "reason=$reason" \
     || replace_unobserved "the close of $id/e$have could not be recorded at $STATE/$id.lineage, and an execution whose end was never written cannot be told apart from one still running"
   attempt_exec_commit "$id" "$next" "$binding" "$effort" sanctioned "$head" \
     || replace_unobserved "the successor could not be recorded at $STATE/$id.attempt; nothing was launched"

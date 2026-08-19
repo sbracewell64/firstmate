@@ -492,6 +492,12 @@ crew_state_absorb_class() {  # <state> <source>
 # fields (detail, terminal_error) are deliberately NOT read through this:
 # consumers branch on the typed fields, which is the entire point of retiring
 # prose matching.
+#
+# run_id and run_step are read through it too, but for PRESENCE only. Their
+# nonzero return means the field was emitted as bare `null` - the reader measured
+# no run - and that verdict is exact whatever the value would have been, because
+# presence is decided by the `"<field>":"` prefix alone and never by what follows
+# it. Nothing branches on their contents here.
 crew_state_json_token() {  # <json> <field>
   local json=$1 field=$2 frag
   frag=${json##*\""$field"\":\"}
@@ -499,6 +505,48 @@ crew_state_json_token() {  # <json> <field>
     "$json") printf ''; return 1 ;;
   esac
   printf '%s' "${frag%%\"*}"
+}
+
+# The two precedences under which bin/fm-crew-state.sh reports `unknown` because
+# the lane's ENDPOINT IS NOT THERE TO BE READ: `endpoint-gone` for a recorded
+# backend target that no longer answers, and `no-backend-target` for metadata
+# that never recorded one. That reader emits both only on its no-run fallback,
+# and both name an ABSENT endpoint rather than an unreadable or uninterpretable
+# one - which is what separates them from every other unknown, where something
+# WAS there and could not be read.
+FM_CREW_STATE_ENDPOINT_ABSENT_PRECEDENCE='endpoint-gone no-backend-target'
+
+# 0 when the structured answer is that unknown. This is deliberately NARROW and
+# is not a liveness verdict on its own: an endpoint can be gone while work it
+# started is still executing elsewhere, which is exactly why the reader answers
+# unknown instead of idle. A consumer that needs QUIESCENCE must compose this
+# with the owners of the other facts rather than reading it as one
+# (bin/fm-attempt.sh's replacement gate does, and states the composition).
+crew_state_endpoint_absent() {  # <json>
+  local prec
+  [ "$(crew_state_json_token "${1:-}" state)" = unknown ] || return 1
+  prec=$(crew_state_json_token "${1:-}" precedence_applied) || return 1
+  case " $FM_CREW_STATE_ENDPOINT_ABSENT_PRECEDENCE " in
+    *" $prec "*) return 0 ;;
+  esac
+  return 1
+}
+
+# 0 when the structured answer attributes NO validation run to the lane. Three
+# readings of the one fact, each from a typed field: `run-step` is the source
+# bin/fm-crew-state.sh emits whenever a run decided the verdict, so any other
+# source means no run did, and the run identity and step it publishes on its
+# full run path are both absent. Any of the three finding a run refuses the
+# whole answer, because a run owns the lane's branch whether or not a worker is
+# still at the endpoint.
+crew_state_no_run_attributed() {  # <json>
+  [ "$(crew_state_json_token "${1:-}" source)" != run-step ] || return 1
+  # `if` rather than `cmd && return 1`: a trailing false && list is the last
+  # command of the function under `set -e` in a consumer that enables it, and
+  # would exit the shell instead of returning a verdict.
+  if crew_state_json_token "${1:-}" run_id >/dev/null 2>&1; then return 1; fi
+  if crew_state_json_token "${1:-}" run_step >/dev/null 2>&1; then return 1; fi
+  return 0
 }
 
 # 0 if a verb CLOSES a keyed decision rather than declaring a state. These verbs

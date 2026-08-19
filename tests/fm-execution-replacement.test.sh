@@ -97,6 +97,18 @@ case "$*" in
     printf '%s\n' "$entered" > "${FM_FAKE_ENTERED:-/dev/null}"
     ;;
 esac
+# The pane-liveness probe bin/fm-crew-state.sh reads, answered separately from
+# every other tmux call so ONE case can take the endpoint away without changing
+# what the session or the slot report. Inert unless the case asks for it.
+case "$*" in
+  *"#{pane_id}"*)
+    if [ -n "${FM_FAKE_PANE_GONE:-}" ]; then
+      printf "can't find pane\n" >&2
+      exit 1
+    fi
+    printf '%%0\n'
+    exit 0 ;;
+esac
 case "$*" in
   *"#{pane_current_path}"*)
     if [ -s "${FM_FAKE_ENTERED:-/nonexistent}" ] && [ -n "${FM_FAKE_POOL_DIR:-}" ]; then
@@ -136,8 +148,16 @@ SH
 
   # A crew-state reader that reports an idle lane: no run is executing, so
   # nothing irreversible is in flight.
+  # It also REFUSES an argument order the real reader would answer in prose. A
+  # stub that ignored its arguments would answer structured JSON to a call the
+  # real script renders as prose, and every case here would pass against a gate
+  # that never obtained a structured answer in the fleet at all.
   cat > "$case_dir/crew-state.sh" <<'SH'
 #!/usr/bin/env bash
+if [ "${1:-}" != --json ]; then
+  printf 'stub: --json must be argument 1, got "%s"; bin/fm-crew-state.sh renders prose otherwise\n' "${1:-}" >&2
+  exit 2
+fi
 printf '%s\n' "${FM_FAKE_CREW_STATE_JSON:-{\"state\":\"idle\",\"run_step\":null\}}"
 SH
   chmod +x "$case_dir/crew-state.sh"
@@ -183,8 +203,9 @@ attempt_in() {  # <case-dir> <args...>
     FM_STATE_OVERRIDE="$case_dir/home/state" FM_DATA_OVERRIDE="$case_dir/home/data" \
     FM_CONFIG_OVERRIDE="$case_dir/home/config" \
     FM_PROC_ROOT_OVERRIDE="${FM_PROC_ROOT_FOR_CASE:-$case_dir/proc}" \
-    FM_CREW_STATE_BIN="$case_dir/crew-state.sh" \
+    FM_CREW_STATE_BIN="${FM_CREW_STATE_BIN_FOR_CASE:-$case_dir/crew-state.sh}" \
     FM_FAKE_CREW_STATE_JSON="${FM_FAKE_CREW_STATE_JSON:-}" \
+    FM_FAKE_PANE_GONE="${FM_FAKE_PANE_GONE:-}" \
     PATH="$case_dir/fakebin:$PATH" \
     "$ATTEMPT" "$@" 2>&1
 }
@@ -423,6 +444,190 @@ EOF
   out=$(replace_lane "$case_dir" "$id"); rc=$?
   [ "$rc" -eq 0 ] || fail "with no run in flight the same replacement must be sanctioned"$'\n'"$out"
   pass "control 11: an operation already in flight refuses replacement"
+}
+
+# --- The dead-endpoint quiescence composition -------------------------------
+
+# One structured crew-state answer, in bin/fm-crew-state.sh's own emitted shape.
+# Written as a whole object rather than the two-key stub the other cases use,
+# because the gate under test reads FOUR typed fields and a stub carrying only
+# the field it happens to branch on would make the other three vacuous.
+crew_state_json() {  # <state> <source> <precedence> [run_id] [run_step]
+  printf '{"schema":1,"id":"x","state":"%s","source":"%s","precedence_applied":"%s"' \
+    "$1" "$2" "$3"
+  printf ',"busy_signal":null,"agent_liveness":null,"busy_seq":null'
+  if [ -n "${5:-}" ]; then printf ',"run_step":"%s"' "$5"; else printf ',"run_step":null'; fi
+  if [ -n "${4:-}" ]; then printf ',"run_id":"%s"' "$4"; else printf ',"run_id":null'; fi
+  printf ',"terminal_error":null,"evidence_age_secs":null,"detail":"fixture"}\n'
+}
+
+# THE THIRD DOOR. A lane whose runtime is fully dead reads `unknown` from the
+# current-state owner by design, and that unknown used to refuse - so the one
+# lane whose binding most needed to move was the one lane that could never move
+# it. Dead custody, an endpoint-absent unknown and no attributed run compose a
+# POSITIVE quiescence, and this case drives that composition end to end.
+test_a_dead_endpoint_lane_composes_quiescence_and_replaces() {
+  local rec case_dir id wt out rc ledger dead_json
+  rec=$(make_lane deadep)
+  IFS='|' read -r _ _ wt _ case_dir id <<EOF
+$rec
+EOF
+  dead_json=$(crew_state_json unknown none endpoint-gone)
+
+  # The check names the composition before anything is committed, so an operator
+  # sees WHY an unknown was read as quiescent rather than finding out afterwards.
+  out=$(FM_FAKE_CREW_STATE_JSON="$dead_json" replace_lane "$case_dir" "$id" --check); rc=$?
+  [ "$rc" -eq 0 ] || fail "a dead-endpoint lane must be replaceable, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "OBSERVED_QUIESCENT" \
+    "the gate must record that this unknown was composed into a positive answer"
+  assert_contains "$out" "endpoint-gone" \
+    "the composition must name the endpoint-absent rule that selected the unknown"
+  assert_contains "$out" "no run is attributed" \
+    "the composition must name the run conjunct it established"
+  assert_contains "$out" "custody as dead" \
+    "the composition must name the custody conjunct it established"
+  [ "$(rec_field "$case_dir" "$id" execution)" = 1 ] || fail "--check must commit nothing"
+
+  out=$(FM_FAKE_CREW_STATE_JSON="$dead_json" replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the replacement of a dead-endpoint lane must be sanctioned"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_id)" = "$id/e2" ] \
+    || fail "the successor must be e2, got '$(rec_field "$case_dir" "$id" execution_id)'"
+  [ "$(rec_field "$case_dir" "$id" execution_binding)" = "codex/$ALTERNATE" ] \
+    || fail "the successor must carry the admitted alternate binding"
+
+  # Durable, not merely printed: the ledger line that closes the predecessor says
+  # how the in-flight condition was ANSWERED, so a later reader can tell a lane
+  # observed idle from one whose quiescence was composed.
+  ledger=$(cat "$case_dir/home/state/$id.lineage")
+  assert_contains "$ledger" "inflight=observed-quiescent-endpoint-absent" \
+    "the close must record that the in-flight condition was composed, not observed idle"
+
+  # End to end: the sanctioned successor launches onto the same slot, worktree
+  # and committed work. A composition that only satisfied `replace` would leave
+  # the capability exactly as unusable as the refusal did.
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || fail "the successor of a dead-endpoint lane must launch"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = active ] \
+    || fail "a confirmed launch must be recorded active, got '$(rec_field "$case_dir" "$id" execution_dispatch)'"
+  [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
+    || fail "the lane must keep its own worktree across the replacement"
+  [ -f "$wt/work.txt" ] || fail "the lane's committed work must survive the replacement"
+  pass "a dead-endpoint lane composes quiescence, replaces, and launches its successor"
+}
+
+# The composition's boundaries, asserted as DIVERGENCE from the case above: the
+# same lane, the same gate, one conjunct removed at a time. Without these the
+# case above would pass just as well against a gate that admitted every unknown.
+test_every_other_unknown_still_refuses_replacement() {
+  local rec case_dir id out rc
+  rec=$(make_lane unkbound)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  # A LIVE endpoint that could not be interpreted. Something was there and its
+  # signal was unusable, which is the unknown this gate exists to refuse.
+  out=$(FM_FAKE_CREW_STATE_JSON="$(crew_state_json unknown pane busy-signal-unusable)" \
+    replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 4 ] || fail "an unknown from a live endpoint must be COULD_NOT_OBSERVE, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "busy-signal-unusable" \
+    "the refusal must name the rule that selected the unknown it would not compose"
+
+  # An unknown whose rule reports something OTHER than an absent endpoint.
+  out=$(FM_FAKE_CREW_STATE_JSON="$(crew_state_json unknown status-log unrecognized-status-verb)" \
+    replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 4 ] || fail "an unrecognized-verb unknown must be COULD_NOT_OBSERVE, got rc=$rc"$'\n'"$out"
+
+  # An endpoint-absent unknown that STILL has a run attributed to it. The run
+  # owns the lane's branch whatever the endpoint is doing, so the pane state
+  # never carries this on its own.
+  out=$(FM_FAKE_CREW_STATE_JSON="$(crew_state_json unknown run-step endpoint-gone run-77 push)" \
+    replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 4 ] || fail "an attributed run must refuse even under an endpoint-absent rule, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "still attributed" \
+    "the refusal must name the run conjunct that failed, not the unknown"
+
+  # And a run in flight refuses as a REFUSAL, not as could-not-observe, with the
+  # endpoint gone underneath it - the "regardless of pane state" boundary.
+  out=$(FM_FAKE_CREW_STATE_JSON="$(crew_state_json working run-step run-step-over-status-log run-78 push)" \
+    FM_FAKE_PANE_GONE=1 replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 1 ] || fail "an in-flight run must REFUSE regardless of pane state, got rc=$rc"$'\n'"$out"
+  # A prefix assignment on a FUNCTION call outlives the call in bash, unlike one
+  # on an external command, so it is cleared rather than left to reach a later
+  # case as a fixture nobody asked for.
+  FM_FAKE_PANE_GONE=''
+
+  # Nothing above moved the lane.
+  [ "$(rec_field "$case_dir" "$id" execution)" = 1 ] \
+    || fail "a refused replacement must mint nothing"
+  case "$(cat "$case_dir/home/state/$id.lineage" 2>/dev/null)" in
+    *event=closed*) fail "a refused replacement must close no execution on the ledger" ;;
+  esac
+
+  # The divergence itself: the same gate, the same lane, the endpoint-absent
+  # composition - sanctioned. Without this the refusals above could all be a gate
+  # that refuses everything.
+  out=$(FM_FAKE_CREW_STATE_JSON="$(crew_state_json unknown none endpoint-gone)" \
+    replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the composed unknown must still be sanctioned, got rc=$rc"$'\n'"$out"
+  pass "every unknown but the composed one still refuses replacement"
+}
+
+# WRONG-SUBJECT CONTROL. Every case above feeds the gate a stub, so they measure
+# the gate against a shape THIS FILE wrote. This one takes the stub away: the
+# real bin/fm-crew-state.sh reads the real lane with its endpoint removed, and
+# the tokens it emits are asserted before the same real reader is handed to the
+# gate. If the producer ever stops emitting this composition, this case goes red
+# while every stubbed case above stays green.
+test_the_real_reader_emits_the_composition_the_gate_admits() {
+  local rec case_dir id home fakebin out rc json
+  rec=$(make_lane realep)
+  IFS='|' read -r home _ _ fakebin case_dir id <<EOF
+$rec
+EOF
+  # No validation run for this lane, deterministically: the real reader consults
+  # no-mistakes when one is on PATH, and a developer machine has one.
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+
+  # The producer's own answer for a run-less lane whose endpoint is gone.
+  json=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" FM_FAKE_PANE_GONE=1 \
+    PATH="$fakebin:$PATH" "$ROOT/bin/fm-crew-state.sh" --json "$id" 2>&1)
+  assert_contains "$json" '"state":"unknown"' \
+    "the real reader must report unknown for a run-less lane whose endpoint is gone"
+  assert_contains "$json" '"precedence_applied":"endpoint-gone"' \
+    "the real reader must name endpoint-gone as the rule that selected it"
+  assert_contains "$json" '"source":"none"' \
+    "the real reader must attribute the answer to no run"
+  assert_contains "$json" '"run_id":null' "the real reader must publish no run identity"
+  assert_contains "$json" '"run_step":null' "the real reader must publish no run step"
+
+  # The contrast that proves the fixture actually removed the endpoint rather
+  # than the reader answering unknown for some unrelated reason.
+  json=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_CONFIG_OVERRIDE="$home/config" \
+    PATH="$fakebin:$PATH" "$ROOT/bin/fm-crew-state.sh" --json "$id" 2>&1)
+  case "$json" in
+    *'"precedence_applied":"endpoint-gone"'*)
+      fail "the same lane with a LIVE endpoint must not read endpoint-gone: $json" ;;
+  esac
+
+  # And the gate, reading that same real producer, composes.
+  out=$(FM_CREW_STATE_BIN_FOR_CASE="$ROOT/bin/fm-crew-state.sh" FM_FAKE_PANE_GONE=1 \
+    replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the gate must compose the REAL reader's answer, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "OBSERVED_QUIESCENT" \
+    "the composition over the real reader must record itself the same way"
+  [ "$(rec_field "$case_dir" "$id" execution_id)" = "$id/e2" ] \
+    || fail "the real-reader composition must mint the successor"
+  FM_FAKE_PANE_GONE=''
+  FM_CREW_STATE_BIN_FOR_CASE=''
+  pass "the real current-state reader emits the composition the gate admits"
 }
 
 # --- Controls 9 and 10: the alternate, and having none ----------------------
@@ -1266,5 +1471,8 @@ test_a_prelineage_lane_adopts_its_recorded_binding_and_replaces
 test_a_prelineage_lane_without_a_recorded_binding_refuses
 test_an_adopted_execution_is_not_re_pointed_like_an_unstarted_one
 test_the_lineage_retires_with_the_attempt_record
+test_a_dead_endpoint_lane_composes_quiescence_and_replaces
+test_every_other_unknown_still_refuses_replacement
+test_the_real_reader_emits_the_composition_the_gate_admits
 
 fm_test_contract "$0" || exit 1
