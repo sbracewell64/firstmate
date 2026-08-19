@@ -34,8 +34,10 @@
 #       no way to report "the page is bad" - only "here is what I saw" or a
 #       failure to see it. The verdict on what it saw belongs to the caller.
 #   pr-checks <pr-url>
-#       Reads the pull request's check-run set through gh and classifies it with
-#       bin/fm-verify-lib.sh.
+#       Reads the pull request's check-run set from GitHub's GraphQL API and
+#       classifies it with bin/fm-verify-lib.sh, the single owner of "is this
+#       exact head green?". GitHub only: a URL this cannot address by owner,
+#       repository and number is refused rather than answered.
 #   merge-clean <base-ref> <head-ref> [repo-dir]
 #       Runs git merge-tree --write-tree in <repo-dir> (default: the current
 #       directory).
@@ -68,13 +70,21 @@
 #   verifier_undeclared       the verifier name is not in the registry
 #   verifier_unavailable      the underlying tool is not installed
 #   verification_unreachable  the verifier ran but could not reach its subject
-#                             (ruling D3's token for the unreachable browser)
+#                             (ruling D3's token for the unreachable browser).
+#                             A forge response whose check results belong to a
+#                             commit other than the head asked about reaches the
+#                             same token: it is evidence about a different
+#                             subject, so this head went unobserved
 #   empty_result_set          the verifier returned no results at all
 #   verification_incomplete   results exist but no verdict has been reached yet
 #   retrieval_incomplete      results exist, no adverse one among them, and the
-#                             set's own extent was never established, so "none of
-#                             them failed" is a negative claim over records this
-#                             never read (bin/fm-verify-lib.sh owns the rule)
+#                             set was never established well enough to speak for
+#                             the head: its extent went unproven, or several
+#                             attempts at one check carried no usable ordering so
+#                             which one is current went unproven. Either way
+#                             "none of them failed" is a negative claim over
+#                             records this never read or never ranked
+#                             (bin/fm-verify-lib.sh owns the rule)
 #   no_verdict_reached        the verifier finished and reached no verdict, and
 #                             none is coming: checks that completed TIMED_OUT,
 #                             CANCELLED, ACTION_REQUIRED, SKIPPED, STALE,
@@ -100,6 +110,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=bin/fm-verify-lib.sh
 . "$SCRIPT_DIR/fm-verify-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$SCRIPT_DIR/fm-pr-lib.sh"
 
 usage() {
   awk '
@@ -299,13 +311,28 @@ verify_browser() {
 
 # --- pr-checks --------------------------------------------------------------
 
+# This adapter reads the AUTHORITATIVE source and folds it with the one owner in
+# bin/fm-verify-lib.sh. It used to classify `gh pr view --json statusCheckRollup`
+# with a second copy of the rule, and the two copies were measured disagreeing on
+# one head - see that file's header. The flattened field is still readable and
+# still narrower, and this adapter does not read it: an answer about a head that
+# a merge, a certification, or a trunk-repair reservation will act on has to come
+# from the source that can bind its evidence to that head, reconcile its extent,
+# and order repeated attempts.
 verify_pr_checks() {
-  local label
+  local lines rc
   [ "$#" -eq 1 ] || refuse usage_error
   require_tool gh || return 0
   require_tool jq || return 0
-  # fm-retrieval-audit: complete-source - refuses a rollup filling gh's own contexts(first:100) page, so a truncated member set is never read as green
-  run_verifier gh pr view "$1" --json statusCheckRollup || {
+  if ! fm_pr_url_parse "$1" || [ "$FM_PR_PROVIDER" != github ]; then
+    # A URL this cannot address is not a pull request this observed.
+    set_result NO_VERIFIER_RAN usage_error
+    return 0
+  fi
+  # fm-retrieval-audit: complete-source - reads contexts(last:100) with totalCount and refuses in bin/fm-verify-lib.sh when the returned members do not reconcile against it, so what was not read is never read as green
+  run_verifier gh api graphql -f query="$FM_VERIFY_ROLLUP_GRAPHQL" \
+    -f owner="$FM_PR_OWNER" -f repo="$FM_PR_REPO" -F number="$FM_PR_NUMBER" \
+    -q "$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | ($FM_VERIFY_ROLLUP_COUNTS)" || {
     set_result NO_VERIFIER_RAN no_evidence
     return 0
   }
@@ -315,14 +342,21 @@ verify_pr_checks() {
     set_result NO_VERIFIER_RAN verification_unreachable
     return 0
   fi
-  label=$(printf '%s' "$VERIFIER_OUT" | jq -r "$FM_VERIFY_CHECK_ROLLUP_EXPR" 2>/dev/null) || label=
-  case "$label" in
+  lines=$VERIFIER_OUT
+  fm_verify_rollup_classify "$lines" && rc=0 || rc=$?
+  case "$FM_VERIFY_ROLLUP_LABEL" in
     passing) set_result PASS verified ;;
     failing) set_result FAIL verifier_reported_failure ;;
     pending) set_result NO_VERIFIER_RAN verification_incomplete ;;
     truncated) set_result NO_VERIFIER_RAN retrieval_incomplete ;;
     inconclusive) set_result NO_VERIFIER_RAN no_verdict_reached ;;
     none) set_result NO_VERIFIER_RAN empty_result_set ;;
+    *) set_result NO_VERIFIER_RAN verification_unreachable ;;
+  esac
+  # The library's own three-valued status and the label must agree, or one of
+  # them was read wrong and neither may be acted on.
+  case "$rc:$RESULT" in
+    0:PASS|1:FAIL|2:NO_VERIFIER_RAN) ;;
     *) set_result NO_VERIFIER_RAN verification_unreachable ;;
   esac
 }

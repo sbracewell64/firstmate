@@ -14,31 +14,30 @@
 # results from one GraphQL response, so every state-based refusal names the exact
 # head it evaluated once GitHub has supplied a readable head.
 #
-# That query is written here rather than taken from `gh pr view --json
-# statusCheckRollup`, because that field flattens the rollup into members that
-# carry no commit of their own. The rollup is the one GitHub attached to the
-# pull request's latest commit, but nothing in that response says which commit
-# that was, so evidence describing a superseded head reads exactly like evidence
-# describing the head being merged. This asks for that commit's own oid in the
-# same snapshot as headRefOid and refuses unless the two agree, and asks for the
-# rollup's totalCount so members GitHub reported but did not return are refused
-# as unread rather than counted as absent. GitHub serves at most 100 members in
-# one page, which is the connection's own limit and not a choice made here, so a
-# head carrying more than that is refused as unread rather than judged on the
-# part that happened to arrive.
+# THIS GATE DOES NOT DECIDE WHETHER THE HEAD IS GREEN. bin/fm-verify-lib.sh is
+# the single owner of that question, and this file asks it through
+# fm_verify_rollup_classify. The query, the adverse conclusion set, the reduction
+# of repeated executions to one current attempt per check, the reconciliation
+# against totalCount, and the fold from a check set to a verdict all live there.
 #
-# A head accumulates every execution ever run against it, not only the current
-# one, so the members are reduced to one verdict per check before anything is
-# counted. Two members are two attempts at one check when they carry the same
-# owning workflow and the same name, and the attempt with the newest run ID
-# speaks for that check. A member GitHub reports with no name is never an
-# attempt at anything, because nothing identifies what it would supersede, so
-# each of those counts on its own. Without that reduction a re-triggered check
-# leaves its earlier run attached to the head forever, and that head can never
-# be merged again however often the check subsequently passes; the only escape is a new
-# head, which for the attestation check needs a fresh attestation, so the
-# pattern repeats. Reduction never excuses a current verdict: a failing latest
-# attempt still refuses, and where attempts tie for latest the worst decides.
+# They lived here until 2026-08-18, in a second copy, and the two copies were
+# measured returning opposite verdicts on one head with a re-run check. That
+# file's header records the executed divergence and the reasoning; this file
+# now supplies mergeability, the review decision, the waiver arithmetic, and the
+# wording of its own refusals, and takes the verdict.
+#
+# One consequence of the unification is visible here: TIMED_OUT used to be
+# counted adverse by this file and a non-verdict by the library, and the
+# library's narrower adverse set won, because FAIL is a positive observed-bad
+# claim that has to be earned. A timed-out check now refuses with "reported no
+# result" instead of "failed". It still refuses.
+#
+# What the library refuses on this gate's behalf: check results belonging to a
+# commit other than the head being merged, a rollup returning fewer members than
+# its own totalCount reports, and a response whose counts do not reconcile.
+# GitHub serves at most 100 members in one page, which is the connection's own
+# limit and not a choice made here.
+#
 # The merge is refused when:
 #   * the check results GitHub returned belong to a commit other than the head
 #     being merged, or it returned fewer members than it reported - neither is
@@ -49,11 +48,16 @@
 #     refusal names why the set is empty, separating a head with no CI
 #     configured from one whose workflows are held awaiting approval;
 #   * any check's current attempt is not SUCCESS - a queued, in-progress,
-#     skipped, neutral, cancelled, or failed run all refuse, so the guard fails
-#     closed on anything that is not an observed pass. Checks whose current
-#     attempt returned an adverse verdict and checks whose current attempt
-#     returned no verdict are counted and reported separately, so a head nothing
-#     examined is never described as a head something rejected;
+#     skipped, neutral, cancelled, timed-out, or failed run all refuse, so the
+#     guard stops rather than proceeding on anything that is not an observed
+#     pass. Checks whose current attempt returned an adverse verdict and checks
+#     whose current attempt returned no verdict are counted and reported
+#     separately, so a head nothing examined is never described as a head
+#     something rejected;
+#   * the library returns any label but passing, whatever this gate's own counts
+#     happen to say. That check runs last and has the last word: a caller cannot
+#     reach a merge by producing counts that read green past an owner that did
+#     not say green;
 #   * the pull request is not MERGEABLE - CONFLICTING and a not-yet-computed
 #     UNKNOWN both refuse;
 #   * a review requests changes.
@@ -121,6 +125,8 @@ STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-verify-lib.sh
+. "$SCRIPT_DIR/fm-verify-lib.sh"
 
 if [ "$#" -lt 2 ]; then
   echo "error: invalid PR merge request" >&2
@@ -226,109 +232,41 @@ if ! RECORD=$(fm_pr_identity_record_path "$STATE" "$ID"); then
 fi
 
 # One read of the live pull request, so the head reported in a refusal is the
-# same head the checks, mergeability, and review decision were read from, and
-# so the commit its check results are attached to is read from that same
-# snapshot rather than inferred. The $-prefixed names below are GraphQL
-# variables, not shell expansions.
-# shellcheck disable=SC2016
-PR_VERIFY_GRAPHQL='query($owner:String!,$repo:String!,$number:Int!){
-  repository(owner:$owner,name:$repo){
-    pullRequest(number:$number){
-      headRefOid
-      mergeable
-      reviewDecision
-      commits(last:1){nodes{commit{oid
-        statusCheckRollup{contexts(last:100){totalCount nodes{
-          __typename
-          ... on CheckRun{databaseId name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}}
-          ... on StatusContext{context state createdAt}
-        }}}
-      }}}
-    }
-  }
-}'
-# A CheckRun carries .conclusion (empty while queued or running); a legacy
-# StatusContext carries .state instead. Neither is treated as a pass unless it
-# says SUCCESS.
+# same head the checks, mergeability, and review decision were read from, and so
+# the commit its check results are attached to is read from that same snapshot
+# rather than inferred.
 #
-# The checks are counted in three disjoint buckets, not two, because "ran and
-# reported a failure" and "never produced a result" are different facts about a
-# head and collapsing them loses the one this guard exists to report. A run that
-# failed, errored, timed out, or failed to start returned an adverse verdict; a
-# run that is queued, in progress, skipped, neutral, cancelled, stale, or held
-# at action_required returned no verdict at all. Both refuse, and each says so
-# in its own words. PR_VERIFY_FAILING is the whole adverse set, so anything
-# absent from it that is not SUCCESS counts as unrun rather than as a failure.
-PR_VERIFY_FAILING='["FAILURE","ERROR","TIMED_OUT","STARTUP_FAILURE"]'
-
-# The reduction from executions to checks, shared by every line read back below.
-# Each member is keyed by the check it is an attempt at - its owning workflow
-# and its name together, since two workflows may define one job name - and an
-# unnamed member is keyed by its own position so it can never be taken for an
-# attempt at another. Check runs are ordered by their monotonic database ID,
-# with their timestamp as a tie-breaker, while legacy statuses continue to use
-# their creation time. Where attempts tie for latest the worst verdict decides,
-# so a tie can never manufacture a pass.
-#
-# The jq bindings below ($pr, $commit, $adverse, $checks and the rest) are jq's
-# own, not shell variables; only PR_VERIFY_FAILING is expanded by the shell.
+# The query, the adverse conclusion set, the reduction from executions to checks
+# and the fold from checks to a verdict all live in bin/fm-verify-lib.sh. They
+# used to live here, in a second copy that was measured disagreeing with the one
+# in that file on a head with a re-run check - see that file's header for the
+# executed divergence. This gate now asks the same owner every other consumer
+# asks, and keeps only what is its own: mergeability, the review decision, the
+# waiver arithmetic, and the wording of its own refusals.
+PR_VERIFY_GRAPHQL=$FM_VERIFY_ROLLUP_GRAPHQL
 # shellcheck disable=SC2016
-PR_VERIFY_REDUCE='.data.repository.pullRequest as $pr
-| ($pr.commits.nodes[0].commit // {}) as $commit
-| ($commit.statusCheckRollup.contexts // {}) as $contexts
-| ($contexts.nodes // []) as $members
-| ('"$PR_VERIFY_FAILING"') as $adverse
-| ($members | to_entries | map(
-    (.value.name // .value.context // "") as $name
-    | {name: $name,
-       check: (if ($name | length) == 0 then ["unnamed", (.key | tostring)]
-               elif .value.__typename == "CheckRun"
-               then ["run", (.value.checkSuite.workflowRun.workflow.name // ""), $name]
-               else ["status", $name] end),
-       order: (if .value.__typename == "CheckRun"
-               then .value.databaseId
-               else .value.createdAt end),
-       verdict: ((.value.conclusion // .value.state // "") | ascii_upcase)})) as $attempts
-| ($attempts | group_by(.check) | map(
-    . as $group
-    | if (($group | length) > 1 and ($group | any(.order == null)))
-      then {name: $group[0].name, verdict: "UNDECIDABLE"}
-      else (map(.order) | max) as $latest
-      | map(select(.order == $latest)) as $current
-      | {name: $current[0].name,
-         verdict: (if ($current | any(.verdict as $v | ($adverse | index($v)) != null))
-                   then "FAILING"
-                   elif ($current | any(.verdict != "SUCCESS")) then "UNRUN"
-                   else "SUCCESS" end)} end)) as $checks
-| '
-
-# shellcheck disable=SC2016
-PR_VERIFY_QUERY=$PR_VERIFY_REDUCE'"head=\($pr.headRefOid // "")",
-"mergeable=\($pr.mergeable // "")",
-"review=\($pr.reviewDecision // "")",
-"rollup_head=\($commit.oid // "")",
-"members=\($members | length)",
-"reported=\($contexts.totalCount // "")",
-"checks=\($checks | length)",
-"unsuccessful=\($checks | map(select(.verdict != "SUCCESS")) | length)",
-"failing=\($checks | map(select(.verdict == "FAILING")) | length)",
-"unrun=\($checks | map(select(.verdict == "UNRUN")) | length)",
-"undecidable=\($checks | map(select(.verdict == "UNDECIDABLE")) | length)"'
+PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | ($FM_VERIFY_ROLLUP_COUNTS)"
 
 # Three further lines, asked for only when a check is waived, so a merge with no
 # override sends byte-identical query text and reads back the same lines it
 # always did. They count the checks carrying the waived name and how those
 # checks break down, which is exactly what has to be subtracted from the totals
 # above. They read the same reduced set, so a waived check that was re-triggered
-# is one check here too.
+# is one check here too. Their verdict vocabulary is the library's, not this
+# file's: a copy of it here would keep selecting on a spelling the owner had
+# moved on from, and would silently subtract nothing.
 if [ -n "$WAIVED_CHECK" ]; then
-  # shellcheck disable=SC2016
-  PR_VERIFY_WAIVED_SELECT='$checks | map(select(.name == "'"$WAIVED_CHECK"'"))'
-  # shellcheck disable=SC2016
-  PR_VERIFY_QUERY=$PR_VERIFY_QUERY',
-"waived=\(('"$PR_VERIFY_WAIVED_SELECT"') | length)",
-"waived_failing=\(('"$PR_VERIFY_WAIVED_SELECT"') | map(select(.verdict == "FAILING")) | length)",
-"waived_unrun=\(('"$PR_VERIFY_WAIVED_SELECT"') | map(select(.verdict == "UNRUN")) | length)"'
+  # The breakdown lines come from bin/fm-verify-lib.sh, which owns the verdict
+  # vocabulary they select on. The comma binds looser than the pipe, so the whole
+  # sequence is parenthesised together: without that the waiver lines would be
+  # evaluated against the raw forge response instead of the normalized rollup the
+  # counts describe.
+  PR_VERIFY_WAIVED_LINES=$(fm_verify_rollup_waived_counts_expr "$WAIVED_CHECK") || {
+    echo "error: refusing to merge: the waived check name cannot be used in a forge query" >&2
+    exit 1
+  }
+  PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (($FM_VERIFY_ROLLUP_COUNTS),
+$PR_VERIFY_WAIVED_LINES)"
 fi
 
 VERIFIED_HEAD=
@@ -371,8 +309,8 @@ refuse_unreadable_rollup() {
 }
 
 verify_current_head() {
-  local output line joined remaining eff_failing eff_unrun
-  local head='' mergeable='' review='' checks='' unsuccessful='' failing='' unrun='' undecidable=''
+  local output line joined remaining eff_failing eff_unrun rc
+  local head='' mergeable='' review='' checks='' failing='' unrun='' undecidable=''
   local rollup_head='' members='' reported=''
   local waived='' waived_failing='' waived_unrun=''
   local -a reasons=()
@@ -381,7 +319,7 @@ verify_current_head() {
     echo "error: refusing to merge: the pull request could not be verified because gh is not on PATH" >&2
     return 1
   }
-  # fm-retrieval-audit: complete-source - refuses when the rollup returned fewer members than its own totalCount reported, so what was not read is never read as green
+  # fm-retrieval-audit: complete-source - reads contexts(last:100) with totalCount and bin/fm-verify-lib.sh refuses when the returned members do not reconcile against it, so what was not read is never read as green
   output=$(gh api graphql -f query="$PR_VERIFY_GRAPHQL" \
     -f owner="$PR_OWNER" -f repo="$PR_REPO" -F number="$PR_NUMBER" \
     -q "$PR_VERIFY_QUERY" 2>/dev/null) || {
@@ -389,93 +327,85 @@ verify_current_head() {
     return 1
   }
 
-  while IFS= read -r line || [ -n "$line" ]; do
-    case "$line" in
-      head=*) head=${line#head=} ;;
-      mergeable=*) mergeable=${line#mergeable=} ;;
-      review=*) review=${line#review=} ;;
-      rollup_head=*) rollup_head=${line#rollup_head=} ;;
-      members=*) members=${line#members=} ;;
-      reported=*) reported=${line#reported=} ;;
-      checks=*) checks=${line#checks=} ;;
-      unsuccessful=*) unsuccessful=${line#unsuccessful=} ;;
-      failing=*) failing=${line#failing=} ;;
-      unrun=*) unrun=${line#unrun=} ;;
-      undecidable=*) undecidable=${line#undecidable=} ;;
-      waived=*) waived=${line#waived=} ;;
-      waived_failing=*) waived_failing=${line#waived_failing=} ;;
-      waived_unrun=*) waived_unrun=${line#waived_unrun=} ;;
-    esac
-  done <<< "$output"
+  # The classification is bin/fm-verify-lib.sh's, and this gate never re-derives
+  # it: the label decides whether the merge may proceed, and every count below is
+  # read from what that owner published rather than recomputed here. rc and the
+  # label are its three-valued answer; the reasons array is this gate's own
+  # wording for a refusal the owner has already made.
+  fm_verify_rollup_classify "$output" && rc=0 || rc=$?
+  head=$FM_VERIFY_ROLLUP_HEAD
+  rollup_head=$FM_VERIFY_ROLLUP_EVIDENCE_HEAD
+  mergeable=$FM_VERIFY_ROLLUP_MERGEABLE
+  review=$FM_VERIFY_ROLLUP_REVIEW
+  members=$FM_VERIFY_ROLLUP_MEMBERS
+  reported=$FM_VERIFY_ROLLUP_REPORTED
+  checks=$FM_VERIFY_ROLLUP_CHECKS
+  failing=$FM_VERIFY_ROLLUP_FAILING
+  undecidable=$FM_VERIFY_ROLLUP_UNDECIDABLE
+  # This gate reports one bucket for every current attempt that reached no
+  # verdict, whether or not another may still arrive, so the library's two are
+  # added back here. They are published separately because a consumer can merge
+  # two buckets and cannot split one that arrived already merged.
+  if [ -n "$FM_VERIFY_ROLLUP_PENDING" ] && [ -n "$FM_VERIFY_ROLLUP_INCONCLUSIVE" ]; then
+    unrun=$((FM_VERIFY_ROLLUP_PENDING + FM_VERIFY_ROLLUP_INCONCLUSIVE))
+  fi
 
+  # Anything the owner could not resolve into a head state is reported as
+  # unreadable, in this gate's own words, before any count is trusted.
+  if [ "$FM_VERIFY_ROLLUP_LABEL" = unreadable ]; then
+    if ! fm_pr_head_valid "$head"; then
+      echo "error: refusing to merge: the pull request head commit could not be read from GitHub" >&2
+      return 1
+    fi
+    case "$FM_VERIFY_ROLLUP_REASON" in
+      subject_mismatch)
+        # GitHub attaches check results to a commit, and a pull request's latest
+        # commit moves under a force-push or a queued update, so the commit the
+        # results came from is compared against the head being merged instead of
+        # assumed to be it. Results belonging to another commit describe a
+        # superseded head: they are not this head's evidence and are never
+        # counted toward it.
+        if fm_pr_head_valid "$rollup_head" && [ "$rollup_head" != "$head" ]; then
+          printf 'error: refusing to merge head %s: GitHub returned check results for commit %s, so nothing here examined the head being merged\n' \
+            "$head" "$rollup_head" >&2
+        else
+          refuse_unreadable_rollup "$head"
+        fi
+        ;;
+      *) refuse_unreadable_rollup "$head" ;;
+    esac
+    return 1
+  fi
   fm_pr_head_valid "$head" || {
     echo "error: refusing to merge: the pull request head commit could not be read from GitHub" >&2
     return 1
   }
-  # GitHub attaches check results to a commit, and a pull request's latest
-  # commit moves under a force-push or a queued update, so the commit the
-  # results came from is compared against the head being merged instead of
-  # assumed to be it. Results belonging to another commit describe a superseded
-  # head: they are not this head's evidence and are never counted toward it.
-  fm_pr_head_valid "$rollup_head" || {
-    refuse_unreadable_rollup "$head"
-    return 1
-  }
-  if [ "$rollup_head" != "$head" ]; then
-    printf 'error: refusing to merge head %s: GitHub returned check results for commit %s, so nothing here examined the head being merged\n' \
-      "$head" "$rollup_head" >&2
-    return 1
-  fi
   # A member GitHub reported but did not return is unread rather than absent,
-  # and an unread member could be the one that failed.
-  if [ -z "$members" ] || [ -n "${members//[0-9]/}" ]; then
-    refuse_unreadable_rollup "$head"
-    return 1
-  fi
-  if [ -z "$reported" ]; then
-    # No rollup at all reports no count; anything else owes one.
-    if [ "$members" -ne 0 ]; then
-      refuse_unreadable_rollup "$head"
-      return 1
-    fi
-  elif [ -n "${reported//[0-9]/}" ]; then
-    refuse_unreadable_rollup "$head"
-    return 1
-  elif [ "$reported" -ne "$members" ]; then
+  # and an unread member could be the one that failed. The library refuses the
+  # unreadable shapes; this one gets its own wording because the numbers are
+  # what the captain needs.
+  if [ "$FM_VERIFY_ROLLUP_REASON" = members_unread ]; then
     printf 'error: refusing to merge head %s: GitHub reported %s check results for it but returned %s, so the rest could not be read\n' \
       "$head" "$reported" "$members" >&2
     return 1
   fi
-  # Each count is validated on its own. Concatenating them would let one empty
-  # field hide behind the other's digits and reach the comparisons below as an
-  # empty string, which compares as neither zero nor positive and would merge.
-  if [ -z "$checks" ] || [ -n "${checks//[0-9]/}" ] \
-    || [ -z "$unsuccessful" ] || [ -n "${unsuccessful//[0-9]/}" ] \
-    || [ -z "$failing" ] || [ -n "${failing//[0-9]/}" ] \
-    || [ -z "$unrun" ] || [ -n "${unrun//[0-9]/}" ] \
-    || [ -z "$undecidable" ] || [ -n "${undecidable//[0-9]/}" ]; then
-    refuse_unreadable_rollup "$head"
-    return 1
-  fi
-  # A reduction can only ever shrink the members, so more checks than members
-  # means the two lines describe different sets and neither can be trusted.
-  if [ "$checks" -gt "$members" ] || [ "$unsuccessful" -gt "$checks" ] \
-    || [ "$undecidable" -gt "$checks" ]; then
-    refuse_unreadable_rollup "$head"
-    return 1
-  fi
-  # The two disjoint buckets must account for exactly the members that are not
-  # successes. A response that breaks that identity was not understood, and an
-  # unreadable rollup is reported as unreadable rather than resolved either way.
-  if [ "$((failing + unrun + undecidable))" -ne "$unsuccessful" ]; then
+  # Nothing below may run on counts the library did not publish.
+  if [ -z "$unrun" ]; then
     refuse_unreadable_rollup "$head"
     return 1
   fi
   # The waived counts are subtracted from the totals below, so a count that is
   # unreadable or cannot be a subset of what it is subtracted from would silently
   # shrink a refusal. Each is validated on its own and against its own total,
-  # exactly as the three above are, and an unreadable answer stays unreadable.
+  # exactly as the library's own are, and an unreadable answer stays unreadable.
   if [ -n "$WAIVED_CHECK" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in
+        waived=*) waived=${line#waived=} ;;
+        waived_failing=*) waived_failing=${line#waived_failing=} ;;
+        waived_unrun=*) waived_unrun=${line#waived_unrun=} ;;
+      esac
+    done <<< "$output"
     if [ -z "$waived" ] || [ -n "${waived//[0-9]/}" ] \
       || [ -z "$waived_failing" ] || [ -n "${waived_failing//[0-9]/}" ] \
       || [ -z "$waived_unrun" ] || [ -n "${waived_unrun//[0-9]/}" ] \
@@ -531,6 +461,20 @@ verify_current_head() {
     joined=$(printf '%s; ' "${reasons[@]}")
     printf 'error: refusing to merge head %s: %s\n' "$head" "${joined%; }" >&2
     return 1
+  fi
+  # THE CANONICAL OWNER HAS THE LAST WORD. Everything above this line is either
+  # a fact of this gate's own - mergeability, review, the waiver - or wording for
+  # a refusal. The verdict on whether the head is green is not derived here and
+  # cannot be talked around here: if the one owner did not say passing, this
+  # merge does not happen, whatever the reasons array did or did not find. A
+  # waiver is the single sanctioned narrowing, and it narrows exactly the one
+  # named check, so it is the only thing allowed past a non-passing label.
+  if [ "$rc" -ne 0 ] || [ "$FM_VERIFY_ROLLUP_LABEL" != passing ]; then
+    if [ -z "$WAIVED_CHECK" ] || [ "$waived" != 1 ]; then
+      printf 'error: refusing to merge head %s: the check rollup did not pass (%s)\n' \
+        "$head" "$FM_VERIFY_ROLLUP_REASON" >&2
+      return 1
+    fi
   fi
   VERIFIED_HEAD=$head
 }

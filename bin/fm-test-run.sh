@@ -260,7 +260,7 @@ family_for_basename() {
       printf '%s\n' backend-dispatch
       ;;
     fm-attest.test.sh|fm-attribution-sweep.test.sh|fm-merge-local.test.sh|\
-    fm-pr-check-security.test.sh|\
+    fm-exact-head-green-one-owner.test.sh|fm-pr-check-security.test.sh|\
     fm-pr-merge.test.sh|fm-review-diff.test.sh|\
     fm-teardown.test.sh|fm-x-mode.test.sh)
       printf '%s\n' pr-forge

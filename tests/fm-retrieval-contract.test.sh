@@ -1202,20 +1202,46 @@ test_check_census_is_strictly_broader_than_the_enforced_set() {
 # which gh 2.96.0 requests as contexts(first:100): a head with more than 100
 # members silently loses the newest ones, and "no member is non-SUCCESS" is a
 # negative claim over that truncated set.
+#
+# pr-checks now reads the authoritative GraphQL source instead, which serves the
+# NEWEST 100 and reconciles them against totalCount. The page cap it must refuse
+# at is therefore a DIFFERENT one: a head whose totalCount exceeds the members
+# returned. The cases below drive that shape, because the defect this section
+# records - a negative claim over a set nothing fully read - is unchanged by
+# which end of the page the source serves.
 
-rollup_json() {  # <member-count> <last-conclusion>
-  jq -cn --argjson n "$1" --arg last "$2" '
-    {statusCheckRollup: [ range($n) | {__typename:"CheckRun", status:"COMPLETED",
-      conclusion: (if . == ($n - 1) then $last else "SUCCESS" end)} ]}'
+# rollup_graphql <member-count> <last-conclusion> [total-count]
+# total-count defaults to the member count, which is the complete case. Passing
+# a larger one is the truncated case: GitHub reported more than it returned.
+ROLLUP_HEAD=bb22cc33dd44ee55ff66aa77bb88cc99dd00aa11
+rollup_graphql() {
+  jq -cn --argjson n "$1" --arg last "$2" --argjson total "${3:-$1}" \
+    --arg head "$ROLLUP_HEAD" '
+    {data: {repository: {pullRequest: {
+      headRefOid: $head, mergeable: "MERGEABLE", reviewDecision: "APPROVED",
+      commits: {nodes: [{commit: {oid: $head, statusCheckRollup: {contexts: {
+        totalCount: $total,
+        nodes: [ range($n) | {__typename: "CheckRun", databaseId: (9000 + .),
+          name: ("check-" + (. | tostring)), status: "COMPLETED",
+          checkSuite: {workflowRun: {workflow: {name: "CI"}}},
+          conclusion: (if . == ($n - 1) then $last else "SUCCESS" end)} ]}}}}]}}}}}'
 }
 
-fake_gh_pr_view() {  # <payload>
+fake_gh_pr_view() {  # <graphql-payload>
   local fakebin
   fakebin=$(fm_fakebin "$TMP_ROOT/rollup-$RANDOM")
   printf '%s' "$1" > "$fakebin/payload.json"
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
-cat "$(dirname "$0")/payload.json"
+here=$(dirname "$0")
+query=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -q|--jq) query=${2:-}; shift; [ "$#" -gt 0 ] && shift ;;
+    *) shift ;;
+  esac
+done
+jq -r "$query" "$here/payload.json"
 SH
   chmod +x "$fakebin/gh"
   printf '%s' "$fakebin"
@@ -1223,20 +1249,35 @@ SH
 
 test_rollup_at_the_page_cap_is_not_a_pass() {
   local fakebin out
-  fakebin=$(fake_gh_pr_view "$(rollup_json 100 SUCCESS)")
-  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.test/o/r/pull/1 2>&1) \
-    && fail "rollup cap: a set filling the page must not exit 0"
+  # 100 members returned, 143 reported: the rest could not be read, and "none of
+  # them failed" over what did arrive is a negative claim about records nothing
+  # read.
+  fakebin=$(fake_gh_pr_view "$(rollup_graphql 100 SUCCESS 143)")
+  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.com/o/r/pull/1 2>&1) \
+    && fail "rollup cap: a set the source did not fully return must not exit 0"
   assert_contains "$out" NO_VERIFIER_RAN \
-    "a rollup that exactly fills its page is not proven complete"
+    "a rollup the source did not fully return is not proven complete"
   assert_contains "$out" retrieval_incomplete \
     "the reason names the incomplete retrieval"
-  pass "a check rollup filling gh's page cap refuses a pass instead of assuming completeness"
+  pass "a check rollup GitHub reported more members for than it returned refuses a pass instead of assuming completeness"
+}
+
+test_rollup_at_the_page_cap_with_a_matching_total_passes() {
+  local fakebin out
+  # Exactly 100 members and exactly 100 reported. The authoritative source can
+  # prove this set complete where the flattened one never could, and the guard
+  # must not charge for a truncation that did not happen.
+  fakebin=$(fake_gh_pr_view "$(rollup_graphql 100 SUCCESS 100)")
+  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.com/o/r/pull/1 2>&1) \
+    || fail "rollup cap: 100 members reconciled against totalCount must pass: $out"
+  assert_contains "$out" PASS "a full page whose totalCount matches is complete"
+  pass "a rollup at the page cap whose totalCount reconciles still passes, so the refusal tracks unread members and not member count"
 }
 
 test_rollup_below_the_cap_still_passes() {
   local fakebin out
-  fakebin=$(fake_gh_pr_view "$(rollup_json 99 SUCCESS)")
-  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.test/o/r/pull/1 2>&1) \
+  fakebin=$(fake_gh_pr_view "$(rollup_graphql 99 SUCCESS)")
+  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.com/o/r/pull/1 2>&1) \
     || fail "rollup below cap: 99 successful members must still pass: $out"
   assert_contains "$out" PASS "a complete successful rollup still passes"
   pass "a rollup below the page cap still reaches a pass, so the guard is not vacuous"
@@ -1244,8 +1285,8 @@ test_rollup_below_the_cap_still_passes() {
 
 test_rollup_below_the_cap_still_fails_on_a_failure() {
   local fakebin out rc=0
-  fakebin=$(fake_gh_pr_view "$(rollup_json 99 FAILURE)")
-  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.test/o/r/pull/1 2>&1) || rc=$?
+  fakebin=$(fake_gh_pr_view "$(rollup_graphql 99 FAILURE)")
+  out=$(PATH="$fakebin:$PATH" "$VERIFY" pr-checks https://github.com/o/r/pull/1 2>&1) || rc=$?
   expect_code 1 "$rc" "a failing member below the cap is still a failure"
   assert_contains "$out" FAIL "a failing rollup still fails"
   pass "a failing member below the page cap is still reported as a failure"
@@ -1317,6 +1358,7 @@ run test_check_requires_a_reason_with_the_classification
 run test_check_passes_this_repository
 run test_check_census_is_strictly_broader_than_the_enforced_set
 run test_rollup_at_the_page_cap_is_not_a_pass
+run test_rollup_at_the_page_cap_with_a_matching_total_passes
 run test_rollup_below_the_cap_still_passes
 run test_rollup_below_the_cap_still_fails_on_a_failure
 

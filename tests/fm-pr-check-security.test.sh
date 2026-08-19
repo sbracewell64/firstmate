@@ -71,11 +71,12 @@ SH
 printf '%s\n' "$*" >> "$FM_TEST_GH_LOG"
 case " $* " in
   *statusCheckRollup*)
-    # bin/fm-pr-merge.sh's merge-time head verification. Green by default here,
-    # with its one check result belonging to the head it is verifying;
-    # tests/fm-pr-merge.test.sh owns the refusal matrix for that guard.
+    # bin/fm-pr-merge.sh's merge-time head verification, whose classification
+    # bin/fm-verify-lib.sh owns. Green by default here, with its one check result
+    # belonging to the head it is verifying; tests/fm-pr-merge.test.sh owns the
+    # refusal matrix for that guard.
     verify_head=${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}
-    printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=1\nreported=1\nchecks=1\nunsuccessful=0\nfailing=0\nunrun=0\nundecidable=0\n' \
+    printf 'label=passing\nsubject=bound\nhead=%s\nevidence_head=%s\nmergeable=MERGEABLE\nreview=\nmembers=1\nreported=1\nchecks=1\nunsuccessful=0\nfailing=0\npending=0\ninconclusive=0\nundecidable=0\n' \
       "$verify_head" "$verify_head"
     ;;
   *" state,mergeable,headRefOid "*)
