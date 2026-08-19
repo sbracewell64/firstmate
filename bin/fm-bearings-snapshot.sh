@@ -244,6 +244,20 @@ EOF
       # The check-set rule is bin/fm-verify-lib.sh's, spliced in rather than
       # restated: "none" here and NO_VERIFIER_RAN in bin/fm-verify.sh are the
       # same empty set, and one copy of that rule is the point.
+      #
+      # THIS IS A STALE-ABLE DISPLAY PROJECTION AND AUTHORIZES NOTHING. It reads
+      # the NARROWER of the rule's two sources, gh's flattened
+      # --json statusCheckRollup, because many pull requests are read in one
+      # listing and that is the only shape a listing has. Its narrower properties
+      # are declared in that file's header: no totalCount, so the extent is
+      # provable only by the page sentinel; no databaseId, so repeated attempts
+      # are ordered by start time alone; and no commit oid, so the rows cannot be
+      # bound to any particular head. A row that says "passing" therefore says
+      # "the newest attempt at every check in this listing succeeded", which is a
+      # weaker claim than the merge gate's and is rendered, never acted on.
+      # Anything that will act - a merge, a certification, a trunk-repair
+      # reservation - goes through bin/fm-verify.sh pr-checks, which reads the
+      # authoritative source and binds it to a head.
       repo_result=$(printf '%s' "$out" | jq --arg repo "$repo" --argjson limit "$FM_BEARINGS_PR_LIMIT" '
         [ .[] | {
           num:(.number|tostring),

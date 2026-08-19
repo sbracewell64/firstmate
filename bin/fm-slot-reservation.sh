@@ -55,6 +55,15 @@
 # a trunk-checks verifier is what upgrades a later admission to verified; it
 # does not change what caller-asserted means.
 #
+# Caller-asserted is not caller-authored. The record must name a verifier
+# bin/fm-verify.sh actually declares, so a caller cannot supply its own
+# classification of the same question and have it admitted: the registry is
+# closed, and a verdict from outside it is refused rather than believed. That is
+# the consumer half of the one-owner rule in bin/fm-verify-lib.sh - this file was
+# the measured second victim of two owners of "is this head green", because a
+# false FAIL from the stricter one opens a reservation that withholds a pool slot
+# on a phantom.
+#
 # EXIT STATUS IS THREE-VALUED, LIKE THE ANSWER. 0 means observed and held, 1
 # means observed and not held, 2 means the state could not be observed. A caller
 # that reads only the status therefore cannot turn "I could not tell" into
@@ -146,7 +155,7 @@ state_exit() {
 VERDICT_VERIFIER=
 VERDICT_EVIDENCE=
 read_verdict() {  # <file>
-  local file=$1 row result
+  local file=$1 row result declared
   [ -f "$file" ] && [ -r "$file" ] \
     || die "--verdict $file is not a readable file, so no observation was read"
   row=$(grep -A1 '^verify\[1\]{verifier,result,reason,evidence_ref}:' "$file" 2>/dev/null | sed -n '2p')
@@ -156,6 +165,41 @@ read_verdict() {  # <file>
   VERDICT_VERIFIER=$(printf '%s' "$row" | cut -d, -f1)
   result=$(printf '%s' "$row" | cut -d, -f2)
   VERDICT_EVIDENCE=$(printf '%s' "$row" | cut -d, -f4-)
+  # ONLY THE DECLARED OWNER'S VERDICT ADMITS A RESERVATION. The record shape is
+  # public - four comma-separated fields under one header line - so anything can
+  # write one, and a verdict from a second derivation of the same question is
+  # exactly what this admission must not accept. bin/fm-verify.sh's registry is
+  # closed, so a name outside it is either a caller's own classifier or a typo,
+  # and both are refused here rather than resolved into a FAIL that withholds a
+  # pool slot.
+  #
+  # This does NOT upgrade the evidence tier. The record is still one the caller
+  # handed over, and a caller can still hand over a real verifier's record for a
+  # subject it did not intend; what it can no longer do is name its own
+  # classifier as the source. Re-deriving the verdict from the evidence
+  # reference is the remaining step, and it needs a declared trunk-checks
+  # verifier that does not exist yet.
+  # The empty name is refused first and on its own, so it can never reach the
+  # membership test below, where an empty needle is the one value a substring
+  # match could answer wrongly.
+  [ -n "$VERDICT_VERIFIER" ] \
+    || die "--verdict $file names no verifier, so whose observation it is was not established"
+  declared=$("$SCRIPT_DIR/fm-verify.sh" --list 2>/dev/null) \
+    || die "--verdict $file could not be checked against bin/fm-verify.sh's verifier registry, so whose observation it is was not established"
+  [ -n "$declared" ] \
+    || die "--verdict $file could not be checked against bin/fm-verify.sh's verifier registry, so whose observation it is was not established"
+  # Newline-delimited on both sides, so a name that is merely a substring of a
+  # declared one is not a member of the registry.
+  case "
+$declared
+" in
+    *"
+$VERDICT_VERIFIER
+"*) ;;
+    *)
+      die "--verdict $file names verifier '$VERDICT_VERIFIER', which bin/fm-verify.sh does not declare: only the owner of an observation may supply it, and a second derivation of the same question is not that owner"
+      ;;
+  esac
   case "$result" in
     FAIL) return 0 ;;
     PASS)

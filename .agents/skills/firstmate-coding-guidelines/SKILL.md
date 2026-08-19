@@ -46,6 +46,15 @@ A single deliberate one-line reinforcement at a genuine risk point is allowed, f
 Restating the contract's substance a second time is not allowed: the two copies will drift the moment only one is edited.
 When you touch a contract, patch, replace, or prune the owner's existing language rather than appending a new clause or paragraph wherever possible, then grep the repo for its other mentions and update the cross-references, not duplicate the change into a second full copy.
 
+### Two sources are allowed; two answers are not
+
+Sometimes one question genuinely has to be asked of two places - a richer API and a cheaper batch listing, a live read and a cached record.
+That is a sourcing problem, not a licence for a second decision procedure.
+Normalize each source into the shape the one owner consumes, state in that normalizer exactly what its source CANNOT supply, and let the single fold produce the answer.
+A source missing an input the rule needs says so and gets a could-not-observe; it never answers a narrower question and has the answer credited to the wider one.
+Never put a fallback for a missing input inside the shared rule, because that silently hands every source the weakest guarantee any of them has.
+`bin/fm-verify-lib.sh`'s check-rollup section is the worked example, and `tests/fm-exact-head-green-one-owner.test.sh` keeps the divergence that motivated it as an executed red control.
+
 ## Inline-stub pattern
 
 When content moves out of `AGENTS.md` into a skill, decide what stays behind by asking one question: what must survive with no skill loaded?

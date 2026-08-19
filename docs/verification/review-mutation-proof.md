@@ -106,6 +106,8 @@ The evidence a record rests on stays under its output directory, because `result
 ## Environment
 
 Measured 2026-08-17 on Linux 6.18.33.2-microsoft-standard-WSL2, against `git` 2.53.0, `jq` 1.8.1, GNU bash 5.3.9, and Python 3.14, with the branch based on `c5c7dff1`.
+Re-measured in full on 2026-08-18 on the same host and tool versions, with the branch based on `e6bc4a18`, after the check-rollup consolidation changed `bin/fm-verify.sh`.
+That change is in the `pr-checks` adapter and this proof's subject is the `review-mutation` adapter, but this record pins whole-file digests on purpose, so the matrix was re-run rather than the digests repinned.
 
 ## Commands
 
@@ -149,7 +151,7 @@ The suite executes 40 controls, and the current measured-file inventory is:
 ```
 inventory_control_count: 40
 inventory_sha256: bin/fm-review-mutation.sh 6961e3bbee3bf13b876982b32ebb42a92c94e2ec64a066a05e46e968c4f88993
-inventory_sha256: bin/fm-verify.sh a187ed0765a1d17b419c83cbc55c9e98fd5f380701f0a50f8cdcd909e7c1bd37
+inventory_sha256: bin/fm-verify.sh 9aba23259bfad9ba534bf09420b9823f6d98667e3abb2b00ff5fdbce6b18fb39
 inventory_sha256: tests/fm-review-mutation.test.sh 092b1fb90a77ab8e330627c552b2501629580a82e6d1ff88c763c854ea73a7fe
 inventory_sha256: tests/review-mutation-red-matrix.py 1917504e3326bbdb38182b2f41d61038c8709c03c84516e4f6422eb81602f668
 ```
@@ -159,9 +161,9 @@ They are written only by a measurement run, so a repin that is not a re-measurem
 Without this the inventory could be made current while the measurement silently described bytes that no longer exist.
 
 ```
-measured_at: 6269ffb4
+measured_at: e6bc4a18
 measured_sha256: bin/fm-review-mutation.sh 6961e3bbee3bf13b876982b32ebb42a92c94e2ec64a066a05e46e968c4f88993
-measured_sha256: bin/fm-verify.sh a187ed0765a1d17b419c83cbc55c9e98fd5f380701f0a50f8cdcd909e7c1bd37
+measured_sha256: bin/fm-verify.sh 9aba23259bfad9ba534bf09420b9823f6d98667e3abb2b00ff5fdbce6b18fb39
 measured_sha256: tests/fm-review-mutation.test.sh 092b1fb90a77ab8e330627c552b2501629580a82e6d1ff88c763c854ea73a7fe
 measured_sha256: tests/review-mutation-red-matrix.py 1917504e3326bbdb38182b2f41d61038c8709c03c84516e4f6422eb81602f668
 ```
@@ -175,13 +177,15 @@ A green inventory sitting on top of unmeasured rows is the collapse this separat
 
 ### Measurement claim
 
-Measured at `6269ffb4`. The green pass ran all 40 controls against the shipped scripts and exited 0.
+Measured at `6269ffb4`, and re-measured in full at `e6bc4a18`. The green pass ran all 40 controls against the shipped scripts and exited 0.
+The re-measurement was required because the check-rollup consolidation changed `bin/fm-verify.sh`, which this proof pins and which every defect build's digest is taken over, so all 34 build digests below moved even though the catalogue itself did not.
 34 single-defect builds were then measured, each control run separately against each build.
 **Every control has at least one red witness, and no control is left unwitnessed.**
 **Every defect build reddened at least one control, so no catalogued defect is inert.**
 That is a separate claim from control coverage above, and neither implies the other.
 
 The measurement pinned the inventory digests before and after the run and they were identical, so all of it describes one build rather than a moving one.
+The same holds for the re-measurement: the four pinned files were unchanged across it, and `bin/fm-verify-lib.sh`'s three-valued type section, which is the only part of that library this proof's subject reaches, is byte-for-byte what it was at `6269ffb4`.
 
 Controls are run one at a time rather than as a suite, because the suite stops at its first failing control.
 A suite-at-a-time measurement reports each defect reddening exactly one control and says nothing about the rest, which is a coverage claim resting on an observation that was never made.
@@ -195,47 +199,62 @@ tests/review-mutation-red-matrix.py replay <defect> <control>
 ```
 
 It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256 alongside the outcome.
-Compare the digest with the defect table below before comparing outcomes: a digest that does not reproduce means the row describes a build that is not the one in front of you.
 A replay is a new execution and cannot establish that the historical run happened - what it removes is the need to take this record's word for it.
+
+**A replay digest does not reproduce the table digest, and never did.**
+A defect build is digested over the concatenation of `bin/fm-review-mutation.sh`, `bin/fm-verify.sh`, and THIS RECORD, so writing the measured digests into the table is itself an edit that moves every one of them.
+The table is therefore self-referential by construction: it records what each build hashed to during the run, and the act of publishing that changes it.
+Measured 2026-08-18 on the pre-existing record at `e6bc4a18`, before any change in this branch reached it:
+
+```
+$ tests/review-mutation-red-matrix.py replay D01 test_a_probes_own_output_cannot_establish_a_verdict
+defect_sha256: c22164d6fb9b...          table: 9a1ac2e8379c...
+$ tests/review-mutation-red-matrix.py replay D08 test_a_refused_source_is_never_written_to
+defect_sha256: d7dcd80e1272...          table: cf64caed826e...
+```
+
+So a digest that does not reproduce means only that this record has been edited since the run, which is always true.
+Compare the OUTCOME instead - whether that control goes red on that defect - which is the claim the row actually makes and which a replay does establish.
+Making the digest reproducible needs the record removed from what a build hashes, which is a change to `tests/review-mutation-red-matrix.py` and outside this record.
 
 ### The defect builds
 
 | Build | sha256 | Defect injected |
 | --- | --- | --- |
-| D01 | `9a1ac2e8379ccb1be738031720b7b8fcb205ce8415feb86c047e6ab9d89c20ee` | The retired defect, restored: the verdict is read from an `ok - ` line in the probe's captured output instead of from the differential. |
-| D02 | `ea879d80254c4f0a9c6ef68e23fc7988d7bb3b891681d9f3fb98fb26225f14d3` | Control is established by the falsifying direction alone. |
-| D03 | `e60886802c6788f480fe19160ff7a28964779a37d96253472fffa8b80808a6d2` | The occurrence guard accepts more than one site and uses the first. |
-| D04 | `5857c1f1a845b1323adadead1087ecfd62ca772a836b56fda62e35d4b7aa3b52` | The clone is made locally and its isolation assumed rather than measured. |
-| D05 | `1aab728d213c0bff18474b6a6a55833e4e91041a54e65359370ffd97548330f2` | The apparatus perturbs the baseline tree and nothing requires it not to. |
-| D06 | `90927c701840e79a00820bf72d3d471280baf496fd8cf0ea57e281ecc112b6e7` | Mutation facts are read out of the record instead of re-proven. |
-| D07 | `cdef45a4d2969492c11f817f8307618d6d5a08b892a289b162d09c72a01f2d77` | An occupied output directory is cleared and reused. |
-| D08 | `cf64caed826ede9da8c36a341e5d5f398f5aa57d3cc3ff35babf0c9bb1fa8c20` | The primary-checkout refusal is dropped. |
-| D09 | `1d417fda35a130e9b0c59084dc015f3b78ad7f0cb97fbf30a529d031795805e1` | The catalogue fold reports a gap ahead of a failure. |
-| D10 | `d8ce626956cfa3b6e22f88d1093b683ca9e3dace069dcb92700fb8f630060f58` | An unobserved dimension no longer outranks the fold. |
-| D11 | `57324351a04426ac9900698523cf78d913ff9c2d10e91d2d35ee0049dd3ad4b3` | A caller declaration is read and reaches the verdict. |
-| D12 | `b141cd6f6aeae68ad1fff39450ceed6b35929f83aa60af08a9f2264e5c299647` | The source is mutated in place and restored in a finally - every after-the-fact check is satisfied, a reader during the run is not. |
-| D13 | `d9d468ce96ce9bacd405ec96cdbc267c289111ae87b27c916c30aaaa63cbb7e5` | An empty catalogue is folded as clean. |
-| D14 | `a5c6a1b0ae4b513f524b8347039b11fdf6859975d58feacae624721490c7e0e9` | Duplicate case identities are accepted. |
-| D15 | `9ff66a17d2ab798ef20dc49773467caeb57b152a96fa28751631af33adbba331` | The probe argv is recorded as a space-joined rendering of itself. |
-| D16 | `680a5ec3d64301bd331f9f1496cb9808efa388aefdc67981f0925b08ceac8946` | The regular-file guard on the target path is dropped. |
-| D17 | `c202f721a8ec9243a7d1f834355015bdb2503feeb6fbb813a4d3dadbab8044d2` | With no execution substrate the build reports PASS itself rather than refusing - the exact fallback the law forbids. |
-| D18 | `7e1afca02dda9a6bb7c0ba2d5b879bf2412d97a5b88d17caceb4d352fe8db52d` | The wrapper narrows any transported result to PASS. |
-| D19 | `127153e07ffbee086692747f1782a381e0300d19d089f8c02e09db243f61bc4c` | The label defect in its other direction: a FAILURE literal in the probe's own output is read as a failure. |
-| D20 | `b7ac23bd6194f30d9d9014870d661eb074c3dbb475e5b3ef76cc48f778ad3347` | The unmutated baseline is ignored once control is established. |
-| D21 | `0d06782581619116fba708fee0889b1ead64acad190944a20891072e84372842` | A target that is not present is spliced in at the start of the file instead of refused - discovery failing open. |
-| D22 | `9cf76b0ec54ffb0a86e63a509b381842cee363f603c6e6468cd3dce237bd2621` | The identical-substitution refusals are dropped. |
-| D23 | `4afe1bb9b2e17c26cc79f9eb3506b6fda7e60f1d31fe46dc78d393318da64026` | The record is believed even when the clone it names is gone. |
-| D24 | `0e9586ef2f6d8a5a0badcdca7c56940ea3be5b6100e3cf091c6e76b3e3f5e3fc` | Every execution record is accepted for every variant, so an execution belonging to another mutation can manufacture control. |
-| D25 | `91882314d14d8a234c42dca5c73562336d133418c007952e775b7b7a72b1a50a` | The mutation bytes are not re-derived: any mismatch is swallowed, so a record can describe arbitrary commits as the three exact-byte mutations. |
-| D26 | `1c19b33c01ebfee097b5417afd74d46ec2b6f567159400fc3b0b95c3e273fe66` | The record's documented control count disagrees with the suite. |
-| D27 | `5c847c616773cc043596f559e34290deadbda88add9e160f7462fb7e1124be9a` | A documented file digest disagrees with the bytes it names. |
-| D28 | `a2a00d5b94d5363fa11b2e172318907bd363d7cd01e39c9dad35522e0f593c01` | The record carries no parseable inventory count at all. |
-| D29 | `8ed879c96cc8eac0b5b473f4ea11bf40f36de20b1a537edead5149f137d25966` | The record's declared target path is never bound to where the mutants actually differ, so a record can name one file while its commits changed another. The binding lives in two places - the name-only diff and the re-derivation's path lookup - so defeating it takes both, which is one defect and not two. |
-| D30 | `8fd66d9777fcc24c32bc344ebc8ea30a4f767f50e4f5ee932ea02ef372bd266d` | The output directory is claimed before the source is judged, so a caller naming a primary checkout with an output path inside it gets a directory written into the very checkout the next line refuses. The refusal text stays correct; the refusal leaves a trace in what it refused. |
-| D31 | `afb748650811bf241f6d9b536eab4a082d3bb0d24a96eb6ee9ac778feb336544` | The closed `..` rejection is replaced by the old nearest-ancestor resolution, so traversal in a nonexistent suffix creates inside the source before the post-creation containment check refuses it. |
-| D32 | `2b6c33887d464113961a48bfe3da0bd58758ba42044312e3905b131b60ab2b37` | The shared pre-creation output guard is omitted from catalogue only, so output inside a linked-worktree source is created before the backstop refuses it. |
-| D33 | `eb4acbf4130fc3e9b90faec33fbbdf2eec46de4a3e32af04dc6618cc8a626eb0` | The shared output guard refuses every path, so legitimate evidence output outside the source can never proceed. |
-| D34 | `d6834a05a268debafd7cf456ab27150e40a7055eb13d04e8cc8f36fe749e36f8` | The record's measured digests no longer describe the current subject, so the matrix reports a measurement taken against bytes that have since changed. |
+| D01 | `67b361bd2b080f58fb4e3574ca166f7f57dadce57466d4032782559101c95dad` | The retired defect, restored: the verdict is read from an `ok - ` line in the probe's captured output instead of from the differential. |
+| D02 | `d0d2688105e0f97fb26a8d793bc99ed600cb003ca46404b41fcaf8186a013364` | Control is established by the falsifying direction alone. |
+| D03 | `6d67ca533e43c1bd805510fc53f46d57d1bfae6633f7bf3accf4aa3251b434f6` | The occurrence guard accepts more than one site and uses the first. |
+| D04 | `723ae18184fc9ebb1939c174db9b835c541d168ad0705ea70fbbc600e4dd2bdb` | The clone is made locally and its isolation assumed rather than measured. |
+| D05 | `b8a068f7abcde9609028151b7cb49e727d3e1fc35d969381735d6420ecbadb83` | The apparatus perturbs the baseline tree and nothing requires it not to. |
+| D06 | `bdb3413a705e1e92890c2adc2a2f8d6b9ce1a52a7c0f74a50c35f34d80929d7f` | Mutation facts are read out of the record instead of re-proven. |
+| D07 | `7d75782e0cbb4d2b1e00c864f59c568d01cc373204554e65b1ba10a3ac545011` | An occupied output directory is cleared and reused. |
+| D08 | `165b4cd33918e39e3506ca5599a084454dc9b228530197693a0f931cf3b1b4d5` | The primary-checkout refusal is dropped. |
+| D09 | `a6094f472544611d2bc13967d792eeb720c9be486ebb8a882844f27ac2fcd830` | The catalogue fold reports a gap ahead of a failure. |
+| D10 | `596b6f2a72dad600b4d6cdbe1e721adba66af8e3d101bf62d510f08d7f2d309a` | An unobserved dimension no longer outranks the fold. |
+| D11 | `3ad58d4ae53e0e686df44ef95aa00386c08da5be36f054a7fd31fa5ac82d68d9` | A caller declaration is read and reaches the verdict. |
+| D12 | `81d60972639ce6d6da5cdaf356d9e9766fced60c48704d74114330544655a12e` | The source is mutated in place and restored in a finally - every after-the-fact check is satisfied, a reader during the run is not. |
+| D13 | `af327a124caa3a9d1f06346f3442936b94da52d184280908412fb3446208a7a2` | An empty catalogue is folded as clean. |
+| D14 | `926e9c7a7d2b1cdf945aa6ba1a88f97ee3cd4c4f538647ed9f0fb57d99877dbf` | Duplicate case identities are accepted. |
+| D15 | `a3cdec31867cbf3d51fcef59052600c7f1d5e86afb509150328b86b424a1000c` | The probe argv is recorded as a space-joined rendering of itself. |
+| D16 | `1bcb6df77dd9559aab86ec2295386cdb0757b13d4e3d2371eb6a1a3acb430b8c` | The regular-file guard on the target path is dropped. |
+| D17 | `c7f36b20a644d1e6f61ec85f9708b2470b145dcc2d6e91992de250ad8a5eb1e6` | With no execution substrate the build reports PASS itself rather than refusing - the exact fallback the law forbids. |
+| D18 | `95b5bbcd4fe3c772426114afe6b7175470cec7404b097de8b93b320bdba5b668` | The wrapper narrows any transported result to PASS. |
+| D19 | `2a1f8cfc4b93aedd905b1d3813f0bbcf90854ab30098691c109c6e9ae558e3e5` | The label defect in its other direction: a FAILURE literal in the probe's own output is read as a failure. |
+| D20 | `b3a50824febb7c4d532fefd9bcda0a9aa6ef53c576c3ef8df01bb97ef9e2643e` | The unmutated baseline is ignored once control is established. |
+| D21 | `18a736af5da40f9646ea4519b506ec48ab0d6806a8006b6ecfb62ee8a61566e4` | A target that is not present is spliced in at the start of the file instead of refused - discovery failing open. |
+| D22 | `1422bc0965ea5dcb1259723a0190e1a6a649c6e3c5eafb370a7fb238237cb5d7` | The identical-substitution refusals are dropped. |
+| D23 | `088d0eb8af27990beeeba3397845a1df6f4491f39bc49ffa6b1ef36ff43555fa` | The record is believed even when the clone it names is gone. |
+| D24 | `093bed682db7b821a72821ec1392b24fdcef43d2228964c5f834acb9fe635dac` | Every execution record is accepted for every variant, so an execution belonging to another mutation can manufacture control. |
+| D25 | `6587aca810197922295a0a7290961350e6b6906608072e4fcd7093860a5c83ce` | The mutation bytes are not re-derived: any mismatch is swallowed, so a record can describe arbitrary commits as the three exact-byte mutations. |
+| D26 | `9e634993ba343481cb77c7d5eeb4953be6d66fb967805e9e1bda60fe39567d24` | The record's documented control count disagrees with the suite. |
+| D27 | `9378c474f32f689017068e520eebe4cee5d4dcefaaa929a80cb07e116d37b582` | A documented file digest disagrees with the bytes it names. |
+| D28 | `f61471e5a8c6fccab8d041ab8ac1dea852ea8135f6cd9f9524b13339ba0a1232` | The record carries no parseable inventory count at all. |
+| D29 | `648d715859c4e23548d39ae08418459356a3eb5394e914732b493ec84375abf6` | The record's declared target path is never bound to where the mutants actually differ, so a record can name one file while its commits changed another. The binding lives in two places - the name-only diff and the re-derivation's path lookup - so defeating it takes both, which is one defect and not two. |
+| D30 | `441e3dc79254af9161ec3086ae0085350e4706e609fdf7b268138b5ec80160d1` | The output directory is claimed before the source is judged, so a caller naming a primary checkout with an output path inside it gets a directory written into the very checkout the next line refuses. The refusal text stays correct; the refusal leaves a trace in what it refused. |
+| D31 | `fa15235285d1619573b5266fe6ddd63711be429059543f9c3bd2705f129f34e4` | The closed `..` rejection is replaced by the old nearest-ancestor resolution, so traversal in a nonexistent suffix creates inside the source before the post-creation containment check refuses it. |
+| D32 | `c9764fe9b35e31f770ee6ae907fd71af685a0b60c9786e70380be3397cbe87bc` | The shared pre-creation output guard is omitted from catalogue only, so output inside a linked-worktree source is created before the backstop refuses it. |
+| D33 | `591e4d36b8ec3992c218a2a360c65411135b646d4f146df35e6f9c41ccc5ed8b` | The shared output guard refuses every path, so legitimate evidence output outside the source can never proceed. |
+| D34 | `cdc853a2b1e8445d8854c651f05f868af3bde36b60eab909765ab1d4dc4870bc` | The record's measured digests no longer describe the current subject, so the matrix reports a measurement taken against bytes that have since changed. |
 
 ### The matrix
 

@@ -199,32 +199,97 @@ pass "absent browser tool is NO_VERIFIER_RAN, not PASS"
 
 # --- fixture: the empty check-run set ---------------------------------------
 
+# make_gh <dir> <members-json> [status] [totalCount] [head] [rollup-head]
+#
+# One fake forge answering BOTH shapes off its argv, because both are under test
+# here for different reasons:
+#
+#   gh api graphql -q <query>   what pr-checks actually calls now. The real
+#                               query text is evaluated against the fixture with
+#                               jq, so the query and the fold in
+#                               bin/fm-verify-lib.sh are what the case exercises
+#                               - not a canned answer shaped to agree with them.
+#   gh pr view --json ...       the flattened field, kept because the naive
+#                               wrappers below are driven against it: they are
+#                               negative controls showing what an exit-status or
+#                               output-presence reader concludes from the same
+#                               head.
+#
+# members-json is the member array both shapes are built from, so one fixture
+# cannot say two different things about one head.
 make_gh() {
-  local dir=$1 body=$2 status=${3:-0} bin
+  local dir=$1 members=$2 status=${3:-0} total=${4:-} head=${5:-} rollup=${6:-} bin
   bin=$(fm_fakebin "$dir")
+  [ -n "$head" ] || head=$FIXTURE_HEAD
+  [ -n "$rollup" ] || rollup=$head
+  if [ -z "$total" ]; then
+    total=$(printf '%s' "$members" | jq 'length')
+  fi
+  jq -n --argjson members "$members" --argjson total "$total" \
+    --arg head "$head" --arg rollup "$rollup" \
+    '{data: {repository: {pullRequest: {
+       headRefOid: $head, mergeable: "MERGEABLE", reviewDecision: "APPROVED",
+       commits: {nodes: [{commit: {oid: $rollup,
+         statusCheckRollup: {contexts: {totalCount: $total, nodes: $members}}}}]}}}}}' \
+    > "$bin/graphql.json"
+  jq -n --argjson members "$members" '{statusCheckRollup: $members}' > "$bin/flat.json"
   cat >"$bin/gh" <<SH
 #!/usr/bin/env bash
-printf '%s\n' '$body'
-exit $status
+here=\$(cd "\$(dirname "\${BASH_SOURCE[0]}")" && pwd)
+[ "$status" = 0 ] || { printf 'gh: could not reach api.github.com\n'; exit $status; }
+query=
+graphql=
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    graphql) graphql=1; shift ;;
+    -q|--jq) query=\${2:-}; shift; [ "\$#" -gt 0 ] && shift ;;
+    *) shift ;;
+  esac
+done
+if [ -n "\$graphql" ]; then
+  jq -r "\$query" "\$here/graphql.json"
+  exit \$?
+fi
+cat "\$here/flat.json"
 SH
   chmod +x "$bin/gh"
   printf '%s\n' "$bin"
 }
 
-GH_EMPTY=$(make_gh "$TMP/gh-empty" '{"statusCheckRollup":[]}')
-GH_PASSING=$(make_gh "$TMP/gh-passing" \
-  '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"}]}')
-GH_FAILING=$(make_gh "$TMP/gh-failing" \
-  '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"FAILURE"}]}')
-GH_PENDING=$(make_gh "$TMP/gh-pending" \
-  '{"statusCheckRollup":[{"status":"IN_PROGRESS","conclusion":null}]}')
-GH_SKIPPED=$(make_gh "$TMP/gh-skipped" \
-  '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SKIPPED"}]}')
-GH_NO_CONCLUSION=$(make_gh "$TMP/gh-no-conclusion" \
-  '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":null}]}')
+# A forge that cannot be reached at all: no body, non-zero status.
+make_gh_down() {
+  local dir=$1 bin
+  bin=$(fm_fakebin "$dir")
+  cat >"$bin/gh" <<'SH'
+#!/usr/bin/env bash
+printf 'gh: could not reach api.github.com\n'
+exit 1
+SH
+  chmod +x "$bin/gh"
+  printf '%s\n' "$bin"
+}
+
+FIXTURE_HEAD=aa11bb22cc33dd44ee55ff66aa77bb88cc99dd00
+
+# check_json <name> <conclusion-or-null> [status] [databaseId]: one CheckRun
+# member, named and identified, so the reduction can tell attempts apart.
+check_json() {
+  jq -nc --arg name "$1" --argjson conclusion "$2" \
+    --arg status "${3:-COMPLETED}" --argjson id "${4:-9001}" \
+    '{__typename: "CheckRun", databaseId: $id, name: $name, status: $status,
+      conclusion: $conclusion, startedAt: "2026-08-18T05:10:00Z",
+      workflowName: "CI", checkSuite: {workflowRun: {workflow: {name: "CI"}}}}'
+}
+
+GH_EMPTY=$(make_gh "$TMP/gh-empty" '[]')
+GH_PASSING=$(make_gh "$TMP/gh-passing" "[$(check_json ci '"SUCCESS"')]")
+GH_FAILING=$(make_gh "$TMP/gh-failing" "[$(check_json ci '"FAILURE"')]")
+GH_PENDING=$(make_gh "$TMP/gh-pending" "[$(check_json ci null IN_PROGRESS)]")
+GH_SKIPPED=$(make_gh "$TMP/gh-skipped" "[$(check_json ci '"SKIPPED"')]")
+GH_NO_CONCLUSION=$(make_gh "$TMP/gh-no-conclusion" "[$(check_json ci null)]")
 GH_ONE_STALE=$(make_gh "$TMP/gh-one-stale" \
-  '{"statusCheckRollup":[{"status":"COMPLETED","conclusion":"SUCCESS"},{"status":"COMPLETED","conclusion":"STALE"}]}')
-GH_DOWN=$(make_gh "$TMP/gh-down" 'gh: could not reach api.github.com' 1)
+  "[$(check_json ci '"SUCCESS"' COMPLETED 9001),$(check_json lint '"STALE"' COMPLETED 9002)]")
+GH_DOWN=$(make_gh_down "$TMP/gh-down")
 
 PR=https://github.com/example/repo/pull/1
 
@@ -280,8 +345,7 @@ pass "passing means EVERY member succeeded, so one unconcluded check withholds i
 # gh_with_conclusion <json-conclusion> <slug>: a gh whose pull request carries
 # exactly one COMPLETED check with that conclusion.
 gh_with_conclusion() {
-  make_gh "$TMP/gh-conclusion-$2" \
-    "{\"statusCheckRollup\":[{\"status\":\"COMPLETED\",\"conclusion\":$1}]}"
+  make_gh "$TMP/gh-conclusion-$2" "[$(check_json ci "$1")]"
 }
 
 while read -r conclusion want; do
@@ -309,7 +373,7 @@ pass "a check completing with no conclusion at all is NO_VERIFIER_RAN"
 # state vocabulary, which is why the rule reads .conclusion // .state. Asserted
 # in its own shape so repartitioning cannot quietly drop one vocabulary.
 GH_STATE_ERROR=$(make_gh "$TMP/gh-state-error" \
-  '{"statusCheckRollup":[{"state":"ERROR"}]}')
+  '[{"__typename":"StatusContext","context":"ci/legacy","state":"ERROR","createdAt":"2026-08-18T05:10:00Z"}]')
 with_path "$GH_STATE_ERROR:$PATH" expect_verify FAIL verifier_reported_failure \
   'commit status ERROR' -- pr-checks "$PR"
 pass "a commit status in the ERROR state is FAIL, so both GitHub vocabularies stay live"

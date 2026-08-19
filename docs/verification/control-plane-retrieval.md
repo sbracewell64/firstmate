@@ -38,14 +38,19 @@ gh version 2.96.0 (2026-07-02)
 $ GH_DEBUG=api gh pr view 2522 --repo sbracewell64/firstmate --json statusCheckRollup 2>&1 \
     | grep -o 'contexts([a-z]*:[0-9]*)' | sort -u
 contexts(first:100)
+$ GH_DEBUG=api gh pr list --repo sbracewell64/firstmate --state open --limit 1 \
+    --json number,statusCheckRollup 2>&1 \
+    | grep -o 'contexts([a-z]*:[0-9]*)' | sort -u
+contexts(first:100)
 ```
 
-`first:100`, not `last:100`.
+`first:100`, not `last:100`, and the listing form asks for the same thing as the single-request form.
 A head carrying more than 100 check members returns the oldest 100 and silently drops the newest, which are exactly the members a re-triggered check produces.
 That response also flattens away both `totalCount` and `pageInfo`, so it carries no evidence of its own truncation.
 At exactly 100 members a complete set and a truncated one are indistinguishable in it, so [`../../bin/fm-verify-lib.sh`](../../bin/fm-verify-lib.sh) refuses both: that costs a re-read on a head with exactly 100 checks and prevents a false green on every head above it.
 
-[`../../bin/fm-pr-merge.sh`](../../bin/fm-pr-merge.sh) asks for `contexts(last:100)` with `totalCount` and refuses a returned count below the reported one, which is why that path was already sound.
+That flattened field is now the NARROWER of the rule's two sources and is read only by the batched pull-request listing in [`../../bin/fm-bearings-snapshot.sh`](../../bin/fm-bearings-snapshot.sh), which renders it and authorizes nothing.
+Every path whose answer will be acted on - `bin/fm-verify.sh pr-checks`, and through it certification and slot reservation, plus [`../../bin/fm-pr-merge.sh`](../../bin/fm-pr-merge.sh) - reads `contexts(last:100)` with `totalCount` and refuses a returned count below the reported one.
 
 ### GitHub's continuation is an opaque cursor, so page numbers are not a traversal
 
@@ -200,6 +205,12 @@ Two sites were load-bearing negatives over an unenumerated universe.
 [`../../bin/fm-verify.sh`](../../bin/fm-verify.sh)'s `pr-checks` verifier classified gh's flattened rollup with no truncation detection, so "no member is non-SUCCESS" - a negative claim - was drawn over a set capped at the oldest 100.
 It is fixed in the rule's owner, `bin/fm-verify-lib.sh`, which gained a `truncated` label placed below `failing` and `pending` and above `passing`: incompleteness kills negatives and not positives, so a failure actually observed in the returned part still refuses.
 `bin/fm-verify.sh` maps that label to `NO_VERIFIER_RAN` with a new `retrieval_incomplete` reason, and `bin/fm-bearings-snapshot.sh`, the rule's other consumer, renders the label directly and needed no change.
+
+That repair left the truncation closed and a second question open, which a later audit measured: `bin/fm-verify-lib.sh` and `bin/fm-pr-merge.sh` were TWO OWNERS of "is this exact head green?", and they were driven to opposite verdicts on one head carrying an older `FAILURE` and a newer `SUCCESS` for one check.
+The library had no attempt reduction, so any attempt that ever failed made the head failing forever; the merge gate reduced attempts to the current one and read green.
+The library was the stricter of the two, so it produced a false `FAIL` - a positive observed-bad claim that reaches `bin/fm-certify.sh` as a verification gap and `bin/fm-slot-reservation.sh` as grounds to withhold a pool slot.
+There is now one fold in `bin/fm-verify-lib.sh` and two normalizers that feed it, each declaring what it cannot supply, and `pr-checks` reads the authoritative source.
+`tests/fm-exact-head-green-one-owner.test.sh` keeps the divergence itself as an executed red control against the pre-consolidation rule.
 
 [`../../bin/fm-verify-fork-landing.sh`](../../bin/fm-verify-fork-landing.sh) asked `gh-axi pr list --head` and took the first number the listing printed.
 That is two mistakes in one line: the listing was never enumerated, so "no open pull request" was a negative over an unread universe, and the first row is the SOURCE's choice of which pull request the subject is rather than the verifier's.

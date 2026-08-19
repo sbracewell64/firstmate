@@ -461,6 +461,23 @@ nm_effective_ci_step_status() {
 # because nothing executed. An absent verifier is a distinct state from a
 # passing one and never maps to green here, so a head no verifier examined
 # reaches firstmate as not-ready rather than as work ready for review.
+#
+# WHAT THIS IS, AND WHAT IT IS NOT. This TRANSPORTS the pipeline's own reported
+# CI state out of the pipeline's own log. It is not an answer to "is this exact
+# head green?" - bin/fm-verify-lib.sh is the single owner of that question, and
+# it answers it by reading the forge and binding the check set to a named commit.
+# This reads neither the forge nor a commit.
+#
+# So the projection is stale-able by construction: the marker was written when
+# the pipeline last looked, the head can have moved since, and nothing here can
+# tell. That is acceptable for what it drives - whether a crew's run is still
+# working or is waiting on a merge - and it is why it drives nothing else. No
+# merge, no certification, and no trunk-repair reservation may be taken from
+# this: those go through bin/fm-verify.sh pr-checks, and bin/fm-pr-merge.sh
+# re-reads the head at merge time regardless of anything reported here.
+#
+# "green" below therefore means "the pipeline last reported every check passing",
+# never "this head is green now". The caller renders it and stops.
 nm_ci_checks_state() {
   local run_id log_tail marker
   run_id=$(strip_quotes "$(nm_field id)")

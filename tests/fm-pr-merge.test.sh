@@ -65,6 +65,9 @@ set -u
 # the written format.
 # shellcheck source=/dev/null
 . "$ROOT/bin/fm-pr-lib.sh"
+# The check-rollup fixtures fold through the real owner rather than restating it.
+# shellcheck source=bin/fm-verify-lib.sh
+. "$ROOT/bin/fm-verify-lib.sh"
 fm_git_identity fmtest fmtest@example.invalid
 
 PR_MERGE="$ROOT/bin/fm-pr-merge.sh"
@@ -92,23 +95,58 @@ make_case() {
 }
 
 # write_verify_payload <file> <head> <mergeable> <review> <checks> <unsuccessful>
-#                      [failing] [unrun]
+#                      [failing] [unrun] [undecidable]
 # The lines fm-pr-merge.sh reads back from its single forge read. When a case
 # does not care how the unsuccessful checks break down, they default to
 # failures, which is the stricter reading and keeps the pre-existing cases
 # meaning exactly what they meant before the split.
 #
-# rollup_head is the commit GitHub attached the results to, and a case that says
-# nothing about it gets the head itself, which is the ordinary state: these
+# evidence_head is the commit GitHub attached the results to, and a case that
+# says nothing about it gets the head itself, which is the ordinary state: these
 # cases are about what the results say, not about which commit they belong to.
 # members and reported are the raw member count before executions are reduced to
 # checks and the count GitHub claimed for them; a case that says nothing about
 # them gets a rollup whose members are already one per check and complete.
+#
+# label= is NOT written by hand. It is produced by the real fold in
+# bin/fm-verify-lib.sh over a rollup carrying exactly the verdict mix this case
+# asked for, so a fixture can never hand the gate a label the one owner would
+# not have produced. A case that asks for counts which do not reconcile still
+# gets them verbatim: the classifier refuses those before any label matters, and
+# that refusal is what those cases are testing.
+payload_label() {  # <members> <reported> <success> <failing> <unrun> <undecidable>
+  jq -nr \
+    --argjson members "$1" --argjson reported "$2" --argjson ok "$3" \
+    --argjson failing "$4" --argjson unrun "$5" --argjson und "$6" \
+    '{members: $members, reported: $reported,
+      checks: ([range($ok) | {name: "ok", verdict: "SUCCESS"}]
+               + [range($failing) | {name: "f", verdict: "FAILING"}]
+               + [range($unrun) | {name: "u", verdict: "INCONCLUSIVE"}]
+               + [range($und) | {name: "d", verdict: "UNDECIDABLE"}])}' \
+    | jq -r "$FM_VERIFY_ROLLUP_FOLD"
+}
+
 write_verify_payload() {
-  local failing=${7:-$6} unrun=${8:-0}
-  printf 'head=%s\nmergeable=%s\nreview=%s\nrollup_head=%s\nmembers=%s\nreported=%s\nchecks=%s\nunsuccessful=%s\nfailing=%s\nunrun=%s\nundecidable=0\n' \
-    "$2" "$3" "$4" "${FM_TEST_ROLLUP_HEAD:-$2}" "${FM_TEST_MEMBERS:-$5}" \
-    "${FM_TEST_REPORTED:-${FM_TEST_MEMBERS:-$5}}" "$5" "$6" "$failing" "$unrun" > "$1"
+  local file=$1 head=$2 mergeable=$3 review=$4 checks=$5 unsuccessful=$6
+  local failing=${7:-$6} unrun=${8:-0} undecidable=${9:-0}
+  local members=${FM_TEST_MEMBERS:-$checks}
+  local reported=${FM_TEST_REPORTED:-${FM_TEST_MEMBERS:-$checks}}
+  local evidence_head=${FM_TEST_ROLLUP_HEAD:-$head}
+  local subject ok label
+  if [ -z "$head" ] || [ -z "$evidence_head" ]; then
+    subject=unbound
+  elif [ "$head" = "$evidence_head" ]; then
+    subject=bound
+  else
+    subject=mismatch
+  fi
+  ok=$((checks - unsuccessful))
+  [ "$ok" -ge 0 ] || ok=0
+  label=$(payload_label "$members" "$reported" "$ok" "$failing" "$unrun" "$undecidable")
+  printf 'label=%s\nsubject=%s\nhead=%s\nevidence_head=%s\nmergeable=%s\nreview=%s\nmembers=%s\nreported=%s\nchecks=%s\nunsuccessful=%s\nfailing=%s\npending=0\ninconclusive=%s\nundecidable=%s\n' \
+    "$label" "$subject" "$head" "$evidence_head" "$mergeable" "$review" \
+    "$members" "$reported" "$checks" "$unsuccessful" "$failing" "$unrun" \
+    "$undecidable" > "$file"
 }
 
 # A green head: mergeable, no review blocking, ten check runs, none unsuccessful.
@@ -696,7 +734,7 @@ test_unreadable_check_counts_refuse() {
   case_dir=$(make_case unreadable-counts)
   mkdir -p "$case_dir/wt"
   add_gh_mocks "$case_dir" "$head"
-  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=\nunsuccessful=0\nundecidable=0\n' \
+  printf 'label=passing\nsubject=bound\nhead=%s\nevidence_head=%s\nmergeable=MERGEABLE\nreview=\nmembers=3\nreported=3\nchecks=\nunsuccessful=0\nfailing=0\npending=0\ninconclusive=0\nundecidable=0\n' \
     "$head" "$head" > "$case_dir/verify.txt"
   : > "$case_dir/gh-axi.log"
 
@@ -712,7 +750,7 @@ test_unreadable_check_counts_refuse() {
   assert_no_merge_side_effects "$case_dir" unreadable-counts
 
   # The mirrored shape: a readable count with an unreadable failure count.
-  printf 'head=%s\nmergeable=MERGEABLE\nreview=\nrollup_head=%s\nmembers=3\nreported=3\nchecks=3\nunsuccessful=\nundecidable=0\n' \
+  printf 'label=passing\nsubject=bound\nhead=%s\nevidence_head=%s\nmergeable=MERGEABLE\nreview=\nmembers=3\nreported=3\nchecks=3\nunsuccessful=\nfailing=0\npending=0\ninconclusive=0\nundecidable=0\n' \
     "$head" "$head" > "$case_dir/verify.txt"
   : > "$case_dir/gh-axi.log"
   set +e
@@ -1293,10 +1331,16 @@ test_real_query_against_api_shaped_json() {
   run_fixture_case skipped-among-passes \
     "[${success_runs%,},{\"__typename\":\"CheckRun\",\"databaseId\":2000,\"status\":\"COMPLETED\",\"conclusion\":\"SKIPPED\"},{\"__typename\":\"CheckRun\",\"databaseId\":2001,\"status\":\"COMPLETED\",\"conclusion\":\"NEUTRAL\"},{\"__typename\":\"CheckRun\",\"databaseId\":2002,\"status\":\"COMPLETED\",\"conclusion\":\"CANCELLED\"}]" \
     MERGEABLE '' 63 1 '3 of 13 check runs reported no result'
-  # The adverse conclusions, which must read as failures rather than as absence.
+  # TIMED_OUT is a NON-VERDICT, and this assertion is the record of a resolved
+  # disagreement. This gate used to count it adverse while bin/fm-verify-lib.sh
+  # counted it a non-verdict; consolidating the two owners kept the library's
+  # narrower adverse set, because FAIL is a positive observed-bad claim and a run
+  # the clock killed never earned one. The merge still refuses - the bucket
+  # changed, not the outcome - and this case exists to catch a silent move back.
   run_fixture_case timed-out \
     '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"TIMED_OUT"}]' \
-    MERGEABLE '' 64 1 '1 of 1 check runs failed'
+    MERGEABLE '' 64 1 '1 of 1 check runs reported no result'
+  # The adverse conclusions, which must read as failures rather than as absence.
   run_fixture_case startup-failure \
     '[{"__typename":"CheckRun","databaseId":2000,"status":"COMPLETED","conclusion":"STARTUP_FAILURE"}]' \
     MERGEABLE '' 65 1 '1 of 1 check runs failed'
@@ -1313,6 +1357,21 @@ test_real_query_against_api_shaped_json() {
   run_fixture_case legacy-status-pending \
     '[{"__typename":"StatusContext","context":"ci/legacy","state":"PENDING"}]' \
     MERGEABLE '' 67 1 '1 of 1 check runs reported no result'
+  # THE OWNER HAS THE LAST WORD. Every count in this response reads green - ten
+  # checks, zero failing, zero unrun, zero undecidable - and the merge must still
+  # be refused, because GitHub reported more members for the head than it
+  # returned and the ones it did not return are exactly where a failure could be.
+  # This is the case that separates "consumes the verdict" from "computes its own
+  # from the counts": a gate reading only its own arithmetic would merge here.
+  FM_TEST_FIXTURE_TOTAL=143 \
+    run_fixture_case green-counts-but-unread-members "[${success_runs%,}]" \
+      MERGEABLE '' 102 1 'GitHub reported 143 check results for it but returned 10'
+  # The same shape one level up: a rollup that is entirely green and belongs to
+  # another commit. Nothing here examined the head being merged, so this is
+  # could-not-observe about that head rather than a verdict about it.
+  FM_TEST_FIXTURE_OID=1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c1c \
+    run_fixture_case green-counts-for-another-commit "[${success_runs%,}]" \
+      MERGEABLE '' 103 1 'so nothing here examined the head being merged'
   # Mergeability and review decision read off the same single response.
   run_fixture_case conflicting "[${success_runs%,}]" CONFLICTING '' 58 1 \
     'the pull request is not mergeable (mergeable=CONFLICTING)'

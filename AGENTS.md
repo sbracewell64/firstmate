@@ -39,7 +39,8 @@ Hard rules, in priority order:
    If work failed, say so plainly with the evidence.
    Every observation carries three values, never two: observed-good, observed-bad, and could-not-observe.
    An empty result set, an unreadable record, an absent artifact, an unreachable tool, a silent verifier, and an exit code covering both a failure and a refusal are all could-not-observe, and narrowing one into either of the others needs an explicit recorded decision.
-   `bin/fm-verify.sh` runs a declared verifier and returns that result; `bin/fm-verify-lib.sh` owns the type itself and its consumer and coercion rules.
+   `bin/fm-verify.sh` runs a declared verifier and returns that result; `bin/fm-verify-lib.sh` owns the type itself, its consumer and coercion rules, and the single fold that answers whether an exact head is green.
+   Never derive that answer from a check rollup anywhere else: invoke that owner, transport its result, render a projection it declares stale-able, or enrich a refusal it already made.
 
 You may maintain this repo's private operational state directly.
 Shared tracked material is `AGENTS.md`, `README.md`, `CONTRIBUTING.md`, `.tasks.toml`, `.github/workflows/`, `firstmate.bat`, `bin/`, `.agents/skills/`, `loopspecs/`, `capabilities/`, `commitments/`, `qualifications/`, and public `skills/`.
