@@ -44,27 +44,31 @@
   },
   "required_by_assurance": {
     "executable": [
-      "probe"
+      "probe|probes"
     ],
     "cited-control": [
-      "probe",
+      "probe|probes",
       "control"
     ],
     "attested": [
       "reason"
     ]
   },
+  "required_by_assurance_alternation": "A required key containing \"|\" names ALTERNATIVES, and an entry satisfies it by carrying any one of them. The rule is generic and lives in the interpreter as one split; the alternatives themselves live here, so a tier's requirement can never be stated in the script instead of in this contract. It exists because a commitment with more than one half declares `probes` where a single-half one declares `probe`, and both are the same requirement - that the entry declares SOMETHING that observes it.",
   "forbidden_by_assurance": {
     "attested": [
-      "probe"
+      "probe",
+      "probes"
     ]
   },
   "optional": {
     "probe": "one probe object; see probe_kinds",
+    "probes": "array of TWO OR MORE probe objects, for a commitment with more than one half that each have a landed artifact to probe. Mutually exclusive with `probe`: an entry carrying both declares two answers and no single one, so it is INADMISSIBLE rather than resolved by preferring either. An entry with one half declares `probe`, because two spellings of one thing drift. THE TYPE IS VALIDATED the same way unobserved_conditions is, and for the same reason: it must be an array of at least two objects each carrying a non-empty `kind`, and anything else makes the entry INADMISSIBLE rather than silently observing fewer halves than it declares. Every probe in the list is subject to probe_bounds.typed_probe_targets exactly as a single one is, and each runs exactly as its kind runs when declared alone - a kind that bounds its work at register_entry_probe_seconds keeps that bound per probe, so an entry does not get slower reads by having more halves.",
+    "probes_are_composed_by_three_valued_AND": "SATISFIED requires every half observed-good, so the composition is Kleene strong three-valued AND over the probe results: every PASS is PASS; any FAIL is FAIL even when another half could not be observed, because one half observed unreal settles that the commitment is not real; otherwise, with no FAIL and at least one unobserved half, the entry is UNOBSERVED. This is deliberately the SAME law unobserved_conditions already applies with a constant-unknown operand - a declared-uncovered half turns a PASS into could-not-observe and leaves a FAIL a FAIL - so the two fields cannot rule the same entry differently. The evidence is joined rather than reduced, so a reader sees which half answered what instead of one verdict standing for all of them.",
     "control": "name of the test or artifact watched to fail first, as the 2026-08-10 ruling pins it. Required by cited-control. Surfaced, and marked when it also resolves on disk.",
     "reason": "why no probe is possible. Required by attested, and never treated as verification.",
     "deadline": "ISO date (YYYY-MM-DD). An entry still unmet after it is reported overdue. It never turns an unmet entry into a met one, and it never suppresses one.",
-    "unobserved_conditions": "array of one-sentence conditions this commitment includes that its probe does NOT observe. Use it when the recorded commitment has more than one half and only some of them have a landed artifact to probe. The covered half is reported exactly as the probe found it, and the declared-uncovered half is reported as could-not-observe, so the entry can never reach SATISFIED - and therefore never retire - on a partial answer. It can only withhold satisfaction, never grant it, which is why it is not one of the refused status words. It is not a place to record work that is merely unfinished: that is what a second entry with its own probe is for. THE TYPE IS VALIDATED: it must be a non-empty array of non-empty strings, and anything else - a bare string, an array of objects, a null member - makes the entry INADMISSIBLE. This is the one field that can withhold satisfaction, so a malformed one would silently skip the guard and let a passing probe reach SATISFIED on a partial answer, which is the exact outcome the field exists to prevent.",
+    "unobserved_conditions": "array of one-sentence conditions this commitment includes that its probe does NOT observe. Use it when the recorded commitment has more than one half and only some of them have a landed artifact to probe. The covered half is reported exactly as the probe found it, and the declared-uncovered half is reported as could-not-observe, so the entry can never reach SATISFIED - and therefore never retire - on a partial answer. It can only withhold satisfaction, never grant it, which is why it is not one of the refused status words. It is not a place to record work that is merely unfinished: that is what a second entry with its own probe is for. It is ONLY for a half with nothing to probe at all, and it is the weaker of the two mechanisms: a half that has a landed artifact belongs in `probes`, which observes it, and this field's own declaration of why it cannot be probed is prose that ages and must be replaced by a probe the moment one becomes possible. A declaration that has gone stale states a falsehood as evidence at every session start, which is the failure this register was built from. THE TYPE IS VALIDATED: it must be a non-empty array of non-empty strings, and anything else - a bare string, an array of objects, a null member - makes the entry INADMISSIBLE. This is the one field that can withhold satisfaction, so a malformed one would silently skip the guard and let a passing probe reach SATISFIED on a partial answer, which is the exact outcome the field exists to prevent.",
     "note": "free prose for a reader; never consumed"
   },
   "refused_keys": [
@@ -132,6 +136,17 @@
       "pass_when": "a live task record, a local fm/<work_id> branch, or a backlog record that is in flight or done owns the identity",
       "fail_when": "every consulted source answered, and none of them owns it",
       "could_not_observe_when": "a source that could have owned it could not answer - no readable backlog backend, or no git"
+    },
+    "capability_row_owned": {
+      "args": {
+        "catalog": "path to the capability catalog, relative to the firstmate code root, resolved only under the tracked code root; see probe_bounds.typed_probe_targets",
+        "capability": "the dotted capability name whose row must name an owner and a verifier"
+      },
+      "pass_when": "the catalog parses, carries exactly one row with that name, and that row's owner and verifier are both non-empty paths that each resolve to a file existing under the tracked code root",
+      "fail_when": "the catalog is readable and the row is absent or duplicated, or the row's owner or verifier is null, empty, or names a path that does not exist - the same rule command_answers already applies, that a declared owner which does not exist is an OBSERVED absence rather than an unobservable one",
+      "could_not_observe_when": "the catalog is absent or does not parse as JSON with a capabilities list",
+      "why_resolution_and_not_just_a_name": "The commitment this kind was added for is satisfied when the row NAMES an owner and a verifier, and a name pointing at nothing is precisely the recorded-but-not-real shape this register exists to refuse. Reading the name alone would let the row be satisfied by a string, which is the defect one level up. Nothing here is executed: the row's owner and verifier are only tested for existence, and each is put through the same typed_probe_targets guard as any other probe target first, because those two paths come out of a catalog file rather than out of the entry this register validated.",
+      "not_a_binding_check": "This observes what the catalog RECORDS. It cannot observe that anything enforces the capability, and no reader may take a PASS here as containment - capabilities/catalog.json's own not_a_security_boundary certification governs, and it is a capability boundary rather than a security one."
     }
   },
   "derived_never_written": {

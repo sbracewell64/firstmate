@@ -4,13 +4,17 @@
   "recorded": "A bound agent receives no unrestricted or raw network egress; network is a typed capability the agent may request, Runtime decides, and the capability host enforces.",
   "authority": "data/captain-rulings-2026-08-06/capability-host-network-egress.md (captain ruling, 2026-08-06)",
   "unmet_state": "RULED-NOT-ENFORCED",
-  "satisfied_when": "Every harness firstmate can launch composes a session whose permission enforcement is active, AND the capability catalog's network.request row names an owner and a verifier. The probe below answers the first of those; the second is declared unobserved, so this entry cannot retire on the first alone.",
+  "satisfied_when": "Every harness firstmate can launch composes a session whose permission enforcement is active, AND the capability catalog's network.request row names an owner and a verifier that both exist. Both halves are probed below and composed by three-valued AND, so neither can retire this entry alone.",
   "assurance": "executable",
-  "probe": {
-    "kind": "launch_permission_enforced"
-  },
-  "unobserved_conditions": [
-    "the capability catalog's network.request row names an owner and a verifier rather than carrying owner null and verifier null, which has no landed artifact to probe because that catalog exists as a proposal in data/cfvc-harness-and-capability/report.md section 6.3 rather than as tracked code"
+  "probes": [
+    {
+      "kind": "launch_permission_enforced"
+    },
+    {
+      "kind": "capability_row_owned",
+      "catalog": "capabilities/catalog.json",
+      "capability": "network.request"
+    }
   ],
-  "note": "The ruling has two halves and only one of them has landed code to probe today. The probe answers the landed half: every worker launches with permission enforcement disabled, so the prohibition is recorded and not enforced. The other half is declared in unobserved_conditions rather than being probed or quietly dropped, because naming a not-yet-decided owner path would produce a probe that can never pass and dropping it would let this entry retire while network.request still carries owner null and verifier null - the verdict would then claim more than it observed. When that catalog lands as tracked code, this entry gains a second probe over it and the declaration goes away. Closing the gap is staged separately and this entry authorises none of it: retiring a bypass flag before bindings and adapters are proven would disarm every lane and enforce nothing."
+  "note": "The ruling has two halves and both are now observed. The first probe answers the launch posture: workers still launch with permission enforcement disabled, so the prohibition is recorded and not enforced. The second probe answers the catalog: network.request still carries owner null and verifier null, which is what capabilities/catalog.json deliberately records rather than inventing a cheap owner. Until 2026-08-18 this entry declared that second half in unobserved_conditions on the stated ground that the catalog existed only as a proposal in data/cfvc-harness-and-capability/report.md section 6.3; capabilities/catalog.json landed as tracked code on 2026-08-10, before this entry was written on 2026-08-11, so that ground was already false when it was recorded and the register was printing it as evidence at every session start. Replacing the declaration with a probe is strictly stronger: could-not-observe became observed-bad, and the entry still cannot retire on either half. Neither half is satisfiable by this register. The launch half retires only when bindings and adapters are proven, because removing a bypass flag first disarms every lane and enforces nothing. The catalog half is captain-owned: the report's exception E-07 records its retirement evidence as a named workload plus a captain decision on egress scope, the 2026-08-06 ruling authorises no concrete grant, and tests/fm-capability-catalog.test.sh pins network.request unowned - which is also what stops this probe being made green by writing any path into that row."
 }
