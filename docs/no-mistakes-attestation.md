@@ -265,5 +265,5 @@ It does not directly prove that two invocations racing for the last budget slot 
 It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
 The stale-attempt rollup reduction is separately owned by `bin/fm-verify-lib.sh` and proved by `tests/fm-exact-head-green-one-owner.test.sh`.
 
-The suite was re-measured on 2026-08-18 with `bash tests/fm-attest.test.sh`, which exited 0 and reported 92 passing cases.
+The suite was re-measured on 2026-08-19 with `bash tests/fm-attest.test.sh`, which exited 0 and reported 94 passing cases.
 That number is bound to the head it was measured at and to nothing else: it is prose, and no control reads it, so it goes stale silently whenever the suite grows. Re-measure it rather than reconciling it against a remembered figure.
