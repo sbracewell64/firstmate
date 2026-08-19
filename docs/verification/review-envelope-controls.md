@@ -54,11 +54,11 @@ A control fails when a subject's shipped bytes differ from the bytes measured, o
 
 A record about a subject NAMES THE SUBJECT. The citation for this campaign is therefore these three digests, and nothing else:
 
-- `bin/fm-review-envelope-lib.sh` — `sha256:d1342bff0c7504d12f7492f7370bcf1a7f8fc7251e883ab5282523ff2f043226`
+- `bin/fm-review-envelope-lib.sh` — `sha256:49996ecb35eb0a4a786b4008ca5d64548e06d2d37e7f0ba33ab3f8b91590a25a`
 - `bin/fm-review-envelope.sh` — `sha256:f5c1efdf049feaf7c81368d5dd64e73accfbf0cc092ecf36524e07234954b17a`
-- `tests/fm-review-envelope.test.sh` — `sha256:fc7f344aba17d6e3cea0caa3910390202f24c0f8c3e15073b5f7d7e2551294ee`
+- `tests/fm-review-envelope.test.sh` — `sha256:6b924f9a3e74467ddacd599e06bc39d9a0b2bf005403300790292dcb3fdccb1d`
 
-Campaign head: `03264d6364245e5c58007d5ebbe4c670ccadfb6c` (provenance only).
+Campaign head: `2aecbc1bc4b088e4a515cbbf3bb07c02c574db08` (provenance only).
 Mutations built: 74.
 
 That head is PROVENANCE: the commit the measurement was taken at, recorded so the moment is attributable. It is not the coordinate a replay depends on. It happens to be reachable from this branch today, and that is convenience rather than the binding — the digests above are the binding, and they stay checkable whatever later becomes of the commit.
@@ -101,7 +101,7 @@ Three properties bound what a leak of either variable can do:
 
 ## What was measured
 
-81 controls pass against the shipped scripts.
+90 controls pass against the shipped scripts.
 
 That number is an OBSERVATION, not a count of the invocation list. It stands only because a run reached the end of the suite with the campaign artifact matching every shipped subject, and the count-drift control compared it against that run's executed count. Until the re-measurement above, no number could stand here at all: the suite halted at the campaign-artifact control, and a count taken from the invocation list would have been arithmetic wearing the clothes of a measurement.
 
@@ -217,7 +217,7 @@ Two rows are marked INVERTED. Those are non-vacuity mutations: they break the AC
 | an explicit no-contracts declaration is accepted | an explicit no-contracts declaration stops being accepted | `test_no_verification_contracts_requires_an_explicit_reason` | `not ok - an explicit reason may declare that no contracts are required: expected exit 0, got 2` |
 | requested decisions accept only uppercase tokens | the requested-decision token format stops being enforced | `test_requested_decision_is_an_uppercase_token` | `not ok - a malformed requested decision refuses: expected exit 1, got 0` |
 | a synchronization seam outside its root refuses | the confinement boundary accepts the root directory itself | `test_a_synchronization_seam_outside_its_root_refuses` | `not ok - a seam pointed at the confinement root must not write siblings of it` |
-| a malformed but parseable inputs document is could-not-observe | prepare's generic exception guard narrows to one exception class | `test_a_malformed_but_parseable_inputs_document_is_could_not_observe` | `not ok - a malformed inputs document must never answer with a traceback (unexpected: 'Traceback')` |
+| a malformed but parseable inputs document is could-not-observe | prepare's generic exception guard narrows to one exception class | `test_a_malformed_but_parseable_inputs_document_is_could_not_observe` | `not ok - the entrypoint's record must carry the classifier's own reason, not the empty-summary fallback (missing: 'review-envelope,NO_VERIFIER_RAN,ver` |
 
 ## Nine review findings, and the round that closed them
 
