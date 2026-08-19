@@ -33,20 +33,50 @@ WAIT_REMOTE_SECONDS=90
 WAIT_LOCAL_SECONDS=30
 mkdir -p "$PARENT/data" "$PARENT/state" "$PARENT/config" "$PARENT/projects" "$REMOTE_ROOT" "$CLAIMS"
 cleanup() {
-  local worker_pid='' wait_attempt=0
+  local worker_pid='' supervisor_pid='' supervisor_cmd='' wait_attempt=0 rm_attempt=0
   touch "$TMP_ROOT/provision.release" "$TMP_ROOT/seed.release" "$TMP_ROOT/handoff.release" \
     "$TMP_ROOT/inherit.release" "$TMP_ROOT/launch.release" 2>/dev/null || true
   FM_HOME="$PARENT" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" \
     "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
   if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
+    # worker.pid records the --serve child, but on Linux that child runs under
+    # a supervisor loop that respawns it after a non-zero exit; a respawned
+    # child's mkdir -p recreates remote-jobs/ underneath the rm below, which
+    # then fails with "Directory not empty". Kill the whole tree from the
+    # supervisor down (identified via ppid, gated on it still being the worker
+    # script so a reparented pid is never touched) before removing the fixture.
     worker_pid=$(cat "$TMP_ROOT/remote-jobs/worker.pid")
-    kill "$worker_pid" 2>/dev/null || true
-    while kill -0 "$worker_pid" 2>/dev/null && [ "$wait_attempt" -lt 100 ]; do
-      wait_attempt=$((wait_attempt + 1))
-      sleep 0.05
-    done
+    case "$worker_pid" in ''|*[!0-9]*) worker_pid='' ;; esac
+    if [ -n "$worker_pid" ]; then
+      supervisor_pid=$(ps -o ppid= -p "$worker_pid" 2>/dev/null | tr -d '[:space:]')
+      case "$supervisor_pid" in ''|*[!0-9]*|0|1) supervisor_pid='' ;; esac
+      if [ -n "$supervisor_pid" ]; then
+        supervisor_cmd=$(ps -o command= -p "$supervisor_pid" 2>/dev/null || true)
+        case "$supervisor_cmd" in
+          *fm-remote-job-worker.sh*) ;;
+          *) supervisor_pid='' ;;
+        esac
+      fi
+      fm_test_kill_tree ${supervisor_pid:+"$supervisor_pid"} "$worker_pid"
+      while { kill -0 "$worker_pid" 2>/dev/null ||
+        { [ -n "$supervisor_pid" ] && kill -0 "$supervisor_pid" 2>/dev/null; }; } &&
+        [ "$wait_attempt" -lt 100 ]; do
+        wait_attempt=$((wait_attempt + 1))
+        sleep 0.05
+      done
+    fi
   fi
-  rm -rf -- "$TMP_ROOT"
+  # Absorb any final in-flight write from a straggler instead of letting one
+  # race turn a passed suite red: retry briefly, and only the last attempt is
+  # allowed to fail loudly.
+  while ! rm -rf -- "$TMP_ROOT" 2>/dev/null || [ -d "$TMP_ROOT" ]; do
+    rm_attempt=$((rm_attempt + 1))
+    if [ "$rm_attempt" -ge 40 ]; then
+      rm -rf -- "$TMP_ROOT"
+      break
+    fi
+    sleep 0.05
+  done
 }
 trap cleanup EXIT
 
