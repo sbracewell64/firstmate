@@ -46,6 +46,16 @@ Re-measuring means running the subjects again.
 There is no path anywhere in this module that stamps a fresh digest onto an existing record, and adding one would recreate exactly the failure this artifact was rebuilt to prevent.
 `bin/fm-test-run.sh`'s serial-lane budget carries the same lesson from a sibling incident, and its comment cross-references this one.
 
+The harness run takes about five minutes and must be allowed to finish; a run cut short writes no artifact and changes nothing.
+
+Expect to run the harness twice when the stale subject is `tests/fm-test-run.test.sh` or when a stale subject was already recorded failing.
+That suite asserts against `--check-coverage`, so it reads the artifact that is installed while it runs: with a stale one installed it fails, and the run then records it failing, which keeps the proven set one short of the candidate set.
+The first run leaves every other subject correctly measured, and the second run - started with that artifact in place - measures the whole set green.
+This is the suite observing its own guard rather than a defect in either, and it is the reason a re-measurement is not always a single command.
+
+A proof also goes stale when the default branch changes a proven subject, because pull request CI checks the merge of the branch into that branch.
+The branch that changed the subject owns the re-measurement; a branch that merely merges it re-measures when it takes the change.
+
 `--check-coverage` answers three-valued, and could-not-observe is never a pass.
 
 | Exit | Verdict | Meaning |
