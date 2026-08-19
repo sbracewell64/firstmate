@@ -175,6 +175,12 @@ SEAM_DEADLINE_SECONDS = 5
 # start never clears by waiting, so it is a verdict rather than a silence.
 ADVERSE_CONCLUSIONS = ("FAILURE", "ERROR", "TIMED_OUT", "STARTUP_FAILURE")
 
+# A check attempt that has not finished. These arrive non-empty through the
+# `state` fallback while a check is still running, and they are recognized
+# explicitly: an unrecognized conclusion stays NO_VERDICT, because unknown is
+# not the same as in-flight.
+IN_FLIGHT_STATES = ("PENDING", "QUEUED", "IN_PROGRESS", "WAITING", "REQUESTED", "EXPECTED")
+
 # Ranked worst-first, so a tie between attempts at the same order can never
 # manufacture a pass.
 VERDICT_RANK = ("UNDECIDABLE", "FAILING", "NO_VERDICT", "SKIPPED", "PENDING", "SUCCESS")
@@ -193,8 +199,11 @@ class Unobservable(Exception):
 
 
 def canonical_bytes(value):
+    # allow_nan is off because NaN and Infinity are not strict JSON: a
+    # "canonical" digest over bytes no conforming canonicalizer can reproduce
+    # is a false identity claim.
     return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False
     ).encode("utf-8")
 
 
@@ -636,8 +645,16 @@ CATALOG = {
 
 
 def git(repo, *args):
+    # Decoded explicitly rather than through the locale's preferred encoding,
+    # because the bytes feed digested content: two locales reading one
+    # repository must never produce two content identities.
     completed = subprocess.run(
-        ["git", "-C", repo, *args], capture_output=True, text=True, check=False
+        ["git", "-C", repo, *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        encoding="utf-8",
+        errors="backslashreplace",
     )
     return completed.returncode, completed.stdout
 
@@ -669,7 +686,7 @@ def commit_distance(repo, ancestor, descendant):
 
 def changed_file_table(repo, base, head):
     code, out = git(
-        repo, "diff", "--raw", "-z", "--no-renames", "--abbrev=40", base, head
+        repo, "diff", "--raw", "-z", "--no-renames", "--no-abbrev", base, head
     )
     if code != 0:
         raise Unobservable("repository_unreadable", "the contribution diff could not be read")
@@ -799,6 +816,8 @@ def probe_capability(capability):
                 text=True,
                 check=False,
                 timeout=timeout,
+                encoding="utf-8",
+                errors="backslashreplace",
             )
         except subprocess.TimeoutExpired:
             # Recorded as its own outcome rather than folded into a failure,
@@ -842,7 +861,7 @@ def verdict_of(attempt):
         return "SUCCESS"
     if conclusion == "SKIPPED":
         return "SKIPPED"
-    if conclusion == "":
+    if conclusion == "" or conclusion in IN_FLIGHT_STATES:
         return "PENDING"
     return "NO_VERDICT"
 
@@ -898,12 +917,16 @@ def reduce_checks(attempts):
 # --- reading stored documents -----------------------------------------------
 
 
+def reject_non_finite(constant):
+    raise ValueError("non-finite constant " + constant + " is not strict JSON")
+
+
 def read_json(path, code, detail):
     if not path:
         raise Unobservable("usage_error", detail + ": no path was given")
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+            return json.load(handle, parse_constant=reject_non_finite)
     except (OSError, ValueError) as error:
         raise Unobservable(code, detail + ": " + str(error), str(path))
 
@@ -2081,8 +2104,13 @@ def emit(classification, args):
             print(
                 "  unobserved " + problem["code"] + " subject=" + problem["subject"] + ": " + problem["detail"]
             )
-    if args.summary_out:
-        with open(args.summary_out, "w", encoding="utf-8") as handle:
+    # Every requested summary is written, not only the last one named: the
+    # shell entrypoint injects its own --summary-out ahead of the caller's
+    # arguments, and a last-wins read here once left that injected file empty,
+    # so the entrypoint reported could-not-observe whatever the classification
+    # was and its exit code discriminated nothing.
+    for path in args.summary_out or []:
+        with open(path, "w", encoding="utf-8") as handle:
             handle.write("result=" + classification["result"] + "\n")
             handle.write("reason=" + classification["reason"] + "\n")
             handle.write("readiness=" + classification["readiness"] + "\n")
@@ -2130,12 +2158,6 @@ def command_prepare(args):
         if not getattr(args, name):
             raise Unobservable("usage_error", "prepare requires --" + name.replace("_", "-"))
     target = os.path.join(args.out, "envelope.json")
-    if os.path.exists(target):
-        raise Unobservable(
-            "envelope_exists",
-            "an envelope is written once; supersede a generation, never overwrite one",
-            target,
-        )
     inputs = read_json(args.inputs, "inputs_malformed", "inputs are unreadable")
     # A document that parses as JSON can still be malformed in a way no
     # individual guard names - a rule whose value is a number where a pattern
@@ -2173,10 +2195,37 @@ def command_prepare(args):
         "canonicalization": CANONICALIZATION,
         "value": digest_of(outer_integrity_payload(document)),
     }
-    os.makedirs(args.out, exist_ok=True)
-    with open(target, "w", encoding="utf-8") as handle:
-        json.dump(document, handle, indent=2, sort_keys=True)
-        handle.write("\n")
+    # Write-once is the FILESYSTEM's guarantee, not a look-then-write: the
+    # document is staged beside its final path and hard-linked into place, so
+    # the link either creates the envelope whole or fails because one exists.
+    # A crash mid-write can therefore never leave a partial envelope.json where
+    # a reader would find one - the earlier shape did, and the partial then
+    # blocked every later prepare - and of two concurrent prepares exactly one
+    # wins while the other refuses in the closed vocabulary.
+    staged = target + ".stage." + str(os.getpid())
+    try:
+        os.makedirs(args.out, exist_ok=True)
+        try:
+            with open(staged, "w", encoding="utf-8") as handle:
+                json.dump(document, handle, indent=2, sort_keys=True, allow_nan=False)
+                handle.write("\n")
+            try:
+                os.link(staged, target)
+            except FileExistsError:
+                raise Unobservable(
+                    "envelope_exists",
+                    "an envelope is written once; supersede a generation, never overwrite one",
+                    target,
+                )
+        finally:
+            if os.path.exists(staged):
+                os.unlink(staged)
+    except Unobservable:
+        raise
+    except OSError as error:
+        raise Unobservable(
+            "usage_error", "the envelope could not be written: " + str(error), str(args.out)
+        )
     try:
         classification = classify(envelope, args.repo, args.evidence_root, True)
     except Unobservable:
@@ -2187,7 +2236,9 @@ def command_prepare(args):
             "inputs are structurally malformed: " + str(error),
             str(args.inputs),
         )
-    if "identity" in request_input and request_input["identity"] != computed_request_identity:
+    # An explicit null claim means NONE WAS CLAIMED, exactly as the catalog
+    # states and validate reads it; only a present, non-null claim can mismatch.
+    if request_input.get("identity") is not None and request_input["identity"] != computed_request_identity:
         classification["refusals"].append(
             {
                 "code": "request_identity_mismatch",
@@ -2214,7 +2265,14 @@ def command_validate(args):
             "usage_error", "--evidence-root and --no-evidence-recheck contradict each other"
         )
     document, body, stored, path = read_envelope(args.envelope, "envelope_unreadable")
-    recomputed = digest_of(body)
+    try:
+        recomputed = digest_of(body)
+    except ValueError as error:
+        raise Unobservable(
+            "envelope_unreadable",
+            "envelope body cannot be canonicalized: " + str(error),
+            str(path),
+        )
     if recomputed != stored:
         return refused(
             "envelope_digest_mismatch",
@@ -2230,7 +2288,14 @@ def command_validate(args):
             "the outer integrity digest is absent",
             str(path),
         )
-    recomputed_outer_digest = digest_of(outer_integrity_payload(document))
+    try:
+        recomputed_outer_digest = digest_of(outer_integrity_payload(document))
+    except ValueError as error:
+        raise Unobservable(
+            "envelope_unreadable",
+            "outer facts cannot be canonicalized: " + str(error),
+            str(path),
+        )
     if outer_digest["value"] != recomputed_outer_digest:
         return refused(
             "outer_integrity_digest_mismatch",
@@ -2313,7 +2378,7 @@ def main(argv):
     parser.add_argument("--evidence-root", dest="evidence_root")
     parser.add_argument("--no-evidence-recheck", dest="no_recheck", action="store_true")
     parser.add_argument("--json", action="store_true")
-    parser.add_argument("--summary-out", dest="summary_out")
+    parser.add_argument("--summary-out", dest="summary_out", action="append")
     args = parser.parse_args(argv)
 
     if args.command == "schema":

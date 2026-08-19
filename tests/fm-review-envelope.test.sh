@@ -829,6 +829,49 @@ PY
   pass "unmoved facts compile to the identical digest, and no time-varying value sits inside the body"
 }
 
+# The contract sells a git-version-stable content identity, and the caller's
+# locale is an axis of that claim nobody had stated: git output decoded through
+# the locale's preferred encoding gave two readers of one repository two
+# different changed-file rows - or a traceback - once a changed path carried a
+# non-ASCII byte. Identical candidate facts must produce the identical digest
+# under any locale, so the axis is pinned here rather than assumed.
+test_the_digest_is_locale_independent() {
+  local case_dir digest_posix digest_utf8
+  case_dir=$(make_case locale-axis)
+  {
+    git -C "$case_dir/repo" checkout -q candidate
+    printf 'non-ascii path\n' > "$case_dir/repo/docs/naïve-ü.md"
+    git -C "$case_dir/repo" add "docs/naïve-ü.md"
+    git -C "$case_dir/repo" commit -qm 'non-ascii path'
+    git -C "$case_dir/repo" checkout -q main
+  } >&2
+  write_inputs "$case_dir"
+  locale_prepare() {  # <locale> <out-name>
+    LC_ALL=$1 LANG=$1 run_prepare "$case_dir" "$2"
+  }
+  # CPython coerces the C locale to UTF-8 and auto-enables UTF-8 mode under it,
+  # which would let a locale-dependent decode pass this control by interpreter
+  # courtesy rather than by the compiler's own pinning. Both escape hatches
+  # are closed so the POSIX leg genuinely decodes through ASCII.
+  posix_prepare() {  # <out-name>
+    PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 locale_prepare C "$1"
+  }
+  capture posix_prepare posix-locale
+  expect_code 0 "$CAPTURED_CODE" "the compiler must not depend on the caller's locale"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a non-ASCII changed path must never crash the compiler under any locale"
+  capture locale_prepare C.UTF-8 utf8-locale
+  expect_code 0 "$CAPTURED_CODE" "the utf-8 locale compiles the same facts"
+  digest_posix=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["digest"]["value"])' \
+    "$case_dir/posix-locale/envelope.json")
+  digest_utf8=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["digest"]["value"])' \
+    "$case_dir/utf8-locale/envelope.json")
+  [ -n "$digest_posix" ] || fail "the locale case must produce a digest to compare"
+  [ "$digest_posix" = "$digest_utf8" ] \
+    || fail "identical candidate facts must produce one digest whatever the locale ($digest_posix vs $digest_utf8)"
+  pass "identical facts produce the identical digest under differing locales"
+}
+
 test_order_insensitive_facts_produce_an_identical_identity() {
   local case_dir first_digest second_digest first_identity second_identity
   case_dir=$(make_case canonical-fact-order)
@@ -1263,6 +1306,60 @@ test_an_envelope_is_written_once() {
   pass "an envelope is written once, so a superseded generation cannot silently become the current one"
 }
 
+# Write-once is the FILESYSTEM's guarantee, not a look-then-write. The envelope
+# is staged beside its final path and hard-linked into place, so two properties
+# hold and both are pinned: a write that fails leaves NOTHING at the final path
+# - the earlier shape could leave a partial envelope.json that permanently
+# blocked every later prepare, a guard that wedges instead of refusing - and of
+# two racing prepares exactly one wins while the loser refuses in the closed
+# vocabulary rather than crashing or overwriting.
+test_a_failed_or_racing_envelope_write_cannot_corrupt_the_final_path() {
+  local case_dir code_a code_b loser
+  case_dir=$(make_case write-atomic)
+  write_inputs "$case_dir"
+
+  mkdir -p "$case_dir/sealed"
+  chmod 555 "$case_dir/sealed"
+  capture run_prepare "$case_dir" sealed
+  chmod 755 "$case_dir/sealed"
+  expect_code 2 "$CAPTURED_CODE" "an unwritable output is could-not-observe"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a failed envelope write must classify rather than crash"
+  [ ! -e "$case_dir/sealed/envelope.json" ] \
+    || fail "a failed write must leave nothing at the final path"
+  capture run_prepare "$case_dir" sealed
+  expect_code 0 "$CAPTURED_CODE" \
+    "a failed write must not wedge the output; the next prepare succeeds"
+
+  printf 'not a directory\n' > "$case_dir/occupied"
+  capture run_prepare "$case_dir" occupied
+  expect_code 2 "$CAPTURED_CODE" "an output path that is a file is could-not-observe"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "an occupied output path must classify rather than crash"
+
+  run_prepare "$case_dir" race >"$case_dir/race-a.out" 2>&1 &
+  local pid_a=$!
+  run_prepare "$case_dir" race >"$case_dir/race-b.out" 2>&1 &
+  local pid_b=$!
+  code_a=0; wait "$pid_a" || code_a=$?
+  code_b=0; wait "$pid_b" || code_b=$?
+  if [ "$code_a" = 0 ] && [ "$code_b" = 2 ]; then
+    loser=$case_dir/race-b.out
+  elif [ "$code_a" = 2 ] && [ "$code_b" = 0 ]; then
+    loser=$case_dir/race-a.out
+  else
+    fail "a concurrent double-prepare must have one winner and one refusal (got $code_a and $code_b)"
+  fi
+  grep -F 'envelope_exists' "$loser" >/dev/null \
+    || fail "the losing prepare must refuse with the contract's own write-once code"
+  if grep -F 'Traceback' "$case_dir/race-a.out" "$case_dir/race-b.out" >/dev/null; then
+    fail "neither racing prepare may crash"
+  fi
+  capture run_validate "$case_dir" race
+  expect_code 0 "$CAPTURED_CODE" "the winning envelope must be whole and valid"
+  pass "a failed or racing envelope write leaves the final path either absent or whole, never partial"
+}
+
 # --- verification contracts and their evidence ------------------------------
 
 test_a_missing_required_contract_refuses() {
@@ -1683,6 +1780,15 @@ test_a_malformed_but_parseable_inputs_document_is_could_not_observe() {
   capture run_prepare "$case_dir" env --json --summary-out "$case_dir/summary"
   expect_code 2 "$CAPTURED_CODE" \
     "inputs that parse but are malformed within are could-not-observe"
+  # The exit code must come from the CLASSIFIER'S summary, never from the
+  # entrypoint's empty-summary fallback: a caller-supplied --summary-out once
+  # redirected the classifier's summary away from the entrypoint's injected
+  # file, RESULT fell through to NO_VERIFIER_RAN with reason no_evidence, and
+  # exit 2 was produced for ANY classification - so the exit-code assertion
+  # above discriminated nothing. The classifier now writes every requested
+  # summary, and the record line below pins that the fallback was not taken.
+  assert_contains "$CAPTURED" 'review-envelope,NO_VERIFIER_RAN,verification_incomplete,' \
+    "the entrypoint's record must carry the classifier's own reason, not the empty-summary fallback"
   assert_not_contains "$CAPTURED" 'Traceback' \
     "a malformed inputs document must never answer with a traceback"
   assert_contains "$CAPTURED" '"code": "inputs_malformed"' \
@@ -1692,6 +1798,27 @@ test_a_malformed_but_parseable_inputs_document_is_could_not_observe() {
   assert_grep 'result=NO_VERIFIER_RAN' "$case_dir/summary" \
     "the summary a caller reads must be written even when the inputs are malformed"
   pass "an inputs document that parses but is malformed within classifies rather than crashing"
+}
+
+# Strict JSON has no NaN and no Infinity, but Python's reader admits them and
+# its writer re-emits them, so a declared record carrying NaN once produced an
+# envelope.json that is not strict JSON and a "canonical" digest no conforming
+# canonicalizer can reproduce - a false identity claim. The constants are
+# refused on load in the closed vocabulary, and emission independently refuses
+# to serialize a non-finite number, so the false claim cannot be produced.
+test_a_non_finite_number_in_the_inputs_is_refused_on_load() {
+  local case_dir
+  case_dir=$(make_case non-finite-inputs)
+  write_inputs "$case_dir" '{"findings": {"adverse": [], "unproven": [], "nan_probe": NaN}}'
+  capture run_prepare "$case_dir" env
+  expect_code 2 "$CAPTURED_CODE" "inputs carrying a non-finite constant are could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved inputs_malformed' \
+    "the refusal must name the malformed inputs in the closed vocabulary"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a non-finite constant must classify rather than crash"
+  [ ! -e "$case_dir/env/envelope.json" ] \
+    || fail "no envelope may be written from inputs that are not strict JSON"
+  pass "NaN and Infinity are refused on load rather than laundered into a canonical digest"
 }
 
 test_a_result_that_does_not_identify_its_verifier_refuses() {
@@ -1780,6 +1907,45 @@ PY
   assert_contains "$CAPTURED" 'unobserved ci_required_check_pending' \
     "a running check is could-not-observe, not a failure and not a pass"
   pass "a required check that has not completed is could-not-observe rather than either verdict"
+}
+
+# In-flight and completed-without-a-verdict are different absences, and the
+# split is pinned in BOTH directions because this component's recurring defect
+# class is exactly this shape inverted: a check still running once arrived as a
+# non-empty conclusion, fell to NO_VERDICT, and was reported as one that
+# "completed without a verdict" - in-flight rendered as decided. The in-flight
+# vocabulary is recognized explicitly; an unrecognized conclusion stays
+# NO_VERDICT, because unknown is not the same as in-flight.
+test_an_in_flight_conclusion_is_not_a_completed_no_verdict() {
+  local case_dir
+  case_dir=$(make_case ci-in-flight)
+  write_inputs "$case_dir"
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["ci"]["attempts"][0]["conclusion"] = "IN_PROGRESS"
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" in-flight
+  expect_code 2 "$CAPTURED_CODE" "an in-flight required check is could-not-observe, not decided"
+  assert_contains "$CAPTURED" 'unobserved ci_required_check_pending' \
+    "a still-running check must reach the pending path"
+  assert_not_contains "$CAPTURED" 'ci_required_check_no_verdict' \
+    "a still-running check must not read as one that completed without a verdict"
+
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["ci"]["attempts"][0]["conclusion"] = "NEUTRAL"
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" no-verdict
+  expect_code 1 "$CAPTURED_CODE" "a check that genuinely completed without deciding still refuses"
+  assert_contains "$CAPTURED" 'refusal ci_required_check_no_verdict' \
+    "the completed-without-a-verdict refusal must survive the in-flight split"
+  pass "in-flight states reach the pending path while completed-without-verdict still refuses"
 }
 
 test_duplicate_attempts_with_no_ordering_refuse() {
@@ -2205,6 +2371,38 @@ PY
   assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
     "validation must name the stored request identity mismatch"
   pass "request identity claims and stored identities are checked against recomputation"
+}
+
+# prepare and validate are two readers of one declared claim, and two components
+# disagreeing about one input is a defect no single-component control can catch
+# - which is why this control spans both. An explicit null claim means NONE WAS
+# CLAIMED, exactly as the catalog states; prepare once read that same null as a
+# mismatching claim, wrote the envelope, then refused a document that validate
+# went on to accept, so the two commands gave different answers about one
+# document. The same declared inputs must produce the same reading in each.
+test_prepare_and_validate_agree_on_a_declared_identity_claim() {
+  local case_dir
+  case_dir=$(make_case identity-claim-pairing)
+  write_inputs "$case_dir" '{"request": {"identity": null}}'
+  capture run_prepare "$case_dir" null-claim
+  expect_code 0 "$CAPTURED_CODE" "prepare reads an explicit null claim as none was claimed"
+  assert_not_contains "$CAPTURED" 'request_identity_mismatch' \
+    "an explicit null claim is not a mismatching claim"
+  assert_grep '"declared_request_identity": null' "$case_dir/null-claim/envelope.json" \
+    "the explicit null claim must be preserved in the outer document"
+  capture run_validate "$case_dir" null-claim
+  expect_code 0 "$CAPTURED_CODE" "validate reads the same explicit null claim the same way"
+
+  write_inputs "$case_dir" '{"request": {"identity": "sha256:'"$(printf 'e%.0s' $(seq 64))"'"}}'
+  capture run_prepare "$case_dir" wrong-claim
+  expect_code 1 "$CAPTURED_CODE" "prepare refuses a mismatching declared claim"
+  assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
+    "the mismatching claim must refuse by name in prepare"
+  capture run_validate "$case_dir" wrong-claim
+  expect_code 1 "$CAPTURED_CODE" "validate reads the same mismatching claim the same way"
+  assert_contains "$CAPTURED" 'refusal request_identity_mismatch' \
+    "the mismatching claim must refuse by name in validate"
+  pass "one declared identity claim produces one reading across prepare and validate"
 }
 
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe() {
@@ -3606,6 +3804,7 @@ test_verification_applicability_must_be_declared_explicitly
 test_no_verification_contracts_requires_an_explicit_reason
 test_requested_decision_is_an_uppercase_token
 test_identical_facts_produce_an_identical_digest
+test_the_digest_is_locale_independent
 test_order_insensitive_facts_produce_an_identical_identity
 test_nested_order_insensitive_facts_produce_an_identical_identity
 test_array_classification_registry_is_total
@@ -3618,6 +3817,7 @@ test_a_base_that_falls_behind_the_trunk_refuses
 test_an_asserted_head_the_repository_contradicts_refuses
 test_a_tampered_envelope_body_refuses
 test_an_envelope_is_written_once
+test_a_failed_or_racing_envelope_write_cannot_corrupt_the_final_path
 test_a_missing_required_contract_refuses
 test_a_missing_required_verifier_result_refuses
 test_verifier_results_bind_the_selected_contract_digest
@@ -3634,10 +3834,12 @@ test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading
 test_a_result_that_does_not_identify_its_verifier_refuses
 test_a_synchronization_seam_outside_its_root_refuses
 test_a_malformed_but_parseable_inputs_document_is_could_not_observe
+test_a_non_finite_number_in_the_inputs_is_refused_on_load
 test_wrong_head_ci_refuses
 test_a_skipped_required_check_refuses
 test_an_absent_required_platform_refuses
 test_a_pending_required_check_is_could_not_observe
+test_an_in_flight_conclusion_is_not_a_completed_no_verdict
 test_duplicate_attempts_with_no_ordering_refuse
 test_a_superseded_failure_is_replaced_by_its_later_rerun
 test_two_workflows_sharing_a_check_name_stay_two_checks
@@ -3654,6 +3856,7 @@ test_a_successor_that_declares_no_predecessor_is_could_not_observe
 test_a_disposition_for_an_obligation_the_predecessor_never_held_refuses
 test_duplicate_dispositions_refuse_in_both_orders
 test_request_identity_is_recomputed_and_checked
+test_prepare_and_validate_agree_on_a_declared_identity_claim
 test_a_predecessor_that_is_not_the_declared_one_is_could_not_observe
 test_a_ruling_that_does_not_apply_cannot_authorize_a_resolution
 test_a_relied_upon_ruling_with_empty_applicability_refuses
