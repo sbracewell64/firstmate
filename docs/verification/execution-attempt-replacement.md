@@ -13,7 +13,7 @@ The regression coverage is [`../../tests/fm-execution-replacement.test.sh`](../.
 
 Measured 2026-08-19 on Linux 6.18 (WSL2), bash 5.2, git 2.53.0, shellcheck 0.11.0.
 
-The suite runs **21 test functions covering the 14 declared controls, the boundary rules the implementation created, and five review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
+The suite runs **the test functions enumerated below - the 14 declared controls, the boundary rules the implementation created, and the review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
 Nothing asserts implementation source bytes.
 
 ```
@@ -37,19 +37,25 @@ ok - a successor on a clean detached lane opens on the predecessor's exact head
 ok - an orca lane refuses succession as unverified custody reuse, and the lane is untouched
 ok - a successor dispatch cannot skip the gate that sanctions it
 ok - only a confirmed launch is protected from rebinding; an unstarted one produced nothing
+ok - an ended attempt closes its execution and admits a fresh-execution retry on any binding
 ok - a reviewing lane refuses a replacement that is not independent of its maker
 ok - the execution ledger retires with the attempt record
 ```
 
-That is a POSITIVE EXECUTED COUNT - twenty-one assertion groups reported, listed rather than summarized - and not an absence of failures.
+That is a POSITIVE EXECUTED COUNT - the enumeration above IS the count, one reported line per executed assertion group, so no total is maintained by hand beside it - and not an absence of failures.
 A run that executed nothing would print nothing here, which is the reason the list is recorded at all.
 The suite takes about 70 seconds; the recorded portable-serial weight hint in `bin/fm-test-run.sh` is seeded from that measurement.
 
-Five of the twenty-one are review-regression cases added after the initial implementation was reviewed, each named for the defect it guards: the effort axis of the sanctioned binding left unpinned at the launch door, a clean DETACHED lane's head silently reset to the slot base by the successor dispatch (unreachable from the original fixtures, which all sat on a named branch), an orca-backed lane's succession silently allocating a fresh worktree instead of refusing, and - from the second review round - an UNSTATED effort sanction (an empty or `default` recorded band) accepted instead of refused, measured at both of its doors: `replace` refuses to mint a successor carrying no band and points at `--alternate-effort`, and the successor gate refuses a sanctioned record carrying none rather than adopting whatever the launch declared.
-The second round also moved the ordinary-relaunch rebind refusal ahead of allocation: it previously fired only at `fm-attempt.sh open`, after a pool slot was selected (and reset) and a window's pane had entered it, so every refused rebind leaked a live window occupying a slot. The rebind case now also asserts that a refused rebind creates no window.
-The orca case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the pointer to this record as where a verified reuse path would be recorded, and the lane - worktree, metadata and sanctioned record - untouched afterwards.
-The lift condition is self-contained: the refusal stands exactly until a verified orca custody-reuse path lands and its verification is recorded here, at which point the refusal, its case, and this paragraph all retire together.
-These three were authored against defects that existed in the reviewed tree, but they have not been through the defect-build watch below; what they establish is bounded to the assertions they print.
+The review-regression cases, each added after a review round of this branch and named for the defect it guards:
+
+- `test_a_successor_may_only_launch_at_the_admitted_effort` - the effort axis of the sanctioned binding left unpinned at the launch door.
+- `test_a_detached_lane_keeps_the_predecessors_exact_head` - a clean DETACHED lane's head silently reset to the slot base by the successor dispatch, unreachable from the original fixtures, which all sat on a named branch.
+- `test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified` - an orca-backed lane's succession silently allocating a fresh worktree instead of refusing. The case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the pointer to this record as where a verified reuse path would be recorded, and the lane - worktree, metadata and sanctioned record - untouched afterwards. The lift condition is self-contained: the refusal stands exactly until a verified orca custody-reuse path lands and its verification is recorded here, at which point the refusal, its case, and this bullet all retire together.
+- `test_replace_refuses_an_unstated_effort_sanction` and `test_a_successor_with_no_effort_sanction_refuses_at_launch` - an UNSTATED effort sanction (an empty or `default` recorded band) accepted instead of refused, measured at both of its doors: `replace` refuses to mint a successor carrying no band and points at `--alternate-effort`, and the successor gate refuses a sanctioned record carrying none rather than adopting whatever the launch declared.
+- `test_an_ended_attempt_admits_a_fresh_execution_on_any_binding` - a force-discarded task deadlocked out of retrying on a different binding: the ended record still carried an `active` execution, so the rebind refusal fired with nothing executing, while `replace` refused on the discarded lane's missing custody. `end` now closes the execution it ends (reader and writer both: the guard exempts an ended record, `open` mints the retry a fresh execution, and no record can carry ended=1 with an executing dispatch again), with the live-record refusal asserted beside it so the exemption stays bounded.
+
+The second review round also moved the ordinary-relaunch rebind refusal ahead of allocation: it previously fired only at `fm-attempt.sh open`, after a pool slot was selected (and reset) and a window's pane had entered it, so every refused rebind leaked a live window occupying a slot. The rebind case now also asserts that a refused rebind creates no window.
+Every case listed above was authored against a defect that existed in the reviewed tree, but none has been through the defect-build watch below; what they establish is bounded to the assertions they print.
 
 ## Each control watched RED against its own defect build
 

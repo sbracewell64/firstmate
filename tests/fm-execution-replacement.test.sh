@@ -901,6 +901,53 @@ EOF
   pass "only a confirmed launch is protected from rebinding; an unstarted one produced nothing"
 }
 
+# The discard-retry door, watched in BOTH directions. Ending a work attempt
+# closes its execution in the same act, and the ended record then admits a
+# genuine retry on ANY binding as a FRESH execution. The live half is the
+# non-vacuity partner: before the end, the same different-binding dispatch is
+# still refused, so the exemption cannot silently widen into no guard at all.
+# The writer half asserts the contradiction can no longer be written: no record
+# carries ended=1 with an execution still recorded executing.
+test_an_ended_attempt_admits_a_fresh_execution_on_any_binding() {
+  local case_dir id out rc
+  case_dir="$TMP_ROOT/endedretry"
+  id=endedretry-a1
+  mkdir -p "$case_dir/home/state" "$case_dir/fakebin" "$case_dir/proc"
+  out=$(attempt_in "$case_dir" open "$id" --binding "codex/$PRIMARY" --effort medium); rc=$?
+  [ "$rc" -eq 0 ] || fail "the first dispatch must open execution 1"$'\n'"$out"
+  out=$(attempt_in "$case_dir" dispatched "$id" --execution "$id/e1"); rc=$?
+  [ "$rc" -eq 0 ] || fail "confirming the launch must succeed"$'\n'"$out"
+
+  out=$(attempt_in "$case_dir" check "$id" --binding "codex/$ALTERNATE"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a LIVE record must still refuse a second binding"$'\n'"$out"
+  assert_contains "$out" "not rebound by relaunching" \
+    "the live refusal must keep pointing at replace"
+
+  out=$(attempt_in "$case_dir" end "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "ending the attempt must succeed"$'\n'"$out"
+  [ "$(rec_field "$case_dir" "$id" ended)" = 1 ] \
+    || fail "the end must be recorded on the attempt"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = ended ] \
+    || fail "ending the attempt must close its execution, got '$(rec_field "$case_dir" "$id" execution_dispatch)'"
+  assert_contains "$(cat "$case_dir/home/state/$id.lineage")" "event=closed execution=$id/e1" \
+    "the close must be on the lineage ledger"
+  assert_contains "$(cat "$case_dir/home/state/$id.lineage")" "disposition=discarded" \
+    "the close must name the discard as its disposition"
+
+  out=$(attempt_in "$case_dir" check "$id" --binding "codex/$ALTERNATE"); rc=$?
+  [ "$rc" -eq 0 ] || fail "an ended record must admit a retry on a different binding"$'\n'"$out"
+  out=$(attempt_in "$case_dir" open "$id" --binding "codex/$ALTERNATE" --effort medium); rc=$?
+  [ "$rc" -eq 0 ] || fail "the retry dispatch must open"$'\n'"$out"
+  assert_contains "$out" "attempt=2" "the end must have spent attempt 1, so the retry is attempt 2"
+  [ "$(rec_field "$case_dir" "$id" execution_id)" = "$id/e2" ] \
+    || fail "the retry must mint a FRESH execution, got '$(rec_field "$case_dir" "$id" execution_id)'"
+  [ "$(rec_field "$case_dir" "$id" execution_binding)" = "codex/$ALTERNATE" ] \
+    || fail "the fresh execution must carry the declared binding"
+  assert_contains "$(cat "$case_dir/home/state/$id.lineage")" "event=opened execution=$id/e2" \
+    "the fresh execution must have its own opened line"
+  pass "an ended attempt closes its execution and admits a fresh-execution retry on any binding"
+}
+
 # --- Assignment independence, which no record grants ------------------------
 
 # A route whose floor requires an ADJUDICATED capability contract is a reviewing
@@ -1022,5 +1069,6 @@ test_a_detached_lane_keeps_the_predecessors_exact_head
 test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified
 test_a_successor_dispatch_without_a_sanctioned_successor_is_refused
 test_only_a_confirmed_launch_is_protected_from_rebinding
+test_an_ended_attempt_admits_a_fresh_execution_on_any_binding
 test_a_reviewing_lane_refuses_a_replacement_that_is_not_independent_of_its_maker
 test_the_lineage_retires_with_the_attempt_record

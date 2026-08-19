@@ -142,11 +142,16 @@
 #   execution_id=<id>/e<k>   the stamp evidence is attributed to.
 #   execution_binding=<h>/<m>  the harness/model binding it runs on.
 #   execution_effort=<band>  its recorded effort band, empty when unstated.
-#   execution_dispatch=<launching|active|sanctioned>  where this execution
+#   execution_dispatch=<launching|active|sanctioned|ended>  where this execution
 #                            stands. `launching` was minted by an ordinary spawn
 #                            whose launch has not been confirmed; `active` has a
 #                            confirmed launch; `sanctioned` was minted by
-#                            `replace` and is waiting for its successor dispatch.
+#                            `replace` and is waiting for its successor dispatch;
+#                            `ended` was closed by `end` because the work attempt
+#                            it ran under ended without landing. `end` closes the
+#                            open execution before it records the ended flag, so
+#                            ended=1 and an executing dispatch state are mutually
+#                            exclusive by construction, not by convention.
 #   execution_head=<sha>     the branch head observed when it was minted.
 #
 # A REPLACEMENT MOVES THE EXECUTION AND LEAVES THE WORK ALONE. `replace` mints
@@ -176,6 +181,12 @@
 # capacity owner's in-pool substitution work at all - a dispatch that failed to
 # launch on one model and is retried on the next never had two producers, it had
 # none. An execution that reached `active` is the opposite case and is refused.
+#
+# An ENDED work attempt is the other admission. Its execution is closed and
+# nothing is executing, so the re-dispatch a forced discard deliberately leaves
+# possible is a genuine retry, not a rebind: it opens a FRESH ordinal on
+# whatever binding it declares, never a continuation of the discarded run, so
+# the discarded evidence keeps its own producer and the retry gets its own.
 #
 # THE RESIDUE, STATED RATHER THAN CLOSED. `active` is recorded after the launch
 # is confirmed, by a separate call. If that call fails - the state directory
@@ -606,12 +617,16 @@ cmd_show() {
 # a CONTINUATION of the one already open? A failure declared since the count
 # last moved is what makes it new; anything else - a dead runtime, a husk, a
 # reclaim - continues. Sets ATTEMPT_PRIOR, ATTEMPT_BUDGET_RESOLVED,
-# ATTEMPT_FAILURES, ATTEMPT_NEXT, and ATTEMPT_IS_NEW.
+# ATTEMPT_FAILURES, ATTEMPT_NEXT, ATTEMPT_IS_NEW, and ATTEMPT_WAS_ENDED - the
+# last captured here because `open` rewrites the record (clearing the ended
+# flag) before the execution lineage looks at it.
 attempt_resolve() {  # <id> <explicit-budget-or-empty>
   local id=$1 explicit=${2-}
   ATTEMPT_BUDGET_RESOLVED=$(attempt_budget "$id" "$explicit")
   ATTEMPT_PRIOR=$(attempt_prior "$id")
   ATTEMPT_FAILURES=$(attempt_failures "$id")
+  ATTEMPT_WAS_ENDED=0
+  ! attempt_ended "$id" || ATTEMPT_WAS_ENDED=1
   if [ "$ATTEMPT_PRIOR" -eq 0 ]; then
     # Nothing has been attempted yet, so the first launch opens attempt 1
     # whether or not anything ever failed.
@@ -619,7 +634,7 @@ attempt_resolve() {  # <id> <explicit-budget-or-empty>
     ATTEMPT_NEXT=1
     return 0
   fi
-  if attempt_ended "$id" || [ "$ATTEMPT_FAILURES" -gt "$(attempt_failures_seen "$id")" ]; then
+  if [ "$ATTEMPT_WAS_ENDED" -eq 1 ] || [ "$ATTEMPT_FAILURES" -gt "$(attempt_failures_seen "$id")" ]; then
     ATTEMPT_IS_NEW=1
     ATTEMPT_NEXT=$((ATTEMPT_PRIOR + 1))
     return 0
@@ -670,7 +685,7 @@ cmd_open() {
 }
 
 cmd_end() {
-  local id=${1-} prior budget
+  local id=${1-} prior budget have state
   require_id "$id"
   shift
   [ "$#" -eq 0 ] || die "end takes only a task id"
@@ -679,6 +694,23 @@ cmd_end() {
   prior=$(attempt_prior "$id")
   [ "$prior" -gt 0 ] || return 0
   budget=$(attempt_budget "$id" '')
+  # The end CLOSES the open execution BEFORE it records the ended flag, in that
+  # order, so no durable record ever carries ended=1 with an execution still
+  # recorded as executing - a contradiction every reader would otherwise have
+  # to know to disbelieve.
+  have=$(attempt_exec_n "$id")
+  state=$(attempt_field "$STATE/$id.attempt" execution_dispatch)
+  if [ "$have" -gt 0 ] && [ "$state" != ended ]; then
+    attempt_exec_commit "$id" "$have" \
+      "$(attempt_field "$STATE/$id.attempt" execution_binding)" \
+      "$(attempt_field "$STATE/$id.attempt" execution_effort)" \
+      ended \
+      "$(attempt_field "$STATE/$id.attempt" execution_head)" \
+      || die "could not close execution $id/e$have at $STATE/$id.attempt"
+    attempt_lineage_append "$id" "event=closed" "execution=$id/e$have" \
+      "ts=$(date +%s)" "disposition=discarded" \
+      || die "could not record the close of $id/e$have at $STATE/$id.lineage"
+  fi
   attempt_write "$id" "$prior" "$budget" \
     "$(attempt_field "$STATE/$id.attempt" terminal)" "$(attempt_failures "$id")" 1 \
     || die "could not record the end of attempt $prior for $id"
@@ -898,6 +930,14 @@ attempt_exec_commit() {  # <id> <ordinal> <binding> <effort> <dispatch> <head>
 attempt_exec_guard() {  # <id> <binding-or-empty> <succeeding-0-or-1>
   local id=$1 binding=${2-} succeeding=${3-0} recorded state
   state=$(attempt_field "$STATE/$id.attempt" execution_dispatch)
+  # An ENDED work attempt has nothing executing: its execution is closed (or,
+  # on a record written before `end` closed them, the ended flag says the run
+  # is over), its evidence is already attributed, and the re-dispatch a forced
+  # discard deliberately admits is a genuine retry, not a rebind.
+  # attempt_exec_open mints that retry a fresh execution.
+  if [ "$state" = ended ] || [ "${ATTEMPT_WAS_ENDED:-0}" = 1 ] || attempt_ended "$id"; then
+    return 0
+  fi
   # A record written before this vocabulary existed names no state; read it as
   # the strict one, because the permissive readings are the ones that let a lane
   # be rebound without a gate.
@@ -925,7 +965,7 @@ attempt_exec_guard() {  # <id> <binding-or-empty> <succeeding-0-or-1>
 # its producer without a second command, and an ordinary spawn cannot rebind a
 # lane by passing a different --binding.
 attempt_exec_open() {  # <id> <binding-or-empty> <effort-or-empty> <succeeding>
-  local id=$1 binding=${2-} effort=${3-} succeeding=${4-0} have recorded state
+  local id=$1 binding=${2-} effort=${3-} succeeding=${4-0} have recorded state next
   have=$(attempt_exec_n "$id")
   recorded=$(attempt_field "$STATE/$id.attempt" execution_binding)
   state=$(attempt_field "$STATE/$id.attempt" execution_dispatch)
@@ -936,6 +976,20 @@ attempt_exec_open() {  # <id> <binding-or-empty> <effort-or-empty> <succeeding>
       "attempt=$(attempt_prior "$id")" "binding=${binding:-unknown}" \
       "effort=${effort:-unstated}" "ts=$(date +%s)" \
       || die "could not record the producer of execution 1 for $id at $STATE/$id.lineage"
+    return 0
+  fi
+  # A retry after the work attempt ended is a NEW incarnation: a fresh ordinal
+  # on the declared binding, with its own opened line, never a continuation of
+  # the execution whose run was discarded - whatever binding it declares.
+  if [ "$state" = ended ] || [ "${ATTEMPT_WAS_ENDED:-0}" = 1 ] || attempt_ended "$id"; then
+    next=$((have + 1))
+    attempt_exec_commit "$id" "$next" "$binding" "$effort" launching '' \
+      || die "could not record execution $next for $id at $STATE/$id.attempt"
+    attempt_lineage_append "$id" "event=opened" "execution=$id/e$next" "ordinal=$next" \
+      "attempt=$(attempt_prior "$id")" "binding=${binding:-unknown}" \
+      "effort=${effort:-unstated}" "ts=$(date +%s)" "predecessor=$id/e$have" \
+      "reason=retry after the prior work attempt ended" \
+      || die "could not record the producer of execution $next for $id at $STATE/$id.lineage"
     return 0
   fi
   attempt_exec_guard "$id" "$binding" "$succeeding"
