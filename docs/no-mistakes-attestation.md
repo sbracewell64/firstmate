@@ -117,6 +117,11 @@ Those refusals are reached by a head no pipeline run validated, which the check'
 Sending that reader to publish and no further would send them to a command that must refuse, so the refusal says that this head has not been validated, that publishing is not the repair, and that the repair is to validate it through the pipeline and then attest the head that run pushed.
 It says in the same breath not to add a commit merely to restart the check, because that advances the head past the last run's tip and reproduces the identical refusal on the new head; that is the loop this case exists to stop, and `CONTRIBUTING.md` step 8 states the same rule for the contributor following the workflow rather than reading a failed check.
 
+The refusal also addresses the automated fix agent the pipeline's own CI monitor dispatches at a failing check, because that reader was missing from it and is the one whose default repair restarts the loop.
+A fix agent is handed this check's log and told to produce a file change, but no file change exists: the check reads evidence published about the head commit, never the tree, so any commit the agent produces is exactly the restart commit the previous paragraph forbids, made against a head no run has validated.
+Publishing is `write`'s job, run from the checkout the pipeline validated, and a fix worktree is not that checkout: it holds a detached copy of the head with no run record to read, so the one repair that works is the one it cannot perform.
+So the refusal tells that reader, in the log it is reading, that leaving the tree unchanged is the repair and that the check converges on its own through `write`; without that sentence each dispatched agent must rediscover it or churn.
+
 It publishes to the remote's push URL rather than its fetch URL, and reconciles against that same repository before writing, because those are two different repositories in the setup `CONTRIBUTING.md` describes and only the push target is the one the check reads.
 The reconciliation merges the published ref instead of forcing over the local one, so an attestation recorded locally with `--no-push` survives the publishing of a later one.
 It names that repository in what it prints, because "published to origin" does not say which repository was reached and the note is evidence only on the one holding the pull request head.
