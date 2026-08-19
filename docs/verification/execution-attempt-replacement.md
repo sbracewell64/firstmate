@@ -44,7 +44,8 @@ A run that executed nothing would print nothing here, which is the reason the li
 The suite takes about 70 seconds; the recorded portable-serial weight hint in `bin/fm-test-run.sh` is seeded from that measurement.
 
 Three of the nineteen are review-regression cases added after the initial implementation was reviewed, each named for the defect it guards: the effort axis of the sanctioned binding left unpinned at the launch door, a clean DETACHED lane's head silently reset to the slot base by the successor dispatch (unreachable from the original fixtures, which all sat on a named branch), and an orca-backed lane's succession silently allocating a fresh worktree instead of refusing.
-The orca case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the follow-up item `orca-successor-worktree-reuse` that lifts it, and the lane - worktree, metadata and sanctioned record - untouched afterwards.
+The orca case also pins the refusal's shape: its own exit status (3), the condition named as UNVERIFIED custody reuse rather than permanent unsupport, the pointer to this record as where a verified reuse path would be recorded, and the lane - worktree, metadata and sanctioned record - untouched afterwards.
+The lift condition is self-contained: the refusal stands exactly until a verified orca custody-reuse path lands and its verification is recorded here, at which point the refusal, its case, and this paragraph all retire together.
 These three were authored against defects that existed in the reviewed tree, but they have not been through the defect-build watch below; what they establish is bounded to the assertions they print.
 
 ## Each control watched RED against its own defect build

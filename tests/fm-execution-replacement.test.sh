@@ -729,9 +729,10 @@ EOF
 }
 
 # An orca-backed lane refuses succession as a TYPED outcome - its own exit
-# status, a named condition (unverified custody reuse), and the item that lifts
-# it - and the refusal touches nothing: no worktree, no metadata, and the
-# sanctioned record stays exactly as replace minted it.
+# status, a named condition (unverified custody reuse), and a self-contained
+# lift condition pointing at the repo-tracked verification record - and the
+# refusal touches nothing: no worktree, no metadata, and the sanctioned record
+# stays exactly as replace minted it.
 test_an_orca_lane_refuses_succession_until_custody_reuse_is_verified() {
   local rec case_dir id wt out rc
   rec=$(make_lane orcalane)
@@ -747,8 +748,10 @@ EOF
   assert_contains "$out" "REFUSED" "the refusal must present as an outcome, not a crash"
   assert_contains "$out" "unverified" \
     "the refusal must name the condition rather than reading as permanent unsupport"
-  assert_contains "$out" "orca-successor-worktree-reuse" \
-    "the refusal must name what lifts it"
+  assert_contains "$out" "clears when a verified orca custody-reuse path lands" \
+    "the refusal must state its own lift condition"
+  assert_contains "$out" "docs/verification/execution-attempt-replacement.md" \
+    "the lift condition must point at the repo-tracked verification record"
   [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
     || fail "a refused orca succession must leave the lane's recorded worktree untouched"
   [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \

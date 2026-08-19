@@ -208,7 +208,9 @@
 #   the lane completely untouched: no worktree is created, no metadata is
 #   rewritten, and the sanctioned successor record stays exactly as `replace`
 #   minted it. The condition is unverified reuse, not permanent unsupport; it
-#   clears when follow-up item orca-successor-worktree-reuse lands.
+#   clears when a verified orca custody-reuse path lands, recorded in
+#   docs/verification/execution-attempt-replacement.md alongside the rest of
+#   this dispatch's verification.
 #   --scout records deliverable=scout in the task's meta (report deliverable, scratch
 #   worktree; see AGENTS.md task lifecycle); --secondmate records role=secondmate and
 #   launches in a provisioned firstmate home; the default is a commissioned crew ship
@@ -960,7 +962,7 @@ fi
 # as it was" apart from an argument error (2) and a crash (1).
 SPAWN_SUCCEED_REFUSED_EXIT=3
 spawn_succeed_refuse_orca() {
-  echo "error: REFUSED - --succeed-execution on an orca-backed lane. Orca owns its own task worktree, and orca-side worktree custody reuse is unverified, so a successor dispatch cannot yet prove it would inherit the lane's worktree instead of allocating a fresh one. Nothing was created and nothing was rewritten: the lane, its worktree and its sanctioned successor record are exactly as bin/fm-attempt.sh replace left them. This refusal clears when follow-up item orca-successor-worktree-reuse verifies the reuse path." >&2
+  echo "error: REFUSED - --succeed-execution on an orca-backed lane. Orca owns its own task worktree, and orca-side worktree custody reuse is unverified, so a successor dispatch cannot yet prove it would inherit the lane's worktree instead of allocating a fresh one. Nothing was created and nothing was rewritten: the lane, its worktree and its sanctioned successor record are exactly as bin/fm-attempt.sh replace left them. This refusal clears when a verified orca custody-reuse path lands, recorded in docs/verification/execution-attempt-replacement.md." >&2
   exit "$SPAWN_SUCCEED_REFUSED_EXIT"
 }
 if [ "$BACKEND" = orca ] && [ "$SUCCEED_EXECUTION" -eq 1 ]; then
