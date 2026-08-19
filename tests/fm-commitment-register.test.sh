@@ -1868,6 +1868,8 @@ JSON
   write_case ownerescapes '[{"name": "net.request", "owner": "/etc/passwd", "verifier": "tests/fm-owner.test.sh"}]'
   write_case rowabsent '[{"name": "other.capability", "owner": "bin/fm-owner.sh", "verifier": "tests/fm-owner.test.sh"}]'
   write_case rowtwice '[{"name": "net.request", "owner": "bin/fm-owner.sh", "verifier": "tests/fm-owner.test.sh"}, {"name": "net.request", "owner": null, "verifier": null}]'
+  write_case emptylist '[]'
+  write_case ownerisdir '[{"name": "net.request", "owner": "bin", "verifier": "tests/fm-owner.test.sh"}]'
   write_case unparseable '[]'
   printf 'not json at all\n' > "$REG_ROOT/capabilities/unparseable.json"
   write_case catalogabsent '[]'
@@ -1914,6 +1916,20 @@ JSON
   [ "$state" = UNMET ] || fail "duplicated rows must be UNMET rather than answered from the first, got $state"
   assert_contains "$(evidence_of rowtwice)" "2 rows named net.request" \
     "duplicated rows must be reported, because no single row states who owns it"
+
+  # A readable catalog whose list is empty carries no row, and an absent row is
+  # an OBSERVED absence - the fail_when rule - not an unobservable one.
+  state=$(state_of emptylist)
+  [ "$state" = UNMET ] || fail "a catalog with an empty capabilities list must be an observed absent row, got $state"
+  assert_contains "$(evidence_of emptylist)" "no net.request row at all" \
+    "an empty capabilities list must read as the row being absent rather than as unreadable"
+
+  # The contract says owner and verifier resolve to FILES, so a directory that
+  # happens to exist at the named path is still a name pointing at nothing.
+  state=$(state_of ownerisdir)
+  [ "$state" = UNMET ] || fail "a row naming a directory as its owner must be UNMET, got $state"
+  assert_contains "$(evidence_of ownerisdir)" "no such file exists" \
+    "a named owner that is a directory is not a file, and the evidence must say so"
 
   # Could-not-observe, proven distinct from both verdicts above.
   state=$(state_of unparseable)

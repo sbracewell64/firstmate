@@ -609,9 +609,9 @@ probe_capability_row_owned() {  # <probe-json>
       "the capability catalog $rel is not readable, so what its $name row names could not be read"
     return 0
   fi
-  if ! jq -e '(.capabilities | type) == "array" and (.capabilities | length) > 0' "$path" >/dev/null 2>&1; then
+  if ! jq -e '(.capabilities | type) == "array"' "$path" >/dev/null 2>&1; then
     probe_answer NO_VERIFIER_RAN verification_unreachable \
-      "$rel does not parse as a capability catalog with a non-empty capabilities list, so its $name row could not be read"
+      "$rel does not parse as a capability catalog with a capabilities list, so its $name row could not be read"
     return 0
   fi
   rows=$(jq --arg n "$name" '[.capabilities[] | select(.name == $n)] | length' "$path" 2>/dev/null) || rows=
@@ -647,12 +647,12 @@ probe_capability_row_owned() {  # <probe-json>
       "$rel names $name's owner and verifier, but $fault, so what it names is not a file in this repository"
     return 0
   fi
-  if [ ! -e "$FM_ROOT/$owner" ]; then
+  if [ ! -f "$FM_ROOT/$owner" ]; then
     probe_answer FAIL verifier_reported_failure \
       "$rel names $owner as $name's owner and no such file exists, so the row names an owner that is not there"
     return 0
   fi
-  if [ ! -e "$FM_ROOT/$verifier" ]; then
+  if [ ! -f "$FM_ROOT/$verifier" ]; then
     probe_answer FAIL verifier_reported_failure \
       "$rel names $verifier as $name's verifier and no such file exists, so the row names a verifier that is not there"
     return 0
