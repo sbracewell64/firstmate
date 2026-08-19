@@ -113,6 +113,10 @@ The regression suite locates both workflow fields within their named job structu
 It also verifies that the parallel lanes, portable serial lane, and real-Herdr family are disjoint and cover every `tests/*.test.sh` script.
 It separately verifies that the portable serial CI shards are non-empty, disjoint, and together equal the portable serial lane.
 
+It is also the isolation proof's refusing consumer: it judges `docs/fm-test-isolation-proof.json` against the code that is here now and refuses a proof whose subjects, fixtures, isolation semantics, or concurrency have moved.
+Editing a proven-isolated test therefore means re-measuring the proof in the same change.
+[`docs/fm-test-isolation-proof.md`](fm-test-isolation-proof.md) owns that loop and the exit codes; the freshness model itself is owned by `bin/fm-test-isolation-lib.sh`'s header.
+
 ## Timing artifacts
 
 Portable shards, each portable serial shard, and the Herdr lane upload runner-generated timing JSON.

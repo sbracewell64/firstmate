@@ -111,8 +111,9 @@ bin/fm-test-run.sh --lane portable-serial   # portable serial remainder (watcher
 bin/fm-test-run.sh --list-lanes   # discover exact lane names, including the current CI serial shards
 bin/fm-test-run.sh --check-coverage   # prove portable shards + serial + serial shards + Herdr equal the full inventory
 bin/fm-test-run.sh --all   # deliberate complete regression (optional local full walk; not no-mistakes Test)
-bin/fm-test-isolation-proof.sh --list   # proven parallel candidate set (Phase 2 owner)
-bin/fm-test-isolation-proof.sh --jobs 4 --json /tmp/fm-isolation-proof.json   # re-run concurrent isolation proof only
+bin/fm-test-isolation-proof.sh --list   # parallel candidate set: the input to a proof run
+bin/fm-test-isolation-proof.sh --list-proven   # proven-isolated set: what CI lanes actually consume
+bin/fm-test-isolation-proof.sh --jobs 4 --json docs/fm-test-isolation-proof.json   # re-measure the proof after editing a proven test
 [ "$(readlink CLAUDE.md)" = "AGENTS.md" ]
 [ "$(readlink .claude/skills)" = "../.agents/skills" ]
 tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVERRIDE="$tmp" FM_SIGNAL_GRACE=1 FM_POLL=1 FM_HEARTBEAT=999999 bin/fm-watch-arm.sh  # watcher re-arm smoke test (prints arm status, then an actionable signal)
@@ -120,7 +121,8 @@ tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVE
 
 `bin/fm-test-run.sh` is the single owner of behavior-suite selection, portable CI lane composition, optional local `--jobs` for the proven-isolated set only, per-script timing markers, family totals, the coverage and serial-budget guards, and the optional JSON timing artifact.
 Its header and `--help` own the flags, family labels, lanes, and changed-file map; this section only documents the entry points.
-`bin/fm-test-isolation-proof.sh` remains the single owner of the Phase 2 concurrent isolation proof and the exact proven candidate set; see `docs/fm-test-isolation-proof.md`.
+`bin/fm-test-isolation-proof.sh` remains the single owner of the concurrent isolation proof and the candidate set it measures, and `docs/fm-test-isolation-proof.json` is the single owner of the proven set that CI lanes consume.
+Editing a proven-isolated test makes its proof stale and `--check-coverage` refuses until it is measured again; see [`docs/fm-test-isolation-proof.md`](docs/fm-test-isolation-proof.md).
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
 Local no-mistakes Test stays intent-targeted and must not wire `commands.test` to `--all` or a `tests/*.test.sh` walk.
 Family selection is the ordinary local path; `--all` is deliberate full regression only.
