@@ -292,6 +292,9 @@ Declaring such a verifier is the way to tighten it.
 What keeps that proportionate is the bound above - a reservation grants no capacity and cannot preempt, so the worst an unjustified one does is withhold one empty slot, visibly, until it expires.
 Case (9) pins the admission, including that the record names the observation that admitted it.
 
+The record must also name a verifier `bin/fm-verify.sh` declares: the registry is closed, so a caller's own classification of the same question - or a typo - is refused rather than resolved into a `FAIL` that withholds a slot.
+That refusal is the consumer half of the one-owner rule in `bin/fm-verify-lib.sh`, and `tests/fm-exact-head-green-one-owner.test.sh` pins it, together with its near-miss-name case and the matched admission of the declared owner's verdict.
+
 That disclosure is typed rather than left to prose, because a comment is not something a consumer can read.
 Every record and every printed result carries an `evidence_tier` from a closed vocabulary owned by `bin/fm-slot-reservation-lib.sh`: `caller-asserted` when the `FAIL` observation arrived as a record the caller handed over, and `verified` when a declared trunk-checks verifier produced it.
 Every admission today is `caller-asserted`, because there is no declared trunk-checks verifier for `open` to run itself, and nothing in `bin/fm-slot-reservation.sh` may write the other value.

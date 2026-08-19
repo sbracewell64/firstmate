@@ -209,7 +209,7 @@ What it establishes before asking GitHub for anything:
   A commit a candidate repository does not carry is a fact about that repository and is passed over; a candidate that could not be read at all stops the command, because not reading a repository is not reading an absence.
   One head on two open requests is refused rather than chosen between, and naming the request with `--repo` and `--pr` is the way past both that and an unreadable candidate.
 - The applicable run is a `no-mistakes-required.yml` run for this head, on this pull request.
-  The run that started last is the one re-run, which is the same "latest attempt speaks for the check" ordering `bin/fm-pr-merge.sh` reduces a rollup by, so a re-run can never leave a newer failure still speaking.
+  The run that started last is the one re-run, which is the same "latest attempt speaks for the check" ordering `bin/fm-verify-lib.sh`'s rollup reduction uses, so a re-run can never leave a newer failure still speaking.
 - Nothing has already been done about it.
   One re-run per run attempt, and at most three per repository, pull request and head, counted from a durable record.
 
@@ -263,4 +263,4 @@ The stub applies the real `--jq` filters to real fixture JSON, so the selection 
 The suite proves that the ledger lock is taken before the count and that a holder stops the request.
 It does not directly prove that two invocations racing for the last budget slot cannot both take it; mutual exclusion between holders is inherited from the atomicity of POSIX `mkdir`.
 It also does not establish GitHub's behavior when re-running a `pull_request` workflow against an unchanged head.
-The stale-attempt merge reduction is separately owned and proved by `bin/fm-pr-merge.sh` and `tests/fm-pr-merge.test.sh`.
+The stale-attempt rollup reduction is separately owned by `bin/fm-verify-lib.sh` and proved by `tests/fm-exact-head-green-one-owner.test.sh`.
