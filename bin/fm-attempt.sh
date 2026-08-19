@@ -1306,8 +1306,15 @@ cmd_retire() {
   shift
   [ "$#" -eq 0 ] || die "retire takes only a task id"
   rm -f -- "$STATE/$id.attempt" "$STATE/$id.lineage"
-  if fm_lock_try_acquire "$STATE/$id.attempt.lock" 2>/dev/null; then
-    fm_lock_release "$STATE/$id.attempt.lock" 2>/dev/null || true
+  # Reap the replace lock only when one is actually present: acquiring through
+  # fm_lock_try_acquire creates the lock's parent directory, and retire runs at
+  # the tail of teardown flows whose state directory may itself have just been
+  # removed (a remote secondmate home retires its whole home before this call),
+  # so an unconditional probe would resurrect the removed home.
+  if [ -e "$STATE/$id.attempt.lock" ] || [ -L "$STATE/$id.attempt.lock" ]; then
+    if fm_lock_try_acquire "$STATE/$id.attempt.lock" 2>/dev/null; then
+      fm_lock_release "$STATE/$id.attempt.lock" 2>/dev/null || true
+    fi
   fi
 }
 
