@@ -404,7 +404,8 @@ list_proven_isolated() {
 }
 
 # Portable parallel shard 1: LPT balance of the proven-isolated set using the
-# current concurrent-proof durations in docs/fm-test-isolation-proof.json.
+# 2026-07-29 concurrent-proof durations, now known-stale for balance pending
+# parallel-lane-split-rebalance (see docs/fm-test-portable-shards.md).
 # Execution order is longest first so wall-clock stays near the balanced sum.
 list_portable_parallel_1() {
   cat <<'EOF'

@@ -21,6 +21,11 @@ Read it before changing what a proof means.
 | The concurrency the proven set is actually run at | `lane_concurrency`, checked against `concurrency` | the whole proof is `STALE` |
 | Shared-state surfaces the subject touches | per-subject `shared_state[]` | recorded evidence; its freshness rides on the two digests above |
 
+The runner-semantics binding is precise about its subject: the contract digest binds the isolation contract in `bin/fm-test-isolation-lib.sh`, which the proof harness builds every worker sandbox from.
+`bin/fm-test-run.sh --jobs` implements the same contract from its own copy of the values.
+The two sets of values are identical today, but the digest does not cover that second copy, so a future change to only the runner's copy would not make the proof stale.
+This is a known gap - the binding covers the sandboxes the proof measured, not every runner of the proven set.
+
 Repository state at large is deliberately not a binding.
 An unrelated file moving does not invalidate anything, which is why nothing digests a whole workflow file or a tree hash: the CI lane contributes a number, its concurrency, not its bytes.
 

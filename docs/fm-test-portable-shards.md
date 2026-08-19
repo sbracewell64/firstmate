@@ -5,8 +5,9 @@
 
 ## Verification inputs
 
-The candidate timings below came from the 2026-07-29 concurrent proof run (`run_id fm-isolation-1785367157179-18165`), which ran 24 candidates with four workers and no failures.
-That run has since been superseded as the isolation proof by the re-measurement recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md); this table preserves the measured durations the current lane balance was derived from.
+The candidate timings below came from the 2026-07-29 concurrent proof run (`run_id fm-isolation-1785367157179-18165`), which ran 24 candidates with four workers, no failures, and 149010 ms total wall time.
+That run has since been superseded as the isolation proof by the 2026-08-19 re-measurement recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md), which recorded 298803 ms total wall time, with 17 of the 24 proven subjects changed since the earlier proof and 7 unchanged.
+This table preserves the 2026-07-29 durations only because they are what the lane balance was derived from; the current measurements live in `docs/fm-test-isolation-proof.json`.
 
 | duration_ms | script |
 |---:|---|
@@ -37,15 +38,22 @@ That run has since been superseded as the isolation proof by the re-measurement 
 
 ## Parallel lanes
 
-The two parallel lanes use longest-processing-time assignment from those measured durations.
+The two-lane longest-processing-time split in `list_portable_parallel_1` and `list_portable_parallel_2` derives from the 2026-07-29 per-subject durations above, not from the current 2026-08-19 measurements.
+The split is therefore known-stale for balance purposes, pending the follow-up parallel-lane-split-rebalance, which re-derives it from the current durations in `docs/fm-test-isolation-proof.json`.
 
-| Lane | Script count | Estimated duration |
+| Lane | Script count | Estimated duration (2026-07-29 basis) |
 |---|---:|---:|
 | `portable-parallel-1` | 11 | 162436 ms (~162.4 s) |
 | `portable-parallel-2` | 13 | 162754 ms (~162.8 s) |
 | imbalance | | 318 ms |
 
 `bin/fm-test-run.sh` contains the exact ordered memberships in `list_portable_parallel_1` and `list_portable_parallel_2`.
+
+The stale split is a performance fact only, not an isolation dependency.
+The two parallel lanes are separate CI jobs on separate runners, and neither passes `--jobs`, so each lane runs strictly serially and no two proven-isolated subjects are ever co-resident on one machine.
+Lane placement therefore cannot change any subject's isolation outcome; it changes only which runner executes a script and in what order.
+Lane concurrency, which would be such a dependency, is recorded per lane in `docs/fm-test-isolation-proof.json` and enforced by `bin/fm-test-run.sh --check-coverage`, which refuses a lane running above the proof.
+A stale balance hint costs a slower shard, never lost coverage or a weakened isolation claim.
 
 ## Portable serial remainder
 
