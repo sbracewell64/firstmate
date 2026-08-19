@@ -185,6 +185,20 @@
 #   secondmate receives the primary's read-only shared captain-preference file
 #   (fm-config-inherit-lib.sh). A successful launch clears pending inherited
 #   config reread generations because the new agent reads the converged files.
+#   --succeed-execution dispatches the SUCCESSOR execution attempt that
+#   bin/fm-attempt.sh has already sanctioned for this lane, instead of
+#   commissioning a task. It changes exactly two things and nothing else. It
+#   REQUESTS NO SLOT: the pool guard is never consulted and `treehouse get` is
+#   never reached, because the lane already holds its slot and asking the
+#   allocator for another would take capacity from work that has none. And it
+#   REFUSES unless the durable record holds one PENDING successor whose recorded
+#   binding is exactly the harness/model this launch declares, so a successor
+#   cannot be launched onto a binding no gate ever admitted. The recorded
+#   worktree is entered BY NAME - never `get`, which resets - so the lane keeps
+#   its branch, its head and its uncommitted content, and the base references,
+#   venue and pull request the lane already recorded are carried onto the new
+#   metadata rather than re-derived. On success the record moves from pending to
+#   active. Refused on --secondmate, which owns a home rather than a lane.
 #   --scout records deliverable=scout in the task's meta (report deliverable, scratch
 #   worktree; see AGENTS.md task lifecycle); --secondmate records role=secondmate and
 #   launches in a provisioned firstmate home; the default is a commissioned crew ship
@@ -373,6 +387,7 @@ TRACEPARENT_SET=0
 SLOT_BASE_SET=0
 CONTRIB_SET=0
 ATTEMPT_BUDGET_SET=0
+SUCCEED_EXECUTION=0
 POS=()
 want_value=
 for a in "$@"; do
@@ -403,6 +418,7 @@ for a in "$@"; do
   case "$a" in
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
+    --succeed-execution) SUCCEED_EXECUTION=1 ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -1216,6 +1232,52 @@ if ! fm_lock_try_acquire "$SPAWN_TASK_LOCK"; then
 fi
 SPAWN_TASK_LOCK_HELD=1
 
+# A SUCCESSOR EXECUTION ATTEMPT, which is a different thing from a task.
+# Everything below commissions work; this flag continues work that is already
+# under way on a binding that can no longer execute it. The lane's own record is
+# read here, before any allocation decision, because every one of those decisions
+# changes when the slot is already held: the pool guard must not be consulted,
+# the base references must not be re-derived, and the pull request the lane
+# already opened must not be dropped from the metadata this spawn rewrites.
+SUCCEED_EXEC_ID=
+SUCCEED_EXEC_BINDING=
+SUCCEED_WT=
+SUCCEED_SLOT_BASE=
+SUCCEED_CONTRIB_TARGET=
+SUCCEED_BASE_STATE=
+SUCCEED_CONTRIB_VENUE=
+SUCCEED_CONTRIB_VENUE_URL=
+SUCCEED_PR=
+SUCCEED_PR_HEAD=
+if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+  if [ "$KIND" = secondmate ]; then
+    echo "error: --succeed-execution replaces the execution attempt of a LANE; a secondmate owns a home and has no lane to succeed" >&2
+    exit 1
+  fi
+  [ -f "$STATE/$ID.meta" ] || {
+    echo "error: --succeed-execution needs $ID's existing task record at $STATE/$ID.meta; there is no lane here to succeed" >&2
+    exit 1
+  }
+  SUCCEED_EXEC_ID=$(fm_meta_get "$STATE/$ID.attempt" execution_id)
+  SUCCEED_EXEC_BINDING=$(fm_meta_get "$STATE/$ID.attempt" execution_binding)
+  [ "$(fm_meta_get "$STATE/$ID.attempt" execution_dispatch)" = sanctioned ] || {
+    echo "error: $ID holds no PENDING successor execution. bin/fm-attempt.sh replace is what sanctions one, and it is the only thing that does: it establishes that the execution now open is quiescent, that this lane's worktree custody is known, that no operation is in flight, and that the alternate is admissible. Run it first." >&2
+    exit 1
+  }
+  SUCCEED_WT=$(fm_meta_get "$STATE/$ID.meta" worktree)
+  [ -n "$SUCCEED_WT" ] && [ -d "$SUCCEED_WT" ] || {
+    echo "error: $ID's recorded worktree '${SUCCEED_WT:-none}' is not present, so there is no custody for a successor to inherit" >&2
+    exit 1
+  }
+  SUCCEED_SLOT_BASE=$(fm_meta_get "$STATE/$ID.meta" slot_base)
+  SUCCEED_CONTRIB_TARGET=$(fm_meta_get "$STATE/$ID.meta" contribution_target)
+  SUCCEED_BASE_STATE=$(fm_meta_get "$STATE/$ID.meta" base_state)
+  SUCCEED_CONTRIB_VENUE=$(fm_meta_get "$STATE/$ID.meta" contribution_venue)
+  SUCCEED_CONTRIB_VENUE_URL=$(fm_meta_get "$STATE/$ID.meta" contribution_venue_url)
+  SUCCEED_PR=$(fm_meta_get "$STATE/$ID.meta" pr)
+  SUCCEED_PR_HEAD=$(fm_meta_get "$STATE/$ID.meta" pr_head)
+fi
+
 # The retry budget, before anything is created. Whether this task id may be
 # attempted again is arithmetic over its durable count, which bin/fm-attempt.sh
 # owns; a spent budget refuses here so a refused retry allocates no worktree and
@@ -1228,6 +1290,10 @@ SPAWN_TASK_LOCK_HELD=1
 # retry (fm-attempt.sh's header owns that reasoning).
 ATTEMPT_FLAGS=()
 [ "$ATTEMPT_BUDGET_SET" -eq 0 ] || ATTEMPT_FLAGS=(--budget "$ATTEMPT_BUDGET_ARG")
+# A record holding a sanctioned successor refuses every dispatch but the one
+# that succeeds it, so the declaration travels with both the pre-allocation
+# check and the commit.
+[ "$SUCCEED_EXECUTION" -eq 0 ] || ATTEMPT_FLAGS+=(--succeeding)
 if [ "$KIND" != secondmate ]; then
   "$FM_ROOT/bin/fm-attempt.sh" check "$ID" "${ATTEMPT_FLAGS[@]+"${ATTEMPT_FLAGS[@]}"}" >/dev/null || exit 1
 fi
@@ -2079,6 +2145,15 @@ if [ "$KIND" != secondmate ]; then
       exit 1
     }
   fi
+  # A successor inherits the lane's recorded base references rather than a fresh
+  # derivation of them. Re-deriving would silently move the lane's base to
+  # whatever the project checkout's trunk is NOW, so a replacement that changed
+  # only the worker would also have changed what the work is measured against.
+  if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+    [ -z "$SUCCEED_SLOT_BASE" ] || SLOT_BASE=$SUCCEED_SLOT_BASE
+    [ -z "$SUCCEED_CONTRIB_TARGET" ] || CONTRIB_TARGET=$SUCCEED_CONTRIB_TARGET
+    [ -z "$SUCCEED_BASE_STATE" ] || BASE_STATE=$SUCCEED_BASE_STATE
+  fi
   if [ "$CONTRIB_SET" -eq 1 ]; then
     CONTRIB_TARGET=$(git -C "$PROJ_ABS" rev-parse --verify --quiet "$CONTRIB_ARG^{commit}" 2>/dev/null) || {
       echo "error: --contribution-target '$CONTRIB_ARG' is not a commit in $PROJ_ABS" >&2
@@ -2117,6 +2192,13 @@ if [ "$KIND" != secondmate ]; then
       CONTRIB_VENUE=unresolved
       echo "warning: $ID contribution venue unresolved for $PROJ_ABS ($TASK_BASE_ERROR); a pull request for this task cannot be venue-checked" >&2
     fi
+  fi
+  # And a successor keeps the venue the lane already recorded, for the same
+  # reason it keeps the base references: replacing a worker changes who is
+  # executing, never where this lane's contribution lands.
+  if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+    [ -z "$SUCCEED_CONTRIB_VENUE" ] || CONTRIB_VENUE=$SUCCEED_CONTRIB_VENUE
+    [ -z "$SUCCEED_CONTRIB_VENUE_URL" ] || CONTRIB_VENUE_URL=$SUCCEED_CONTRIB_VENUE_URL
   fi
 fi
 
@@ -2189,7 +2271,27 @@ real_path_or_raw() {  # <path>
 # get` fallback claims its slot atomically.
 WT_SLOT_NAME=
 WT_SLOT_REAL=
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+# A successor takes the slot the lane ALREADY HOLDS, so the allocator is not
+# consulted at all: no pool lock, no `select`, no slot reservation consumed, and
+# no fallback to `treehouse get`, which acquires and RESETS. The slot is entered
+# by name below exactly as a selected one is, which is the operation that does
+# not reset it - so the branch, the head and the uncommitted content the
+# predecessor left are what the successor opens on.
+#
+# The binding is checked HERE rather than at metadata publication because this
+# is the last point before anything is created. A launch whose harness/model is
+# not the one the gate admitted would be a lane rebound by a command line, which
+# is the whole thing bin/fm-attempt.sh replace exists to make impossible.
+if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+  SPAWN_BINDING=$HARNESS
+  [ -z "$MODEL" ] || SPAWN_BINDING="$HARNESS/$MODEL"
+  if [ "$SPAWN_BINDING" != "$SUCCEED_EXEC_BINDING" ]; then
+    echo "error: $ID's sanctioned successor $SUCCEED_EXEC_ID is recorded on $SUCCEED_EXEC_BINDING and this launch declares $SPAWN_BINDING. Only the binding a gate admitted may be launched; run bin/fm-attempt.sh replace $ID --alternate <model> --reason <text> for the one you want." >&2
+    exit 1
+  fi
+  WT_SLOT_REAL=$(real_path_or_raw "$SUCCEED_WT")
+  WT_SLOT_NAME=$(basename "$WT_SLOT_REAL")
+elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_pool_select_lock_acquire "$PROJ_ABS_REAL" || exit 1
   # --for names this task, which is what a pool's slot reservation is matched
   # against: a queued trunk repair's reservation withholds one empty slot from
@@ -3047,6 +3149,10 @@ META_WINDOW=$T
 ATTEMPT_N=
 ATTEMPT_BUDGET=
 if [ "$KIND" != secondmate ]; then
+  SPAWN_BINDING=$HARNESS
+  [ -z "$MODEL" ] || SPAWN_BINDING="$HARNESS/$MODEL"
+  ATTEMPT_FLAGS+=(--binding "$SPAWN_BINDING")
+  [ -z "$EFFORT" ] || ATTEMPT_FLAGS+=(--effort "$EFFORT")
   if ATTEMPT_OPENED=$("$FM_ROOT/bin/fm-attempt.sh" open "$ID" "${ATTEMPT_FLAGS[@]+"${ATTEMPT_FLAGS[@]}"}"); then
     ATTEMPT_N=${ATTEMPT_OPENED#attempt=}
     ATTEMPT_N=${ATTEMPT_N%% *}
@@ -3128,6 +3234,11 @@ fi
   echo "effort=${EFFORT:-default}"
   [ -z "$ATTEMPT_N" ] || echo "attempt=$ATTEMPT_N"
   [ -z "$ATTEMPT_BUDGET" ] || echo "attempt_budget=$ATTEMPT_BUDGET"
+  # The lane's pull request, which this spawn is rewriting the record of and did
+  # not open. Dropping it would leave bin/fm-pr-merge.sh and the merge watch with
+  # no pull request to land for work that already has one.
+  [ -z "$SUCCEED_PR" ] || echo "pr=$SUCCEED_PR"
+  [ -z "$SUCCEED_PR_HEAD" ] || echo "pr_head=$SUCCEED_PR_HEAD"
   [ -z "${BUSY_GEN:-}" ] || echo "busy_gen=$BUSY_GEN"
   # Default-off writes no traceparent= line (meta stays byte-identical).
   # backend= is written only for a non-default (non-tmux) backend, so the
@@ -3158,6 +3269,13 @@ fi
     echo "projects=$SECONDMATE_PROJECTS"
   fi
 } > "$STATE/$ID.meta"
+# Which execution attempt this launch is for, read back from the record that
+# owns it. It is marked ACTIVE only after the launch is confirmed, far below:
+# metadata publication is not a launch, and an execution that was published and
+# never started produced nothing, which is what lets the capacity owner retry
+# the same dispatch on the next model in the pool.
+SPAWN_EXEC_ID=
+[ "$KIND" = secondmate ] || SPAWN_EXEC_ID=$(fm_meta_get "$STATE/$ID.attempt" execution_id)
 [ "$BACKEND" = orca ] && ORCA_ABORT_CLEANUP=0
 
 sq_brief=$(shell_quote "$BRIEF")
@@ -3267,6 +3385,16 @@ if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
       echo "CONFIG_REREAD: secondmate $ID: cleanup failed; pre-relaunch generations were force-cleared where possible (destination=$PROJ_ABS source=$FM_HOME)" >&2
     fi
   fi
+fi
+
+# The launch is confirmed: everything above either succeeded or exited. Only now
+# is this execution the one actually running the lane, and only now may another
+# dispatch be refused on the strength of that. A failure here is loud rather
+# than fatal, because the agent IS running and reporting a failed spawn would
+# invite a second one onto the same lane.
+if [ -n "$SPAWN_EXEC_ID" ]; then
+  "$FM_ROOT/bin/fm-attempt.sh" dispatched "$ID" --execution "$SPAWN_EXEC_ID" >/dev/null || \
+    echo "warning: $ID launched on $SPAWN_EXEC_ID but that execution could not be recorded as active in $STATE/$ID.attempt; until it is, a relaunch of this task could rebind the lane without passing through bin/fm-attempt.sh replace. Reconcile it with: bin/fm-attempt.sh dispatched $ID --execution $SPAWN_EXEC_ID" >&2
 fi
 
 SPAWN_DELIVERY=

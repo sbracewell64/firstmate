@@ -124,6 +124,86 @@
 # past an exhausted count, and it is recorded, so the override is inspectable
 # afterwards. A reset verb would hand back exactly the discretion this replaces.
 #
+# TWO NOUNS, ONE LINEAGE: THE WORK ATTEMPT AND THE EXECUTION ATTEMPT.
+# Everything above counts ATTEMPTS AT THE WORK - "may this task be tried
+# again?". A second question shares the word and is not that question: which
+# WORKER INCARNATION is currently executing this lane. They separate the moment
+# a lane's provider window closes mid-flight: the work did not fail, the runtime
+# did not die, and nothing may be retried - but the binding that was executing
+# it can no longer execute anything. Under the count above that relaunch is a
+# CONTINUATION, so a successor on a different model would inherit the identity
+# of the attempt that produced the earlier evidence.
+#
+# So the record also carries an EXECUTION lineage, and the two never move
+# together:
+#
+#   execution=<k>            the execution attempt now open, monotonic for the
+#                            life of the task id and never reused.
+#   execution_id=<id>/e<k>   the stamp evidence is attributed to.
+#   execution_binding=<h>/<m>  the harness/model binding it runs on.
+#   execution_effort=<band>  its recorded effort band, empty when unstated.
+#   execution_dispatch=<launching|active|sanctioned>  where this execution
+#                            stands. `launching` was minted by an ordinary spawn
+#                            whose launch has not been confirmed; `active` has a
+#                            confirmed launch; `sanctioned` was minted by
+#                            `replace` and is waiting for its successor dispatch.
+#   execution_head=<sha>     the branch head observed when it was minted.
+#
+# A REPLACEMENT MOVES THE EXECUTION AND LEAVES THE WORK ALONE. `replace` mints
+# a successor execution in the SAME lane - same task id, same slot, same
+# worktree, same branch and head, same attempt number - and spends no attempt,
+# because a provider that ran out of window did not fail the work. That is the
+# whole point of keeping both numbers in one record: a reader cannot see one
+# without the other, and neither can be advanced by touching the other.
+#
+# THE SUCCESSOR IS NEVER THE SAME WORKER. `execution_id` changes, so evidence
+# produced after the replacement is attributed to the successor and evidence
+# produced before it stays attributed to the predecessor. state/<id>.lineage is
+# the append-only ledger that makes that structural rather than conventional: a
+# closed execution's line is never rewritten, because nothing here rewrites the
+# ledger at all. An unchanged worktree is not an unchanged producer - the same
+# law that governs head-bound evidence across a rebase.
+#
+# WHAT `open` MAY NOT DO, AND THE ONE CASE WHERE IT MAY. A relaunch that keeps
+# the SAME binding continues the execution already open, exactly as it continues
+# the attempt. A relaunch that CHANGES it is refused and pointed at `replace`,
+# so a lane cannot be rebound by passing a different --binding to an ordinary
+# spawn. That refusal is what makes `replace` the only door.
+#
+# The exception is an execution still in `launching`: its metadata was published
+# and its launch never completed, so it PRODUCED NOTHING and there is no producer
+# to preserve. Re-recording that ordinal onto another binding is what lets the
+# capacity owner's in-pool substitution work at all - a dispatch that failed to
+# launch on one model and is retried on the next never had two producers, it had
+# none. An execution that reached `active` is the opposite case and is refused.
+#
+# THE RESIDUE, STATED RATHER THAN CLOSED. `active` is recorded after the launch
+# is confirmed, by a separate call. If that call fails - the state directory
+# became unwritable between publishing metadata and confirming the launch - a
+# LIVE execution is left recorded as `launching`, and a later relaunch could
+# then rebind it without passing through `replace`. The failure is loud and
+# names the reconciliation, and it cannot happen silently, because `open` itself
+# refuses to launch when it cannot write that record at all. Closing it properly
+# needs the launch confirmation and the metadata publication to be one atomic
+# write, which they are not.
+#
+# EVERY REPLACEMENT CONDITION IS THREE-VALUED, AND EVERY ONE COMES FROM ITS
+# EXISTING OWNER. This file evaluates no capacity, no route, no qualification
+# and no liveness of its own; it asks the owner that already answers, and a
+# condition that owner could not establish REFUSES rather than defaulting to
+# permitted:
+#
+#   worktree custody and process quiescence  bin/fm-worktree-guard.sh owner-state
+#   agent quiescence at the endpoint         fm_backend_agent_state (bin/fm-backend.sh)
+#   an operation still in flight             bin/fm-crew-state.sh
+#   route, floor, availability, registry,
+#     role qualification and capacity        bin/fm-route.sh eligible
+#   assignment independence from the maker   bin/fm-qualification.sh reviewer
+#
+# A provider that refused for quota proves that ATTEMPT cannot continue. It
+# proves nothing about any other process, lane or slot, so nothing here kills,
+# reclaims, resets or releases anything - it refuses instead.
+#
 # Usage:
 #   fm-attempt.sh show <id>
 #       Print "attempt=<n> attempt_budget=<b>" for the resolved prior count.
@@ -164,6 +244,38 @@
 #       There is no default, because defaulting would report a broken recorder
 #       as an exhausted pool. A task already in a terminal state keeps the state
 #       it was first recorded in and is not rewritten.
+#   fm-attempt.sh execution <id>
+#       Print "execution=<k> execution_id=<id> execution_binding=<b> \
+#       execution_dispatch=<state>" for the execution attempt now open. A task
+#       with no execution lineage prints execution=0 and empty fields, which is
+#       could-not-observe about its producer and never a claim that one ran.
+#   fm-attempt.sh lineage <id>
+#       Print the append-only execution ledger, oldest first. Nothing rewrites
+#       it, so a closed execution's attribution is preserved by construction.
+#   fm-attempt.sh replace <id> --alternate <model> --reason <text>
+#                              [--alternate-harness <h>] [--alternate-effort <e>]
+#                              [--maker <model>] [--check]
+#       Decide whether this lane's execution attempt may be replaced by a
+#       successor on <model>, and - unless --check - MINT that successor. Every
+#       safety condition above must be observed good. --check decides and
+#       commits nothing. --maker names the binding that MADE the work this lane
+#       reviews, when the lane is a reviewing assignment; a route whose floor
+#       requires an adjudicated contract and no known maker cannot establish
+#       assignment independence and is refused.
+#       --alternate-harness and --alternate-effort default to the lane's own
+#       recorded harness and effort, because a replacement states what MOVES;
+#       inheriting an axis is never admitting it, and the route is re-checked
+#       against the whole resulting binding either way.
+#   fm-attempt.sh dispatched <id> --execution <execution-id>
+#       Record that a spawn CONFIRMED the launch of that exact execution, moving
+#       it to active. bin/fm-spawn.sh's hook; refuses any id but
+#       the one execution the record currently holds open, so a crash between
+#       the mint and the launch can only ever leave ONE execution to recover.
+#   `check` and `open` additionally take --binding <harness>/<model>, --effort
+#       <band>, and --succeeding. The binding is what makes an unsanctioned
+#       rebind refusable at the chokepoint; --succeeding declares that this
+#       launch IS the sanctioned successor dispatch, which is the only thing
+#       allowed past a record that holds one.
 #   fm-attempt.sh retire <id>
 #       Remove the record. Teardown's ordinary-release hook.
 #
@@ -211,6 +323,25 @@ ATTEMPT_DEFER_STAGNATION_DEFAULT=${FM_ATTEMPT_DEFER_STAGNATION_DEFAULT:-8}
 # Exit code for a refused retry, distinct from an argument error (2) so a caller
 # can tell "this task is out of budget" from "you called me wrong".
 ATTEMPT_EXHAUSTED_EXIT=3
+# `replace`'s answers, which are the same four bin/fm-route.sh already uses plus
+# one, so a caller that reads nothing but the status still stops safely:
+#   0  sanctioned
+#   1  REFUSED     - a safety condition was observed BAD
+#   2  usage error, or a policy surface that could not be read at all
+#   3  HELD        - no eligible alternate exists. 3 means here exactly what it
+#                    means for an exhausted budget above: the work stays where
+#                    it is. It is never a reason to lower a floor.
+#   4  COULD_NOT_OBSERVE - a required condition could not be established. It is
+#                    a real result, and it refuses.
+ATTEMPT_REPLACE_REFUSED_EXIT=1
+ATTEMPT_REPLACE_HELD_EXIT=3
+ATTEMPT_REPLACE_UNOBSERVED_EXIT=4
+# The schema tag of one line of state/<id>.lineage.
+FM_ATTEMPT_LINEAGE_SCHEMA=fm-execution-lineage.v1
+# Set to 1 only by the one path that mints or advances an execution; every other
+# writer preserves the lineage it finds. Defaulted here so `set -u` cannot make
+# an ordinary write depend on whether a replacement ran first in this process.
+ATTEMPT_EXEC_SET=0
 
 usage() {
   LC_ALL=C awk '
@@ -335,6 +466,7 @@ attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty> <failures> <end
                    #   [<deferrals> <deferral-budget> <signature> <stagnant>]
   local id=$1 n=$2 b=$3 term=${4-} failures=${5-0} ended=${6-0} rec tmp
   local deferrals defer_budget signature stagnant
+  local exec_n exec_id exec_binding exec_effort exec_dispatch exec_head
   rec="$STATE/$id.attempt"
   if [ "$#" -ge 10 ]; then
     deferrals=$7 defer_budget=$8 signature=$9 stagnant=${10}
@@ -343,6 +475,25 @@ attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty> <failures> <end
     defer_budget=$(attempt_field "$rec" deferral_budget)
     signature=$(attempt_field "$rec" defer_signature)
     stagnant=$(attempt_field "$rec" defer_stagnant)
+  fi
+  # The execution lineage is PRESERVED by every writer and set by exactly one.
+  # Only the paths that mint or advance an execution set ATTEMPT_EXEC_SET, so a
+  # check, an open, an end, a deferral and a terminal declaration all rewrite
+  # this record without being able to move a producer identity. That asymmetry
+  # is the same one the deferral fields already rely on, and for the same
+  # reason: a field a passing writer can silently drop is a field that will be
+  # dropped.
+  if [ "${ATTEMPT_EXEC_SET:-0}" = 1 ]; then
+    exec_n=${ATTEMPT_EXEC_N:-} exec_id=${ATTEMPT_EXEC_ID:-}
+    exec_binding=${ATTEMPT_EXEC_BINDING:-} exec_effort=${ATTEMPT_EXEC_EFFORT:-}
+    exec_dispatch=${ATTEMPT_EXEC_DISPATCH:-} exec_head=${ATTEMPT_EXEC_HEAD:-}
+  else
+    exec_n=$(attempt_field "$rec" execution)
+    exec_id=$(attempt_field "$rec" execution_id)
+    exec_binding=$(attempt_field "$rec" execution_binding)
+    exec_effort=$(attempt_field "$rec" execution_effort)
+    exec_dispatch=$(attempt_field "$rec" execution_dispatch)
+    exec_head=$(attempt_field "$rec" execution_head)
   fi
   # An absent ended flag is written as the 0 it means, so the record's shape does
   # not depend on which caller last wrote it.
@@ -358,6 +509,12 @@ attempt_write() {  # <id> <attempt> <budget> <terminal-or-empty> <failures> <end
     [ -z "$defer_budget" ] || printf 'deferral_budget=%s\n' "$defer_budget"
     [ -z "$signature" ] || printf 'defer_signature=%s\n' "$signature"
     [ -z "$stagnant" ] || printf 'defer_stagnant=%s\n' "$stagnant"
+    [ -z "$exec_n" ] || printf 'execution=%s\n' "$exec_n"
+    [ -z "$exec_id" ] || printf 'execution_id=%s\n' "$exec_id"
+    [ -z "$exec_binding" ] || printf 'execution_binding=%s\n' "$exec_binding"
+    [ -z "$exec_effort" ] || printf 'execution_effort=%s\n' "$exec_effort"
+    [ -z "$exec_dispatch" ] || printf 'execution_dispatch=%s\n' "$exec_dispatch"
+    [ -z "$exec_head" ] || printf 'execution_head=%s\n' "$exec_head"
     [ -z "$term" ] || printf 'terminal=%s\n' "$term"
     printf 'updated=%s\n' "$(date +%s)"
   } > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
@@ -395,10 +552,27 @@ attempt_refuse() {  # <id> <prior> <budget> <failures-already-seen>
     "$id" "$prior" "$budget" "$FM_ATTEMPT_TERMINAL_STATE" >&2
 }
 
-parse_budget_flag() {  # <args...> -> sets PARSED_BUDGET
+parse_budget_flag() {  # <args...> -> sets PARSED_BUDGET, PARSED_BINDING, PARSED_EFFORT, PARSED_SUCCEEDING
   PARSED_BUDGET=''
+  PARSED_BINDING=''
+  PARSED_EFFORT=''
+  PARSED_SUCCEEDING=0
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --binding)
+        [ "$#" -ge 2 ] || die "--binding needs a value"
+        PARSED_BINDING=$2
+        shift 2
+        ;;
+      --effort)
+        [ "$#" -ge 2 ] || die "--effort needs a value"
+        PARSED_EFFORT=$2
+        shift 2
+        ;;
+      --succeeding)
+        PARSED_SUCCEEDING=1
+        shift
+        ;;
       --budget)
         [ "$#" -ge 2 ] || die "--budget needs a value"
         PARSED_BUDGET=$2
@@ -459,6 +633,7 @@ cmd_check() {
   require_id "$id"
   shift
   parse_budget_flag "$@"
+  attempt_exec_guard "$id" "$PARSED_BINDING" "$PARSED_SUCCEEDING"
   attempt_resolve "$id" "$PARSED_BUDGET"
   # Only a NEW attempt can exceed the budget. A continuation is never refused,
   # however many times a dead runtime has to be replaced.
@@ -487,6 +662,10 @@ cmd_open() {
   # uncounted: an attempt nobody recorded is exactly the state this replaces.
   attempt_write "$id" "$ATTEMPT_NEXT" "$ATTEMPT_BUDGET_RESOLVED" '' "$ATTEMPT_FAILURES" 0 \
     || die "could not record attempt $ATTEMPT_NEXT for $id at $STATE/$id.attempt"
+  # An ordinary launch also records WHO is executing, so a lane always has a
+  # producer to attribute its evidence to and a replacement always has a
+  # predecessor to preserve.
+  attempt_exec_open "$id" "$PARSED_BINDING" "$PARSED_EFFORT" "$PARSED_SUCCEEDING"
   printf 'attempt=%s attempt_budget=%s\n' "$ATTEMPT_NEXT" "$ATTEMPT_BUDGET_RESOLVED"
 }
 
@@ -663,12 +842,467 @@ cmd_stop_defer() {
   printf 'terminal=%s\n' "$state"
 }
 
+# --- the execution lineage -------------------------------------------------
+
+# The task's current execution ordinal. Absent reads 0, which is
+# could-not-observe about the producer and never a claim that one ran.
+attempt_exec_n() {  # <id> -> ordinal on stdout
+  local n
+  n=$(attempt_field "$STATE/$1.attempt" execution)
+  attempt_is_count "$n" || n=0
+  printf '%s' "$n"
+}
+
+# One line of the append-only ledger. Nothing in this file ever rewrites or
+# truncates it, so a closed execution's attribution survives by construction
+# rather than by anyone remembering to preserve it. A ledger that cannot be
+# appended is a refusal at every call site: an execution whose producer was
+# never recorded cannot later be told apart from one whose producer was.
+attempt_lineage_append() {  # <id> <field>...
+  local id=$1 line
+  shift
+  line="$FM_ATTEMPT_LINEAGE_SCHEMA"
+  while [ "$#" -gt 0 ]; do
+    line="$line $(attempt_clean_signature "$1")"
+    shift
+  done
+  [ -d "$STATE" ] || mkdir -p "$STATE" 2>/dev/null || return 1
+  printf '%s\n' "$line" >> "$STATE/$id.lineage" 2>/dev/null
+}
+
+# Commit one execution onto the record. The ONLY writer of the lineage fields;
+# every other path preserves what it finds (see attempt_write).
+attempt_exec_commit() {  # <id> <ordinal> <binding> <effort> <dispatch> <head>
+  local id=$1
+  ATTEMPT_EXEC_SET=1
+  ATTEMPT_EXEC_N=$2
+  ATTEMPT_EXEC_ID="$id/e$2"
+  ATTEMPT_EXEC_BINDING=$3
+  ATTEMPT_EXEC_EFFORT=$4
+  ATTEMPT_EXEC_DISPATCH=$5
+  ATTEMPT_EXEC_HEAD=$6
+  attempt_write "$id" "$(attempt_prior "$id")" "$(attempt_budget "$id" '')" \
+    "$(attempt_field "$STATE/$id.attempt" terminal)" \
+    "$(attempt_failures_seen "$id")" \
+    "$(attempt_field "$STATE/$id.attempt" ended)"
+  local rc=$?
+  ATTEMPT_EXEC_SET=0
+  return "$rc"
+}
+
+# The refusal that makes `replace` the only door. An ordinary relaunch declaring
+# a DIFFERENT binding is refused before anything is created, so a lane cannot be
+# rebound by editing a spawn command line: the successor identity, the
+# quiescence proof and the admissibility of the alternate all live behind the
+# one verb that mints a successor.
+attempt_exec_guard() {  # <id> <binding-or-empty> <succeeding-0-or-1>
+  local id=$1 binding=${2-} succeeding=${3-0} recorded state
+  state=$(attempt_field "$STATE/$id.attempt" execution_dispatch)
+  # A record written before this vocabulary existed names no state; read it as
+  # the strict one, because the permissive readings are the ones that let a lane
+  # be rebound without a gate.
+  [ -n "$state" ] || [ "$(attempt_exec_n "$id")" -eq 0 ] || state=active
+  if [ "$state" = sanctioned ] && [ "$succeeding" != 1 ]; then
+    printf 'error: %s already has a sanctioned successor execution (%s on %s) waiting to be launched. Launch it with bin/fm-spawn.sh --succeed-execution, which keeps this lane its slot and worktree; an ordinary dispatch would take a second slot for work that already holds one.\n' \
+      "$id" "$(attempt_field "$STATE/$id.attempt" execution_id)" \
+      "$(attempt_field "$STATE/$id.attempt" execution_binding)" >&2
+    exit "$ATTEMPT_REPLACE_REFUSED_EXIT"
+  fi
+  [ -n "$binding" ] || return 0
+  recorded=$(attempt_field "$STATE/$id.attempt" execution_binding)
+  [ -n "$recorded" ] || return 0
+  [ "$binding" != "$recorded" ] || return 0
+  # A launch that never completed produced nothing, so there is no producer to
+  # preserve and the ordinal may simply be re-recorded onto the new binding.
+  [ "$state" != launching ] || return 0
+  printf 'error: %s is executing on %s and this launch declares %s. A lane is not rebound by relaunching it: run bin/fm-attempt.sh replace %s --alternate <model> --reason <text>, which checks that the execution now open is quiescent, that the alternate is admissible, and mints a successor identity so the earlier evidence keeps its own producer.\n' \
+    "$id" "$recorded" "$binding" "$id" >&2
+  exit "$ATTEMPT_REPLACE_REFUSED_EXIT"
+}
+
+# Mint execution 1 for a task that has none, and refuse a binding change that
+# did not go through `replace`. Called from `open`, so an ordinary spawn records
+# its producer without a second command, and an ordinary spawn cannot rebind a
+# lane by passing a different --binding.
+attempt_exec_open() {  # <id> <binding-or-empty> <effort-or-empty> <succeeding>
+  local id=$1 binding=${2-} effort=${3-} succeeding=${4-0} have recorded state
+  have=$(attempt_exec_n "$id")
+  recorded=$(attempt_field "$STATE/$id.attempt" execution_binding)
+  state=$(attempt_field "$STATE/$id.attempt" execution_dispatch)
+  if [ "$have" -eq 0 ]; then
+    attempt_exec_commit "$id" 1 "$binding" "$effort" launching '' \
+      || die "could not record execution 1 for $id at $STATE/$id.attempt"
+    attempt_lineage_append "$id" "event=opened" "execution=$id/e1" "ordinal=1" \
+      "attempt=$(attempt_prior "$id")" "binding=${binding:-unknown}" \
+      "effort=${effort:-unstated}" "ts=$(date +%s)" \
+      || die "could not record the producer of execution 1 for $id at $STATE/$id.lineage"
+    return 0
+  fi
+  attempt_exec_guard "$id" "$binding" "$succeeding"
+  # A sanctioned successor is left exactly as the gate minted it; its dispatch is
+  # confirmed separately, so nothing here may quietly declare it running.
+  [ "$state" != sanctioned ] || return 0
+  # Otherwise: adopt this launch's binding onto the open ordinal. That is a
+  # no-op for a continuation on the same binding, fills in a producer a record
+  # predating this never had, and re-points an execution whose launch never
+  # completed - the three cases the guard above has already separated from a
+  # rebind it must refuse.
+  if [ -n "$binding" ] && [ "$binding" != "$recorded" ]; then
+    attempt_exec_commit "$id" "$have" "$binding" "$effort" launching \
+      "$(attempt_field "$STATE/$id.attempt" execution_head)" \
+      || die "could not record the producer of execution $have for $id"
+    attempt_lineage_append "$id" "event=relaunched" "execution=$id/e$have" \
+      "ordinal=$have" "binding=$binding" "effort=${effort:-unstated}" \
+      "ts=$(date +%s)" "previous_binding=${recorded:-unknown}" \
+      "reason=the prior launch of this execution was never confirmed" \
+      || die "could not record the re-pointed producer of execution $have for $id"
+  fi
+}
+
+cmd_execution() {
+  local id=${1-} n
+  require_id "$id"
+  shift
+  [ "$#" -eq 0 ] || die "execution takes only a task id"
+  n=$(attempt_exec_n "$id")
+  printf 'execution=%s execution_id=%s execution_binding=%s execution_effort=%s execution_dispatch=%s execution_head=%s\n' \
+    "$n" \
+    "$(attempt_field "$STATE/$id.attempt" execution_id)" \
+    "$(attempt_field "$STATE/$id.attempt" execution_binding)" \
+    "$(attempt_field "$STATE/$id.attempt" execution_effort)" \
+    "$(attempt_field "$STATE/$id.attempt" execution_dispatch)" \
+    "$(attempt_field "$STATE/$id.attempt" execution_head)"
+}
+
+cmd_lineage() {
+  local id=${1-}
+  require_id "$id"
+  shift
+  [ "$#" -eq 0 ] || die "lineage takes only a task id"
+  [ -f "$STATE/$id.lineage" ] || return 0
+  cat -- "$STATE/$id.lineage"
+}
+
+# --- the replacement gate --------------------------------------------------
+
+# Every refusal prints WHY and WHICH of the three values it reached, because a
+# caller acting on the exit status alone still has to be able to tell a lane
+# that is unsafe to replace from one whose safety could not be established.
+replace_refuse() {  # <text>
+  printf 'error: REFUSED - %s\n' "$1" >&2
+  exit "$ATTEMPT_REPLACE_REFUSED_EXIT"
+}
+
+replace_unobserved() {  # <text>
+  printf 'error: COULD_NOT_OBSERVE - %s\n' "$1" >&2
+  exit "$ATTEMPT_REPLACE_UNOBSERVED_EXIT"
+}
+
+replace_held() {  # <text>
+  printf 'error: HELD - %s\n' "$1" >&2
+  exit "$ATTEMPT_REPLACE_HELD_EXIT"
+}
+
+# The process table has to be READABLE before its silence means anything. Every
+# occupancy verdict downstream is drawn from the absence of matching entries,
+# and absence read out of a table that could not be listed is exactly the
+# could-not-observe this refuses. A root holding no numeric entry at all is not
+# a machine with no processes; it is a root that was not read.
+replace_proc_readable() {
+  local root=${FM_PROC_ROOT_OVERRIDE:-/proc} dir
+  [ -d "$root" ] || return 1
+  for dir in "$root"/[0-9]*; do
+    [ -d "$dir" ] && return 0
+  done
+  return 1
+}
+
+# The lane's worktree custody AND whether anything still lives in it, from the
+# one owner that already answers both. Its four words map onto exactly the three
+# values this gate needs, and none of them is narrowed:
+#   dead        the recorded owner identity no longer matches and no live
+#               evidence remains - quiescent, and nothing owns an effect.
+#   alive       something is still running in this lane's slot.
+#   unresolved  the slot is claimed but no owner identity was ever recorded, so
+#               who owns it cannot be established.
+#   unclaimed   no metadata claims the slot at all, so custody is unknown.
+replace_custody_gate() {  # <id> <worktree>
+  local id=$1 wt=$2 line state owner
+  replace_proc_readable \
+    || replace_unobserved "the process table at ${FM_PROC_ROOT_OVERRIDE:-/proc} could not be listed, so nothing can be concluded from finding no process in $wt"
+  line=$("$FM_ROOT/bin/fm-worktree-guard.sh" owner-state "$wt" 2>/dev/null) \
+    || replace_unobserved "bin/fm-worktree-guard.sh could not report who owns $wt"
+  state=${line%%$'\t'*}
+  owner=${line#*$'\t'}
+  owner=${owner%%$'\t'*}
+  # WHO owns it is settled before WHAT state it is in, because they are different
+  # questions with different answers. A slot another lane holds is a refusal
+  # whatever its process state: a provider refusing THIS lane for quota is
+  # evidence about this lane's binding and about nothing else, and it authorizes
+  # reclaiming no other lane's work.
+  [ "$state" != unclaimed ] \
+    || replace_unobserved "no task record claims $wt, so this lane's worktree custody is not established and a successor cannot be told it inherits it"
+  [ "$owner" = "$id" ] \
+    || replace_refuse "$wt is held by $owner, not $id. A provider refusing $id for quota says nothing about $owner's work, and no lane is ever reclaimed from another"
+  [ "$state" != unresolved ] \
+    || replace_unobserved "$wt is claimed by $owner but no owner process identity was ever recorded for it, so whether anything still owns an effect there cannot be established"
+  [ "$state" != alive ] \
+    || replace_refuse "$id's execution attempt is not quiescent: ${line##*$'\t'}. Replacement resumes only once the process holding this lane is gone"
+  [ "$state" = dead ] \
+    || replace_unobserved "bin/fm-worktree-guard.sh reported $wt as '$state', which this gate has no rule for"
+}
+
+# The endpoint's own agent, which the worktree cannot answer for: a backend that
+# runs the agent off this host leaves no occupant behind at all. Only `dead` and
+# `missing` license recovery in that owner's contract, and this gate does not
+# widen it.
+replace_agent_gate() {  # <id> <backend> <target>
+  local id=$1 backend=$2 target=$3 verdict
+  [ -n "$target" ] \
+    || replace_unobserved "$id's metadata records no endpoint, so whether its worker is still running cannot be established"
+  # shellcheck source=bin/fm-backend.sh disable=SC1091
+  . "$FM_ROOT/bin/fm-backend.sh"
+  verdict=$(fm_backend_agent_state "$backend" "$target" 2>/dev/null) || verdict=unreadable
+  case "$verdict" in
+    dead|missing) return 0 ;;
+    alive) replace_refuse "a worker is still running at $id's endpoint ($backend $target). Replacement resumes once it is gone" ;;
+    *) replace_unobserved "$id's endpoint ($backend $target) reported '$verdict', so whether a worker is still running there could not be established" ;;
+  esac
+}
+
+# An operation already in flight is not this gate's to interrupt. An ACTIVE
+# validation run owns the lane's branch whether or not a worker is at the
+# endpoint - the pipeline executes in its own daemon - so replacing the worker
+# under it duplicates ownership of a push, a pull request, or a merge. Read
+# through the one owner of a crew's current state; its own words are used, and
+# no step name is enumerated here, because a vocabulary this file restated would
+# drift the moment that owner added a step.
+replace_inflight_gate() {  # <id>
+  local id=$1 json state bin
+  bin=${FM_CREW_STATE_BIN:-$FM_ROOT/bin/fm-crew-state.sh}
+  json=$("$bin" "$id" --json 2>/dev/null) \
+    || replace_unobserved "bin/fm-crew-state.sh could not report what $id is currently doing, so whether an operation is in flight is unestablished"
+  state=$(printf '%s' "$json" | LC_ALL=C sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  case "$state" in
+    working|parked)
+      replace_refuse "$id has a validation run in flight (state $state). It owns this lane's branch, and a push, pull request or merge it is midway through cannot be made not to have happened by replacing the worker" ;;
+    '')
+      replace_unobserved "bin/fm-crew-state.sh reported no state for $id, so whether an operation is in flight is unestablished" ;;
+    stale|unknown)
+      replace_unobserved "bin/fm-crew-state.sh reported $id as '$state', which is precisely the absence of usable evidence about what is in flight" ;;
+  esac
+}
+
+# What the successor inherits, observed rather than assumed. The worktree is
+# retained across the replacement, so its content is durable by construction;
+# what has to be established is that the lane's HEAD can be READ, because that
+# head is what the successor's own evidence will later be bound to.
+replace_head_of() {  # <worktree> -> sha on stdout, nonzero when unreadable
+  git --no-optional-locks -C "$1" rev-parse HEAD 2>/dev/null
+}
+
+# Whether this home routes at all. An ABSENT dispatch config is a home with no
+# routed pool, which the routing owner is silent about by design; an config that
+# EXISTS and cannot be read is could-not-observe, and the two must never collapse
+# into each other.
+replace_route_configured() {
+  [ -f "${FM_CONFIG_OVERRIDE:-$FM_HOME/config}/crew-dispatch.json" ]
+}
+
+# The alternate binding, judged by the owners that already compose floor, pool
+# order, availability, cost and routability, role qualification and current
+# provider capacity - each with its own ruled disposition, including capacity's
+# deliberate asymmetry, which is not re-decided here. The decision record it
+# returns is KEPT, because the independence gate below needs the same route's
+# declared capability contracts and reading them a second time could read a
+# different file.
+REPLACE_DECISION=
+replace_alternate_gate() {  # <id> <route> <alternate>
+  local id=$1 route=$2 alternate=$3 bin json rc eligible why
+  bin=${FM_ROUTE_BIN:-$FM_ROOT/bin/fm-route.sh}
+  if ! replace_route_configured; then
+    printf 'note: this home configures no routed pool, so route eligibility is unconfigured for %s and the alternate carries only the model registry behind it\n' "$alternate" >&2
+    return 0
+  fi
+  [ -n "$route" ] \
+    || replace_unobserved "this home routes dispatches but $id's metadata records no route, so whether $alternate may run this lane cannot be established"
+  rc=0
+  json=$("$bin" eligible --route "$route" --json 2>/dev/null) || rc=$?
+  case "$rc" in
+    0) ;;
+    3)
+      why=$("$bin" zero-route --route "$route" 2>&1 || true)
+      replace_held "route $route has no eligible candidate, so this lane stays on the execution it has. $(printf '%s' "$why" | tr '\n' ' ')" ;;
+    *)
+      replace_unobserved "bin/fm-route.sh could not read route $route, so $alternate's admissibility is unestablished" ;;
+  esac
+  REPLACE_DECISION=$json
+  eligible=$(printf '%s' "$json" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | .[]' 2>/dev/null) \
+    || replace_unobserved "route $route's decision record could not be parsed, so $alternate's admissibility is unestablished"
+  [ -n "$eligible" ] \
+    || replace_held "route $route reports no eligible candidate, so this lane stays on the execution it has"
+  printf '%s\n' "$eligible" | LC_ALL=C grep -qxF -- "$alternate" \
+    || replace_refuse "$alternate is not currently eligible on route $route. Eligible now: $(printf '%s' "$eligible" | tr '\n' ' '). An ineligible alternate is not made eligible by the primary being out of window"
+}
+
+# Assignment independence, which no qualification record grants and which is
+# therefore decided per assignment rather than carried by the binding. A route
+# whose floor requires an ADJUDICATED capability contract is a reviewing
+# assignment: replacing its worker with the binding that made the work under
+# review is refused BY CONTRACT, not merely unavailable, and a lane whose maker
+# is unknown cannot establish the predicate at all.
+#
+# The declared contracts are read off the decision record the eligibility gate
+# already fetched, so both terms see one read of one route.
+replace_independence_gate() {  # <id> <route> <alternate> <maker>
+  local id=$1 route=$2 alternate=$3 maker=$4 qbin contracts c adjudicated=0 out dir
+  local -a required=()
+  qbin=${FM_QUALIFICATION_BIN:-$FM_ROOT/bin/fm-qualification.sh}
+  dir=${FM_QUALIFICATION_CONTRACT_DIR:-$FM_ROOT/qualifications/contracts}
+  [ -n "$REPLACE_DECISION" ] || return 0
+  contracts=$(printf '%s' "$REPLACE_DECISION" \
+    | jq -r '(.floor_axes.requires_capabilities // []) | .[]' 2>/dev/null) \
+    || replace_unobserved "route $route's declared capability contracts could not be read, so whether this assignment must be independent of its maker is unestablished"
+  [ -n "$contracts" ] || return 0
+  while IFS= read -r c; do
+    [ -n "$c" ] || continue
+    required+=("--contract" "$c")
+    [ -f "$dir/$c.json" ] \
+      || replace_unobserved "capability contract $c, required by route $route, could not be read at $dir, so whether this assignment must be independent of its maker is unestablished"
+    if [ "$(jq -r '.adjudication.required // false' "$dir/$c.json" 2>/dev/null)" = true ]; then
+      adjudicated=1
+    fi
+  done <<EOF
+$contracts
+EOF
+  [ "$adjudicated" -eq 1 ] || return 0
+  [ -n "$maker" ] \
+    || replace_unobserved "route $route requires an adjudicated capability contract, so this lane is a reviewing assignment, and no maker is recorded for it. An independence predicate that could not be evaluated is not a satisfied one; pass --maker <model>"
+  out=$("$qbin" reviewer --maker "$maker" --reviewer "$alternate" "${required[@]}" 2>&1) \
+    || replace_refuse "$alternate may not take this assignment: $(printf '%s' "$out" | tr '\n' ' ')"
+}
+
+cmd_replace() {
+  local id=${1-} alternate='' harness='' effort='' maker='' reason='' check=0
+  local rec meta wt backend target route binding have head lockdir next
+  require_id "$id"
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --alternate) [ "$#" -ge 2 ] || die "--alternate needs a value"; alternate=$2; shift 2 ;;
+      --alternate-harness) [ "$#" -ge 2 ] || die "--alternate-harness needs a value"; harness=$2; shift 2 ;;
+      --alternate-effort) [ "$#" -ge 2 ] || die "--alternate-effort needs a value"; effort=$2; shift 2 ;;
+      --maker) [ "$#" -ge 2 ] || die "--maker needs a value"; maker=$2; shift 2 ;;
+      --reason) [ "$#" -ge 2 ] || die "--reason needs a value"; reason=$2; shift 2 ;;
+      --check) check=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  [ -n "$alternate" ] || die "replace needs --alternate <model>"
+  [ -n "$reason" ] || die "replace needs --reason <text>: a replacement nobody can read the cause of is one nobody can audit"
+  reason=$(attempt_clean_signature "$reason")
+
+  meta="$STATE/$id.meta"
+  [ -f "$meta" ] \
+    || replace_unobserved "$id has no task metadata, so this lane's slot, worktree, endpoint and route are all unestablished"
+  wt=$(attempt_field "$meta" worktree)
+  [ -n "$wt" ] \
+    || replace_unobserved "$id's metadata records no worktree, so the custody a successor would inherit is unestablished"
+  [ -d "$wt" ] \
+    || replace_unobserved "$id's recorded worktree $wt is not present, so the work a successor would continue cannot be observed to be there"
+  backend=$(attempt_field "$meta" backend)
+  [ -n "$backend" ] || backend=tmux
+  target=$(attempt_field "$meta" window)
+  route=$(attempt_field "$meta" route)
+  # The axes the replacement does NOT change default to the lane's own recorded
+  # ones, so a caller states only what actually moves. Every one of them is still
+  # recomputed against the route below - inheriting a value is not admitting it.
+  [ -n "$harness" ] || harness=$(attempt_field "$meta" harness)
+  if [ -z "$effort" ]; then
+    effort=$(attempt_field "$meta" effort)
+    [ "$effort" != default ] || effort=''
+  fi
+  binding=$harness
+  [ -z "$binding" ] || binding="$binding/"
+  binding="$binding$alternate"
+
+  have=$(attempt_exec_n "$id")
+  [ "$have" -gt 0 ] \
+    || replace_unobserved "$id has no recorded execution attempt, so there is nothing to replace and no predecessor to attribute its evidence to"
+
+  replace_custody_gate "$id" "$wt"
+  replace_agent_gate "$id" "$backend" "$target"
+  replace_inflight_gate "$id"
+  head=$(replace_head_of "$wt") \
+    || replace_unobserved "the branch head in $wt could not be read, so what the successor would inherit - and what its own evidence would be bound to - is unestablished"
+  replace_alternate_gate "$id" "$route" "$alternate"
+  replace_independence_gate "$id" "$route" "$alternate" "$maker"
+
+  if [ "$check" -eq 1 ]; then
+    printf 'sanctioned successor=%s/e%s binding=%s head=%s (checked only; nothing was committed)\n' \
+      "$id" "$((have + 1))" "$binding" "$head"
+    return 0
+  fi
+
+  # ONE successor, whatever happens next. The mint is a single atomic rewrite of
+  # the record, taken under a lock this task id alone can hold, and the record is
+  # the only authority on which execution is open. A crash before it leaves the
+  # predecessor open; a crash after it leaves exactly the successor, in pending,
+  # for recovery to launch. There is no window in which two executions are open,
+  # because there is no state in which two are recorded.
+  lockdir="$STATE/$id.attempt.lock"
+  mkdir "$lockdir" 2>/dev/null \
+    || replace_unobserved "another replacement of $id is already in progress (holding $lockdir); whether it has already minted a successor is unestablished from here"
+  # shellcheck disable=SC2064
+  trap "rmdir -- '$lockdir' 2>/dev/null || true" EXIT
+  have=$(attempt_exec_n "$id")
+  next=$((have + 1))
+  attempt_lineage_append "$id" "event=closed" "execution=$id/e$have" \
+    "ts=$(date +%s)" "disposition=replaced" "successor=$id/e$next" "reason=$reason" \
+    || replace_unobserved "the close of $id/e$have could not be recorded at $STATE/$id.lineage, and an execution whose end was never written cannot be told apart from one still running"
+  attempt_exec_commit "$id" "$next" "$binding" "$effort" sanctioned "$head" \
+    || replace_unobserved "the successor could not be recorded at $STATE/$id.attempt; nothing was launched"
+  attempt_lineage_append "$id" "event=opened" "execution=$id/e$next" "ordinal=$next" \
+    "attempt=$(attempt_prior "$id")" "binding=$binding" "effort=${effort:-unstated}" \
+    "ts=$(date +%s)" "predecessor=$id/e$have" "head=$head" "reason=$reason" \
+    || replace_unobserved "the producer of $id/e$next could not be recorded at $STATE/$id.lineage"
+  printf 'sanctioned execution=%s execution_id=%s/e%s execution_binding=%s predecessor=%s/e%s attempt=%s head=%s\n' \
+    "$next" "$id" "$next" "$binding" "$id" "$have" "$(attempt_prior "$id")" "$head"
+}
+
+cmd_dispatched() {
+  local id=${1-} want='' open_id
+  require_id "$id"
+  shift
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --execution) [ "$#" -ge 2 ] || die "--execution needs a value"; want=$2; shift 2 ;;
+      -h|--help) usage; exit 0 ;;
+      *) die "unknown flag: $1" ;;
+    esac
+  done
+  [ -n "$want" ] || die "dispatched needs --execution <execution-id>"
+  open_id=$(attempt_field "$STATE/$id.attempt" execution_id)
+  [ -n "$open_id" ] || die "$id has no recorded execution attempt to mark dispatched"
+  [ "$open_id" = "$want" ] \
+    || die "$id currently holds $open_id open, not $want. Marking a stale execution dispatched would leave two executions claiming the same lane"
+  attempt_exec_commit "$id" "$(attempt_exec_n "$id")" \
+    "$(attempt_field "$STATE/$id.attempt" execution_binding)" \
+    "$(attempt_field "$STATE/$id.attempt" execution_effort)" \
+    active \
+    "$(attempt_field "$STATE/$id.attempt" execution_head)" \
+    || die "could not record the dispatch of $want"
+  printf 'execution=%s execution_dispatch=active\n' "$open_id"
+}
+
 cmd_retire() {
   local id=${1-}
   require_id "$id"
   shift
   [ "$#" -eq 0 ] || die "retire takes only a task id"
-  rm -f -- "$STATE/$id.attempt"
+  rm -f -- "$STATE/$id.attempt" "$STATE/$id.lineage"
+  rmdir -- "$STATE/$id.attempt.lock" 2>/dev/null || true
 }
 
 attempt_is_count "$ATTEMPT_BUDGET_DEFAULT" && [ "$ATTEMPT_BUDGET_DEFAULT" -gt 0 ] \
@@ -691,6 +1325,10 @@ case "$SUBCOMMAND" in
   defer) cmd_defer "$@" ;;
   stop-defer) cmd_stop_defer "$@" ;;
   retire) cmd_retire "$@" ;;
+  execution) cmd_execution "$@" ;;
+  lineage) cmd_lineage "$@" ;;
+  replace) cmd_replace "$@" ;;
+  dispatched) cmd_dispatched "$@" ;;
   -h|--help|help) usage ;;
-  *) die "unknown subcommand: $SUBCOMMAND (show check open defer stop-defer end retire)" ;;
+  *) die "unknown subcommand: $SUBCOMMAND (show check open defer stop-defer end retire execution lineage replace dispatched)" ;;
 esac

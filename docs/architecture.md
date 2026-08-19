@@ -465,6 +465,14 @@ Exhaustion is a named stop rather than a silent one: the spawn refuses, records 
 The count outlives the task metadata deliberately - an ordinary teardown retires it because that release means the task reached a sanctioned completion (including a parked release whose pull request is still open), so a re-dispatch of that id starts a fresh budget, while a `--force` release keeps it because discarded work makes a re-dispatch of that id a genuine retry.
 Secondmate relaunches are exempt, since their relaunch is unattended liveness recovery rather than a retry.
 
+A retry is not the only thing a lane can need, and the second thing is a different noun.
+A lane already under way whose provider window closes has not failed and cannot be retried; what can no longer execute is its BINDING, and the fleet's answer is to replace the EXECUTION ATTEMPT in place rather than dispatch the work again.
+[`vocabulary-collisions.md`](vocabulary-collisions.md) owns the ruling that keeps the two senses of `attempt` apart, and the same `bin/fm-attempt.sh` record carries both counts so neither can move by touching the other.
+The replacement keeps the lane's slot, worktree, branch, head, open questions and obligations, and asks the allocator for nothing - which is what makes it usable exactly when a pool has no allocatable slot, the state that produced the need.
+It mints a successor with its own identity rather than reusing the predecessor's, because an unchanged workspace is not an unchanged producer; the append-only `state/<task-id>.lineage` ledger is what keeps evidence made before the replacement attributed to the binding that made it.
+Every safety condition it needs - worktree custody and process quiescence, the endpoint's own agent liveness, whether an operation is in flight, and whether the alternate is admissible - is asked of the owner that already answers it, and a condition that owner could not establish refuses rather than defaulting to permitted.
+`bin/fm-attempt.sh`'s header owns the record, the gate and the refusals; `bin/fm-spawn.sh`'s `--succeed-execution` owns the launch, and refuses any binding no gate admitted.
+
 Teardown is fail-closed for ship worktrees: dirty worktrees refuse, and committed work must be published at the forge or landed before the worktree is returned.
 [`bin/fm-teardown.sh`](../bin/fm-teardown.sh)'s header owns the recoverable-work proofs, publication observation, landing-record rule, PR-discovery fallback, and stale-lock recovery procedure.
 

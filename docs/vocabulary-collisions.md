@@ -19,7 +19,7 @@ The vocabulary of this column follows the platform's Register 3 precedent.
 
 ## Rows
 
-Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation`, ruled on 2026-08-18 when its second sense was built, and any row that states its own later ruling date.
+Every row below was ruled by the captain on 2026-08-07 against the measured census in the CFVC-16 naming proposal, except `reservation` and `attempt`, each ruled on 2026-08-18 when its second sense was built, and any row that states its own later ruling date.
 
 ### `axi`
 
@@ -203,6 +203,28 @@ The split retires when the session-start relay no longer runs the sweep in the f
 Until then both names are live and neither may be read as the other.
 
 **Where it bites:** the environment table in [`bin/fm-outbound-artifact.sh`](../bin/fm-outbound-artifact.sh); `outbound_artifact_report` in [`bin/fm-bootstrap.sh`](../bin/fm-bootstrap.sh); the Browser Sol control venue section of [`configuration.md`](configuration.md).
+
+### `attempt`
+
+| | |
+|---|---|
+| **Disposition** | QUALIFY |
+| **Work sense** | a try at the WORK - the count and retry budget in `state/<task-id>.attempt`'s `attempt=`/`attempt_budget=`, advanced only by a recorded failure, owned by [`bin/fm-attempt.sh`](../bin/fm-attempt.sh) |
+| **Execution sense** | a WORKER INCARNATION executing that work - `execution=`/`execution_id=` in the same record and the `state/<task-id>.lineage` ledger, advanced only by a sanctioned replacement, owned by the same file |
+| **Herdr-projection sense** | the "attempt and restart-binding journal" of `state/<task-id>.herdr-presentation`, owned by [`docs/herdr-backend.md`](herdr-backend.md) |
+
+NO-CONTACT was not available and neither was a rename, and the measurement says why.
+The first two senses are recorded in ONE file, by one owner, and are read together on every dispatch: `bin/fm-spawn.sh` resolves the retry budget and the producer identity in the same call, and the whole reason the execution sense exists is that a provider window closing mid-flight advances the second while the first must not move.
+Renaming either would rename half of one record.
+
+Write `work attempt` for the first sense and `execution attempt` for the second.
+Bare `attempt` is acceptable only where the surrounding text has already fixed which one is meant, and never in a field name, a refusal, or a header sentence that introduces the subject.
+The Herdr-projection sense is confined to one journal that is never task or endpoint authority, and its own file already qualifies it.
+
+Nothing is renamed: `attempt=`, `attempt_budget=`, `--attempt-budget`, `FM_ATTEMPT_*` and `fm-attempt.sh` keep the work sense's spelling, and every execution-sense field already carries `execution` in its own name.
+This is a writing rule, not a migration.
+
+**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `<id>.attempt` and `<id>.lineage` rows and section 7's replacement paragraph; the header of [`bin/fm-attempt.sh`](../bin/fm-attempt.sh); the `--succeed-execution` contract in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-execution-replacement.test.sh`](../tests/fm-execution-replacement.test.sh).
 
 ## Maintaining this file
 

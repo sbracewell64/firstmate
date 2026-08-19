@@ -59,7 +59,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-remote-home-seed.sh` | Register and provision a whole secondmate home on an SSH-reachable host              |
 | `fm-remote-readiness-lib.sh` | Shared remote second-mate readiness gate: check and, when needed, repair then re-check through `fm-remote-doctor.sh` |
 | `fm-spawn.sh`            | Spawn crewmates, scouts, `id=repo` batches, and secondmates on the resolved harness and runtime backend |
-| `fm-worktree-guard.sh`   | Choose the demonstrably empty Treehouse slot a spawn may use, and refuse when no available slot is one |
+| `fm-worktree-guard.sh`   | Choose the demonstrably empty Treehouse slot a spawn may use, refuse when no available slot is one, and publish who apparently owns an occupied one |
 | `fm-pool-lib.sh`         | Single owner of where one worktree pool's machine-private state lives and of the key naming that pool |
 | `fm-slot-reservation.sh` | Reserve a pool's next free slot for one queued trunk repair, and read, claim or release that slot reservation |
 | `fm-slot-reservation-lib.sh` | Single owner of the slot-reservation record, what may open one, and how its state is computed on read |
@@ -145,7 +145,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is Browser-Sol-governed, which request grants its authority, and the spend the merge command runs inside |
 | `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |
 | `fm-reflag.sh`           | Reflag a scout task in place as a protected ship task with an explicit delivery mode |
-| `fm-attempt.sh`          | Own the durable per-task attempt count and its retry budget                          |
+| `fm-attempt.sh`          | Own a task's durable work-attempt count and retry budget, its execution-attempt lineage, and the gate that sanctions replacing one execution attempt in the same lane |
 | `fm-teardown.sh`         | Fail-closed teardown: return ship worktrees whose work is published or landed, require completed scout deliverables, retire secondmate homes |
 | `fm-harness.sh`          | Detect the running harness and resolve crew or secondmate harness, model, and effort |
 | `fm-lock.sh`             | Per-home firstmate session lock                                                      |

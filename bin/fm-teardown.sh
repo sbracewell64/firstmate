@@ -51,6 +51,9 @@
 # under --force, which additionally RECORDS that the attempt ended, because
 # discarded work makes a re-dispatch a genuine retry and this cleanup removes
 # the status log that would otherwise carry that evidence.
+# The task's execution lineage (state/<task-id>.lineage) is that record's
+# append-only ledger of which worker incarnation produced which evidence, and it
+# retires and survives on exactly the same terms, through the same owner.
 # A ship task released while its PR is still open leaves state/<task-id>.landing
 # behind: a minimal durable record (pr, pr_head, project) that keeps the PR
 # landable through bin/fm-pr-merge.sh and rearmable through bin/fm-pr-check.sh
@@ -697,6 +700,9 @@ write_landing_record_if_unlanded() {
 # --force is the opposite case and KEEPS the record: the work was deliberately
 # discarded, a re-dispatch of that id is a genuine retry, and clearing the count
 # here would make the budget unbounded by simply discarding between attempts.
+#
+# The execution lineage ledger rides with the record either way, because that
+# owner retires the two together; nothing here removes it separately.
 retire_attempt_record() {
   if [ "$FORCE" = "--force" ]; then
     # The discard ENDS the open attempt, and this cleanup deletes the status log
