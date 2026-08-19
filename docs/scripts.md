@@ -120,6 +120,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-blocker-lib.sh`      | Detect blocker movement for dependency-driven pause re-evaluation and maintain its durable baseline |
 | `fm-status-event-lib.sh` | Single owner of the `fm-status-event.v1` typed status-event wire format and its only parser |
 | `fm-task-axis-lib.sh`    | Single owner of a task's role, deliverable, and stage axes, their derivation, and the stale-writer refusal |
+| `fm-autonomy-lib.sh`     | Single owner of the task autonomy-state (`yolo=`) vocabulary, its producer validation, and the one comparison that reads it |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |
 | `fm-busy-lib.sh`         | Single owner of the semantic busy-state contract: verdicts, source attribution, and per-harness sources |
 | `fm-busy-event.sh`       | The only writer of a task's semantic busy-state record; arms an incarnation and applies lifecycle events |

@@ -38,6 +38,13 @@ _FM_CLASSIFY_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)"
 # shellcheck source=bin/fm-status-event-lib.sh
 . "$_FM_CLASSIFY_LIB_DIR/fm-status-event-lib.sh"
 
+# The autonomy-state vocabulary (`yolo=`) and its one comparison. Sourced
+# eagerly for the same reason: it is pure, observes nothing, and creates
+# nothing. bin/fm-autonomy-lib.sh owns the values; the disposition fold below
+# owns what standing routine authority MEANS for whose decision this is.
+# shellcheck source=bin/fm-autonomy-lib.sh
+. "$_FM_CLASSIFY_LIB_DIR/fm-autonomy-lib.sh"
+
 # The crew current-state reader used for the "provably working" decision.
 # Overridable so tests can stub the run-step/pane verdict without a real worktree
 # or no-mistakes install; absent, it points at the real sibling script.
@@ -732,7 +739,7 @@ _fm_decision_recorded_disposition() {  # <decision-file>
 # from what the fleet does own - the task's own metadata and the verb - and
 # takes CNO_DECISION_SUBJECT when even that is absent.
 decision_disposition() {  # <task-id> <key> <verb> [home]
-  local task=$1 key=$2 verb=$3 home=${4:-${FM_HOME:-}} recorded meta
+  local task=$1 key=$2 verb=$3 home=${4:-${FM_HOME:-}} recorded meta autonomy autonomy_rc
   case "$task" in ''|*[!A-Za-z0-9._-]*) printf 'CNO_DECISION_SUBJECT'; return 0 ;; esac
   case "$key" in ''|*[!A-Za-z0-9._-]*) printf 'CNO_DECISION_SUBJECT'; return 0 ;; esac
   [ -n "$home" ] || { printf 'CNO_DECISION_SUBJECT'; return 0; }
@@ -750,11 +757,29 @@ decision_disposition() {  # <task-id> <key> <verb> [home]
   # observable from here, so nothing about it can be established.
   [ -r "$meta" ] || { printf 'CNO_DECISION_SUBJECT'; return 0; }
   # Standing routine authority for this task is firstmate's to exercise, so the
-  # decision is firstmate's own move rather than the captain's.
-  if [ "$(sed -n 's/^yolo=//p' "$meta" 2>/dev/null | tail -1)" = 1 ]; then
-    printf 'SELF_HANDLE'
-    return 0
-  fi
+  # decision is firstmate's own move rather than the captain's. The value's
+  # vocabulary belongs to bin/fm-autonomy-lib.sh, which the producer validates
+  # against before writing it, so this fold can never accept a spelling the
+  # producer does not emit or reject one it does.
+  #
+  # Three answers, never two. A recorded posture outside that vocabulary is a
+  # record this reader cannot interpret, which is could-not-observe about the
+  # subject - so it takes CNO_DECISION_SUBJECT rather than being narrowed into
+  # the captain answer, exactly as an unreadable decision record is above. An
+  # ABSENT posture is a different fact and NOT could-not-observe: a scout
+  # records none by design, nothing granted standing authority, and the captain
+  # holds the decision. That case falls through to the verb.
+  autonomy=$(fm_autonomy_state_of_meta "$meta"); autonomy_rc=$?
+  case "$autonomy_rc" in
+    0)
+      # A member, so the comparison boundary answers 0 or 1 and never 2.
+      if fm_autonomy_self_handles "$autonomy"; then
+        printf 'SELF_HANDLE'
+        return 0
+      fi
+      ;;
+    2) printf 'CNO_DECISION_SUBJECT'; return 0 ;;
+  esac
   case "$verb" in
     blocked) printf 'CAPTAIN_REQUIRED_AND_BLOCKING' ;;
     needs-decision) printf 'CAPTAIN_REQUIRED_NONBLOCKING' ;;

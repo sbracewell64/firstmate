@@ -107,6 +107,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-reasoning-lib.sh
 . "$SCRIPT_DIR/fm-reasoning-lib.sh"
+# shellcheck source=bin/fm-autonomy-lib.sh
+. "$SCRIPT_DIR/fm-autonomy-lib.sh"
 # shellcheck source=bin/fm-tasks-axi-lib.sh
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-route-lib.sh
@@ -203,8 +205,12 @@ valid_mode() {  # <mode>
   case "${1-}" in no-mistakes|direct-PR|local-only) return 0 ;; *) return 1 ;; esac
 }
 
+# The autonomy-state vocabulary is bin/fm-autonomy-lib.sh's. A deferral record
+# is a producer of `yolo=` too - it is replayed into a later spawn - so it
+# validates against the same owner the decision fold reads, on the way in and
+# again on the way out.
 valid_yolo() {  # <yolo>
-  case "${1-}" in on|off) return 0 ;; *) return 1 ;; esac
+  fm_autonomy_state_is_known "${1-}"
 }
 
 # ---------------------------------------------------------------------------

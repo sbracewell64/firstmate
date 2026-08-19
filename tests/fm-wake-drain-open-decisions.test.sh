@@ -19,6 +19,10 @@ set -u
 
 # shellcheck source=tests/wake-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
+# The autonomy-state members, so a fixture below cannot spell a posture the
+# fleet does not write. bin/fm-autonomy-lib.sh is pure.
+# shellcheck source=/dev/null
+. "$ROOT/bin/fm-autonomy-lib.sh"
 
 DRAIN="$ROOT/bin/fm-wake-drain.sh"
 
@@ -240,7 +244,10 @@ test_every_entry_carries_a_disposition() {
   mkdir -p "$dir/data/dtask"
   printf 'needs-decision [key=derived]: no metadata for this one\n' > "$state/dtask.status"
   printf 'blocked [key=blocking]: work has stopped\n' >> "$state/dtask.status"
-  printf 'worktree=%s\nyolo=0\n' "$dir" > "$state/dtask.meta"
+  # The captain-side posture the producer actually writes: this case is about
+  # the DERIVED captain answer, and a posture outside the vocabulary would now
+  # (correctly) be could-not-observe instead.
+  printf 'worktree=%s\nyolo=%s\n' "$dir" "$FM_AUTONOMY_STATE_CAPTAIN" > "$state/dtask.meta"
   # shellcheck disable=SC2016  # the backticks are the literal fence the fold reads, not a substitution
   printf '# decision\n\n```disposition\nBROWSER_SOL\n```\n' > "$dir/data/dtask/decision-derived.md"
 

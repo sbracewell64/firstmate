@@ -2,6 +2,12 @@
 # Single owner of the agent-justification record written at the spawn chokepoint.
 # Usage: . bin/fm-reasoning-lib.sh
 #
+# The autonomy state (`yolo=`) this record derives from is NOT owned here.
+# bin/fm-autonomy-lib.sh owns its values and the one comparison that reads
+# them, sourced below so this library and the decision-disposition fold in
+# bin/fm-classify-lib.sh decide "does firstmate hold standing routine
+# authority" in exactly one place.
+#
 # Every dispatch has to answer one question: why was an agent turn necessary
 # here? This library owns the closed vocabulary that answer is given in, the
 # fields derived from it, and the refusal tokens callers and tests match on.
@@ -29,6 +35,12 @@
 # MIGRATION. The fields are additive. A meta written before this library
 # existed carries none of them, and an absent field reads as unknown, never as
 # justified reasoning.
+
+# Directory of this library, resolved at source time from BASH_SOURCE so it
+# works whether sourced by a bin/ script with its own SCRIPT_DIR or by a test.
+_FM_REASONING_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_REASONING_LIB_DIR="."
+# shellcheck source=bin/fm-autonomy-lib.sh
+. "$_FM_REASONING_LIB_DIR/fm-autonomy-lib.sh"
 
 # The closed reason_code enum. Order is presentation only.
 FM_REASON_CODES='NL_RULE_CLASSIFICATION
@@ -96,21 +108,29 @@ fm_reasoning_required_for() {  # <code>
 # with yolo off it records the local merge approval the captain actually owns
 # rather than a gate it never arrives at. With yolo on, firstmate decides
 # routine gates on either path, which is one posture rather than two.
+# The autonomy comparison is bin/fm-autonomy-lib.sh's and is never spelled
+# here. Its third answer - a value outside the vocabulary - is NOT LIVE at this
+# site: both callers validate the posture against that same owner before
+# recording anything, so no producer can reach this function with an
+# uninterpretable value. It stays grouped with the captain answer rather than
+# taking a branch of its own because this function must remain total (both
+# callers assign its output under `set -e`, and the record has to exist), and
+# because the captain side is the conservative reading of a posture that did
+# not establish standing authority.
 fm_escalation_policy_for() {  # <kind> <mode> <yolo>
   local kind=$1 mode=$2 yolo=$3
   case "$kind" in
     scout) printf 'report-only\n' ;;
     secondmate) printf 'captain-approves-gates\n' ;;
     *)
-      case "$yolo" in
-        on) printf 'firstmate-routine-gates\n' ;;
-        *)
-          case "$mode" in
-            local-only) printf 'captain-approves-local-merge\n' ;;
-            *) printf 'captain-approves-gates\n' ;;
-          esac
-          ;;
-      esac
+      if fm_autonomy_self_handles "$yolo"; then
+        printf 'firstmate-routine-gates\n'
+      else
+        case "$mode" in
+          local-only) printf 'captain-approves-local-merge\n' ;;
+          *) printf 'captain-approves-gates\n' ;;
+        esac
+      fi
       ;;
   esac
 }
