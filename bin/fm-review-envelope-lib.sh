@@ -147,6 +147,7 @@
 fm_review_envelope_python() {
   python3 - "$@" <<'PY'
 import argparse
+import errno
 import fnmatch
 import hashlib
 import json
@@ -583,6 +584,7 @@ CATALOG = {
         {"code": "verification_result_contract_mismatch", "meaning": "A verifier result does not bind the selected contract's exact digest."},
         {"code": "verifier_identity_unpinned", "meaning": "A required result names no verifier id and digest, so what ran is not identified."},
         {"code": "required_verifier_failed", "meaning": "A required verifier reached an adverse verdict."},
+        {"code": "required_verifier_result_unrecognized", "meaning": "A required verifier returned a token outside the closed result vocabulary."},
         {"code": "required_verifier_wrong_head", "meaning": "A required verifier result binds a head or tree that is not the candidate's."},
         {"code": "missing_red_calibration", "meaning": "A required passing verifier was never observed failing."},
         {"code": "red_calibration_not_adverse", "meaning": "A red calibration records something other than an observed failure."},
@@ -620,6 +622,7 @@ CATALOG = {
         {"code": "inputs_malformed", "meaning": "The inputs document is unreadable or violates its schema."},
         {"code": "policy_undeclared", "meaning": "No review policy bound was declared, so staleness cannot be judged."},
         {"code": "repository_unreadable", "meaning": "The repository could not be inspected."},
+        {"code": "repository_shallow", "meaning": "The repository is a shallow clone, so its root commits cannot be observed."},
         {"code": "candidate_unresolvable", "meaning": "The candidate reference does not resolve."},
         {"code": "base_unresolvable", "meaning": "The base reference does not resolve."},
         {"code": "main_unresolvable", "meaning": "The trunk reference does not resolve."},
@@ -682,6 +685,23 @@ def commit_distance(repo, ancestor, descendant):
     if out is None or not out.isdigit():
         return None
     return int(out)
+
+
+def observe_root_commits(repo, head_commit):
+    shallow = git_out(repo, "rev-parse", "--is-shallow-repository")
+    if shallow != "false":
+        if shallow == "true":
+            raise Unobservable(
+                "repository_shallow",
+                "a shallow clone reports its boundary commits as parentless, so the root commits cannot be observed",
+            )
+        raise Unobservable(
+            "repository_unreadable", "repository shallowness could not be determined"
+        )
+    listed = git_out(repo, "rev-list", "--max-parents=0", head_commit)
+    if not listed:
+        raise Unobservable("repository_unreadable", "the root commits could not be listed")
+    return sorted(listed.split())
 
 
 def changed_file_table(repo, base, head):
@@ -762,7 +782,9 @@ def path_matches(rule, path):
     if kind == "exact":
         return path == value
     if kind == "prefix":
-        return path.startswith(value)
+        if path == value:
+            return True
+        return path.startswith(value if value.endswith("/") else value + "/")
     if kind == "glob":
         return fnmatch.fnmatchcase(path, value)
     raise Unobservable("inputs_malformed", "unknown path match type: " + str(kind))
@@ -826,7 +848,12 @@ def probe_capability(capability):
             continue
         except OSError as error:
             probes.append(
-                {"candidate": candidate, "path": path, "outcome": "identity_failed", "detail": str(error)}
+                {
+                    "candidate": candidate,
+                    "path": path,
+                    "outcome": "identity_failed",
+                    "detail": errno.errorcode.get(error.errno, "OS_ERROR"),
+                }
             )
             continue
         identity = (completed.stdout + completed.stderr).strip()
@@ -938,8 +965,9 @@ def read_envelope(path, code):
     if not isinstance(document, dict) or document.get("schema") != SCHEMA:
         raise Unobservable(code, "not a " + SCHEMA + " document", str(path))
     body = document.get("envelope")
-    stored = (document.get("digest") or {}).get("value")
-    if not isinstance(body, dict) or not stored:
+    digest = document.get("digest")
+    stored = digest.get("value") if isinstance(digest, dict) else None
+    if not isinstance(body, dict) or not isinstance(stored, str) or not stored:
         raise Unobservable(code, "envelope document is incomplete", str(path))
     return document, body, stored, path
 
@@ -1284,9 +1312,7 @@ def compile_envelope(repo, inputs, predecessor_path, evidence_root):
             "project": {
                 "id": str(project["id"]),
                 "declared_root_commit": project.get("root_commit"),
-                "root_commits": sorted(
-                    (git_out(repo, "rev-list", "--max-parents=0", head_commit) or "").split()
-                ),
+                "root_commits": observe_root_commits(repo, head_commit),
                 "origin_url": git_out(repo, "config", "--get", "remote.origin.url"),
             },
             "work": {
@@ -1764,9 +1790,16 @@ def classify_result(problems, label, result, candidate, evidence_root, recheck_e
     if outcome == "FAIL":
         problems.refuse("required_verifier_failed", label, str(result.get("detail") or ""))
         return
-    if outcome != "PASS":
+    if outcome in ("", "COULD_NOT_OBSERVE"):
         problems.unobserve(
             "required_verifier_unproven", label, "the verifier returned " + (outcome or "no result")
+        )
+        return
+    if outcome != "PASS":
+        problems.refuse(
+            "required_verifier_result_unrecognized",
+            label,
+            "the verifier returned " + outcome + ", which is not in the result vocabulary",
         )
         return
     check_evidence(problems, label, result.get("evidence"), evidence_root, recheck_evidence)

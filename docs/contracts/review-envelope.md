@@ -180,6 +180,7 @@ Each of these is an observed contradiction of readiness, and reports `FAIL`.
 | `verification_result_contract_mismatch` | A verifier result does not bind the selected contract's exact digest. |
 | `verifier_identity_unpinned` | A required result names no verifier id and digest, so what ran is not identified. |
 | `required_verifier_failed` | A required verifier reached an adverse verdict. |
+| `required_verifier_result_unrecognized` | A required verifier returned a token outside the closed result vocabulary. |
 | `required_verifier_wrong_head` | A required verifier result binds a head or tree that is not the candidate's. |
 | `missing_red_calibration` | A required passing verifier was never observed failing. |
 | `red_calibration_not_adverse` | A red calibration records something other than an observed failure. |
@@ -224,6 +225,7 @@ None of them is a pass, and none of them is skippable.
 | `inputs_malformed` | The inputs document is unreadable or violates its schema. |
 | `policy_undeclared` | No review policy bound was declared, so staleness cannot be judged. |
 | `repository_unreadable` | The repository could not be inspected. |
+| `repository_shallow` | The repository is a shallow clone, so its root commits cannot be observed. |
 | `candidate_unresolvable` | The candidate reference does not resolve. |
 | `base_unresolvable` | The base reference does not resolve. |
 | `main_unresolvable` | The trunk reference does not resolve. |

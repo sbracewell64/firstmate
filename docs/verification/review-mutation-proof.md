@@ -200,8 +200,11 @@ tests/review-mutation-red-matrix.py replay <defect> <control>
 ```
 
 It rebuilds that exact defect, reruns that one control, and prints the defect build's sha256 alongside the outcome.
-Compare the digest with the defect table below before comparing outcomes: a digest that does not reproduce means the row describes a build that is not the one in front of you.
-A replay is a new execution and cannot establish that the historical run happened - what it removes is the need to take this record's word for it.
+That digest hashes the mutated `bin/fm-review-mutation.sh` together with `bin/fm-verify.sh` and this record's own bytes as they stand at replay time.
+A replay digest therefore does not reproduce the table below, and never did: the table was transcribed into this record after the measurement, and writing it here moved the record bytes the digest covers.
+What the digest offers is narrower and still real: two independent replays of the same defect against identical bytes agree with each other, and any edit to a hashed file moves every replay digest, which is what it detects.
+So compare the replayed outcome against the row, and use the digest to compare replays with each other, not to authenticate the table.
+A replay is a new execution and cannot establish that the historical run happened - what it removes is the need to take this record's word for the outcome.
 
 ### The defect builds
 

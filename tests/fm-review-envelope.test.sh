@@ -937,6 +937,10 @@ document = json.load(open(sys.argv[1]))
 print(document["digest"]["value"], document["request_identity"])
 PY
 )
+  [ -n "$first_digest" ] && [ -n "$first_identity" ] \
+    || fail "the first fact order must yield a digest and identity to compare"
+  [ -n "$second_digest" ] && [ -n "$second_identity" ] \
+    || fail "the reordered facts must yield a digest and identity to compare"
   [ "$first_digest" = "$second_digest" ] \
     || fail "order-insensitive facts must have one envelope digest"
   [ "$first_identity" = "$second_identity" ] \
@@ -1006,6 +1010,12 @@ document = json.load(open(sys.argv[1]))
 print(document["digest"]["value"], document["request_identity"])
 PY
 )
+  [ -n "$first_digest" ] && [ -n "$first_identity" ] \
+    || fail "the first nested fact order must yield a digest and identity to compare"
+  [ -n "$second_digest" ] && [ -n "$second_identity" ] \
+    || fail "the reordered nested facts must yield a digest and identity to compare"
+  [ -n "$third_digest" ] && [ -n "$third_identity" ] \
+    || fail "the meaningfully changed nested facts must yield a digest and identity to compare"
   [ "$first_digest" = "$second_digest" ] \
     || fail "nested order-insensitive facts must have one envelope digest"
   [ "$first_identity" = "$second_identity" ] \
@@ -1118,6 +1128,10 @@ document = json.load(open(sys.argv[1]))
 print(document["digest"]["value"], document["request_identity"])
 PY
 )
+  [ -n "$first_digest" ] && [ -n "$first_identity" ] \
+    || fail "the passing CI envelope must yield a digest and identity to compare"
+  [ -n "$second_digest" ] && [ -n "$second_identity" ] \
+    || fail "the refused CI envelope must yield a digest and identity to compare"
   [ "$first_digest" != "$second_digest" ] \
     || fail "a meaningful CI verdict difference must change the envelope digest"
   [ "$first_identity" != "$second_identity" ] \
@@ -1151,6 +1165,37 @@ PY
   [ "$first_identity" != "$second_identity" ] \
     || fail "reordering first-match-wins exclusions must change request identity"
   pass "exclusion rules retain first-match-wins order"
+}
+
+test_a_bare_prefix_rule_matches_only_at_a_path_boundary() {
+  local case_dir
+  case_dir=$(make_case prefix-boundary)
+  {
+    git -C "$case_dir/repo" checkout -q candidate
+    mkdir -p "$case_dir/repo/docs-generator"
+    printf 'build\n' > "$case_dir/repo/docs-generator/build.py"
+    git -C "$case_dir/repo" add docs-generator/build.py
+    git -C "$case_dir/repo" commit -qm docs-generator
+    git -C "$case_dir/repo" checkout -q main
+  } >&2
+  write_inputs "$case_dir" '{"scope": {"excluded": [
+    {"id": "docs-rule", "type": "prefix", "value": "docs", "reason": "prose only"}]}}'
+  capture run_prepare "$case_dir" env
+  expect_code 0 "$CAPTURED_CODE" "the boundary case compiles to a classified envelope"
+  python3 - "$case_dir/env/envelope.json" <<'PY' \
+    || fail "a bare prefix rule must exclude whole path components, never lexical extensions of them"
+import json, sys
+scope = json.load(open(sys.argv[1]))["envelope"]["scope"]
+excluded = [entry["path"] for entry in scope["excluded_paths"]]
+# THE CONTROL: the lexical extension must stay in scope, or a required contract
+# covering it would silently never be demanded.
+assert "docs-generator/build.py" not in excluded, excluded
+assert "docs-generator/build.py" in scope["in_scope_paths"], scope["in_scope_paths"]
+# NON-VACUITY: the rule still excludes the directory it names.
+assert "docs/notes.md" in excluded, excluded
+assert "docs/notes.md" not in scope["in_scope_paths"], scope["in_scope_paths"]
+PY
+  pass "a bare prefix rule matches at a path separator boundary or on exact equality"
 }
 
 test_a_structurally_malformed_envelope_is_could_not_observe() {
@@ -1224,6 +1269,46 @@ PY
     "the readable verify record must classify every structural failure"
   assert_not_contains "$CAPTURED" 'Traceback' "an unknown verdict must never escape as an exception"
   pass "a structurally malformed envelope emits a readable could-not-observe record"
+}
+
+test_a_malformed_stored_digest_is_classified_not_a_traceback() {
+  local case_dir
+  case_dir=$(make_case malformed-stored-digest)
+  write_inputs "$case_dir"
+  capture run_prepare "$case_dir" env
+  expect_code 0 "$CAPTURED_CODE" "the valid precursor envelope compiles"
+  # A digest field that is present but not an object was read and is wrong; it
+  # must answer in the closed vocabulary, never as an uncaught exception.
+  python3 - "$case_dir/env/envelope.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["digest"] = "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" env
+  expect_code 2 "$CAPTURED_CODE" "a non-object stored digest is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved envelope_unreadable' \
+    "the malformed digest shape must be classified as an unreadable envelope"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a non-object stored digest must never escape as an exception"
+
+  capture run_prepare "$case_dir" env-value
+  expect_code 0 "$CAPTURED_CODE" "the second precursor envelope compiles"
+  python3 - "$case_dir/env-value/envelope.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["digest"]["value"] = 123
+json.dump(document, open(path, "w"), indent=2, sort_keys=True)
+PY
+  capture run_validate "$case_dir" env-value
+  expect_code 2 "$CAPTURED_CODE" "a non-string stored digest value is could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved envelope_unreadable' \
+    "the non-string digest value must be classified as an unreadable envelope"
+  assert_not_contains "$CAPTURED" 'Traceback' \
+    "a non-string stored digest value must never escape as an exception"
+  pass "a present-but-malformed stored digest answers in the closed vocabulary"
 }
 
 # --- staleness --------------------------------------------------------------
@@ -1575,6 +1660,31 @@ PY
     "the unobserved dimension must be named"
   assert_not_contains "$CAPTURED" 'REVIEW_READY' "could-not-observe must never reach review-ready"
   pass "a required verifier that could not observe cannot reach review-ready"
+}
+
+test_an_unrecognized_verifier_result_token_refuses() {
+  local case_dir
+  case_dir=$(make_case unrecognized-verifier-token)
+  write_inputs "$case_dir"
+  # "PASSED" is a token outside the closed result vocabulary, not an absent
+  # answer: the world answered in a language the contract does not accept, and
+  # that is a refusal, never could-not-observe.
+  python3 - "$case_dir/inputs.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+document = json.load(open(path))
+document["verification"]["results"][1]["result"] = "PASSED"
+json.dump(document, open(path, "w"), indent=2)
+PY
+  capture run_prepare "$case_dir" env
+  expect_code 1 "$CAPTURED_CODE" "a token outside the result vocabulary refuses"
+  assert_contains "$CAPTURED" 'refusal required_verifier_result_unrecognized' \
+    "the refusal must name the unrecognized-token code"
+  assert_not_contains "$CAPTURED" 'required_verifier_unproven' \
+    "an unrecognized token must not be classified as an unobserved result"
+  assert_not_contains "$CAPTURED" 'REVIEW_READY' \
+    "an unrecognized token must never reach review-ready"
+  pass "a present-but-unrecognized verifier result token refuses distinctly"
 }
 
 test_a_broken_evidence_digest_refuses() {
@@ -2865,6 +2975,40 @@ body["applicability"]["base_is_ancestor_of_head"] = None
   pass "an ancestry git could not answer is could-not-observe at both consumers"
 }
 
+test_a_shallow_clone_is_could_not_observe() {
+  local case_dir shallow
+  case_dir=$(make_case shallow-clone)
+  write_inputs "$case_dir"
+
+  # NON-VACUITY, taken first: the full-history repository still reaches a
+  # verdict, so the refusal below is about shallowness and not about the case.
+  capture run_prepare "$case_dir" full
+  expect_code 0 "$CAPTURED_CODE" "a full-history repository must still reach a verdict"
+  assert_contains "$CAPTURED" 'review-envelope: REVIEW_READY' \
+    "a repository whose roots are observable must remain accepted"
+
+  # THE CONTROL: a shallow clone reports its boundary commits as parentless
+  # with a clean exit, which is a confidently wrong repository identity. A
+  # false identity is worse than an absent one, so the roots are refused as
+  # unobservable rather than bound.
+  shallow=$case_dir/shallow
+  {
+    git clone -q --depth 2 --no-single-branch "file://$case_dir/repo" "$shallow"
+    git -C "$shallow" branch -q candidate origin/candidate
+  } >&2
+  capture env PATH="$case_dir/fakebin:$PATH" "$BIN" prepare \
+    --repo "$shallow" \
+    --inputs "$case_dir/inputs.json" \
+    --evidence-root "$case_dir/evidence" \
+    --out "$case_dir/shallow-out"
+  expect_code 2 "$CAPTURED_CODE" "a shallow clone's root commits are could-not-observe"
+  assert_contains "$CAPTURED" 'unobserved repository_shallow' \
+    "the shallow repository must be named with its own closed-vocabulary code"
+  assert_not_contains "$CAPTURED" 'REVIEW_READY' \
+    "a repository identity that may be a boundary artefact must never be bound"
+  pass "a shallow clone is could-not-observe rather than a false repository identity"
+}
+
 test_a_declared_repository_identity_this_is_not_refuses() {
   local case_dir
   case_dir=$(make_case wrong-repository)
@@ -3645,6 +3789,15 @@ if not isinstance(control_order, list) or not control_order or any(
     sys.stderr.write("the campaign artifact carries no usable control invocation order\n")
     sys.exit(1)
 
+# An artifact with no entries records no measurements, which is a clean refusal
+# rather than a crash: raising here would report a broken control where the real
+# fact is an empty campaign, and the two must not be confused. It is judged
+# before the per-entry loop and before any replay skip, so an empty artifact
+# cannot pass vacuously under either.
+if not mutations:
+    sys.stderr.write("the campaign artifact records no measurements, so nothing is backed by it\n")
+    sys.exit(1)
+
 # Each entry records the head it was measured at, so relabelling the artifact's
 # single head cannot silently re-attribute entries measured somewhere else. That
 # is not hypothetical: a commit on this branch did exactly that to 69 entries,
@@ -3743,13 +3896,6 @@ if (os.environ.get("FM_REVIEW_ENVELOPE_CAMPAIGN_REPLAY_CHILD") == "1"
         or os.environ.get("FM_REVIEW_ENVELOPE_SKIP_CAMPAIGN_REPLAY") == "1"):
     sys.exit(0)
 
-# An artifact with no entries records no measurements, which is a clean refusal
-# rather than a crash: raising here would report a broken control where the real
-# fact is an empty campaign, and the two must not be confused.
-if not mutations:
-    sys.stderr.write("the campaign artifact records no measurements, so nothing is backed by it\n")
-    sys.exit(1)
-
 # Replay the lexically first mutation id, so every verifier exercises the same
 # deep proof and its result never depends on chance or artifact ordering.
 entry = min(mutations, key=lambda item: item["id"])
@@ -3811,7 +3957,9 @@ test_array_classification_registry_is_total
 test_array_classifications_are_exercised_in_isolation
 test_ci_canonicalization_preserves_meaningful_differences
 test_exclusion_rule_order_remains_meaningful
+test_a_bare_prefix_rule_matches_only_at_a_path_boundary
 test_a_structurally_malformed_envelope_is_could_not_observe
+test_a_malformed_stored_digest_is_classified_not_a_traceback
 test_a_stale_envelope_refuses
 test_a_base_that_falls_behind_the_trunk_refuses
 test_an_asserted_head_the_repository_contradicts_refuses
@@ -3828,6 +3976,7 @@ test_a_verifier_result_without_a_tree_refuses
 test_a_missing_red_calibration_refuses
 test_a_red_calibration_that_records_a_pass_refuses
 test_a_could_not_observe_verifier_cannot_become_review_ready
+test_an_unrecognized_verifier_result_token_refuses
 test_a_broken_evidence_digest_refuses
 test_an_evidence_locator_that_escapes_its_root_refuses
 test_an_evidence_symlink_that_escapes_its_root_refuses_before_reading
@@ -3875,6 +4024,7 @@ test_a_base_the_candidate_does_not_descend_from_refuses
 test_a_declared_repository_identity_this_is_not_refuses
 test_the_classification_digest_names_the_envelope_it_classified
 test_an_unreadable_ancestry_is_could_not_observe
+test_a_shallow_clone_is_could_not_observe
 test_a_check_that_names_no_head_cannot_cover_a_required_platform
 test_validate_refuses_to_guess_about_evidence
 test_declining_the_evidence_recheck_cannot_reach_review_ready
