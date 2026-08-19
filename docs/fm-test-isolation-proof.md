@@ -62,9 +62,9 @@ The branch that changed the subject owns the re-measurement; a branch that merel
 |---:|---|---|
 | 0 | ok | Every lane invariant holds and the proof is current for this code. |
 | 1 | refused | A lane invariant broke, or a subject, fixture, contract, or concurrency binding moved. |
-| 3 | could-not-observe | The proof, a subject, a fixture, the digest tool, or the CI lane inventory could not be read. |
+| 3 | could-not-observe | The proof, a subject, a fixture, the digest tool, or the CI lane inventory could not be read, or the proof records no passing subject. |
 
-An unreadable proof is could-not-observe rather than an empty proven set.
+An unreadable proof - and a readable proof in which no recorded subject passed - is could-not-observe rather than an empty proven set.
 An empty set would silently reroute every proven script into the serial lane and still read as a successful selection.
 
 ## Verification
