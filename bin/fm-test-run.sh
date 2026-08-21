@@ -130,16 +130,17 @@ JOBS_MAX=4
 # it. This block is the one owner of every number the recurrence control checks;
 # docs/fm-test-portable-shards.md owns how to re-derive them.
 #
-# BASIS (2026-08-17). Measured on this repo's own main-push CI runs 32044341699
-# and 32046031290, whose portable-serial inventories matched each other at 122
-# scripts. Per-shard timing artifacts summed to 2398034 ms and 2335349 ms of
-# script time; the mean, 2366725 ms, is the declared budget below. Job wall
-# exceeded script sum by under 10 s on every shard, so the shard wall is the
-# script sum for budgeting purposes.
+# BASIS (2026-08-21). Measured on this repo's own CI run 32536769074 after the
+# portable-serial inventory grew to 160 scripts. Its per-shard timing artifacts
+# summed to 3008223 ms of script time, which is the declared budget below. Every
+# shard completed below the 15-minute cap, and the aggregate timing check read
+# all eight artifacts, so this is complete lane evidence rather than a partial
+# run.
 #
-# This replaces a 2026-08-02 basis of 69 scripts and 1143762 ms. The lane did not
-# drift within a stale budget; it grew to 2.07x of it, so the budget is re-derived
-# from what the suite now is rather than restored to what it used to be.
+# This replaces the 2026-08-17 basis of 122 scripts and 2366725 ms. The lane did
+# not drift within that stale budget; it grew to 1.27x of it, so the budget is
+# re-derived from what the suite now is rather than restored to what it used to
+# be.
 #
 # That rule is not local to this number. The isolation proof reached the same
 # state from the same cause - its subjects moved while the recorded evidence
@@ -148,15 +149,15 @@ JOBS_MAX=4
 # had a consumer that could notice and the proof did not, which is what
 # bin/fm-test-isolation-lib.sh now supplies. Read that file's header for the
 # freshness model; this comment is only the cross-reference to it.
-PORTABLE_SERIAL_BUDGET_MS=2366725
+PORTABLE_SERIAL_BUDGET_MS=3008223
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
 #
-# Derived, not chosen: 8 shards put the balanced wall at 2366725/8 = 295841 ms
-# (~4.93 min) against the 15-minute cap below, which is the ~3x hang-tripwire
-# margin this lane was designed around. Four shards would put it at ~9.86 min and
-# 1.5x, which is the margin that let one shard reach the cap and cancel the run.
+# Derived, not chosen: 8 shards put the balanced wall at 3008223/8 = 376028 ms
+# (~6.27 min) against the 15-minute cap below, which is the ~2.4x hang-tripwire
+# margin this lane was designed around. Four shards would put it at ~12.53 min
+# and 1.2x, too little margin for a hang tripwire.
 # The floor for any count is the longest single script
 # (tests/fm-pr-check-security.test.sh, 216161 ms), which binds near 10 shards.
 PORTABLE_SERIAL_SHARDS=8
@@ -524,7 +525,7 @@ tests/fm-context-statusline.test.sh 571
 tests/fm-daemon.test.sh 32092
 tests/fm-decision-surface.test.sh 7820
 tests/fm-documentation-audiences.test.sh 702
-tests/fm-execution-replacement.test.sh 72275
+tests/fm-execution-replacement.test.sh 137103
 tests/fm-fleet-snapshot-view.test.sh 81131
 tests/fm-fleet-sync.test.sh 17638
 tests/fm-gate-refuse.test.sh 4007
