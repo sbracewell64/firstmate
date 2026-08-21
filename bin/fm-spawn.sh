@@ -989,6 +989,7 @@ SPAWN_TASK_LOCK_HELD=0
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 SLOT_HOLDER_PID=
+SLOT_HOLDER_READY=
 WT_POOL_LOCK=
 WT_POOL_LOCK_HELD=0
 
@@ -996,10 +997,34 @@ WT_POOL_LOCK_HELD=0
 # inside it, and again from the abort path so an aborted spawn never leaves the
 # slot looking in-use to the rest of the fleet.
 release_slot_holder() {
-  [ -n "$SLOT_HOLDER_PID" ] || return 0
-  kill "$SLOT_HOLDER_PID" 2>/dev/null || true
-  wait "$SLOT_HOLDER_PID" 2>/dev/null || true
+  if [ -n "$SLOT_HOLDER_PID" ]; then
+    kill "$SLOT_HOLDER_PID" 2>/dev/null || true
+    wait "$SLOT_HOLDER_PID" 2>/dev/null || true
+  fi
+  [ -z "$SLOT_HOLDER_READY" ] || rm -f "$SLOT_HOLDER_READY"
   SLOT_HOLDER_PID=
+  SLOT_HOLDER_READY=
+}
+
+start_slot_holder() {  # <worktree>
+  local worktree=$1 attempt=0
+  SLOT_HOLDER_READY=$(mktemp "$STATE/.slot-holder-ready.XXXXXX") || return 1
+  ( cd "$worktree" 2>/dev/null || exit 1
+    printf 'ready\n' > "$SLOT_HOLDER_READY" || exit 1
+    exec sleep 300
+  ) >/dev/null 2>&1 &
+  SLOT_HOLDER_PID=$!
+  while [ ! -s "$SLOT_HOLDER_READY" ] && kill -0 "$SLOT_HOLDER_PID" 2>/dev/null && [ "$attempt" -lt 100 ]; do
+    sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  if [ ! -s "$SLOT_HOLDER_READY" ] || ! kill -0 "$SLOT_HOLDER_PID" 2>/dev/null; then
+    echo "error: could not establish custody of worktree $worktree" >&2
+    release_slot_holder
+    return 1
+  fi
+  rm -f "$SLOT_HOLDER_READY"
+  SLOT_HOLDER_READY=
 }
 
 parse_orca_worktree_result() {
@@ -2353,8 +2378,7 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   # home's `treehouse get` could acquire-and-RESET it over the lane's work. The
   # same holder the select branch uses occupies it across that window.
   if [ "$BACKEND" != orca ]; then
-    ( cd "$WT_SLOT_REAL" 2>/dev/null && exec sleep 300 ) >/dev/null 2>&1 &
-    SLOT_HOLDER_PID=$!
+    start_slot_holder "$WT_SLOT_REAL" || exit 1
   fi
   WT_SLOT_NAME=$(fm_pool_recorded_worktree_slot_name "$PROJ_ABS_REAL" "$SUCCEED_WT") || {
     echo "error: $ID's recorded worktree '$SUCCEED_WT' cannot be matched to one exact Treehouse slot; refusing to launch a successor without custody proof" >&2
@@ -2376,8 +2400,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     # so this occupies the slot across the window in which another home's
     # `treehouse get` could otherwise still take it. The abort path releases it
     # too, so a spawn that never got started leaves nothing occupied.
-    ( cd "$WT_SLOT_REAL" 2>/dev/null && exec sleep 300 ) >/dev/null 2>&1 &
-    SLOT_HOLDER_PID=$!
+    start_slot_holder "$WT_SLOT_REAL" || exit 1
   else
     spawn_pool_select_lock_release
   fi

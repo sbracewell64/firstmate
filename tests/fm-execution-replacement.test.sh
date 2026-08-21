@@ -188,12 +188,6 @@ fi
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then echo '[]'; exit 0; fi
 if [ "${1:-}" = enter ] && [ "${2:-}" = --print-path ]; then
   if [ -n "${FM_FAKE_REQUIRE_HOLDER:-}" ]; then
-    holder_attempt=0
-    while [ "$holder_attempt" -lt 100 ] &&
-          ! lsof -a -d cwd -Fn 2>/dev/null | grep -Fxq "n${FM_FAKE_ENTER_PATH:-/nonexistent}"; do
-      /bin/sleep 0.01
-      holder_attempt=$((holder_attempt + 1))
-    done
     if ! lsof -a -d cwd -Fn 2>/dev/null | grep -Fxq "n${FM_FAKE_ENTER_PATH:-/nonexistent}"; then
       echo "fake treehouse: recorded slot has no holder" >&2
       exit 4
@@ -341,6 +335,8 @@ EOF
 test_recorded_slot_identity_handles_space_paths() {
   watch_red prop_recorded_slot_identity_handles_spaces recorded-slot-parent \
     fm-pool-lib.sh "  slot_dir=\$(dirname -- \"\$recorded_real\")" "  slot_dir=\$recorded_real"
+  watch_red prop_recorded_slot_identity_handles_spaces recorded-slot-custody \
+    fm-spawn.sh "    printf 'ready\\n' > \"\$SLOT_HOLDER_READY\" || exit 1" "    :"
   pass "recorded successors derive a numeric Treehouse slot from a spaced worktree path"
 }
 
