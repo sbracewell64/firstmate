@@ -194,11 +194,16 @@
 #   REFUSES unless the durable record holds one PENDING successor whose recorded
 #   binding is exactly the harness/model this launch declares, so a successor
 #   cannot be launched onto a binding no gate ever admitted. The recorded
-#   worktree is entered BY NAME - never `get`, which resets - so the lane keeps
-#   its branch, its head and its uncommitted content, and the base references,
-#   venue and pull request the lane already recorded are carried onto the new
-#   metadata rather than re-derived. On success the record moves from pending to
-#   active. Refused on --secondmate, which owns a home rather than a lane.
+#   worktree is entered BY NAME - never `get`, which resets - after resolving the
+#   slot from the recorded Treehouse `<pool>/<slot>/<repository>` structure and
+#   verifying that Treehouse maps that name back to the exact physical worktree.
+#   An outside, malformed, unreadable, or ambiguous recorded path refuses rather
+#   than guessing from a repository basename. Thus names containing whitespace
+#   remain intact, the lane keeps its branch, its head and its uncommitted content,
+#   and the base references, venue and pull request the lane already recorded are
+#   carried onto the new metadata rather than re-derived. On success the record
+#   moves from pending to active. Refused on --secondmate, which owns a home rather
+#   than a lane.
 #   REFUSED on an orca-backed lane with its own exit status (3, distinct from a
 #   generic failure and from an argument error, because refusing a dispatch is
 #   an outcome rather than a crash): orca owns its task worktree, and orca-side
