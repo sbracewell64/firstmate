@@ -2347,8 +2347,11 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
     echo "error: $ID's sanctioned successor $SUCCEED_EXEC_ID is recorded on $SUCCEED_EXEC_BINDING and this launch declares $SPAWN_BINDING. Only the binding a gate admitted may be launched; run bin/fm-attempt.sh replace $ID --alternate <model> --reason <text> for the one you want." >&2
     exit 1
   fi
+  WT_SLOT_NAME=$(fm_pool_recorded_worktree_slot_name "$PROJ_ABS_REAL" "$SUCCEED_WT") || {
+    echo "error: $ID's recorded worktree '$SUCCEED_WT' cannot be matched to one exact Treehouse slot; refusing to launch a successor without custody proof" >&2
+    exit 1
+  }
   WT_SLOT_REAL=$(real_path_or_raw "$SUCCEED_WT")
-  WT_SLOT_NAME=$(basename "$WT_SLOT_REAL")
   # A lane sanctioned for replacement is process-free by the custody gate, so
   # until the pane's own shell enters the slot nothing occupies it and another
   # home's `treehouse get` could acquire-and-RESET it over the lane's work. The
