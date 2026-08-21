@@ -187,6 +187,18 @@ if [ "${1:-}" = status ] && [ "${2:-}" = --help ]; then
 fi
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then echo '[]'; exit 0; fi
 if [ "${1:-}" = enter ] && [ "${2:-}" = --print-path ]; then
+  if [ -n "${FM_FAKE_REQUIRE_HOLDER:-}" ]; then
+    holder_attempt=0
+    while [ "$holder_attempt" -lt 100 ] &&
+          ! lsof -a -d cwd -Fn 2>/dev/null | grep -Fxq "n${FM_FAKE_ENTER_PATH:-/nonexistent}"; do
+      /bin/sleep 0.01
+      holder_attempt=$((holder_attempt + 1))
+    done
+    if ! lsof -a -d cwd -Fn 2>/dev/null | grep -Fxq "n${FM_FAKE_ENTER_PATH:-/nonexistent}"; then
+      echo "fake treehouse: recorded slot has no holder" >&2
+      exit 4
+    fi
+  fi
   if [ "${3:-}" = "${FM_FAKE_SLOT_NAME:-slot1}" ]; then
     printf '%s\n' "${FM_FAKE_ENTER_PATH:-}"
     exit 0
@@ -250,6 +262,7 @@ spawn_in() {  # <case-dir> <spawn-args...>
     FM_FAKE_PANE_PATH="$(cat "$case_dir/worktree-path")" \
     FM_FAKE_ENTER_PATH="$(cat "$case_dir/worktree-path")" \
     FM_FAKE_SLOT_NAME="$(cat "$case_dir/slot-name")" \
+    FM_FAKE_REQUIRE_HOLDER="$([ -f "$case_dir/require-holder" ] && printf 1)" \
     FM_FAKE_TMUX_LOG="$case_dir/tmux.log" FM_FAKE_TREEHOUSE_LOG="$case_dir/treehouse.log" \
     FM_FAKE_ENTERED="$case_dir/entered" \
     PATH="$case_dir/fakebin:$PATH" \
@@ -302,6 +315,7 @@ prop_recorded_slot_identity_handles_spaces() (  # <bin-dir> <label>
 $rec
 EOF
   before_head=$(git -C "$wt" rev-parse HEAD)
+  : > "$case_dir/require-holder"
   out=$(replace_lane "$case_dir" "$id"); rc=$?
   [ "$rc" -eq 0 ] || { echo "$label: replacement was not sanctioned: $out" >&2; return 1; }
   : > "$case_dir/treehouse.log"
