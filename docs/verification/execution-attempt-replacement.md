@@ -61,7 +61,7 @@ The closing `FM_TEST_CONTRACT` line is what makes that count enforceable rather 
 The suite now opts into `tests/lib.sh`'s identity contract, which compares the declared `test_` functions against the ones that reported success and exits nonzero on any difference.
 Measured against a build with every invocation but the first removed: `exit=1`, naming each declared case that never reported.
 The suite takes about 115 seconds on the machine above, up from about 102 before the recorded-slot cases, about 92 before the door-3 cases, and about 70 before the pre-lineage ones.
-The portable-serial weight hint in `bin/fm-test-run.sh` still reads 72275 and is deliberately NOT restamped with this local number: that table is derived from CI timing artifacts, its own header says the next refresh replaces it wholesale from CI, and a locally measured value mixed into a CI-derived table is the restamped-evidence failure that file's budget comment warns against.
+The portable-serial weight hint in `bin/fm-test-run.sh` reads 137103 from the latest complete CI timing artifacts rather than this local measurement, because the table's own header requires CI evidence and forbids mixing in local timing.
 The hint is a balance hint only, so the staleness costs shard balance and never coverage.
 
 The three recorded-slot cases exercise the Treehouse layout as `<pool>/<slot>/<repository>` with spaces in the project, pool, and repository names, preserve the ordinary no-space layout, and refuse both a worktree outside Treehouse's answer and a malformed recorded path before pane launch.
