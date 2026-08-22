@@ -345,24 +345,31 @@ test_recorded_slot_identity_handles_space_paths() {
   pass "recorded successors derive a numeric Treehouse slot from a spaced worktree path"
 }
 
-test_recorded_slot_identity_keeps_a_no_space_layout() {
-  local rec case_dir id wt out rc
-  rec=$(make_lane slotidentity-ordinary)
+prop_recorded_slot_identity_keeps_a_no_space_layout() (  # <bin-dir> <label>
+  local bin_dir=$1 label=$2 rec case_dir id wt out rc
+  SPAWN="$bin_dir/fm-spawn.sh"
+  ATTEMPT="$bin_dir/fm-attempt.sh"
+  rec=$(make_lane "$label")
   IFS='|' read -r _ _ wt _ case_dir id <<EOF
 $rec
 EOF
   out=$(replace_lane "$case_dir" "$id"); rc=$?
-  [ "$rc" -eq 0 ] || fail "the ordinary layout's replacement must be sanctioned: $out"
+  [ "$rc" -eq 0 ] || { echo "$label: replacement was not sanctioned: $out" >&2; return 1; }
   : > "$case_dir/treehouse.log"
   : > "$case_dir/tmux.log"
   out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
     --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
     --succeed-execution); rc=$?
-  [ "$rc" -eq 0 ] || fail "the ordinary layout's successor must launch: $out"
+  [ "$rc" -eq 0 ] || { echo "$label: successor did not launch: $out" >&2; return 1; }
   [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
-    || fail "the ordinary layout's successor must retain its recorded worktree"
+    || { echo "$label: successor did not retain its recorded worktree" >&2; return 1; }
   assert_contains "$(cat "$case_dir/tmux.log")" "treehouse enter 'slot1'" \
-    "the ordinary layout must retain its established slot name"
+    "$label: ordinary layout did not retain its established slot name"
+)
+
+test_recorded_slot_identity_keeps_a_no_space_layout() {
+  watch_red prop_recorded_slot_identity_keeps_a_no_space_layout recorded-slot-ordinary \
+    fm-pool-lib.sh '  slot_name=$(basename -- "$slot_dir")' '  slot_name=$(basename -- "$recorded_real")'
   pass "recorded successors preserve the ordinary no-space slot layout"
 }
 

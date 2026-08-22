@@ -15,7 +15,7 @@ Measured 2026-08-21 on Linux 6.18 (WSL2), bash 5.2, git 2.53.0, shellcheck 0.11.
 
 The suite runs **the test functions enumerated below - the 14 declared controls, the boundary rules the implementation created, and the review-regression cases**, each driving `bin/fm-attempt.sh` and `bin/fm-spawn.sh` as executables against a real isolated git worktree, a real routed dispatch policy read by the real `bin/fm-route.sh`, and a controlled process table.
 One case additionally drives the real `bin/fm-crew-state.sh` rather than the suite's stub, which is what binds the gate's enumeration to the answers its producer actually emits.
-The behavioral assertions inspect only public command results and durable outputs; the two watched-red checks described below copy the shipped toolbelt and replace one exact implementation clause solely to create their controlled defect builds.
+The behavioral assertions inspect only public command results and durable outputs; the three integrated watched-red checks described below copy the shipped toolbelt and replace one exact implementation clause solely to create their controlled defect builds.
 
 ```
 $ bash tests/fm-execution-replacement.test.sh
@@ -66,6 +66,7 @@ The hint is a balance hint only, so the staleness costs shard balance and never 
 
 The three recorded-slot cases exercise the Treehouse layout as `<pool>/<slot>/<repository>` with spaces in the project, pool, and repository names, preserve the ordinary no-space layout, and refuse worktrees outside Treehouse's answer and ambiguous or malformed recorded paths before pane launch.
 The spaced-path case also requires the custody holder to be observable before exact-path verification, asserts that the numeric slot rather than the repository basename is passed through shell quoting, and watches both the parent-derivation and custody-readiness properties go red against controlled defects.
+The ordinary-path case separately watches the established non-space slot turn red when the repository basename is substituted for its slot identity.
 
 The review-regression cases, each added after a review round of this branch and named for the defect it guards:
 
@@ -90,10 +91,10 @@ A mutation that matched nothing is reported `MUTATION-DID-NOT-APPLY`, and one th
 A defect build that left the suite green is reported `DEFECT-NOT-CAUGHT`, and that is a finding about the test rather than about the code.
 All three outcomes were reached during development and each was repaired before this record was written: one anchor stopped matching after a refactor, one defect build was survived because the control had a second enforcing path the defect did not remove, and one case was found to be passing on the wrong subject - it was asserting against a missing-metadata refusal rather than against the ownership record it claimed to measure.
 
-Twenty-eight defect builds, twenty-eight watched reds, **28 of 28** - but measured in two passes, and the difference matters.
+Twenty-nine defect builds, twenty-nine watched reds, **29 of 29** - but measured in two passes, and the difference matters.
 The nineteen rows above the door-3 block were measured 2026-08-19 against the tree they landed in; they were NOT re-run against this change, so what their cases establish here is that the assertions still execute and still pass, not that each removed clause is still the only thing controlling its verdict.
 The seven door-3 and wiring rows were measured 2026-08-19 against the implementation as committed there, each mutation applied to the committed file, the suite re-run, and the file restored before the next build.
-The two recorded-slot rows were measured 2026-08-21 by the suite's integrated watched-red helper, which first runs the public property against the shipped toolbelt and then against a disposable toolbelt copy carrying the named exact-clause defect.
+The three recorded-slot rows were measured 2026-08-21 by the suite's integrated watched-red helper, which first runs the public property against the shipped toolbelt and then against a disposable toolbelt copy carrying the named exact-clause defect.
 
 | Control | Defect build | Observed red |
 | --- | --- | --- |
@@ -113,6 +114,7 @@ The two recorded-slot rows were measured 2026-08-21 by the suite's integrated wa
 | 14 - allocation truth is never a directory count | the successor picks its slot by listing the pool directory | `the successor must land on the slot the record names, got .../pool/slot5` |
 | recorded slot - identity comes from the Treehouse slot parent | the resolver treats the repository directory itself as the slot parent | `recorded worktree has no Treehouse slot parent: .../Treehouse Pool With Spaces/1/Repository With Spaces` |
 | recorded slot - custody is established before exact-path verification | the holder never publishes readiness after entering the recorded worktree | `could not establish custody of worktree .../Treehouse Pool With Spaces/1/Repository With Spaces` |
+| recorded slot - ordinary layouts retain their slot identity | the resolver substitutes the repository basename for the slot parent basename | `fake treehouse: unknown slot 'repository'` |
 | boundary - only a CONFIRMED launch is protected | a confirmed launch is treated as an unstarted one | `an ordinary relaunch onto a different model must be refused` |
 | pre-lineage - a lane with no recorded execution is ADOPTED, not refused | the adoption is removed and the landed refusal restored | `a pre-lineage lane must be replaceable, got rc=4`, on `COULD_NOT_OBSERVE - preline-a1 has no recorded execution attempt` |
 | pre-lineage - the adoption reads a durable record and never invents one | the adoption stops requiring a named binding | `a lane whose binding cannot be read must be COULD_NOT_OBSERVE, got rc=0` |
