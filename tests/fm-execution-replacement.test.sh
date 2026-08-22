@@ -390,6 +390,8 @@ EOF
     || fail "an outside-path refusal must leave the successor sanctioned"
   assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
     "an outside-path refusal must not launch a pane into any slot"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "an outside-path refusal must not allocate a replacement slot"
 
   cp "$case_dir/meta.original" "$case_dir/home/state/$id.meta"
   ambiguous="$case_dir/Ambiguous Pool/1/Repository With Spaces"
@@ -406,6 +408,8 @@ EOF
     || fail "an ambiguous-path refusal must leave the successor sanctioned"
   assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
     "an ambiguous-path refusal must not launch a pane into any slot"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "an ambiguous-path refusal must not allocate a replacement slot"
 
   malformed="$case_dir/Malformed Pool/Repository With Spaces"
   mkdir -p "$malformed"
@@ -421,6 +425,8 @@ EOF
     || fail "a malformed-path refusal must leave the successor sanctioned"
   assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
     "a malformed-path refusal must not launch a pane into any slot"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "a malformed-path refusal must not allocate a replacement slot"
   pass "recorded successor paths outside, ambiguous, or malformed for the Treehouse pool refuse before launch"
 }
 
