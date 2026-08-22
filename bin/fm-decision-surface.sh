@@ -253,7 +253,7 @@ owners_json() {
   "note":"firstmate waits on wakes; it never polls for state"},
  {"compensation":"known_dependencies","status":"owned",
   "owner":"bin/fm-fleet-snapshot.sh --json .backlog.records[].unresolved_blocker_ids",
-  "note":"a blocker resolves only when its own record is Done"},
+  "note":"a blocker resolves only when its own terminal record is Done, current or archived; an unobservable or duplicated identity is reported, never cleared"},
  {"compensation":"pr_existence","status":"owned",
   "owner":"bin/fm-fleet-snapshot.sh --json .tasks[].pr and bin/fm-pr-check.sh",
   "note":"the recorded pr= and the forge head, not a remembered URL"},

@@ -372,9 +372,13 @@ activation_file() {  # <activation-id>
 # still live: its own backlog record. The blocked work's dependency on it is not a
 # second copy of that fact - bin/fm-fleet-snapshot.sh recomputes
 # `unresolved_blocker_ids` on every read, and resolves a blocker if and only if
-# its structured record is Done. So the relationship is DERIVED on read by an
-# owner that already exists, exactly as qualification state is computed on read
-# and expired availability holds are dropped on read rather than swept.
+# its own terminal record is Done. Retention ROTATES that record into
+# data/done-archive.md instead of deleting it, and the snapshot reads the archive
+# as terminal history, so a finished workflow keeps releasing the work it
+# unblocked after its row leaves the current file. So the relationship is DERIVED
+# on read by an owner that already exists, exactly as qualification state is
+# computed on read and expired availability holds are dropped on read rather than
+# swept.
 #
 # WHY THERE IS NO TRANSFER, COMPENSATION, OR RECONCILIATION LOGIC HERE, and a
 # reader who goes looking for it should find this paragraph instead of an absence.

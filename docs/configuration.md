@@ -787,7 +787,8 @@ It refuses every classification other than `QUALIFICATION_REQUIRED`, derives a d
 
 **The workflow is a backlog task, and that is the whole design.**
 A bounded qualification run is a work item, so it is registered as one through the existing backlog owner - which is what makes `tasks-axi block --by` meet its documented precondition that the blocker must already exist, rather than working around it.
-Its backlog record is then the ONLY fact about whether it is live: the blocked work's dependency is not a second copy, because `unresolved_blocker_ids` is recomputed on every read and resolves a blocker exactly when its structured record is Done.
+Its backlog record is then the ONLY fact about whether it is live: the blocked work's dependency is not a second copy, because `unresolved_blocker_ids` is recomputed on every read and resolves a blocker exactly when its own terminal record is Done.
+Retention rotates that record into `data/done-archive.md` rather than deleting it, so the snapshot reads the archive as terminal history too and a finished workflow keeps releasing the work it unblocked.
 The relationship is therefore derived on read by an owner that already exists, exactly as qualification state is computed on read and expired availability holds are dropped on read rather than swept.
 `state/qualification/<activation-id>.activation` holds the workflow's inert parameters and no state at all.
 

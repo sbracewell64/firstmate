@@ -17,9 +17,44 @@
 #     those sections are preserved as unstructured records.
 #     Structured rows preserve captain-hold metadata such as hold_kind and
 #     hold_reason when tasks-axi emits it. They also carry normalized current_role,
-#     requires_child_metadata, blocked_by_ids, unresolved_blocker_ids, and
-#     captain_actionable fields. Repeated blocker tokens remain ordered; a blocker
-#     resolves only when its structured record is Done, and missing ids stay open.
+#     requires_child_metadata, blocked_by_ids, blocker_resolution,
+#     unresolved_blocker_ids, cno_blocker_ids, dependency_observation, and
+#     captain_actionable fields. Repeated blocker tokens remain ordered.
+#   backlog.archive: {path,present,readable} for data/done-archive.md, the
+#     rotated tail of the SAME corpus rather than a second queue. Retention
+#     moves completed rows there, so a projection that reads only the current
+#     file reclassifies every satisfied dependency as unresolved the moment
+#     retention runs. It is read-only terminal history: it can say that an
+#     identity FINISHED, never that one is live.
+#
+#   BLOCKER RESOLUTION, the one fold, three-valued and property-local.
+#   Each referenced identity is answered on its own evidence and reported in
+#   blocker_resolution[] as exactly one of:
+#     UNRESOLVED_CURRENT              a live current row; nothing archived can
+#                                     clear it, so a current open blocker wins.
+#     SATISFIED_TERMINAL              one terminal row, current or archived.
+#     SUPERSEDED_BY_EXACT_REPLACEMENT one successor row names this exact id in
+#                                     `supersedes:` and itself resolves. A
+#                                     replacement is an exact-identity edge and
+#                                     is never inferred from a name or a
+#                                     generation number. While the successor is
+#                                     still open the successor's own result
+#                                     stands, so the retired id neither reopens
+#                                     as its own work nor reads as satisfied.
+#     COULD_NOT_OBSERVE               no record anywhere, an archived row whose
+#                                     terminal marker is not the canonical
+#                                     spelling, an unreadable archive, or a
+#                                     supersession cycle.
+#     REFUSED_DUPLICATE_IDENTITY      the identity appears more than once in one
+#                                     source, in both sources at once, or has
+#                                     more than one claimed replacement.
+#   Refusal outranks could-not-observe, which outranks a clean answer, and
+#   dependency_observation folds the row's results to REFUSED, CNO, or COMPLETE.
+#   unresolved_blocker_ids is CONSERVATIVE: every identity that did not resolve
+#   stays in it, so an unobservable or refused dependency can never read as
+#   cleared. It is EXACT only when dependency_observation is COMPLETE;
+#   cno_blocker_ids names the identities that made it inexact. captain_actionable
+#   therefore requires a complete observation as well as an empty unresolved set.
 #   tasks[]: one row per state/<id>.meta, sorted by id.
 #     current_state is bin/fm-crew-state.sh --json's typed answer, projected to
 #     {state,source,detail,precedence_applied,busy_signal,run_step,
@@ -73,6 +108,9 @@
 #     Each structured-home record carries active_children, decisions_open, holds,
 #     queued, landed, endpoints, counts, and omitted. Actionable captain holds
 #     appear in decisions_open; blocked captain holds remain queued with metadata.
+#     Each queued row carries the same dependency_observation and cno_blocker_ids
+#     as the backlog record it came from, so a cross-home reader cannot take an
+#     inexact blocker set for an exact one.
 #   secondmate_landed: {records[],truncated[],unreadable[],partial[]} - the
 #     compatibility landed-work roll-up derived from secondmate_current. Readable
 #     structured homes with an unknown current classification are partial, not
@@ -98,6 +136,10 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 PROJECTS="${FM_PROJECTS_OVERRIDE:-$FM_HOME/projects}"
 BACKLOG="$DATA/backlog.md"
+# The done-archive holds the backlog's ROTATED rows, so it is the same corpus
+# under retention rather than a second queue. `.tasks.toml` pins the path; this
+# reader never writes it.
+DONE_ARCHIVE="${FM_DONE_ARCHIVE_OVERRIDE:-$DATA/done-archive.md}"
 SNAPSHOT_NOW=${FM_SNAPSHOT_NOW:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}
 if [ -n "${FM_SNAPSHOT_NOW_EPOCH:-}" ]; then
   SNAPSHOT_EPOCH=$FM_SNAPSHOT_NOW_EPOCH
@@ -359,20 +401,56 @@ first_pr_url_in_file() {  # <file>
   grep -Eo 'https?://[^[:space:])"]+/pull/[0-9]+' "$1" 2>/dev/null | head -1
 }
 
-backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
+# Can jq actually ingest this file as raw text? An archive that EXISTS and
+# cannot be ingested is could-not-observe, never an empty corpus, so the answer
+# has to come from a real read rather than from a mode bit. A directory, a
+# permission fault, and content jq refuses all answer the same way here.
+archive_ingestible() {  # <path>
+  [ -f "$1" ] || return 1
+  jq -Rn --rawfile probe "$1" 'true' >/dev/null 2>&1
+}
+
+backlog_json() {  # [<backlog-path> [<done-archive-path>]]
   local backlog=${1:-$BACKLOG}
+  local archive=${2:-$DONE_ARCHIVE}
+  local archive_present=false archive_readable=true archive_src=/dev/null
   if [ ! -f "$backlog" ]; then
-    jq -n --arg path "$backlog" '{path:$path,present:false,records:[]}'
+    jq -n --arg path "$backlog" --arg archive "$archive" \
+      '{path:$path,present:false,records:[],
+        archive:{path:$archive,present:false,readable:true}}'
     return 0
+  fi
+  # An archive that is not there yet is simply a smaller corpus. One that is
+  # there and unreadable compromises the candidate set for every identity the
+  # current backlog cannot settle on its own.
+  if [ -e "$archive" ]; then
+    archive_present=true
+    if archive_ingestible "$archive"; then
+      archive_src=$archive
+    else
+      archive_readable=false
+    fi
   fi
 
   # shellcheck disable=SC2094
-  jq -Rn --arg path "$backlog" '
+  jq -Rn --arg path "$backlog" \
+    --arg archive_path "$archive" \
+    --argjson archive_present "$archive_present" \
+    --argjson archive_readable "$archive_readable" \
+    --rawfile archive_raw "$archive_src" '
     def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
-    def section_state:
+    # Each source is normalized into the ONE shape the fold consumes, and each
+    # states what it cannot supply. The current file carries live sections only,
+    # so the archived vocabulary stays unmapped there and a stray Archived header
+    # in the current file is skipped exactly as before rather than becoming a row
+    # that looks live. The archive carries the retention header and may also still
+    # hold the rotated section name a row was written under; either way its
+    # terminal state comes from the row marker, never from the header.
+    def section_state($archive_source):
       if . == "In flight" then "in_flight"
       elif . == "Queued" then "queued"
       elif . == "Done" then "done"
+      elif $archive_source and test("^Archived([[:space:]]|$)") then "archived"
       else null end;
     def cap($rest; $re):
       (((($rest | capture($re)?) // {}) | .v) // null) as $v
@@ -386,7 +464,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
     def links($rest): [$rest | scan(url_pattern)];
     def strip_trailing_metadata:
       reduce range(0; 20) as $_ (.;
-        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority|hold|hold-kind):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
+        sub("[[:space:]]*\\([[:space:]]*(?:(?:repo|kind|priority|hold|hold-kind|supersedes):[[:space:]]*[^)]*|(?:since|merged|reported|done)[[:space:]]+[^)]*)[[:space:]]*\\)[[:space:]]*$"; ""));
     def strip_title_artifacts:
       sub("[[:space:]]+-[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
       | sub("[[:space:]]+data/[^[:space:])]+/report\\.md$"; "")
@@ -446,6 +524,7 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
              priority:metadata($rest; "priority"),
              hold_reason:metadata($rest; "hold"),
              hold_kind:metadata($rest; "hold-kind"),
+             supersedes:metadata($rest; "supersedes"),
              blocked_by:cap($rest; ".*blocked-by:[[:space:]]*(?<v>[^[:space:])]+).*"),
              blocked_by_ids:blocked_by_ids($rest),
              blocked_reason:blocked_reason($rest),
@@ -462,38 +541,97 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
              body_lines:[],
              body_excerpt:null}
         end;
-    reduce inputs as $line
-      ({path:$path,present:true,records:[],section:null,order:0};
-       if ($line | test("^##[[:space:]]+")) then
-         .section = (($line | sub("^##[[:space:]]+";"") | trim) | section_state)
-       elif .section == null or ($line | trim) == "" then
-         .
-       elif structured_row($line) then
-         .order += 1
-         | .records += [parse_row($line; .section; .order)]
-       elif ((.records | length) > 0 and (.records[-1].structured == true) and ($line | test("^[[:space:]]+"))) then
-         ($line | trim) as $body
-         | if $body == "" then .
-           else .records[-1].body_lines += [$body] end
-       else
-         .order += 1
-         | .records += [{order:.order,state:.section,structured:false,id:null,raw:$line,body_lines:[],body_excerpt:null}]
-       end)
-    | .records |= map(
-        if (.body_lines | length) > 0 then
-          .body_excerpt = ((.body_lines | join(" "))[:240])
-        else . end)
-    | .records as $records
-    | (reduce ($records[] | select(.structured)) as $record ({};
-         .[$record.id] = ((.[$record.id] // true) and ($record.state == "done")))) as $resolved_ids
+    # ONE parser over both sources. The archive IS the backlog rotated by
+    # retention, so the two files carry the same row format; two parsers over
+    # one format drift apart on the same line.
+    def parse_lines($lines; $archive_source):
+      reduce $lines[] as $line
+        ({records:[],section:null,order:0};
+         if ($line | test("^##[[:space:]]+")) then
+           .section = (($line | sub("^##[[:space:]]+";"") | trim) | section_state($archive_source))
+         elif .section == null or ($line | trim) == "" then
+           .
+         elif structured_row($line) then
+           .order += 1
+           | .records += [parse_row($line; .section; .order)]
+         elif ((.records | length) > 0 and (.records[-1].structured == true) and ($line | test("^[[:space:]]+"))) then
+           ($line | trim) as $body
+           | if $body == "" then .
+             else .records[-1].body_lines += [$body] end
+         else
+           .order += 1
+           | .records += [{order:.order,state:.section,structured:false,id:null,raw:$line,body_lines:[],body_excerpt:null}]
+         end)
+      | .records
+      | map(if (.body_lines | length) > 0
+            then .body_excerpt = ((.body_lines | join(" "))[:240])
+            else . end);
+
+    parse_lines([inputs]; false) as $records
+    # The archive supplies terminal history only. It cannot say what is LIVE -
+    # every row in it has already left the current queue - so it is normalized
+    # to that one input and never consulted for liveness.
+    | (if $archive_readable then parse_lines($archive_raw | split("\n"); true) else [] end) as $archive_records
+
+    # --- evidence indexes, one entry per referenced identity -----------------
+    | (reduce ($records[] | select(.structured and .id != null)) as $r ({};
+         .[$r.id] += [{done:($r.state == "done")}])) as $current_by_id
+    | (reduce ($archive_records[] | select(.structured and .id != null)) as $r ({};
+         .[$r.id] += [{terminal:($r.checked == true)}])) as $archive_by_id
+    # Supersession is an EXACT-IDENTITY edge from a successor row to the one
+    # identity it replaces. It is never inferred from a title, a prefix, or a
+    # generation number.
+    | (reduce (($records + $archive_records)[]
+               | select(.structured and .id != null and .supersedes != null and .supersedes != "")) as $r ({};
+         .[$r.supersedes] += [$r.id])) as $successors_by_id
+
+    # --- the one blocker-resolution fold -------------------------------------
+    #
+    # Three-valued and property-local: each identity is answered on its own
+    # evidence, and FAIL (refused) outranks CNO, which outranks a clean answer.
+    # $seen carries the supersession path so a cycle terminates as an unobserved
+    # answer instead of recursing forever.
+    | def identity_result($id; $seen):
+        if ($seen | index($id)) != null then "COULD_NOT_OBSERVE"
+        else
+          ($current_by_id[$id] // []) as $cur
+          | ($archive_by_id[$id] // []) as $arc
+          | (($successors_by_id[$id] // []) | unique) as $sup
+          | if ($cur | length) > 1 then "REFUSED_DUPLICATE_IDENTITY"
+            elif ($arc | length) > 1 then "REFUSED_DUPLICATE_IDENTITY"
+            elif ($cur | length) == 1 and ($arc | length) == 1 then "REFUSED_DUPLICATE_IDENTITY"
+            elif ($cur | length) == 1 and ($cur[0].done | not) then "UNRESOLVED_CURRENT"
+            elif ($archive_readable | not) then "COULD_NOT_OBSERVE"
+            elif ($sup | length) > 1 then "REFUSED_DUPLICATE_IDENTITY"
+            elif ($sup | length) == 1 then
+              (identity_result($sup[0]; $seen + [$id])) as $s
+              | if $s == "SATISFIED_TERMINAL" or $s == "SUPERSEDED_BY_EXACT_REPLACEMENT"
+                then "SUPERSEDED_BY_EXACT_REPLACEMENT"
+                else $s end
+            elif ($arc | length) == 1 then
+              (if $arc[0].terminal then "SATISFIED_TERMINAL" else "COULD_NOT_OBSERVE" end)
+            elif ($cur | length) == 1 then "SATISFIED_TERMINAL"
+            else "COULD_NOT_OBSERVE"
+            end
+        end;
+    def resolves: . == "SATISFIED_TERMINAL" or . == "SUPERSEDED_BY_EXACT_REPLACEMENT";
+    {path:$path,present:true,records:$records,
+     archive:{path:$archive_path,present:$archive_present,readable:$archive_readable}}
     | .records |= map(
         if .structured then
-          . as $record
-          | .unresolved_blocker_ids = [
-              $record.blocked_by_ids[] as $blocker
-              | select($resolved_ids[$blocker] != true)
-              | $blocker
-            ]
+          ([.blocked_by_ids[] | {id:., result:identity_result(.; [])}]) as $resolution
+          | .blocker_resolution = $resolution
+          # Conservative by construction: anything that did not RESOLVE stays in
+          # the unresolved set, so an unobservable or refused identity can never
+          # read as cleared. Exact only when dependency_observation is COMPLETE.
+          | .unresolved_blocker_ids = [$resolution[] | select(.result | resolves | not) | .id]
+          | .cno_blocker_ids = [$resolution[]
+              | select(.result == "COULD_NOT_OBSERVE" or .result == "REFUSED_DUPLICATE_IDENTITY")
+              | .id]
+          | .dependency_observation =
+              (if any($resolution[]; .result == "REFUSED_DUPLICATE_IDENTITY") then "REFUSED"
+               elif any($resolution[]; .result == "COULD_NOT_OBSERVE") then "CNO"
+               else "COMPLETE" end)
           | .current_role =
               (if .state == "in_flight" and .hold_reason != null and .hold_kind != null then "held"
                elif .state == "in_flight" and .kind == "program" then "program"
@@ -503,9 +641,10 @@ backlog_json() {  # [<backlog-path>] - defaults to this home's $BACKLOG
           | .requires_child_metadata = (.current_role == "worker")
           | .captain_actionable =
               (.state == "queued" and .kind == "captain" and .hold_kind == "captain"
-               and .hold_reason != null and (.unresolved_blocker_ids | length) == 0)
+               and .hold_reason != null
+               and .dependency_observation == "COMPLETE"
+               and (.unresolved_blocker_ids | length) == 0)
         else . end)
-    | del(.section,.order)
   ' < "$backlog"
 }
 
@@ -909,6 +1048,11 @@ secondmate_home_summary_json() {  # <backlog-json> <tasks-json>
           blocked_by:((.blocked_by // null) | if . == null then null else trunc(120) end),
           blocked_by_ids:((.blocked_by_ids // []) | map(trunc(120))),
           unresolved_blocker_ids:((.unresolved_blocker_ids // []) | map(trunc(120))),
+          cno_blocker_ids:((.cno_blocker_ids // []) | map(trunc(120))),
+          # A row that carries no observation has not been observed. Defaulting
+          # the other way would let a record from an older reader present an
+          # unchecked blocker set as an exact one.
+          dependency_observation:(.dependency_observation // "CNO"),
           blocked_reason:((.blocked_reason // null) | if . == null then null else trunc(160) end),
           hold_reason:((.hold_reason // null) | if . == null then null else trunc(160) end),
           hold_kind:((.hold_kind // null) | if . == null then null else trunc(40) end),

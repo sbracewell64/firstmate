@@ -1011,6 +1011,474 @@ SH
   pass "the fleet view refuses to report success for a failed or empty snapshot"
 }
 
+# --- archive-aware blocker resolution (ARC-3A) --------------------------------
+#
+# Retention ROTATES completed rows out of data/backlog.md into
+# data/done-archive.md. A projection that reads only the current file therefore
+# reclassifies every satisfied dependency as unresolved the moment retention
+# runs, which is what these cases pin. The archive is authoritative TERMINAL
+# evidence and is read here only; nothing below edits it to make the projection
+# agree.
+
+# The exact fixture identities measured on the live fleet: ten dependencies that
+# retention had already archived, and one that is genuinely still open.
+ARC_ARCHIVED_IDS=(
+  qualify-537e56b8c7b64629a3ccfb96da4bc39b59a45b12
+  qualify-a9616b1ccc48659c80d6b8c1ce5aee58dd88abc6
+  qualify-d0cc1d6041a7f664e97d1d4d780bea616ed4b82f
+  qualify-0bd86dbbf00ed2bd18233d623ddb0a0df4663b5b
+  qualify-0a220a3e05b450d79b15e4954d6b00e516879c6f
+  qualify-2ac63e9c984f4e12613215ca8475d0f19d7e0a4a
+  qualify-9b3122f31da89e97a8175f5a589eebf572901e4f
+  qualify-85eb21730e5dbdce45d86068577c48cbe145e214
+  qualify-e99eb62cb921287cb6592044caaadddc094b2103
+  qualify-10657dd0f7a7e19d9e69a232211a13f46937e436
+)
+ARC_OPEN_ID=qualify-eb46c7b0b2e06e6d5e344276705503ca282db3bc
+
+# The parent row carries all eleven dependencies in the recorded order.
+write_arc_backlog() {  # <home>
+  local home=$1 id blockers=""
+  for id in "${ARC_ARCHIVED_IDS[@]:0:5}"; do blockers="$blockers blocked-by: $id"; done
+  blockers="$blockers blocked-by: $ARC_OPEN_ID"
+  for id in "${ARC_ARCHIVED_IDS[@]:5}"; do blockers="$blockers blocked-by: $id"; done
+  {
+    printf '## In flight\n\n## Queued\n'
+    printf -- '- [ ] front-door - Recovery-aware front door%s (repo: kun) (kind: ship) (priority: 0)\n' "$blockers"
+    printf -- '- [ ] %s - qualify runtime-risk-maker (repo: kun) (kind: ship)\n' "$ARC_OPEN_ID"
+    printf '\n## Done\n'
+  } > "$home/data/backlog.md"
+}
+
+write_arc_archive() {  # <home>
+  local home=$1 id
+  : > "$home/data/done-archive.md"
+  for id in "${ARC_ARCHIVED_IDS[@]}"; do
+    printf '\n## Archived 2026-08-21\n' >> "$home/data/done-archive.md"
+    printf -- '- [x] %s - qualification evidence (repo: kun) (kind: ship) (reported 2026-08-20)\n' \
+      "$id" >> "$home/data/done-archive.md"
+  done
+}
+
+arc_snapshot() {  # <home> <fakebin>
+  PATH="$2:$PATH" FM_HOME="$1" "$SNAPSHOT" --json
+}
+
+test_archived_terminal_blockers_resolve_with_watched_omission_control() {
+  local home fakebin out control
+  home=$(make_home arc3a-real-fixture)
+  fakebin=$(make_fakebin "$home")
+  write_arc_backlog "$home"
+
+  # NEGATIVE CONTROL, run first and watched red: with the terminal history
+  # withheld the projection MUST report the old omission shape - all eleven
+  # dependencies unresolved. A positive that also passes here would be proving
+  # nothing about archive-awareness.
+  control=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$control" | jq -e '
+    .backlog.archive.present == false and .backlog.archive.readable == true
+      and (.backlog.records[] | select(.id == "front-door")
+           | (.unresolved_blocker_ids | length) == 11
+             and .dependency_observation == "CNO")
+  ' >/dev/null || fail "the archive-omitted control did not reproduce the old eleven-unresolved shape: $control"
+
+  # POSITIVE: the same current backlog, with retention's own archive readable.
+  write_arc_archive "$home"
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e --arg open "$ARC_OPEN_ID" '
+    .backlog.archive.present == true and .backlog.archive.readable == true
+      and (.backlog.records[] | select(.id == "front-door")
+           | (.blocked_by_ids | length) == 11
+             and .unresolved_blocker_ids == [$open]
+             and .cno_blocker_ids == []
+             and .dependency_observation == "COMPLETE"
+             and ([.blocker_resolution[] | select(.result == "SATISFIED_TERMINAL")] | length) == 10
+             and ([.blocker_resolution[] | select(.id == $open) | .result] == ["UNRESOLVED_CURRENT"]))
+  ' >/dev/null || fail "ten archived terminal dependencies did not leave exactly the one open blocker: $out"
+  pass "archived terminal rows resolve their blockers and the current open one still wins"
+}
+
+test_blocker_identity_defects_report_cno_or_refusal() {
+  local home fakebin out
+  home=$(make_home arc3a-identity-defects)
+  fakebin=$(make_fakebin "$home")
+
+  # A clean single-identity baseline, watched green, so every red below is
+  # attributable to the defect it introduces and not to the fixture shape.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: settled blocked-by: nowhere (repo: kun) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] settled - Settled dependency (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add) as $r
+    | $r.settled == "SATISFIED_TERMINAL"
+      and $r.nowhere == "COULD_NOT_OBSERVE"
+      and .unresolved_blocker_ids == ["nowhere"]
+      and .cno_blocker_ids == ["nowhere"]
+      and .dependency_observation == "CNO"
+  ' >/dev/null || fail "an identity referenced nowhere was not could-not-observe: $out"
+
+  # Duplicate identity inside the CURRENT file.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: twice (repo: kun) (kind: ship)
+- [ ] twice - First copy (repo: kun) (kind: ship)
+
+## Done
+- [x] twice - Second copy (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add).twice == "REFUSED_DUPLICATE_IDENTITY"
+      and .unresolved_blocker_ids == ["twice"]
+      and .dependency_observation == "REFUSED"
+  ' >/dev/null || fail "a duplicate current identity was not refused: $out"
+
+  # Duplicate identity inside the ARCHIVE.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: twice (repo: kun) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] twice - First archived copy (repo: kun) (kind: ship) (done 2026-08-01)
+
+## Archived 2026-08-02
+- [x] twice - Second archived copy (repo: kun) (kind: ship) (done 2026-08-02)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add).twice == "REFUSED_DUPLICATE_IDENTITY"
+      and .unresolved_blocker_ids == ["twice"]
+      and .dependency_observation == "REFUSED"
+  ' >/dev/null || fail "a duplicate archived identity was not refused: $out"
+
+  # Conflicting terminal evidence: the SAME identity is live in the current file
+  # and terminally archived at once. Retention moves rows, so this is one
+  # identity with two lifecycles, and it may not resolve in either direction.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: conflicted (repo: kun) (kind: ship)
+- [ ] conflicted - Still open here (repo: kun) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] conflicted - Terminally archived there (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add).conflicted == "REFUSED_DUPLICATE_IDENTITY"
+      and .unresolved_blocker_ids == ["conflicted"]
+      and .dependency_observation == "REFUSED"
+  ' >/dev/null || fail "contradictory current and archived records did not refuse: $out"
+
+  # An archived row whose terminal marker is not the canonical spelling states
+  # no terminal state at all, so it is could-not-observe and never satisfied.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: unspelled (repo: kun) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [ ] unspelled - Archived without a terminal marker (repo: kun) (kind: ship)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add).unspelled == "COULD_NOT_OBSERVE"
+      and .unresolved_blocker_ids == ["unspelled"]
+      and .cno_blocker_ids == ["unspelled"]
+      and .dependency_observation == "CNO"
+  ' >/dev/null || fail "an unknown archived terminal spelling was read as satisfied: $out"
+
+  # The current file carries LIVE sections only. A stray archived header inside
+  # it stays skipped, so it can neither add a phantom duplicate of an identity
+  # the archive already holds nor present a rotated row as live open work.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: settled (repo: kun) (kind: ship)
+
+## Archived 2026-08-01
+- [x] settled - Stray archived row in the current file (repo: kun) (kind: ship)
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] settled - Settled dependency (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    ([.backlog.records[].state] | unique) == ["queued"]
+      and (.backlog.records[] | select(.id == "parent")
+           | (.blocker_resolution | map({(.id):.result}) | add).settled == "SATISFIED_TERMINAL"
+             and .unresolved_blocker_ids == []
+             and .dependency_observation == "COMPLETE")
+  ' >/dev/null || fail "a stray archived header in the current file changed the live record set: $out"
+
+  # Precedence is property-local and ordered FAIL > CNO > PASS. One record
+  # carrying all three grades must fold to the strongest: the refusal. A clean
+  # identity beside a broken one never softens the row.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: twice blocked-by: nowhere blocked-by: settled (repo: kun) (kind: ship)
+- [ ] twice - First copy (repo: kun) (kind: ship)
+
+## Done
+- [x] twice - Second copy (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] settled - Settled dependency (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add) as $r
+    | $r.twice == "REFUSED_DUPLICATE_IDENTITY"
+      and $r.nowhere == "COULD_NOT_OBSERVE"
+      and $r.settled == "SATISFIED_TERMINAL"
+      and .dependency_observation == "REFUSED"
+      and (.unresolved_blocker_ids | sort) == ["nowhere","twice"]
+      and (.cno_blocker_ids | sort) == ["nowhere","twice"]
+  ' >/dev/null || fail "a refusal beside a could-not-observe did not fold to the refusal: $out"
+  pass "incomplete, duplicate, conflicting and unspelled identities return could-not-observe or refusal"
+}
+
+test_exact_supersession_resolves_and_cycles_are_unobservable() {
+  local home fakebin out
+  home=$(make_home arc3a-supersession)
+  fakebin=$(make_fakebin "$home")
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: old-gen (repo: kun) (kind: ship)
+
+## Done
+EOF
+
+  # WATCHED RED for exact identity: a successor that names a DIFFERENT
+  # predecessor must not resolve this one. Supersession is an exact-identity
+  # edge, never a family resemblance between generation names.
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-02
+- [x] new-gen - Replacement generation (repo: kun) (kind: ship) (supersedes: old-gen-2)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add)["old-gen"] == "COULD_NOT_OBSERVE"
+      and .unresolved_blocker_ids == ["old-gen"]
+  ' >/dev/null || fail "a near-miss successor identity wrongly superseded the predecessor: $out"
+
+  # The exact successor, itself terminal, replaces the predecessor.
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-02
+- [x] new-gen - Replacement generation (repo: kun) (kind: ship) (supersedes: old-gen)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add)["old-gen"] == "SUPERSEDED_BY_EXACT_REPLACEMENT"
+      and .unresolved_blocker_ids == []
+      and .dependency_observation == "COMPLETE"
+      and (.title | test("supersedes") | not)
+  ' >/dev/null || fail "an exact replacement identity did not supersede its predecessor: $out"
+
+  # A new generation that is still OPEN leaves the obligation live - under the
+  # successor's identity. The retired predecessor never silently reopens as its
+  # own unresolved work, and it never reads as satisfied either.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: old-gen (repo: kun) (kind: ship)
+- [ ] new-gen - Replacement generation still open (repo: kun) (kind: ship) (supersedes: old-gen)
+
+## Done
+EOF
+  : > "$home/data/done-archive.md"
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add)["old-gen"] == "UNRESOLVED_CURRENT"
+      and .unresolved_blocker_ids == ["old-gen"]
+      and .dependency_observation == "COMPLETE"
+  ' >/dev/null || fail "an open replacement generation did not keep the obligation live: $out"
+
+  # Two claimants to one predecessor is ambiguous identity, not a menu.
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-02
+- [x] other-gen - Second claimant (repo: kun) (kind: ship) (supersedes: old-gen)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add)["old-gen"] == "REFUSED_DUPLICATE_IDENTITY"
+      and .dependency_observation == "REFUSED"
+  ' >/dev/null || fail "two competing replacement identities were not refused: $out"
+
+  # A supersession cycle terminates as an unobserved answer rather than
+  # recursing, and never as a resolved one.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: gen-a (repo: kun) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-02
+- [x] gen-a - Generation A (repo: kun) (kind: ship) (supersedes: gen-b)
+
+## Archived 2026-08-03
+- [x] gen-b - Generation B (repo: kun) (kind: ship) (supersedes: gen-a)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "parent")
+    | (.blocker_resolution | map({(.id):.result}) | add)["gen-a"] == "COULD_NOT_OBSERVE"
+      and .unresolved_blocker_ids == ["gen-a"]
+      and .dependency_observation == "CNO"
+  ' >/dev/null || fail "a supersession cycle did not return could-not-observe: $out"
+  pass "supersession resolves only by exact identity and cycles stay unobservable"
+}
+
+test_unreadable_archive_is_could_not_observe_not_empty_corpus() {
+  local home fakebin out
+  home=$(make_home arc3a-unreadable-archive)
+  fakebin=$(make_fakebin "$home")
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] parent - Parent blocked-by: settled blocked-by: live (repo: kun) (kind: ship)
+- [ ] live - Still open (repo: kun) (kind: ship)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] settled - Settled dependency (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+
+  # WATCHED GREEN baseline: readable archive, the dependency resolves.
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.archive.readable == true
+      and (.backlog.records[] | select(.id == "parent")
+           | .unresolved_blocker_ids == ["live"] and .dependency_observation == "COMPLETE")
+  ' >/dev/null || fail "the readable-archive baseline did not resolve its archived dependency: $out"
+
+  if [ "$(id -u)" -eq 0 ]; then
+    pass "unreadable archive reports could-not-observe (unreadable case skipped: root reads anything)"
+    return 0
+  fi
+
+  chmod 000 "$home/data/done-archive.md"
+  out=$(arc_snapshot "$home" "$fakebin")
+  chmod 644 "$home/data/done-archive.md"
+  # An archive that EXISTS and cannot be read compromises the candidate set: it
+  # is a repairable fault, never a smaller corpus. The one thing it cannot
+  # overturn is a live current row, which stays unresolved on its own evidence.
+  printf '%s' "$out" | jq -e '
+    .backlog.archive.present == true and .backlog.archive.readable == false
+      and (.backlog.records[] | select(.id == "parent")
+           | (.blocker_resolution | map({(.id):.result}) | add) as $r
+           | $r.settled == "COULD_NOT_OBSERVE"
+             and $r.live == "UNRESOLVED_CURRENT"
+             and (.unresolved_blocker_ids | sort) == ["live","settled"]
+             and .cno_blocker_ids == ["settled"]
+             and .dependency_observation == "CNO")
+  ' >/dev/null || fail "an unreadable archive was read as an empty corpus: $out"
+  pass "an unreadable archive is could-not-observe, never an empty corpus"
+}
+
+test_captain_hold_clears_only_on_a_complete_dependency_observation() {
+  local home fakebin out
+  home=$(make_home arc3a-captain-hold)
+  fakebin=$(make_fakebin "$home")
+
+  # The operational payoff: a captain hold whose only dependency retention has
+  # already archived is actionable, where the current-file-only projection left
+  # it permanently blocked by its own completed work.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] captain-run - Run canary blocked-by: settled (repo: kun) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+EOF
+  cat > "$home/data/done-archive.md" <<'EOF'
+## Archived 2026-08-01
+- [x] settled - Settled dependency (repo: kun) (kind: ship) (done 2026-08-01)
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "captain-run")
+    | .unresolved_blocker_ids == [] and .dependency_observation == "COMPLETE"
+      and .captain_actionable == true
+  ' >/dev/null || fail "an archived dependency did not make the captain hold actionable: $out"
+
+  # WATCHED RED: one unobservable dependency and the same hold must not be
+  # presented to the captain as ready.
+  cat > "$home/data/backlog.md" <<'EOF'
+## In flight
+
+## Queued
+- [ ] captain-run - Run canary blocked-by: settled blocked-by: nowhere (repo: kun) (kind: captain) (hold: captain runs canary) (hold-kind: captain)
+
+## Done
+EOF
+  out=$(arc_snapshot "$home" "$fakebin")
+  printf '%s' "$out" | jq -e '
+    .backlog.records[] | select(.id == "captain-run")
+    | .dependency_observation == "CNO" and .captain_actionable == false
+  ' >/dev/null || fail "an unobservable dependency still presented the hold as actionable: $out"
+
+  # The standing invariant every consumer relies on: an empty unresolved set is
+  # trustworthy ONLY alongside a complete observation, so no record may report
+  # one without the other.
+  printf '%s' "$out" | jq -e '
+    [.backlog.records[] | select(.structured)
+     | select((.unresolved_blocker_ids | length) == 0 and .dependency_observation != "COMPLETE")]
+    | length == 0
+  ' >/dev/null || fail "a record cleared its blockers without a complete observation: $out"
+  pass "a captain hold clears only on a complete dependency observation"
+}
+
 # The identity contract is red-capable: removing only an expected invocation
 # fails, while the same fixture passes after a legitimate test is added.
 test_test_identity_contract() {
@@ -1078,5 +1546,10 @@ test_oversized_task_row_is_never_silently_dropped
 test_empty_fleet_is_success_not_failure
 test_unreadable_home_data_fails_loudly
 test_view_never_reports_success_for_a_failed_snapshot
+test_archived_terminal_blockers_resolve_with_watched_omission_control
+test_blocker_identity_defects_report_cno_or_refusal
+test_exact_supersession_resolves_and_cycles_are_unobservable
+test_unreadable_archive_is_could_not_observe_not_empty_corpus
+test_captain_hold_clears_only_on_a_complete_dependency_observation
 test_test_identity_contract
 fm_test_contract "${BASH_SOURCE[0]}"
