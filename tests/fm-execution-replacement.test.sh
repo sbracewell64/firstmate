@@ -194,6 +194,10 @@ if [ "${1:-}" = enter ] && [ "${2:-}" = --print-path ]; then
     fi
   fi
   if [ "${3:-}" = "${FM_FAKE_SLOT_NAME:-slot1}" ]; then
+    if [ -n "${FM_FAKE_AMBIGUOUS_ENTER_PATH:-}" ]; then
+      printf '%s\n%s\n' "${FM_FAKE_ENTER_PATH:-}" "$FM_FAKE_AMBIGUOUS_ENTER_PATH"
+      exit 0
+    fi
     printf '%s\n' "${FM_FAKE_ENTER_PATH:-}"
     exit 0
   fi
@@ -256,6 +260,7 @@ spawn_in() {  # <case-dir> <spawn-args...>
     FM_FAKE_PANE_PATH="$(cat "$case_dir/worktree-path")" \
     FM_FAKE_ENTER_PATH="$(cat "$case_dir/worktree-path")" \
     FM_FAKE_SLOT_NAME="$(cat "$case_dir/slot-name")" \
+    FM_FAKE_AMBIGUOUS_ENTER_PATH="${FM_FAKE_AMBIGUOUS_ENTER_PATH:-}" \
     FM_FAKE_REQUIRE_HOLDER="$([ -f "$case_dir/require-holder" ] && printf 1)" \
     FM_FAKE_TMUX_LOG="$case_dir/tmux.log" FM_FAKE_TREEHOUSE_LOG="$case_dir/treehouse.log" \
     FM_FAKE_ENTERED="$case_dir/entered" \
@@ -361,8 +366,8 @@ EOF
   pass "recorded successors preserve the ordinary no-space slot layout"
 }
 
-test_recorded_slot_identity_refuses_malformed_or_outside_paths() {
-  local rec case_dir id wt proj outside malformed out rc
+test_recorded_slot_identity_refuses_malformed_outside_or_ambiguous_paths() {
+  local rec case_dir id wt proj outside malformed ambiguous out rc
   rec=$(make_lane slotidentity-refusal '' spaces)
   IFS='|' read -r _ proj wt _ case_dir id <<EOF
 $rec
@@ -386,6 +391,22 @@ EOF
   assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
     "an outside-path refusal must not launch a pane into any slot"
 
+  cp "$case_dir/meta.original" "$case_dir/home/state/$id.meta"
+  ambiguous="$case_dir/Ambiguous Pool/1/Repository With Spaces"
+  mkdir -p "$ambiguous"
+  : > "$case_dir/tmux.log"
+  out=$(FM_FAKE_AMBIGUOUS_ENTER_PATH="$ambiguous" spawn_in "$case_dir" "$id" \
+    --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "an ambiguous Treehouse slot result must refuse"
+  assert_contains "$out" "Treehouse returned an ambiguous path" \
+    "the ambiguous-path refusal must name the ambiguous Treehouse result"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "an ambiguous-path refusal must leave the successor sanctioned"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
+    "an ambiguous-path refusal must not launch a pane into any slot"
+
   malformed="$case_dir/Malformed Pool/Repository With Spaces"
   mkdir -p "$malformed"
   sed "s|^worktree=.*|worktree=$malformed|" "$case_dir/meta.original" > "$case_dir/home/state/$id.meta"
@@ -400,7 +421,7 @@ EOF
     || fail "a malformed-path refusal must leave the successor sanctioned"
   assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
     "a malformed-path refusal must not launch a pane into any slot"
-  pass "recorded successor paths outside or malformed for the Treehouse pool refuse before launch"
+  pass "recorded successor paths outside, ambiguous, or malformed for the Treehouse pool refuse before launch"
 }
 
 # --- Control 1, 2 and 14: the same slot, no allocator, and never a directory ---
@@ -1625,7 +1646,7 @@ EOF
 
 test_recorded_slot_identity_handles_space_paths
 test_recorded_slot_identity_keeps_a_no_space_layout
-test_recorded_slot_identity_refuses_malformed_or_outside_paths
+test_recorded_slot_identity_refuses_malformed_outside_or_ambiguous_paths
 test_c01_c02_the_lane_continues_on_its_own_slot_and_asks_for_no_other
 test_c14_allocation_truth_is_never_a_directory_count
 test_c03_replacement_is_refused_until_the_old_process_group_is_quiescent
