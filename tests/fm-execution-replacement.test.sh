@@ -369,7 +369,7 @@ EOF
 
 test_recorded_slot_identity_keeps_a_no_space_layout() {
   watch_red prop_recorded_slot_identity_keeps_a_no_space_layout recorded-slot-ordinary \
-    fm-pool-lib.sh '  slot_name=$(basename -- "$slot_dir")' '  slot_name=$(basename -- "$recorded_real")'
+    fm-pool-lib.sh "  slot_name=\$(basename -- \"\$slot_dir\")" "  slot_name=\$(basename -- \"\$recorded_real\")"
   pass "recorded successors preserve the ordinary no-space slot layout"
 }
 
