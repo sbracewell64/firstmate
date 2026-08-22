@@ -29,7 +29,46 @@ FM_TEST_IDENTITY_CONTRACT=1
 ATTEMPT="$ROOT/bin/fm-attempt.sh"
 SPAWN="$ROOT/bin/fm-spawn.sh"
 GUARD="$ROOT/bin/fm-worktree-guard.sh"
+SHIPPED_BIN="$ROOT/bin"
 TMP_ROOT=$(fm_test_tmproot fm-execution-replacement)
+
+# A watched-red property runs against the shipped toolbelt and against a
+# disposable copy carrying one planted defect. The assertions drive the public
+# successor-launch interface; the source edit only creates the controlled red
+# implementation.
+bin_copy() {  # <label>
+  local label=$1 root
+  root="$TMP_ROOT/toolbelt-$label"
+  rm -rf "$root"
+  mkdir -p "$root"
+  cp -R "$SHIPPED_BIN" "$root/bin" || return 1
+  printf '%s\n' "$root/bin"
+}
+
+plant() {  # <file> <old> <new>
+  python3 - "$1" "$2" "$3" <<'PY'
+import sys
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+source = open(path).read()
+if source.count(old) != 1:
+    sys.stderr.write("plant: %d occurrences of target bytes in %s, need exactly 1\\n" %
+                     (source.count(old), path))
+    sys.exit(3)
+open(path, "w").write(source.replace(old, new, 1))
+PY
+}
+
+watch_red() {  # <property-fn> <label> <file> <old> <new>
+  local property=$1 label=$2 file=$3 old=$4 new=$5 copied
+  "$property" "$SHIPPED_BIN" "green-$label" \
+    || fail "$label: property is not green against the shipped toolbelt"
+  copied=$(bin_copy "$label") || fail "$label: could not copy bin/"
+  plant "$copied/$file" "$old" "$new" \
+    || fail "$label: could not plant the controlled defect"
+  if "$property" "$copied" "red-$label"; then
+    fail "$label: property stayed green with the controlled defect"
+  fi
+}
 
 # The lane's own binding and the alternate it may move to. Both live in one
 # route's ordered pool; UNPOOLED is deliberately outside it, which is what makes
@@ -65,16 +104,28 @@ JSON
 # One lane, dispatched for real and then left in the state the origin describes:
 # committed work in its own worktree, a recorded slot, and a worker that is gone.
 # Echoes "<home>|<project>|<worktree>|<fakebin>|<case-dir>|<id>".
-make_lane() {  # <name> [floor-extra-json]
-  local name=$1 extra=${2:-} case_dir home proj wt fakebin id out rc
+make_lane() {  # <name> [floor-extra-json] [ordinary|spaces]
+  local name=$1 extra=${2:-} layout=${3:-ordinary} case_dir home proj wt pool slot_name fakebin id out rc
   case_dir="$TMP_ROOT/$name"
   home="$case_dir/home"
-  proj="$case_dir/project"
-  wt="$case_dir/pool/slot1"
+  if [ "$layout" = spaces ]; then
+    proj="$case_dir/Primary Repository With Spaces"
+    pool="$case_dir/Treehouse Pool With Spaces"
+    slot_name=1
+    wt="$pool/$slot_name/Repository With Spaces"
+  else
+    proj="$case_dir/project"
+    pool="$case_dir/pool"
+    slot_name=slot1
+    wt="$pool/$slot_name/repository"
+  fi
   id="$name-a1"
   fakebin=$(fm_fakebin "$case_dir")
   mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config" \
-    "$case_dir/pool" "$case_dir/proc/999999"
+    "$(dirname "$wt")" "$case_dir/proc/999999"
+  printf '%s\n' "$proj" > "$case_dir/project-path"
+  printf '%s\n' "$wt" > "$case_dir/worktree-path"
+  printf '%s\n' "$slot_name" > "$case_dir/slot-name"
 
   # A tmux whose session is GONE, which is the endpoint state a replaced worker
   # leaves behind, and which fm_backend_agent_state classifies as `missing` -
@@ -111,8 +162,8 @@ case "$*" in
 esac
 case "$*" in
   *"#{pane_current_path}"*)
-    if [ -s "${FM_FAKE_ENTERED:-/nonexistent}" ] && [ -n "${FM_FAKE_POOL_DIR:-}" ]; then
-      printf '%s/%s\n' "$FM_FAKE_POOL_DIR" "$(cat "$FM_FAKE_ENTERED")"
+    if [ -s "${FM_FAKE_ENTERED:-/nonexistent}" ] && [ -n "${FM_FAKE_ENTER_PATH:-}" ]; then
+      printf '%s\n' "$FM_FAKE_ENTER_PATH"
     else
       printf '%s\n' "${FM_FAKE_PANE_PATH:-}"
     fi
@@ -135,6 +186,24 @@ if [ "${1:-}" = status ] && [ "${2:-}" = --help ]; then
   exit 0
 fi
 if [ "${1:-}" = status ] && [ "${2:-}" = --json ]; then echo '[]'; exit 0; fi
+if [ "${1:-}" = enter ] && [ "${2:-}" = --print-path ]; then
+  if [ -n "${FM_FAKE_REQUIRE_HOLDER:-}" ]; then
+    if ! lsof -a -d cwd -Fn 2>/dev/null | grep -Fxq "n${FM_FAKE_ENTER_PATH:-/nonexistent}"; then
+      echo "fake treehouse: recorded slot has no holder" >&2
+      exit 4
+    fi
+  fi
+  if [ "${3:-}" = "${FM_FAKE_SLOT_NAME:-slot1}" ]; then
+    if [ -n "${FM_FAKE_AMBIGUOUS_ENTER_PATH:-}" ]; then
+      printf '%s\n%s\n' "${FM_FAKE_ENTER_PATH:-}" "$FM_FAKE_AMBIGUOUS_ENTER_PATH"
+      exit 0
+    fi
+    printf '%s\n' "${FM_FAKE_ENTER_PATH:-}"
+    exit 0
+  fi
+  echo "fake treehouse: unknown slot '${3:-}'" >&2
+  exit 3
+fi
 exit 0
 SH
   chmod +x "$fakebin/treehouse"
@@ -187,11 +256,16 @@ spawn_in() {  # <case-dir> <spawn-args...>
   FM_ROOT_OVERRIDE='' FM_HOME="$case_dir/home" \
     FM_STATE_OVERRIDE="$case_dir/home/state" FM_DATA_OVERRIDE="$case_dir/home/data" \
     FM_PROJECTS_OVERRIDE="$case_dir/home/projects" FM_CONFIG_OVERRIDE="$case_dir/home/config" \
-    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux FM_FAKE_PANE_PATH="$case_dir/pool/slot1" \
+    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux \
+    FM_FAKE_PANE_PATH="$(cat "$case_dir/worktree-path")" \
+    FM_FAKE_ENTER_PATH="$(cat "$case_dir/worktree-path")" \
+    FM_FAKE_SLOT_NAME="$(cat "$case_dir/slot-name")" \
+    FM_FAKE_AMBIGUOUS_ENTER_PATH="${FM_FAKE_AMBIGUOUS_ENTER_PATH:-}" \
+    FM_FAKE_REQUIRE_HOLDER="$([ -f "$case_dir/require-holder" ] && printf 1)" \
     FM_FAKE_TMUX_LOG="$case_dir/tmux.log" FM_FAKE_TREEHOUSE_LOG="$case_dir/treehouse.log" \
-    FM_FAKE_ENTERED="$case_dir/entered" FM_FAKE_POOL_DIR="$case_dir/pool" \
+    FM_FAKE_ENTERED="$case_dir/entered" \
     PATH="$case_dir/fakebin:$PATH" \
-    "$SPAWN" "$1" "$case_dir/project" "${@:2}" 2>&1
+    "$SPAWN" "$1" "$(cat "$case_dir/project-path")" "${@:2}" 2>&1
 }
 
 # One bin/fm-attempt.sh call against the case's home, controlled process table
@@ -224,6 +298,143 @@ replace_lane() {  # <case-dir> <id> [extra args...]
   shift 2
   attempt_in "$case_dir" replace "$id" --alternate "$ALTERNATE" \
     --reason "provider window exhausted" "$@"
+}
+
+# The exact Treehouse layout is <pool>/<slot>/<repository>. The pool and both
+# repository names deliberately carry spaces, while the slot remains the
+# number Treehouse publishes. This proves successor launch takes the slot from
+# the recorded worktree's parent and confirms it through Treehouse, rather than
+# treating the repository basename as a slot name.
+prop_recorded_slot_identity_handles_spaces() (  # <bin-dir> <label>
+  local bin_dir=$1 label=$2 rec case_dir id wt out rc before_head
+  SPAWN="$bin_dir/fm-spawn.sh"
+  ATTEMPT="$bin_dir/fm-attempt.sh"
+  rec=$(make_lane "$label" '' spaces)
+  IFS='|' read -r _ _ wt _ case_dir id <<EOF
+$rec
+EOF
+  before_head=$(git -C "$wt" rev-parse HEAD)
+  : > "$case_dir/require-holder"
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || { echo "$label: replacement was not sanctioned: $out" >&2; return 1; }
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || { echo "$label: successor did not launch: $out" >&2; return 1; }
+  [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
+    || { echo "$label: successor did not retain its recorded worktree" >&2; return 1; }
+  [ "$(git -C "$wt" rev-parse HEAD)" = "$before_head" ] \
+    || { echo "$label: successor changed the recorded worktree head" >&2; return 1; }
+  assert_contains "$(cat "$case_dir/treehouse.log")" "enter --print-path 1" \
+    "$label: successor did not verify Treehouse slot 1 against the recorded path"
+  assert_not_contains "$(cat "$case_dir/treehouse.log")" "status" \
+    "$label: successor consulted the allocator"
+  assert_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '1'" \
+    "$label: successor did not enter the recorded slot with preserved shell quoting"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "$label: successor reached the allocating treehouse path"
+)
+
+test_recorded_slot_identity_handles_space_paths() {
+  watch_red prop_recorded_slot_identity_handles_spaces recorded-slot-parent \
+    fm-pool-lib.sh "  slot_dir=\$(dirname -- \"\$recorded_real\")" "  slot_dir=\$recorded_real"
+  watch_red prop_recorded_slot_identity_handles_spaces recorded-slot-custody \
+    fm-spawn.sh "    printf 'ready\\n' > \"\$SLOT_HOLDER_READY\" || exit 1" "    :"
+  pass "recorded successors derive a numeric Treehouse slot from a spaced worktree path"
+}
+
+prop_recorded_slot_identity_keeps_a_no_space_layout() (  # <bin-dir> <label>
+  local bin_dir=$1 label=$2 rec case_dir id wt out rc
+  SPAWN="$bin_dir/fm-spawn.sh"
+  ATTEMPT="$bin_dir/fm-attempt.sh"
+  rec=$(make_lane "$label")
+  IFS='|' read -r _ _ wt _ case_dir id <<EOF
+$rec
+EOF
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || { echo "$label: replacement was not sanctioned: $out" >&2; return 1; }
+  : > "$case_dir/treehouse.log"
+  : > "$case_dir/tmux.log"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -eq 0 ] || { echo "$label: successor did not launch: $out" >&2; return 1; }
+  [ "$(meta_field "$case_dir" "$id" worktree)" = "$wt" ] \
+    || { echo "$label: successor did not retain its recorded worktree" >&2; return 1; }
+  assert_contains "$(cat "$case_dir/tmux.log")" "treehouse enter 'slot1'" \
+    "$label: ordinary layout did not retain its established slot name"
+)
+
+test_recorded_slot_identity_keeps_a_no_space_layout() {
+  watch_red prop_recorded_slot_identity_keeps_a_no_space_layout recorded-slot-ordinary \
+    fm-pool-lib.sh "  slot_name=\$(basename -- \"\$slot_dir\")" "  slot_name=\$(basename -- \"\$recorded_real\")"
+  pass "recorded successors preserve the ordinary no-space slot layout"
+}
+
+test_recorded_slot_identity_refuses_malformed_outside_or_ambiguous_paths() {
+  local rec case_dir id wt proj outside malformed ambiguous out rc
+  rec=$(make_lane slotidentity-refusal '' spaces)
+  IFS='|' read -r _ proj wt _ case_dir id <<EOF
+$rec
+EOF
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the refusal fixture's replacement must be sanctioned: $out"
+  outside="$case_dir/Outside Pool/1/Repository With Spaces"
+  mkdir -p "$(dirname "$outside")"
+  git -C "$proj" worktree add --quiet --detach "$outside"
+  cp "$case_dir/home/state/$id.meta" "$case_dir/meta.original"
+  sed "s|^worktree=.*|worktree=$outside|" "$case_dir/meta.original" > "$case_dir/home/state/$id.meta"
+  : > "$case_dir/tmux.log"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "a worktree outside Treehouse's recorded slot must refuse"
+  assert_contains "$out" "does not match Treehouse slot" \
+    "the outside-path refusal must name the failed exact-path proof"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "an outside-path refusal must leave the successor sanctioned"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
+    "an outside-path refusal must not launch a pane into any slot"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "an outside-path refusal must not allocate a replacement slot"
+
+  cp "$case_dir/meta.original" "$case_dir/home/state/$id.meta"
+  ambiguous="$case_dir/Ambiguous Pool/1/Repository With Spaces"
+  mkdir -p "$ambiguous"
+  : > "$case_dir/tmux.log"
+  out=$(FM_FAKE_AMBIGUOUS_ENTER_PATH="$ambiguous" spawn_in "$case_dir" "$id" \
+    --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "an ambiguous Treehouse slot result must refuse"
+  assert_contains "$out" "Treehouse returned an ambiguous path" \
+    "the ambiguous-path refusal must name the ambiguous Treehouse result"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "an ambiguous-path refusal must leave the successor sanctioned"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
+    "an ambiguous-path refusal must not launch a pane into any slot"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "an ambiguous-path refusal must not allocate a replacement slot"
+
+  malformed="$case_dir/Malformed Pool/Repository With Spaces"
+  mkdir -p "$malformed"
+  sed "s|^worktree=.*|worktree=$malformed|" "$case_dir/meta.original" > "$case_dir/home/state/$id.meta"
+  : > "$case_dir/tmux.log"
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "a malformed recorded Treehouse path must refuse"
+  assert_contains "$out" "Treehouse could not resolve recorded worktree slot" \
+    "the malformed-path refusal must name the unresolvable slot"
+  [ "$(rec_field "$case_dir" "$id" execution_dispatch)" = sanctioned ] \
+    || fail "a malformed-path refusal must leave the successor sanctioned"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse enter '" \
+    "a malformed-path refusal must not launch a pane into any slot"
+  assert_not_contains "$(cat "$case_dir/tmux.log")" "treehouse get" \
+    "a malformed-path refusal must not allocate a replacement slot"
+  pass "recorded successor paths outside, ambiguous, or malformed for the Treehouse pool refuse before launch"
 }
 
 # --- Control 1, 2 and 14: the same slot, no allocator, and never a directory ---
@@ -1446,6 +1657,9 @@ EOF
   pass "the execution ledger retires with the attempt record"
 }
 
+test_recorded_slot_identity_handles_space_paths
+test_recorded_slot_identity_keeps_a_no_space_layout
+test_recorded_slot_identity_refuses_malformed_outside_or_ambiguous_paths
 test_c01_c02_the_lane_continues_on_its_own_slot_and_asks_for_no_other
 test_c14_allocation_truth_is_never_a_directory_count
 test_c03_replacement_is_refused_until_the_old_process_group_is_quiescent

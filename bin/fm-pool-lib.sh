@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fm-pool-lib.sh - the single owner of WHERE one worktree pool's machine-private
-# state lives, and of the key that names that pool.
+# state lives, of the key that names that pool, and of recorded-worktree slot identity.
 #
 # Source it; it defines and runs nothing on its own:
 #   # shellcheck source=bin/fm-pool-lib.sh
@@ -92,6 +92,50 @@ fm_pool_key() {  # <pool-real>
   fi
   [ -n "$hash" ] || return 1
   printf '%s\n' "${hash:0:32}"
+}
+
+# Resolve the one Treehouse slot that owns a recorded worktree, printing its
+# name only when Treehouse itself maps that name back to the exact same physical
+# worktree. A pool worktree has the stable shape <pool>/<slot>/<repository>;
+# the repository basename is not a slot identity and may contain whitespace.
+# `treehouse enter --print-path` is observational: unlike `get`, it does not
+# allocate, reset, or return anything. A record outside the pool, a malformed path, or
+# any ambiguous Treehouse result therefore refuses instead of guessing a name.
+fm_pool_recorded_worktree_slot_name() {  # <project-dir> <recorded-worktree>
+  local project=$1 recorded=$2 project_real recorded_real slot_dir slot_name entered entered_real
+  project_real=$(CDPATH='' cd -- "$project" 2>/dev/null && pwd -P) || {
+    echo "error: cannot resolve project while checking recorded worktree slot: $project" >&2
+    return 1
+  }
+  recorded_real=$(CDPATH='' cd -- "$recorded" 2>/dev/null && pwd -P) || {
+    echo "error: cannot resolve recorded worktree while checking its Treehouse slot: $recorded" >&2
+    return 1
+  }
+  slot_dir=$(dirname -- "$recorded_real")
+  slot_name=$(basename -- "$slot_dir")
+  if [ -z "$slot_name" ] || [ "$slot_dir" = / ] || [ "$slot_dir" = "$recorded_real" ]; then
+    echo "error: recorded worktree has no Treehouse slot parent: $recorded_real" >&2
+    return 1
+  fi
+  entered=$(CDPATH='' cd -- "$project_real" && treehouse enter --print-path "$slot_name") || {
+    echo "error: Treehouse could not resolve recorded worktree slot '$slot_name' from $project_real" >&2
+    return 1
+  }
+  case "$entered" in
+    ''|*$'\n'*)
+      echo "error: Treehouse returned an ambiguous path for recorded worktree slot '$slot_name'" >&2
+      return 1
+      ;;
+  esac
+  entered_real=$(CDPATH='' cd -- "$entered" 2>/dev/null && pwd -P) || {
+    echo "error: Treehouse returned an unreadable path for recorded worktree slot '$slot_name': $entered" >&2
+    return 1
+  }
+  if [ "$entered_real" != "$recorded_real" ]; then
+    echo "error: recorded worktree $recorded_real does not match Treehouse slot '$slot_name' at $entered_real" >&2
+    return 1
+  fi
+  printf '%s\n' "$slot_name"
 }
 
 # The path one kind of pool state takes for <pool-real>, as

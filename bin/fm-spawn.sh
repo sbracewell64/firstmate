@@ -194,11 +194,16 @@
 #   REFUSES unless the durable record holds one PENDING successor whose recorded
 #   binding is exactly the harness/model this launch declares, so a successor
 #   cannot be launched onto a binding no gate ever admitted. The recorded
-#   worktree is entered BY NAME - never `get`, which resets - so the lane keeps
-#   its branch, its head and its uncommitted content, and the base references,
-#   venue and pull request the lane already recorded are carried onto the new
-#   metadata rather than re-derived. On success the record moves from pending to
-#   active. Refused on --secondmate, which owns a home rather than a lane.
+#   worktree is entered BY NAME - never `get`, which resets - after resolving the
+#   slot from the recorded Treehouse `<pool>/<slot>/<repository>` structure and
+#   verifying that Treehouse maps that name back to the exact physical worktree.
+#   An outside, malformed, unreadable, or ambiguous recorded path refuses rather
+#   than guessing from a repository basename. Thus names containing whitespace
+#   remain intact, the lane keeps its branch, its head and its uncommitted content,
+#   and the base references, venue and pull request the lane already recorded are
+#   carried onto the new metadata rather than re-derived. On success the record
+#   moves from pending to active. Refused on --secondmate, which owns a home rather
+#   than a lane.
 #   REFUSED on an orca-backed lane with its own exit status (3, distinct from a
 #   generic failure and from an argument error, because refusing a dispatch is
 #   an outcome rather than a crash): orca owns its task worktree, and orca-side
@@ -989,6 +994,7 @@ SPAWN_TASK_LOCK_HELD=0
 CONFIG_INHERIT_LOCK=
 CONFIG_INHERIT_LOCK_HELD=0
 SLOT_HOLDER_PID=
+SLOT_HOLDER_READY=
 WT_POOL_LOCK=
 WT_POOL_LOCK_HELD=0
 
@@ -996,10 +1002,34 @@ WT_POOL_LOCK_HELD=0
 # inside it, and again from the abort path so an aborted spawn never leaves the
 # slot looking in-use to the rest of the fleet.
 release_slot_holder() {
-  [ -n "$SLOT_HOLDER_PID" ] || return 0
-  kill "$SLOT_HOLDER_PID" 2>/dev/null || true
-  wait "$SLOT_HOLDER_PID" 2>/dev/null || true
+  if [ -n "$SLOT_HOLDER_PID" ]; then
+    kill "$SLOT_HOLDER_PID" 2>/dev/null || true
+    wait "$SLOT_HOLDER_PID" 2>/dev/null || true
+  fi
+  [ -z "$SLOT_HOLDER_READY" ] || rm -f "$SLOT_HOLDER_READY"
   SLOT_HOLDER_PID=
+  SLOT_HOLDER_READY=
+}
+
+start_slot_holder() {  # <worktree>
+  local worktree=$1 attempt=0
+  SLOT_HOLDER_READY=$(mktemp "$STATE/.slot-holder-ready.XXXXXX") || return 1
+  ( cd "$worktree" 2>/dev/null || exit 1
+    printf 'ready\n' > "$SLOT_HOLDER_READY" || exit 1
+    exec sleep 300
+  ) >/dev/null 2>&1 &
+  SLOT_HOLDER_PID=$!
+  while [ ! -s "$SLOT_HOLDER_READY" ] && kill -0 "$SLOT_HOLDER_PID" 2>/dev/null && [ "$attempt" -lt 100 ]; do
+    sleep 0.01
+    attempt=$((attempt + 1))
+  done
+  if [ ! -s "$SLOT_HOLDER_READY" ] || ! kill -0 "$SLOT_HOLDER_PID" 2>/dev/null; then
+    echo "error: could not establish custody of worktree $worktree" >&2
+    release_slot_holder
+    return 1
+  fi
+  rm -f "$SLOT_HOLDER_READY"
+  SLOT_HOLDER_READY=
 }
 
 parse_orca_worktree_result() {
@@ -2348,15 +2378,17 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
     exit 1
   fi
   WT_SLOT_REAL=$(real_path_or_raw "$SUCCEED_WT")
-  WT_SLOT_NAME=$(basename "$WT_SLOT_REAL")
   # A lane sanctioned for replacement is process-free by the custody gate, so
   # until the pane's own shell enters the slot nothing occupies it and another
   # home's `treehouse get` could acquire-and-RESET it over the lane's work. The
   # same holder the select branch uses occupies it across that window.
   if [ "$BACKEND" != orca ]; then
-    ( cd "$WT_SLOT_REAL" 2>/dev/null && exec sleep 300 ) >/dev/null 2>&1 &
-    SLOT_HOLDER_PID=$!
+    start_slot_holder "$WT_SLOT_REAL" || exit 1
   fi
+  WT_SLOT_NAME=$(fm_pool_recorded_worktree_slot_name "$PROJ_ABS_REAL" "$SUCCEED_WT") || {
+    echo "error: $ID's recorded worktree '$SUCCEED_WT' cannot be matched to one exact Treehouse slot; refusing to launch a successor without custody proof" >&2
+    exit 1
+  }
 elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   spawn_pool_select_lock_acquire "$PROJ_ABS_REAL" || exit 1
   # --for names this task, which is what a pool's slot reservation is matched
@@ -2373,8 +2405,7 @@ elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     # so this occupies the slot across the window in which another home's
     # `treehouse get` could otherwise still take it. The abort path releases it
     # too, so a spawn that never got started leaves nothing occupied.
-    ( cd "$WT_SLOT_REAL" 2>/dev/null && exec sleep 300 ) >/dev/null 2>&1 &
-    SLOT_HOLDER_PID=$!
+    start_slot_holder "$WT_SLOT_REAL" || exit 1
   else
     spawn_pool_select_lock_release
   fi
