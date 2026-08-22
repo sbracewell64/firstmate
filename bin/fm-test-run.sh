@@ -180,13 +180,13 @@ PORTABLE_SERIAL_BUDGET_DRIFT_PCT=25
 
 # SHARD headroom is checked only against the hang tripwire, never against the
 # balanced wall, so per-shard jitter is not a verdict. At 60% of a 15-minute cap
-# the bound is 9 min: 1.83x the ~4.93 min healthy wall and far outside the 11%
+# the bound is 9 min: 1.44x the ~6.27 min healthy wall and far outside the 11%
 # shard spread, but still low enough to fire before a shard reaches the cap.
 PORTABLE_SERIAL_SHARD_HEADROOM_PCT=60
 
 # Balance hint for a portable-serial script with no measured duration. Rounded
 # from the measured per-script mean of the declared budget
-# (2366725/122 = 19399 ms) so a newly added test neither starves nor overloads
+# (3008223/160 = 18801 ms) so a newly added test neither starves nor overloads
 # the shard it lands in.
 PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 

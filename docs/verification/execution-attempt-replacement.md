@@ -21,7 +21,7 @@ The behavioral assertions inspect only public command results and durable output
 $ bash tests/fm-execution-replacement.test.sh
 ok - recorded successors derive a numeric Treehouse slot from a spaced worktree path
 ok - recorded successors preserve the ordinary no-space slot layout
-ok - recorded successor paths outside or malformed for the Treehouse pool refuse before launch
+ok - recorded successor paths outside, ambiguous, or malformed for the Treehouse pool refuse before launch
 ok - control 1+2: the lane continues on its own slot and requests no allocator slot
 ok - control 14: the verdict and the slot follow the allocator's record, never a directory count
 ok - control 3: replacement is refused while the old process group still holds the lane
@@ -64,7 +64,7 @@ The suite takes about 115 seconds on the machine above, up from about 102 before
 The portable-serial weight hint in `bin/fm-test-run.sh` reads 137103 from the latest complete CI timing artifacts rather than this local measurement, because the table's own header requires CI evidence and forbids mixing in local timing.
 The hint is a balance hint only, so the staleness costs shard balance and never coverage.
 
-The three recorded-slot cases exercise the Treehouse layout as `<pool>/<slot>/<repository>` with spaces in the project, pool, and repository names, preserve the ordinary no-space layout, and refuse both a worktree outside Treehouse's answer and a malformed recorded path before pane launch.
+The three recorded-slot cases exercise the Treehouse layout as `<pool>/<slot>/<repository>` with spaces in the project, pool, and repository names, preserve the ordinary no-space layout, and refuse worktrees outside Treehouse's answer and ambiguous or malformed recorded paths before pane launch.
 The spaced-path case also requires the custody holder to be observable before exact-path verification, asserts that the numeric slot rather than the repository basename is passed through shell quoting, and watches both the parent-derivation and custody-readiness properties go red against controlled defects.
 
 The review-regression cases, each added after a review round of this branch and named for the defect it guards:
