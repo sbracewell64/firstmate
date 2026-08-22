@@ -142,7 +142,12 @@ The adoption fires only on a record holding no execution, and the quiescence com
 Every case above them passes unchanged, and the neighbouring suites that execute `bin/fm-attempt.sh`, the current-state reader it now composes, and the dispatch chain ran with zero failures and positive executed counts: `fm-attempt` 10, `fm-classify` 8, `fm-crew-state` 78, `fm-capacity-retry` 20, `fm-teardown` 87, `fm-route-enforcement` 51, `fm-spawn-dispatch-profile` 27, `fm-exact-head-green-one-owner` 14.
 Those are counts of assertions that RAN, not an absence of reported failures.
 `fm-classify` and `fm-crew-state` are in that list because the endpoint-absent reading and the token extraction it uses live in `bin/fm-classify-lib.sh`, which `bin/fm-crew-state.sh` itself sources.
-`bin/fm-lint.sh` passes on the pinned ShellCheck 0.11.0.
+The watched-red mutation strings retain their literal command-substitution bytes while the repository lint owner passes them with the pinned ShellCheck version.
+
+```
+$ bin/fm-lint.sh
+fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
+```
 
 Four defect builds reach a different wrong answer rather than a false pass, which the cases still catch but which bounds what they establish.
 Control 3's build reaches could-not-observe, because removing the `alive` refusal leaves the remaining `dead` requirement unsatisfied.
