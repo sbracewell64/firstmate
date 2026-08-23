@@ -2,6 +2,11 @@
 # fm-landing-authorization.test.sh - behavior tests for the one-use, head-bound
 # landing authorization and its exactly-once spend.
 #
+# Subject: bin/fm-landing-authorization.sh, and the identity, state vocabulary,
+# record store and spend predicates it consumes from
+# bin/fm-landing-authorization-lib.sh. The publication effect that library also
+# carries is verified separately by tests/fm-publication-seam.test.sh.
+#
 # THE CONTROLS THIS SUITE OWNS. Each was observed failing for its intended reason
 # before it was trusted; docs/verification/inbound-ruling-authorization.md records
 # those observations with the exact commands and output.
