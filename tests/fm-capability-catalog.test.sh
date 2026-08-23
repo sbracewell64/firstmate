@@ -209,16 +209,16 @@ test_security_boundary_disclaimer_is_present() {
   pass "capability catalog: states it is a capability boundary, not a security boundary"
 }
 
-test_nineteen_capabilities_with_unique_names() {
+test_twenty_capabilities_with_unique_names() {
   local count dupes
   count=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["capabilities"]))' "$CATALOG")
-  [ "$count" = "19" ] || fail "capability catalog: expected 19 capabilities, found $count"
+  [ "$count" = "20" ] || fail "capability catalog: expected 20 capabilities, found $count"
   dupes=$(python3 -c '
 import json, sys, collections
 names = [c["name"] for c in json.load(open(sys.argv[1]))["capabilities"]]
 print(",".join(n for n, k in collections.Counter(names).items() if k > 1))' "$CATALOG")
   [ -z "$dupes" ] || fail "capability catalog: duplicate capability names: $dupes"
-  pass "capability catalog: nineteen capabilities with unique names"
+  pass "capability catalog: twenty capabilities with unique names"
 }
 
 test_every_owner_resolves
@@ -226,4 +226,4 @@ test_every_verifier_resolves
 test_network_request_is_unowned_and_captain_required
 test_authority_class_reuses_the_existing_enum
 test_security_boundary_disclaimer_is_present
-test_nineteen_capabilities_with_unique_names
+test_twenty_capabilities_with_unique_names

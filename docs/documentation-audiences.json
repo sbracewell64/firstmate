@@ -403,6 +403,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/no-mistakes-run-census.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/outbound-transport-invariant.md",
       "audience": "maintainer-verification"
     },

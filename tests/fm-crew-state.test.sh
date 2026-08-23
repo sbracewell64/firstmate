@@ -153,12 +153,22 @@ make_no_timeout_toolbin() {  # <dir> -> echoes toolbin path
 
 # Run the helper for one case dir. FM_FAKE_* env (run output, busy flag) are read
 # from the caller's environment by the fakes above.
+# The complete-run-census fallback reads a no-mistakes state database, so every
+# case pins it to its OWN temp root. Absent by default, which is the shape that
+# leaves the reader exactly where it was before the fallback existed; a case
+# that wants the census builds the file itself. Without this pin the suite would
+# read the host's real ~/.no-mistakes/state.sqlite and a branch name that
+# happened to collide with a real run would decide a test.
 run_crew_state() {  # <case-dir> <id>
-  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" "$CREW_STATE" "$2"
+  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" \
+    FM_NM_HOME="$1/nm" FM_PIPELINE_STATE_DB="$1/nm/state.sqlite" FM_NM_CENSUS_FILE='' \
+    "$CREW_STATE" "$2"
 }
 
 run_crew_state_json() {  # <case-dir> <id>
-  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" "$CREW_STATE" --json "$2"
+  PATH="$1/fakebin:$PATH" FM_STATE_OVERRIDE="$1/state" \
+    FM_NM_HOME="$1/nm" FM_PIPELINE_STATE_DB="$1/nm/state.sqlite" FM_NM_CENSUS_FILE='' \
+    "$CREW_STATE" --json "$2"
 }
 
 new_case() {  # <name> -> echoes case dir with an empty state/
@@ -1119,6 +1129,96 @@ EOF
   assert_contains "$out" "state: working" "most recent (running) row wins over an older completed row"
   assert_contains "$out" "source: run-step" "most-recent-row resolution -> run-step source"
   pass "cross-branch attribution picks the branch's most recent row"
+}
+
+# (f) the case NEITHER repository-scoped read can answer: this crew's run was
+# created from inside a no-mistakes-managed run worktree, so it is registered
+# under its own repos.id. Bare `axi status` answers for another branch and the
+# `no-mistakes runs` listing covers one repository, so both miss it entirely -
+# which is how a live lane came to be reported dead. The complete census in
+# bin/fm-nm-run-lib.sh reads every registered repository, so it sees the run.
+test_hidden_nested_run_attributed_via_complete_census() {
+  reset_fakes
+  local d; d=$(new_case census-nested)
+  make_repo_on_branch "$d/wt" fm/feat-hidden
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-hidden.meta" "window=fm:fm-feat-hidden" "worktree=$d/wt" "kind=ship"
+  # Both repository-scoped reads miss: another branch's run, and a listing this
+  # branch is absent from.
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="  running    fm/other-crew aaaaaaa  2026-08-22 22:10"
+  build_nested_census_db "$d" fm/feat-hidden
+
+  local out; out=$(run_crew_state "$d" feat-hidden)
+  assert_contains "$out" "state: working" "the hidden nested run is attributed to this crew"
+  assert_contains "$out" "source: run-step" "census-resolved run -> run-step source"
+  assert_contains "$out" "complete census" "the degraded source is named in the detail"
+  pass "a run hidden under a nested repository identity is attributed via the complete census"
+}
+
+# The negative control for the case above: the SAME fixture with the census
+# unreadable must not turn into an attribution, and must not turn into a claim
+# that this crew has no run either - it simply leaves the reader where it was.
+test_unreadable_census_adds_no_attribution() {
+  reset_fakes
+  local d; d=$(new_case census-unreadable)
+  make_repo_on_branch "$d/wt" fm/feat-nocensus
+  make_fakebin "$d" >/dev/null
+  fm_write_meta "$d/state/feat-nocensus.meta" "window=fm:fm-feat-nocensus" "worktree=$d/wt" "kind=ship"
+  FM_FAKE_AXI_STATUS="$(run_running fm/other-crew)"
+  FM_FAKE_RUNS_LIST="  running    fm/other-crew aaaaaaa  2026-08-22 22:10"
+  # No state database at all: the census is could-not-observe.
+
+  local out; out=$(run_crew_state "$d" feat-nocensus)
+  assert_not_contains "$out" "complete census" \
+    "an unobservable census must not produce an attribution"
+  assert_not_contains "$out" "source: run-step" \
+    "an unobservable census must not resolve a run step"
+  pass "an unobservable census adds no attribution and claims nothing"
+}
+
+# A throwaway no-mistakes state database whose only active run lives under a
+# nested repository identity, exactly the recursive-run shape.
+build_nested_census_db() {  # <case-dir> <branch>
+  local d=$1 branch=$2
+  mkdir -p "$d/nm/worktrees" || fail "could not build census fixture"
+  python3 - "$d/nm/state.sqlite" "$d/wt" "$d/nm/worktrees/top/RUNOUTER" "$branch" <<'PY'
+import sqlite3
+import sys
+
+db, top, nested, branch = sys.argv[1:5]
+conn = sqlite3.connect(db)
+conn.executescript(
+    "CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL,"
+    " upstream_url TEXT NOT NULL, fork_url TEXT,"
+    " default_branch TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL);"
+    "CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,"
+    " branch TEXT NOT NULL, head_sha TEXT NOT NULL, base_sha TEXT NOT NULL,"
+    " submitted_head_sha TEXT, status TEXT NOT NULL DEFAULT 'pending',"
+    " pr_url TEXT, last_pushed_sha TEXT, error TEXT,"
+    " created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);"
+)
+conn.execute(
+    "insert into repos values ('top', ?, 'https://github.com/o/p.git', null, 'main', 1)",
+    (top,),
+)
+conn.execute(
+    "insert into repos values ('nest', ?, 'https://github.com/o/p.git', null, 'main', 1)",
+    (nested,),
+)
+conn.execute(
+    "insert into runs values ('RUNOUTER', 'top', ?, 'aaaaaaaaaaaa', 'base', null,"
+    " 'cancelled', null, null, null, 1, 1)",
+    (branch,),
+)
+conn.execute(
+    "insert into runs values ('RUNINNER', 'nest', ?, 'cccccccccccc', 'base', null,"
+    " 'running', null, null, null, 1, 1)",
+    (branch,),
+)
+conn.commit()
+conn.close()
+PY
 }
 
 test_coarse_run_does_not_corroborate_ready_status() {
@@ -2489,6 +2589,8 @@ test_unverified_backend_stays_unobserved
 test_non_run_ended_verdicts_measure_no_crew_liveness
 test_cross_branch_attribution_via_runs_list
 test_cross_branch_attribution_picks_most_recent_row
+test_hidden_nested_run_attributed_via_complete_census
+test_unreadable_census_adds_no_attribution
 test_coarse_run_does_not_corroborate_ready_status
 test_other_branch_run_ignored
 test_no_run_busy_pane

@@ -654,10 +654,18 @@ SH
 # Run teardown with PATH mocking. Args: case_dir [extra args...]
 run_teardown() {
   local case_dir=$1; shift
+  # The complete-run-census fallback in the pre-teardown run abort reads a
+  # no-mistakes state database. Pin it to this case's own temp root: absent by
+  # default, which leaves the abort exactly where it was before the fallback
+  # existed, and a case that wants it builds the file itself. Unpinned, the
+  # suite would read the host's real ~/.no-mistakes/state.sqlite.
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
   FM_DATA_OVERRIDE="${FM_TEARDOWN_TEST_DATA:-$case_dir/data}" \
+  FM_NM_HOME="$case_dir/nm" \
+  FM_PIPELINE_STATE_DB="${FM_TEARDOWN_TEST_NM_DB:-$case_dir/nm/state.sqlite}" \
+  FM_NM_CENSUS_FILE='' \
   PATH="$case_dir/fakebin:${FM_TEARDOWN_TEST_PATH:-$PATH}" \
     "$TEARDOWN" task-x1 "$@"
 }
@@ -2832,6 +2840,94 @@ test_parked_own_run_is_aborted_before_teardown() {
   pass "a task's own parked no-mistakes run is aborted, not orphaned, before the worker is removed"
 }
 
+# The run the repository-scoped read cannot see at all: created from inside a
+# no-mistakes-managed run worktree, so it is registered under its own repos.id
+# and `axi status` in this checkout answers with nothing. Teardown must still
+# conclude it, or the released worker's gate is left holding a fleet slot with
+# nobody able to answer it.
+test_hidden_nested_run_is_concluded_via_complete_census() {
+  local case_dir rc
+  case_dir=$(make_case parked-run-census)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  build_nested_run_census "$case_dir" fm/task-x1
+
+  rc=0
+  FM_FAKE_NM_ABORT_LOG="$case_dir/nm-abort.log" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "parked-run-census: teardown should still succeed"
+  assert_grep "abort --run RUNINNER" "$case_dir/nm-abort.log" \
+    "parked-run-census: the hidden nested run was never aborted"
+  assert_grep "found only by the complete run census" "$case_dir/stderr" \
+    "parked-run-census: teardown did not report where the run was found"
+  pass "a run hidden under a nested repository identity is concluded before the worker is removed"
+}
+
+# The negative control: with the census unreadable, teardown must conclude
+# nothing AND say that it could not look, rather than proceeding as though it
+# had established there was no run.
+test_unobservable_census_reports_rather_than_assuming_none() {
+  local case_dir rc
+  case_dir=$(make_case parked-run-census-cno)
+  write_meta "$case_dir" no-mistakes ship
+  land_shippable_commit "$case_dir"
+  # A state database that exists and cannot be read as one.
+  mkdir -p "$case_dir/nm"
+  printf 'not a database\n' > "$case_dir/nm/state.sqlite"
+
+  rc=0
+  FM_FAKE_NM_ABORT_LOG="$case_dir/nm-abort.log" \
+    run_teardown "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr" || rc=$?
+
+  expect_code 0 "$rc" "parked-run-census-cno: teardown should still succeed"
+  assert_absent "$case_dir/nm-abort.log" \
+    "parked-run-census-cno: teardown aborted a run it never positively attributed"
+  assert_grep "could not observe the run universe" "$case_dir/stderr" \
+    "parked-run-census-cno: teardown treated an unreadable universe as no run"
+  pass "an unobservable run universe is reported as unknown, never as no run"
+}
+
+# A no-mistakes state database whose only active run for this branch lives under
+# a nested repository identity - the recursive-run shape the census exists for.
+build_nested_run_census() {  # <case-dir> <branch>
+  local case_dir=$1 branch=$2
+  mkdir -p "$case_dir/nm/worktrees" || fail "could not build the census fixture"
+  python3 - "$case_dir/nm/state.sqlite" "$case_dir/wt" \
+    "$case_dir/nm/worktrees/top/RUNOUTER" "$branch" <<'PY'
+import sqlite3
+import sys
+
+db, top, nested, branch = sys.argv[1:5]
+conn = sqlite3.connect(db)
+conn.executescript(
+    "CREATE TABLE repos (id TEXT PRIMARY KEY, working_path TEXT NOT NULL,"
+    " upstream_url TEXT NOT NULL, fork_url TEXT,"
+    " default_branch TEXT NOT NULL DEFAULT 'main', created_at INTEGER NOT NULL);"
+    "CREATE TABLE runs (id TEXT PRIMARY KEY, repo_id TEXT NOT NULL,"
+    " branch TEXT NOT NULL, head_sha TEXT NOT NULL, base_sha TEXT NOT NULL,"
+    " submitted_head_sha TEXT, status TEXT NOT NULL DEFAULT 'pending',"
+    " pr_url TEXT, last_pushed_sha TEXT, error TEXT,"
+    " created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);"
+)
+conn.execute(
+    "insert into repos values ('top', ?, 'https://github.com/o/p.git', null, 'main', 1)",
+    (top,),
+)
+conn.execute(
+    "insert into repos values ('nest', ?, 'https://github.com/o/p.git', null, 'main', 1)",
+    (nested,),
+)
+conn.execute(
+    "insert into runs values ('RUNINNER', 'nest', ?, 'cccccccccccc', 'base', null,"
+    " 'running', null, null, null, 1, 1)",
+    (branch,),
+)
+conn.commit()
+conn.close()
+PY
+}
+
 test_mismatched_run_after_abort_refuses_unconfirmed() {
   local case_dir rc head
   case_dir=$(make_case parked-run-replaced)
@@ -3508,6 +3604,8 @@ test_teardown_records_unknown_when_the_critic_is_unresolvable
 test_unwritable_ledger_never_fails_teardown
 test_parked_own_run_is_aborted_before_teardown
 test_parked_own_run_refuses_when_abort_is_unconfirmed
+test_hidden_nested_run_is_concluded_via_complete_census
+test_unobservable_census_reports_rather_than_assuming_none
 test_mismatched_run_after_abort_refuses_unconfirmed
 test_empty_status_after_abort_refuses_unconfirmed
 test_not_found_status_after_abort_confirms_completion

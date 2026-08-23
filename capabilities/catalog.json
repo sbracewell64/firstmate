@@ -108,6 +108,15 @@
       "verifier": "tests/fm-crew-state.test.sh"
     },
     {
+      "name": "validation.census",
+      "purpose": "Observe the complete no-mistakes run universe across every registered repository and nested repository identity, and join each candidate-owning run to firstmate semantic work.",
+      "input_schema": { "state_dir": "string", "scope": "string" },
+      "output_schema": { "verdict": "string", "members": "array" },
+      "owner": "bin/fm-nm-census.sh",
+      "authority_class": "read-only",
+      "verifier": "tests/fm-nm-census.test.sh"
+    },
+    {
       "name": "agent.spawn",
       "purpose": "Launch a worker agent on a verified harness adapter with a resolved model and effort.",
       "input_schema": { "task_id": "slug", "harness": "slug", "model": "string", "effort": "string" },

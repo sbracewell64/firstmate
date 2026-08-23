@@ -68,7 +68,7 @@ README.md            public overview and development notes
 .claude/skills       symlink to .agents/skills for claude compatibility
 skills/              standalone public installer-facing skills, committed; not loaded by firstmate
 loopspecs/           canonical LoopSpec registry, committed: schema.json (field contract), triggers.json (the sixteen-trigger register), terminal-states.json (the unified terminal-state vocabulary and its total mapping from every source vocabulary), and one <id>.json per loop; bin/fm-loopspec.sh is their only interpreter (section 13)
-capabilities/        capability catalog, committed: catalog.json names the nineteen typed capabilities and their existing owners. Definitions only - nothing is bound or enforced from it, and the file itself certifies that it is a capability boundary and not a security boundary
+capabilities/        capability catalog, committed: catalog.json names the twenty typed capabilities and their existing owners. Definitions only - nothing is bound or enforced from it, and the file itself certifies that it is a capability boundary and not a security boundary
 commitments/         canonical register of recorded-but-not-yet-real commitments, committed: schema.json (field contract, assurance tiers, refused keys) and one <id>.json per commitment; bin/fm-commitment-register.sh is their only interpreter, computes every state from the entry's probes, and never stores one (section 7)
 qualifications/      role qualification register, committed: schema.json (field contract, the five-value vocabulary, the nine axes, the state computation), contracts/<id>.json per capability contract, and records/<id>.json per observed binding, with an optional home-private data/qualifications/records/ overlay; bin/fm-qualification-lib.sh and bin/fm-qualification.sh are their only interpreters, compute every state on read, and never store one (section 7)
 firstmate.bat        Windows-to-WSL launcher bridge, committed; docs/windows-launcher.md owns setup
@@ -285,6 +285,8 @@ Its `owners` ledger names the deterministic work with no landed owner yet; that 
 Load `decision-surface` before asserting any of those facts, before dispatching work that may already exist, and whenever a check returns contradicted or unevaluable.
 
 Before making a negative control-plane claim from a remote collection, use `bin/fm-control-read.sh`; its header owns the retrieval and conclusion contract.
+
+`bin/fm-nm-census.sh` is the complete no-mistakes run universe: never claim that no validation run is live, anywhere or for one branch, from a repository-scoped read, because a run created inside a managed run worktree is registered under its own repository identity and is absent from one, and only that command's `OBSERVED_QUIESCENT` is quiescence.
 
 An item waiting on an outbound artifact, such as an independent review or a pull request, is legitimately blocked only while an applicable one actually exists.
 `bin/fm-outbound-artifact.sh check` owns that fact and session start relays its defects; waiting with no applicable artifact is a transport defect to repair, never an external wait to report as blocked.

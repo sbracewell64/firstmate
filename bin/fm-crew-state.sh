@@ -53,8 +53,11 @@
 # Logic, in order:
 #   1. Resolve worktree + backend target + identity axes from state/<id>.meta.
 #   2. Matching no-mistakes run for this crew's branch AND current code identity,
-#      active or terminal (from `axi status`, or the coarse `no-mistakes runs`
-#      fallback)? Branch name alone is not enough: a historical run on a reused
+#      active or terminal (from `axi status`, the coarse `no-mistakes runs`
+#      fallback, or - when both of those repository-scoped reads miss - the
+#      COMPLETE census in bin/fm-nm-run-lib.sh, which is the only one of the
+#      three that can see a run registered under a nested repository identity)?
+#      Branch name alone is not enough: a historical run on a reused
 #      branch whose head was rewritten or diverged must not be attributed. The
 #      three-valued match/no-match/unresolvable rule is owned by
 #      fm_nm_head_matches_worktree in bin/fm-nm-run-lib.sh. Unresolvable is a
@@ -605,6 +608,27 @@ nm_runs_status_for_branch() {  # <branch>
   return 0
 }
 
+# The same predicate over the COMPLETE run universe: is a candidate-owning run
+# carrying this branch live ANYWHERE, including inside a managed run worktree
+# registered under its own repository id? Echoes that run's status word, or
+# nothing when none carries it and nothing when the universe could not be
+# observed - the caller treats both as "no attribution from here", which is
+# where it already was. Set FM_CREW_STATE_CENSUS=0 to skip the read entirely.
+nm_census_status_for_branch() {  # <branch>
+  local out rc
+  [ "${FM_CREW_STATE_CENSUS:-1}" = 1 ] || return 0
+  rc=0
+  out=$(FM_NM_CENSUS_STATE="$STATE" fm_nm_census_branch_active "$1" 2>/dev/null) || rc=$?
+  # 1 is the only status that reports a run. 0 (observed, none), 2 (refused) and
+  # 3 (could not observe) all leave this reader where it already was.
+  [ "$rc" = 1 ] || return 0
+  [ -n "$out" ] || return 0
+  # Every member the census returns is NON-TERMINAL by construction, so the
+  # question this reader asks - is a run for this branch live right now - is
+  # answered identically by any one of them.
+  printf '%s\n' "$out" | head -1 | awk '{print $1}'  # fm-retrieval-audit: window-is-the-subject - one live run answers "is one live"
+}
+
 # CREW_BRANCH is empty at detached HEAD (a just-spawned crew, or a scout's
 # scratch worktree); with no branch there is no run to attribute to this crew.
 CREW_BRANCH=$(git -C "$WT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)
@@ -637,10 +661,13 @@ nm_run_claims_terminal() {
 }
 
 HAVE_RUN=0
-# RUN_SOURCE distinguishes the two ways HAVE_RUN=1 can happen: "full" means
+# RUN_SOURCE distinguishes the three ways HAVE_RUN=1 can happen: "full" means
 # $RUN_OUT is real `axi status` TOON with step/gate detail; "coarse" means only
-# a bare status word came back from the runs-list fallback above, so the
-# run-step block below skips the TOON field parsing entirely for this crew.
+# a bare status word came back from the runs-list fallback above; "census" means
+# only a bare status word came back from the complete run census, which is the
+# one source that can see a run registered under a nested repository identity.
+# The last two carry no step or gate detail, so the run-step block below skips
+# the TOON field parsing entirely for both.
 RUN_SOURCE=full
 COARSE_STATUS=""
 # Scouts and secondmates never drive a no-mistakes validation of their own
@@ -682,6 +709,29 @@ if [ "$DELIVERABLE" = ship ] && [ -n "$CREW_BRANCH" ] && command -v no-mistakes 
       fi
     fi
   fi
+  if [ "$HAVE_RUN" = 0 ]; then
+    # Both reads above are REPOSITORY-SCOPED, and the repository is not the
+    # universe: no-mistakes registers each managed run worktree as its own
+    # repository, so a run created from inside one is absent from both this
+    # checkout's `axi status` and its `no-mistakes runs` listing. That is how a
+    # live lane came to be reported dead. The complete census in
+    # bin/fm-nm-run-lib.sh reads every registered repository, so it sees that
+    # run; it is asked LAST because the two reads above carry step and gate
+    # detail this one cannot.
+    #
+    # It only ever ADDS a positive attribution. A census that could not observe
+    # the universe leaves this reader exactly where it already was - falling
+    # through to the pane and log - because a per-task reader that has attributed
+    # nothing makes no quiescence claim to weaken. The fleet-level three-valued
+    # answer is reported by bin/fm-fleet-snapshot.sh's census block, which is
+    # where a quiescence claim would actually be made.
+    CENSUS_STATUS=$(nm_census_status_for_branch "$CREW_BRANCH")
+    if [ -n "$CENSUS_STATUS" ]; then
+      HAVE_RUN=1
+      RUN_SOURCE=census
+      COARSE_STATUS=$CENSUS_STATUS
+    fi
+  fi
 fi
 
 # --- run-step authoritative path -------------------------------------------
@@ -692,7 +742,7 @@ if [ "$HAVE_RUN" = 1 ]; then
   CI_STEP_STATUS=""
   CI_LOG_STATE=""
   RUN_STATUS=""
-  if [ "$RUN_SOURCE" = coarse ]; then
+  if [ "$RUN_SOURCE" = coarse ] || [ "$RUN_SOURCE" = census ]; then
     # No step/gate detail is available from the plain runs list - only ever
     # true/working, done, or failed. A crew genuinely parked at a gate still
     # gets full detail once `axi status` reports its own branch again (e.g.
@@ -711,8 +761,15 @@ if [ "$HAVE_RUN" = 1 ]; then
       completed) RUN_STATE="done";  RUN_DETAIL="run completed" ;;
       failed)    RUN_STATE=failed;  RUN_DETAIL="run failed (runs list: failure reason unattributed)" ;;
       cancelled) RUN_STATE=aborted; RUN_DETAIL="run cancelled: stopped deliberately, work not judged" ;;
+      pending)   RUN_STATE=working; RUN_DETAIL="validating (run queued)" ;;
       *)         RUN_STATE=unknown; RUN_DETAIL="unrecognized runs list status: $COARSE_STATUS" ;;
     esac
+    if [ "$RUN_SOURCE" = census ]; then
+      # Same shape, different source, and the source is worth saying: this run
+      # was found only by the complete census, so it is not in this checkout's
+      # own repository-scoped view at all.
+      RUN_DETAIL="$RUN_DETAIL (complete census: run registered outside this checkout's repository)"
+    fi
   else
     status=$(strip_quotes "$(nm_field status)")
     RUN_STATUS=$status
@@ -831,7 +888,7 @@ if [ "$HAVE_RUN" = 1 ]; then
 
   if [ "$RUN_STATE" = working ] && log_reports_ci_ready; then
     PRECEDENCE='status-log-ci-ready-over-monitoring-run'
-    if [ "$RUN_SOURCE" = coarse ]; then
+    if [ "$RUN_SOURCE" = coarse ] || [ "$RUN_SOURCE" = census ]; then
       RUN_STATE=unknown
       RUN_DETAIL="status log reported readiness, but coarse run data cannot corroborate the claim"
     else
@@ -857,6 +914,7 @@ if [ "$HAVE_RUN" = 1 ]; then
   # stale: the gate resolved and the run resumed or finished.
   PRECEDENCE='run-step-over-status-log'
   [ "$RUN_SOURCE" = coarse ] && PRECEDENCE='coarse-runs-list-over-status-log'
+  [ "$RUN_SOURCE" = census ] && PRECEDENCE='complete-run-census-over-status-log'
   case "$LOG_VERB" in
     needs-decision|blocked)
       if [ "$RUN_STATE" != parked ]; then

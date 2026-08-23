@@ -78,6 +78,25 @@
 #     structured homes with an unknown current classification are partial, not
 #     unreadable, and retain independently trustworthy structured surfaces.
 #   secondmate_guidance: return-channel action note for renderers and bearings.
+#   no_mistakes_census: the fleet-level answer to "is any no-mistakes run live
+#     anywhere, and whose work is it?", from the COMPLETE census owned by
+#     bin/fm-nm-run-lib.sh - every registered repository including every nested
+#     repository identity, in one WAL-consistent read transaction, with each
+#     candidate-owning run joined exactly once to firstmate work or classified
+#     unrelated, ambiguous, or could-not-observe.
+#     verdict is OBSERVED_QUIESCENT, OBSERVED_ACTIVE, REFUSED, or CNO, and ONLY
+#     OBSERVED_QUIESCENT may be read as quiescence; universe.non_vacuous says
+#     whether a global zero was taken over a universe that had anything in it.
+#     members[], cno[] and refusals[] are bounded and the bound is reported in
+#     truncated, because a silently truncated list of active runs would read as
+#     the reassuring answer. Set FM_SNAPSHOT_NM_CENSUS=0 to skip the read; the
+#     block is still present and still says CNO, because declining to look has
+#     never made anything quiescent.
+#     This block is the ONE part of the snapshot whose own failure is not a
+#     snapshot failure: it is three-valued, so a census that could not be taken
+#     is reported as CNO inside the block and the snapshot still exits 0. That is
+#     deliberate - this is an added observation, and a host that cannot take it
+#     must still get the snapshot it could always produce.
 #
 # Compatibility: JSON is the primary machine-readable surface.
 # Human views must render this output instead of parsing state files again.
@@ -127,6 +146,7 @@ FM_SNAPSHOT_REGISTRY_LINES=${FM_SNAPSHOT_REGISTRY_LINES:-256}
 FM_SNAPSHOT_REGISTRY_BYTES=${FM_SNAPSHOT_REGISTRY_BYTES:-65536}
 FM_SNAPSHOT_REGISTRY_RECORDS=${FM_SNAPSHOT_REGISTRY_RECORDS:-40}
 FM_SNAPSHOT_REGISTRY_TIMEOUT=${FM_SNAPSHOT_REGISTRY_TIMEOUT:-2}
+FM_SNAPSHOT_NM_CENSUS_MEMBERS=${FM_SNAPSHOT_NM_CENSUS_MEMBERS:-40}
 validate_positive_bound() {  # <name> <value>
   case "$2" in
     ''|*[!0-9]*|0)
@@ -157,6 +177,7 @@ validate_positive_bound FM_SNAPSHOT_REGISTRY_LINES "$FM_SNAPSHOT_REGISTRY_LINES"
 validate_positive_bound FM_SNAPSHOT_REGISTRY_BYTES "$FM_SNAPSHOT_REGISTRY_BYTES"
 validate_positive_bound FM_SNAPSHOT_REGISTRY_RECORDS "$FM_SNAPSHOT_REGISTRY_RECORDS"
 validate_positive_bound FM_SNAPSHOT_REGISTRY_TIMEOUT "$FM_SNAPSHOT_REGISTRY_TIMEOUT"
+validate_positive_bound FM_SNAPSHOT_NM_CENSUS_MEMBERS "$FM_SNAPSHOT_NM_CENSUS_MEMBERS"
 
 # shellcheck source=bin/fm-backend.sh
 # shellcheck disable=SC1091
@@ -170,6 +191,9 @@ validate_positive_bound FM_SNAPSHOT_REGISTRY_TIMEOUT "$FM_SNAPSHOT_REGISTRY_TIME
 # shellcheck source=bin/fm-ff-lib.sh
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/fm-ff-lib.sh"  # validate_secondmate_home: shared seeded-home boundary checks
+# shellcheck source=bin/fm-nm-run-lib.sh
+# shellcheck disable=SC1091
+. "$SCRIPT_DIR/fm-nm-run-lib.sh"  # fm_nm_census: the complete no-mistakes run universe
 
 usage() {
   cat <<'EOF'
@@ -1560,6 +1584,39 @@ scout_report_lines() {
   )
 }
 
+# The census is taken ONCE, before the per-task reads, and handed to them through
+# FM_NM_CENSUS_FILE. Every crew-state read below would otherwise take its own,
+# which is the same observation repeated once per task; one snapshot is one
+# observation. The file is a projection with a lifetime, not an authority: the
+# reader that consumes it refuses to serve it once it is older than
+# FM_NM_CENSUS_MAX_AGE.
+nm_census_unavailable_json() {  # <code> <subject> <detail>
+  printf '{"schema":"fm-nm-census.v1","verdict":"CNO","observed_at":null,"universe":{"observed":false,"non_vacuous":false},"generation":{},"members":[],"repositories":[],"runs":[],"repo_scoped_projection":null,"refusals":[],"cno":[{"code":"%s","subject":"%s","detail":"%s"}]}' \
+    "$1" "$2" "$3"
+}
+
+NM_CENSUS_JSON=$(nm_census_unavailable_json CENSUS_DISABLED FM_SNAPSHOT_NM_CENSUS \
+  "the complete no-mistakes run census was not taken for this snapshot")
+if [ "${FM_SNAPSHOT_NM_CENSUS:-1}" = 1 ]; then
+  # A census that cannot be taken is reported as could-not-observe, never as a
+  # snapshot failure: this is an ADDED observation, and a host that cannot stage
+  # a temporary file must still get the fleet snapshot it could always produce.
+  if NM_CENSUS_FILE=$(mktemp "${TMPDIR:-/tmp}/fm-snapshot-nm-census.XXXXXX" 2>/dev/null); then
+    trap 'rm -f "$NM_CENSUS_FILE"' EXIT
+    fm_nm_census --state "$STATE" > "$NM_CENSUS_FILE" 2>/dev/null || true
+    if [ -s "$NM_CENSUS_FILE" ]; then
+      NM_CENSUS_JSON=$(cat "$NM_CENSUS_FILE")
+      export FM_NM_CENSUS_FILE="$NM_CENSUS_FILE"
+    else
+      NM_CENSUS_JSON=$(nm_census_unavailable_json CENSUS_READER_FAILED "$STATE" \
+        "the census reader produced no readable result for this snapshot")
+    fi
+  else
+    NM_CENSUS_JSON=$(nm_census_unavailable_json CENSUS_STAGING_FAILED "${TMPDIR:-/tmp}" \
+      "no temporary file could be staged to hold the census")
+  fi
+fi
+
 BACKLOG_JSON=$(backlog_json) || { echo "fm-fleet-snapshot: backlog read failed" >&2; exit 1; }
 TASKS_JSON=$(task_json_lines) || { echo "fm-fleet-snapshot: task snapshot failed" >&2; exit 1; }
 
@@ -1578,9 +1635,43 @@ SECONDMATE_CURRENT_JSON=$(secondmate_current_json "$TASKS_JSON") \
 SECONDMATE_LANDED_JSON=$(secondmate_landed_from_current_json "$SECONDMATE_CURRENT_JSON") \
   || { echo "fm-fleet-snapshot: secondmate landed projection failed" >&2; exit 1; }
 
+NM_CENSUS_PROJECTION=$(printf '%s' "$NM_CENSUS_JSON" | jq -c --argjson cap "$FM_SNAPSHOT_NM_CENSUS_MEMBERS" '
+    {
+      verdict: (.verdict // "CNO"),
+      observed_at: .observed_at,
+      generation: {
+        database: .generation.database,
+        schema_fingerprint: .generation.schema_fingerprint,
+        sqlite_library: .generation.sqlite_library,
+        integrity: .generation.integrity,
+        journal_mode: .generation.journal_mode
+      },
+      universe: (.universe // {observed:false,non_vacuous:false}),
+      members: ((.members // [])[:$cap] | map({
+        run: .id, status: .status, state: .state, branch: .branch,
+        join: .join, work: (.work // null), join_keys: (.join_keys // []),
+        generation: .generation, exact_head_evidence: (.exact_head_evidence // false),
+        repository: {
+          id: .repository.id, working_path: .repository.working_path,
+          nested: .repository.nested, depth: .repository.depth,
+          enclosing_run_id: .repository.enclosing_run_id,
+          root_working_path: .repository.root_working_path
+        }
+      })),
+      cno: ((.cno // [])[:$cap]),
+      refusals: ((.refusals // [])[:$cap]),
+      truncated: {
+        members: (((.members // []) | length) > $cap),
+        cno: (((.cno // []) | length) > $cap),
+        refusals: (((.refusals // []) | length) > $cap),
+        bound: $cap
+      }
+    }') || { echo "fm-fleet-snapshot: no-mistakes census projection failed" >&2; exit 1; }
+
 json_envelope \
     backlog "$BACKLOG_JSON" \
     tasks "$TASKS_JSON" \
+    no_mistakes_census "$NM_CENSUS_PROJECTION" \
     main_inventory "$MAIN_INVENTORY_JSON" \
     scout_reports "$SCOUT_REPORTS_JSON" \
     secondmate_current "$SECONDMATE_CURRENT_JSON" \
@@ -1600,6 +1691,7 @@ json_envelope \
    | $in.scout_reports as $scout_reports
    | $in.secondmate_current as $secondmate_current
    | $in.secondmate_landed as $secondmate_landed
+   | $in.no_mistakes_census as $no_mistakes_census
    | def backlog_by_id($id): ($backlog.records[]? | select(.structured == true and .id == $id) | .) // null;
    def task_by_id($id): ($tasks[]? | select(.id == $id) | .) // null;
    def report_kind($id): (task_by_id($id).kind // "scout");
@@ -1615,6 +1707,7 @@ json_envelope \
      scout_reports:($scout_reports | map(. + {kind:report_kind(.id), deliverable:report_deliverable(.id)})),
      secondmate_current:$secondmate_current,
      secondmate_landed:$secondmate_landed,
+     no_mistakes_census:$no_mistakes_census,
      secondmate_guidance:{
        note:"For role=secondmate, bearings selects validated structured state from that registered home; parent events and bounded terminal evidence are fallback-only supplements and never current-state authority."
      }

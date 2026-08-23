@@ -137,6 +137,15 @@
 #     that verified run instance. A run already terminal
 #     (an outcome is set) or not parked at a gate is left untouched. Idempotent:
 #     an already-aborted run reads back terminal and is skipped on retry.
+#     That read is REPOSITORY-SCOPED and therefore cannot be the universe: a run
+#     created from inside a managed run worktree is registered under its own
+#     repository id and is absent from this checkout's `axi status` entirely. So
+#     when it attributes nothing, the COMPLETE census in bin/fm-nm-run-lib.sh is
+#     asked for a candidate-owning run carrying this branch anywhere at all, and
+#     the same guarded abort-then-verify sequence runs for it. The census only
+#     ever ADDS a run to conclude; a census that could not observe the universe
+#     is reported on stderr and changes nothing, keeping the existing fail-open
+#     contract that no-mistakes availability never blocks a teardown.
 #   Fix 2 - reap leaked descendant processes. A backgrounded/disowned process
 #     started under the worktree (or its per-task tasktmp) does not receive the
 #     SIGHUP/SIGTERM that closing the backend pane sends to its own foreground
@@ -1439,6 +1448,37 @@ task_status_is_run_not_found() {  # <status-error> <run-id>
   [ "$actual" = "$expected" ]
 }
 
+# The complete-census fallback for the read above: the id of a candidate-owning
+# run carrying this worktree's branch ANYWHERE in the run universe, including
+# inside a managed run worktree registered under its own repository id. Empty
+# when none carries it, and empty when the universe could not be observed - the
+# two are deliberately reported differently on stderr, because a teardown that
+# concluded nothing because it saw nothing and one that concluded nothing because
+# it could not look are different facts for whoever reads the log afterwards.
+task_census_run_id() {  # <worktree>
+  local wt=$1 branch out rc
+  [ "${FM_TEARDOWN_NM_CENSUS:-1}" = 1 ] || return 0
+  branch=$(git -C "$wt" symbolic-ref --quiet --short HEAD 2>/dev/null) || return 0
+  [ -n "$branch" ] || return 0
+  rc=0
+  out=$(FM_NM_CENSUS_STATE="$STATE" fm_nm_census_branch_active "$branch" 2>/dev/null) || rc=$?
+  case "$rc" in
+    1)
+      # More than one candidate-owning run carrying this branch is exactly the
+      # ambiguity teardown must not resolve by picking one: aborting the first
+      # would leave the other parked and unattended. Report and conclude none.
+      if [ "$(printf '%s\n' "$out" | grep -c .)" -gt 1 ]; then
+        echo "teardown: more than one no-mistakes run carries branch $branch; none was concluded for $ID, resolve the ambiguity before retrying" >&2
+        return 0
+      fi
+      printf '%s\n' "$out" | head -1 | awk '{print $2}'
+      ;;
+    2) echo "teardown: the no-mistakes run census REFUSED the evidence for branch $branch; no run was concluded for $ID" >&2 ;;
+    3) echo "teardown: the no-mistakes run census could not observe the run universe; whether a run is live for $ID is unknown, not none" >&2 ;;
+  esac
+  return 0
+}
+
 # Abort THIS task's own parked no-mistakes run before the worker that would
 # have answered its gate is removed, so no run is left orphaned holding a
 # fleet slot. Only deliverable=ship drives a no-mistakes validation of its own
@@ -1449,9 +1489,17 @@ conclude_task_no_mistakes_run() {  # <worktree>
   [ "$DELIVERABLE" = ship ] || return 0
   [ -d "$wt" ] || return 0
   command -v no-mistakes >/dev/null 2>&1 || return 0
-  task_run_is_own_parked_run "$wt" || return 0
-  run_id=$TASK_RUN_ID
-  echo "teardown: no-mistakes run for $ID is parked at a gate; aborting before the worker is removed" >&2
+  if task_run_is_own_parked_run "$wt"; then
+    run_id=$TASK_RUN_ID
+    echo "teardown: no-mistakes run for $ID is parked at a gate; aborting before the worker is removed" >&2
+  else
+    run_id=$(task_census_run_id "$wt")
+    [ -n "$run_id" ] || return 0
+    # Deliberately NOT described as parked: the census answers whether a run is
+    # live, not which step it sits on, and claiming the gate would be crediting
+    # this read with something it never examined.
+    echo "teardown: no-mistakes run $run_id for $ID is live outside this checkout's repository and was found only by the complete run census; aborting before the worker is removed" >&2
+  fi
   # Accepted best-effort residual: abort supports run-id targeting but no atomic
   # live-state condition; fully closing the resume race needs upstream compare-and-cancel.
   fm_nm_run_checked "$wt" "$NM_TEARDOWN_TIMEOUT" axi abort --run "$run_id" >/dev/null 2>&1 || true

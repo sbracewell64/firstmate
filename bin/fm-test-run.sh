@@ -232,7 +232,7 @@ family_for_basename() {
     fm-documentation-audiences.test.sh|fm-ensure-agents-md.test.sh|fm-grok-harness.test.sh|\
     fm-kimi-harness.test.sh|fm-herdr-lab.test.sh|fm-landed-lib.test.sh|\
     fm-launch-lib.test.sh|fm-lint.test.sh|\
-    fm-nm-run-lib.test.sh|fm-qualification.test.sh|\
+    fm-nm-census.test.sh|fm-nm-run-lib.test.sh|fm-qualification.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
@@ -543,6 +543,7 @@ tests/fm-loopspec.test.sh 13173
 tests/fm-merge-local.test.sh 10260
 tests/fm-model-registry.test.sh 861
 tests/fm-model-zero-budget.test.sh 2915
+tests/fm-nm-census.test.sh 17853
 tests/fm-nm-run-lib.test.sh 395
 tests/fm-on.test.sh 7195
 tests/fm-opencode-primary-live-e2e.test.sh 21
@@ -1365,13 +1366,16 @@ families_for_changed_path() {
       printf '%s\n' pure-contract-unit
       printf '%s\n' pr-forge
       ;;
-    bin/fm-nm-run-lib.sh|bin/fm-timeout-lib.sh)
-      # Shared no-mistakes run-attribution primitives, sourced by both
-      # bin/fm-crew-state.sh (pure-contract-unit) and bin/fm-teardown.sh's
-      # pre-teardown run abort (pr-forge). The shared hard bound those reads go
-      # through is owned by bin/fm-timeout-lib.sh, so it selects the same lanes.
+    bin/fm-nm-run-lib.sh|bin/fm-nm-census.sh|bin/fm-timeout-lib.sh)
+      # Shared no-mistakes run-attribution primitives and the complete run
+      # census over them, sourced by bin/fm-crew-state.sh (pure-contract-unit),
+      # bin/fm-teardown.sh's pre-teardown run abort (pr-forge), and
+      # bin/fm-fleet-snapshot.sh's census block (snapshot-bearings). The shared
+      # hard bound those reads go through is owned by bin/fm-timeout-lib.sh, so
+      # it selects the same lanes.
       printf '%s\n' pure-contract-unit
       printf '%s\n' pr-forge
+      printf '%s\n' snapshot-bearings
       ;;
     bin/fm-launch-lib.sh)
       printf '%s\n' backend-dispatch
