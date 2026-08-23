@@ -62,12 +62,12 @@ The no-mistakes source generation was reconciled at `c0e06bebd0a43f17365af755b98
 
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
-  -> 21 ok, 0 not ok, FM_TEST_CONTRACT status=pass
+  -> 26 ok, 0 not ok, FM_TEST_CONTRACT status=pass
 bin/fm-test-run.sh tests/fm-attest.test.sh
   -> 95 ok, 0 not ok
 ```
 
-Controls selected 21, attempted 21, completed 21 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
+Controls selected 26, attempted 26, completed 26 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
 
 ### Red calibration
 
@@ -92,6 +92,10 @@ Each run stages a full copy of the worktree, injects exactly one defect, and run
 | 12 | the outcome record is rebuilt from the copy read before the intent | `not ok - intent: the spent record carries no record of the intent written before the act` |
 | 13 | the wiring relays the guard's verdict word as the token | `not ok - token: the refusal doubled its own verdict word instead of naming the reason: REFUSE REFUSE ... (unexpected: 'REFUSE REFUSE')` |
 | 14 | a dry run mints anyway | `not ok - dry-run: a probe minted an authority (0 -> 1): [fm-auth-4403b3ee68f326f7c437f6b624209e33 granted]` |
+| 15 | retirement rebuilds the record instead of amending it | `not ok - retire: retirement changed what the record says it authorized` |
+| 16 | retirement accepts a spent record | `not ok - retire-spent: a spent authority was retired (exit 0): RETIRED fm-auth-eb8a8d0248ce456bc30678520f7a72b6 is now void (tidy up)` |
+| 17 | retirement is not idempotent | `not ok - retire-twice: repeating the retirement changed the record` |
+| 18 | a retired authority is still spendable | `not ok - retire-consume: a retired authority was accepted (exit 0): APPLIED fm-auth-4f6058d22d127f535eed8530bcc00ea8 refs/heads/candidate now at 52372b62` |
 
 Reds 06 and 07 are worth reading twice, because both name a token other than the one the defect removed.
 That is defence in depth showing itself rather than a miscalibrated control: with the explicit generation comparison gone the authority identity still fails to recompute, and with the replay refusal gone the remote is already at the head so the second consume becomes a no-effect.
@@ -141,6 +145,18 @@ Running this guard's own pinned probe verbatim against the operational home, at 
 `--dry-run` exists because of it: it compiles and prints the same verdict, names the same deterministic id, and writes nothing.
 
 Any probe, any check-path, and any command that only wants the verdict must use it.
+
+## Retiring an authority that must never be spent
+
+An authority that should never have existed is still evidence that it did, so the repair for a mistaken grant is a RECORDED retirement rather than a removal - and never a hand edit, which leaves no trace that anything was ever different.
+
+`retire` transitions `granted` to `void` and nothing else.
+The record is amended rather than rebuilt, so everything it already said about what was authorized survives verbatim and a timestamped reason is added beside it.
+Repeating the command reports the record and writes nothing, so a retirement cannot accumulate history.
+
+It refuses the two states that are not unused authorities.
+A `spent` record says an act happened; an unobserved one says an act may have.
+Replacing either with `void` would turn evidence into a tidier claim than the evidence supports, and the second belongs to `reconcile`, which settles it from an observation rather than assuming it.
 
 ## Enrolment in the dead-predicate control
 
