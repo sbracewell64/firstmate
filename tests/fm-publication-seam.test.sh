@@ -305,6 +305,105 @@ test_a_dry_run_compiles_the_same_verdict_and_writes_nothing() {
   pass "a dry run compiles the same verdict, names the same authority, and writes nothing"
 }
 
+# --- (a5) retiring an authority that must never be spent -----------------------
+#
+# The repair for a mistaken grant is a RECORDED retirement, never a deletion and
+# never a hand edit. These cases assert what the record still says afterwards,
+# not merely that the state changed, because a repair that discards the evidence
+# of what it repaired is the failure this store exists to prevent.
+
+test_retiring_a_granted_authority_preserves_its_whole_record() {
+  local id record before after
+  fixture retire
+  policy
+  grant; id=$GRANT_ID
+  record="$FX_DATA/landing-authorizations/$id.json"
+  before=$(jq -S '.grant, .subject, .epoch, .minted, .request_id' "$record") \
+    || fail "retire: the granted record could not be read"
+
+  guard retire "$id" --reason 'minted by a probe and must never be spent' > /dev/null \
+    || fail "retire: a granted authority could not be retired"
+
+  [ "$(jq -r '.state' "$record")" = void ] || fail "retire: the authority is not void: $(jq -r '.state' "$record")"
+  after=$(jq -S '.grant, .subject, .epoch, .minted, .request_id' "$record") \
+    || fail "retire: the retired record could not be read"
+  [ "$before" = "$after" ] \
+    || fail "retire: retirement changed what the record says it authorized: '$before' vs '$after'"
+  assert_contains "$(jq -r '.void_reason // ""' "$record")" 'must never be spent' \
+    "retire: the record does not say why it was retired"
+  [ "$(jq -r '[.history[] | select(.event=="retired")] | length' "$record")" = 1 ] \
+    || fail "retire: the retirement is not recorded once in the history: $(jq -c '.history' "$record")"
+  pass "retiring a granted authority preserves its whole record and says why"
+}
+
+test_a_retired_authority_cannot_be_consumed_and_moves_nothing() {
+  local id out rc=0 after fresh
+  fixture retire-consume
+  policy
+  grant; id=$GRANT_ID
+  guard retire "$id" --reason 'superseded before use' > /dev/null \
+    || fail "retire-consume: the authority could not be retired"
+
+  out=$(spend "$id") || rc=$?
+  [ "$rc" -eq 3 ] || fail "retire-consume: a retired authority was accepted (exit $rc): $out"
+  after=$(tip) || fail "retire-consume: the remote tip could not be observed"
+  [ "$after" = '-' ] || fail "retire-consume: the remote moved to $after under a retired authority"
+
+  # REPLAY CANNOT RESURRECT IT. A fresh grant for the same unchanged subject is a
+  # DIFFERENT authority, so recovery still works while the retired one stays
+  # retired - the property that keeps the retirement from wedging the lane.
+  grant; fresh=$GRANT_ID
+  [ "$fresh" != "$id" ] \
+    || fail "retire-consume: a fresh grant reproduced the retired authority $id"
+  [ "$(guard status "$id")" = void ] \
+    || fail "retire-consume: the retired authority did not stay void"
+  pass "a retired authority cannot be consumed, moves nothing, and is not resurrected by a fresh grant"
+}
+
+test_retiring_is_idempotent_and_records_it_once() {
+  local id record first out
+  fixture retire-twice
+  policy
+  grant; id=$GRANT_ID
+  record="$FX_DATA/landing-authorizations/$id.json"
+  guard retire "$id" --reason 'first' > /dev/null || fail "retire-twice: the first retirement failed"
+  first=$(cat "$record") || fail "retire-twice: the retired record could not be read"
+
+  out=$(guard retire "$id" --reason 'second') \
+    || fail "retire-twice: repeating the retirement failed: $out"
+  assert_contains "$out" 'already retired' "retire-twice: the repeat did not report the record was already retired: $out"
+  [ "$first" = "$(cat "$record")" ] \
+    || fail "retire-twice: repeating the retirement changed the record"
+  pass "retiring the same record again reports it and accumulates no second entry"
+}
+
+test_retire_refuses_an_authority_that_records_an_act() {
+  local id out rc=0
+  fixture retire-spent
+  policy
+  grant; id=$GRANT_ID
+  spend "$id" > /dev/null || fail "retire-spent: the publication did not complete"
+  out=$(guard retire "$id" --reason 'tidy up') || rc=$?
+  [ "$rc" -eq 3 ] || fail "retire-spent: a spent authority was retired (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_NOT_RETIRABLE' "retire-spent: the refusal did not name the rule: $out"
+  [ "$(guard status "$id")" = spent ] || fail "retire-spent: the spent record did not stay spent"
+  pass "retiring refuses an authority that records an act that happened"
+}
+
+test_retire_refuses_an_authority_whose_effect_is_unobserved() {
+  local id out rc=0
+  fixture retire-indeterminate
+  policy
+  grant; id=$GRANT_ID
+  guard consume "$id" --repo "$FX_REPO" --remote origin -- true > /dev/null 2>&1 || true
+  out=$(guard retire "$id" --reason 'tidy up') || rc=$?
+  [ "$rc" -eq 3 ] || fail "retire-indeterminate: an unobserved effect was retired (exit $rc): $out"
+  assert_contains "$out" 'reconcile' "retire-indeterminate: the refusal did not name the owner that settles it: $out"
+  [ "$(guard status "$id")" = indeterminate ] \
+    || fail "retire-indeterminate: the record did not stay indeterminate"
+  pass "retiring refuses an authority whose effect is unobserved, leaving it for reconciliation"
+}
+
 # --- (b) an active publication hold -------------------------------------------
 
 test_refuses_a_candidate_under_an_active_publication_hold() {
@@ -625,6 +724,11 @@ test_reports_an_ungoverned_publication_rather_than_staying_silent() {
 test_publishes_one_governed_candidate_exactly_once
 test_the_spent_record_keeps_the_intent_written_before_the_act
 test_a_dry_run_compiles_the_same_verdict_and_writes_nothing
+test_retiring_a_granted_authority_preserves_its_whole_record
+test_a_retired_authority_cannot_be_consumed_and_moves_nothing
+test_retiring_is_idempotent_and_records_it_once
+test_retire_refuses_an_authority_that_records_an_act
+test_retire_refuses_an_authority_whose_effect_is_unobserved
 test_publish_composes_the_decision_and_the_act
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold

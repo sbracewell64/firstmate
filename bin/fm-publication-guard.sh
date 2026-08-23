@@ -67,6 +67,19 @@
 #       wants: decide, and if permitted perform <command> inside the authority.
 #       This is the entry point for a caller that cannot source shell libraries.
 #
+#   fm-publication-guard.sh retire <auth-id> --reason <text>
+#       Retire a still-GRANTED authority that should never be spent - one minted
+#       by a probe, or superseded before it was used. It transitions `granted` to
+#       `void` and nothing else: the record is preserved whole and gains a
+#       timestamped entry saying who retired it and why.
+#
+#       It refuses a `spent` record and one whose effect is unobserved, because
+#       neither is an unused authority: the first records an act that happened,
+#       and the second records one that may have. Retiring either would replace
+#       evidence with a tidier state, which is the one thing this store exists
+#       not to do. An already-retired record is reported and left exactly as it
+#       is, so repeating the command cannot accumulate history.
+#
 #   fm-publication-guard.sh status <auth-id>
 #   fm-publication-guard.sh list
 #
@@ -552,6 +565,76 @@ cmd_reconcile() {
   return 0
 }
 
+# --- retire -------------------------------------------------------------------
+#
+# WHY THIS IS NARROW, and why it is not a delete.
+#
+# An authority that should never have existed is still evidence that it did. The
+# store's whole value is that a later reader can say what was authorized, when,
+# and what became of it, so the repair for a mistaken grant is a recorded
+# retirement rather than a removal - and certainly not a hand edit, which leaves
+# no trace that anything was ever different.
+#
+# `granted` is the ONLY state this touches. The two it refuses are refused for
+# the same reason it exists: a `spent` record says an act happened, and an
+# unobserved one says an act may have, and replacing either with `void` would
+# turn evidence into a tidier claim than the evidence supports. The second is
+# reconcile's to settle from an observation, never this command's to assume.
+
+cmd_retire() {
+  local id=${1:-}; shift || true
+  local reason='' now record state
+  [ -n "$id" ] || die "retire requires an authorization id"
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --reason) reason=${2:-}; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [ -n "$reason" ] || die "retire requires --reason naming why this authority must never be spent"
+
+  auth_read "$id" || case $? in
+    3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id exists to retire" ;;
+    *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "publication authority $id could not be read, so what retiring it would discard could not be established" ;;
+  esac
+
+  state=$(auth_field '.state // ""')
+  case $state in
+    granted) ;;
+    void)
+      # Idempotent, and deliberately WITHOUT a second history entry: repeating
+      # the command must not make the record look like it was retired twice.
+      printf 'RETIRED %s was already retired (%s)\n' "$id" "$(auth_field '.void_reason // "no reason recorded"')"
+      return 0
+      ;;
+    spent)
+      refuse FM_PUB_NOT_RETIRABLE \
+        "publication authority $id is spent, so it records an act that happened; retiring it would replace that evidence with a tidier state than the evidence supports"
+      ;;
+    spending)
+      refuse FM_PUB_NOT_RETIRABLE \
+        "publication authority $id was consumed and its effect is unobserved, so whether an act happened is not settled; reconcile it from an observation of the remote rather than retiring it"
+      ;;
+    *)
+      cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
+        "publication authority $id is in state '$state', which this contract does not know"
+      ;;
+  esac
+
+  now=$(now_iso)
+  # The record is AMENDED, never rebuilt: every field it already carries survives
+  # verbatim, and the retirement is added beside them.
+  record=$(printf '%s' "$AUTH_RECORD" | jq --arg now "$now" --arg reason "$reason" \
+    '.state="void" | .updated=$now | .void_reason=$reason
+     | .history += [{at:$now,event:"retired",reason:$reason}]') \
+    || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the retirement record for $id could not be constructed"
+  [ -n "$record" ] || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the retirement record for $id could not be constructed"
+  fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
+    || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the retirement record for $id could not be written, so it is still spendable"
+  printf 'RETIRED %s is now void (%s)\n' "$id" "$reason"
+  return 0
+}
+
 # --- status and list ----------------------------------------------------------
 
 cmd_status() {
@@ -602,6 +685,7 @@ case $1 in
   consume) shift; cmd_consume "$@" ;;
   publish) shift; cmd_publish "$@" ;;
   reconcile) shift; cmd_reconcile "$@" ;;
+  retire) shift; cmd_retire "$@" ;;
   status) shift; cmd_status "$@" ;;
   list) shift; cmd_list "$@" ;;
   *) die "unknown command: $1" ;;
