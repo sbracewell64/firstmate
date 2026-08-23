@@ -1,7 +1,16 @@
 #!/usr/bin/env bash
-# fm-landing-authorization-lib.sh - the contract for a ruling-derived landing
-# authorization: its identity, its state vocabulary, and the pure predicates that
-# decide whether one may be minted and whether one may be spent.
+# fm-landing-authorization-lib.sh - the contract for a ruling-derived one-use
+# EFFECT authorization: its identity, its state vocabulary, and the pure
+# predicates that decide whether one may be minted and whether one may be spent.
+#
+# LANDING WAS THE FIRST EFFECT and gave this file its name. Candidate publication
+# is the second, and it is the same authority wearing a different subject: one
+# irreversible act, against one exact head, exhausted by being used. It is
+# carried here rather than in a second authorization owner because a second one
+# would bring its own store, its own lifecycle and its own idea of what `spent`
+# means - the second control plane every boundary in this pair exists to avoid.
+# The file name is now narrower than its contents; docs/vocabulary-collisions.md
+# records that, and the two live meanings of "publication" it forced apart.
 #
 # WHY THIS EXISTS, AND WHAT IT DELIBERATELY DOES NOT DO.
 #
@@ -90,6 +99,13 @@ FM_AUTH_CORRELATION_MINTABLE_STATE='ruled'
 
 FM_AUTH_ID_PREFIX='fm-auth-'
 FM_AUTH_ID_HEX_WIDTH=32
+
+# The effects an authorization may authorize. Closed, and compared exactly: an
+# effect this contract has never heard of must not reach a record, because the
+# whole value of the authority is that its subject is known before it is spent.
+# shellcheck disable=SC2034  # contract constant consumed by sourcing callers
+FM_AUTH_EFFECTS='landing
+publication'
 
 # Authorization lifecycle.
 #
@@ -218,6 +234,72 @@ fm_auth_id() {  # <same arguments as fm_auth_identity_canonical> -> id
 fm_auth_id_valid() {  # <candidate>
   printf '%s' "${1:-}" \
     | grep -Eq "^${FM_AUTH_ID_PREFIX}[0-9a-f]{${FM_AUTH_ID_HEX_WIDTH}}\$"
+}
+
+fm_auth_effect_valid() {  # <candidate>
+  printf '%s\n' "$FM_AUTH_EFFECTS" | grep -qxF "${1:-}"
+}
+
+# --- the publication subject -------------------------------------------------
+#
+# A candidate publication authorizes moving ONE ref on ONE remote from ONE tip to
+# ONE head. Landing's identity cannot express that: it names a pull request, and
+# a push has no pull request at the moment it happens.
+#
+# THREE MEMBERS ARE LOAD-BEARING, and each one turns a rule the caller would
+# otherwise have to remember into a fact about the id.
+#
+#   head        what is being published. A different head is a different
+#               authorization, exactly as in landing.
+#   tip         the remote tip the effect was PLANNED AGAINST. This is the member
+#               that makes "remote movement after eligibility compilation
+#               invalidates the planned effect" fall out of the identity: a
+#               remote that moved yields a different tip, a different id, and
+#               therefore an authorization that was never minted. Nothing has to
+#               notice the movement and refuse it separately, which is the form
+#               of that rule least likely to be walked around.
+#   generation  the compiled ruling and policy generation the verdict rested on.
+#               A newer HOLD, REVISE, quarantine or supersession changes it, so a
+#               permission compiled under the old one cannot address the new one.
+#               This is what makes commission-time permission revocable: the
+#               authority is bound to the generation that granted it rather than
+#               to the moment it was granted.
+#
+# An absent optional member is the literal "-" rather than empty, so a new ref
+# with no tip and a tip field left out cannot collide into one identity.
+#
+# THE EPOCH, and why a purely subject-derived id was not enough. An authorization
+# consumed before its effect must never be reusable, so reconciling one to
+# "the act did not happen" retires it permanently rather than returning it to the
+# pool. But the world it named is unchanged - the remote is still where it was -
+# so a recovery that re-asked the same question would reproduce the same id and
+# find its own retired record standing in the way, and the lane would be wedged
+# by the very rule meant to protect it.
+#
+# The epoch is how a fresh authority is granted for an unchanged subject without
+# the retired one being resurrected. It counts the retired authorities for this
+# exact subject, so it is derived from the store rather than chosen: two
+# concurrent prepares for a subject with no history still converge on epoch 1 and
+# therefore on one authorization, which is the idempotency that makes a duplicate
+# wake harmless.
+
+fm_auth_publication_identity_canonical() {  # <venue> <ref> <item> <head> <tree> <tip> <generation> <epoch>
+  printf 'schema=%s\neffect=publication\nvenue=%s\nref=%s\nitem=%s\nhead=%s\ntree=%s\ntip=%s\ngeneration=%s\nepoch=%s\n' \
+    "$FM_AUTH_SCHEMA" "${1:--}" "$2" "$3" "$4" "${5:--}" "${6:--}" "$7" "${8:-1}"
+}
+
+fm_auth_publication_id() {  # <same arguments as fm_auth_publication_identity_canonical> -> id
+  local sum
+  sum=$(fm_auth_publication_identity_canonical "$@" | fm_auth_digest) || return 1
+  [ -n "$sum" ] || return 1
+  printf '%s%s\n' "$FM_AUTH_ID_PREFIX" "${sum:0:$FM_AUTH_ID_HEX_WIDTH}"
+}
+
+# The subject WITHOUT its epoch, so the store can be asked "what has already
+# happened to this exact subject?" before an epoch is chosen for it.
+fm_auth_publication_subject_digest() {  # <venue> <ref> <item> <head> <tree> <tip> <generation>
+  printf 'schema=%s\neffect=publication\nvenue=%s\nref=%s\nitem=%s\nhead=%s\ntree=%s\ntip=%s\ngeneration=%s\n' \
+    "$FM_AUTH_SCHEMA" "${1:--}" "$2" "$3" "$4" "${5:--}" "${6:--}" "$7" | fm_auth_digest
 }
 
 # --- verdict classification --------------------------------------------------
@@ -362,6 +444,63 @@ fm_auth_record_new() {  # <id> <request> <comment> <verdict> <item> <project> <r
       spend:null,
       void_reason:null,
       history:[]}'
+}
+
+# The publication record carries the SAME lifecycle fields under the same names,
+# because the whole point of extending this contract rather than writing a second
+# one is that `granted`, `spending`, `spent` and `void` mean one thing in this
+# fleet. Only `grant` differs, and it differs because the subject differs.
+#
+# `request_id` is null for a publication no Browser Sol request governs. That is
+# a real, reportable state rather than a gap: an ungoverned publication still
+# mints an authority, so it is still one-use, still head-bound and still
+# crash-recoverable. What governance adds is the ruling, not the exactly-once.
+
+fm_auth_publication_record_new() {  # <id> <request-or-empty> <venue> <ref> <item> <head> <tree> <tip> <generation> <epoch> <subject> <now>
+  jq -n \
+    --arg schema "$FM_AUTH_SCHEMA" \
+    --arg id "$1" --arg request "$2" --arg venue "$3" --arg ref "$4" \
+    --arg item "$5" --arg head "$6" --arg tree "$7" --arg tip "$8" \
+    --arg generation "$9" --arg epoch "${10}" --arg subject "${11}" --arg now "${12}" \
+    '{schema:$schema,
+      authorization_id:$id,
+      effect:"publication",
+      request_id:(if $request == "" or $request == "-" then null else $request end),
+      subject:$subject,
+      epoch:($epoch|tonumber),
+      grant:{venue:$venue,ref:$ref,item:$item,head:$head,tree:$tree,
+             tip:(if $tip == "" or $tip == "-" then null else $tip end),
+             generation:$generation},
+      uses:1,
+      state:"granted",
+      minted:$now,
+      updated:$now,
+      spend:null,
+      void_reason:null,
+      history:[]}'
+}
+
+# --- the store ----------------------------------------------------------------
+#
+# Where a record lives and how it is written. Both effects write through here, so
+# an authorization record has one on-disk shape however it was minted.
+#
+# ATOMIC BY RENAME, and the spend sequence depends on it. An intent record that
+# could be half-written would put the fourth state back: a reader finding a torn
+# record cannot tell an act that was about to happen from one that did.
+
+fm_auth_store_path() {  # <dir> <auth-id>
+  fm_auth_id_valid "${2:-}" || return 1
+  printf '%s/%s.json\n' "$1" "$2"
+}
+
+fm_auth_store_write() {  # <dir> <auth-id> <json>
+  local path tmp
+  path=$(fm_auth_store_path "$1" "$2") || return 1
+  mkdir -p "$1" || return 1
+  tmp="$path.tmp.$$"
+  printf '%s\n' "$3" > "$tmp" || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
 }
 
 # fail-closed-predicates: enforced

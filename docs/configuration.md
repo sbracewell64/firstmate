@@ -200,7 +200,7 @@ It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND
 Detection and emission are separated exactly so an unconfigured venue can never read as a satisfied invariant.
 The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
 
-The same venue is what makes a landing ruling-governed.
+The same venue is what makes a candidate publication and a landing ruling-governed.
 [`bin/fm-landing-seam-lib.sh`](../bin/fm-landing-seam-lib.sh) reads this file and the correlation store at both merge chokepoints, so a candidate a live Sol review request governs cannot land without consuming the one-use authorization that request's ruling grants, while a candidate no ruling governs lands through the ordinary gates and reports that explicitly.
 A home holding live Sol requests with this file absent is a contradiction rather than an ungoverned home, and both landing paths refuse it as could-not-observe.
 
@@ -214,6 +214,46 @@ Two timeouts bound that session-start relay, and they are deliberately separate 
 `FM_OUTBOUND_BOOTSTRAP_DEADLINE` (default 60) bounds the **whole** sweep that `bin/fm-bootstrap.sh` starts, and must stay several probe timeouts wide so a single slow observation cannot consume the run.
 When the deadline expires the sweep is terminated and reported as unevaluable rather than partially believed, because a sweep that was cut short did not answer the question either way.
 [`vocabulary-collisions.md`](vocabulary-collisions.md) carries the ruling that split the two names and the condition under which the split retires.
+
+## Publication identity policy (config/publication-identity.json)
+
+[`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) decides whether a remote-changing candidate publication may proceed, and this optional local, gitignored file is where a home declares which venues it governs and who the governed parties are.
+It names real people and real delivery actors, so it is home-private and never ships in a template repo.
+
+```json
+{
+  "generation": "pol-2026-08-22",
+  "placeholders": ["Nobody <nobody@example.invalid>"],
+  "venues": {
+    "github.com/owner/name": {
+      "identities": {
+        "author": "A Person <person@example.invalid>",
+        "committer": "A Person <person@example.invalid>",
+        "delivery_actor": "forge-login",
+        "maker": "maker/binding",
+        "reviewer": "reviewer/binding",
+        "ruling": "browser-sol"
+      },
+      "work": {
+        "refs/heads/some-branch": { "item": "work-id", "role": "canonical" }
+      }
+    }
+  }
+}
+```
+
+`generation` is required and is part of what an authority binds, so bumping it retires every authority granted under the previous one.
+A venue named here is governed; a venue absent from the file is not governed by this policy, though a live Browser Sol request may still govern the work.
+All six `identities` axes are required for a governed venue: a policy declaring four of them has not made a weaker promise, it has left two unstated, and an unstated axis is could-not-observe.
+`maker` and `reviewer` must name different parties.
+`work` maps each publishable ref to the semantic work identity it carries and its `role`; only `canonical` is actionable, so a retained predecessor stays readable and stays unable to publish.
+`placeholders` adds identities to the built-in list that is never a governed party whatever a policy says; that list is built in rather than configured because a placeholder a home could switch off is not a floor.
+
+A GitHub email association is never maker proof: the mapping is what this file states, and an identity it does not state refuses.
+
+An absent file means this home has declared no publication governance, and a publication no live request holds proceeds and reports that it was ungoverned.
+Once the file exists, a publication whose venue it does not name and whose work is unstated is could-not-observe rather than ungoverned, because an unidentifiable subject must not become the way around governance a home has opted into.
+[`verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md) records the dated watched-red evidence for each control.
 
 ## Gate defaults (.no-mistakes.yaml)
 

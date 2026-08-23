@@ -228,6 +228,34 @@ This is a writing rule, not a migration.
 
 **Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `<id>.attempt` and `<id>.lineage` rows and section 7's replacement paragraph; the header of [`bin/fm-attempt.sh`](../bin/fm-attempt.sh); the `--succeed-execution` contract in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-execution-replacement.test.sh`](../tests/fm-execution-replacement.test.sh).
 
+### `publication`
+
+Ruled 2026-08-22, when the candidate-publication effect guard was built and the two senses met in one decision.
+
+| | |
+|---|---|
+| **Disposition** | QUALIFY |
+| **Bundle sense** | posting a review bundle's attachments and its request to a Browser Sol control issue, owned by [`bin/fm-outbound-artifact.sh`](../bin/fm-outbound-artifact.sh) and its correlation records |
+| **Candidate sense** | moving a ref on a remote so a candidate head exists outside this machine, owned by [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-publication-guard.sh`](../bin/fm-publication-guard.sh) |
+
+NO-CONTACT was not available, and the contact point is load-bearing rather than incidental.
+The candidate sense reads the bundle sense's own correlation records to decide whether a hold stands, so one function asks about both senses in the same fold.
+The resemblance is durable rather than passing: both senses emit something to a remote, both are bound to an exact head, and both record a durable artifact afterwards, so a reader who knows one recognises the shape of the other and reaches for the wrong owner.
+
+Write `bundle publication` for the first sense and `candidate publication` for the second.
+Bare `publication` is acceptable only where the surrounding text has already fixed which one is meant, and never in a refusal, a token, or a header sentence that introduces the subject.
+
+Nothing is renamed.
+The `FM_PUB_*` tokens, `fm_pub_seam_*` functions and the `publication` effect value all carry the candidate sense in their own file, and the bundle sense's records already spell themselves `outbound-artifact`.
+This is a writing rule, not a migration.
+
+A second collision was ruled with it and needs no row of its own, because one owner carries both senses under one name.
+[`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh) now owns the one-use authority for two effects, `landing` and `publication`, so its file name is narrower than its contents.
+That is deliberate: a second authorization owner would bring a second store and a second idea of what `spent` means.
+The file keeps its name, its header states the widening, and `effect=` in the identity is what a reader distinguishes them by.
+
+**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `landing-authorizations/` row and section 7's publication chokepoint paragraph; the headers of [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh); the publish path of [`bin/fm-attest.sh`](../bin/fm-attest.sh); [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
+
 ## Maintaining this file
 
 Add a row when a word acquires a second live sense in any repository the fleet reads or writes, not when a rename is proposed.

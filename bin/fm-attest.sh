@@ -60,6 +60,17 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=bin/fm-nm-run-lib.sh
 . "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# The publication guard's decision layer. Sourced here rather than inside the
+# publish path so a missing owner is a load failure at the top of the command,
+# not a surprise at the moment the remote would have moved.
+# shellcheck source=bin/fm-outbound-artifact-lib.sh
+. "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
+# shellcheck source=bin/fm-landing-authorization-lib.sh
+. "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-landing-seam-lib.sh
+. "$SCRIPT_DIR/fm-landing-seam-lib.sh"
+# shellcheck source=bin/fm-publication-seam-lib.sh
+. "$SCRIPT_DIR/fm-publication-seam-lib.sh"
 
 # Every call to the pipeline is bounded, so a tool blocked on a lock or on a
 # network read refuses with its own reason instead of hanging at a terminal.
@@ -970,6 +981,7 @@ cmd_write() {
   run_id=
   remote=origin
   push=1
+  publication_expected_tip=
   recheck=1
   notes_ref=$NOTES_REF_DEFAULT
   while [ "$#" -gt 0 ]; do
@@ -1189,9 +1201,16 @@ EOF
           "Could not reconcile the local $notes_ref with the one on $push_target, the push target of $remote." \
           "git said: $merge_err" \
           "Resolve that and re-run; nothing was recorded."
+        # The tip the publication is being PLANNED AGAINST, taken from what was
+        # just fetched rather than from a second network read. The guard below
+        # re-observes the remote for itself; this is the caller's own statement
+        # of which tip it compiled its plan on, and the two disagreeing is
+        # precisely the remote-moved case that must not publish.
+        publication_expected_tip=$(git rev-parse --verify --quiet "$incoming_ref" 2>/dev/null) \
+          || publication_expected_tip=
         git update-ref -d "$incoming_ref" 2>/dev/null || true
         ;;
-      2) ;;
+      2) publication_expected_tip='-' ;;
       *)
         fail push-target-unreadable \
           "Could not read $notes_ref from $push_target, the push target of $remote (git exit $ls_rc)." \
@@ -1211,14 +1230,75 @@ EOF
   emit "fm-attest: recorded $notes_ref for $attest_head"
 
   [ "$push" -eq 1 ] || return 0
-  push_rc=0
-  push_err=$(git push --quiet "$remote" "$notes_ref:$notes_ref" 2>&1 >/dev/null) || push_rc=$?
-  [ "$push_rc" -eq 0 ] || fail attestation-not-published \
-    "Could not publish $notes_ref to $push_target, the push target of $remote." \
-    "git said: $push_err" \
-    "A URL in that text is shown only in a form that has no place for a credential, and any line holding one that is not is withheld whole rather than shown in part." \
-    "The attestation is evidence only on the repository holding the pull request head, so name that one with --remote <name> if this is not it, or re-run to reconcile if its $notes_ref moved since."
-  emit "fm-attest: published $notes_ref to $push_target (the push target of $remote)"
+
+  # THE ONE REMOTE-CHANGING PUBLICATION THIS REPOSITORY PERFORMS, and therefore
+  # the one that has to pass the publication guard. Everything the guard needs is
+  # already established here: the ref, the local tip about to move it, the tip
+  # that was observed above, and the venue the push target names.
+  #
+  # bin/fm-publication-seam-lib.sh owns the whole decision and runs the push
+  # inside the authority when one governs it, so this site holds no copy of when
+  # a publication is permitted - only the act, and the report of what happened.
+  # Sourced here rather than at the top because this library resets its own
+  # globals when loaded, and the two functions below already load it themselves.
+  # shellcheck source=bin/fm-task-base-lib.sh
+  . "$SCRIPT_DIR/fm-task-base-lib.sh"
+  publication_repo=$(git rev-parse --show-toplevel 2>/dev/null) || publication_repo=
+  publication_head=$(git rev-parse --verify --quiet "$notes_ref" 2>/dev/null) || publication_head=
+  publication_tree=$(git rev-parse --verify --quiet "$notes_ref^{tree}" 2>/dev/null) || publication_tree=
+  # A push target that is not a forge - a local mirror, a fixture - has no venue
+  # identity, and that is a fact about the target rather than a defect. It is
+  # passed through as the unidentified marker so the guard decides what it means
+  # in THIS home, instead of this site deciding it twice.
+  publication_venue=$(task_base_venue_identity_alias "$push_url" 2>/dev/null) \
+    || publication_venue=$(task_base_venue_identity "$push_url" 2>/dev/null) \
+    || publication_venue=
+  [ -n "$publication_venue" ] || publication_venue='-'
+  [ -n "$publication_repo" ] && [ -n "$publication_head" ] && [ -n "$publication_tree" ] \
+    && [ -n "$publication_expected_tip" ] \
+    || fail attestation-not-published \
+      "Could not establish what publishing $notes_ref to $push_target would change." \
+      "The guard that permits a publication needs the exact ref, its local tip, and the tip already on that target, and at least one of those could not be read here." \
+      "Nothing was published."
+
+  publication_rc=0
+  fm_pub_seam_publish "$SCRIPT_DIR/fm-publication-guard.sh" \
+    "$publication_repo" "$remote" "$publication_venue" "$notes_ref" \
+    "$publication_head" "$publication_expected_tip" '-' \
+    git -C "$publication_repo" push --quiet "$remote" "$notes_ref:$notes_ref" \
+    || publication_rc=$?
+  case "$publication_rc" in
+    0) ;;
+    3)
+      fail attestation-not-published \
+        "Publishing $notes_ref to $push_target, the push target of $remote, was refused before that repository was touched." \
+        "$FM_PUB_SEAM_TOKEN: $FM_PUB_SEAM_REASON" \
+        "$notes_ref on that target is unchanged. Resolve what the refusal names, then re-run."
+      ;;
+    *)
+      # The remote may have been reached and may even have refused in its own
+      # words, so those words are relayed here rather than replaced by the
+      # guard's. A URL in that text is shown only in a form that has no place for
+      # a credential, and any line holding one that is not is withheld whole
+      # rather than shown in part.
+      fail attestation-not-published \
+        "Could not publish $notes_ref to $push_target, the push target of $remote." \
+        "$FM_PUB_SEAM_TOKEN: $FM_PUB_SEAM_REASON" \
+        "${FM_PUB_SEAM_OUTPUT:-No output was captured from the attempt.}" \
+        "That the attempt reported a failure does not establish that it had no effect; $notes_ref on that target may or may not have moved, so re-run to reconcile rather than assuming either."
+      ;;
+  esac
+  case "$FM_PUB_SEAM_VERDICT" in
+    no-effect)
+      emit "fm-attest: $push_target (the push target of $remote) already has $notes_ref at this tip, so nothing was published"
+      ;;
+    not-applicable)
+      emit "fm-attest: published $notes_ref to $push_target (the push target of $remote), ungoverned - $FM_PUB_SEAM_REASON"
+      ;;
+    *)
+      emit "fm-attest: published $notes_ref to $push_target (the push target of $remote) under a spent publication authority"
+      ;;
+  esac
 
   # Publishing repairs the evidence but not the verdict, and the verdict is what
   # a contributor is actually waiting on. This step is what closes that gap, so

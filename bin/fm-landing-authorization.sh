@@ -97,9 +97,10 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # --- store -------------------------------------------------------------------
 
+# Both delegate to bin/fm-landing-authorization-lib.sh, which owns where a record
+# lives and how it is written for every effect that mints one.
 auth_path() {
-  fm_auth_id_valid "${1:-}" || return 1
-  printf '%s/%s.json\n' "$AUTH_DIR" "$1"
+  fm_auth_store_path "$AUTH_DIR" "${1:-}"
 }
 
 auth_claim_path() {
@@ -107,17 +108,8 @@ auth_claim_path() {
   printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
 }
 
-# Atomic by rename, so a reader never sees a half-written record and a crash
-# leaves either the previous record or the new one - never a torn one. The spend
-# sequence depends on this: an intent record that could be half-written would put
-# the fourth state back.
 auth_write() {  # <auth-id> <json>
-  local path tmp
-  path=$(auth_path "$1") || return 1
-  mkdir -p "$AUTH_DIR" || return 1
-  tmp="$path.tmp.$$"
-  printf '%s\n' "$2" > "$tmp" || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
+  fm_auth_store_write "$AUTH_DIR" "$1" "$2"
 }
 
 # Three-valued, and the caller must keep the three apart:
