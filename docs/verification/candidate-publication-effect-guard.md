@@ -96,6 +96,26 @@ Both still go red, and both name what actually happened.
 
 Red 11 is the only one that establishes the wiring, and it is the one without which every other row is a description of a control rather than a control.
 
+### The real seam, on the real remote
+
+Synthetic fixtures establish the logic; they do not establish that the mechanism refuses a real prohibited attempt against a real remote.
+This probe was run from the candidate worktree against `github.com/sbracewell64/firstmate`, the venue this branch would publish to, on 2026-08-22.
+It is read-only by construction: `prepare` observes the remote with `git ls-remote` and mints a local record, and it never pushes.
+
+Subject: head `8398169e9c0145d15f597cdc3fbde4c7642a92c2`, tree `81a4216f4a023a7687cbe2a93b3b20ee8df61427`, ref `refs/heads/fm/candidate-publication-effect-guard`.
+That ref was absent on the remote before, between and after every step below, so no remote moved.
+
+| Step | Perturbation | Observed result |
+| ---- | ------------ | --------------- |
+| 1 | the active publication quarantine holds this exact work at this exact head | `REFUSE FM_PUB_ACTIVE_HOLD: 1 live Browser Sol request(s) hold candidate-publication-effect-guard and none approves publishing 8398169e...` |
+| 2 | the hold alone is lifted; every other axis is unchanged | `ALLOW_EXACT fm-auth-80a080d99481ca56401b57bfdddd5ab4` |
+| 3 | the hold alone is restored | `REFUSE FM_PUB_ACTIVE_HOLD ...` (identical to step 1) |
+
+Step 2 is what makes steps 1 and 3 evidence about the hold rather than about a mechanism that refuses everything, and the round trip is what makes it evidence about that one axis rather than about fixture drift between two runs.
+
+An earlier attempt at step 2 refused with `FM_PUB_IDENTITY_UNMAPPED` because the probe policy named an author the commit does not carry.
+That is recorded rather than removed: it is the guard declining to publish under an identity nobody declared, observed on the real remote, and it is the one axis a synthetic fixture is least able to get wrong by accident.
+
 ## Refreshing this record
 
 ```
