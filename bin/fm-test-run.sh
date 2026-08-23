@@ -1091,11 +1091,14 @@ for raw in sys.argv[7:]:
         value = summary.get(field)
         if type(value) is not int or value < 0:
             unobserved(f"shard {idx} timing artifact has an invalid summary {field}")
+    if summary["duration_ms"] < total:
+        unobserved(
+            f"shard {idx} wall duration is shorter than its summed script durations"
+        )
     if (
         summary["total"] != len(rows)
         or summary["failed"] != failed
         or summary["skipped_gate"] != skipped_gate
-        or summary["duration_ms"] < total
     ):
         unobserved(f"shard {idx} timing artifact summary disagrees with its script records")
     seen[idx] = (total, summary["duration_ms"], paths)

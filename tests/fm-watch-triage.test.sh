@@ -43,7 +43,7 @@ watch_bg() {  # <state> <fakebin> <out> [extra env assignments...]
 wait_live() {
   local pid=$1 limit=${2:-30} i=0
   while [ "$i" -lt "$limit" ]; do
-    kill -0 "$pid" 2>/dev/null || return 1
+    is_live_non_zombie "$pid" || return 1
     sleep 0.1
     i=$((i + 1))
   done
@@ -109,7 +109,38 @@ record_pi_busy() {  # <state-dir> <id>
     --source pi-ext --event agent-start
 }
 
-reap() { kill "$1" 2>/dev/null || true; wait "$1" 2>/dev/null || true; }
+reap() {
+  local pid=$1 i=0
+  kill "$pid" 2>/dev/null || true
+  while is_live_non_zombie "$pid" && [ "$i" -lt 30 ]; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+  if is_live_non_zombie "$pid"; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+test_reap_bounds_cleanup_that_ignores_term() {
+  local ready="$TMP_ROOT/reap-term-ready" pid started elapsed i=0
+  rm -f "$ready"
+  bash -c 'trap "" TERM; : > "$1"; while :; do sleep 1; done' bash "$ready" &
+  pid=$!
+  fm_test_reap "$pid"
+  while [ ! -f "$ready" ] && [ "$i" -lt 30 ]; do
+    is_live_non_zombie "$pid" || break
+    sleep 0.1
+    i=$((i + 1))
+  done
+  [ -f "$ready" ] || { fm_test_reap "$pid"; fail "TERM-ignoring cleanup fixture did not become ready"; }
+  started=$(date +%s)
+  reap "$pid"
+  elapsed=$(( $(date +%s) - started ))
+  [ "$elapsed" -lt 10 ] || fail "cleanup waited ${elapsed}s for a TERM-ignoring process"
+  ! is_live_non_zombie "$pid" || fail "cleanup left a TERM-ignoring process alive"
+  pass "test cleanup is bounded when a watcher does not exit on TERM"
+}
 
 # Write one process into a fake /proc tree, carrying every field the
 # process-liveness probe and fm_pid_identity read: ppid/pgrp (field 4/5), the
@@ -3094,6 +3125,7 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   pass "AFK changed paused panes hand off plain stale identities for daemon-owned pause triage"
 }
 
+test_reap_bounds_cleanup_that_ignores_term
 test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier

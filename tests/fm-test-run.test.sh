@@ -1048,6 +1048,8 @@ PY
   set -e
   [ "$rc" -eq 3 ] || fail "a serial wall shorter than its scripts must be could-not-observe (exit 3), got $rc"
   assert_contains "$out" "verdict=could-not-observe" "an impossible serial wall must report could-not-observe"
+  assert_contains "$out" "wall duration is shorter than its summed script durations" \
+    "an impossible serial wall must name its dedicated evidence failure"
   assert_not_contains "$out" "verdict=drifted" "an impossible serial wall must not report drifted"
 
   # A malformed extra artifact must not disappear as though it belonged to a
