@@ -137,10 +137,6 @@ ruling_reservation_path() {  # <request-id> <head>
   printf '%s/.%s.ruling-reservation\n' "$AUTH_DIR" "$key"
 }
 
-# Atomic by rename, so a reader never sees a half-written record and a crash
-# leaves either the previous record or the new one - never a torn one. The spend
-# sequence depends on this: an intent record that could be half-written would put
-# the fourth state back.
 auth_write() {  # <auth-id> <json>
   fm_auth_store_write "$AUTH_DIR" "$1" "$2"
 }
