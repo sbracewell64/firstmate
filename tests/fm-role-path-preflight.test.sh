@@ -55,14 +55,38 @@ make_case() {  # <name> -> "<dir>|<repo>|<home>|<fakebin>|<base>|<head>"
 # states the run population it is about instead of depending on the host's.
 census_stub() {  # <fakebin> <rows>
   local fakebin=$1 rows=$2
-  { printf '#!/usr/bin/env bash\n'
-    printf 'if [ "${1:-}" = runs ]; then\n'
-    printf '  cat <<'"'"'ROWS'"'"'\n%s\nROWS\n' "$rows"
-    printf '  exit 0\n'
-    printf 'fi\n'
-    printf 'exit 0\n'
-  } > "$fakebin/no-mistakes"
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = runs ]; then
+  cat "$0.rows"
+  exit 0
+fi
+exit 0
+SH
+  printf '%s\n' "$rows" > "$fakebin/no-mistakes.rows"
   chmod +x "$fakebin/no-mistakes"
+}
+
+# A `no-mistakes` whose `runs` fails the way a real one does: <stream> is stdout
+# or stderr, <text> the refusal, <code> the exit status.
+refusing_stub() {  # <fakebin> <stream> <text> <code>
+  local fakebin=$1 stream=$2 text=$3 code=$4
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+set -u
+if [ "${1:-}" = runs ]; then
+  if [ "$FM_STUB_STREAM" = stderr ]; then
+    printf '%s\n' "$FM_STUB_TEXT" >&2
+  else
+    printf '%s\n' "$FM_STUB_TEXT"
+  fi
+  exit "$FM_STUB_CODE"
+fi
+exit 0
+SH
+  chmod +x "$fakebin/no-mistakes"
+  export FM_STUB_STREAM=$stream FM_STUB_TEXT=$text FM_STUB_CODE=$code
 }
 
 # The product, through the read interface. Echoes the JSON; sets RP_RC.
@@ -82,8 +106,8 @@ field() { printf '%s' "$1" | jq -r "$2"; }
 effect_snapshot() {  # <home> <repo>
   local home=$1 repo=$2
   {
-    printf 'state:\n';    ls -1A "$home/state" 2>/dev/null | LC_ALL=C sort
-    printf 'data:\n';     ls -1A "$home/data" 2>/dev/null | LC_ALL=C sort
+    printf 'state:\n';    find "$home/state" -mindepth 1 -maxdepth 1 2>/dev/null | LC_ALL=C sort
+    printf 'data:\n';     find "$home/data" -mindepth 1 -maxdepth 1 2>/dev/null | LC_ALL=C sort
     printf 'branches:\n'; git -C "$repo" for-each-ref --format='%(refname) %(objectname)' 2>/dev/null | LC_ALL=C sort
     printf 'worktrees:\n'; git -C "$repo" worktree list --porcelain 2>/dev/null | LC_ALL=C sort
     printf 'status:\n';   git -C "$repo" status --porcelain 2>/dev/null | LC_ALL=C sort
@@ -451,11 +475,7 @@ EOF
   # clean run that listed nothing, which is a refusal promoted to a pass. The
   # uninitialized refusal is classified separately (see the case above); every
   # OTHER exit-zero refusal must remain could-not-observe.
-  { printf '#!/usr/bin/env bash\n'
-    printf 'if [ "${1:-}" = runs ]; then echo "error: run store unavailable"; exit 0; fi\n'
-    printf 'exit 0\n'
-  } > "$fakebin/no-mistakes"
-  chmod +x "$fakebin/no-mistakes"
+  refusing_stub "$fakebin" stdout "error: run store unavailable" 0
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$ROUTE" role-path --json \
     --work W1 --repository "$repo" --branch feat --base "$base" --candidate-head "$head" \
     --mode no-mistakes \
@@ -479,14 +499,7 @@ EOF
   # while exiting 0. Reading only the status calls one a broken read and the
   # other a clean empty census. Both are the same fact, and that fact is that no
   # pipeline exists here to own anything - an established absence.
-  { printf '#!/usr/bin/env bash\n'
-    printf 'if [ "${1:-}" = runs ]; then\n'
-    printf '  echo "repo not initialized (run '"'"'no-mistakes init'"'"' first)" >&2\n'
-    printf '  exit 1\n'
-    printf 'fi\n'
-    printf 'exit 0\n'
-  } > "$fakebin/no-mistakes"
-  chmod +x "$fakebin/no-mistakes"
+  refusing_stub "$fakebin" stderr "repo not initialized (run 'no-mistakes init' first)" 1
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$ROUTE" role-path --json \
     --work W1 --repository "$repo" --branch feat --base "$base" --candidate-head "$head" \
     --mode no-mistakes \
@@ -501,11 +514,7 @@ EOF
     || fail "custody must name the uninitialized repository rather than claiming no run: $out"
   # NEGATIVE CONTROL: an unrecognised failure from the same command still
   # refuses, so the classification above is narrow rather than a blanket pass.
-  { printf '#!/usr/bin/env bash\n'
-    printf 'if [ "${1:-}" = runs ]; then echo "database is locked" >&2; exit 1; fi\n'
-    printf 'exit 0\n'
-  } > "$fakebin/no-mistakes"
-  chmod +x "$fakebin/no-mistakes"
+  refusing_stub "$fakebin" stderr "database is locked" 1
   out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$ROUTE" role-path --json \
     --work W1 --repository "$repo" --branch feat --base "$base" --candidate-head "$head" \
     --mode no-mistakes \
