@@ -1,0 +1,69 @@
+{
+  "semantics_schema_version": 1,
+  "document": "schema",
+  "description": "The field contract for the semantics register: which documents exist, what each must carry, which keys are refused outright, and the invariants that hold ACROSS documents. bin/fm-semantics.sh is the only interpreter of this directory; its header and --help own the exact commands and flags.",
+  "why": "Each document below already states its own internal invariants. This file owns the ones no single document can see - that a reason namespace a law names exists, that a projection is emitted from a declared owner, that no document has quietly acquired a runtime.",
+  "authority": "diagnostic",
+  "the_boundary_this_register_may_never_cross": {
+    "may": "describe semantics, legal successors, source mappings, compatibility, identity namespaces, reason namespaces, seam contracts and versions",
+    "may_not": "hold current task state, scheduling, queues, orchestration, current decisions, a runtime, a watcher, a database, an event bus or a hook bus",
+    "why": "bin/fm-decision-surface.sh is this fleet resolved operational surface and answers what a task is doing. The moment this register answers that, the fleet has two answers to one question and both are credited with the same sentence. The refused_keys list below is the mechanical form of this boundary: an entry carrying one is refused outright rather than having the key ignored, because an ignored field still reads to a human as the answer."
+  },
+  "documents": {
+    "schema": {"path": "semantics/schema.json", "role": "this field contract"},
+    "laws": {"path": "semantics/laws.json", "role": "the five laws, three gate-placement predicates, horizon predicate, lifecycle strategy and adoption prerequisites"},
+    "state-families": {"path": "semantics/state-families.json", "role": "work families, legal successors, terminal reasons, verdict vocabularies and every source mapping"},
+    "reasons": {"path": "semantics/reasons.json", "role": "the six reason namespaces and their codes"},
+    "identity": {"path": "semantics/identity.json", "role": "identity namespaces, the canonical subject record, and cross-namespace edges"},
+    "seams": {"path": "semantics/seams.json", "role": "the seam row contract, seam states, protocol law and declared protocols"},
+    "inheritance-manifest-schema": {"path": "semantics/inheritance-manifest.schema.json", "role": "the field contract for one inheritance manifest"},
+    "census": {"path": "semantics/census.json", "role": "the migration source of truth; explicitly NOT an owner"}
+  },
+  "required_in_every_document": {
+    "semantics_schema_version": "must equal this file semantics_schema_version",
+    "document": "must equal the key naming it in documents above",
+    "description": "one paragraph: what this document owns",
+    "authority": "authoritative, diagnostic, or an object mapping sections to one of those - what this document output may currently be used for",
+    "invariants": "the checks this document own interpreter enforces, stated as name: meaning"
+  },
+  "refused_keys": [
+    "current_state",
+    "task_state",
+    "queue",
+    "schedule",
+    "runtime",
+    "watcher",
+    "daemon",
+    "event_bus",
+    "hook_bus",
+    "live",
+    "in_flight"
+  ],
+  "refused_keys_why": "Every one of these names a thing this register may not become. They are refused OUTRIGHT rather than ignored, following the mechanism commitments/schema.json already uses, because an ignored field still reads to a human as the answer. The list is deliberately about shape rather than content: it cannot stop a bad description, and it can stop the register from growing a second decision surface one key at a time.",
+  "authority_values": {
+    "authoritative": "a consumer may rely on this as the current fact",
+    "diagnostic": "a consumer may read this and may not rely on it. A diagnostic output must SAY SO in its own text rather than relying on a reader to remember. Everything defined new on the branch that introduced this register is diagnostic until the adoption prerequisites in semantics/laws.json pass for it."
+  },
+  "generated_projections": {
+    "rule": "A generated file declares its generator and its owner set in its own bytes, and is reproducible byte-for-byte from the owners. A hand edit is DRIFT and refuses.",
+    "outputs": [
+      {"path": "loopspecs/terminal-states.json", "kind": "compatibility", "consumers": "existing terminal consumers, unchanged"},
+      {"path": "semantics/generated/semantics.projection.json", "kind": "complete machine projection", "consumers": "any owner that needs the whole contract as data"},
+      {"path": "semantics/generated/semantics.projection.sh", "kind": "bash projection", "consumers": "an existing shell owner that needs the vocabulary without a JSON parse"}
+    ],
+    "no_current_state": "A projection carries vocabulary, legality, mappings and versions. It carries no task, no queue and no decision, and the refused_keys rule applies to a projection exactly as it applies to an owner."
+  },
+  "cross_document_invariants": [
+    "every_document_present: every path in documents must exist and be readable JSON",
+    "schema_version_agrees: every document semantics_schema_version must equal this file version",
+    "document_key_agrees: every document self-declared document name must equal its key here",
+    "law_reason_namespaces_exist: every reason_namespace a law names must be declared in reasons",
+    "law_validator_names_exist: every non-null validator a law names must be one of the four declared validators",
+    "census_rows_name_real_owners: every census row naming a manifest must name one that exists under semantics/manifests/",
+    "census_introduces_no_vocabulary: no census row may declare a vocabulary member absent from the owner documents",
+    "no_refused_key_anywhere: no document, manifest or projection may carry a refused key at any depth",
+    "projection_declares_generator: every generated output must carry a generated block naming its generator and the owner documents it was compiled from"
+  ],
+  "validators": ["validate_state", "validate_transition", "validate_effect_commit", "validate_identity_mapping"],
+  "validators_why_four": "One per law that is decidable from declarations. The Seam Contract law deliberately has none, because a seam state is an OBSERVATION of a crossing made by the seam owner and is not decidable from a file. A fifth validator returning a seam verdict from declarations would grade the declaration and be credited to the crossing - the exact wrong-subject failure this substrate exists to refuse."
+}

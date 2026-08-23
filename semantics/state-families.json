@@ -1,0 +1,806 @@
+{
+  "semantics_schema_version": 1,
+  "document": "state-families",
+  "description": "The single owner of the fleet state semantics: what a work state MEANS, which states may legally follow it, which stop-reason name the fleet already uses for the same fact, and how every source vocabulary maps onto them. It describes vocabulary and legality only. It holds no current task state, no schedule, no queue, no decision and no orchestration, and bin/fm-semantics.sh - its only interpreter - reads it and writes projections, never fleet state.",
+  "why": "This fleet independently built the same state law six times in six vocabularies - loopspecs/terminal-states.json, bin/fm-verify-lib.sh, commitments/schema.json, qualifications/schema.json, bin/fm-outbound-artifact-lib.sh and bin/fm-landing-authorization-lib.sh - and every rediscovery was correct and none was reusable. The cost is not the duplicated code, which is small. It is that a seventh mechanism has no prior art to inherit and reinvents the law a seventh time, less completely. This file exists so the seventh mechanism inherits instead of rediscovering.",
+  "not_this": "Not a runtime, scheduler, watcher, work queue, event bus, hook bus, state database, or second decision surface. bin/fm-decision-surface.sh answers what one task is doing; this file answers what a word means and what may follow it. The moment it answers the first question it has become a duplicate and must be split back.",
+  "authority": {
+    "terminal_reasons": "authoritative",
+    "terminal_sources": "authoritative",
+    "families": "diagnostic",
+    "object_families": "diagnostic",
+    "verdict_vocabularies": "diagnostic",
+    "work_family_sources": "diagnostic",
+    "why": "The terminal half is the semantics that already shipped in loopspecs/terminal-states.json and is still consumed by bin/fm-loopspec.sh through the generated projection, so it stays authoritative across the move and its consumers see no change. Everything else is new on this branch and is DIAGNOSTIC until the adoption prerequisites in semantics/laws.json pass for it. No mechanism becomes authoritative merely because a branch defines it."
+  },
+  "version": {
+    "family_vocabulary_version": 1,
+    "transition_version": 1,
+    "terminal_vocabulary_version": 1,
+    "source_mapping_version": 1,
+    "why_four_numbers": "A consumer inherits some of these and not others, and an inheritance manifest names exactly which. Bumping the transition version when one legal successor changes must not force every consumer that only reads family names to re-declare its inheritance."
+  },
+  "families": [
+    {
+      "name": "ACTIVE",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "wait on the owner; the owner's own wake reports movement",
+      "owner_is": "a live worker or lane",
+      "wake_is": "its status event or turn-end",
+      "reobservation_is": "bin/fm-crew-state.sh",
+      "legal_successors": [
+        "WAITING_EXTERNAL",
+        "RETRY_PENDING",
+        "REVISE",
+        "SUCCEEDED",
+        "FAILED",
+        "REFUSED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ],
+      "successors_why": "ACTIVE is where work happens, so every outcome is reachable from it. This is the one family whose successor set is wide, and it is wide because the work is genuinely being done rather than because the set was never narrowed.",
+      "description": "An owner is progressing the work now. Membership says nothing about whether the work will succeed; it says an owner holds it and a wake will report movement."
+    },
+    {
+      "name": "WAITING_EXTERNAL",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "verify the artifact the wait names actually exists, then wait; a wait with no applicable artifact is a transport defect to repair, never patience",
+      "owner_is": "the party outside this state's own owner - a reviewer, a forge, a captain, or firstmate itself for a lane-level blocker",
+      "wake_is": "the inbound ruling, the forge poll, or the durable blocker record changing",
+      "reobservation_is": "bin/fm-outbound-artifact.sh check for an outbound gate; bin/fm-blocker-lib.sh for a dependency blocker",
+      "legal_successors": [
+        "ACTIVE",
+        "REVISE",
+        "REFUSED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ],
+      "successors_why": "An arriving artifact does not finish the work, it returns it to its owner - so SUCCEEDED and FAILED are deliberately NOT reachable directly from here. A wait that could resolve straight to success is a wait whose ruling was read as the work.",
+      "description": "The work is alive and its next move belongs to somebody else. This is the fleet's largest nonterminal family and the one least able to satisfy its own obligation, which is why the obligation is checked rather than assumed."
+    },
+    {
+      "name": "RETRY_PENDING",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "check the BOUND, not the work; a retry whose bound cannot be read is not patient, it is unbounded",
+      "owner_is": "the durable attempt or deferral record",
+      "wake_is": "the recorded resume condition",
+      "reobservation_is": "bin/fm-attempt.sh and bin/fm-capacity-retry.sh",
+      "legal_successors": [
+        "ACTIVE",
+        "FAILED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ],
+      "successors_why": "Either the retry starts, the bound is spent, an authority stops it, or it is replaced. It cannot reach SUCCEEDED directly, because a retry that has not run has produced nothing to succeed with.",
+      "description": "The work stopped and a declared bound governs whether it runs again. Retry and recovery are ONE family: in both, the thing a consumer must observe is the bound rather than the work, so splitting them would give two consumers the same branch."
+    },
+    {
+      "name": "REVISE",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "the MAKER must act; the state may not be promoted while the finding is unaddressed, and no checker verdict discharges it",
+      "owner_is": "the maker that produced the work",
+      "wake_is": "the finding record",
+      "reobservation_is": "the decision probe pinned into the ruling",
+      "legal_successors": [
+        "ACTIVE",
+        "FAILED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ],
+      "successors_why": "The maker acts and the work resumes, the revision is judged impossible, an authority stops it, or it is replaced. Promotion straight to SUCCEEDED is the defect this family exists to make refusable.",
+      "description": "A finding is open against live work. Distinct from FAILED because the work is alive, and distinct from ACTIVE because the obligation sits on the maker and an unaddressed finding blocks promotion.",
+      "no_source_reason": "OBSERVED GAP, declared rather than mapped away. No tracked fleet vocabulary currently names this family: a review finding returns as needs-decision, which is WAITING_EXTERNAL because firstmate owes the ruling, and once the ruling directs a fix the worker reports working, which is ACTIVE. The state in between - the finding is ruled, the obligation is on the MAKER, and promotion must be refused until the finding is addressed - has no name anywhere today. That absence is exactly why the family exists and why the promoted-unaddressed-finding control is still unproven. Forcing a source row onto it would manufacture a mapping and hide the gap."
+    },
+    {
+      "name": "SUCCEEDED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "close dependents; the goal was met and verification did not reject it",
+      "legal_successors": [
+        "SUPERSEDED"
+      ],
+      "successors_why": "Landed work can later be replaced by a successor. Nothing else follows a success.",
+      "description": "The goal was met and verification did not reject it. Success of the SUBJECT this state names, never of a neighbouring subject the same run touched."
+    },
+    {
+      "name": "FAILED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "a successor may be opened; dependents are not closed",
+      "legal_successors": [
+        "SUPERSEDED"
+      ],
+      "successors_why": "A failure may be superseded by a successor attempt. It is never repaired in place, because repairing it would erase the evidence the successor rests on.",
+      "description": "The goal was not met. Kept apart from SUCCEEDED because the consumer action differs: failure may open a successor, success closes dependents."
+    },
+    {
+      "name": "REFUSED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "route the owed ruling to its authority; do not retry, and do not read the refusal as a failure of the work",
+      "legal_successors": [
+        "SUPERSEDED"
+      ],
+      "successors_why": "A ruling produces a successor subject rather than resurrecting this one, so the arriving ruling never moves this state back into a nonterminal family.",
+      "description": "The work stopped because an authority must rule before anything may continue. A ruling is OWED, and that is the whole of what separates this from CANCELLED."
+    },
+    {
+      "name": "CANCELLED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "record and stop; nothing failed and nothing is owed",
+      "legal_successors": [
+        "SUPERSEDED"
+      ],
+      "successors_why": "Same as every terminal family: replacement, never resurrection.",
+      "description": "An authority stopped the work deliberately. aborted is the same fact named twice and is mapped here rather than kept as a second name."
+    },
+    {
+      "name": "SUPERSEDED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "read as EVIDENCE; refuse as AUTHORITY; never return it to a nonterminal family",
+      "legal_successors": [],
+      "successors_why": "Empty, and empty is the enforcement. Transition Integrity's no-stale-resurrection rule needs no separate check because there is no edge out of this family for later evidence to take.",
+      "description": "The subject was replaced by a successor. It stays permanently readable and permanently non-actionable, which is what lets adverse history be preserved rather than rewritten. At most one successor of a predecessor may be outside this family at any time, and that cardinality is a count rather than a review question."
+    }
+  ],
+  "object_families": [
+    {
+      "name": "AUTHORITY",
+      "owner": "bin/fm-landing-authorization-lib.sh",
+      "states": [
+        "granted",
+        "spending",
+        "spent",
+        "void"
+      ],
+      "transitions": {
+        "granted": [
+          "spending",
+          "void"
+        ],
+        "spending": [
+          "spent",
+          "void"
+        ],
+        "spent": [],
+        "void": []
+      },
+      "why_not_a_work_family": "An authority is a SEPARATE OBJECT with its own lifecycle, not a property of the work. Making authorised a work state lets a subject BE authorised rather than HOLD a spendable token, and a token that is a property cannot be exhausted. That is the exact collapse Identity Integrity's no-authority-by-name rule forbids.",
+      "description": "A one-use spendable permission to perform one effect on one exact subject. spending is the honest name for the window in which the act may or may not have happened; it is not a synonym for either neighbour."
+    },
+    {
+      "name": "EVIDENCE",
+      "owner": "bin/fm-verify-lib.sh",
+      "states": [
+        "PASS",
+        "FAIL",
+        "NO_VERIFIER_RAN"
+      ],
+      "transitions": {
+        "PASS": [],
+        "FAIL": [],
+        "NO_VERIFIER_RAN": []
+      },
+      "why_no_transitions": "An observation does not move. A later look is a NEW evidence entry with its own as_of and its own binding, which is what keeps a superseded worker's evidence attributed to the worker that produced it. A vocabulary that let an observation transition would be a vocabulary in which a result could be edited.",
+      "why_not_a_work_family": "COULD-NOT-OBSERVE is a value of an OBSERVATION, not a place work sits. A work family meaning we do not know what family this is would be unrepresentable, and it would give the fleet two could-not-observes. The honest encoding is that the classification returns CNO while the work stays in whatever family it is already in.",
+      "description": "One typed observation of one subject, carrying its own verdict, reason, source, as_of and producing binding."
+    }
+  ],
+  "verdict_vocabularies": {
+    "_why": "Two three-valued verdict vocabularies exist in this fleet and they are NOT the same words. Writing either one's spelling for the other is how a consumer branches on a value that can never arrive. Both are declared here with a total mapping in both directions, so a consumer converts by lookup instead of inventing a conversion.",
+    "observation": {
+      "owner": "bin/fm-verify-lib.sh",
+      "members": [
+        "PASS",
+        "FAIL",
+        "NO_VERIFIER_RAN"
+      ],
+      "means": "did the observation happen, and what did it see",
+      "exit_codes": "owned by bin/fm-verify.sh; not restated here"
+    },
+    "validator": {
+      "owner": "bin/fm-semantics-lib.sh",
+      "members": [
+        "PASS",
+        "REFUSE",
+        "CNO"
+      ],
+      "means": "is this state, transition, effect phase or identity mapping LEGAL under the declared semantics",
+      "exit_codes": {
+        "PASS": 0,
+        "usage": 2,
+        "REFUSE": 3,
+        "CNO": 4
+      },
+      "exit_codes_why": "Deliberately the same 0/3/4 shape bin/fm-decision-surface.sh already uses, so a caller that already handles a contradicted-or-unevaluable answer needs no second convention. A two-valued 0/nonzero read is refused rather than supported: the measured root cause of ten separate defects in this fleet was an exit status covering both a failure and a refusal."
+    },
+    "total_mapping": {
+      "validator_to_observation": {
+        "PASS": "PASS",
+        "REFUSE": "FAIL",
+        "CNO": "NO_VERIFIER_RAN"
+      },
+      "observation_to_validator": {
+        "PASS": "PASS",
+        "FAIL": "REFUSE",
+        "NO_VERIFIER_RAN": "CNO"
+      },
+      "why_total": "Every member of each vocabulary has exactly one image in the other, so no consumer ever has to default one. REFUSE and FAIL are the same class - a positive observed-bad claim - and CNO and NO_VERIFIER_RAN are the same class - the observation did not happen. Only the spellings differ, and the spellings differ because the subjects differ: one grades a SUBJECT, the other grades a STATE."
+    }
+  },
+  "unmapped_row_encoding": {
+    "literal": "OBSERVATION_RESULT",
+    "rule": "A source row whose state names a value of an OBSERVATION rather than a member of the target vocabulary sets unified to this literal and must carry observation_verdict naming its member of the observation vocabulary. It is not an escape hatch and it is not an unmapped row: the row is fully accounted for, on the correct axis.",
+    "why": "Could-not-observe is a value of an observation, not a place work sits. Forcing such a row onto a work family would make an unmade observation read as a claim about work, and forcing a mapping to be total without this encoding is exactly the pressure that produces that defect. Three crew-state rows and one decision-disposition row are in this class and each is named."
+  },
+  "terminal_reasons": [
+    {
+      "name": "no_delta",
+      "kind": "neutral",
+      "costs_model_turn": false,
+      "family": "SUCCEEDED",
+      "family_distinction": "A loop that ran to completion and found nothing to do met its goal; the fact that it produced nothing and spent no model turn is carried by the terminal reason's own costs_model_turn field, which is the axis that owns it. A consumer needing that fact reads the terminal reason and never the family.",
+      "description": "Nothing to do: the watched input is unchanged since the last accepted iteration. Reaching this must cost no model turn, which is why it is the one unified state declaring costs_model_turn false."
+    },
+    {
+      "name": "goal_met",
+      "kind": "success",
+      "costs_model_turn": true,
+      "family": "SUCCEEDED",
+      "family_distinction": "The work produced its result. It shares SUCCEEDED with no_delta, which produced nothing and spent no model turn; the terminal axis carries that difference and the family axis does not, because a consumer closing dependents takes the same action either way.",
+      "description": "The work declared its goal met and verification did not reject it."
+    },
+    {
+      "name": "budget_exhausted",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED",
+      "family_distinction": "The bound was REACHED. Which bound is evidence recorded by the run, not a family distinction.",
+      "description": "A declared bound - iterations, wall clock, context, capacity or cost - was reached before the goal was met. Which bound was reached is evidence recorded by the run, not a separate name."
+    },
+    {
+      "name": "no_progress_stalled",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED",
+      "family_distinction": "The repetition bound was reached with no declared progress. Kept apart from budget_exhausted on the terminal axis because the repairs differ; both are FAILED to a work consumer, which is why the family axis does not carry the split.",
+      "description": "The repetition bound was reached without declared progress, so iterating again would repeat the same non-result."
+    },
+    {
+      "name": "verification_failed",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED",
+      "family_distinction": "The verifier ran and rejected, or was unavailable. This is the only failure reason a consumer may cite as a judgement about the work itself.",
+      "description": "The verifier ran and rejected the iteration, or was unavailable. An unavailable verifier lands here and can never become a pass."
+    },
+    {
+      "name": "blocked_by_evidence_integrity",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED",
+      "family_distinction": "A required source was unreadable, so absence of evidence could not be told from evidence of absence. The work is FAILED to a work consumer and the repair is to the INSTRUMENT, which is what the terminal reason preserves and the family cannot.",
+      "description": "A required source was unreadable, so absence of evidence could not be distinguished from evidence of absence."
+    },
+    {
+      "name": "needs_ruling",
+      "kind": "refusal",
+      "costs_model_turn": true,
+      "family": "REFUSED",
+      "family_distinction": null,
+      "description": "The work stopped because an authority must rule before it may continue. A ruling is owed."
+    },
+    {
+      "name": "cancelled",
+      "kind": "neutral",
+      "costs_model_turn": true,
+      "family": "CANCELLED",
+      "family_distinction": null,
+      "description": "An authority stopped the run deliberately. Nothing failed and nothing is owed, which is what separates this from needs_ruling."
+    },
+    {
+      "name": "unclassified_failure",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED",
+      "family_distinction": "A stop nobody can explain is a different fact from one that is explained, and that difference lives on the terminal axis. To a work consumer it is still FAILED, because there is nothing else it could safely be.",
+      "description": "The run stopped and no classified reason held. Kept as a named state rather than folded into another failure, because a stop nobody can explain is a different fact from one that is explained."
+    }
+  ],
+  "terminal_reasons_why_a_second_axis": "A terminal reason answers why did this stop; a family answers what kind of state is this. They are different questions at different granularity - five terminal reasons share the family FAILED, and the split between them is what tells an operator whether to repair the work, the bound, or the instrument. Collapsing them would lose the repair; keeping them as two independent vocabularies with no mapping would give the fleet two answers. So they are two axes with one TOTAL mapping, declared on every terminal reason above.",
+  "sources": [
+    {
+      "source": "loopspec",
+      "owner": "loopspecs/<id>.json terminal_states[].name",
+      "maps_onto": "terminal_reason",
+      "projected_to_terminal_states": true,
+      "description": "The terminal-state names a LoopSpec declares. Every declared name must appear here, and a spec's terminal_states[].maps_to must equal the unified name recorded for it - an unmapped name is refused, never defaulted.",
+      "map": [
+        {
+          "state": "no_delta",
+          "unified": "no_delta",
+          "note": "Carried through unchanged. Commission section 18's zero-model-turn rule is already encoded in this state and survives the merge intact."
+        },
+        {
+          "state": "delta_emitted",
+          "unified": "goal_met",
+          "note": "One of two goal-met successes; what the success produced is the spec's own business, not a vocabulary distinction."
+        },
+        {
+          "state": "confirmed_work_found",
+          "unified": "goal_met",
+          "note": "The second goal-met success. It already shared a class with delta_emitted before the merge."
+        },
+        {
+          "state": "already_carried",
+          "unified": "no_delta",
+          "note": "The fork already carries the contribution, so there is nothing to do. It shares no_delta's zero-model-turn rule, which is why it lands here rather than on a success."
+        },
+        {
+          "state": "carried_and_checks_resolved",
+          "unified": "goal_met",
+          "note": "A third goal-met success. What the success produced - here, a carried contribution whose checks finished - is the spec's own business, not a vocabulary distinction."
+        },
+        {
+          "state": "needs_ruling",
+          "unified": "needs_ruling",
+          "note": "Carried through unchanged. Deliberately not merged with cancelled: a ruling is owed here and is not owed there."
+        },
+        {
+          "state": "blocked_by_evidence_integrity",
+          "unified": "blocked_by_evidence_integrity",
+          "note": "Carried through unchanged. Distinct from verification_failed: the inputs were unreadable, rather than the verifier rejecting."
+        },
+        {
+          "state": "budget_exhausted",
+          "unified": "budget_exhausted",
+          "note": "Carried through unchanged, and now the single name for every bounded stop on both sides."
+        },
+        {
+          "state": "verification_failed",
+          "unified": "verification_failed",
+          "note": "Carried through unchanged."
+        },
+        {
+          "state": "no_progress_stalled",
+          "unified": "no_progress_stalled",
+          "note": "Carried through unchanged, and the merge target for the execution node's iteration-cap-failed."
+        }
+      ]
+    },
+    {
+      "source": "execution-node",
+      "owner": "the platform's scripts/runtime_execution_node.py FINALIZE_MATRIX",
+      "maps_onto": "terminal_reason",
+      "projected_to_terminal_states": true,
+      "description": "The finalize outcomes of the platform's execution-node runtime, read at platform commit 5d86b7e. Each row also records the status and exit code that matrix books, so a merge that collapses two names is auditable against the consequence each name actually carried. This side is mapped only; the platform-side rename is a follow-on platform task and no platform file is changed by this record.",
+      "map": [
+        {
+          "state": "context-ceiling",
+          "unified": "budget_exhausted",
+          "consequence": "EXHAUSTED/0",
+          "distinction": "The hardest structural bound the platform has, and the first row of the finalize matrix so it outranks every other outcome. That precedence lives in the matrix ordering, which the merge does not touch.",
+          "note": "A node stopped at the context ceiling obeyed its governor, so the platform books a clean exit."
+        },
+        {
+          "state": "budget-finish",
+          "unified": "budget_exhausted",
+          "consequence": "EXHAUSTED/0",
+          "distinction": "Ranked above the finish row so a budget-tripped run cannot book COMPLETE. That ordering is the mechanism by which bounded beats done, and it survives the merge unchanged.",
+          "note": "A budget trip asks the node to wind down, so a finish declaration is usually present alongside it."
+        },
+        {
+          "state": "timeout",
+          "unified": "budget_exhausted",
+          "consequence": "EXHAUSTED/1",
+          "distinction": "The only bounded stop the platform books unclean. The exit code carries clean against unclean and the status carries the reason, so merging the name loses nothing the record still holds.",
+          "note": "The platform's own rationale: a deadline is a bound, and a run stopped by one did not fail any more than a run stopped by its iteration cap did."
+        },
+        {
+          "state": "iteration-cap-clean",
+          "unified": "budget_exhausted",
+          "consequence": "EXHAUSTED/0",
+          "distinction": "Separated from iteration-cap-failed by whether the last iteration was clean; that split is preserved by mapping the two rows to different unified states.",
+          "note": "The iteration cap was reached and the final iteration completed cleanly."
+        },
+        {
+          "state": "finish-signal",
+          "unified": "goal_met",
+          "consequence": "COMPLETE/0",
+          "note": "The node declared its goal met and no higher-ranked bound held."
+        },
+        {
+          "state": "stop-signal",
+          "unified": "cancelled",
+          "consequence": "CANCELLED/0",
+          "note": "An operator stopped the run. Mapped to cancelled rather than needs_ruling because the authority already decided; nothing is owed back."
+        },
+        {
+          "state": "iteration-cap-failed",
+          "unified": "no_progress_stalled",
+          "consequence": "EXHAUSTED/1",
+          "note": "The fact this increment exists to name once: a node finalising here and a loop finalising on no_progress_stalled are the same fact - the repetition bound was reached and the work is no further forward."
+        },
+        {
+          "state": "unclassified",
+          "unified": "unclassified_failure",
+          "consequence": "FAILED/1",
+          "note": "The matrix's always-holding backstop, so a matrix carrying its row always terminates."
+        }
+      ]
+    },
+    {
+      "source": "capacity-wait",
+      "owner": "bin/fm-attempt.sh FM_ATTEMPT_TERMINAL_STATE and FM_ATTEMPT_UNOBSERVABLE_STATE",
+      "maps_onto": "terminal_reason",
+      "projected_to_terminal_states": true,
+      "description": "How a task that stopped WAITING FOR MODEL CAPACITY names why it stopped, recorded in state/<id>.attempt by bin/fm-attempt.sh and read by bin/fm-capacity-retry.sh. Registered here because the two stops were previously written under one name, which made a recorder that could not write the deferral count indistinguishable from a pool that had genuinely been tried and found empty. They are different facts with different repairs, so they are mapped to different unified states and stop-defer refuses to record either without being told which was observed.",
+      "map": [
+        {
+          "state": "deferral_budget_spent",
+          "unified": "budget_exhausted",
+          "consequence": "the wait stops and the work is held in the backlog for a decision",
+          "note": "Observed-bad. The bound was REACHED: the deferral count was readable at every step and ran out, or consecutive deferrals observed an unchanged capacity picture past the stagnation limit. This is a routing fact about the pool and is worth acting on. The bound is owned by the WORK ITEM and consumed monotonically across substitutions, so reaching it means this item waited its whole allowance, not that one model did."
+        },
+        {
+          "state": "deferral_count_unrecordable",
+          "unified": "blocked_by_evidence_integrity",
+          "consequence": "the wait stops and the count that bounds it is reported as unwritten",
+          "note": "Could-not-observe, and the could-not-observe lands on the BOUND ITSELF rather than on a detail beside it. Nothing here says the pool was tried and found empty; what is established is that the record bounding the wait could not be written, so the bound was never enforceable. A bound you cannot observe is not a bound, so the wait stops rather than continuing on a warning - continuing is the fail-open shape. This is a defect in the instrument and the repair is to the recorder, not to the routing."
+        }
+      ]
+    },
+    {
+      "source": "role-qualification",
+      "owner": "bin/fm-qualification.sh resolve, recorded as terminal= in state/qualification/<activation-id>.activation",
+      "maps_onto": "terminal_reason",
+      "projected_to_terminal_states": true,
+      "description": "How a BOUNDED QUALIFICATION WORKFLOW names why it stopped. Registered here because the register it feeds has five result values and only some of them end a workflow: QUALIFICATION_REQUIRED and QUALIFICATION_STALE are the reasons a workflow STARTS, and COULD_NOT_OBSERVE deliberately appears in no row below because it is nonterminal - it spends one attempt, records nothing against the binding, and leaves the workflow active. Listing it would make an unmade observation look like an ending, which is the exact collapse qualifications/schema.json refuses.",
+      "map": [
+        {
+          "state": "qualified",
+          "unified": "goal_met",
+          "consequence": "the evidence becomes reusable and the blocked work identity returns to normal eligibility unchanged",
+          "note": "Observed-good, and the only row that admits a binding. It unblocks the SAME work identity through the existing backlog owner: nothing is re-created, so identity, custody bases, attempt count and retry budget all survive."
+        },
+        {
+          "state": "failed",
+          "unified": "verification_failed",
+          "consequence": "the exclusion evidence is preserved and the next promising candidate is evaluated",
+          "note": "Observed-bad. The predicate ran and rejected this binding, which is a real finding worth keeping - a later record never deletes it. This is a statement about one binding against one contract version, never a score or a reputation, and re-qualifying it is lawful only on a directly evidenced material change."
+        },
+        {
+          "state": "no_candidate_can_satisfy",
+          "unified": "needs_ruling",
+          "consequence": "the route stops and escalates, because no candidate can be made eligible by qualifying it",
+          "note": "The ONLY row that reaches the captain. Every candidate is excluded by something a qualification workflow cannot fix - a floor axis it does not meet, a model-registry refusal, or a preserved FAILED record. Missing or stale qualification never lands here; routing it here is the recurrence the whole register exists to close."
+        },
+        {
+          "state": "attempt_budget_spent",
+          "unified": "budget_exhausted",
+          "consequence": "the workflow stops and the blocked work is left held for a decision",
+          "note": "Observed-bad on the BOUND: the workflow was tried its whole allowance and did not reach a result. The bound belongs to the workflow's own identity, never to the work it would unblock, so a qualification attempt can never spend a retry the real work is owed."
+        },
+        {
+          "state": "record_unwritable",
+          "unified": "blocked_by_evidence_integrity",
+          "consequence": "the workflow stops and the record that bounds it is reported as unwritten",
+          "note": "Could-not-observe, and it lands on the bound itself rather than on a detail beside it - exactly as the capacity wait above distinguishes its two stops. Nothing here says any binding was tried and found wanting; what is established is that the durable record could not be maintained, so continuing would be an unbounded loop that still looked correct step by step. The repair is to the recorder."
+        },
+        {
+          "state": "superseded",
+          "unified": "cancelled",
+          "consequence": "the workflow stops without a verdict because the route no longer needs it",
+          "note": "Neither good nor bad: an eligible candidate appeared, the floor stopped requiring the contract, or the blocked work was withdrawn. Deliberately not folded into goal_met - a workflow that never observed anything must not read as one that qualified a binding."
+        }
+      ]
+    },
+    {
+      "source": "crew-state",
+      "owner": "bin/fm-classify-lib.sh FM_CREW_STATE_VOCABULARY, derived by bin/fm-crew-state.sh",
+      "maps_onto": "work_family",
+      "projected_to_terminal_states": false,
+      "description": "The complete crew-state verdict vocabulary. Registered here because three of its eleven members are verdicts about an OBSERVATION of the lane rather than about the work, and mapping those three onto a work family would assert a fact the verdict never established. They map to OBSERVATION_RESULT instead, which is the encoding this contract requires and is why the mapping can be total without being wrong.",
+      "map": [
+        {
+          "state": "working",
+          "unified": "ACTIVE",
+          "note": "An owner is progressing it."
+        },
+        {
+          "state": "parked",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the run waits at a gate it can see",
+          "distinction": "The external party is the validation pipeline and the artifact whose existence must be verified is the gate's own parked record.",
+          "note": "A run WAITING, not one that ended."
+        },
+        {
+          "state": "blocked",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "firstmate must act before the lane can move",
+          "distinction": "The external party here is firstmate itself - external to the LANE, not to the fleet - and the artifact whose existence must be verified is the durable blocker record bin/fm-blocker-lib.sh maintains. Same consumer action as any other external wait: verify the artifact, then wait.",
+          "note": "Distinct from paused, which is a bounded wait expected to clear on its own."
+        },
+        {
+          "state": "paused",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "a bounded external wait is expected to clear without intervention",
+          "distinction": "The wait clears on its own, so the correct supervision cadence is long rather than immediate. Same family, different cadence - and cadence is the wake's business, not the family's.",
+          "note": "The textbook member of this family."
+        },
+        {
+          "state": "done",
+          "unified": "SUCCEEDED",
+          "note": "The run passed."
+        },
+        {
+          "state": "failed",
+          "unified": "FAILED",
+          "consequence": "a step judged the work and rejected it",
+          "distinction": "A judgement about the work, unlike aborted and interrupted, which judge nothing.",
+          "note": "Run-level terminal."
+        },
+        {
+          "state": "aborted",
+          "unified": "CANCELLED",
+          "consequence": "an authority stopped the run deliberately",
+          "distinction": "Nothing failed and nothing is owed.",
+          "note": "Run-level terminal."
+        },
+        {
+          "state": "interrupted",
+          "unified": "RETRY_PENDING",
+          "consequence": "the pipeline broke without judging the work, so the condition is a re-run",
+          "distinction": "Kept apart from failed precisely because nothing judged the work; the thing to observe next is the retry bound, not the code.",
+          "note": "Run-level terminal for the RUN and nonterminal for the WORK, which is the reason this row exists."
+        },
+        {
+          "state": "idle",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "PASS",
+          "note": "Observed, and the lane is genuinely quiescent. It says nothing about which family the WORK is in, so it maps to an observation rather than to a family."
+        },
+        {
+          "state": "stale",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "FAIL",
+          "note": "Observed, and observed bad: no movement where movement was expected. Still a statement about the lane, not about the work."
+        },
+        {
+          "state": "unknown",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "NO_VERIFIER_RAN",
+          "note": "Liveness could not be observed at all. Naming it is what stops an escalation from being read as a measurement that was actually taken."
+        }
+      ]
+    },
+    {
+      "source": "status-verb",
+      "owner": "bin/fm-classify-lib.sh FM_CLASSIFY_CAPTAIN_TERMINAL_VERBS, FM_CLASSIFY_NONTERMINAL_VERBS and FM_CLASSIFY_PAUSED_VERB_DEFAULT; carried on the wire by bin/fm-status-event-lib.sh",
+      "maps_onto": "work_family",
+      "projected_to_terminal_states": false,
+      "description": "The verbs a worker may append to its own status log. This is the Result-to-Evidence seam's vocabulary and the only state vocabulary a worker writes directly, which is why an unmapped verb here would put an unclassifiable value into a durable record.",
+      "map": [
+        {
+          "state": "working",
+          "unified": "ACTIVE",
+          "note": "Nonterminal by declaration; a worker that ends its turn on one has not finished a stage."
+        },
+        {
+          "state": "resolved",
+          "unified": "ACTIVE",
+          "consequence": "a named blocker or decision closed and the work resumes",
+          "distinction": "Carries a key that closes an earlier open event, which working does not.",
+          "note": "Nonterminal."
+        },
+        {
+          "state": "captain-held",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the captain owes a decision",
+          "distinction": "The external party is the captain and no automation can supply the artifact.",
+          "note": ""
+        },
+        {
+          "state": "needs-decision",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the configured authority owes a decision",
+          "distinction": "The external party may be firstmate under a standing autonomy posture, so this one can clear without reaching the captain.",
+          "note": ""
+        },
+        {
+          "state": "blocked",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the worker is stuck and firstmate must act",
+          "distinction": "The worker is asking for help rather than reporting a wait it expects to clear.",
+          "note": ""
+        },
+        {
+          "state": "paused",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "a declared external wait is expected to clear on its own",
+          "distinction": "Supervision uses a long cadence rather than treating the idle lane as a possible wedge.",
+          "note": ""
+        },
+        {
+          "state": "done",
+          "unified": "SUCCEEDED",
+          "note": "Terminal."
+        },
+        {
+          "state": "failed",
+          "unified": "FAILED",
+          "note": "Terminal."
+        }
+      ]
+    },
+    {
+      "source": "outbound-record",
+      "owner": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_RECORD_STATES",
+      "maps_onto": "work_family",
+      "projected_to_terminal_states": false,
+      "description": "The lifecycle of one outbound REQUEST record. Its subject is the request, never the work the ruling would govern, and that separation is the reason the mapping is recorded rather than assumed: a satisfied request and a finished piece of work are two subjects.",
+      "map": [
+        {
+          "state": "emitting",
+          "unified": "ACTIVE",
+          "consequence": "the emit is in flight and its outcome is not yet durable",
+          "distinction": "The owner is this fleet's own transport, so the next move is local.",
+          "note": ""
+        },
+        {
+          "state": "emitted",
+          "unified": "WAITING_EXTERNAL",
+          "note": "The request exists on the outside and the reviewer owes a ruling. The canonical member of the family."
+        },
+        {
+          "state": "ruled",
+          "unified": "ACTIVE",
+          "consequence": "a ruling arrived and firstmate owes its consumption",
+          "distinction": "The wait is over and the next move is local again, which is exactly why WAITING_EXTERNAL does not reach a terminal family directly.",
+          "note": ""
+        },
+        {
+          "state": "resumed",
+          "unified": "ACTIVE",
+          "consequence": "the item the request blocked has been released",
+          "distinction": "The ruling has been consumed, unlike ruled where it has not.",
+          "note": ""
+        },
+        {
+          "state": "closed",
+          "unified": "SUCCEEDED",
+          "note": "The REQUEST's lifecycle ended having obtained and consumed its artifact. This is success of the request and never of the work the ruling governed - crediting it to the work would be the wrong-subject failure this fleet already names."
+        },
+        {
+          "state": "superseded",
+          "unified": "SUPERSEDED",
+          "note": "A newer request on a moved head replaced it. Readable as evidence, refused as authority."
+        }
+      ]
+    },
+    {
+      "source": "decision-disposition",
+      "owner": "bin/fm-classify-lib.sh FM_DECISION_DISPOSITION_VOCABULARY",
+      "maps_onto": "work_family",
+      "projected_to_terminal_states": false,
+      "description": "How an open decision hold is dispositioned. Five of its eight members share one family and differ only in WHO must act, which is a wake fact rather than a family fact - so the rows carry the difference and the family does not, and no sixth family is invented to hold it.",
+      "map": [
+        {
+          "state": "CAPTAIN_REQUIRED_AND_BLOCKING",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the captain owes a decision and work stops until it arrives",
+          "distinction": "Blocking, so it must be surfaced at session start rather than batched.",
+          "note": ""
+        },
+        {
+          "state": "CAPTAIN_REQUIRED_NONBLOCKING",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the captain owes a decision and other work continues",
+          "distinction": "Non-blocking, so it batches into the next natural reply.",
+          "note": ""
+        },
+        {
+          "state": "CAPTAIN_DEFERRED",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "the captain has deferred the decision to a later window",
+          "distinction": "The wait is expected to clear on a schedule rather than on an artifact.",
+          "note": ""
+        },
+        {
+          "state": "BROWSER_SOL",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "an independent review ruling is owed through the control venue",
+          "distinction": "The only disposition whose artifact is durable, correlatable and mechanically checkable, which is why bin/fm-outbound-artifact.sh can answer for it and cannot answer for the others.",
+          "note": ""
+        },
+        {
+          "state": "EXTERNAL_DEPENDENCY",
+          "unified": "WAITING_EXTERNAL",
+          "consequence": "a third party outside the fleet owes something",
+          "distinction": "No fleet mechanism can supply the artifact, so the wake is a poll rather than an inbound record.",
+          "note": ""
+        },
+        {
+          "state": "SELF_HANDLE",
+          "unified": "ACTIVE",
+          "note": "Firstmate owns the next move within its configured authority."
+        },
+        {
+          "state": "WITHDRAWN",
+          "unified": "CANCELLED",
+          "note": "An authority retired the decision. Nothing failed and nothing is owed."
+        },
+        {
+          "state": "CNO_DECISION_SUBJECT",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "NO_VERIFIER_RAN",
+          "note": "What the decision is ABOUT could not be observed. This is a defect in the instrument that enumerates decisions, and mapping it onto a work family would turn an unreadable record into a claim about work."
+        }
+      ]
+    },
+    {
+      "source": "authority-record",
+      "owner": "bin/fm-landing-authorization-lib.sh FM_AUTH_STATES",
+      "maps_onto": "authority_state",
+      "projected_to_terminal_states": false,
+      "description": "Registered as an identity mapping rather than a translation: this vocabulary IS the AUTHORITY object family, and recording that here is what makes a second authority vocabulary refusable rather than merely discouraged. It maps onto authority_state and deliberately never onto a work family.",
+      "map": [
+        {
+          "state": "granted",
+          "unified": "granted",
+          "note": "Minted, unspent, and fresh as far as the last check could observe."
+        },
+        {
+          "state": "spending",
+          "unified": "spending",
+          "note": "A spend began and its outcome is not recorded. The honest name for the act may or may not have happened, and the one a careless implementation omits."
+        },
+        {
+          "state": "spent",
+          "unified": "spent",
+          "note": "The act completed and this authority is exhausted."
+        },
+        {
+          "state": "void",
+          "unified": "void",
+          "note": "Permanently inapplicable. The head moved, or the request it rests on no longer applies."
+        }
+      ]
+    }
+  ],
+  "terminal_projection": {
+    "target": "loopspecs/terminal-states.json",
+    "generator": "bin/fm-semantics.sh compile",
+    "loopspec_schema_version": 1,
+    "description": "The compatibility projection of firstmate's unified terminal-reason vocabulary and of the total mapping onto it from every source vocabulary that names the same facts. A terminal reason answers one question: why did this stop. Two systems previously answered it in two vocabularies - a LoopSpec finalising on no_progress_stalled and an execution node finalising on iteration-cap-failed are the same fact named twice. Each fact is named once and every source name is recorded against it. semantics/state-families.json OWNS this vocabulary and bin/fm-semantics.sh compile emits this file from it; bin/fm-loopspec.sh remains its interpreter here, and loopspecs/schema.json consumes the unified names through its external_enums pointer and never restates them.",
+    "invariants": [
+      "unified_names_unique: no two unified entries may share a name",
+      "source_names_unique: no two rows within one source may name the same state",
+      "mapping_total: every source row must name a unified state declared here",
+      "no_unreachable_unified: every unified state must be the target of at least one source row",
+      "strict_reduction: the unified vocabulary must have strictly fewer members than the total number of source rows",
+      "collapse_declares_distinction: when rows within one source share a unified state but differ in recorded consequence, every row in that group must declare how the distinction is preserved",
+      "zero_model_turn_preserved: exactly one unified state may declare costs_model_turn false, it must be no_delta, and its kind must be neutral"
+    ],
+    "compatibility": "The projection reproduces the shipped vocabulary and the shipped total mapping with no change required of any consumer. bin/fm-loopspec.sh, the loopspecs/schema.json external_enums pointer, bin/fm-attempt.sh and bin/fm-loop-actuate.sh read it exactly as before; the only added bytes are a generated block naming the owner, which no consumer reads. This is the compatible projection rather than a rename: a flag day was available and was deliberately not taken."
+  },
+  "invariants": [
+    "family_names_unique: no two families may share a name",
+    "family_successors_declared: every family must declare legal_successors, and every name in it must be a declared family",
+    "terminal_family_successors: a family declaring terminal true may name only SUPERSEDED, and SUPERSEDED itself must name none - this is what makes no-stale-resurrection unreachable rather than merely forbidden",
+    "nonterminal_family_requires_obligation: a family declaring terminal false must declare obligation_required true and must name owner_is, wake_is and reobservation_is",
+    "terminal_reason_family_total: every terminal reason must name a declared work family",
+    "terminal_reason_collapse_declares_distinction: when terminal reasons sharing one family differ in kind, each must declare family_distinction",
+    "source_rows_total: every source row must name a declared member of its maps_onto vocabulary, or the OBSERVATION_RESULT literal with an observation_verdict",
+    "source_names_unique: no two rows within one source may name the same state",
+    "no_unreachable_family: every work family must be the target of at least one source row or of at least one terminal reason",
+    "authority_is_not_a_work_family: no source row may map an authority state onto a work family, and no work family may name a member of the AUTHORITY object family",
+    "observation_is_not_a_work_family: an OBSERVATION_RESULT row must carry an observation_verdict from the observation vocabulary and must never name a work family"
+  ]
+}

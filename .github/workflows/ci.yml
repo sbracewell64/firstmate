@@ -431,6 +431,13 @@ jobs:
       # purpose: an unresolved predicate is not a clean repository.
       - name: Every enrolled fail-closed predicate must be consulted
         run: bin/fm-dead-predicate-check.sh
+      # Single owner of the check definition: owner invariants, projection drift,
+      # and inheritance-manifest enforcement are composed by one command, so CI
+      # carries no second spelling of any of them and cannot drift from the
+      # pre-push path. A generated projection edited by hand fails here, which is
+      # what keeps semantics/ the single owner of the vocabulary it emits.
+      - name: State and seam semantics must hold and their projections must be fresh
+        run: bin/fm-semantics.sh check
       - name: Personal fleet paths must not be tracked
         run: |
           set -eu

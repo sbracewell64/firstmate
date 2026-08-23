@@ -1,0 +1,322 @@
+{
+  "semantics_schema_version": 1,
+  "document": "identity",
+  "description": "The single owner of the fleet identity namespaces, of the canonical subject record, and of the cross-namespace edges. It declares what identifies a thing, which single owner may map one namespace onto another, and what a subject reference must carry. It resolves nothing at runtime and stores no subject.",
+  "why": "A subject is identified by ONE canonical compilation, computed once from a fixed field order and reused unchanged for every downstream purpose. With n top-level axes there are n places a caller can pass the wrong value and n places a consumer can read a stale one. With one compiled subject there is exactly one, and a wrong axis produces a DIFFERENT digest - so the request, the authority, the wait and the proof all move together or none of them do. Freshness then falls out of the identity rather than being enforced beside it, which is why a mechanism built this way needs no separate head-change rule anywhere.",
+  "authority": "diagnostic",
+  "authority_why": "New on this branch as a REGISTER. Each individual namespace rule and edge owner named below is already landed and already authoritative in its own owner; what is diagnostic here is the register that collects them and the subject record schema, until the adoption prerequisites in semantics/laws.json pass.",
+  "version": {
+    "namespace_register_version": 1,
+    "subject_schema_version": 1
+  },
+  "canonical_subject": {
+    "schema": "fm-canonical-subject.v1",
+    "rule": "A subject reference is a TYPED reference to a durable canonical subject record. It is never an opaque digest alone, because a digest alone cannot be re-derived, cannot be checked against the world, and cannot say which axes it was compiled from.",
+    "record_fields": {
+      "schema": "the record schema and version string",
+      "subject_type": "one declared subject_type below; determines which axes are required",
+      "digest": "the identity - a lowercase hex digest over the canonical compilation, and the compilation is what is hashed, never a summary of it",
+      "axes": "the compiled axis values, in the fixed order the subject_type declares",
+      "namespace_provenance": "for every axis that came from another namespace, the edge and the edge owner that resolved it",
+      "compiled_at": "when the compilation was performed, so a reader can judge freshness of the MUTABLE axes"
+    },
+    "compilation_rules": [
+      "total_and_ordered: every axis the subject_type declares appears, in the declared order, with no axis omitted",
+      "absent_is_a_literal: an absent optional axis compiles to the literal -, never to an empty value, so absent and omitted cannot collide into one identity",
+      "digest_is_the_identity: the digest of the compilation IS the identity; there is no second identifier to keep in step with it",
+      "validated_at_the_boundary: an axis value is checked against its own namespace rule before it enters the compilation - an object id against the TARGET repository own object-format width, and an undeterminable width refuses rather than defaulting, because a fleet that writes 64-character content digests routinely will otherwise let one be read as a head",
+      "mutable_axes_are_reobserved_effect_proximally: an axis declared mutable is re-observed at the last responsible deterministic boundary before an effect, and no cached value is served to an effect-proximal caller at any age",
+      "stable_axes_may_be_bound_early: an axis declared immutable may be bound at the earliest point it is knowable, and evidence resting on it stays valid only while its COMPLETE immutable dependency set is bound - a partially bound set is not an early pass",
+      "referential_integrity_before_durable_effect: when one axis names an object that must belong to the namespace another axis identifies, the compilation checks that membership BEFORE any durable record or wait is created, and a mismatch refuses with IDENT_NAMESPACE_SUBSTITUTION. The axes are checked TOGETHER rather than one at a time, because each value in the observed recurrences was individually well formed and only the relation between them was wrong. An identity that fails this check may neither CREATE a wait nor SUSTAIN one: a restart recomputes the same refusal from the same durable records, so an invalid tuple cannot be resurrected by replay.",
+      "typed_identity_outranks_every_untyped_source: human context, prose, a local path, a configured venue, an inbound response, or a model-supplied repository name may aid DISCOVERY and may never override the typed identity consumed for applicability. Where the two disagree, the typed identity governs and the disagreement itself refuses; the untyped source is never promoted to repair it."
+    ],
+    "subject_types": [
+      {
+        "subject_type": "repo_object",
+        "required_axes": [
+          "repository",
+          "object_format_width",
+          "oid"
+        ],
+        "mutable_axes": [],
+        "note": "Immutable by construction: an object id names one object forever. A REF is not this type."
+      },
+      {
+        "subject_type": "forge_object",
+        "required_axes": [
+          "venue",
+          "kind",
+          "number"
+        ],
+        "mutable_axes": [
+          "head",
+          "base"
+        ],
+        "note": "The identity is immutable; the head and base it currently points at are not, which is exactly why they are separate mutable axes and not part of the identity."
+      },
+      {
+        "subject_type": "work_item",
+        "required_axes": [
+          "home",
+          "task_id"
+        ],
+        "mutable_axes": [
+          "family"
+        ],
+        "note": "The family is never part of the identity. A task whose state changed is the same task."
+      },
+      {
+        "subject_type": "outbound_request",
+        "required_axes": [
+          "gate",
+          "project",
+          "governed_repo",
+          "item",
+          "pr",
+          "head",
+          "tree",
+          "purpose",
+          "review_envelope",
+          "policy_generation"
+        ],
+        "mutable_axes": [],
+        "note": "TARGET declaration, and it deliberately diverges from the landed compiler in ways semantics/census.json records rather than hides. bin/fm-outbound-artifact-lib.sh fm_outbound_identity_canonical compiles six axes - gate, project, repo, item, pr, head - and none of tree, purpose, review_envelope or policy_generation. It also names its repository axis repo, where this declares governed_repo, because the observed recurrence is precisely that the TRANSPORT repository was written into that axis while the head bound beside it belonged to the governed repository. The minimum binding set declared here is the one three independent rulings each required. Adding or renaming an axis changes every existing digest, so the compatible path is a declared v2 compilation beside the declared v1 rather than a recomputation; this branch declares the target and changes no compiler.",
+        "venue_axes": [
+          "transport_venue",
+          "transport_issue"
+        ],
+        "referential_integrity": [
+          "head must be an object of governed_repo, never of transport_venue - the recurrence is a head that resolves, in the wrong repository",
+          "tree must be the tree of head in governed_repo",
+          "pr must belong to the venue the project registry resolves for governed_repo, never to a slug",
+          "review_envelope and policy_generation must be the validated ones for this exact governed_repo and head, checked together with them rather than beside them"
+        ]
+      },
+      {
+        "subject_type": "authority_target",
+        "required_axes": [
+          "request",
+          "comment",
+          "verdict",
+          "item",
+          "project",
+          "repo",
+          "pr",
+          "head"
+        ],
+        "mutable_axes": [],
+        "note": "Matches the eight axes bin/fm-landing-authorization-lib.sh fm_auth_identity_canonical already compiles. head is an IDENTITY axis and deliberately not a mutable one: when the world moves under it, recompiling yields a different digest, so the authority does not go stale - it stops applying to the subject in front of you. That is the whole of the head-change rule, and it needs no separate mechanism."
+      },
+      {
+        "subject_type": "binding",
+        "required_axes": [
+          "provider",
+          "model",
+          "harness",
+          "native_effort"
+        ],
+        "mutable_axes": [
+          "availability"
+        ],
+        "note": "Availability is a mutable observation ABOUT a binding and is never part of its identity, and never a qualification: qualifications/schema.json owns that separation and this record does not restate it."
+      }
+    ],
+    "venue_axes_rule": "A subject type may declare venue_axes: values that describe WHERE a request was carried, asked, or stored. They are recorded on the subject and are never part of its identity, and no venue value may be read into an identity axis. This is the transport-versus-governed-subject distinction stated mechanically rather than as a caution: an identity axis and a venue axis are disjoint sets, and bin/fm-semantics.sh refuses a subject type in which they overlap."
+  },
+  "namespaces": [
+    {
+      "id": "N1",
+      "namespace": "repo-object",
+      "covers": [
+        "subject repository",
+        "transport repository",
+        "evidence repository"
+      ],
+      "identity_rule": "(repository, object_format_width, oid); the width comes from the TARGET repository own rev-parse --show-object-format, and an undeterminable width REFUSES",
+      "owner": "bin/fm-outbound-artifact-lib.sh fm_outbound_object_width and fm_outbound_head_valid",
+      "merged_why": "Subject, transport and evidence repository are three INSTANCES of one namespace, not three namespaces. Treating them as three is what stops the object-format-width rule from applying uniformly, and a width rule that applies to two of three repositories is a width rule that can be walked around."
+    },
+    {
+      "id": "N2",
+      "namespace": "filesystem-copy",
+      "covers": [
+        "workspace",
+        "local copy",
+        "isolated copy"
+      ],
+      "identity_rule": "(host, absolute realpath); git rev-parse --git-dir is explicitly NOT authoritative for isolation, because it answers a question about the repository rather than about which copy you are standing in",
+      "owner": "bin/fm-worktree-guard.sh",
+      "merged_why": "A filesystem copy is not a repository. A workspace can never become a repository identity, and the substitution has a live cost: a worker that reads a git-dir as proof of isolation can be standing in the primary checkout."
+    },
+    {
+      "id": "N3",
+      "namespace": "work",
+      "covers": [
+        "project",
+        "work item",
+        "task"
+      ],
+      "identity_rule": "(FM_HOME, task-id)",
+      "owner": "data/backlog.md with state/<id>.meta",
+      "merged_why": "Project and work are one namespace because a project alone identifies no work; the pair does."
+    },
+    {
+      "id": "N4",
+      "namespace": "forge",
+      "covers": [
+        "pull request",
+        "merge request",
+        "issue",
+        "comment"
+      ],
+      "identity_rule": "(venue, kind, number), with venue resolved through the project registry and NEVER guessed from a slug",
+      "owner": "bin/fm-pr-check.sh with bin/fm-task-base-lib.sh",
+      "merged_why": "The venue is the load-bearing axis and the one most often dropped: an unqualified forge read answers confidently about a same-numbered object in a different repository."
+    },
+    {
+      "id": "N5",
+      "namespace": "runtime",
+      "covers": [
+        "allocator",
+        "session",
+        "endpoint",
+        "execution"
+      ],
+      "identity_rule": "(backend, endpoint) plus (execution_id)",
+      "owner": "bin/fm-backend.sh with bin/fm-attempt.sh",
+      "merged_why": "One namespace with two levels: the endpoint is where the work runs and the execution is which incarnation ran it. Keeping the execution id inside this namespace is what lets a replaced worker keep the previous worker evidence attributed to the previous worker."
+    },
+    {
+      "id": "N6",
+      "namespace": "binding",
+      "covers": [
+        "provider",
+        "model",
+        "harness",
+        "effort"
+      ],
+      "identity_rule": "(provider, fully-qualified model, harness, native_effort)",
+      "owner": "qualifications/schema.json record.binding with bin/fm-route-lib.sh",
+      "merged_why": "A model name alone is not a binding: the same model at a different effort under a different harness is a different thing to qualify, and treating it as the same is how availability becomes qualification."
+    },
+    {
+      "id": "N7",
+      "namespace": "authority",
+      "covers": [
+        "authority",
+        "effect target"
+      ],
+      "identity_rule": "(authorization_id), spendable and exhaustible",
+      "owner": "bin/fm-landing-authorization-lib.sh",
+      "merged_why": "An authority and the effect it permits share one identity on purpose. Splitting them would let an authority exist without a target, which is a permission with nothing to check against."
+    }
+  ],
+  "not_namespaces": [
+    {
+      "candidate": "candidate head/tree",
+      "why_not": "A head and a tree are two N1 VALUES, not a namespace. Treating the pair as its own namespace is what lets a tree digest be read as a head, and this fleet writes 64-character content digests routinely, so a universal width would let a content digest be read as a head in a sha1 repository - the same substitution as an abbreviation, arriving from the other side."
+    },
+    {
+      "candidate": "transport or control venue",
+      "why_not": "A venue is an AXIS of N4 and of an outbound request, never a subject. A transport cannot become a subject; where a review was asked is not what the review is about.",
+      "observed_recurrence": "Browser Sol ruling comment 5387155383, preserved at data/candidate-publication-effect-guard/browser-sol-transport-correlation-revise-5387155383.md (SHA-256 5be16aa5dbbfe30c2e70e9a81bb696aea1a80f140021f266740c4987bc80a14e), verdict REVISE_TRANSPORT_IDENTITY. Request fm-ob-6267e1c729b9 persisted identity.repo = the CONTROL repository while binding a candidate head belonging to the GOVERNED repository, and the malformed request then sustained an exact-head review wait that later typed rulings could not cure. The masking condition the ruling names is exactly the one this register refuses: the producer treated the configured transport repository as the request subject repository."
+    },
+    {
+      "candidate": "artifact location",
+      "why_not": "Where an artifact sits is a path, and a path is N2. A governed subject is what the artifact is ABOUT."
+    }
+  ],
+  "edges": [
+    {
+      "edge": "N3->N1",
+      "resolves": "slot base and contribution target",
+      "owner": "bin/fm-task-base-lib.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta slot_base, contribution_target, base_state"
+    },
+    {
+      "edge": "N3->N4",
+      "resolves": "the venue and pull request a work item contributes to",
+      "owner": "bin/fm-pr-check.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta contribution_venue, contribution_venue_url, pr, pr_head"
+    },
+    {
+      "edge": "N3->N5",
+      "resolves": "the endpoint and execution running a work item",
+      "owner": "bin/fm-spawn.sh with bin/fm-attempt.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta window, endpoint_task_id, execution_id; state/<id>.lineage"
+    },
+    {
+      "edge": "N3->N6",
+      "resolves": "the route and binding a work item runs on",
+      "owner": "bin/fm-route-lib.sh, enforced at bin/fm-spawn.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta route, route_policy_digest, model, harness, effort"
+    },
+    {
+      "edge": "N3->N2",
+      "resolves": "the isolated copy a work item runs in",
+      "owner": "bin/fm-spawn.sh isolation assertion",
+      "status": "owned",
+      "provenance": "state/<id>.meta worktree"
+    },
+    {
+      "edge": "N4->N7",
+      "resolves": "minting an authority from a ruling on a forge object",
+      "owner": "bin/fm-landing-authorization.sh mint",
+      "status": "owned",
+      "provenance": "data/landing-authorizations/<id>.json"
+    },
+    {
+      "edge": "N7->N4",
+      "resolves": "spending an authority against a forge object",
+      "owner": "bin/fm-landing-seam-lib.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta landing_authorization, merge_verification, merge_verified_head"
+    },
+    {
+      "edge": "N6->capability",
+      "resolves": "whether a binding is qualified for a capability contract",
+      "owner": "bin/fm-qualification-lib.sh",
+      "status": "owned",
+      "provenance": "qualifications/records/<id>.json"
+    },
+    {
+      "edge": "N3->outbound-request",
+      "resolves": "the outbound request a work item waits on",
+      "owner": "bin/fm-outbound-artifact-lib.sh",
+      "status": "owned",
+      "provenance": "data/outbound-artifacts/<id>.json"
+    },
+    {
+      "edge": "N1<->N1 fork/upstream",
+      "resolves": "the relation between a fork lineage and its upstream contribution base",
+      "owner": null,
+      "status": "UNOWNED",
+      "provenance": null,
+      "consequence": "A task can be given a contribution target on which its own dependencies do not exist, and discover it only after a worker is dispatched. That is a fact knowable at intake, discovered after cognition - the Earliest-Knowable predicate failing in one seam."
+    },
+    {
+      "edge": "N4->N3 reverse join",
+      "resolves": "which work item owns an open forge object",
+      "owner": null,
+      "status": "UNOWNED",
+      "provenance": null,
+      "consequence": "An open pull request with no registered owner is an orphaned nonterminal state at fleet scale, and nothing refuses it because no owner is answerable for the edge."
+    }
+  ],
+  "invariants": [
+    "namespace_ids_unique: no two namespaces may share an id or a name",
+    "namespace_owner_declared: every namespace must name exactly one owner",
+    "edge_single_owner: an edge declares exactly one owner, or declares status UNOWNED and states the consequence - zero owners and two owners are the same defect and both refuse at resolution time",
+    "edge_endpoints_declared: every edge endpoint must be a declared namespace, a declared subject_type, or the literal capability",
+    "owned_edge_has_provenance: an edge with an owner must name where its provenance is recorded, because a mapping that leaves no record cannot be re-checked",
+    "authority_is_not_a_namespace_of_names: no namespace identity rule may resolve authority, applicability or eligibility from a name, a pool, a directory, a filename or a schema string",
+    "subject_type_axes_declared: every subject_type must declare required_axes",
+    "mutable_axes_are_not_identity_axes: no axis may be both required and mutable - an identity axis that moves produces a DIFFERENT subject rather than a stale one, which is what makes freshness a property of the identity instead of a rule enforced beside it",
+    "venue_axes_are_not_identity_axes: no axis may be both a venue axis and a required or mutable one - a transport cannot become a subject, and an overlap is what lets a configured venue be read as the thing under review",
+    "referential_integrity_declared_axes_exist: every axis a subject type names in referential_integrity must be one of its required or venue axes, so a rule cannot be written about an axis that does not exist and go quietly vacuous"
+  ]
+}

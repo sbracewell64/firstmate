@@ -228,6 +228,65 @@ This is a writing rule, not a migration.
 
 **Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `<id>.attempt` and `<id>.lineage` rows and section 7's replacement paragraph; the header of [`bin/fm-attempt.sh`](../bin/fm-attempt.sh); the `--succeed-execution` contract in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-execution-replacement.test.sh`](../tests/fm-execution-replacement.test.sh).
 
+### `terminal state`
+
+Ruled 2026-08-23 under the project's standing autonomy when the second sense was built, alongside the semantic register that made the two axes explicit.
+
+| | |
+|---|---|
+| **Stop-reason sense** | *why did this stop* - the nine unified names `no_delta`, `goal_met`, `budget_exhausted`, `no_progress_stalled`, `verification_failed`, `blocked_by_evidence_integrity`, `needs_ruling`, `cancelled`, `unclassified_failure`, owned by `semantics/state-families.json` `terminal_reasons` and projected to `loopspecs/terminal-states.json` |
+| **Family sense** | *what kind of state is this* - the `terminal: true` property of a work family, meaning no unresolved continuation obligation exists, owned by the same file's `families` |
+| **Disposition** | QUALIFY |
+
+The two are different questions at different granularity, and a total mapping joins them: five stop reasons share the family `FAILED`, and the split between them is what tells an operator whether to repair the work, the bound, or the instrument.
+Collapsing them would lose the repair; leaving them unmapped would give the fleet two answers.
+So both keep the word and each is written in its qualified form.
+
+Write `terminal reason` for the stop-reason sense and `terminal family` for the family sense.
+Bare `terminal` is acceptable only as the adjective in `a terminal family`, and never as a noun.
+
+Nothing is renamed.
+`loopspecs/terminal-states.json` keeps its name and its bytes: it is the compatibility projection of the stop-reason vocabulary, and renaming it would have made a migration out of every consumer that reads it.
+
+**Where it bites:** `semantics/state-families.json`; [`docs/state-seam-semantics.md`](state-seam-semantics.md); the header of [`bin/fm-loopspec.sh`](../bin/fm-loopspec.sh); [`AGENTS.md`](../AGENTS.md) section 2's `loopspecs/` row.
+
+### `PASS`
+
+Ruled 2026-08-23 under the same standing autonomy, at the point the second three-valued vocabulary was declared.
+
+| | |
+|---|---|
+| **Observation sense** | `PASS` / `FAIL` / `NO_VERIFIER_RAN` - did the observation happen and what did it see, owned by [`bin/fm-verify-lib.sh`](../bin/fm-verify-lib.sh) |
+| **Validator sense** | `PASS` / `REFUSE` / `CNO` - is this state, transition, effect phase or identity mapping legal, owned by [`bin/fm-semantics-lib.sh`](../bin/fm-semantics-lib.sh) |
+| **Disposition** | QUALIFY |
+
+They are the same three-valued type with different spellings for the second and third value, and the spellings differ because the SUBJECTS differ: one grades a subject, the other grades a state.
+A rename was rejected because both vocabularies are landed and each is correct for its own subject; NO-CONTACT was not available because a consumer routinely converts between them.
+
+`semantics/state-families.json` `verdict_vocabularies` declares both with a TOTAL mapping in each direction, so a consumer converts by lookup rather than by inventing a conversion.
+Write `observation verdict` and `validator verdict` whenever both are in scope.
+Never write `FAIL` for a validator or `REFUSE` for an observation: a consumer branching on a value that can never arrive is the failure this row exists to prevent.
+
+**Where it bites:** [`bin/fm-verify-lib.sh`](../bin/fm-verify-lib.sh); [`bin/fm-semantics-lib.sh`](../bin/fm-semantics-lib.sh); `semantics/state-families.json`; [`docs/state-seam-semantics.md`](state-seam-semantics.md).
+
+### `seam`
+
+Ruled 2026-08-23 under the same standing autonomy.
+
+| | |
+|---|---|
+| **Contract sense** | a typed, versioned, independently testable crossing between two owners, with one left owner, one right owner, one exact crossing identity and one owner-to-repair, owned by `semantics/seams.json` |
+| **Wiring sense** | the landing seam - the single code path by which the mutation path consumes a landing authority, owned by [`bin/fm-landing-seam-lib.sh`](../bin/fm-landing-seam-lib.sh) |
+| **Disposition** | QUALIFY |
+
+The wiring sense is an INSTANCE of the contract sense, not a competing definition, which is why neither is renamed: `bin/fm-landing-seam-lib.sh` is one crossing that satisfies the contract, and the contract describes the class it belongs to.
+The hazard is the other direction - reading the contract sense as if it were wiring, and concluding that declaring a seam does something.
+It does not: a seam reaches `QUALIFIED` only on a real production crossing plus a witnessed red, and `NOT_YET_EXERCISED` is a fourth, distinct value that is never a pass.
+
+Write `seam contract` for the class and `landing seam` for the wiring.
+
+**Where it bites:** `semantics/seams.json`; [`bin/fm-landing-seam-lib.sh`](../bin/fm-landing-seam-lib.sh); [`docs/state-seam-semantics.md`](state-seam-semantics.md).
+
 ## Maintaining this file
 
 Add a row when a word acquires a second live sense in any repository the fleet reads or writes, not when a rename is proposed.

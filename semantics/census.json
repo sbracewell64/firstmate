@@ -1,0 +1,629 @@
+{
+  "semantics_schema_version": 1,
+  "document": "census",
+  "authority": "diagnostic",
+  "not_an_owner": "This census is the MIGRATION SOURCE OF TRUTH and must never become a second semantic owner. It records where a semantics is implemented today and how that implementation is classified. It never defines a vocabulary, never declares a legal successor, and never answers what a word means - semantics/state-families.json, semantics/reasons.json, semantics/identity.json and semantics/seams.json answer that. bin/fm-semantics.sh refuses a census row that declares a vocabulary member the owners do not, which is what keeps the boundary mechanical rather than a promise.",
+  "description": "The fleet-wide semantic-duplication census. One row per discovered implementation of a state, terminal, reason, identity, authority, effect, external-wait, seam, version or retry semantics, each classified exactly once.",
+  "classification_vocabulary": {
+    "CANONICAL_OWNER": "This implementation IS the single owner of its semantics for the fleet. Nothing else may define it.",
+    "GENERATED_PROJECTION": "Emitted from a canonical owner by a deterministic compiler. Never hand-edited; a hand edit is drift and refuses in CI.",
+    "ADAPTER": "An explicit, versioned, temporary translation between a canonical owner and a consumer that cannot yet read it directly. Declares what it retires on.",
+    "LEGACY_TO_MIGRATE": "A correct implementation of a semantics that a canonical owner now also covers. It keeps working; it is scheduled to consume the owner rather than restate it.",
+    "SUBJECT_SPECIFIC_EXTENSION": "A genuine local distinction the canonical vocabulary cannot express. Every row in this class MUST state the consumer-action distinction, or it is a synonym."
+  },
+  "collection": {
+    "base": "fork trunk 1f2141ad25b0da95b1d0a680b4b5887f2ec1ca5c, read in the isolated task worktree for fm/state-law-inheritance-foundation",
+    "scope": "TRACKED, non-SSSF firstmate material only: bin/, loopspecs/, capabilities/, commitments/, qualifications/, .github/workflows/, and tracked schema JSON. No SSSF repository was read, opened or modified.",
+    "method": [
+      "closed vocabularies: grep for unindented FM_*_{VOCABULARY,STATES,GATES,KINDS,VERBS,TOKENS,REASONS,DISPOSITION*,CLASSES,BANDS,VERDICTS,OUTCOMES,LABELS} assignments in bin/*.sh",
+      "schema and protocol versions: grep for fm-<name>.v<n> and fm-<name>/v<n> string literals in bin/*.sh and tracked *.json, plus every *_schema_version key in tracked registry JSON",
+      "identity compilers: grep for unindented function definitions whose names contain canonical, identity, digest, fingerprint or compile in bin/*.sh",
+      "cross-namespace edges: read from the owners the identity register names, one edge per resolved pair",
+      "terminal-vocabulary consumers: grep for terminal-states.json and terminal_states across tracked files"
+    ],
+    "coverage_limits": [
+      "A vocabulary held as a case-statement arm rather than as a named constant is NOT discoverable by this method and is not counted. This is a could-not-observe about the census reach, not a claim that none exists.",
+      "A semantics implemented in a language other than shell or JSON in this repository is out of scope; there is none at this base.",
+      "Private, gitignored fleet state under data/, state/ and config/ is deliberately out of scope, because a census of a tracked template may not depend on one home private records.",
+      "SSSF is inventory-and-comparison material only under the governing commission and was not read for this census."
+    ],
+    "three_valued": "Rows record what was OBSERVED. Where a property could not be observed the row says so in its own text rather than being omitted, because an omitted row and a clean row are indistinguishable to a reader."
+  },
+  "axes": [
+    "state-vocabulary",
+    "reason-vocabulary",
+    "identity",
+    "authority-lifecycle",
+    "effect-lifecycle",
+    "external-wait",
+    "seam-and-version",
+    "retry-and-recovery"
+  ],
+  "rows": [
+    {
+      "id": "CEN-ST-01",
+      "axis": "state-vocabulary",
+      "mechanism": "unified terminal-state vocabulary and its total mapping from four source vocabularies",
+      "implementation": "loopspecs/terminal-states.json",
+      "classification": "GENERATED_PROJECTION",
+      "rationale": "Its semantics moved to semantics/state-families.json on this branch and the file is now emitted by bin/fm-semantics.sh compile, byte-for-byte identical to the shipped vocabulary apart from an added generated block no consumer reads. It stays in place, keeps its name and keeps every consumer, which is why this is a compatible projection rather than a rename.",
+      "consumers": [
+        "bin/fm-loopspec.sh",
+        "loopspecs/schema.json external_enums",
+        "bin/fm-attempt.sh",
+        "bin/fm-loop-actuate.sh"
+      ],
+      "manifest": "state-seam-semantics"
+    },
+    {
+      "id": "CEN-ST-02",
+      "axis": "state-vocabulary",
+      "mechanism": "canonical work-state families, legal successors, terminal reasons and source mappings",
+      "implementation": "semantics/state-families.json",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single place a work-state family name is defined and a legal successor is declared. Its terminal half is authoritative because it is the semantics that already shipped; its family half is diagnostic until the adoption prerequisites pass.",
+      "consumers": [
+        "bin/fm-semantics-lib.sh",
+        "bin/fm-semantics.sh"
+      ],
+      "manifest": "state-seam-semantics"
+    },
+    {
+      "id": "CEN-ST-03",
+      "axis": "state-vocabulary",
+      "mechanism": "crew-state verdict vocabulary, eleven members",
+      "implementation": "bin/fm-classify-lib.sh FM_CREW_STATE_VOCABULARY, derived by bin/fm-crew-state.sh",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "A correct closed vocabulary with its own conformance test that already refuses a consumer defaulting an unlisted verdict. It is now mapped totally onto the canonical families as source crew-state; three of its members map to OBSERVATION_RESULT because they grade the LANE rather than the work. Migration means consuming the projection, not deleting the vocabulary - it stays the right words for its own subject.",
+      "consumers": [
+        "bin/fm-watch.sh",
+        "bin/fm-classify-lib.sh",
+        "bin/fm-decision-surface.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-04",
+      "axis": "state-vocabulary",
+      "mechanism": "status-event verbs a worker may append",
+      "implementation": "bin/fm-classify-lib.sh FM_CLASSIFY_CAPTAIN_TERMINAL_VERBS, FM_CLASSIFY_NONTERMINAL_VERBS, FM_CLASSIFY_PAUSED_VERB_DEFAULT",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "The only state vocabulary a worker writes directly, so an unmapped verb here puts an unclassifiable value into a durable record. Mapped totally as source status-verb.",
+      "consumers": [
+        "bin/fm-status-event-lib.sh",
+        "bin/fm-classify-lib.sh",
+        "bin/fm-brief.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-05",
+      "axis": "state-vocabulary",
+      "mechanism": "outbound request record lifecycle, six states",
+      "implementation": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_RECORD_STATES",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "Correct and deliberately STORED rather than computed, because whether a comment was posted is a transport fact about the outside world that cannot be recomputed from local files. Mapped totally as source outbound-record. Its subject is the REQUEST and never the work the ruling governs, and the mapping records that.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh",
+        "bin/fm-landing-authorization-lib.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-06",
+      "axis": "state-vocabulary",
+      "mechanism": "decision hold disposition vocabulary, eight members",
+      "implementation": "bin/fm-classify-lib.sh FM_DECISION_DISPOSITION_VOCABULARY",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "Five members share one family and differ only in who must act, which is a wake fact rather than a family fact. Mapped totally as source decision-disposition with the difference carried on the rows.",
+      "consumers": [
+        "bin/fm-decision-hold.sh",
+        "bin/fm-classify-lib.sh",
+        "bin/fm-session-start.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-07",
+      "axis": "state-vocabulary",
+      "mechanism": "role-qualification result vocabulary, five values, computed on read and never stored",
+      "implementation": "qualifications/schema.json result_vocabulary with derived_state_is_never_stored",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is a BINDING against a CONTRACT, not a work item. QUALIFICATION_REQUIRED and QUALIFICATION_STALE have no work-family image: they say an observation is owed or has aged, which is a statement about EVIDENCE rather than about work, and folding them into a work family would make a missing observation read as a state work sits in.",
+      "consumer_action_distinction": "A routing consumer branches differently on QUALIFICATION_REQUIRED than on any work family: it activates one bounded qualification workflow for the cheapest promising candidate, on the WORKFLOW own identity and bound, and never spends the blocked work retry budget. No work family produces that action.",
+      "consumers": [
+        "bin/fm-route-lib.sh",
+        "bin/fm-spawn.sh",
+        "bin/fm-qualification.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-08",
+      "axis": "state-vocabulary",
+      "mechanism": "commitment register refused state keys - nine names a stored status word may not use",
+      "implementation": "commitments/schema.json refused_keys",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of the compute-state-never-store-it rule as an ENFORCED refusal rather than a convention. semantics/inheritance-manifest.schema.json reuses the mechanism and extends the list with three runtime-shaped keys rather than restating the nine.",
+      "consumers": [
+        "bin/fm-commitment-register.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-09",
+      "axis": "state-vocabulary",
+      "mechanism": "autonomy posture vocabulary, two values",
+      "implementation": "bin/fm-autonomy-lib.sh FM_AUTONOMY_STATE_VOCABULARY",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is who may decide a routine gate, not what a work item is doing. It is an AUTHORITY posture rather than a work state.",
+      "consumer_action_distinction": "A consumer reads it to decide whether firstmate may answer an ask-user finding itself or must escalate. No work family answers that, and giving it one would let a subject BE authorised rather than hold a decision authority.",
+      "consumers": [
+        "bin/fm-spawn.sh",
+        "bin/fm-brief.sh",
+        "bin/fm-pr-merge.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-10",
+      "axis": "state-vocabulary",
+      "mechanism": "blocker movement verdicts, five values including cycle and unobserved",
+      "implementation": "bin/fm-blocker-lib.sh FM_BLOCKER_MOVEMENT_VOCABULARY",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is an EDGE in the dependency graph, not a state. cycle has no work-family image at all: a cycle is a property of the graph.",
+      "consumer_action_distinction": "A consumer branches to refuse traversal on cycle and to report could-not-observe on unobserved; both actions are about the graph and neither is available from a work family.",
+      "consumers": [
+        "bin/fm-blocker-lib.sh",
+        "bin/fm-decision-surface.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ST-11",
+      "axis": "state-vocabulary",
+      "mechanism": "route health states - availability only, never a demotion",
+      "implementation": "bin/fm-route-lib.sh FM_ROUTE_HEALTH_STATES",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is a PROVIDER reachability observation about a binding. Its own owner already refuses to let it become a qualification.",
+      "consumer_action_distinction": "A consumer holds a model out of a pool for a cooldown and substitutes within the same pool in order; a work family never produces a substitution. Reading availability as qualification is the exact collapse the qualification register exists to refuse.",
+      "consumers": [
+        "bin/fm-route.sh",
+        "bin/fm-spawn.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-RE-01",
+      "axis": "reason-vocabulary",
+      "mechanism": "canonical refusal and could-not-observe reason codes, six namespaces",
+      "implementation": "semantics/reasons.json",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single register in which a reason code is declared and resolves to exactly one namespace. Diagnostic until adoption.",
+      "consumers": [
+        "bin/fm-semantics-lib.sh"
+      ],
+      "manifest": "state-seam-semantics"
+    },
+    {
+      "id": "CEN-RE-02",
+      "axis": "reason-vocabulary",
+      "mechanism": "outbound classification and refusal tokens, every token required to have an emit site",
+      "implementation": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_TOKEN_* block",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "The strongest reason vocabulary in the fleet: a colocated test reads the declarations and refuses any token the module never expands, so a classification that cannot occur cannot be documented. Its tokens are subject-specific spellings of canonical classes and it should consume the canonical namespaces rather than a second register being built beside it. It is not reclassified as an extension because the mechanism is general and the fleet should inherit it.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh",
+        "bin/fm-session-start.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-RE-03",
+      "axis": "reason-vocabulary",
+      "mechanism": "three-valued observation type PASS, FAIL, NO_VERIFIER_RAN, with a consumer that must handle all three",
+      "implementation": "bin/fm-verify-lib.sh",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of the observation type. semantics/state-families.json declares it as the EVIDENCE object family and maps it totally onto the validator vocabulary rather than restating it; the validator vocabulary is a different spelling for a different subject and both are declared with a total mapping in both directions.",
+      "consumers": [
+        "bin/fm-verify.sh",
+        "every declared verifier consumer"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-RE-04",
+      "axis": "reason-vocabulary",
+      "mechanism": "landing-authorization refusal token families, kept apart from unobserved",
+      "implementation": "bin/fm-landing-authorization-lib.sh",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "Correct and load-bearing: an operator told only that it did not work repairs the wrong thing. Its codes are subject-specific spellings of the canonical effect namespace.",
+      "consumers": [
+        "bin/fm-landing-authorization.sh",
+        "bin/fm-landing-seam-lib.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-01",
+      "axis": "identity",
+      "mechanism": "canonical six-axis outbound request compilation whose digest is the request id",
+      "implementation": "bin/fm-outbound-artifact-lib.sh fm_outbound_identity_canonical and fm_outbound_request_id",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The reference implementation of Identity Integrity in this fleet: fixed order, a literal for absent, digest IS the id - so a moved head produces a different artifact and no separate head-change rule is needed anywhere in the mechanism.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh",
+        "bin/fm-landing-authorization-lib.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-02",
+      "axis": "identity",
+      "mechanism": "request purpose, review-envelope digest and policy generation as identity axes",
+      "implementation": null,
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "OBSERVED GAP, recorded rather than papered over. semantics/identity.json declares ten required axes for the outbound_request subject type - the six bin/fm-outbound-artifact-lib.sh fm_outbound_identity_canonical compiles, plus tree, purpose, review_envelope and policy_generation. Three independent Browser Sol rulings each required the last two by name, so a policy generation and a validated review envelope are today carried in prose beside an identity that does not include them. Adding them changes every existing digest, so the compatible path is a declared v2 compilation beside the declared v1 rather than a recomputation. This branch declares the target and changes no compiler; CEN-ID-08 carries the recurrence evidence and CEN-ID-09 carries the repository-axis half of the same divergence.",
+      "consumers": [],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-03",
+      "axis": "identity",
+      "mechanism": "eight-axis landing-authority compilation",
+      "implementation": "bin/fm-landing-authorization-lib.sh fm_auth_identity_canonical and fm_auth_id",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single compiler for an authority target. Its idempotence on identity is what makes a duplicate wake converge on the same authority rather than mint a second one.",
+      "consumers": [
+        "bin/fm-landing-authorization.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-04",
+      "axis": "identity",
+      "mechanism": "object-format width resolved from the TARGET repository, undeterminable width refuses",
+      "implementation": "bin/fm-outbound-artifact-lib.sh fm_outbound_object_width and fm_outbound_head_valid",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of the repo-object identity rule. It is the rule that stops a 64-character content digest being read as a head in a sha1 repository, and stops a seven-character abbreviation binding as an exact head.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-05",
+      "axis": "identity",
+      "mechanism": "the seven identity namespaces and the eleven cross-namespace edges",
+      "implementation": "semantics/identity.json",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "A REGISTER of owners rather than a new resolver. Every listed rule and edge owner is already landed and already authoritative in its own owner; what is new is that the set is enumerable and that an edge with zero owners is now visible as a defect rather than as an absence. Two edges are recorded UNOWNED.",
+      "consumers": [
+        "bin/fm-semantics-lib.sh"
+      ],
+      "manifest": "state-seam-semantics"
+    },
+    {
+      "id": "CEN-ID-06",
+      "axis": "identity",
+      "mechanism": "route policy digest binding a dispatch to the exact policy surface that checked it",
+      "implementation": "bin/fm-route-lib.sh fm_route_policy_digest",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is a POLICY SURFACE, not a work item or a repository object. It is compiled so a later reader can tell which policy text admitted a dispatch.",
+      "consumer_action_distinction": "A consumer compares a recorded dispatch policy digest against the current one to decide whether a recorded route decision is still attributable; no canonical subject type answers that, because the thing identified is the rule rather than the subject the rule was applied to.",
+      "consumers": [
+        "bin/fm-spawn.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-07",
+      "axis": "identity",
+      "mechanism": "test-isolation subject digests binding a proof to exact subject bytes",
+      "implementation": "bin/fm-test-isolation-lib.sh fm_isolation_digest_file and fm_isolation_contract_digest",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is a FILE at exact bytes plus an isolation contract, and the identity exists to make a proof go stale the moment its subject moves.",
+      "consumer_action_distinction": "A consumer refuses to reuse a proven-isolation record when the subject bytes changed, and re-measures; no canonical subject type carries a proof-freshness obligation, and giving one to work_item would make every unrelated commit invalidate it.",
+      "consumers": [
+        "bin/fm-test-run.sh --check-coverage",
+        "bin/fm-test-isolation-proof.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-ID-08",
+      "axis": "identity",
+      "mechanism": "transport or control venue kept subordinate to the governed subject, with referential integrity between the axes checked before any durable effect",
+      "implementation": "semantics/identity.json canonical_subject.venue_axes_rule, the outbound_request venue_axes and referential_integrity declarations, and the compilation rule referential_integrity_before_durable_effect",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single place the distinction is stated mechanically rather than as a caution. A venue axis and an identity axis are disjoint SETS, and bin/fm-semantics.sh refuses a subject type in which they overlap, so a configured transport repository cannot be read as the thing under review. This branch DECLARES the target and changes no producer; the outbound repair is phase 9 work and is deliberately not started here.",
+      "observed_recurrence": "THREE independent Browser Sol rulings, on three different decision subjects, recording ONE defect class. Every one declared the SAME transport repository as the request subject repository while binding an exact head that resolves - in a different repository.",
+      "why_each_axis_was_individually_valid": "Both axis values were well formed on their own. Only the RELATION between them was wrong, which is why a per-field validator could not have caught it and why the rule is stated as referential integrity between axes rather than as another field check.",
+      "consumers": [
+        "bin/fm-semantics-lib.sh validate_identity_mapping"
+      ],
+      "manifest": "state-seam-semantics",
+      "recurrence_instances": [
+        {
+          "ruling": "5385612078",
+          "request": "fm-ob-26660534cd52",
+          "declared_repo": "sbracewell64/firstmate-sol-control",
+          "exact_head": "1f2141ad25b0da95b1d0a680b4b5887f2ec1ca5c",
+          "head_actually_belongs_to": "sbracewell64/firstmate",
+          "reason_code": "OUTBOUND_REQUEST_REPOSITORY_IDENTITY_MISMATCH_RECURS",
+          "classification": "CONTROL_TRANSPORT_DEFECT",
+          "preserved_at": "data/runtime-review-luna-adjudicator-qualification/browser-sol-transport-revise-5385612078.md",
+          "note": "Also records that the request context named the governed repository in PROSE while the typed binding named the transport one, and rules that prose may aid discovery and never override typed identity."
+        },
+        {
+          "ruling": "5385881288",
+          "request": "fm-ob-7804557b2dfe",
+          "declared_repo": "sbracewell64/firstmate-sol-control",
+          "exact_head": "16db74ff194cc0246e83f26c246bfcf2bb57600c",
+          "head_actually_belongs_to": "sbracewell64/inkwell-agent-sandboxes-and-software-factory",
+          "reason_code": "OUTBOUND_REQUEST_REPOSITORY_IDENTITY_MISMATCH_RECURS",
+          "classification": "post-authorization recurrence",
+          "preserved_at": "data/sssf-launch-1-pr28-browser-sol-ruling/browser-sol-transport-revise-5385881288.md",
+          "note": "The load-bearing instance: it repeated the SAME defect class AFTER a canonical transport repair had already been authorized. A defect that recurs past its own authorized fix is the argument for a mechanical, drift-checked declaration rather than another repair."
+        },
+        {
+          "ruling": "5387155383",
+          "request": "fm-ob-6267e1c729b9",
+          "declared_repo": "sbracewell64/firstmate-sol-control",
+          "exact_head": "cf4c640bb1c7561b6c65f28cb1346c25ebe36d40",
+          "head_actually_belongs_to": "sbracewell64/firstmate",
+          "reason_code": "REVISE_TRANSPORT_IDENTITY",
+          "classification": "CONTROL_TRANSPORT_DEFECT",
+          "preserved_at": "data/candidate-publication-effect-guard/browser-sol-transport-correlation-revise-5387155383.md",
+          "sha256": "5be16aa5dbbfe30c2e70e9a81bb696aea1a80f140021f266740c4987bc80a14e",
+          "note": "Adds the missing governed tree, ReviewEnvelope digest, purpose and policy-generation bindings to the same finding, and names the masking condition: the producer treats the configured transport repository as the request subject repository."
+        }
+      ],
+      "shared_defect_facts": [
+        "Each request was individually well formed per field; only the RELATION between the repository axis and the head axis was wrong, which is why no per-field validator could have caught any of the three.",
+        "All three are REVISE with captain_required false, self-handled under existing authority. None is a merits ruling and none grants approval, publication, landing, reviewer qualification or one-use authority.",
+        "All three require the identity to be derived from ONE validated decision subject and its axes checked TOGETHER immediately before durable emission, not one at a time and not afterwards.",
+        "All three name the same minimum binding set: governed repository, work or item identity, exact candidate head, validated ReviewEnvelope digest, and review-policy version or generation.",
+        "All three rule that an invalid tuple may neither CREATE nor SUSTAIN an AWAITING_BROWSER_SOL wait, and that restart or replay must not resurrect one.",
+        "All three forbid a second parallel transport owner and forbid retyping the subject from prose."
+      ],
+      "what_the_foundation_expresses": "Venue axes declared disjoint from identity axes; governed_repo named for what it identifies; the minimum binding set declared as required axes; referential integrity between axes required before any durable record or wait and equally against sustaining one; and typed identity declared to outrank every untyped source. Declarations and refusals only - no producer is changed on this branch, and the outbound repair is phase 9."
+    },
+    {
+      "id": "CEN-ID-09",
+      "axis": "identity",
+      "mechanism": "outbound request subject repository axis, as currently compiled",
+      "implementation": "bin/fm-outbound-artifact-lib.sh fm_outbound_identity_canonical, axis repo",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "The landed compiler names one axis repo and does not distinguish the governed repository from the transport venue, which is the axis the observed recurrence in CEN-ID-08 wrote the wrong value into. semantics/identity.json declares the target as governed_repo with transport_venue as a separate non-identity axis. Migrating means a declared v2 compilation beside the declared v1, because adding or renaming an axis changes every existing digest; it is NOT a rewrite of existing records, and it is phase 9 work rather than this branch.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh",
+        "bin/fm-landing-authorization-lib.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-AU-01",
+      "axis": "authority-lifecycle",
+      "mechanism": "one-use head-bound landing authority: granted, spending, spent, void with intent before act",
+      "implementation": "bin/fm-landing-authorization-lib.sh",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of the AUTHORITY object family and the fleet reference implementation of Effect Integrity. spending is the honest name for the window in which the act may or may not have happened, and it is the state a careless implementation omits.",
+      "consumers": [
+        "bin/fm-landing-authorization.sh",
+        "bin/fm-landing-seam-lib.sh",
+        "bin/fm-pr-merge.sh",
+        "bin/fm-merge-local.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-AU-02",
+      "axis": "effect-lifecycle",
+      "mechanism": "the only wiring by which the mutation path consumes a landing authority",
+      "implementation": "bin/fm-landing-seam-lib.sh",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The lifecycle-call strategy already built: a control the mutation path can route around is not a control but a description of one, so this file is deliberately the ONLY wiring. It is the landed argument against a hook bus.",
+      "consumers": [
+        "bin/fm-pr-merge.sh",
+        "bin/fm-merge-local.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-AU-03",
+      "axis": "effect-lifecycle",
+      "mechanism": "post-effect proof of a merge recorded as merge_verification and merge_verified_head",
+      "implementation": "bin/fm-pr-merge.sh writing state/<id>.meta",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "A real post-effect proof: it re-checks the pull request current head and refuses a merge it cannot confirm green, mergeable and unblocked. What is not yet true is that an ABSENT proof is EFFECT_UNPROVEN rather than merely unmentioned, which is what inheriting the effect namespace would add.",
+      "consumers": [
+        "bin/fm-certify.sh",
+        "firstmate reporting"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-EW-01",
+      "axis": "external-wait",
+      "mechanism": "typed outbound gate vocabulary and the durable request-to-ruling correlation record",
+      "implementation": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_GATES with data/outbound-artifacts/",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of what a typed external wait IS. One record serves both directions, so a ruling stays attributable to the request that asked for it, and a wait with no applicable artifact is a transport defect rather than patience.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh check",
+        "bin/fm-session-start.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-EW-02",
+      "axis": "external-wait",
+      "mechanism": "prose backlog hold recognition, tier 2",
+      "implementation": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_PROSE_TOKENS",
+      "classification": "ADAPTER",
+      "rationale": "Explicitly and correctly temporary in its own owner text: a tier-2 match whose gate type cannot be typed from the prose is reported as an incomplete binding, which is a defect requiring reconciliation and never a pass. It retires when every hold carries a typed gate.",
+      "retires_on": "every backlog hold carrying a typed outbound gate, at which point tier 2 matches nothing and is removed",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh check"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-EW-03",
+      "axis": "external-wait",
+      "mechanism": "durable dependency blocker baseline and its pause re-evaluation",
+      "implementation": "bin/fm-blocker-lib.sh writing state/<id>.blockers",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "Its subject is an INTERNAL dependency between two work items, not an artifact outside the fleet. No outbound artifact exists or should exist for it.",
+      "consumer_action_distinction": "A consumer re-evaluates a pause when a NAMED dependency moves in the local backlog, with no transport, no correlation record and no external party; an outbound wait consumer instead verifies that a durable external artifact exists. Two different first actions.",
+      "consumers": [
+        "bin/fm-watch.sh",
+        "bin/fm-decision-surface.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-EW-04",
+      "axis": "external-wait",
+      "mechanism": "capacity deferral wait, resumed automatically when the recorded retry condition is met",
+      "implementation": "bin/fm-capacity-retry.sh with state/<id>.capacity",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "The waited-on thing is a provider quota window, which no artifact records and no party rules on.",
+      "consumer_action_distinction": "A consumer must NOT re-dispatch by hand and must not substitute a model below the floor: the wait resumes itself. Every other external wait requires a consumer action on arrival; this one requires the consumer to do nothing, which is the opposite branch.",
+      "consumers": [
+        "bin/fm-capacity-retry.sh",
+        "bin/fm-spawn.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-SE-01",
+      "axis": "seam-and-version",
+      "mechanism": "seam row contract, four-valued seam state, protocol law and the declared protocol register",
+      "implementation": "semantics/seams.json",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of what a seam contract is and of which protocol versions are declared with which producers. It records no live seam state, because whether a crossing is currently healthy is an observation made by the seam owner.",
+      "consumers": [
+        "bin/fm-semantics-lib.sh"
+      ],
+      "manifest": "state-seam-semantics"
+    },
+    {
+      "id": "CEN-SE-02",
+      "axis": "seam-and-version",
+      "mechanism": "consumer-declared accepted schema version, so an unannounced change refuses rather than being parsed on a guess",
+      "implementation": "bin/fm-landing-authorization-lib.sh FM_AUTH_CORRELATION_SCHEMA",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The landed instance of protocol law P2. Its own comment is the rule, and semantics/seams.json generalises rather than restates it.",
+      "consumers": [
+        "bin/fm-landing-authorization.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-SE-03",
+      "axis": "seam-and-version",
+      "mechanism": "count-then-read structural parsing of a top-level authoritative field, whole-value comparison, exactly-one multiplicity",
+      "implementation": "bin/fm-outbound-artifact-lib.sh fm_outbound_sender_valid and the ambiguous-candidates refusal",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of the top-level parse rule. It refuses a prefix match, refuses a body carrying more than one ruling marker as ambiguous, and keeps ambiguity apart from mismatch because a mismatch says the one candidate found is not about this work while ambiguity says several were found and none can be chosen.",
+      "consumers": [
+        "bin/fm-outbound-artifact.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-SE-04",
+      "axis": "seam-and-version",
+      "mechanism": "external_enums pointer: a schema consuming a vocabulary owned elsewhere instead of restating it",
+      "implementation": "loopspecs/schema.json external_enums with bin/fm-loopspec.sh enum injection",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The landed pattern for one-owner vocabulary sharing across two files, and the mechanism that lets the terminal projection change owners with no consumer edit.",
+      "consumers": [
+        "bin/fm-loopspec.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-SE-05",
+      "axis": "seam-and-version",
+      "mechanism": "complete machine projection of the semantic owners, JSON and bash",
+      "implementation": "semantics/generated/semantics.projection.json and semantics/generated/semantics.projection.sh",
+      "classification": "GENERATED_PROJECTION",
+      "rationale": "Emitted by bin/fm-semantics.sh compile, reproducible byte-for-byte, never hand-edited, and drift-checked in CI. The bash projection exists so an existing shell owner can consume the vocabulary without a JSON parse on a hot path.",
+      "consumers": [
+        "bin/fm-semantics-lib.sh",
+        "future consuming owners"
+      ],
+      "manifest": "state-seam-semantics"
+    },
+    {
+      "id": "CEN-RT-01",
+      "axis": "retry-and-recovery",
+      "mechanism": "durable attempt count and retry budget, spent only after a RECORDED failure",
+      "implementation": "bin/fm-attempt.sh with state/<id>.attempt",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of a work item retry bound. A retry decision is arithmetic rather than a judgement, which is exactly the RETRY_PENDING consumer action - check the bound, not the work.",
+      "consumers": [
+        "bin/fm-spawn.sh",
+        "bin/fm-capacity-retry.sh",
+        "bin/fm-teardown.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-RT-02",
+      "axis": "retry-and-recovery",
+      "mechanism": "capacity deferral bound, counted in the same record and reaching two distinct terminal states",
+      "implementation": "bin/fm-attempt.sh deferrals with bin/fm-capacity-retry.sh",
+      "classification": "LEGACY_TO_MIGRATE",
+      "rationale": "Already correct and already registered in the terminal vocabulary as source capacity-wait, whose two rows are deliberately mapped to different unified states: a bound that was REACHED and a bound that was never ENFORCEABLE are different facts with different repairs. It migrates by consuming the projection.",
+      "consumers": [
+        "bin/fm-capacity-retry.sh"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-RT-03",
+      "axis": "retry-and-recovery",
+      "mechanism": "execution replacement: a new worker incarnation on the same lane, spending no attempt",
+      "implementation": "bin/fm-attempt.sh replace with state/<id>.lineage",
+      "classification": "CANONICAL_OWNER",
+      "rationale": "The single owner of the successor-worker relation and the landed reference implementation of L3.3. The append-only ledger is what keeps a superseded worker evidence attributed to the worker that produced it, and a provider that ran out of window did not fail the work.",
+      "consumers": [
+        "bin/fm-spawn.sh --succeed-execution"
+      ],
+      "manifest": null
+    },
+    {
+      "id": "CEN-RT-04",
+      "axis": "retry-and-recovery",
+      "mechanism": "bounded qualification workflow, bounded on its OWN identity and never on the identity it would unblock",
+      "implementation": "bin/fm-qualification.sh with state/qualification/",
+      "classification": "SUBJECT_SPECIFIC_EXTENSION",
+      "rationale": "A retry bound whose subject is an OBSERVATION workflow rather than the work.",
+      "consumer_action_distinction": "A consumer must charge the bound to the workflow identity, so a qualification attempt can never spend a retry the real work is owed. Charging it to the work identity - the canonical retry behaviour - would be the defect this separation exists to prevent.",
+      "consumers": [
+        "bin/fm-route-lib.sh"
+      ],
+      "manifest": null
+    }
+  ],
+  "duplication_finding": "Six independent implementations of one state law were found across six vocabularies in six files: the unified terminal vocabulary, the three-valued observation type, the refused-state-key rule, the computed-on-read five-value qualification result, the canonical identity compilation, and the four-phase spendable authority. Each is correct. None was reusable by the next mechanism, and that - not the duplicated code, which is small - is the cost this substrate is built to remove.",
+  "unowned_edges_finding": "Two cross-namespace edges have NO owner: fork lineage to upstream contribution base, and forge object back to work item. Zero owners and two owners are the same defect, because in both cases nobody is answerable. Recorded here and in semantics/identity.json; neither is repaired on this branch, because repairing them is migration work and this branch is the foundation.",
+  "observed_gaps": [
+    "CEN-ID-02 and CEN-ID-09: the outbound request identity declares ten axes and the landed compiler compiles six, under a different name for the repository axis. Declared, not repaired - the repair is phase 9.",
+    "A forge-actionability vocabulary exists only in a private, gitignored census artifact, so it could not be registered as a tracked source. That is a could-not-observe about tracked scope, not a claim that the vocabulary is absent.",
+    "bin/fm-verify.sh declares five verifiers and none of them covers a state-family, identity-mapping, seam or registry-conformance observation. The four validators added on this branch are diagnostic and are deliberately NOT registered as declared verifiers, because a verifier registration is an authority claim and the adoption prerequisites have not passed."
+  ],
+  "invariants": [
+    "row_ids_unique: no two rows may share an id",
+    "row_axis_declared: every row axis must be one of the declared axes",
+    "row_classification_declared: every row classification must be one of the declared classification vocabulary keys",
+    "extension_states_consumer_action: every SUBJECT_SPECIFIC_EXTENSION row must carry a non-empty consumer_action_distinction, because a distinction no consumer branches on is a synonym",
+    "adapter_states_retirement: every ADAPTER row must name what it retires on, because an adapter with no retirement condition is a permanent hidden second path",
+    "generated_projection_has_owner: every GENERATED_PROJECTION row must name a manifest, so a projection can always be traced to the owner that emits it",
+    "census_defines_no_vocabulary: no row may introduce a vocabulary member that the owner documents do not declare - the census records where a semantics lives and never what it means"
+  ]
+}

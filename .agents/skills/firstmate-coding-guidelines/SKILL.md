@@ -55,6 +55,18 @@ A source missing an input the rule needs says so and gets a could-not-observe; i
 Never put a fallback for a missing input inside the shared rule, because that silently hands every source the weakest guarantee any of them has.
 `bin/fm-verify-lib.sh`'s check-rollup section is the worked example, and `tests/fm-exact-head-green-one-owner.test.sh` keeps the divergence that motivated it as an executed red control.
 
+## Reuse before a new distinction
+
+Before designing a NEW stateful mechanism in this repo - anything that names a state, a refusal reason, an identity namespace, a subject type, an effect or authority lifecycle, or a protocol - run `bin/fm-semantics.sh preflight --concept <c> --name <n>`.
+Reuse is mandatory where a shared semantics applies, so an existing name refuses rather than being reported as a coincidence.
+
+A genuinely new distinction needs two things before it may exist: a stated consumer-action difference - name the consumer whose ACTION differs, because a distinction no consumer branches on is a synonym - and an attempt to extend the shared contract first.
+Both are declared in an inheritance manifest under `semantics/manifests/`, which `bin/fm-semantics.sh manifest` validates and CI enforces.
+
+Never hand-edit a generated projection.
+`loopspecs/terminal-states.json` and `semantics/generated/` are compiled from the owners by `bin/fm-semantics.sh compile`; edit the owner and recompile, because a hand edit is drift and the CI check refuses it.
+[`docs/state-seam-semantics.md`](../../../docs/state-seam-semantics.md) owns the architecture, the extension points, and what must be true before anything there is authoritative.
+
 ## Inline-stub pattern
 
 When content moves out of `AGENTS.md` into a skill, decide what stays behind by asking one question: what must survive with no skill loaded?

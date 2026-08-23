@@ -1,6 +1,15 @@
 {
+  "generated": {
+    "by": "bin/fm-semantics.sh compile",
+    "from": [
+      "semantics/state-families.json"
+    ],
+    "source_digest": "a48ce8319c326c09edab9de25312a357159542a0dc0561d35bdfcd8c0471d146",
+    "do_not_edit": "This file is a COMPATIBILITY PROJECTION. Its vocabulary, its source mappings and its invariants are owned by semantics/state-families.json and are reproduced here unchanged so every existing consumer keeps working with no edit. Edit the owner and run bin/fm-semantics.sh compile; a hand edit here is drift and CI refuses it.",
+    "authority": "authoritative - this projection carries semantics that were already authoritative before the owner moved"
+  },
   "loopspec_schema_version": 1,
-  "description": "The single owner of firstmate's unified terminal-state vocabulary and of the total mapping onto it from every source vocabulary that names the same facts. A terminal state answers one question: why did this stop. Two systems previously answered it in two vocabularies - a LoopSpec finalising on no_progress_stalled and an execution node finalising on iteration-cap-failed are the same fact named twice. This file names each fact once and records where every source name lands. bin/fm-loopspec.sh is its only interpreter; schema.json consumes the unified names through its external_enums pointer and never restates them.",
+  "description": "The compatibility projection of firstmate's unified terminal-reason vocabulary and of the total mapping onto it from every source vocabulary that names the same facts. A terminal reason answers one question: why did this stop. Two systems previously answered it in two vocabularies - a LoopSpec finalising on no_progress_stalled and an execution node finalising on iteration-cap-failed are the same fact named twice. Each fact is named once and every source name is recorded against it. semantics/state-families.json OWNS this vocabulary and bin/fm-semantics.sh compile emits this file from it; bin/fm-loopspec.sh remains its interpreter here, and loopspecs/schema.json consumes the unified names through its external_enums pointer and never restates them.",
   "unified": [
     {
       "name": "no_delta",

@@ -1,0 +1,150 @@
+{
+  "semantics_schema_version": 1,
+  "document": "laws",
+  "description": "The single owner of the five laws, the three gate-placement predicates, the Observation Horizon Dominance predicate, the lifecycle-call strategy, and the adoption prerequisites that decide when anything defined in semantics/ may be called authoritative. It states properties and names their landed reference implementations. It enforces nothing by itself: each law ships as a validator with a fixture and a witnessed red, or it does not ship.",
+  "why": "Fourteen undifferentiated laws cannot be held at a decision point, and a law nobody applies is prose. Six of the fourteen produce no distinct consumer action and are refusal REASONS; they keep their full force in semantics/reasons.json and stop competing for the attention the five laws need. The single largest risk to this whole substrate is that it becomes documentation nobody applies - and this fleet has a live proof that the risk is real: the highest-risk maker route states its review obligation as a prose string no code reads, while the reviewer route beside it states the same obligation as a key and enforces correctly.",
+  "authority": "diagnostic",
+  "authority_why": "New on this branch. A law becomes authoritative FOR A MECHANISM when that mechanism declares it in an inheritance manifest and the adoption prerequisites below pass for that mechanism. It never becomes authoritative fleet-wide by being written down here.",
+  "version": {"law_set_version": 1, "gate_predicate_version": 1},
+  "laws": [
+    {
+      "id": "L1",
+      "name": "State Family Integrity",
+      "statement": "Every reachable load-bearing state is either TERMINAL, with no unresolved continuation obligation, or NONTERMINAL, declaring an owner, a wake, a reobservation and a bounded enumerable set of legal successors. A state satisfying neither is a defect, and the defect is the state own, not the reader.",
+      "clauses": {
+        "L1.1": "A state is LOAD-BEARING if any decision, gate, effect or captain-facing sentence depends on it. Non-load-bearing state is out of scope and stays out.",
+        "L1.2": "A nonterminal obligation is not satisfied by naming an owner. It must name HOW the state is re-observed and WHAT wakes the fleet when it changes. A nonterminal state whose reobservation has never fired is not patient; it is orphaned.",
+        "L1.3": "legal_successors is bounded and enumerable FROM THE FAMILY ALONE, before the subject is known. That is what makes transition checking a lookup rather than a judgement.",
+        "L1.4": "A state carries as_of. A state read outside its declared freshness may be rendered as a HISTORICAL DIAGNOSTIC and may never be consumed as a current fact."
+      },
+      "reason_namespace": "state_family",
+      "landed_reference": "loopspecs/terminal-states.json declares a terminal vocabulary with a kind and a TOTAL mapping from four source vocabularies; bin/fm-verify-lib.sh declares the three-valued observation type and refuses a consumer that does not handle all three; commitments/schema.json refuses nine state-like keys by name; qualifications/schema.json computes five values on every read and never stores one.",
+      "validator": "validate_state"
+    },
+    {
+      "id": "L2",
+      "name": "Identity Integrity",
+      "statement": "A subject is identified by ONE canonical compilation, computed once from a fixed field order and reused unchanged for every downstream purpose. Every cross-namespace mapping has exactly one deterministic owner and leaves a provenance record. No authority, applicability or eligibility is ever resolved by a name.",
+      "clauses": {
+        "L2.1": "The compilation is total and ordered; an absent optional field is a distinct literal, never empty, so absent and omitted cannot collide.",
+        "L2.2": "The digest of the compilation IS the identity, so freshness falls out of it: a moved head yields a different compilation, a different identity and therefore a different artifact - and no separate head-change rule is needed anywhere.",
+        "L2.3": "Every cross-namespace edge names its single owner and records provenance. Two owners for one edge is the defect, not a redundancy.",
+        "L2.4": "Membership in a pool, a list, a directory, a filename or a schema string never grants a capability, an applicability or a permission. Authority is held as a SPENDABLE OBJECT, never as a property of the thing it authorises."
+      },
+      "reason_namespace": "identity",
+      "landed_reference": "bin/fm-outbound-artifact-lib.sh fm_outbound_identity_canonical is L2.1 and L2.2 in a few lines for six axes, and fm_outbound_object_width takes the object-id width from the target repository own format and refuses an undeterminable one.",
+      "validator": "validate_identity_mapping"
+    },
+    {
+      "id": "L3",
+      "name": "Transition Integrity",
+      "statement": "Evidence is valid only in the context that produced it. A transition is legal only if the source family declares it. Evidence may not cross a family boundary to promote a state, and a superseded state may not be resurrected by later evidence.",
+      "clauses": {
+        "L3.1": "A verdict from one family never advances a subject in another. Availability does not qualify. Openness does not make actionable. A green check does not review. A passing review does not authorise landing.",
+        "L3.2": "Once a subject is SUPERSEDED, no later evidence returns it to a nonterminal family. A successor may be created; the predecessor stays where it is.",
+        "L3.3": "Evidence carries the binding, generation and time that produced it. A successor produced by a NEW worker keeps the OLD worker evidence attributed to the old worker."
+      },
+      "reason_namespace": "transition",
+      "landed_reference": "state/<id>.lineage, the append-only execution ledger written only by bin/fm-attempt.sh, exists exactly for L3.3: nothing rewrites it, which is what keeps a superseded worker evidence attributed to the worker that produced it.",
+      "validator": "validate_transition"
+    },
+    {
+      "id": "L4",
+      "name": "Effect Integrity",
+      "statement": "An irreversible act writes INTENT BEFORE the act and OUTCOME AFTER it, and the gap between them is a named state, never one of its neighbours. Every effect requires a post-effect proof that the intended effect is now observably true.",
+      "clauses": {
+        "L4.1": "The four-phase shape PRE_EFFECT, EFFECT, COMMIT_POINT, POST_EFFECT is mandatory for any effect on the outside world, and the authority moves granted, spending, spent or void alongside it.",
+        "L4.2": "A failed act is NOT an unperformed act. A non-zero exit reports a failure; for an irreversible act those are different claims. A failed act leaves the effect indeterminate and reconcilable, never returned to the pool.",
+        "L4.3": "The post-effect proof is an INDEPENDENT observation of the target, not the actor report. Its absence is EFFECT_UNPROVEN, not success.",
+        "L4.4": "A state before the commit point may never render as committed. The commit point is a state with its own identity."
+      },
+      "reason_namespace": "effect",
+      "landed_reference": "bin/fm-landing-authorization-lib.sh is a complete correct implementation for one effect, and its header names the hazard exactly: the act happened and nothing recorded it, reached by exactly one mistake - writing the durable record after the act rather than before.",
+      "validator": "validate_effect_commit"
+    },
+    {
+      "id": "L5",
+      "name": "Seam Contract",
+      "statement": "A crossing between two owners is itself a subject with a compiled identity, and L1 through L4 hold ACROSS it. Each side state vocabulary maps TOTALLY onto the crossing vocabulary; an unmapped value refuses rather than defaulting. A seam has exactly one real probe: a production-shaped crossing that has actually occurred, plus a witnessed red.",
+      "clauses": {
+        "L5.1": "One left owner, one right owner, one exact crossing identity, one state, one owner-to-repair.",
+        "L5.2": "A seam state is four-valued: QUALIFIED, DEFECT, COULD_NOT_OBSERVE, and NOT_YET_EXERCISED - which is not a pass. A seam with tests but no production crossing is NOT_YET_EXERCISED.",
+        "L5.3": "Repair happens at the EXISTING owner. A seam defect never justifies a new emitter, registry, scheduler, watcher or bus."
+      },
+      "reason_namespace": "seam_protocol",
+      "landed_reference": "The seam row schema, including NOT_YET_EXERCISED as a distinct non-pass, is promoted here from an existing assessment artifact rather than invented.",
+      "validator": null,
+      "validator_why_none": "A seam state is an OBSERVATION of a crossing, made by the seam owner, and it is not decidable from declarations. Providing a fourth-and-a-half validator that returned a seam verdict from a file would be exactly the vacuity this substrate refuses: it would grade the declaration and be credited to the crossing."
+    }
+  ],
+  "gate_placement": [
+    {
+      "id": "G1",
+      "name": "Earliest-Knowable",
+      "predicate": "A fact is checked at the earliest point it is knowable, and a condition an agent turn cannot change REFUSES before the turn is spent. Fail before cognition.",
+      "may_grant": false,
+      "may_refuse": true,
+      "stable_evidence_rule": "A stable or immutable predicate may PASS early ONLY when its COMPLETE immutable dependency set is bound. A partially bound set yields a provisional planning pass, which is never an effect permission.",
+      "landed_reference": "bin/fm-spawn.sh refusals - empty brief, non-isolated worktree, unqualified binding, out-of-pool model - all fire before a model turn is spent."
+    },
+    {
+      "id": "G2",
+      "name": "Gate Dominance",
+      "predicate": "Every gate dominates its earliest dependent effect. Refusals compose MOST-RESTRICTIVELY: a later gate never lifts an earlier refusal, and a passing gate never implies any gate it did not run. A verdict is scoped to the dimension it examined and to nothing else.",
+      "may_grant": false,
+      "may_refuse": true,
+      "landed_reference": "bin/fm-admission.sh composes bands most-restrictively."
+    },
+    {
+      "id": "G3",
+      "name": "Effect-Proximal Revalidation",
+      "predicate": "Every fact that can move between check and effect is re-observed immediately before the effect, from an independent source, and never served from a cache.",
+      "may_grant": true,
+      "may_refuse": true,
+      "landed_reference": "bin/fm-landing-authorization-lib.sh binds by an independent observation of the pull request current head at the moment of use: agreement of all three - what the ruling approved, what the caller intends, and what the forge currently reports - is the property, and any two of them is one of its weaker neighbours."
+    }
+  ],
+  "gate_tension_resolution": {
+    "rule": "G1 governs REFUSALS; G3 governs PERMISSIONS. An early gate may only ever refuse. It may never grant. A permission is re-derived at the effect, from scratch, every time.",
+    "why": "This is the only assignment that makes both cheap and correct. A refusal is monotone - a condition that fails early cannot become fine later without an explicit new observation - while a permission is anti-monotone: a condition that passes early can rot. G2 is what makes the asymmetry safe, because refusals compose, so an early refusal survives into the effect-proximal check without being re-run.",
+    "consequence": "Two rules that need a tie-breaker are one rule and a placement. This is why they are placement predicates and not two more laws."
+  },
+  "observation_horizon_dominance": {
+    "predicate": "refresh_cadence + worst_probe_duration + reconciliation_and_emission + bounded_jitter MUST fit STRICTLY inside the validity horizon, and the outer timeout MUST exceed inner termination plus the typed-result emission margin.",
+    "reason_code": "OBS_HORIZON_EXCEEDED",
+    "where_it_lives": "Inside the EXISTING timing owners. Each owner that already declares a cadence, a probe bound or a timeout evaluates this predicate against its own numbers.",
+    "not_this": "Do not create a timing framework. A framework would need its own clock, its own configuration and its own failure mode, and it would then be a second thing that can be wrong about time.",
+    "worked_example": "The commitment register derives its cache bound from the WARMING PASS rather than from one probe: set to 120s while one probe could cost 60s, a pass over three or more keys had already expired its own first entry before it finished, so every entry the cache wrote was unservable by the time the pass that wrote it ended. That is this predicate failing, diagnosed before it had a name."
+  },
+  "lifecycle_strategy": {
+    "rule": "Build four functions and CALL them. Do not build a hook system.",
+    "points": ["PRE_EFFECT", "EFFECT", "COMMIT_POINT", "POST_EFFECT"],
+    "why": "A lifecycle hook implies registration, dispatch, ordering and a bus, and every one of those is a second control plane. The ordering question alone - does the identity check run before or after the authority check - becomes configuration, which is exactly how a check gets configured away. Four ordinary calls inside the owner that already performs the effect have none of those properties: the ordering is the source order, the registration is the call, and there is nothing to disable.",
+    "landed_reference": "bin/fm-landing-seam-lib.sh is this design already, and its header says why: a complete, correct control that nothing ever invoked is not a control, it is a description of one. A bus is a routable-around control by construction.",
+    "the_one_justified_extension_point": "The effect owner is in ANOTHER repository and cannot be modified from here. Then the correct shape is a narrow declared extension point inside the REAL owner that calls one external verdict compiler, scoped to a single call site, consuming these same generated projections. A firstmate-only wrapper is ruled out for that case because it would leave the real effect owner bypassable."
+  },
+  "adoption_prerequisites": {
+    "rule": "A mechanism defined here remains NON-AUTHORITATIVE until every prerequisite below passes for it. Nothing becomes authoritative merely because a branch defines it, and a diagnostic output must say so in its own text rather than relying on a reader to remember.",
+    "prerequisites": [
+      {"id": "AP1", "requires": "an inheritance manifest exists for the mechanism and validates against semantics/inheritance-manifest.schema.json"},
+      {"id": "AP2", "requires": "every source vocabulary the mechanism consumes maps TOTALLY onto the canonical vocabulary, with no unmapped value and no default"},
+      {"id": "AP3", "requires": "the generated projections are FRESH - regenerating from the owners reproduces them byte-for-byte"},
+      {"id": "AP4", "requires": "a REAL producer -> actual boundary -> actual consumer conformance fixture passes for the mechanism, not a test-only crossing"},
+      {"id": "AP5", "requires": "a reachable watched-red exists and was driven red before it was driven green"},
+      {"id": "AP6", "requires": "no duplicate owner - the mechanism does not become a second answer to a question an existing owner already answers"},
+      {"id": "AP7", "requires": "review and CI at the EXACT head, by an assignment-distinct reviewer qualified through the canonical qualification mechanism"},
+      {"id": "AP8", "requires": "for an effect-bearing mechanism, an independent review and a one-use authorization for the effect itself"}
+    ],
+    "machine_evaluable": ["AP1", "AP2", "AP3", "AP4", "AP5"],
+    "not_machine_evaluable": ["AP6", "AP7", "AP8"],
+    "not_machine_evaluable_why": "AP6 asks whether a NEW owner duplicates an existing one, which is a judgement about meaning and is decided by review; the census is its evidence base, not its verdict. AP7 and AP8 are facts about a forge object and a qualification register at an exact head, owned by bin/fm-pr-check.sh, bin/fm-qualification.sh and bin/fm-landing-authorization.sh. bin/fm-semantics.sh adoption reports these three as COULD_NOT_OBSERVE from its own position rather than guessing them, because a substrate that graded its own review would be the failure it exists to prevent."
+  },
+  "invariants": [
+    "law_ids_unique: no two laws may share an id",
+    "five_laws: exactly five laws are declared",
+    "law_reason_namespace_declared: every law must name a declared reason namespace in semantics/reasons.json",
+    "gate_predicates_three: exactly three gate-placement predicates are declared",
+    "only_g3_grants: exactly one gate predicate may declare may_grant true, and it must be G3 - an early gate that can grant is the anti-monotone failure this resolution exists to prevent",
+    "adoption_prerequisites_partitioned: every prerequisite must appear in exactly one of machine_evaluable and not_machine_evaluable"
+  ]
+}

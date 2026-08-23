@@ -1,0 +1,110 @@
+{
+  "semantics_schema_version": 1,
+  "document": "reasons",
+  "description": "The single owner of the canonical refusal and could-not-observe reason codes, grouped into six namespaces. A code names WHAT was violated and therefore WHO repairs it. bin/fm-semantics-lib.sh is its only interpreter.",
+  "why": "This fleet has established twice, in two landed mechanisms, that keeping refusal reasons apart is what lets an operator repair the right thing: bin/fm-outbound-artifact-lib.sh records that both a mismatch and an unobservable refuse, so a two-valued check is not unsafe but unreportable; bin/fm-landing-authorization-lib.sh keeps two token families apart because an operator told only that it did not work repairs the wrong thing. Six of the fourteen named laws in the commissioning architecture are refusal REASONS wearing a law's clothing. They keep their full force here and stop competing for the attention budget the five laws need.",
+  "authority": "diagnostic",
+  "authority_why": "New on this branch. A reason code becomes authoritative for a mechanism only through that mechanism's inheritance manifest, and only once the adoption prerequisites in semantics/laws.json pass.",
+  "version": {"reason_register_version": 1},
+  "resolution_rule": {
+    "rule": "A code resolves to exactly one namespace by LOOKUP in this register, never by reading its prefix.",
+    "why": "Four observation-integrity codes carry an SFI_ or EFFECT_ prefix because those are the spellings the reviewed architecture ruled, and renaming them here to make prefixes sort cleanly would invent a distinction no ruling made. So the register is the resolver and the prefix is a naming convention. bin/fm-semantics.sh reason <code> performs the lookup, and the flat code-to-namespace map in the projection exists so a consumer never has to parse a prefix.",
+    "enforced_by": "the codes_unique_across_namespaces invariant below, which is what makes the lookup total and single-valued"
+  },
+  "namespaces": [
+    {
+      "namespace": "state_family",
+      "law": "L1",
+      "concern": "a state that is neither honestly terminal nor honestly nonterminal",
+      "owner_to_repair": "the owner that declared the state",
+      "codes": [
+        {"code": "SFI_UNKNOWN_FAMILY", "verdict": "REFUSE", "means": "the family is not a declared member of the vocabulary", "repair": "map the value in semantics/state-families.json, or fix the producer; never default it"},
+        {"code": "SFI_FALSE_TERMINAL", "verdict": "REFUSE", "means": "a terminal family carries an open continuation obligation", "repair": "either the state is not terminal or the obligation is discharged; both cannot be true"},
+        {"code": "SFI_ORPHAN", "verdict": "REFUSE", "means": "a nonterminal family declares no owner, no wake, or no reobservation - a nonterminal state whose reobservation has never fired is not patient, it is orphaned", "repair": "arm the wake, or move the state to the family that honestly describes it"},
+        {"code": "SFI_UNBOUNDED_SUCCESSORS", "verdict": "REFUSE", "means": "the state names a legal successor its family does not declare, so the successor set is not enumerable from the family alone", "repair": "narrow the state, or extend the family in the owner where every consumer sees it"},
+        {"code": "SFI_MULTIPLE_ACTIONABLE", "verdict": "REFUSE", "means": "more than one successor of a superseded predecessor is outside SUPERSEDED", "repair": "supersede the extras; this is a COUNT, never a review question"}
+      ]
+    },
+    {
+      "namespace": "transition",
+      "law": "L3",
+      "concern": "evidence made in one context being consumed in another",
+      "owner_to_repair": "the caller attempting the transition",
+      "codes": [
+        {"code": "TRANS_ILLEGAL", "verdict": "REFUSE", "means": "the target family is not in the source family's declared legal successors", "repair": "take the declared path, or change the declared path in the owner"},
+        {"code": "TRANS_STALE_RESURRECTION", "verdict": "REFUSE", "means": "a SUPERSEDED subject was moved back into a nonterminal family", "repair": "create a successor subject; the predecessor stays where it is, permanently"},
+        {"code": "TRANS_CROSS_FAMILY_PROMOTION", "verdict": "REFUSE", "means": "a verdict from one family was used to advance a subject in another - availability does not qualify, openness does not make actionable, a green check does not review, a passing review does not authorise landing", "repair": "obtain the evidence the transition actually requires"},
+        {"code": "TRANS_UNADDRESSED_REVISE", "verdict": "REFUSE", "means": "a REVISE state was promoted with no evidence addressing the finding", "repair": "the MAKER addresses the finding; a checker verdict cannot discharge it"},
+        {"code": "TRANS_STALE_GENERATION", "verdict": "REFUSE", "means": "the evidence's binding or generation differs from the context's and the contract declares that difference material", "repair": "re-observe under the current binding; the old evidence stays attributed to the worker that produced it"},
+        {"code": "TRANS_UNEVIDENCED", "verdict": "CNO", "means": "the evidence is unreadable, or every entry is NO_VERIFIER_RAN", "repair": "repair the evidence source; this is never a pass and never a rejection"}
+      ]
+    },
+    {
+      "namespace": "identity",
+      "law": "L2",
+      "concern": "a subject being confused with a different subject, or a name granting a permission",
+      "owner_to_repair": "the declared owner of the namespace edge",
+      "codes": [
+        {"code": "IDENT_NAMESPACE_SUBSTITUTION", "verdict": "REFUSE", "means": "the resolved object names a DIFFERENT subject - a workspace read as a repository, a transport read as a subject, an artifact location read as a governed subject", "repair": "resolve through the edge's declared owner"},
+        {"code": "IDENT_AUTHORITY_BY_NAME", "verdict": "REFUSE", "means": "membership in a pool, list, directory, filename or schema string was read as a capability, applicability or permission", "repair": "hold a spendable authority object instead; a name grants nothing"},
+        {"code": "IDENT_AMBIGUOUS", "verdict": "REFUSE", "means": "several candidates match and none is uniquely choosable", "repair": "make the producer state its subject once; deliberately kept apart from a mismatch, because a mismatch says the one candidate found is not about this work while ambiguity says several were found and none can be chosen"},
+        {"code": "IDENT_MULTI_OWNER", "verdict": "REFUSE", "means": "the namespace edge has zero declared owners, or two that disagree", "repair": "declare exactly one owner; zero owners and two owners are the same defect - nobody is answerable"},
+        {"code": "IDENT_MOVED", "verdict": "REFUSE", "means": "recompiling the subject from the world yields a different digest", "repair": "address the current subject; a moved head is a different subject, not a stale one"},
+        {"code": "IDENT_RULE_UNOBSERVED", "verdict": "CNO", "means": "the target namespace's own identity rule could not be determined, such as a repository object-format width", "repair": "repair the observation; never default the rule"},
+        {"code": "IDENT_UNPROVENANCED", "verdict": "CNO", "means": "no provenance record exists for the mapping", "repair": "have the edge owner record provenance when it resolves"},
+        {"code": "IDENT_UNRESOLVABLE", "verdict": "CNO", "means": "the subject reference does not resolve to a compilation record", "repair": "compile the subject at the point every input is knowable"}
+      ]
+    },
+    {
+      "namespace": "effect",
+      "law": "L4",
+      "concern": "an irreversible act whose intent or outcome is not recorded, or is recorded as the wrong one",
+      "owner_to_repair": "the owner that performs the effect",
+      "codes": [
+        {"code": "EFFECT_PRECOMMIT_CLAIMED_COMMITTED", "verdict": "REFUSE", "means": "a state before the commit point was rendered as committed", "repair": "render the commit point as its own state; it is not one of its neighbours"},
+        {"code": "EFFECT_HEAD_DISAGREEMENT", "verdict": "REFUSE", "means": "what the ruling approved, what the caller intends and what the world currently reports do not all agree", "repair": "obtain a fresh authority for the current head; agreement of all three is the property and any two of them is one of its weaker neighbours"},
+        {"code": "EFFECT_INTENT_UNRECORDABLE", "verdict": "REFUSE", "means": "the intent record could not be durably written before the act", "repair": "repair the recorder; acting first is reachable by exactly one mistake and is not recoverable"},
+        {"code": "EFFECT_REPLAY", "verdict": "REFUSE", "means": "the authority for this exact subject is already spent", "repair": "nothing - this is the control working; a duplicate wake converging on the same authority is the designed outcome"},
+        {"code": "EFFECT_UNPROVEN", "verdict": "CNO", "means": "no INDEPENDENT observation of the target establishes that the intended effect is now true", "repair": "observe the target from a source other than the actor; the actor's own report is not the proof"},
+        {"code": "EFFECT_INDETERMINATE", "verdict": "CNO", "means": "the act reported failure, or its outcome was not recorded, so whether it happened is unknown - this is an ANSWER, not an error", "repair": "reconcile from an observation before any retry; a failed invocation does not prove NOT_APPLIED"},
+        {"code": "EFFECT_TARGET_UNOBSERVED", "verdict": "CNO", "means": "the effect target could not be observed at the pre-effect check", "repair": "restore the observation; never proceed on an assumed target"}
+      ]
+    },
+    {
+      "namespace": "seam_protocol",
+      "law": "L5",
+      "concern": "a crossing between two owners whose vocabulary, version or producer is not what the reader assumed",
+      "owner_to_repair": "the seam's declared owner_to_repair, which is an EXISTING owner and never a new emitter",
+      "codes": [
+        {"code": "SEAM_UNMAPPED_VALUE", "verdict": "REFUSE", "means": "a value crossed the seam that the total mapping does not declare", "repair": "map it in the owner, or fix the producer; an unmapped value refuses rather than defaulting"},
+        {"code": "SEAM_NO_REAL_PROBE", "verdict": "REFUSE", "means": "the seam is credited as qualified with no production-shaped crossing and no witnessed red", "repair": "exercise the seam for real; a seam with tests and no crossing is NOT_YET_EXERCISED, which is not a pass"},
+        {"code": "SEAM_TWO_OWNERS", "verdict": "REFUSE", "means": "two owners claim one side of the crossing", "repair": "collapse to one; a seam defect never justifies a new emitter, registry, scheduler, watcher or bus"},
+        {"code": "SCHEMA_UNSUPPORTED_VERSION", "verdict": "REFUSE", "means": "the record declares a version this reader does not accept", "repair": "negotiate a version; kept apart from a shape mismatch because the repairs differ"},
+        {"code": "SCHEMA_SHAPE_MISMATCH", "verdict": "REFUSE", "means": "the record carries an accepted version string but not the shape that version declares - a version string is not a format, and a reader that accepts a record because its schema field matches has checked a NAME", "repair": "fix the producer"},
+        {"code": "SCHEMA_UNDECLARED_PRODUCER", "verdict": "REFUSE", "means": "the record was written into a shared namespace by a producer that namespace does not declare", "repair": "declare the producer, or move the record; quarantine and PRESERVE the record, never delete it - it is evidence"},
+        {"code": "SCHEMA_MALFORMED", "verdict": "CNO", "means": "the record could not be parsed at all", "repair": "kept apart from a semantic mismatch, and no prose fallback upgrades it to authority"}
+      ]
+    },
+    {
+      "namespace": "observation",
+      "law": "L1.4 and G3",
+      "concern": "an observation that did not happen, is out of date for the decision it is being used for, or performed an effect while pretending to look",
+      "owner_to_repair": "the owner of the probe or the evidence source",
+      "codes": [
+        {"code": "SFI_UNEVIDENCED", "verdict": "CNO", "means": "the state carries no evidence, unreadable evidence, or only NO_VERIFIER_RAN entries - a state with zero evidence entries is not clean, it is unevidenced", "repair": "observe it"},
+        {"code": "SFI_STALE_FOR_EFFECT", "verdict": "CNO", "means": "an evidence entry is outside its declared freshness and the caller is effect-proximal, so no cached permission may be served at any age", "repair": "re-observe now; a refusal composes forward from an early gate but a permission never does"},
+        {"code": "SFI_VACUOUS_PROBE", "verdict": "REFUSE", "means": "the probe expression can succeed after a prior step failed, so it passes in any context where its dependencies vanish", "repair": "one conjunction; assert every dependency inside the chain; give every non-existence assertion a positive control"},
+        {"code": "EFFECT_FROM_OBSERVATION", "verdict": "REFUSE", "means": "a probe made a durable change - an observation performed an effect", "repair": "make the probe read-only; this is the sibling of a precommit claiming committed, arriving from the other side"},
+        {"code": "OBS_HORIZON_EXCEEDED", "verdict": "REFUSE", "means": "refresh cadence plus worst probe duration plus reconciliation and emission plus bounded jitter does not fit strictly inside the validity horizon, or the outer timeout does not exceed inner termination plus the typed-result emission margin", "repair": "shorten the cadence or lengthen the horizon at the EXISTING timing owner; this is a predicate, not a timing framework"}
+      ]
+    }
+  ],
+  "invariants": [
+    "namespaces_unique: no two namespaces may share a name",
+    "codes_unique_across_namespaces: no code may be declared in more than one namespace, which is what makes namespace resolution a total single-valued lookup",
+    "code_verdict_declared: every code must declare a verdict of exactly REFUSE or CNO - PASS is never a reason",
+    "code_repair_declared: every code must name what to repair, because a refusal that does not say what to fix sends the operator to the wrong thing",
+    "namespace_owner_to_repair_declared: every namespace must name who repairs its class",
+    "six_namespaces: exactly six namespaces are declared - state-family, transition, identity, effect, seam and protocol, and observation and freshness - and a seventh needs a stated consumer-action difference before it may be added"
+  ]
+}

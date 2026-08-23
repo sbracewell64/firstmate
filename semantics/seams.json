@@ -1,0 +1,113 @@
+{
+  "semantics_schema_version": 1,
+  "document": "seams",
+  "description": "The single owner of what a SEAM contract is, of the seam state vocabulary, and of the protocol and version law that governs records crossing one. It declares the row shape a seam must satisfy and the declared protocol versions with their declared producers and consumers. It inventories no live seam state: whether a given crossing is currently healthy is an observation, made by the seam owner, and is deliberately not stored here.",
+  "why": "A crossing between two owners is itself a subject, and the state laws hold ACROSS it. Each side vocabulary must map TOTALLY onto the crossing vocabulary, and an unmapped value must refuse rather than default. Without that, two correct owners disagree at the boundary and both are credited with the same sentence.",
+  "authority": "diagnostic",
+  "authority_why": "New on this branch. The seam row shape is promoted here from a one-report schema; it governs no crossing until a mechanism inherits it through a manifest and the adoption prerequisites in semantics/laws.json pass.",
+  "version": {"seam_contract_version": 1, "protocol_register_version": 1},
+  "seam_row_contract": {
+    "required": {
+      "seam": "stable id",
+      "left_owner": "the file or component that produces at this crossing",
+      "right_owner": "the file or component that consumes at this crossing",
+      "crossing_identity": "the EXACT compiled subject a crossing is about - not a category of crossings",
+      "state": "one member of seam_states",
+      "owner_to_repair": "an EXISTING owner; a seam defect never justifies a new emitter, registry, scheduler, watcher or bus"
+    },
+    "one_owner_each_side": "Exactly one left owner and exactly one right owner. Two owners on one side is SEAM_TWO_OWNERS and refuses, because with two nobody is answerable and each can correctly believe the other checked."
+  },
+  "seam_states": [
+    {"state": "QUALIFIED", "is_a_pass": true, "means": "a production-shaped crossing has actually occurred AND a red was witnessed at this seam"},
+    {"state": "DEFECT", "is_a_pass": false, "means": "the crossing was exercised and it is wrong"},
+    {"state": "COULD_NOT_OBSERVE", "is_a_pass": false, "means": "the crossing could not be observed at all"},
+    {"state": "NOT_YET_EXERCISED", "is_a_pass": false, "means": "the mechanism exists and tests pass, and no production crossing has occurred. A FOURTH value, distinct from all three, and never a pass - a seam with tests and no crossing has measured the test, not the seam."}
+  ],
+  "why_four_values": "Three-valued is right for an OBSERVATION and insufficient for a SEAM, because a seam that has never run is neither observed-good, nor observed-bad, nor unobservable - it is unexercised, and that is a fact about the seam rather than about the looking. Folding it into could-not-observe would make an unbuilt crossing indistinguishable from an unreadable one, and only one of those is repaired by building something.",
+  "real_probe_rule": {
+    "rule": "A seam reaches QUALIFIED only on a real producer -> actual boundary -> actual consumer crossing plus a witnessed red at that same seam. Tests alone never qualify a seam.",
+    "why": "A schema that has never round-tripped through the real boundary is a description. This fleet has paid for skipping it: a recognizer that only read a typed marker was vacuous on the day it landed, because every item already waiting predated the marker - so the invariant reported a clean fleet while the items it was built for stayed invisible. Before that, a probe read a field that did not exist, failed unconditionally, and measured nothing. The fixture is what stops a third payment."
+  },
+  "protocol_law": {
+    "P1": {
+      "rule": "A version string is not a format. A reader validates the SHAPE and reports SCHEMA_SHAPE_MISMATCH, kept distinct from SCHEMA_UNSUPPORTED_VERSION.",
+      "why": "The repairs differ: one fixes the producer, the other negotiates a version. A reader that accepts a record because its schema field matches has checked a name, which is authority by name in a different costume."
+    },
+    "P2": {
+      "rule": "Both sides declare the versions they accept. An unknown, absent or unnegotiated version REFUSES; it is never parsed on a guess and never defaulted.",
+      "why": "bin/fm-landing-authorization-lib.sh already names the version its reader accepts so an unannounced schema change is refused as could-not-observe rather than parsed on a guess. That comment is the law; this makes it the rule everywhere."
+    },
+    "P3": {
+      "rule": "A shared record namespace declares its producers. A record from an undeclared producer is SCHEMA_UNDECLARED_PRODUCER: quarantined and PRESERVED, never deleted.",
+      "why": "It is evidence. Deleting the record destroys the only proof of how the namespace was violated."
+    }
+  },
+  "unknown_fields_rule": "A reader preserves unknown fields and grants them no authority. Preserving them keeps a forward-compatible producer readable; granting them authority is how an unreviewed field becomes load-bearing.",
+  "top_level_parse_rule": {
+    "rule": "An authoritative record is parsed STRUCTURALLY with count-then-read: count the occurrences of a top-level field, require exactly the declared multiplicity, and compare the WHOLE trimmed value - never a prefix, never a substring, never a first match.",
+    "depth": "Top level means depth zero - outside every fence, quote block and nested envelope. A regex over a whole body cannot express that, which is why quoting produces false ambiguity.",
+    "refusals": "A duplicate authoritative form refuses unless deterministic multiplicity is declared; mixed or conflicting versions refuse; a missing correlation field refuses; and malformed stays distinct from semantic mismatch so the typed owner-to-repair is right.",
+    "no_prose_fallback": "No prose fallback upgrades malformed authority. A temporary prose compatibility path is a migration aid and is never the permanent authority path."
+  },
+  "adapters": {
+    "rule": "An adapter is explicit, versioned, temporary and MEASURED. It declares the version it translates from, the version it translates to, and the condition under which it retires.",
+    "not_this": "Do not teach every consumer every historical syntax. A source vocabulary is mapped ONCE in the owner, not once per consumer, which is why the total mapping lives in one file and no reader carries version branches."
+  },
+  "protocols": [
+    {
+      "protocol": "fm-sol-control/v1",
+      "owner": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_PROTOCOL",
+      "producers": ["bin/fm-outbound-artifact.sh"],
+      "consumers": ["bin/fm-outbound-artifact.sh", "bin/fm-landing-authorization-lib.sh"],
+      "accepted_versions": ["v1"],
+      "note": "The control-plane request and ruling envelope. Its top-level fields are exactly the class the count-then-read rule governs."
+    },
+    {
+      "protocol": "fm-outbound-artifact.v1",
+      "owner": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_RECORD_SCHEMA",
+      "producers": ["bin/fm-outbound-artifact.sh"],
+      "consumers": ["bin/fm-outbound-artifact.sh", "bin/fm-landing-authorization-lib.sh FM_AUTH_CORRELATION_SCHEMA"],
+      "accepted_versions": ["v1"],
+      "note": "The durable correlation record. One record serves both directions, so a ruling stays attributable to the request that asked for it."
+    },
+    {
+      "protocol": "fm-landing-authorization.v1",
+      "owner": "bin/fm-landing-authorization-lib.sh FM_AUTH_SCHEMA",
+      "producers": ["bin/fm-landing-authorization.sh"],
+      "consumers": ["bin/fm-landing-authorization.sh auth_read", "bin/fm-landing-seam-lib.sh"],
+      "accepted_versions": ["v1"],
+      "note": "One declared producer. A record filed under this string by anything else is SCHEMA_UNDECLARED_PRODUCER and is quarantined and preserved, not parsed and not deleted."
+    },
+    {
+      "protocol": "fm-status-event.v1",
+      "owner": "bin/fm-status-event-lib.sh FM_STATUS_EVENT_SCHEMA",
+      "producers": ["crewmates", "bin/fm-spawn.sh", "bin/fm-attempt.sh"],
+      "consumers": ["bin/fm-classify-lib.sh", "bin/fm-crew-state.sh", "bin/fm-watch.sh"],
+      "accepted_versions": ["v1"],
+      "note": "The Result-to-Evidence crossing. Its verb vocabulary is source status-verb in semantics/state-families.json."
+    },
+    {
+      "protocol": "fm-qualification-state.v1",
+      "owner": "bin/fm-qualification-lib.sh",
+      "producers": ["bin/fm-qualification.sh"],
+      "consumers": ["bin/fm-route-lib.sh", "bin/fm-spawn.sh"],
+      "accepted_versions": ["v1"],
+      "note": "Carries a state that is COMPUTED on every read and never stored, which is the property that keeps it correct after its dependencies move."
+    },
+    {
+      "protocol": "fm-semantics-projection.v1",
+      "owner": "bin/fm-semantics.sh",
+      "producers": ["bin/fm-semantics.sh compile"],
+      "consumers": ["bin/fm-semantics-lib.sh", "semantics/generated/semantics.projection.sh consumers"],
+      "accepted_versions": ["v1"],
+      "note": "The projection this mechanism itself emits. Declared here so it is subject to the same producer rule as every other shared namespace, including its own."
+    }
+  ],
+  "invariants": [
+    "seam_states_four: exactly four seam states are declared and exactly one of them is a pass",
+    "protocol_ids_unique: no two protocols may share an id",
+    "protocol_owner_declared: every protocol must name exactly one owner",
+    "protocol_producers_declared: every protocol must declare at least one producer, because an undeclared producer is only detectable against a declared set",
+    "protocol_accepted_versions_declared: every protocol must declare the versions its consumers accept, so an unknown version refuses rather than being parsed on a guess"
+  ]
+}

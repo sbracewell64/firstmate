@@ -1,0 +1,1400 @@
+{
+  "generated": {
+    "by": "bin/fm-semantics.sh compile",
+    "from": [
+      "semantics/laws.json",
+      "semantics/state-families.json",
+      "semantics/reasons.json",
+      "semantics/identity.json",
+      "semantics/seams.json",
+      "semantics/schema.json"
+    ],
+    "source_digest": "69ee113e1271c38dc2f3accf2dd3dd092d8cd08cb2cf477a56a185ec09bfedc1",
+    "do_not_edit": "Compiled from the owner documents named above. Edit an owner and run bin/fm-semantics.sh compile; a hand edit here is drift and CI refuses it.",
+    "authority": "diagnostic - the terminal half of the state vocabulary is authoritative in its own compatibility projection; everything else here is diagnostic until the adoption prerequisites pass"
+  },
+  "schema": "fm-semantics-projection.v1",
+  "versions": {
+    "law_set": 1,
+    "gate_predicate": 1,
+    "family_vocabulary": 1,
+    "transition": 1,
+    "terminal_vocabulary": 1,
+    "source_mapping": 1,
+    "reason_register": 1,
+    "namespace_register": 1,
+    "subject_schema": 1,
+    "seam_contract": 1,
+    "protocol_register": 1
+  },
+  "laws": [
+    {
+      "id": "L1",
+      "name": "State Family Integrity",
+      "reason_namespace": "state_family",
+      "validator": "validate_state"
+    },
+    {
+      "id": "L2",
+      "name": "Identity Integrity",
+      "reason_namespace": "identity",
+      "validator": "validate_identity_mapping"
+    },
+    {
+      "id": "L3",
+      "name": "Transition Integrity",
+      "reason_namespace": "transition",
+      "validator": "validate_transition"
+    },
+    {
+      "id": "L4",
+      "name": "Effect Integrity",
+      "reason_namespace": "effect",
+      "validator": "validate_effect_commit"
+    },
+    {
+      "id": "L5",
+      "name": "Seam Contract",
+      "reason_namespace": "seam_protocol",
+      "validator": null
+    }
+  ],
+  "gate_placement": [
+    {
+      "id": "G1",
+      "name": "Earliest-Knowable",
+      "may_grant": false,
+      "may_refuse": true
+    },
+    {
+      "id": "G2",
+      "name": "Gate Dominance",
+      "may_grant": false,
+      "may_refuse": true
+    },
+    {
+      "id": "G3",
+      "name": "Effect-Proximal Revalidation",
+      "may_grant": true,
+      "may_refuse": true
+    }
+  ],
+  "gate_tension_resolution": "G1 governs REFUSALS; G3 governs PERMISSIONS. An early gate may only ever refuse. It may never grant. A permission is re-derived at the effect, from scratch, every time.",
+  "observation_horizon": {
+    "predicate": "refresh_cadence + worst_probe_duration + reconciliation_and_emission + bounded_jitter MUST fit STRICTLY inside the validity horizon, and the outer timeout MUST exceed inner termination plus the typed-result emission margin.",
+    "reason_code": "OBS_HORIZON_EXCEEDED"
+  },
+  "adoption_prerequisites": [
+    {
+      "id": "AP1",
+      "requires": "an inheritance manifest exists for the mechanism and validates against semantics/inheritance-manifest.schema.json"
+    },
+    {
+      "id": "AP2",
+      "requires": "every source vocabulary the mechanism consumes maps TOTALLY onto the canonical vocabulary, with no unmapped value and no default"
+    },
+    {
+      "id": "AP3",
+      "requires": "the generated projections are FRESH - regenerating from the owners reproduces them byte-for-byte"
+    },
+    {
+      "id": "AP4",
+      "requires": "a REAL producer -> actual boundary -> actual consumer conformance fixture passes for the mechanism, not a test-only crossing"
+    },
+    {
+      "id": "AP5",
+      "requires": "a reachable watched-red exists and was driven red before it was driven green"
+    },
+    {
+      "id": "AP6",
+      "requires": "no duplicate owner - the mechanism does not become a second answer to a question an existing owner already answers"
+    },
+    {
+      "id": "AP7",
+      "requires": "review and CI at the EXACT head, by an assignment-distinct reviewer qualified through the canonical qualification mechanism"
+    },
+    {
+      "id": "AP8",
+      "requires": "for an effect-bearing mechanism, an independent review and a one-use authorization for the effect itself"
+    }
+  ],
+  "adoption_machine_evaluable": [
+    "AP1",
+    "AP2",
+    "AP3",
+    "AP4",
+    "AP5"
+  ],
+  "families": [
+    {
+      "name": "ACTIVE",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "wait on the owner; the owner's own wake reports movement",
+      "legal_successors": [
+        "WAITING_EXTERNAL",
+        "RETRY_PENDING",
+        "REVISE",
+        "SUCCEEDED",
+        "FAILED",
+        "REFUSED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "WAITING_EXTERNAL",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "verify the artifact the wait names actually exists, then wait; a wait with no applicable artifact is a transport defect to repair, never patience",
+      "legal_successors": [
+        "ACTIVE",
+        "REVISE",
+        "REFUSED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "RETRY_PENDING",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "check the BOUND, not the work; a retry whose bound cannot be read is not patient, it is unbounded",
+      "legal_successors": [
+        "ACTIVE",
+        "FAILED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "REVISE",
+      "terminal": false,
+      "obligation_required": true,
+      "consumer_action": "the MAKER must act; the state may not be promoted while the finding is unaddressed, and no checker verdict discharges it",
+      "legal_successors": [
+        "ACTIVE",
+        "FAILED",
+        "CANCELLED",
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "SUCCEEDED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "close dependents; the goal was met and verification did not reject it",
+      "legal_successors": [
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "FAILED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "a successor may be opened; dependents are not closed",
+      "legal_successors": [
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "REFUSED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "route the owed ruling to its authority; do not retry, and do not read the refusal as a failure of the work",
+      "legal_successors": [
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "CANCELLED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "record and stop; nothing failed and nothing is owed",
+      "legal_successors": [
+        "SUPERSEDED"
+      ]
+    },
+    {
+      "name": "SUPERSEDED",
+      "terminal": true,
+      "obligation_required": false,
+      "consumer_action": "read as EVIDENCE; refuse as AUTHORITY; never return it to a nonterminal family",
+      "legal_successors": []
+    }
+  ],
+  "legal_successors": {
+    "ACTIVE": [
+      "WAITING_EXTERNAL",
+      "RETRY_PENDING",
+      "REVISE",
+      "SUCCEEDED",
+      "FAILED",
+      "REFUSED",
+      "CANCELLED",
+      "SUPERSEDED"
+    ],
+    "WAITING_EXTERNAL": [
+      "ACTIVE",
+      "REVISE",
+      "REFUSED",
+      "CANCELLED",
+      "SUPERSEDED"
+    ],
+    "RETRY_PENDING": [
+      "ACTIVE",
+      "FAILED",
+      "CANCELLED",
+      "SUPERSEDED"
+    ],
+    "REVISE": [
+      "ACTIVE",
+      "FAILED",
+      "CANCELLED",
+      "SUPERSEDED"
+    ],
+    "SUCCEEDED": [
+      "SUPERSEDED"
+    ],
+    "FAILED": [
+      "SUPERSEDED"
+    ],
+    "REFUSED": [
+      "SUPERSEDED"
+    ],
+    "CANCELLED": [
+      "SUPERSEDED"
+    ],
+    "SUPERSEDED": []
+  },
+  "object_families": [
+    {
+      "name": "AUTHORITY",
+      "states": [
+        "granted",
+        "spending",
+        "spent",
+        "void"
+      ],
+      "transitions": {
+        "granted": [
+          "spending",
+          "void"
+        ],
+        "spending": [
+          "spent",
+          "void"
+        ],
+        "spent": [],
+        "void": []
+      }
+    },
+    {
+      "name": "EVIDENCE",
+      "states": [
+        "PASS",
+        "FAIL",
+        "NO_VERIFIER_RAN"
+      ],
+      "transitions": {
+        "PASS": [],
+        "FAIL": [],
+        "NO_VERIFIER_RAN": []
+      }
+    }
+  ],
+  "verdict_vocabularies": {
+    "observation": [
+      "PASS",
+      "FAIL",
+      "NO_VERIFIER_RAN"
+    ],
+    "validator": [
+      "PASS",
+      "REFUSE",
+      "CNO"
+    ],
+    "validator_exit_codes": {
+      "PASS": 0,
+      "usage": 2,
+      "REFUSE": 3,
+      "CNO": 4
+    },
+    "validator_to_observation": {
+      "PASS": "PASS",
+      "REFUSE": "FAIL",
+      "CNO": "NO_VERIFIER_RAN"
+    },
+    "observation_to_validator": {
+      "PASS": "PASS",
+      "FAIL": "REFUSE",
+      "NO_VERIFIER_RAN": "CNO"
+    }
+  },
+  "terminal_reasons": [
+    {
+      "name": "no_delta",
+      "kind": "neutral",
+      "costs_model_turn": false,
+      "family": "SUCCEEDED"
+    },
+    {
+      "name": "goal_met",
+      "kind": "success",
+      "costs_model_turn": true,
+      "family": "SUCCEEDED"
+    },
+    {
+      "name": "budget_exhausted",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED"
+    },
+    {
+      "name": "no_progress_stalled",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED"
+    },
+    {
+      "name": "verification_failed",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED"
+    },
+    {
+      "name": "blocked_by_evidence_integrity",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED"
+    },
+    {
+      "name": "needs_ruling",
+      "kind": "refusal",
+      "costs_model_turn": true,
+      "family": "REFUSED"
+    },
+    {
+      "name": "cancelled",
+      "kind": "neutral",
+      "costs_model_turn": true,
+      "family": "CANCELLED"
+    },
+    {
+      "name": "unclassified_failure",
+      "kind": "failure",
+      "costs_model_turn": true,
+      "family": "FAILED"
+    }
+  ],
+  "terminal_reason_to_family": {
+    "no_delta": "SUCCEEDED",
+    "goal_met": "SUCCEEDED",
+    "budget_exhausted": "FAILED",
+    "no_progress_stalled": "FAILED",
+    "verification_failed": "FAILED",
+    "blocked_by_evidence_integrity": "FAILED",
+    "needs_ruling": "REFUSED",
+    "cancelled": "CANCELLED",
+    "unclassified_failure": "FAILED"
+  },
+  "source_mappings": [
+    {
+      "source": "loopspec",
+      "owner": "loopspecs/<id>.json terminal_states[].name",
+      "maps_onto": "terminal_reason",
+      "rows": [
+        {
+          "state": "no_delta",
+          "unified": "no_delta",
+          "observation_verdict": null
+        },
+        {
+          "state": "delta_emitted",
+          "unified": "goal_met",
+          "observation_verdict": null
+        },
+        {
+          "state": "confirmed_work_found",
+          "unified": "goal_met",
+          "observation_verdict": null
+        },
+        {
+          "state": "already_carried",
+          "unified": "no_delta",
+          "observation_verdict": null
+        },
+        {
+          "state": "carried_and_checks_resolved",
+          "unified": "goal_met",
+          "observation_verdict": null
+        },
+        {
+          "state": "needs_ruling",
+          "unified": "needs_ruling",
+          "observation_verdict": null
+        },
+        {
+          "state": "blocked_by_evidence_integrity",
+          "unified": "blocked_by_evidence_integrity",
+          "observation_verdict": null
+        },
+        {
+          "state": "budget_exhausted",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "verification_failed",
+          "unified": "verification_failed",
+          "observation_verdict": null
+        },
+        {
+          "state": "no_progress_stalled",
+          "unified": "no_progress_stalled",
+          "observation_verdict": null
+        }
+      ]
+    },
+    {
+      "source": "execution-node",
+      "owner": "the platform's scripts/runtime_execution_node.py FINALIZE_MATRIX",
+      "maps_onto": "terminal_reason",
+      "rows": [
+        {
+          "state": "context-ceiling",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "budget-finish",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "timeout",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "iteration-cap-clean",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "finish-signal",
+          "unified": "goal_met",
+          "observation_verdict": null
+        },
+        {
+          "state": "stop-signal",
+          "unified": "cancelled",
+          "observation_verdict": null
+        },
+        {
+          "state": "iteration-cap-failed",
+          "unified": "no_progress_stalled",
+          "observation_verdict": null
+        },
+        {
+          "state": "unclassified",
+          "unified": "unclassified_failure",
+          "observation_verdict": null
+        }
+      ]
+    },
+    {
+      "source": "capacity-wait",
+      "owner": "bin/fm-attempt.sh FM_ATTEMPT_TERMINAL_STATE and FM_ATTEMPT_UNOBSERVABLE_STATE",
+      "maps_onto": "terminal_reason",
+      "rows": [
+        {
+          "state": "deferral_budget_spent",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "deferral_count_unrecordable",
+          "unified": "blocked_by_evidence_integrity",
+          "observation_verdict": null
+        }
+      ]
+    },
+    {
+      "source": "role-qualification",
+      "owner": "bin/fm-qualification.sh resolve, recorded as terminal= in state/qualification/<activation-id>.activation",
+      "maps_onto": "terminal_reason",
+      "rows": [
+        {
+          "state": "qualified",
+          "unified": "goal_met",
+          "observation_verdict": null
+        },
+        {
+          "state": "failed",
+          "unified": "verification_failed",
+          "observation_verdict": null
+        },
+        {
+          "state": "no_candidate_can_satisfy",
+          "unified": "needs_ruling",
+          "observation_verdict": null
+        },
+        {
+          "state": "attempt_budget_spent",
+          "unified": "budget_exhausted",
+          "observation_verdict": null
+        },
+        {
+          "state": "record_unwritable",
+          "unified": "blocked_by_evidence_integrity",
+          "observation_verdict": null
+        },
+        {
+          "state": "superseded",
+          "unified": "cancelled",
+          "observation_verdict": null
+        }
+      ]
+    },
+    {
+      "source": "crew-state",
+      "owner": "bin/fm-classify-lib.sh FM_CREW_STATE_VOCABULARY, derived by bin/fm-crew-state.sh",
+      "maps_onto": "work_family",
+      "rows": [
+        {
+          "state": "working",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "parked",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "blocked",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "paused",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "done",
+          "unified": "SUCCEEDED",
+          "observation_verdict": null
+        },
+        {
+          "state": "failed",
+          "unified": "FAILED",
+          "observation_verdict": null
+        },
+        {
+          "state": "aborted",
+          "unified": "CANCELLED",
+          "observation_verdict": null
+        },
+        {
+          "state": "interrupted",
+          "unified": "RETRY_PENDING",
+          "observation_verdict": null
+        },
+        {
+          "state": "idle",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "PASS"
+        },
+        {
+          "state": "stale",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "FAIL"
+        },
+        {
+          "state": "unknown",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "NO_VERIFIER_RAN"
+        }
+      ]
+    },
+    {
+      "source": "status-verb",
+      "owner": "bin/fm-classify-lib.sh FM_CLASSIFY_CAPTAIN_TERMINAL_VERBS, FM_CLASSIFY_NONTERMINAL_VERBS and FM_CLASSIFY_PAUSED_VERB_DEFAULT; carried on the wire by bin/fm-status-event-lib.sh",
+      "maps_onto": "work_family",
+      "rows": [
+        {
+          "state": "working",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "resolved",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "captain-held",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "needs-decision",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "blocked",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "paused",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "done",
+          "unified": "SUCCEEDED",
+          "observation_verdict": null
+        },
+        {
+          "state": "failed",
+          "unified": "FAILED",
+          "observation_verdict": null
+        }
+      ]
+    },
+    {
+      "source": "outbound-record",
+      "owner": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_RECORD_STATES",
+      "maps_onto": "work_family",
+      "rows": [
+        {
+          "state": "emitting",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "emitted",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "ruled",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "resumed",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "closed",
+          "unified": "SUCCEEDED",
+          "observation_verdict": null
+        },
+        {
+          "state": "superseded",
+          "unified": "SUPERSEDED",
+          "observation_verdict": null
+        }
+      ]
+    },
+    {
+      "source": "decision-disposition",
+      "owner": "bin/fm-classify-lib.sh FM_DECISION_DISPOSITION_VOCABULARY",
+      "maps_onto": "work_family",
+      "rows": [
+        {
+          "state": "CAPTAIN_REQUIRED_AND_BLOCKING",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "CAPTAIN_REQUIRED_NONBLOCKING",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "CAPTAIN_DEFERRED",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "BROWSER_SOL",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "EXTERNAL_DEPENDENCY",
+          "unified": "WAITING_EXTERNAL",
+          "observation_verdict": null
+        },
+        {
+          "state": "SELF_HANDLE",
+          "unified": "ACTIVE",
+          "observation_verdict": null
+        },
+        {
+          "state": "WITHDRAWN",
+          "unified": "CANCELLED",
+          "observation_verdict": null
+        },
+        {
+          "state": "CNO_DECISION_SUBJECT",
+          "unified": "OBSERVATION_RESULT",
+          "observation_verdict": "NO_VERIFIER_RAN"
+        }
+      ]
+    },
+    {
+      "source": "authority-record",
+      "owner": "bin/fm-landing-authorization-lib.sh FM_AUTH_STATES",
+      "maps_onto": "authority_state",
+      "rows": [
+        {
+          "state": "granted",
+          "unified": "granted",
+          "observation_verdict": null
+        },
+        {
+          "state": "spending",
+          "unified": "spending",
+          "observation_verdict": null
+        },
+        {
+          "state": "spent",
+          "unified": "spent",
+          "observation_verdict": null
+        },
+        {
+          "state": "void",
+          "unified": "void",
+          "observation_verdict": null
+        }
+      ]
+    }
+  ],
+  "observation_result_literal": "OBSERVATION_RESULT",
+  "reason_namespaces": [
+    {
+      "namespace": "state_family",
+      "law": "L1",
+      "owner_to_repair": "the owner that declared the state",
+      "codes": [
+        {
+          "code": "SFI_UNKNOWN_FAMILY",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SFI_FALSE_TERMINAL",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SFI_ORPHAN",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SFI_UNBOUNDED_SUCCESSORS",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SFI_MULTIPLE_ACTIONABLE",
+          "verdict": "REFUSE"
+        }
+      ]
+    },
+    {
+      "namespace": "transition",
+      "law": "L3",
+      "owner_to_repair": "the caller attempting the transition",
+      "codes": [
+        {
+          "code": "TRANS_ILLEGAL",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "TRANS_STALE_RESURRECTION",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "TRANS_CROSS_FAMILY_PROMOTION",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "TRANS_UNADDRESSED_REVISE",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "TRANS_STALE_GENERATION",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "TRANS_UNEVIDENCED",
+          "verdict": "CNO"
+        }
+      ]
+    },
+    {
+      "namespace": "identity",
+      "law": "L2",
+      "owner_to_repair": "the declared owner of the namespace edge",
+      "codes": [
+        {
+          "code": "IDENT_NAMESPACE_SUBSTITUTION",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "IDENT_AUTHORITY_BY_NAME",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "IDENT_AMBIGUOUS",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "IDENT_MULTI_OWNER",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "IDENT_MOVED",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "IDENT_RULE_UNOBSERVED",
+          "verdict": "CNO"
+        },
+        {
+          "code": "IDENT_UNPROVENANCED",
+          "verdict": "CNO"
+        },
+        {
+          "code": "IDENT_UNRESOLVABLE",
+          "verdict": "CNO"
+        }
+      ]
+    },
+    {
+      "namespace": "effect",
+      "law": "L4",
+      "owner_to_repair": "the owner that performs the effect",
+      "codes": [
+        {
+          "code": "EFFECT_PRECOMMIT_CLAIMED_COMMITTED",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "EFFECT_HEAD_DISAGREEMENT",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "EFFECT_INTENT_UNRECORDABLE",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "EFFECT_REPLAY",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "EFFECT_UNPROVEN",
+          "verdict": "CNO"
+        },
+        {
+          "code": "EFFECT_INDETERMINATE",
+          "verdict": "CNO"
+        },
+        {
+          "code": "EFFECT_TARGET_UNOBSERVED",
+          "verdict": "CNO"
+        }
+      ]
+    },
+    {
+      "namespace": "seam_protocol",
+      "law": "L5",
+      "owner_to_repair": "the seam's declared owner_to_repair, which is an EXISTING owner and never a new emitter",
+      "codes": [
+        {
+          "code": "SEAM_UNMAPPED_VALUE",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SEAM_NO_REAL_PROBE",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SEAM_TWO_OWNERS",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SCHEMA_UNSUPPORTED_VERSION",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SCHEMA_SHAPE_MISMATCH",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SCHEMA_UNDECLARED_PRODUCER",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "SCHEMA_MALFORMED",
+          "verdict": "CNO"
+        }
+      ]
+    },
+    {
+      "namespace": "observation",
+      "law": "L1.4 and G3",
+      "owner_to_repair": "the owner of the probe or the evidence source",
+      "codes": [
+        {
+          "code": "SFI_UNEVIDENCED",
+          "verdict": "CNO"
+        },
+        {
+          "code": "SFI_STALE_FOR_EFFECT",
+          "verdict": "CNO"
+        },
+        {
+          "code": "SFI_VACUOUS_PROBE",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "EFFECT_FROM_OBSERVATION",
+          "verdict": "REFUSE"
+        },
+        {
+          "code": "OBS_HORIZON_EXCEEDED",
+          "verdict": "REFUSE"
+        }
+      ]
+    }
+  ],
+  "reason_namespace_of": {
+    "SFI_UNKNOWN_FAMILY": "state_family",
+    "SFI_FALSE_TERMINAL": "state_family",
+    "SFI_ORPHAN": "state_family",
+    "SFI_UNBOUNDED_SUCCESSORS": "state_family",
+    "SFI_MULTIPLE_ACTIONABLE": "state_family",
+    "TRANS_ILLEGAL": "transition",
+    "TRANS_STALE_RESURRECTION": "transition",
+    "TRANS_CROSS_FAMILY_PROMOTION": "transition",
+    "TRANS_UNADDRESSED_REVISE": "transition",
+    "TRANS_STALE_GENERATION": "transition",
+    "TRANS_UNEVIDENCED": "transition",
+    "IDENT_NAMESPACE_SUBSTITUTION": "identity",
+    "IDENT_AUTHORITY_BY_NAME": "identity",
+    "IDENT_AMBIGUOUS": "identity",
+    "IDENT_MULTI_OWNER": "identity",
+    "IDENT_MOVED": "identity",
+    "IDENT_RULE_UNOBSERVED": "identity",
+    "IDENT_UNPROVENANCED": "identity",
+    "IDENT_UNRESOLVABLE": "identity",
+    "EFFECT_PRECOMMIT_CLAIMED_COMMITTED": "effect",
+    "EFFECT_HEAD_DISAGREEMENT": "effect",
+    "EFFECT_INTENT_UNRECORDABLE": "effect",
+    "EFFECT_REPLAY": "effect",
+    "EFFECT_UNPROVEN": "effect",
+    "EFFECT_INDETERMINATE": "effect",
+    "EFFECT_TARGET_UNOBSERVED": "effect",
+    "SEAM_UNMAPPED_VALUE": "seam_protocol",
+    "SEAM_NO_REAL_PROBE": "seam_protocol",
+    "SEAM_TWO_OWNERS": "seam_protocol",
+    "SCHEMA_UNSUPPORTED_VERSION": "seam_protocol",
+    "SCHEMA_SHAPE_MISMATCH": "seam_protocol",
+    "SCHEMA_UNDECLARED_PRODUCER": "seam_protocol",
+    "SCHEMA_MALFORMED": "seam_protocol",
+    "SFI_UNEVIDENCED": "observation",
+    "SFI_STALE_FOR_EFFECT": "observation",
+    "SFI_VACUOUS_PROBE": "observation",
+    "EFFECT_FROM_OBSERVATION": "observation",
+    "OBS_HORIZON_EXCEEDED": "observation"
+  },
+  "reason_verdict_of": {
+    "SFI_UNKNOWN_FAMILY": "REFUSE",
+    "SFI_FALSE_TERMINAL": "REFUSE",
+    "SFI_ORPHAN": "REFUSE",
+    "SFI_UNBOUNDED_SUCCESSORS": "REFUSE",
+    "SFI_MULTIPLE_ACTIONABLE": "REFUSE",
+    "TRANS_ILLEGAL": "REFUSE",
+    "TRANS_STALE_RESURRECTION": "REFUSE",
+    "TRANS_CROSS_FAMILY_PROMOTION": "REFUSE",
+    "TRANS_UNADDRESSED_REVISE": "REFUSE",
+    "TRANS_STALE_GENERATION": "REFUSE",
+    "TRANS_UNEVIDENCED": "CNO",
+    "IDENT_NAMESPACE_SUBSTITUTION": "REFUSE",
+    "IDENT_AUTHORITY_BY_NAME": "REFUSE",
+    "IDENT_AMBIGUOUS": "REFUSE",
+    "IDENT_MULTI_OWNER": "REFUSE",
+    "IDENT_MOVED": "REFUSE",
+    "IDENT_RULE_UNOBSERVED": "CNO",
+    "IDENT_UNPROVENANCED": "CNO",
+    "IDENT_UNRESOLVABLE": "CNO",
+    "EFFECT_PRECOMMIT_CLAIMED_COMMITTED": "REFUSE",
+    "EFFECT_HEAD_DISAGREEMENT": "REFUSE",
+    "EFFECT_INTENT_UNRECORDABLE": "REFUSE",
+    "EFFECT_REPLAY": "REFUSE",
+    "EFFECT_UNPROVEN": "CNO",
+    "EFFECT_INDETERMINATE": "CNO",
+    "EFFECT_TARGET_UNOBSERVED": "CNO",
+    "SEAM_UNMAPPED_VALUE": "REFUSE",
+    "SEAM_NO_REAL_PROBE": "REFUSE",
+    "SEAM_TWO_OWNERS": "REFUSE",
+    "SCHEMA_UNSUPPORTED_VERSION": "REFUSE",
+    "SCHEMA_SHAPE_MISMATCH": "REFUSE",
+    "SCHEMA_UNDECLARED_PRODUCER": "REFUSE",
+    "SCHEMA_MALFORMED": "CNO",
+    "SFI_UNEVIDENCED": "CNO",
+    "SFI_STALE_FOR_EFFECT": "CNO",
+    "SFI_VACUOUS_PROBE": "REFUSE",
+    "EFFECT_FROM_OBSERVATION": "REFUSE",
+    "OBS_HORIZON_EXCEEDED": "REFUSE"
+  },
+  "identity_namespaces": [
+    {
+      "id": "N1",
+      "namespace": "repo-object",
+      "identity_rule": "(repository, object_format_width, oid); the width comes from the TARGET repository own rev-parse --show-object-format, and an undeterminable width REFUSES",
+      "owner": "bin/fm-outbound-artifact-lib.sh fm_outbound_object_width and fm_outbound_head_valid"
+    },
+    {
+      "id": "N2",
+      "namespace": "filesystem-copy",
+      "identity_rule": "(host, absolute realpath); git rev-parse --git-dir is explicitly NOT authoritative for isolation, because it answers a question about the repository rather than about which copy you are standing in",
+      "owner": "bin/fm-worktree-guard.sh"
+    },
+    {
+      "id": "N3",
+      "namespace": "work",
+      "identity_rule": "(FM_HOME, task-id)",
+      "owner": "data/backlog.md with state/<id>.meta"
+    },
+    {
+      "id": "N4",
+      "namespace": "forge",
+      "identity_rule": "(venue, kind, number), with venue resolved through the project registry and NEVER guessed from a slug",
+      "owner": "bin/fm-pr-check.sh with bin/fm-task-base-lib.sh"
+    },
+    {
+      "id": "N5",
+      "namespace": "runtime",
+      "identity_rule": "(backend, endpoint) plus (execution_id)",
+      "owner": "bin/fm-backend.sh with bin/fm-attempt.sh"
+    },
+    {
+      "id": "N6",
+      "namespace": "binding",
+      "identity_rule": "(provider, fully-qualified model, harness, native_effort)",
+      "owner": "qualifications/schema.json record.binding with bin/fm-route-lib.sh"
+    },
+    {
+      "id": "N7",
+      "namespace": "authority",
+      "identity_rule": "(authorization_id), spendable and exhaustible",
+      "owner": "bin/fm-landing-authorization-lib.sh"
+    }
+  ],
+  "subject_types": [
+    {
+      "subject_type": "repo_object",
+      "required_axes": [
+        "repository",
+        "object_format_width",
+        "oid"
+      ],
+      "mutable_axes": [],
+      "venue_axes": null,
+      "referential_integrity": null
+    },
+    {
+      "subject_type": "forge_object",
+      "required_axes": [
+        "venue",
+        "kind",
+        "number"
+      ],
+      "mutable_axes": [
+        "head",
+        "base"
+      ],
+      "venue_axes": null,
+      "referential_integrity": null
+    },
+    {
+      "subject_type": "work_item",
+      "required_axes": [
+        "home",
+        "task_id"
+      ],
+      "mutable_axes": [
+        "family"
+      ],
+      "venue_axes": null,
+      "referential_integrity": null
+    },
+    {
+      "subject_type": "outbound_request",
+      "required_axes": [
+        "gate",
+        "project",
+        "governed_repo",
+        "item",
+        "pr",
+        "head",
+        "tree",
+        "purpose",
+        "review_envelope",
+        "policy_generation"
+      ],
+      "mutable_axes": [],
+      "venue_axes": [
+        "transport_venue",
+        "transport_issue"
+      ],
+      "referential_integrity": [
+        "head must be an object of governed_repo, never of transport_venue - the recurrence is a head that resolves, in the wrong repository",
+        "tree must be the tree of head in governed_repo",
+        "pr must belong to the venue the project registry resolves for governed_repo, never to a slug",
+        "review_envelope and policy_generation must be the validated ones for this exact governed_repo and head, checked together with them rather than beside them"
+      ]
+    },
+    {
+      "subject_type": "authority_target",
+      "required_axes": [
+        "request",
+        "comment",
+        "verdict",
+        "item",
+        "project",
+        "repo",
+        "pr",
+        "head"
+      ],
+      "mutable_axes": [],
+      "venue_axes": null,
+      "referential_integrity": null
+    },
+    {
+      "subject_type": "binding",
+      "required_axes": [
+        "provider",
+        "model",
+        "harness",
+        "native_effort"
+      ],
+      "mutable_axes": [
+        "availability"
+      ],
+      "venue_axes": null,
+      "referential_integrity": null
+    }
+  ],
+  "subject_compilation_rules": [
+    "total_and_ordered: every axis the subject_type declares appears, in the declared order, with no axis omitted",
+    "absent_is_a_literal: an absent optional axis compiles to the literal -, never to an empty value, so absent and omitted cannot collide into one identity",
+    "digest_is_the_identity: the digest of the compilation IS the identity; there is no second identifier to keep in step with it",
+    "validated_at_the_boundary: an axis value is checked against its own namespace rule before it enters the compilation - an object id against the TARGET repository own object-format width, and an undeterminable width refuses rather than defaulting, because a fleet that writes 64-character content digests routinely will otherwise let one be read as a head",
+    "mutable_axes_are_reobserved_effect_proximally: an axis declared mutable is re-observed at the last responsible deterministic boundary before an effect, and no cached value is served to an effect-proximal caller at any age",
+    "stable_axes_may_be_bound_early: an axis declared immutable may be bound at the earliest point it is knowable, and evidence resting on it stays valid only while its COMPLETE immutable dependency set is bound - a partially bound set is not an early pass",
+    "referential_integrity_before_durable_effect: when one axis names an object that must belong to the namespace another axis identifies, the compilation checks that membership BEFORE any durable record or wait is created, and a mismatch refuses with IDENT_NAMESPACE_SUBSTITUTION. The axes are checked TOGETHER rather than one at a time, because each value in the observed recurrences was individually well formed and only the relation between them was wrong. An identity that fails this check may neither CREATE a wait nor SUSTAIN one: a restart recomputes the same refusal from the same durable records, so an invalid tuple cannot be resurrected by replay.",
+    "typed_identity_outranks_every_untyped_source: human context, prose, a local path, a configured venue, an inbound response, or a model-supplied repository name may aid DISCOVERY and may never override the typed identity consumed for applicability. Where the two disagree, the typed identity governs and the disagreement itself refuses; the untyped source is never promoted to repair it."
+  ],
+  "edges": [
+    {
+      "edge": "N3->N1",
+      "owner": "bin/fm-task-base-lib.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta slot_base, contribution_target, base_state"
+    },
+    {
+      "edge": "N3->N4",
+      "owner": "bin/fm-pr-check.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta contribution_venue, contribution_venue_url, pr, pr_head"
+    },
+    {
+      "edge": "N3->N5",
+      "owner": "bin/fm-spawn.sh with bin/fm-attempt.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta window, endpoint_task_id, execution_id; state/<id>.lineage"
+    },
+    {
+      "edge": "N3->N6",
+      "owner": "bin/fm-route-lib.sh, enforced at bin/fm-spawn.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta route, route_policy_digest, model, harness, effort"
+    },
+    {
+      "edge": "N3->N2",
+      "owner": "bin/fm-spawn.sh isolation assertion",
+      "status": "owned",
+      "provenance": "state/<id>.meta worktree"
+    },
+    {
+      "edge": "N4->N7",
+      "owner": "bin/fm-landing-authorization.sh mint",
+      "status": "owned",
+      "provenance": "data/landing-authorizations/<id>.json"
+    },
+    {
+      "edge": "N7->N4",
+      "owner": "bin/fm-landing-seam-lib.sh",
+      "status": "owned",
+      "provenance": "state/<id>.meta landing_authorization, merge_verification, merge_verified_head"
+    },
+    {
+      "edge": "N6->capability",
+      "owner": "bin/fm-qualification-lib.sh",
+      "status": "owned",
+      "provenance": "qualifications/records/<id>.json"
+    },
+    {
+      "edge": "N3->outbound-request",
+      "owner": "bin/fm-outbound-artifact-lib.sh",
+      "status": "owned",
+      "provenance": "data/outbound-artifacts/<id>.json"
+    },
+    {
+      "edge": "N1<->N1 fork/upstream",
+      "owner": null,
+      "status": "UNOWNED",
+      "provenance": null
+    },
+    {
+      "edge": "N4->N3 reverse join",
+      "owner": null,
+      "status": "UNOWNED",
+      "provenance": null
+    }
+  ],
+  "unowned_edges": [
+    "N1<->N1 fork/upstream",
+    "N4->N3 reverse join"
+  ],
+  "seam_states": [
+    {
+      "state": "QUALIFIED",
+      "is_a_pass": true
+    },
+    {
+      "state": "DEFECT",
+      "is_a_pass": false
+    },
+    {
+      "state": "COULD_NOT_OBSERVE",
+      "is_a_pass": false
+    },
+    {
+      "state": "NOT_YET_EXERCISED",
+      "is_a_pass": false
+    }
+  ],
+  "protocols": [
+    {
+      "protocol": "fm-sol-control/v1",
+      "owner": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_PROTOCOL",
+      "producers": [
+        "bin/fm-outbound-artifact.sh"
+      ],
+      "consumers": [
+        "bin/fm-outbound-artifact.sh",
+        "bin/fm-landing-authorization-lib.sh"
+      ],
+      "accepted_versions": [
+        "v1"
+      ]
+    },
+    {
+      "protocol": "fm-outbound-artifact.v1",
+      "owner": "bin/fm-outbound-artifact-lib.sh FM_OUTBOUND_RECORD_SCHEMA",
+      "producers": [
+        "bin/fm-outbound-artifact.sh"
+      ],
+      "consumers": [
+        "bin/fm-outbound-artifact.sh",
+        "bin/fm-landing-authorization-lib.sh FM_AUTH_CORRELATION_SCHEMA"
+      ],
+      "accepted_versions": [
+        "v1"
+      ]
+    },
+    {
+      "protocol": "fm-landing-authorization.v1",
+      "owner": "bin/fm-landing-authorization-lib.sh FM_AUTH_SCHEMA",
+      "producers": [
+        "bin/fm-landing-authorization.sh"
+      ],
+      "consumers": [
+        "bin/fm-landing-authorization.sh auth_read",
+        "bin/fm-landing-seam-lib.sh"
+      ],
+      "accepted_versions": [
+        "v1"
+      ]
+    },
+    {
+      "protocol": "fm-status-event.v1",
+      "owner": "bin/fm-status-event-lib.sh FM_STATUS_EVENT_SCHEMA",
+      "producers": [
+        "crewmates",
+        "bin/fm-spawn.sh",
+        "bin/fm-attempt.sh"
+      ],
+      "consumers": [
+        "bin/fm-classify-lib.sh",
+        "bin/fm-crew-state.sh",
+        "bin/fm-watch.sh"
+      ],
+      "accepted_versions": [
+        "v1"
+      ]
+    },
+    {
+      "protocol": "fm-qualification-state.v1",
+      "owner": "bin/fm-qualification-lib.sh",
+      "producers": [
+        "bin/fm-qualification.sh"
+      ],
+      "consumers": [
+        "bin/fm-route-lib.sh",
+        "bin/fm-spawn.sh"
+      ],
+      "accepted_versions": [
+        "v1"
+      ]
+    },
+    {
+      "protocol": "fm-semantics-projection.v1",
+      "owner": "bin/fm-semantics.sh",
+      "producers": [
+        "bin/fm-semantics.sh compile"
+      ],
+      "consumers": [
+        "bin/fm-semantics-lib.sh",
+        "semantics/generated/semantics.projection.sh consumers"
+      ],
+      "accepted_versions": [
+        "v1"
+      ]
+    }
+  ],
+  "protocol_law": [
+    {
+      "rule_id": "P1",
+      "rule": "A version string is not a format. A reader validates the SHAPE and reports SCHEMA_SHAPE_MISMATCH, kept distinct from SCHEMA_UNSUPPORTED_VERSION."
+    },
+    {
+      "rule_id": "P2",
+      "rule": "Both sides declare the versions they accept. An unknown, absent or unnegotiated version REFUSES; it is never parsed on a guess and never defaulted."
+    },
+    {
+      "rule_id": "P3",
+      "rule": "A shared record namespace declares its producers. A record from an undeclared producer is SCHEMA_UNDECLARED_PRODUCER: quarantined and PRESERVED, never deleted."
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+{
+  "manifest_schema_version": 1,
+  "id": "state-seam-semantics",
+  "mechanism": "The semantics register itself: the canonical state and seam semantic owner, its deterministic compiler, its three generated projections, and its four validators.",
+  "owner": "bin/fm-semantics.sh with bin/fm-semantics-lib.sh",
+  "load_bearing": true,
+  "authority_status": "diagnostic",
+  "authority_status_why": "The mechanism is new. Its terminal projection carries semantics that were already authoritative and stays so across the move; everything else it emits is diagnostic until the adoption prerequisites in semantics/laws.json pass. This manifest exists first because a mechanism that required manifests of others and had none of its own would be arguing for a rule it had exempted itself from.",
+  "consumes": {
+    "state_families": {"version": 1, "note": "consumes the family vocabulary it owns; declared so a version bump is visible to its own consumers too"},
+    "transitions": {"version": 1, "note": "validate_transition reads legal_successors from the owner and holds no second copy"},
+    "terminal_reasons": {"version": 1, "note": "compiled into the compatibility projection, unchanged"},
+    "reason_namespaces": {"version": 1, "namespaces": ["state_family", "transition", "identity", "effect", "seam_protocol", "observation"], "note": "the validators emit codes in all six and in no others"},
+    "identity_namespaces": {"version": 1, "namespaces": ["N1", "N2", "N3", "N4", "N5", "N6", "N7"], "note": "validate_identity_mapping resolves edges between these and refuses an undeclared one"},
+    "canonical_subject": {"version": 1, "subject_type": "none", "reason": "The register describes subject types and compiles none. Its own inputs are tracked files, not governed subjects, so claiming a subject_type would be an identity it does not have."},
+    "evidence_and_cno": {"vocabulary": "validator", "owner": "bin/fm-semantics-lib.sh", "note": "returns PASS, REFUSE or CNO on exit 0, 3 or 4; the total mapping onto the observation vocabulary is declared in the owner rather than restated here"},
+    "effects": {"performs_effect": false, "reason": "The compiler writes three tracked files under an explicit compile invocation and performs no act on the outside world. It implements no lifecycle point, and declaring one would claim an effect discipline it never exercises."},
+    "authority": {"requires_authority": false, "reason": "It grants nothing and spends nothing. It reads the AUTHORITY object family vocabulary in order to validate an effect-commit phase argument, which is a read of the vocabulary and not a hold of a token."},
+    "seam_protocol": {"version": 1, "protocols": [{"protocol": "fm-semantics-projection.v1", "side": "producer"}], "note": "Declared under the same producer rule as every other shared namespace, including its own - a register that exempted its own output from P3 would be enforcing a rule it did not obey."},
+    "compatibility_adapters": [],
+    "freshness": {"mutable_axes": [], "note": "Every input is a tracked file read at invocation time. Nothing is cached, nothing is served from a store, and there is no effect-proximal caller class to protect, because the mechanism performs no effect."}
+  },
+  "extensions": [
+    {
+      "extends": "state_family",
+      "name": "OBSERVATION_RESULT",
+      "consumer_action_distinction": "A consumer reading a source row mapped to OBSERVATION_RESULT must branch to the OBSERVATION vocabulary and read observation_verdict, then leave the work in whatever family it was already in. Every work-family row instead tells the consumer which family the work is in. Those are different first actions on different vocabularies, and collapsing them would make an unmade observation read as a claim about work.",
+      "why_canonical_reuse_fails": "No work family can express this. A family meaning we do not know what family this is would be unrepresentable, and inventing one would give the fleet two could-not-observes when bin/fm-verify-lib.sh already owns the concept. The literal is deliberately not a family: it never appears in families, it can never be a transition endpoint, and an invariant refuses any row that gives it a work-family meaning.",
+      "proposed_canonical_extension": "None. This is the encoding that keeps the mapping total WITHOUT adding a tenth family, which is the outcome the ruled taxonomy requires."
+    }
+  ],
+  "gate_rules": ["G1", "G2"],
+  "gate_rules_why": "G1 because every refusal the compiler and the validators make is a static fact about declarations, knowable before any turn is spent, and each refuses rather than granting. G2 because the validators compose most-restrictively and each verdict is scoped to the dimension it examined. G3 is deliberately NOT claimed: the mechanism performs no effect, so it has no effect-proximal boundary to revalidate at, and claiming G3 would credit it with a discipline it never exercises."
+}

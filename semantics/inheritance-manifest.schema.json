@@ -1,0 +1,71 @@
+{
+  "semantics_schema_version": 1,
+  "document": "inheritance-manifest-schema",
+  "description": "The field contract for ONE inheritance manifest. A load-bearing mechanism declares, before it may hold authority, exactly which shared semantics it consumes and at which version, plus only its genuine subject-specific extensions. bin/fm-semantics.sh manifest is its only interpreter.",
+  "why": "A mechanism may not silently define another local meaning for a shared concept. Without a manifest, the seventh mechanism reinvents the law a seventh time and nobody finds out until two owners disagree at a boundary. With one, the reuse is declared, the divergence is visible in a diff, and a new distinction has to be argued rather than assumed.",
+  "authority": "diagnostic",
+  "authority_why": "New on this branch. A manifest is REQUIRED before authority; it does not itself confer any, and the CI check that enforces its presence is enabled only for mechanisms that declare themselves load-bearing in semantics/census.json.",
+  "version": {"manifest_schema_version": 1},
+  "required": {
+    "manifest_schema_version": "must equal this file manifest_schema_version",
+    "id": "stable slug, unique across semantics/manifests/, matching the file basename",
+    "mechanism": "one sentence: what this mechanism is",
+    "owner": "the single file or component that owns the mechanism",
+    "load_bearing": "true or false - whether any decision, gate, effect or captain-facing sentence depends on this mechanism state",
+    "authority_status": "one of authoritative or diagnostic - what this mechanism output may currently be used for",
+    "consumes": "the inheritance block, below",
+    "extensions": "array, possibly empty, of genuine subject-specific extensions",
+    "gate_rules": "array of gate-placement predicate ids from semantics/laws.json that apply to this mechanism"
+  },
+  "consumes_fields": {
+    "state_families": "version consumed from semantics/state-families.json family_vocabulary_version, or the literal none with a stated reason",
+    "transitions": "version consumed from transition_version, or none with a reason",
+    "terminal_reasons": "version consumed from terminal_vocabulary_version, or none with a reason",
+    "reason_namespaces": "array of declared namespace names from semantics/reasons.json this mechanism emits reasons in, plus the reason_register_version",
+    "identity_namespaces": "array of declared namespace ids from semantics/identity.json this mechanism resolves within, plus the namespace_register_version",
+    "canonical_subject": "the subject_schema_version consumed, and the subject_type this mechanism subjects are, or none with a reason",
+    "evidence_and_cno": "which verdict vocabulary this mechanism returns - observation or validator - and its owner",
+    "effects": "whether this mechanism performs an effect on the outside world, and if so which of the four lifecycle points it implements",
+    "authority": "whether this mechanism requires a spendable authority, and which object family member vocabulary it reads",
+    "seam_protocol": "array of declared protocol ids from semantics/seams.json this mechanism produces or consumes, with which side it is on",
+    "compatibility_adapters": "array of adapters this mechanism relies on, each naming from_version, to_version and retirement condition; empty when none",
+    "freshness": "which axes this mechanism treats as mutable, and where it re-observes them",
+    "gate_rules": "handled at the top level, not repeated here"
+  },
+  "none_is_a_declaration_not_an_omission": "A consumes field may be the literal none, and when it is, it must carry a reason. That keeps two different facts apart: this mechanism has no states, and nobody filled this in. An absent key is refused; an explicit none with a reason is accepted and is visible in review.",
+  "extension_fields": {
+    "extends": "which canonical concept this extends - one of state_family, terminal_reason, reason_namespace, identity_namespace, subject_type, protocol, or seam",
+    "name": "the local name being introduced",
+    "consumer_action_distinction": "REQUIRED. One sentence naming a consumer whose ACTION differs because of this distinction. Aesthetics, symmetry, and it feels different are not admissible.",
+    "why_canonical_reuse_fails": "REQUIRED. Which canonical member was considered and what it cannot express.",
+    "proposed_canonical_extension": "optional. If the distinction is general, the change that would move it into the canonical owner instead."
+  },
+  "extension_rule": "A new distinction requires a stated consumer-action difference AND an attempt to extend the shared contract first. A member that no consumer branches on is a SYNONYM, and synonyms are how a vocabulary becomes unusable. An extension whose name collides with a canonical member is refused outright rather than shadowing it, because a local redefinition of a shared word is the exact failure this manifest exists to prevent.",
+  "refused_keys": [
+    "state",
+    "status",
+    "current_state",
+    "derived_state",
+    "verdict",
+    "result",
+    "satisfied",
+    "enforced",
+    "applied",
+    "task",
+    "queue",
+    "schedule"
+  ],
+  "refused_keys_why": "The first nine are refused for the reason commitments/schema.json already refuses them: a hand-written status word must not be able to stand in for an observation, and an ignored field still reads to a human as the answer. The last three are refused because a manifest that carries a task, a queue or a schedule has started to be a runtime, and this register may describe semantics only.",
+  "invariants": [
+    "id_matches_basename: the manifest id must equal its file basename without the extension",
+    "consumes_complete: every field in consumes_fields must be present, as a version or as an explicit none with a reason",
+    "consumed_versions_current: every declared version must equal the version the corresponding owner document currently declares, so a manifest cannot claim to inherit a vocabulary it has not seen",
+    "reason_namespaces_declared: every named reason namespace must exist in semantics/reasons.json",
+    "identity_namespaces_declared: every named identity namespace id must exist in semantics/identity.json",
+    "protocols_declared: every named protocol must exist in semantics/seams.json",
+    "gate_rules_declared: every named gate rule must exist in semantics/laws.json gate_placement",
+    "extension_requires_rationale: every extension must carry a non-empty consumer_action_distinction AND why_canonical_reuse_fails",
+    "extension_may_not_shadow: an extension name may not equal any canonical member of the concept it extends",
+    "no_refused_keys: a manifest carrying any refused key is refused outright rather than having the key ignored"
+  ]
+}

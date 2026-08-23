@@ -331,6 +331,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/state-seam-semantics.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/subagent-guard.md",
       "audience": "maintainer-architecture"
     },

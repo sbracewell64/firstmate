@@ -49,7 +49,7 @@
     ]
   },
   "external_enums": {
-    "unified_terminal": "loopspecs/terminal-states.json unified[].name - the unified terminal-state vocabulary is owned there and deliberately not restated here, so the two can never disagree"
+    "unified_terminal": "loopspecs/terminal-states.json unified[].name - read from there and deliberately not restated here, so the two can never disagree. That file is a GENERATED projection: semantics/state-families.json owns the vocabulary and bin/fm-semantics.sh compile emits it, so a hand edit of either is refused as drift."
   },
   "objects": {
     "": {
