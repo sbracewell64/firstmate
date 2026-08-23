@@ -207,6 +207,33 @@ test_publishes_one_governed_candidate_exactly_once() {
   pass "a governed candidate with clean identity, no hold and the exact tip publishes exactly once"
 }
 
+# --- (a2) the intent survives into the outcome ---------------------------------
+
+test_the_spent_record_keeps_the_intent_written_before_the_act() {
+  local id record events
+  fixture intent
+  policy
+  grant; id=$GRANT_ID
+  spend "$id" > /dev/null || fail "intent: the permitted publication did not complete"
+  record="$FX_DATA/landing-authorizations/$id.json"
+
+  # The outcome is written ON TOP of the intent. An implementation that rebuilt
+  # the record from the copy it read BEFORE the intent would still report
+  # `spent`, and would silently drop the one field that says when this authority
+  # was committed to an act - which is the entire reason the intent is written
+  # first. So the assertion is on the intent, not on the state.
+  [ -n "$(jq -r '.spend.intent // ""' "$record" 2>/dev/null)" ] \
+    || fail "intent: the spent record carries no record of the intent written before the act: $(cat "$record")"
+  [ -n "$(jq -r '.spend.by // ""' "$record" 2>/dev/null)" ] \
+    || fail "intent: the spent record does not name what committed the act"
+  events=$(jq -r '[.history[].event] | join(",")' "$record" 2>/dev/null)
+  [ "$events" = 'intent-recorded,effect-confirmed' ] \
+    || fail "intent: the history reads '$events' rather than the intent followed by its confirmation"
+  assert_contains "$(jq -r '.spend.evidence // ""' "$record")" "$FX_HEAD" \
+    "intent: the outcome does not name the remote observation that confirmed it"
+  pass "the spent record keeps the intent written before the act, not just the outcome"
+}
+
 # --- (b) an active publication hold -------------------------------------------
 
 test_refuses_a_candidate_under_an_active_publication_hold() {
@@ -525,6 +552,7 @@ test_reports_an_ungoverned_publication_rather_than_staying_silent() {
 # --- run -----------------------------------------------------------------------
 
 test_publishes_one_governed_candidate_exactly_once
+test_the_spent_record_keeps_the_intent_written_before_the_act
 test_refuses_a_candidate_under_an_active_publication_hold
 test_refuses_once_a_newer_hold_arrives_after_the_authority_was_granted
 test_refuses_a_restarted_run_whose_ruling_was_revoked

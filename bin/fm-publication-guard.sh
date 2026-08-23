@@ -388,6 +388,12 @@ cmd_consume() {
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
     || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the intent record for $id could not be written, so a publication whose outcome could not have been recorded was not attempted"
+  # The outcome is written ON TOP of the intent, not on top of the record as it
+  # was before the intent. Building it from the earlier copy would drop the
+  # intent's own timestamp, its spender, and its history entry - the evidence
+  # that says WHEN this authority was committed to an act, which is the whole
+  # point of writing it first.
+  AUTH_RECORD=$record
 
   "$@" || rc=$?
 
