@@ -232,6 +232,56 @@ Two fixes existed and only one is legitimate. Rewriting the call site would have
 
 Verified in both directions, because adding an accepted call form is precisely the change that can re-open a falsification: the eight predicates resolve to alive, and a quoted `|| ! dead_one` is still reported DEAD, so prose still cannot confirm a call through the new rule.
 
+## Material publication: watched-red evidence
+
+Verified on 2026-08-22 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1, shellcheck 0.11.0 and GNU coreutils base64, at exact implementation head `ac5e3285acb85255a6dbad78d7ce0f7ddd9eeb54`.
+`bash tests/fm-outbound-artifact.test.sh` executed 89 cases with 0 failures; `bin/fm-lint.sh`, `bin/fm-retrieval-check.sh --check`, `bin/fm-doc-audience-check.sh` and `bin/fm-dead-predicate-check.sh` each exited 0, the last reporting `enrolled=4 scanned=118 alive=129 could_not_observe=0`.
+
+This guarantee is the same shape as the one above and needs the same treatment.
+A multipart publication that is quietly incomplete looks exactly like one that is finished: the parts are on the venue, the record says so, and nothing anywhere is red.
+The subject was published by hand once before any of this code existed, and it succeeded, so a green suite here is even weaker evidence than usual - it can be satisfied by a fixture that republishes what already worked.
+
+Each row below is one semantically valid single edit to the shipped implementation, `bash -n` clean before its suite ran, restored afterwards.
+
+| Mutation | Control that caught it | Observed failure |
+| --- | --- | --- |
+| `material_record_venue` reads the configured venue instead of the record's | venue is the record's, never the configuration's | `material venue: parts leaked onto the configured issue 9 instead of bound issue 8` |
+| listing count no longer reconciled against the issue's declared total | unprovable collection is could-not-observe | `material cno: a truncated collection was not could-not-observe: expected exit 4, got 0` |
+| completion skips the verification fold | omitted part forbids the transition | `material omitted: completion accepted an incomplete generation` |
+| completion skips the verification fold | tampering fails per part and on reconstruction | `material tamper: completion accepted tampered material` |
+| subject-digest comparison deleted | tampering fails per part and on reconstruction | `material tamper: a self-consistent tamper verified: expected exit 3, got 0` |
+| per-part digest comparison deleted | tampering fails per part and on reconstruction | `material tamper: a stale part digest was not named (missing: 'does not cover its own bytes')` |
+| duplicate-with-different-bytes detection deleted | duplicate is a collision only when the bytes differ | `material duplicate: conflicting duplicates did not refuse` |
+| emit never adopts an already-exact part | duplicate is a collision only when the bytes differ | `material duplicate: re-emitting posted a second copy of an already exact part` |
+| emit never adopts an already-exact part | interrupted publication resumes at the gap | `material resume: resume left 11 of 9 parts published` |
+| completion's already-complete guard removed | transition is taken exactly once | `material once: a replayed completion was accepted: expected exit 3, got 0` |
+| successor overwrites instead of retaining the prior generation | moved subject takes one successor and launders nothing | `material stale: the prior generation was not retained` |
+| subject-moved recheck removed before completion | moved subject takes one successor and launders nothing | `material stale: a moved subject still completed: expected exit 3, got 0` |
+| universe accounting can never answer `incomplete` | universe accounting refuses what it cannot count | `material universe: an omitted artifact was published: expected exit 3, got 0` |
+| venue axis folded back into the generation check | wrong generation and wrong venue are named apart | `material mismatch: a part addressed elsewhere verified: expected exit 3, got 0` |
+| derivative entries publish their bytes like exact ones | the exact universe publishes and reconstructs | `material: a DERIVATIVE entry published its bytes; only EXACT entries may` |
+
+### The row that was green first, and what it cost
+
+`no-reconstruction-check` - deleting the subject-digest comparison entirely - initially left the tampering control GREEN.
+
+The control was not weak; its FIXTURE was wrong.
+It replaced a 120-byte chunk with a 19-byte one, which makes the reassembled stream an invalid base64 length, and the decode failure refuses under the same token the digest comparison does.
+The case therefore passed whether or not the subject digest was ever consulted, which is precisely the red-for-the-wrong-reason this file's first half was written about.
+
+The fixture is now a minimal pair: the same bytes are permuted in place, same length and inside the base64 alphabet so the stream still decodes, and the two halves differ only in whether the part's own digest claim was repaired to match.
+The first half is caught per part, the second only by the subject digest fixed before anything was published, and the case asserts which of the two refusals it got.
+With that repair the mutation goes red, and the control now measures the check it names.
+
+### What the positive fixture proves, and against what
+
+The publishing case does not compare a digest this code computed against another digest this code computed.
+It reassembles the parts from the venue through the same read the command uses, decodes them, and greps the ORIGINAL source bytes out of the result - then asserts the derivative artifact's bytes are absent from that same stream while its declaration and bound authority are present.
+A self-consistent pipeline passes the first kind of check with no artifact ever leaving the machine.
+
+The fixture is also asserted to be non-vacuous rather than assumed to be: it refuses to run unless the generation produced at least three parts, because every resume, ordering, duplicate and reconstruction control needs a real prefix and a real remainder to be about anything.
+The forge shim keeps a separate comment list per issue for the same reason - against a shim where every issue is one list, "the owner addresses the venue its record binds" cannot fail, and a hardcoded issue would pass.
+
 ## Refreshing this record
 
 ```sh
