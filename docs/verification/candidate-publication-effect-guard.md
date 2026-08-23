@@ -62,12 +62,12 @@ The no-mistakes source generation was reconciled at `c0e06bebd0a43f17365af755b98
 
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
-  -> 18 ok, 0 not ok, FM_TEST_CONTRACT status=pass
+  -> 20 ok, 0 not ok, FM_TEST_CONTRACT status=pass
 bin/fm-test-run.sh tests/fm-attest.test.sh
   -> 95 ok, 0 not ok
 ```
 
-Controls selected 18, attempted 18, completed 18 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
+Controls selected 20, attempted 20, completed 20 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
 
 ### Red calibration
 
@@ -90,6 +90,7 @@ Each run stages a full copy of the worktree, injects exactly one defect, and run
 | 10 | a retained predecessor is treated as actionable | `not ok - predecessor: a superseded candidate did not refuse (exit 0): ALLOW_EXACT fm-auth-eec559bc2e836a1a080a07be9c89911d` |
 | 11 | the attestation path pushes directly instead of through the guard | `not ok - a publication that could not be placed under this home's governance was published` |
 | 12 | the outcome record is rebuilt from the copy read before the intent | `not ok - intent: the spent record carries no record of the intent written before the act` |
+| 13 | the wiring relays the guard's verdict word as the token | `not ok - token: the refusal doubled its own verdict word instead of naming the reason: REFUSE REFUSE ... (unexpected: 'REFUSE REFUSE')` |
 
 Reds 06 and 07 are worth reading twice, because both name a token other than the one the defect removed.
 That is defence in depth showing itself rather than a miscalibrated control: with the explicit generation comparison gone the authority identity still fails to recompute, and with the replay refusal gone the remote is already at the head so the second consume becomes a no-effect.
@@ -125,8 +126,19 @@ That is recorded rather than removed: it is the guard declining to publish under
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
 bin/fm-test-run.sh tests/fm-attest.test.sh
+bin/fm-dead-predicate-check.sh
 bin/fm-lint.sh
 ```
+
+## Enrolment in the dead-predicate control
+
+Both new files carry `# fail-closed-predicates: enforced`, so every predicate in them must have a call site or say in writing why it does not.
+The repository run went from `enrolled=4 alive=85 could_not_observe=0` to `enrolled=6 alive=123 could_not_observe=0`.
+
+That enrolment is load-bearing rather than decorative, and it caught two real defects during this work.
+`fm_auth_effect_valid` was defined and never consulted, which is the exact shape the control exists for - a guard that reads as present because the file defines it.
+Separately, a helper named `rec` collided with a common local variable name in six other files, which made those files unreadable to the control and turned 56 resolved predicates into could-not-observe across libraries this change never touched.
+The second is worth keeping in mind when naming anything in an enrolled file: a three-letter helper name is not a local decision.
 
 Re-run the red calibration after any change to the resolution order in `fm_pub_seam_resolve`, to the spend sequence in `cmd_consume`, or to the publish path of `bin/fm-attest.sh`.
 A control whose red no longer names its own defect is a control that has stopped measuring what this record says it measures.

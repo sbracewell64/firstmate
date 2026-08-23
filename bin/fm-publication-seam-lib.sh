@@ -747,6 +747,23 @@ fm_pub_seam_resolve() {  # <record-dir> <auth-dir> <config-dir> <repo-dir> <item
 # shellcheck disable=SC2034  # read by the sourcing publication paths
 FM_PUB_SEAM_OUTPUT=
 
+# The guard prints its verdict word first and its stable token second on a
+# refusal or a could-not-observe (`REFUSE <token>: ...`), so the token a caller
+# matches on is the SECOND field there and the first everywhere else. Reading the
+# first field unconditionally reported the token as the literal `REFUSE`, which
+# is the one thing a caller relaying it must never say: it names the shape of the
+# answer instead of the reason for it.
+fm_pub_seam_token_of() {  # <guard-output>
+  local first second
+  first=$(printf '%s\n' "${1:-}" | awk 'NF {print $1; exit}')
+  second=$(printf '%s\n' "${1:-}" | awk 'NF {print $2; exit}')
+  second=${second%:}
+  case $first in
+    REFUSE|CNO) printf '%s\n' "${second:-$first}" ;;
+    *) printf '%s\n' "$first" ;;
+  esac
+}
+
 fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expected-tip> <item-or-dash> <command...>
   local guard=$1 repo=$2 remote=$3 venue=$4 ref=$5 head=$6 expected=$7 item=$8
   shift 8
@@ -758,12 +775,12 @@ fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expecte
   word=$(printf '%s\n' "$out" | awk 'NF {print $1; exit}')
 
   if [ "$rc" -eq 3 ]; then
-    fm_pub_seam_set refused "${word:-FM_PUB_REFUSED}" \
+    fm_pub_seam_set refused "$(fm_pub_seam_token_of "$out")" \
       "publishing $ref at $head on $venue was refused before the remote was touched: $out"
     return $?
   fi
   if [ "$rc" -ne 0 ]; then
-    fm_pub_seam_set unobserved "${word:-FM_PUB_UNOBSERVED}" \
+    fm_pub_seam_set unobserved "$(fm_pub_seam_token_of "$out")" \
       "whether publishing $ref at $head on $venue may proceed could not be observed, so it did not: $out"
     return $?
   fi
@@ -789,7 +806,7 @@ fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expecte
       ;;
     ALLOW_EXACT) ;;
     *)
-      fm_pub_seam_set unobserved "${word:-FM_PUB_UNOBSERVED}" \
+      fm_pub_seam_set unobserved "$(fm_pub_seam_token_of "$out")" \
         "the publication guard answered '$out', which is not one of its results, so publishing $ref did not proceed"
       return $?
       ;;
@@ -821,12 +838,12 @@ fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expecte
       return $?
       ;;
     3)
-      fm_pub_seam_set refused "${word:-FM_PUB_REFUSED}" \
+      fm_pub_seam_set refused "$(fm_pub_seam_token_of "$out")" \
         "authority $id refused to publish $ref at $head: $out"
       return $?
       ;;
     *)
-      fm_pub_seam_set unobserved "${word:-FM_PUB_UNOBSERVED}" \
+      fm_pub_seam_set unobserved "$(fm_pub_seam_token_of "$out")" \
         "publishing $ref at $head under authority $id reached no confirmed result: $out"
       return $?
       ;;

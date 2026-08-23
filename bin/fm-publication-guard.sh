@@ -51,6 +51,14 @@
 #       OBSERVATION of the remote. `not-applied` retires it permanently rather
 #       than returning it to the pool; recovery mints a fresh one.
 #
+#   fm-publication-guard.sh publish --repo <dir> --remote <name|url>
+#                                   --venue <host/owner/repo> --ref <refs/...>
+#                                   --head <sha> --expected-tip <sha|->
+#                                   [--item <work-id>] -- <command> [args...]
+#       prepare and consume composed into the one operation a caller actually
+#       wants: decide, and if permitted perform <command> inside the authority.
+#       This is the entry point for a caller that cannot source shell libraries.
+#
 #   fm-publication-guard.sh status <auth-id>
 #   fm-publication-guard.sh list
 #
@@ -139,13 +147,20 @@ observe_tip() {  # <repo> <remote> <ref>
 
 AUTH_RECORD=
 auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
-  local id=$1 path raw
+  local id=$1 path raw effect
   path=$(fm_auth_store_path "$AUTH_DIR" "$id") || return 4
   if [ ! -e "$path" ]; then AUTH_RECORD=; return 3; fi
   raw=$(cat "$path" 2>/dev/null) || return 4
   printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 4
   [ "$(printf '%s' "$raw" | jq -r '.schema // ""')" = "$FM_AUTH_SCHEMA" ] || return 4
-  [ "$(printf '%s' "$raw" | jq -r '.effect // ""')" = publication ] || return 4
+  # Two different unreadabilities, and both stop here. An effect this contract
+  # has never heard of means the record was written by something that does not
+  # share this vocabulary; a known effect that is not publication means the
+  # caller addressed a landing authority with the publication guard. Neither is
+  # a record this command may act on.
+  effect=$(printf '%s' "$raw" | jq -r '.effect // ""')
+  fm_auth_effect_valid "$effect" || return 4
+  [ "$effect" = publication ] || return 4
   # LOCATION IS NOT IDENTITY: a record adopted from its filename can be moved
   # into place, so the record must name itself.
   [ "$(printf '%s' "$raw" | jq -r '.authorization_id // ""')" = "$id" ] || return 4
@@ -153,7 +168,10 @@ auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
   return 0
 }
 
-rec() { printf '%s' "$AUTH_RECORD" | jq -r "$1" 2>/dev/null; }
+# Named for what it reads rather than shortened to `rec`: that spelling is a
+# common local variable across this repository, and a function sharing it makes
+# every one of those files ambiguous to the dead-predicate control.
+auth_field() { printf '%s' "$AUTH_RECORD" | jq -r "$1" 2>/dev/null; }
 
 # --- shared resolution --------------------------------------------------------
 
@@ -320,7 +338,7 @@ cmd_consume() {
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "the publication authority $id could not be read as this contract's record, so whether it permits anything could not be observed" ;;
   esac
 
-  state=$(rec '.state // ""')
+  state=$(auth_field '.state // ""')
   case $(fm_auth_spend_admissibility "$state") in
     proceed) ;;
     exhausted)
@@ -333,7 +351,7 @@ cmd_consume() {
       ;;
     void)
       refuse "$FM_AUTH_TOKEN_VOID" \
-        "publication authority $id was retired ($(rec '.void_reason // "no reason recorded"')) and is never resurrected; a later effect needs a fresh authority"
+        "publication authority $id was retired ($(auth_field '.void_reason // "no reason recorded"')) and is never resurrected; a later effect needs a fresh authority"
       ;;
     *)
       cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
@@ -341,14 +359,14 @@ cmd_consume() {
       ;;
   esac
 
-  venue=$(rec '.grant.venue // ""')
-  ref=$(rec '.grant.ref // ""')
-  item=$(rec '.grant.item // ""')
-  head=$(rec '.grant.head // ""')
-  tree=$(rec '.grant.tree // ""')
-  tip=$(rec 'if .grant.tip == null then "-" else .grant.tip end')
-  generation=$(rec '.grant.generation // ""')
-  epoch=$(rec '.epoch // 1')
+  venue=$(auth_field '.grant.venue // ""')
+  ref=$(auth_field '.grant.ref // ""')
+  item=$(auth_field '.grant.item // ""')
+  head=$(auth_field '.grant.head // ""')
+  tree=$(auth_field '.grant.tree // ""')
+  tip=$(auth_field 'if .grant.tip == null then "-" else .grant.tip end')
+  generation=$(auth_field '.grant.generation // ""')
+  epoch=$(auth_field '.epoch // 1')
 
   observe_tip "$repo" "$remote" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
@@ -420,6 +438,52 @@ cmd_consume() {
   return 0
 }
 
+# --- publish ------------------------------------------------------------------
+#
+# The composed operation, and the only one most callers need. It is a thin front
+# for bin/fm-publication-seam-lib.sh's wiring rather than a second copy of it, so
+# a caller reaching the guard as a COMMAND and a caller sourcing the library
+# cannot drift into two different answers about whether a publication was
+# governed - which is the whole reason that wiring is a single owner.
+
+cmd_publish() {
+  local repo='' remote='' venue='' ref='' head='' expected='' item='-' rc=0
+
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --repo) repo=${2:-}; shift 2 ;;
+      --remote) remote=${2:-}; shift 2 ;;
+      --venue) venue=${2:-}; shift 2 ;;
+      --ref) ref=${2:-}; shift 2 ;;
+      --head) head=${2:-}; shift 2 ;;
+      --expected-tip) expected=${2:-}; shift 2 ;;
+      --item) item=${2:-}; shift 2 ;;
+      --) shift; break ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [ -n "$repo" ] && [ -n "$remote" ] && [ -n "$venue" ] && [ -n "$ref" ] \
+    && [ -n "$head" ] && [ -n "$expected" ] \
+    || die "publish requires --repo, --remote, --venue, --ref, --head and --expected-tip"
+  [ $# -gt 0 ] || die "publish requires a command after --"
+
+  fm_pub_seam_publish "$0" "$repo" "$remote" "$venue" "$ref" "$head" "$expected" "$item" "$@" \
+    || rc=$?
+  [ -z "$FM_PUB_SEAM_OUTPUT" ] || printf '%s\n' "$FM_PUB_SEAM_OUTPUT" >&2
+  case $rc in
+    0)
+      case $FM_PUB_SEAM_VERDICT in
+        no-effect) printf 'NO_EFFECT_ALREADY_EQUAL %s\n' "$FM_PUB_SEAM_REASON" ;;
+        not-applicable) printf 'NOT_APPLICABLE %s\n' "$FM_PUB_SEAM_REASON" ;;
+        *) printf 'APPLIED %s\n' "$FM_PUB_SEAM_REASON" ;;
+      esac
+      return 0
+      ;;
+    3) refuse "$FM_PUB_SEAM_TOKEN" "$FM_PUB_SEAM_REASON" ;;
+    *) cno "$FM_PUB_SEAM_TOKEN" "$FM_PUB_SEAM_REASON" ;;
+  esac
+}
+
 # --- reconcile ----------------------------------------------------------------
 #
 # THE ONE PLACE THIS DIVERGES FROM LANDING, deliberately. A landing authority
@@ -451,7 +515,7 @@ cmd_reconcile() {
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id exists to reconcile" ;;
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "publication authority $id could not be read" ;;
   esac
-  state=$(rec '.state // ""')
+  state=$(auth_field '.state // ""')
   [ "$state" = spending ] || refuse FM_PUB_NOT_INDETERMINATE \
     "publication authority $id is '$state' rather than consumed-without-confirmed-effect, so there is nothing to reconcile"
 
@@ -482,7 +546,7 @@ cmd_status() {
     3) printf '%s\n' "$FM_AUTH_STATUS_ABSENT"; exit 4 ;;
     *) printf '%s\n' "$FM_AUTH_STATUS_UNREADABLE"; exit 4 ;;
   esac
-  state=$(fm_auth_reported_status "$(rec '.state // ""')")
+  state=$(fm_auth_reported_status "$(auth_field '.state // ""')")
   printf '%s\n' "$state"
   [ "$state" = "$FM_AUTH_STATUS_INDETERMINATE" ] && exit 4
   return 0
@@ -521,6 +585,7 @@ case $1 in
   -h|--help) usage; exit 0 ;;
   prepare) shift; cmd_prepare "$@" ;;
   consume) shift; cmd_consume "$@" ;;
+  publish) shift; cmd_publish "$@" ;;
   reconcile) shift; cmd_reconcile "$@" ;;
   status) shift; cmd_status "$@" ;;
   list) shift; cmd_list "$@" ;;
