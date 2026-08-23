@@ -81,6 +81,9 @@
 #                          first page only, so the unparsable-continuation path
 #                          can be exercised without a fixture that lies about
 #                          every page.
+#
+# The public-content transport's own configuration is documented beside it, in
+# the "public-content retrieval" section below.
 
 # shellcheck disable=SC2034  # published for sourcing scripts, not used here.
 FM_RETRIEVAL_SCHEMA=fm-retrieval.v1
@@ -90,9 +93,14 @@ FM_RETRIEVAL_SCHEMA=fm-retrieval.v1
 #
 #   complete
 #     enumerated            the source offered no further continuation
+#     body_complete         a public body arrived whole, inside every bound
 #   incomplete
 #     page_bound_reached    the page bound was spent with a continuation left
 #     record_bound_reached  the record bound was spent with a continuation left
+#     byte_bound_reached    a public body hit the byte bound. The prefix that
+#                           arrived is never published, because a truncated
+#                           document read as the document is the same defect
+#                           this file exists to stop, one layer down
 #   unobserved
 #     transport_unavailable   the reader command is not present or not runnable
 #     not_authorized          the source refused the credential
@@ -102,11 +110,35 @@ FM_RETRIEVAL_SCHEMA=fm-retrieval.v1
 #                             not claim which; what matters is that it is neither
 #                             an empty collection nor a readable one
 #     rate_limited            the source refused for rate reasons after retries
-#     page_unreadable         a page failed after its retries for another reason
+#     page_unreadable         a page, or a public body, failed after its retries
+#                             for another reason
 #     continuation_unreadable a continuation existed and could not be parsed
 #     schema_unexpected       the response was not the shape this reader knows
 #     state_uncommitted       a stored record set carries no committed proof
 #     usage_error             the call itself was malformed
+#
+#   The public-content transport adds the refusals a body download can meet.
+#   Every one of them is unobserved rather than a negative fact about the
+#   document, and each is kept apart from the others because they authorize
+#   different next steps - and, for the first four, because collapsing any of
+#   them into client filtering is exactly how a fallback becomes a bypass:
+#     access_boundary         401, 407, 451, or a positively identified
+#                             authorization, paywall, geographic, session or
+#                             access-control refusal
+#     challenge_presented     a CAPTCHA or interactive challenge, which is never
+#                             answered automatically
+#     ambiguous_refusal       a 403 or 406 that identified nothing at all
+#     redirect_refused        a redirect this reader would not follow: a
+#                             protocol downgrade, an unfollowable target, the
+#                             hop bound, or sensitive material the caller
+#                             declared must not cross an origin
+#     client_filtered         positively identified filtering on the client
+#                             string, with the closed attempt order spent or
+#                             structurally unavailable to this caller
+#     tls_failed              certificate or TLS negotiation failure. There is
+#                             no insecure retry anywhere below
+#     time_bound_reached      the wall-clock bound was spent
+#     malformed_response      no readable status at all
 
 FM_RETRIEVAL_COMPLETENESS=
 FM_RETRIEVAL_REASON=
@@ -150,6 +182,7 @@ fm_retrieval_reset() {
   FM_RETRIEVAL_SELECTED_URL=
   FM_RETRIEVAL_CONCLUSION=
   FM_RETRIEVAL_SOURCE=
+  fm_retrieval_public_reset
 }
 
 # fm_retrieval_completeness_of <reason>: the completeness value a reason implies.
@@ -157,12 +190,16 @@ fm_retrieval_reset() {
 # value or attach a reason to the wrong one.
 fm_retrieval_completeness_of() {  # <reason>
   case "${1:-}" in
-    enumerated) printf 'complete' ;;
-    page_bound_reached|record_bound_reached) printf 'incomplete' ;;
+    enumerated|body_complete) printf 'complete' ;;
+    page_bound_reached|record_bound_reached|byte_bound_reached) printf 'incomplete' ;;
     transport_unavailable|not_authorized|rate_limited|page_unreadable) \
       printf 'unobserved' ;;
     subject_unreadable) printf 'unobserved' ;;
     continuation_unreadable|schema_unexpected|state_uncommitted|usage_error) \
+      printf 'unobserved' ;;
+    access_boundary|challenge_presented|ambiguous_refusal|redirect_refused) \
+      printf 'unobserved' ;;
+    client_filtered|tls_failed|time_bound_reached|malformed_response) \
       printf 'unobserved' ;;
     *) return 1 ;;
   esac
@@ -453,50 +490,44 @@ fm_retrieval_validate_records() {  # <jsonl-records> <id-field> <text-field> <ti
   return 0
 }
 
-# Publish the record set and then its proof, proof last. Called by fetch; split
-# out so the ordering is stated in one place and cannot be reordered by editing
-# the traversal.
-fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages> [retained-proof]
-  local records=$1 staged=$2 pages_file=$3 retained_proof=${4:-}
-  local dir meta observed digest publish_dir
-  dir=$(dirname "$records")
+# Publish the payload and then its proof, proof LAST. The ordering is the commit
+# point the whole crash-safety contract rests on, so it is stated here once and
+# every payload shape goes through it rather than restating it.
+#
+# The meta is built by a caller-supplied builder rather than here, because a
+# collection proof and a public-content proof are genuinely different shapes and
+# a single function trying to be both would carry fields neither one means. The
+# builder receives the digest this function bound to the staged bytes, so no
+# caller can publish a proof describing bytes it did not measure.
+fm_retrieval_commit() {  # <payload-path> <staged-payload> <retained-proof|-> <meta-builder> [builder-args...]
+  local payload=$1 staged=$2 retained_proof=$3 builder=$4
+  local dir meta digest publish_dir
+  shift 4
+  [ "$retained_proof" = '-' ] && retained_proof=
+  dir=$(dirname "$payload")
   [ -d "$dir" ] || mkdir -p "$dir" || {
     fm_retrieval_set_reason usage_error "cannot write to $dir"
     return 1
   }
-  observed=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
-  meta=$records.meta
+  meta=$payload.meta
   publish_dir=$(mktemp -d "$dir/.fm-retrieval-publish.XXXXXX") || {
     fm_retrieval_set_reason state_uncommitted "cannot create private publication staging"
     return 1
   }
 
-  cp "$staged" "$publish_dir/records" || {
-    fm_retrieval_set_reason usage_error "cannot stage the record set at $records"
+  cp "$staged" "$publish_dir/payload" || {
+    fm_retrieval_set_reason usage_error "cannot stage the payload at $payload"
     rm -rf "$publish_dir"
     return 1
   }
-  digest=$(fm_retrieval_sha256 "$publish_dir/records") || {
+  digest=$(fm_retrieval_sha256 "$publish_dir/payload") || {
     fm_retrieval_set_reason state_uncommitted \
-      "the staged record set could not be bound to a SHA-256 digest"
+      "the staged payload could not be bound to a SHA-256 digest"
     rm -rf "$publish_dir"
     return 1
   }
 
-  jq -cn \
-    --arg schema "$FM_RETRIEVAL_SCHEMA" \
-    --arg retrieval "$FM_RETRIEVAL_COMPLETENESS" \
-    --arg reason "$FM_RETRIEVAL_REASON" \
-    --arg detail "$FM_RETRIEVAL_DETAIL" \
-    --arg observed "$observed" \
-    --arg reader "${FM_RETRIEVAL_GH:-gh}" \
-    --arg digest "sha256:$digest" \
-    --argjson records "$FM_RETRIEVAL_RECORDS" \
-    --argjson duplicates "$FM_RETRIEVAL_DUPLICATES" \
-    --slurpfile pages "$pages_file" \
-    '{schema: $schema, retrieval: $retrieval, reason: $reason, detail: $detail,
-      observed_at: $observed, reader: $reader, record_digest: $digest, records: $records,
-      duplicates: $duplicates, pages: $pages}' > "$publish_dir/meta" || {
+  "$builder" "sha256:$digest" "$publish_dir/meta" "$@" || {
     fm_retrieval_set_reason usage_error "cannot stage the completeness proof"
     rm -rf "$publish_dir"
     return 1
@@ -509,9 +540,9 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages> [reta
     }
   fi
   rm -f "$meta"
-  mv -f "$publish_dir/records" "$records" || {
+  mv -f "$publish_dir/payload" "$payload" || {
     rm -rf "$publish_dir"
-    fm_retrieval_set_reason state_uncommitted "cannot publish the record set at $records"
+    fm_retrieval_set_reason state_uncommitted "cannot publish the payload at $payload"
     return 1
   }
   if [ "${FM_RETRIEVAL_TEST_KILL_AFTER_RECORDS:-0}" = 1 ]; then
@@ -525,6 +556,34 @@ fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages> [reta
   rm -rf "$publish_dir"
   FM_RETRIEVAL_PROVENANCE=${retained_proof:-$meta}
   return 0
+}
+
+# The collection proof shape. Called by fm_retrieval_commit with the digest it
+# bound to the staged record set.
+fm_retrieval_collection_meta() {  # <digest> <out> <staged-pages>
+  local digest=$1 out=$2 pages_file=$3 observed
+  observed=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
+  jq -cn \
+    --arg schema "$FM_RETRIEVAL_SCHEMA" \
+    --arg retrieval "$FM_RETRIEVAL_COMPLETENESS" \
+    --arg reason "$FM_RETRIEVAL_REASON" \
+    --arg detail "$FM_RETRIEVAL_DETAIL" \
+    --arg observed "$observed" \
+    --arg reader "${FM_RETRIEVAL_GH:-gh}" \
+    --arg digest "$digest" \
+    --argjson records "$FM_RETRIEVAL_RECORDS" \
+    --argjson duplicates "$FM_RETRIEVAL_DUPLICATES" \
+    --slurpfile pages "$pages_file" \
+    '{schema: $schema, retrieval: $retrieval, reason: $reason, detail: $detail,
+      observed_at: $observed, reader: $reader, record_digest: $digest, records: $records,
+      duplicates: $duplicates, pages: $pages}' > "$out"
+}
+
+# Publish the record set and then its proof, proof last. Called by fetch; the
+# ordering itself lives in fm_retrieval_commit so it cannot be reordered by
+# editing the traversal.
+fm_retrieval_publish() {  # <records-file> <staged-records> <staged-pages> [retained-proof]
+  fm_retrieval_commit "$1" "$2" "${4:--}" fm_retrieval_collection_meta "$3"
 }
 
 fm_retrieval_sha256() {  # <file>
@@ -604,6 +663,779 @@ fm_retrieval_load() {  # <records-file>
   FM_RETRIEVAL_PAGES=$(jq -r '.pages | length' "$meta")
   FM_RETRIEVAL_RECORDS_FILE=$records
   FM_RETRIEVAL_PROVENANCE=$meta
+  return 0
+}
+
+# --- public-content retrieval ------------------------------------------------
+#
+# A SECOND TRANSPORT UNDER THE SAME TYPE, NOT A SECOND TYPE.
+#
+# Everything above reads an authenticated GitHub COLLECTION, where the question
+# is "was the whole candidate universe enumerated". This section reads one
+# PUBLIC DOCUMENT, where the question is "were the whole bytes received". Those
+# are different subjects and they share one completeness algebra, one closed
+# reason vocabulary, one commit ordering, and one provenance discipline, so a
+# caller cannot get a weaker guarantee by picking the other door. The GitHub
+# collection path is untouched by anything below it.
+#
+# WHAT MAKES THIS DANGEROUS ENOUGH TO NEED A STATE MACHINE
+#
+# When a public fetch is refused, the tempting repair is to send a different
+# User-Agent until something answers. That move is correct for exactly one
+# cause - a filter on the client string - and is an access-control bypass for
+# every other cause. A refusal that is really a paywall, a login boundary, a
+# geographic block, a CAPTCHA, or a revoked credential does not become lawful
+# because a second identity got through, and a 403 that says nothing at all does
+# not license guessing which it was.
+#
+# So the ladder moves only on POSITIVE evidence of client filtering, never on
+# the absence of evidence for anything else. Silence is a refusal, not a permit.
+#
+# THE CLOSED ATTEMPT ORDER
+#
+#   1. NORMAL                       ordinary client identity.
+#   2. BROWSER_COMPAT_RETRIEVAL     at most one, and only after attempt 1 was
+#                                   positively typed as client filtering.
+#   3. AUTHORIZED_BRANDED_RETRIEVAL at most one, and only after attempts 1 and 2
+#                                   both failed AND attempt 2 was still
+#                                   positively typed as client filtering rather
+#                                   than an access boundary.
+#
+# The third profile's exact User-Agent is a Captain authorization, not this
+# fleet's identity. It is spelled once, in fm_retrieval_public_profile_ua, and
+# tests/fm-retrieval-public-content.test.sh carries a calibrated control that
+# goes red if that exact string ever changes.
+#
+# WHAT A FALLBACK SUCCESS DOES NOT PROVE
+#
+# This is the failure mode the whole section exists to stop. Bytes obtained on
+# profile 2 or 3 answer "can this content be retrieved at all". They do NOT
+# answer "is this reachable by a default client", "is this normally
+# accessible", "is the authenticated API behaving", or "is there no bot
+# filtering here" - and a fallback success is in fact positive evidence that
+# filtering exists. Crediting a fallback result to a default-client verifier is
+# a wrong-subject conclusion, so fm_retrieval_public_supports refuses those
+# claims structurally and the published proof carries the same refusal in
+# cannot_establish. Nothing here lets a caller ask a narrower question and have
+# the answer credited to the wider one.
+#
+# EXCLUDED CALLERS
+#
+# The caller declares its own context and the ladder is capped at NORMAL for
+# every context except public-content. Authenticated forge and provider API
+# reads, installers, and application, auth, security, client-compatibility and
+# behavior test contexts must never have a substituted client identity blur what
+# they are measuring. An unknown context is a usage error, not a permissive
+# default: this fails closed.
+#
+# CONFIGURATION
+#   FM_RETRIEVAL_PUBLIC_CURL          transport command (default: curl)
+#   FM_RETRIEVAL_PUBLIC_MAX_BYTES     body byte bound (default 5000000)
+#   FM_RETRIEVAL_PUBLIC_TIMEOUT       per-request wall-clock seconds (default 30)
+#   FM_RETRIEVAL_PUBLIC_MAX_REDIRECTS redirect hops per attempt (default 5)
+#   FM_RETRIEVAL_PUBLIC_RATE_RETRIES  bounded 429 retries per profile (default 2)
+#   FM_RETRIEVAL_PUBLIC_MAX_RETRY_AFTER  cap on an honored Retry-After (default 30)
+#   FM_RETRIEVAL_PUBLIC_SENSITIVE     strip|refuse on a cross-origin redirect
+#                                     carrying authorization or cookie material
+#                                     (default strip)
+#   FM_RETRIEVAL_SLEEP                shared with the collection path
+
+FM_RETRIEVAL_PUBLIC_SCHEMA=fm-retrieval-public.v1
+
+# The closed profile ladder, in order. Nothing outside this list is a profile.
+FM_RETRIEVAL_PUBLIC_LADDER='NORMAL BROWSER_COMPAT_RETRIEVAL AUTHORIZED_BRANDED_RETRIEVAL'
+
+# The closed claim vocabulary a caller may ask a public result to support.
+FM_RETRIEVAL_PUBLIC_CLAIMS='content-retrieved default-client-compatible normal-client-accessible authenticated-api-correct no-bot-filtering'
+
+FM_RETRIEVAL_PUBLIC_PROFILE=
+FM_RETRIEVAL_PUBLIC_ATTEMPTS=0
+FM_RETRIEVAL_PUBLIC_REQUESTS=0
+FM_RETRIEVAL_PUBLIC_STATUS=
+FM_RETRIEVAL_PUBLIC_URL=
+FM_RETRIEVAL_PUBLIC_FINAL_URL=
+FM_RETRIEVAL_PUBLIC_FINAL_ORIGIN=
+FM_RETRIEVAL_PUBLIC_BYTES=0
+FM_RETRIEVAL_PUBLIC_CLASS=
+FM_RETRIEVAL_PUBLIC_CONTEXT=
+FM_RETRIEVAL_PUBLIC_REDIRECTS=0
+FM_RETRIEVAL_PUBLIC_STRIPPED=0
+FM_RETRIEVAL_PUBLIC_FILTER_OBSERVED=0
+FM_RETRIEVAL_PUBLIC_FALLBACK_BLOCKED=
+FM_RETRIEVAL_PUBLIC_BODY_FILE=
+FM_RETRIEVAL_PUBLIC_BODY_PUBLISHED=false
+FM_RETRIEVAL_PUBLIC_NOTE=
+FM_RETRIEVAL_PUBLIC_LAST_RC=0
+FM_RETRIEVAL_PUBLIC_LAST_CODE=
+
+fm_retrieval_public_reset() {
+  FM_RETRIEVAL_PUBLIC_PROFILE=
+  FM_RETRIEVAL_PUBLIC_ATTEMPTS=0
+  FM_RETRIEVAL_PUBLIC_REQUESTS=0
+  FM_RETRIEVAL_PUBLIC_STATUS=
+  FM_RETRIEVAL_PUBLIC_URL=
+  FM_RETRIEVAL_PUBLIC_FINAL_URL=
+  FM_RETRIEVAL_PUBLIC_FINAL_ORIGIN=
+  FM_RETRIEVAL_PUBLIC_BYTES=0
+  FM_RETRIEVAL_PUBLIC_CLASS=
+  FM_RETRIEVAL_PUBLIC_CONTEXT=
+  FM_RETRIEVAL_PUBLIC_REDIRECTS=0
+  FM_RETRIEVAL_PUBLIC_STRIPPED=0
+  FM_RETRIEVAL_PUBLIC_FILTER_OBSERVED=0
+  FM_RETRIEVAL_PUBLIC_FALLBACK_BLOCKED=
+  FM_RETRIEVAL_PUBLIC_BODY_FILE=
+  FM_RETRIEVAL_PUBLIC_BODY_PUBLISHED=false
+  FM_RETRIEVAL_PUBLIC_NOTE=
+  FM_RETRIEVAL_PUBLIC_LAST_RC=0
+  FM_RETRIEVAL_PUBLIC_LAST_CODE=
+}
+
+# The exact client identity each profile transmits. This is the single place
+# any of the three strings is spelled.
+#
+# The third is a Captain authorization carried verbatim, not a name this fleet
+# chose for itself, which is why it is recorded in the proof as an authorization
+# rather than as an identity.
+fm_retrieval_public_profile_ua() {  # <profile>
+  case "${1:-}" in
+    NORMAL) printf 'firstmate-retrieval/1.0' ;;
+    BROWSER_COMPAT_RETRIEVAL) printf 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36' ;;
+    AUTHORIZED_BRANDED_RETRIEVAL) printf 'OpenAI File Downloader, XaiImageApiFetch/1.0' ;;
+    *) return 1 ;;
+  esac
+}
+
+# Whether a caller context may climb the ladder at all.
+#   0  may fall back            1  capped at NORMAL            2  unknown context
+#
+# The excluded list is the inventoried caller classes whose subject a
+# substituted client identity would blur: an authenticated forge or provider
+# API, a fixed release-asset installer, and every application, auth, security,
+# client-compatibility and behavior test context.
+fm_retrieval_public_context_allows_fallback() {  # <context>
+  case "${1:-}" in
+    public-content) return 0 ;;
+    authenticated-api|provider-api|installer|auth|security|\
+    client-compatibility|behavior-test|application-test) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# scheme://host:port with the default port made explicit and the host folded to
+# lower case, so "same origin" is a comparison and not a guess. Userinfo is
+# dropped because it is not part of the origin.
+fm_retrieval_public_origin() {  # <url>
+  local url=${1:-} scheme rest hostport
+  case "$url" in
+    https://*) scheme=https; rest=${url#https://} ;;
+    http://*) scheme=http; rest=${url#http://} ;;
+    *) return 1 ;;
+  esac
+  hostport=${rest%%/*}
+  hostport=${hostport%%\?*}
+  hostport=${hostport%%#*}
+  case "$hostport" in *@*) hostport=${hostport##*@} ;; esac
+  [ -n "$hostport" ] || return 1
+  case "$hostport" in
+    *:*) ;;
+    *) if [ "$scheme" = https ]; then hostport=$hostport:443; else hostport=$hostport:80; fi ;;
+  esac
+  printf '%s://%s' "$scheme" "$(printf '%s' "$hostport" | LC_ALL=C tr '[:upper:]' '[:lower:]')"
+}
+
+# Resolve a Location against the URL that produced it. Returns 1 for a target
+# this reader will not follow, which is a refusal rather than a rewrite.
+fm_retrieval_public_resolve() {  # <base-url> <location>
+  local base=${1:-} loc=${2:-} scheme rest authority path
+  [ -n "$loc" ] || return 1
+  case "$loc" in
+    http://*|https://*) printf '%s' "$loc"; return 0 ;;
+  esac
+  case "$base" in
+    https://*) scheme=https; rest=${base#https://} ;;
+    http://*) scheme=http; rest=${base#http://} ;;
+    *) return 1 ;;
+  esac
+  authority=${rest%%/*}
+  case "$rest" in
+    */*) path=/${rest#*/} ;;
+    *) path=/ ;;
+  esac
+  path=${path%%\?*}
+  path=${path%%#*}
+  case "$loc" in
+    //*) printf '%s:%s' "$scheme" "$loc" ;;
+    /*) printf '%s://%s%s' "$scheme" "$authority" "$loc" ;;
+    *:*) return 1 ;;
+    *) printf '%s://%s%s/%s' "$scheme" "$authority" "${path%/*}" "$loc" ;;
+  esac
+  return 0
+}
+
+FM_RETRIEVAL_PUBLIC_SENSITIVE_ERE='^(authorization|proxy-authorization|cookie)[[:space:]]*:'
+
+fm_retrieval_public_has_sensitive() {  # <request-headers-file>
+  [ -s "${1:-}" ] || return 1
+  grep -qiE "$FM_RETRIEVAL_PUBLIC_SENSITIVE_ERE" "$1"
+}
+
+fm_retrieval_public_strip_sensitive() {  # <in> <out>
+  grep -viE "$FM_RETRIEVAL_PUBLIC_SENSITIVE_ERE" "$1" > "$2" 2>/dev/null || :
+  return 0
+}
+
+# --- classification ----------------------------------------------------------
+#
+# The marker sets below are read against the response headers and a bounded head
+# of the body, folded to lower case.
+#
+# PRECEDENCE IS THE SAFETY PROPERTY, not the marker lists. A page can carry a
+# bot-vendor banner AND a CAPTCHA, or a filter phrase AND a login wall. Every
+# such overlap must resolve to the answer that permits LESS, so challenge and
+# access boundaries are tested before client filtering and win outright. A
+# marker list that is too narrow costs a retrieval; a precedence order that is
+# wrong costs an access-control bypass.
+
+# Two challenge sets, because the word and the wall are different facts. A page
+# that IS an interstitial says so structurally, and that reading holds at any
+# status - challenge walls are served as 200 as readily as 403. A page that
+# merely CONTAINS "captcha" is usually a document about captchas, so that
+# reading is admitted only at a status that already refused the request.
+# Collapsing the two would either refuse ordinary prose or accept a wall as
+# content, and both are wrong-subject answers.
+FM_RETRIEVAL_PUBLIC_CHALLENGE_ERE='verify (that )?you are (a )?human|are you a robot|checking your browser'
+FM_RETRIEVAL_PUBLIC_CHALLENGE_ERE=$FM_RETRIEVAL_PUBLIC_CHALLENGE_ERE'|cf-chl|cf-mitigated:[[:space:]]*challenge|challenge-platform|challenge required'
+FM_RETRIEVAL_PUBLIC_CHALLENGE_ERE=$FM_RETRIEVAL_PUBLIC_CHALLENGE_ERE'|enable javascript and cookies to continue|complete the security check'
+
+FM_RETRIEVAL_PUBLIC_CHALLENGE_TOPICAL_ERE='captcha|recaptcha|hcaptcha|turnstile'
+
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE='www-authenticate:|proxy-authenticate:'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|unauthori(z|s)ed|not authori(z|s)ed|authentication required'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|permission denied|access denied|access is denied|insufficient (permission|scope|privilege)'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|login required|please (log|sign) in|sign in to (view|read|continue)|log in to (view|read|continue)'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|invalid (api )?(key|token|credential)|revoked (key|token|credential)'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|subscription required|subscriber[- ]only|paywall|premium (content|article)|metered'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|not available in your (country|region|location)|geo[- ]?(restricted|blocked)|geographic restriction'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|session (expired|invalid)|invalid session|access control|acl denied'
+FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE=$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE'|ip (address )?(blocked|banned|not allowed)'
+
+FM_RETRIEVAL_PUBLIC_FILTER_ERE='automated (client|traffic|request|access|tool)'
+FM_RETRIEVAL_PUBLIC_FILTER_ERE=$FM_RETRIEVAL_PUBLIC_FILTER_ERE'|bot (detected|protection|management|traffic)|anti-?bot'
+FM_RETRIEVAL_PUBLIC_FILTER_ERE=$FM_RETRIEVAL_PUBLIC_FILTER_ERE'|(unsupported|unrecognized|invalid|blocked|missing) user[ -]?agent|your user[ -]?agent'
+FM_RETRIEVAL_PUBLIC_FILTER_ERE=$FM_RETRIEVAL_PUBLIC_FILTER_ERE'|user[ -]?agent (is )?(not )?(supported|allowed|permitted|recognized)'
+FM_RETRIEVAL_PUBLIC_FILTER_ERE=$FM_RETRIEVAL_PUBLIC_FILTER_ERE'|(unsupported|outdated) browser|browser (is )?not supported|please use a (supported |modern )?browser'
+FM_RETRIEVAL_PUBLIC_FILTER_ERE=$FM_RETRIEVAL_PUBLIC_FILTER_ERE'|crawlers? (are |is )?not allowed|scraping (is )?(not allowed|prohibited|detected)|scraper detected'
+
+# The bounded head of the response this classifier is allowed to read. A refusal
+# page states its cause early, and an unbounded read would hand a hostile body
+# control over how long classification takes.
+FM_RETRIEVAL_PUBLIC_CLASSIFY_BYTES=65536
+
+fm_retrieval_public_haystack() {  # <headers-file> <body-file>
+  { cat "${1:-/dev/null}" 2>/dev/null
+    head -c "$FM_RETRIEVAL_PUBLIC_CLASSIFY_BYTES" "${2:-/dev/null}" 2>/dev/null
+  } | LC_ALL=C tr '[:upper:]' '[:lower:]' | tr -d '\r'
+}
+
+# fm_retrieval_public_classify <status> <headers-file> <body-file>: the closed
+# class vocabulary, printed on stdout.
+#
+#   ok           2xx with a body inside the bounds
+#   not_found    404
+#   access_denied  401, 407, 451, or a positively identified access boundary
+#   challenge    an interstitial challenge, structurally identified at any
+#                status, or a CAPTCHA named on a response that already refused
+#   client_filter  positively identified filtering on the client string, and
+#                nothing that identifies a boundary or a challenge
+#   rate_limited 429
+#   server_error 5xx
+#   ambiguous    403 or 406 that identifies nothing; could-not-observe
+#   http_error   any other status this reader will not interpret
+#   malformed    no readable status at all
+fm_retrieval_public_classify() {  # <status> <headers-file> <body-file>
+  local status=${1:-} headers=${2:-} body=${3:-} hay
+  case "$status" in
+    ''|*[!0-9]*) printf 'malformed'; return 0 ;;
+  esac
+  hay=$(fm_retrieval_public_haystack "$headers" "$body")
+  case "$status" in
+    401|407) printf 'access_denied'; return 0 ;;
+  esac
+  if printf '%s' "$hay" | grep -qE "$FM_RETRIEVAL_PUBLIC_CHALLENGE_ERE"; then
+    printf 'challenge'; return 0
+  fi
+  case "$status" in
+    2??) printf 'ok'; return 0 ;;
+  esac
+  if printf '%s' "$hay" | grep -qE "$FM_RETRIEVAL_PUBLIC_CHALLENGE_TOPICAL_ERE"; then
+    printf 'challenge'; return 0
+  fi
+  case "$status" in
+    404) printf 'not_found'; return 0 ;;
+    451) printf 'access_denied'; return 0 ;;
+  esac
+  if printf '%s' "$hay" | grep -qE "$FM_RETRIEVAL_PUBLIC_BOUNDARY_ERE"; then
+    printf 'access_denied'; return 0
+  fi
+  case "$status" in
+    403|406)
+      if printf '%s' "$hay" | grep -qE "$FM_RETRIEVAL_PUBLIC_FILTER_ERE"; then
+        printf 'client_filter'
+      else
+        printf 'ambiguous'
+      fi
+      return 0
+      ;;
+    429) printf 'rate_limited'; return 0 ;;
+    5??) printf 'server_error'; return 0 ;;
+  esac
+  printf 'http_error'
+}
+
+# The total class-to-reason mapping. Kept beside the classifier so a new class
+# cannot be introduced without answering what it means for completeness.
+fm_retrieval_public_reason_of() {  # <class>
+  case "${1:-}" in
+    ok) printf 'body_complete' ;;
+    transport_absent) printf 'transport_unavailable' ;;
+    not_found) printf 'subject_unreadable' ;;
+    access_denied) printf 'access_boundary' ;;
+    challenge) printf 'challenge_presented' ;;
+    client_filter) printf 'client_filtered' ;;
+    rate_limited) printf 'rate_limited' ;;
+    server_error|http_error|unreachable) printf 'page_unreadable' ;;
+    ambiguous) printf 'ambiguous_refusal' ;;
+    malformed) printf 'malformed_response' ;;
+    tls) printf 'tls_failed' ;;
+    timeout) printf 'time_bound_reached' ;;
+    too_large) printf 'byte_bound_reached' ;;
+    redirect_refused) printf 'redirect_refused' ;;
+    *) return 1 ;;
+  esac
+}
+
+# --- one request -------------------------------------------------------------
+#
+# Redirects are deliberately NOT delegated to the transport. Following them here
+# is what makes the cross-origin rule enforceable at all: the decision to strip
+# or refuse authorization and cookie material has to happen BEFORE the next hop
+# is transmitted, and a transport following redirects internally has already
+# sent them by the time this code could look.
+#
+# TLS is never retried insecurely. There is no code path below that adds a
+# certificate-verification override, because "it worked without verification" is
+# not a weaker version of success, it is a different and unauthorized act.
+fm_retrieval_public_request() {  # <url> <profile> <headers-out> <body-out> <request-headers-file>
+  local url=$1 profile=$2 hdr_out=$3 body_out=$4 req_headers=$5
+  local transport ua line rc=0 code
+  local -a args=()
+  transport=${FM_RETRIEVAL_PUBLIC_CURL:-curl}
+  command -v "$transport" >/dev/null 2>&1 || {
+    FM_RETRIEVAL_PUBLIC_LAST_RC=-1
+    FM_RETRIEVAL_PUBLIC_LAST_CODE=
+    return 2
+  }
+  ua=$(fm_retrieval_public_profile_ua "$profile") || {
+    FM_RETRIEVAL_PUBLIC_LAST_RC=-1
+    FM_RETRIEVAL_PUBLIC_LAST_CODE=
+    return 3
+  }
+  args+=( -sS )
+  args+=( --proto '=http,https' )
+  args+=( --max-time "${FM_RETRIEVAL_PUBLIC_TIMEOUT:-30}" )
+  args+=( --max-filesize "${FM_RETRIEVAL_PUBLIC_MAX_BYTES:-5000000}" )
+  args+=( -A "$ua" )
+  args+=( -D "$hdr_out" -o "$body_out" -w '%{http_code}' )
+  if [ -s "$req_headers" ]; then
+    while IFS= read -r line; do
+      [ -n "$line" ] || continue
+      args+=( -H "$line" )
+    done < "$req_headers"
+  fi
+  : > "$hdr_out"
+  : > "$body_out"
+  code=$("$transport" "${args[@]}" "$url" 2>/dev/null) || rc=$?
+  FM_RETRIEVAL_PUBLIC_LAST_RC=$rc
+  FM_RETRIEVAL_PUBLIC_LAST_CODE=$code
+  return 0
+}
+
+# The transport's own failures, before any HTTP status exists to classify.
+# Returns the class name, or 1 when the transport reported no failure.
+fm_retrieval_public_transport_class() {  # <exit-code>
+  case "${1:-0}" in
+    0) return 1 ;;
+    28) printf 'timeout' ;;
+    63) printf 'too_large' ;;
+    35|51|53|54|58|59|60|66|77|80|82|83|90|91) printf 'tls' ;;
+    6|7|18|52|56) printf 'unreachable' ;;
+    1|2|3) printf 'malformed' ;;
+    *) printf 'unreachable' ;;
+  esac
+  return 0
+}
+
+# --- one profile attempt -----------------------------------------------------
+#
+# One attempt is one profile carried from the starting URL to a terminal
+# response, following redirects and absorbing a bounded number of 429s WITHOUT
+# moving the profile. Rate limiting is the source asking for patience, not
+# evidence about client identity, so answering it with a different User-Agent
+# would be reading one fact as another.
+fm_retrieval_public_attempt() {  # <start-url> <profile> <work-dir> <caller-headers>
+  local start_url=$1 profile=$2 work=$3 caller_headers=$4
+  local url hops=0 rate_tries=0 max_hops rate_max cap
+  local rc cls status location next origin_now origin_next
+  local active retry_after wait_s
+  url=$start_url
+  active=$work/req-headers
+  max_hops=${FM_RETRIEVAL_PUBLIC_MAX_REDIRECTS:-5}
+  rate_max=${FM_RETRIEVAL_PUBLIC_RATE_RETRIES:-2}
+  cap=${FM_RETRIEVAL_PUBLIC_MAX_RETRY_AFTER:-30}
+  case "$max_hops" in ''|*[!0-9]*) max_hops=5 ;; esac
+  case "$rate_max" in ''|*[!0-9]*) rate_max=2 ;; esac
+  case "$cap" in ''|*[!0-9]*) cap=30 ;; esac
+  : > "$active"
+  if [ -s "$caller_headers" ]; then
+    cp "$caller_headers" "$active" || return 1
+  fi
+  FM_RETRIEVAL_PUBLIC_NOTE=
+
+  while :; do
+    rc=0
+    fm_retrieval_public_request "$url" "$profile" "$work/hdr" "$work/body" "$active" || rc=$?
+    FM_RETRIEVAL_PUBLIC_REQUESTS=$((FM_RETRIEVAL_PUBLIC_REQUESTS + 1))
+    FM_RETRIEVAL_PUBLIC_FINAL_URL=$url
+    case "$rc" in
+      0) ;;
+      2) FM_RETRIEVAL_PUBLIC_CLASS=transport_absent
+         FM_RETRIEVAL_PUBLIC_NOTE="${FM_RETRIEVAL_PUBLIC_CURL:-curl} is not on PATH"
+         return 0 ;;
+      *) FM_RETRIEVAL_PUBLIC_CLASS=malformed
+         FM_RETRIEVAL_PUBLIC_NOTE="the transport could not be invoked for $profile"
+         return 0 ;;
+    esac
+
+    cls=$(fm_retrieval_public_transport_class "$FM_RETRIEVAL_PUBLIC_LAST_RC")
+    if [ -n "$cls" ]; then
+      FM_RETRIEVAL_PUBLIC_CLASS=$cls
+      FM_RETRIEVAL_PUBLIC_STATUS=$FM_RETRIEVAL_PUBLIC_LAST_CODE
+      FM_RETRIEVAL_PUBLIC_NOTE="the transport failed with exit $FM_RETRIEVAL_PUBLIC_LAST_RC for $url"
+      return 0
+    fi
+    status=$FM_RETRIEVAL_PUBLIC_LAST_CODE
+    FM_RETRIEVAL_PUBLIC_STATUS=$status
+
+    case "$status" in
+      301|302|303|307|308)
+        location=$(sed -n 's/^[Ll]ocation:[[:space:]]*//p' "$work/hdr" | tr -d '\r' | head -1)
+        if [ -z "$location" ]; then
+          FM_RETRIEVAL_PUBLIC_CLASS=malformed
+          FM_RETRIEVAL_PUBLIC_NOTE="HTTP $status carried no Location"
+          return 0
+        fi
+        hops=$((hops + 1))
+        FM_RETRIEVAL_PUBLIC_REDIRECTS=$((FM_RETRIEVAL_PUBLIC_REDIRECTS + 1))
+        if [ "$hops" -gt "$max_hops" ]; then
+          FM_RETRIEVAL_PUBLIC_CLASS=redirect_refused
+          FM_RETRIEVAL_PUBLIC_NOTE="the redirect bound of $max_hops hops was spent"
+          return 0
+        fi
+        next=$(fm_retrieval_public_resolve "$url" "$location") || {
+          FM_RETRIEVAL_PUBLIC_CLASS=redirect_refused
+          FM_RETRIEVAL_PUBLIC_NOTE="the redirect target is not an http or https URL"
+          return 0
+        }
+        origin_now=$(fm_retrieval_public_origin "$url") || origin_now=
+        origin_next=$(fm_retrieval_public_origin "$next") || origin_next=
+        if [ -z "$origin_next" ]; then
+          FM_RETRIEVAL_PUBLIC_CLASS=redirect_refused
+          FM_RETRIEVAL_PUBLIC_NOTE="the redirect target has no readable origin"
+          return 0
+        fi
+        if [ "$origin_now" != "$origin_next" ]; then
+          # A cross-origin hop that also drops TLS is refused outright: the
+          # bytes would arrive over a channel the first origin's guarantee does
+          # not cover, and no header discipline repairs that.
+          case "$url" in
+            https://*)
+              case "$next" in
+                http://*)
+                  FM_RETRIEVAL_PUBLIC_CLASS=redirect_refused
+                  FM_RETRIEVAL_PUBLIC_NOTE="the redirect downgrades $origin_now to $origin_next"
+                  return 0
+                  ;;
+              esac
+              ;;
+          esac
+          if fm_retrieval_public_has_sensitive "$active"; then
+            if [ "${FM_RETRIEVAL_PUBLIC_SENSITIVE:-strip}" = refuse ]; then
+              FM_RETRIEVAL_PUBLIC_CLASS=redirect_refused
+              FM_RETRIEVAL_PUBLIC_NOTE="authorization or cookie material must not cross from $origin_now to $origin_next"
+              return 0
+            fi
+            fm_retrieval_public_strip_sensitive "$active" "$work/req-stripped"
+            mv -f "$work/req-stripped" "$active" || return 1
+            FM_RETRIEVAL_PUBLIC_STRIPPED=1
+          fi
+        fi
+        url=$next
+        continue
+        ;;
+    esac
+
+    cls=$(fm_retrieval_public_classify "$status" "$work/hdr" "$work/body")
+    if [ "$cls" = rate_limited ]; then
+      rate_tries=$((rate_tries + 1))
+      if [ "$rate_tries" -gt "$rate_max" ]; then
+        FM_RETRIEVAL_PUBLIC_CLASS=rate_limited
+        FM_RETRIEVAL_PUBLIC_NOTE="the source rate-limited $url through $rate_tries bounded retries on $profile"
+        return 0
+      fi
+      retry_after=$(sed -n 's/^[Rr]etry-[Aa]fter:[[:space:]]*//p' "$work/hdr" | tr -d '\r' | head -1)
+      case "$retry_after" in
+        ''|*[!0-9]*)
+          wait_s=$(awk -v ms="${FM_RETRIEVAL_PUBLIC_BACKOFF_MS:-400}" -v n="$rate_tries" \
+            'BEGIN { printf "%.3f", (ms * (2 ^ (n - 1))) / 1000 }')
+          ;;
+        *)
+          if [ "$retry_after" -gt "$cap" ]; then
+            # Waiting less than the source asked and asking again is not a
+            # bounded retry, it is ignoring the answer. Stop instead.
+            FM_RETRIEVAL_PUBLIC_CLASS=rate_limited
+            FM_RETRIEVAL_PUBLIC_NOTE="the source asked for ${retry_after}s, beyond this reader's ${cap}s bound"
+            return 0
+          fi
+          wait_s=$retry_after
+          ;;
+      esac
+      "${FM_RETRIEVAL_SLEEP:-sleep}" "$wait_s" >/dev/null 2>&1 || true
+      continue
+    fi
+    FM_RETRIEVAL_PUBLIC_CLASS=$cls
+    return 0
+  done
+}
+
+# --- what a public result may be credited with -------------------------------
+#
+# The single fold. The published proof's cannot_establish list is computed from
+# this function rather than restated, so a verifier reading the proof and a
+# caller asking in process cannot disagree.
+#
+#   0 supported    1 not supported    2 not a claim in the vocabulary
+fm_retrieval_public_supports() {  # <claim>
+  case "${1:-}" in
+    content-retrieved)
+      [ "$FM_RETRIEVAL_COMPLETENESS" = complete ] || return 1
+      return 0
+      ;;
+    default-client-compatible|normal-client-accessible)
+      # Bytes obtained under a substituted client identity say nothing about
+      # what a default client would receive. This is the wrong-subject refusal.
+      [ "$FM_RETRIEVAL_COMPLETENESS" = complete ] || return 1
+      [ "$FM_RETRIEVAL_PUBLIC_PROFILE" = NORMAL ] || return 1
+      return 0
+      ;;
+    authenticated-api-correct)
+      # This entrypoint never speaks to an authenticated API, so no result it
+      # produces is evidence about one, however it was obtained.
+      return 1
+      ;;
+    no-bot-filtering)
+      # A fallback success is positive evidence that filtering EXISTS, so it is
+      # the strongest possible refusal of this claim rather than a weak pass.
+      [ "$FM_RETRIEVAL_COMPLETENESS" = complete ] || return 1
+      [ "$FM_RETRIEVAL_PUBLIC_PROFILE" = NORMAL ] || return 1
+      [ "$FM_RETRIEVAL_PUBLIC_FILTER_OBSERVED" = 0 ] || return 1
+      return 0
+      ;;
+    *) return 2 ;;
+  esac
+}
+
+# The public-content proof shape, built by fm_retrieval_commit with the digest
+# it bound to the published bytes.
+fm_retrieval_public_meta() {  # <digest> <out>
+  local digest=$1 out=$2 observed authorization ua cannot claim
+  local -a claims=()
+  observed=$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || printf 'unknown')
+  ua=$(fm_retrieval_public_profile_ua "$FM_RETRIEVAL_PUBLIC_PROFILE" 2>/dev/null) || ua=
+  if [ "$FM_RETRIEVAL_PUBLIC_PROFILE" = AUTHORIZED_BRANDED_RETRIEVAL ]; then
+    authorization=captain-authorized-exact-string
+  else
+    authorization=fleet-default-identity
+  fi
+  read -r -a claims <<< "$FM_RETRIEVAL_PUBLIC_CLAIMS"
+  cannot=$(
+    for claim in "${claims[@]}"; do
+      fm_retrieval_public_supports "$claim" || printf '%s\n' "$claim"
+    done | jq -R . | jq -sc .
+  ) || return 1
+  jq -cn \
+    --arg schema "$FM_RETRIEVAL_PUBLIC_SCHEMA" \
+    --arg retrieval "$FM_RETRIEVAL_COMPLETENESS" \
+    --arg reason "$FM_RETRIEVAL_REASON" \
+    --arg detail "$FM_RETRIEVAL_DETAIL" \
+    --arg observed "$observed" \
+    --arg context "$FM_RETRIEVAL_PUBLIC_CONTEXT" \
+    --arg profile "$FM_RETRIEVAL_PUBLIC_PROFILE" \
+    --arg ua "$ua" \
+    --arg authorization "$authorization" \
+    --arg requested_url "$FM_RETRIEVAL_PUBLIC_URL" \
+    --arg final_url "$FM_RETRIEVAL_PUBLIC_FINAL_URL" \
+    --arg final_origin "$FM_RETRIEVAL_PUBLIC_FINAL_ORIGIN" \
+    --arg status "$FM_RETRIEVAL_PUBLIC_STATUS" \
+    --arg classification "$FM_RETRIEVAL_PUBLIC_CLASS" \
+    --arg fallback_blocked "$FM_RETRIEVAL_PUBLIC_FALLBACK_BLOCKED" \
+    --arg transport "${FM_RETRIEVAL_PUBLIC_CURL:-curl}" \
+    --arg digest "$digest" \
+    --argjson attempts "$FM_RETRIEVAL_PUBLIC_ATTEMPTS" \
+    --argjson requests "$FM_RETRIEVAL_PUBLIC_REQUESTS" \
+    --argjson bytes "$FM_RETRIEVAL_PUBLIC_BYTES" \
+    --argjson redirects "$FM_RETRIEVAL_PUBLIC_REDIRECTS" \
+    --argjson sensitive_stripped "$FM_RETRIEVAL_PUBLIC_STRIPPED" \
+    --argjson filter_observed "$FM_RETRIEVAL_PUBLIC_FILTER_OBSERVED" \
+    --argjson body_published "$FM_RETRIEVAL_PUBLIC_BODY_PUBLISHED" \
+    --argjson cannot_establish "$cannot" \
+    '{schema: $schema, retrieval: $retrieval, reason: $reason, detail: $detail,
+      observed_at: $observed, context: $context, profile: $profile,
+      profile_user_agent: $ua, profile_authorization: $authorization,
+      attempts: $attempts, requests: $requests, requested_url: $requested_url,
+      final_url: $final_url, final_origin: $final_origin, status: $status,
+      classification: $classification, bytes: $bytes, body_digest: $digest,
+      body_published: $body_published, redirects: $redirects,
+      sensitive_stripped: ($sensitive_stripped == 1),
+      filter_observed: ($filter_observed == 1),
+      fallback_blocked: $fallback_blocked, transport: $transport,
+      cannot_establish: $cannot_establish}' > "$out"
+}
+
+# fm_retrieval_public_fetch <url> <body-out> <context> [request-headers-file]
+#
+# The distinct typed public-content entrypoint. Writes the retrieved bytes to
+# <body-out> and their proof to <body-out>.meta through the same commit ordering
+# the collection path uses, and returns 0 only for a complete body.
+#
+# The request-headers file, when given, carries one "Name: value" per line.
+# Authorization, Proxy-Authorization and Cookie lines in it are the sensitive
+# material the cross-origin rule governs.
+#
+# TRUNCATION IS NOT A WEAK SUCCESS. A body that hit the byte bound publishes
+# EMPTY bytes with retrieval=incomplete, so no caller can be handed a prefix and
+# read it as the document. The observed length is still recorded, because how
+# much arrived is evidence even when none of it may be used.
+fm_retrieval_public_fetch() {  # <url> <body-out> <context> [request-headers-file]
+  local url=${1:-} out=${2:-} context=${3:-} caller_headers=${4:-}
+  local work allows attempts=0 profile cls reason payload rc detail max_bytes
+  local -a ladder=()
+
+  fm_retrieval_reset
+  FM_RETRIEVAL_PUBLIC_URL=$url
+  FM_RETRIEVAL_PUBLIC_CONTEXT=$context
+
+  if [ -z "$out" ]; then
+    fm_retrieval_set_reason usage_error "fm_retrieval_public_fetch needs an output path"
+    return 1
+  fi
+  case "$url" in
+    http://*|https://*) ;;
+    *)
+      fm_retrieval_set_reason usage_error "not an http or https URL: ${url:-<empty>}"
+      return 1
+      ;;
+  esac
+  command -v jq >/dev/null 2>&1 || {
+    fm_retrieval_set_reason transport_unavailable "jq is not on PATH"
+    return 1
+  }
+  allows=0
+  fm_retrieval_public_context_allows_fallback "$context" || allows=$?
+  if [ "$allows" = 2 ]; then
+    # An unrecognized context is a usage error rather than a permissive
+    # default, because the permissive default is the one that would quietly
+    # give an excluded caller a substituted client identity.
+    fm_retrieval_set_reason usage_error \
+      "unknown public-content caller context: ${context:-<empty>}"
+    return 1
+  fi
+
+  work=$(mktemp -d "${TMPDIR:-/tmp}/fm-retrieval-public.XXXXXX") || {
+    fm_retrieval_set_reason usage_error "could not create a working directory"
+    return 1
+  }
+  : > "$work/hdr"
+  : > "$work/body"
+  : > "$work/empty"
+  : > "$work/caller-headers"
+  if [ -n "$caller_headers" ] && [ -f "$caller_headers" ]; then
+    cp "$caller_headers" "$work/caller-headers" || {
+      rm -rf "$work"
+      fm_retrieval_set_reason usage_error "could not read the request headers at $caller_headers"
+      return 1
+    }
+  fi
+
+  read -r -a ladder <<< "$FM_RETRIEVAL_PUBLIC_LADDER"
+  cls=
+  for profile in "${ladder[@]}"; do
+    FM_RETRIEVAL_PUBLIC_PROFILE=$profile
+    attempts=$((attempts + 1))
+    FM_RETRIEVAL_PUBLIC_ATTEMPTS=$attempts
+    fm_retrieval_public_attempt "$url" "$profile" "$work" "$work/caller-headers"
+    cls=$FM_RETRIEVAL_PUBLIC_CLASS
+    [ "$cls" = client_filter ] && FM_RETRIEVAL_PUBLIC_FILTER_OBSERVED=1
+
+    # Every terminal class stops here. The ladder advances on exactly one
+    # condition - this attempt was positively typed as client filtering - which
+    # is what keeps a boundary, a challenge, a rate refusal, or an unexplained
+    # 403 from being answered with a different identity.
+    [ "$cls" = client_filter ] || break
+
+    if [ "$allows" != 0 ]; then
+      FM_RETRIEVAL_PUBLIC_FALLBACK_BLOCKED="context:$context"
+      break
+    fi
+  done
+
+  reason=$(fm_retrieval_public_reason_of "$cls") || reason=malformed_response
+  FM_RETRIEVAL_PUBLIC_BYTES=$(wc -c < "$work/body" 2>/dev/null | tr -d '[:space:]')
+  case "$FM_RETRIEVAL_PUBLIC_BYTES" in ''|*[!0-9]*) FM_RETRIEVAL_PUBLIC_BYTES=0 ;; esac
+  max_bytes=${FM_RETRIEVAL_PUBLIC_MAX_BYTES:-5000000}
+  case "$max_bytes" in ''|*[!0-9]*) max_bytes=5000000 ;; esac
+  if [ "$reason" = body_complete ] && [ "$FM_RETRIEVAL_PUBLIC_BYTES" -gt "$max_bytes" ]; then
+    # The transport did not stop it, so this does. A response that declares no
+    # length can outrun a transport-side cap, and the caller must never be
+    # handed the prefix that did arrive.
+    cls=too_large
+    reason=byte_bound_reached
+    FM_RETRIEVAL_PUBLIC_CLASS=$cls
+    FM_RETRIEVAL_PUBLIC_NOTE="the body reached $FM_RETRIEVAL_PUBLIC_BYTES bytes, past this reader's $max_bytes byte bound"
+  fi
+  FM_RETRIEVAL_PUBLIC_FINAL_ORIGIN=$(fm_retrieval_public_origin "$FM_RETRIEVAL_PUBLIC_FINAL_URL") \
+    || FM_RETRIEVAL_PUBLIC_FINAL_ORIGIN=
+
+  detail="profile $FM_RETRIEVAL_PUBLIC_PROFILE on attempt $attempts of ${#ladder[@]}"
+  detail="$detail answered HTTP ${FM_RETRIEVAL_PUBLIC_STATUS:-none} for $FM_RETRIEVAL_PUBLIC_FINAL_URL"
+  [ -n "${FM_RETRIEVAL_PUBLIC_NOTE:-}" ] && detail="$detail: $FM_RETRIEVAL_PUBLIC_NOTE"
+  [ -n "$FM_RETRIEVAL_PUBLIC_FALLBACK_BLOCKED" ] && \
+    detail="$detail; fallback is structurally unavailable to $FM_RETRIEVAL_PUBLIC_FALLBACK_BLOCKED"
+  fm_retrieval_set_reason "$reason" "$detail" || :
+
+  if [ "$reason" = body_complete ]; then
+    payload=$work/body
+    FM_RETRIEVAL_PUBLIC_BODY_PUBLISHED=true
+  else
+    payload=$work/empty
+    FM_RETRIEVAL_PUBLIC_BODY_PUBLISHED=false
+  fi
+
+  rc=0
+  fm_retrieval_commit "$out" "$payload" - fm_retrieval_public_meta || rc=$?
+  FM_RETRIEVAL_PUBLIC_BODY_FILE=$out
+  rm -rf "$work"
+  [ "$rc" = 0 ] || return 1
+  [ "$FM_RETRIEVAL_COMPLETENESS" = complete ] || return 1
   return 0
 }
 

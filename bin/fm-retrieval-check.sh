@@ -55,7 +55,11 @@
 #
 #   contract              routed through bin/fm-control-read.sh or
 #                         bin/fm-retrieval-lib.sh, which owns the completeness
-#                         proof on this site's behalf.
+#                         proof on this site's behalf. A public-document read
+#                         routed through that owner's fm_retrieval_public_fetch
+#                         entrypoint qualifies on the same ground: the byte
+#                         bound, the attempt profile, and the refusal all travel
+#                         with its published proof.
 #   complete-source       proves completeness by its own equivalent mechanism.
 #                         The reason must name that mechanism.
 #   chokepoint            a transport wrapper carrying no collection semantics
