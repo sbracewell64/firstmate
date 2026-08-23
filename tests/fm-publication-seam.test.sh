@@ -273,6 +273,38 @@ test_a_refusal_relays_its_reason_rather_than_its_shape() {
   pass "a refusal relayed through the composed operation names its reason, not its shape"
 }
 
+# --- (a4) a probe must not mint --------------------------------------------------
+
+test_a_dry_run_compiles_the_same_verdict_and_writes_nothing() {
+  local dry real before after
+  fixture dry-run
+  policy
+  before=$(states | wc -l | tr -d '[:space:]')
+  dry=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) \
+    || fail "dry-run: a permitted candidate was not compiled: $dry"
+  assert_contains "$dry" 'ALLOW_EXACT' "dry-run: the verdict was not compiled: $dry"
+  after=$(states | wc -l | tr -d '[:space:]')
+  # THE POINT. `prepare` is side-effect-free only on the paths where it refuses,
+  # so a probe written to expect a refusal silently becomes a mint on the day
+  # that refusal stops firing - leaving a live one-use authority behind exactly
+  # when nobody wanted one.
+  [ "$before" = "$after" ] \
+    || fail "dry-run: a probe minted an authority ($before -> $after): [$(states | tr '\n' ';')]"
+
+  # And it is the SAME verdict, not a weaker one: the identity is deterministic,
+  # so the id a dry run names is the id a real prepare grants.
+  real=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) \
+    || fail "dry-run: the real prepare did not complete: $real"
+  # Both captures carry the command's stderr too, so the id is read off the
+  # verdict line rather than off whichever line happens to come first.
+  [ "$(printf '%s\n' "$dry" | awk '$1=="ALLOW_EXACT"{print $2; exit}')" \
+    = "$(printf '%s\n' "$real" | awk '$1=="ALLOW_EXACT"{print $2; exit}')" ] \
+    || fail "dry-run: the dry run named a different authority than the real one granted: '$dry' vs '$real'"
+  pass "a dry run compiles the same verdict, names the same authority, and writes nothing"
+}
+
 # --- (b) an active publication hold -------------------------------------------
 
 test_refuses_a_candidate_under_an_active_publication_hold() {
@@ -592,6 +624,7 @@ test_reports_an_ungoverned_publication_rather_than_staying_silent() {
 
 test_publishes_one_governed_candidate_exactly_once
 test_the_spent_record_keeps_the_intent_written_before_the_act
+test_a_dry_run_compiles_the_same_verdict_and_writes_nothing
 test_publish_composes_the_decision_and_the_act
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
