@@ -62,12 +62,12 @@ The no-mistakes source generation was reconciled at `c0e06bebd0a43f17365af755b98
 
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
-  -> 17 ok, 0 not ok, FM_TEST_CONTRACT status=pass
+  -> 18 ok, 0 not ok, FM_TEST_CONTRACT status=pass
 bin/fm-test-run.sh tests/fm-attest.test.sh
   -> 95 ok, 0 not ok
 ```
 
-Controls selected 17, attempted 17, completed 17 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
+Controls selected 18, attempted 18, completed 18 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
 
 ### Red calibration
 
@@ -77,7 +77,7 @@ Each run stages a full copy of the worktree, injects exactly one defect, and run
 
 | # | Injected defect | Observed result |
 | - | --------------- | --------------- |
-| 00 | none - the staging control | `GREEN (17 ok)` |
+| 00 | none - the staging control | `GREEN (17 ok, before control 12 was added)` |
 | 01 | the hold check is removed | `not ok - hold: an active publication hold did not refuse (exit 0): ALLOW_EXACT fm-auth-4c218bee65892f10d1ca6fb358b858b1` |
 | 02 | the placeholder identity check is removed | `not ok - placeholder: the refusal did not name the placeholder identity: REFUSE FM_PUB_IDENTITY_UNMAPPED ... (missing: 'FM_PUB_IDENTITY_PLACEHOLDER')` |
 | 03 | remote movement is not compared | `not ok - wrong-tip: a wrong expected tip did not refuse (exit 0): ALLOW_EXACT fm-auth-b2fd02c433f6ab36b7e6c5675500305e` |
@@ -89,12 +89,16 @@ Each run stages a full copy of the worktree, injects exactly one defect, and run
 | 09 | an authority consumed without a confirmed effect is restored | `not ok - unconfirmed: a retired authority was not void: granted (missing: 'void')` |
 | 10 | a retained predecessor is treated as actionable | `not ok - predecessor: a superseded candidate did not refuse (exit 0): ALLOW_EXACT fm-auth-eec559bc2e836a1a080a07be9c89911d` |
 | 11 | the attestation path pushes directly instead of through the guard | `not ok - a publication that could not be placed under this home's governance was published` |
+| 12 | the outcome record is rebuilt from the copy read before the intent | `not ok - intent: the spent record carries no record of the intent written before the act` |
 
 Reds 06 and 07 are worth reading twice, because both name a token other than the one the defect removed.
 That is defence in depth showing itself rather than a miscalibrated control: with the explicit generation comparison gone the authority identity still fails to recompute, and with the replay refusal gone the remote is already at the head so the second consume becomes a no-effect.
 Both still go red, and both name what actually happened.
 
 Red 11 is the only one that establishes the wiring, and it is the one without which every other row is a description of a control rather than a control.
+
+Control 12 was found by re-reading the spend sequence rather than by any test failing, which is the reason it is listed: the record still reported `spent`, so every state assertion in the suite stayed green while the intent evidence was being dropped.
+A control that only checks the state a mechanism reports cannot see a mechanism losing the evidence for that state.
 
 ### The real seam, on the real remote
 
