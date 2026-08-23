@@ -234,6 +234,45 @@ test_the_spent_record_keeps_the_intent_written_before_the_act() {
   pass "the spent record keeps the intent written before the act, not just the outcome"
 }
 
+# --- (a3) the composed operation, and the token it relays ----------------------
+
+test_publish_composes_the_decision_and_the_act() {
+  local out rc=0 after
+  fixture publish-cmd
+  policy
+  out=$(guard publish --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip - -- \
+    git -C "$FX_REPO" push --quiet origin "$REF:$REF") || rc=$?
+  [ "$rc" -eq 0 ] || fail "publish: the composed operation did not complete (exit $rc): $out"
+  assert_contains "$out" 'APPLIED' "publish: the composed operation reported no applied result: $out"
+  after=$(tip) || fail "publish: the remote tip could not be observed"
+  [ "$after" = "$FX_HEAD" ] \
+    || fail "publish: the remote is at $after rather than the published head $FX_HEAD"
+  pass "publish composes the decision and the act into one operation for a caller that cannot source shell"
+}
+
+test_a_refusal_relays_its_reason_rather_than_its_shape() {
+  local out rc=0 after
+  fixture publish-token
+  policy
+  record fm-ob-token emitted
+  out=$(guard publish --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip - -- \
+    git -C "$FX_REPO" push --quiet origin "$REF:$REF") || rc=$?
+  [ "$rc" -eq 3 ] || fail "token: a held publication did not refuse (exit $rc): $out"
+  # THE REASON, NOT THE SHAPE. The guard prints `REFUSE <token>`, so a wiring
+  # that read the first field relayed the literal word `REFUSE` as the token -
+  # naming the shape of the answer instead of what was wrong, to every caller
+  # that repeats it.
+  assert_contains "$out" 'REFUSE FM_PUB_ACTIVE_HOLD' \
+    "token: the refusal relayed its shape rather than its reason: $out"
+  assert_not_contains "$out" 'REFUSE REFUSE' \
+    "token: the refusal doubled its own verdict word instead of naming the reason: $out"
+  after=$(tip) || fail "token: the remote tip could not be observed"
+  [ "$after" = '-' ] || fail "token: the remote moved to $after under an active hold"
+  pass "a refusal relayed through the composed operation names its reason, not its shape"
+}
+
 # --- (b) an active publication hold -------------------------------------------
 
 test_refuses_a_candidate_under_an_active_publication_hold() {
@@ -553,6 +592,8 @@ test_reports_an_ungoverned_publication_rather_than_staying_silent() {
 
 test_publishes_one_governed_candidate_exactly_once
 test_the_spent_record_keeps_the_intent_written_before_the_act
+test_publish_composes_the_decision_and_the_act
+test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
 test_refuses_once_a_newer_hold_arrives_after_the_authority_was_granted
 test_refuses_a_restarted_run_whose_ruling_was_revoked
