@@ -11,7 +11,8 @@
 #                       fetch is involved.
 #   contribution target the commit the task's branch is CUT FROM, so the PR
 #                       carries only the task's own commits. On a fork setup
-#                       that is the upstream trunk, which is NOT the slot base.
+#                       contributing upstream that is the upstream trunk, which
+#                       is NOT the slot base.
 #
 # Cutting the branch from the slot base instead is the pollution this file
 # exists to prevent: it silently carries every fleet-only commit into the
@@ -36,7 +37,40 @@
 # function names at call time, so a caller reaching past its half gets a
 # runtime `default_branch: command not found` rather than a failure to source.
 #
-# task_base_resolve <repo-dir> sets, and clears first:
+# THE CHECKOUT CANNOT NAME THE VENUE ON ITS OWN
+# A fork layout has TWO trunks a task could be contributed to, and a clone that
+# contributes to its fork looks exactly like a clone that contributes upstream.
+# So the derivation below - which reads only the remotes - answered a question
+# the remotes do not hold, and sent fork-approved work to an upstream repository
+# whose trunk does not even carry the material that work builds on.
+#
+# The captain's standing answer is registry data. bin/fm-project-mode.sh's
+# --contribution owns it and names exactly three words, which every entry point
+# here takes as an optional last argument and defaults to when it is absent:
+#
+#   default   derive from the remotes, which is every behavior described below
+#             and what an unregistered project and a project with no registered
+#             posture both keep.
+#   fork      the project contributes where it PUSHES. The two base references
+#             collapse onto the slot base, and the venue is the push side - no
+#             upstream trunk is read, because none is being contributed to.
+#   upstream  the project contributes to its upstream trunk, which is the
+#             derivation below made explicit. A repository with no upstream
+#             distinct from where it pushes is then a CONTRADICTION rather than
+#             a collapse: refused, not quietly resolved to the fork.
+#
+# A posture this cannot name is refused everywhere it is accepted. Picking
+# between a fork and an upstream on the captain's behalf is precisely the guess
+# the token was recorded to remove, so a caller handing this an unrecognized
+# word gets a refusal rather than the derivation the token was meant to replace.
+#
+# THE POSTURE IS A STANDING DEFAULT, NOT AN OVERRIDE OF ONE. An explicit
+# per-task contribution target still wins over both the posture and the
+# derivation: bin/fm-spawn.sh applies --contribution-target after this resolution
+# and then derives that task's venue with the posture withheld, so a single task
+# aimed at the other trunk lands at the other trunk.
+#
+# task_base_resolve <repo-dir> [<contribution-posture>] sets, and clears first:
 #   TASK_BASE_SLOT          slot base commit SHA
 #   TASK_BASE_SLOT_REF      the ref it was read from
 #   TASK_BASE_CONTRIB       contribution target commit SHA (empty when unresolved)
@@ -51,7 +85,10 @@
 #               cut its branch at the contribution target.
 #   unresolved  an upstream relationship exists but its trunk cannot be read
 #               locally. Refused rather than guessed, because silently falling
-#               back to the slot base is exactly the pollution above.
+#               back to the slot base is exactly the pollution above. A
+#               registered upstream posture on a repository with no distinct
+#               upstream reports the same state, for the same reason: the trunk
+#               the captain named is not there to cut from.
 #
 # THE VENUE IS THE THIRD PROPERTY OF THE SAME CONTRACT
 # A contribution target names a commit; it also, implicitly, names the repository
@@ -64,7 +101,10 @@
 # task_base_venue derives it, and derives it from the target VALUE rather than
 # from TASK_BASE_STATE, because the target can be overridden after resolution -
 # retargeting a task onto fork-only material is exactly that override, and the
-# venue has to move with it.
+# venue has to move with it. A REGISTERED posture is the one input that is not a
+# property of the task: it names the side for every task the project does not
+# retarget, and the derivation from the target value is what a project with no
+# registered posture keeps.
 
 # shellcheck disable=SC2034 # The resolution outputs are read by callers (fm-spawn.sh) and tests, not by this lib.
 TASK_BASE_SLOT='' TASK_BASE_SLOT_REF='' TASK_BASE_CONTRIB='' TASK_BASE_CONTRIB_REF='' TASK_BASE_STATE='' TASK_BASE_ERROR=''
@@ -75,6 +115,78 @@ TASK_BASE_VENUE='' TASK_BASE_VENUE_URL=''
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-landed-lib.sh"
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-timeout-lib.sh"
+
+# The three words bin/fm-project-mode.sh's --contribution names, re-validated
+# at every entry point that accepts one. This is not defensive duplication of
+# that owner's parsing: it is the one place a caller that hands this library a
+# word from anywhere else is stopped, and stopping it is the whole point - the
+# fallback for an unrecognized posture would be the remote-only derivation the
+# posture exists to override, which is the wrong answer stated confidently.
+task_base_posture_is_known() {  # <posture>
+  case ${1-} in
+    default | fork | upstream) return 0 ;;
+  esac
+  return 1
+}
+
+# The venue a `fork` posture names: where this repository PUSHES.
+# `git remote get-url --push --all origin` answers that in all three layouts a
+# fork posture can appear in, because it prints the configured pushurl list when
+# there is one and falls back to the fetch url when there is not: origin IS the
+# fork (no split), origin fetches upstream and pushes the fork (a split), and a
+# lone remote with no upstream at all.
+#
+# --all is load-bearing. Git accepts SEVERAL remote.origin.pushurl entries, and
+# `get-url --push` without it returns the first one silently, so a repository
+# configured to push two places would have one of them recorded as "the" venue
+# with nothing to distinguish that from a repository that pushes one place.
+# There is no fork to name there, so it is refused.
+#
+# Sets TASK_BASE_VENUE_URL. 0 with it set, 2 with TASK_BASE_ERROR set when the
+# push side is missing, unreadable, or not unique.
+task_base_fork_venue_url() {  # <repo-dir>
+  local dir=$1 urls url key first_key first_url seen=0 status
+  if ! urls=$(git --no-optional-locks -C "$dir" remote get-url --push --all origin 2>/dev/null); then
+    # Absent remote and unreadable configuration both fail that read, so the
+    # negative is taken only from the enumeration that can tell them apart -
+    # the same separation bin/fm-landed-lib.sh makes for the same reason.
+    fm_landed_remote_listed "$dir" origin
+    status=$?
+    if [ "$status" -eq 1 ]; then
+      TASK_BASE_ERROR="no origin remote in $dir, so the fork venue its registered posture names cannot be derived"
+    else
+      TASK_BASE_ERROR="the urls $dir pushes to could not be read, so the fork venue its registered posture names cannot be derived"
+    fi
+    return 2
+  fi
+  first_key=
+  first_url=
+  while IFS= read -r url; do
+    [ -n "$url" ] || continue
+    # Two urls differing only in transport, port, or a .git suffix name ONE
+    # venue, so the comparison is on the forge identity; a remote this cannot
+    # reduce to a forge (a local path) falls back to its normalized url, which
+    # is the strongest comparison available for it.
+    key=$(task_base_venue_identity "$url") || key=$(fm_landed_normalize_url "$url")
+    if [ "$seen" -eq 0 ]; then
+      seen=1
+      first_key=$key
+      first_url=$url
+      continue
+    fi
+    [ "$key" = "$first_key" ] && continue
+    TASK_BASE_ERROR="$dir pushes to more than one venue ($first_url and $url), so the fork its registered posture names is not unique"
+    return 2
+  done <<EOF
+$urls
+EOF
+  if [ "$seen" -eq 0 ]; then
+    TASK_BASE_ERROR="origin in $dir names no push url, so the fork venue its registered posture names cannot be derived"
+    return 2
+  fi
+  TASK_BASE_VENUE_URL=$first_url
+  return 0
+}
 
 # Name the remote-tracking ref that holds the UPSTREAM trunk, when this repo
 # contributes somewhere other than where it pushes. Two shapes are recognized:
@@ -113,14 +225,21 @@ task_base_upstream_ref() {  # <repo-dir>
   printf 'origin/%s\n' "$default"
 }
 
-task_base_resolve() {  # <repo-dir>
-  local dir=$1 upstream_ref upstream_sha status
+task_base_resolve() {  # <repo-dir> [<contribution-posture>]
+  local dir=$1 posture=${2-} upstream_ref upstream_sha status
   TASK_BASE_SLOT=
   TASK_BASE_SLOT_REF=
   TASK_BASE_CONTRIB=
   TASK_BASE_CONTRIB_REF=
   TASK_BASE_STATE=
   TASK_BASE_ERROR=
+
+  [ -n "$posture" ] || posture=default
+  task_base_posture_is_known "$posture" || {
+    TASK_BASE_STATE=unresolved
+    TASK_BASE_ERROR="unknown contribution posture '$posture'; bin/fm-project-mode.sh --contribution owns that word and names only default, fork, or upstream"
+    return 1
+  }
 
   TASK_BASE_SLOT_REF=$(default_branch "$dir" 2>/dev/null) || {
     TASK_BASE_STATE=unresolved
@@ -133,6 +252,23 @@ task_base_resolve() {  # <repo-dir>
     return 1
   }
 
+  # A REGISTERED FORK POSTURE ENDS THE RESOLUTION HERE. The project contributes
+  # where it pushes, so the trunk the branch is cut from is the trunk the fleet
+  # already runs and the two roles collapse onto that one commit - the same
+  # coincident state a project with no upstream at all reports.
+  #
+  # No upstream trunk is read, and that is deliberate rather than an
+  # optimization: an upstream this project is not contributing to has no say in
+  # where its branches are cut, so an unfetched one must not be able to refuse a
+  # dispatch, and a readable one must not be able to pull the target away from
+  # the trunk the captain approved.
+  if [ "$posture" = fork ]; then
+    TASK_BASE_CONTRIB=$TASK_BASE_SLOT
+    TASK_BASE_CONTRIB_REF=$TASK_BASE_SLOT_REF
+    TASK_BASE_STATE=coincident
+    return 0
+  fi
+
   # No distinct upstream: the two roles collapse onto the slot base and every
   # caller stays on today's single-reference behavior. That collapse is a claim
   # about the repository's remotes, so it is made only when they were read - a
@@ -141,6 +277,14 @@ task_base_resolve() {  # <repo-dir>
   upstream_ref=$(task_base_upstream_ref "$dir")
   status=$?
   if [ "$status" -eq 1 ]; then
+    # Except under a registered upstream posture, where the collapse would
+    # silently substitute the fork for the trunk the captain named. The two
+    # facts contradict, and a contradiction is refused rather than resolved.
+    if [ "$posture" = upstream ]; then
+      TASK_BASE_STATE=unresolved
+      TASK_BASE_ERROR="$dir is registered to contribute upstream but has no upstream distinct from where it pushes, so there is no upstream trunk to cut from"
+      return 0
+    fi
     TASK_BASE_CONTRIB=$TASK_BASE_SLOT
     TASK_BASE_CONTRIB_REF=$TASK_BASE_SLOT_REF
     TASK_BASE_STATE=coincident
@@ -335,19 +479,44 @@ task_base_venue_identity_alias() {  # <url>
 # would silently hand its targets to whichever trunk IS readable - the exact
 # inversion this derivation exists to prevent.
 #
+# A REGISTERED POSTURE REPLACES THAT DERIVATION RATHER THAN BIASING IT. The
+# ordering below is a safety property only while the venue is being GUESSED from
+# reachability; once the captain has named the side, reachability is the wrong
+# question entirely. It has to be, because the two trunks are not always
+# distinguishable by it: the moment upstream merges everything the fork holds,
+# the fork trunk becomes an ancestor of the upstream trunk and the upstream-first
+# test resolves upstream for work that must still be raised at the fork.
+#
 # 0 with the venue set, 2 when it could not be derived. There is no "probably";
 # an underivable venue is reported so a caller can refuse rather than guess.
-task_base_venue() {  # <repo-dir> <contribution-target>
-  local dir=$1 target=${2-} fetch_url push_url upstream_url upstream_ref name target_sha ref fork_seen
+task_base_venue() {  # <repo-dir> <contribution-target> [<contribution-posture>]
+  local dir=$1 target=${2-} posture=${3-}
+  local fetch_url push_url upstream_url upstream_ref name target_sha ref fork_seen
   local status refs complete
   TASK_BASE_VENUE=
   TASK_BASE_VENUE_URL=
   TASK_BASE_ERROR=
 
+  [ -n "$posture" ] || posture=default
+  task_base_posture_is_known "$posture" || {
+    TASK_BASE_ERROR="unknown contribution posture '$posture'; bin/fm-project-mode.sh --contribution owns that word and names only default, fork, or upstream"
+    return 2
+  }
+
   target_sha=$(git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
     TASK_BASE_ERROR="contribution target '$target' is not a readable commit"
     return 2
   }
+
+  # The registered fork posture. The venue is the push side and no trunk is
+  # tested for reachability, so no upstream - merged, diverged, or unfetched -
+  # can move a fork-approved task's pull request to another repository.
+  if [ "$posture" = fork ]; then
+    task_base_fork_venue_url "$dir" || return 2
+    TASK_BASE_VENUE=$(task_base_venue_identity "$TASK_BASE_VENUE_URL" || true)
+    return 0
+  fi
+
   fetch_url=$(git --no-optional-locks -C "$dir" remote get-url origin 2>/dev/null) || {
     TASK_BASE_ERROR="no origin remote in $dir, so no venue can be named"
     return 2
@@ -360,6 +529,14 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   upstream_ref=$(task_base_upstream_ref "$dir")
   status=$?
   if [ "$status" -eq 1 ]; then
+    # A registered upstream posture names a trunk this repository does not have,
+    # so recording its single venue here would quietly answer "fork" to a
+    # question the captain already answered "upstream". Refused, matching
+    # task_base_resolve's refusal of the same contradiction.
+    if [ "$posture" = upstream ]; then
+      TASK_BASE_ERROR="$dir is registered to contribute upstream but has no upstream distinct from where it pushes, so the venue that posture names does not exist"
+      return 2
+    fi
     TASK_BASE_VENUE_URL=$fetch_url
     TASK_BASE_VENUE=$(task_base_venue_identity "$fetch_url" || true)
     return 0
@@ -382,6 +559,17 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   # separate `upstream` remote names the upstream side, and otherwise origin
   # FETCHES the upstream side and PUSHES the fork.
   upstream_url=$(git --no-optional-locks -C "$dir" remote get-url upstream 2>/dev/null) || upstream_url=$fetch_url
+
+  # The registered upstream posture. Same shape as the fork branch above and for
+  # the same reason: the side is named, so the target is not tested against it.
+  # The push side is deliberately left unread - a project contributing upstream
+  # does not need its fork to be nameable for its pull request to have a venue.
+  if [ "$posture" = upstream ]; then
+    TASK_BASE_VENUE_URL=$upstream_url
+    TASK_BASE_VENUE=$(task_base_venue_identity "$upstream_url" || true)
+    return 0
+  fi
+
   # The fetch url stands in for the push url only when there PROVABLY is no
   # distinct one. A push url that could not be read is a different fact, and
   # recording the fetch url as the venue in that case names the wrong forge.

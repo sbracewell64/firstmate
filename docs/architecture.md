@@ -326,6 +326,11 @@ The same library derives a third property from that target, the forge venue whos
 `fm-spawn.sh` resolves it after every base override so a retargeted task records the venue it was actually retargeted to, and `bin/fm-pr-check.sh` refuses a pull request that contradicts the record before arming anything, because raising it at the other trunk would contribute every commit the two do not share.
 Only a contradiction refuses; a task with no recorded venue is reported unchecked rather than read as agreement, and no venue is ever inferred from the pull request itself.
 
+Which of a fork layout's two trunks a project contributes to is not something the remotes can answer, because a clone that contributes to its fork looks exactly like one that contributes upstream.
+That is the captain's standing decision, recorded in `data/projects.md` as a `contribute=fork` or `contribute=upstream` token and read by `fm-spawn.sh` through `bin/fm-project-mode.sh --contribution`, which the base and venue resolution then take as an input rather than deriving around.
+A registered posture names the side outright instead of biasing the reachability test, because reachability stops separating the two trunks the moment upstream merges everything the fork holds, and a fork-approved task would then be raised upstream on evidence that looks conclusive.
+An unregistered project and a project with no token keep the derivation, an explicit per-task `--contribution-target` still outranks the registered posture for that one task, and a registry line declaring a posture the parser cannot name stops the dispatch rather than falling back to a guess between two repositories.
+
 The firstmate repo has one extra exposure because it can dispatch crewmates to work on itself.
 Its operating checkout (`FM_ROOT`) and the disposable crewmate worktrees are all linked git worktrees of the same repository, so the valid discriminator is branch state, not whether the checkout is linked.
 The primary checkout is healthy on its default branch, and linked worktrees or secondmate homes are healthy at detached HEAD.
@@ -435,7 +440,7 @@ The `data/secondmates.md` line contract is owned by the [`secondmate-provisionin
 Each task's mode and `yolo` posture are firstmate's decision at intake and are passed explicitly to `bin/fm-brief.sh`, `bin/fm-spawn.sh`, and `bin/fm-reflag.sh`, which refuse a ship task that does not carry them.
 A ship brief records its mode as a fixed machine-readable line and the spawn refuses to launch on a different one, so the worker's instructions and the recorded task delivery cannot diverge.
 `data/projects.md` records each project's standing posture and optional `+yolo` flag as the captain's default and as context for that decision, including the conditional `no-mistakes-prod-only` policy; a ship spawn that drops below the registered rigor prints a deviation notice and continues.
-`bin/fm-project-mode.sh` remains the one registry parser for the mechanical consumers that have no task in hand: fleet sync's `local-only` skip and home seeding's refusal and no-mistakes initialization.
+`bin/fm-project-mode.sh` remains the one registry parser: fleet sync's `local-only` skip, home seeding's refusal and no-mistakes initialization, the spawn's standing-rigor deviation notice, and the contribution posture described under [worktrees](#worktrees-not-branches-in-your-checkout).
 When a selected delivery path calls for a diff, `bin/fm-review-diff.sh` refreshes the authoritative base and, when task meta records `pr=`, always fetches and compares against `refs/pull/<n>/head` by default (recorded `pr_head=` is only an offline fallback) before falling back to the local branch with a warning.
 For target project repos shipped through their own no-mistakes pipeline, commits under `.no-mistakes/evidence/` are the pipeline's PR-viewable validation evidence and are expected to stay in the crew branch until the evidence-hosting design changes.
 The firstmate repo itself is the exception: its `.no-mistakes/` directory is local state, stays gitignored, and is rejected by CI if tracked.

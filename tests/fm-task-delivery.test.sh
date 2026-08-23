@@ -486,6 +486,65 @@ test_autonomy_state_producers_and_consumer_are_paired() {
   pass "the autonomy-state vocabulary has one owner, every member is produced, and the consumer partitions them"
 }
 
+# The registry is where the captain's CONTRIBUTION posture lives: which of a
+# fork layout's two trunks this project contributes to, a fact the checkout
+# cannot supply and the resolver previously derived from the remotes instead.
+#
+# The two answers this file gives are independent on purpose. A contribution
+# token this cannot name refuses that query, because choosing between a fork and
+# an upstream on the captain's behalf is what the token exists to prevent - but
+# the delivery gate is not part of that question, so it keeps answering.
+test_project_mode_reads_the_registered_contribution_posture() {
+  local home out err rc
+  home="$TMP_ROOT/project-contribution/home"
+  mkdir -p "$home/data"
+  cat > "$home/data/projects.md" <<'EOF'
+- plainproj [no-mistakes] - fixture (added 2026-01-01)
+- forkproj [no-mistakes contribute=fork] - fixture (added 2026-01-01)
+- upproj [direct-PR +yolo contribute=upstream] - fixture (added 2026-01-01)
+- bareproj [contribute=fork] - fixture (added 2026-01-01)
+- dupeproj [no-mistakes contribute=fork contribute=upstream] - fixture (added 2026-01-01)
+- typoproj [no-mistakes contribute=forq] - fixture (added 2026-01-01)
+EOF
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --contribution plainproj 2>/dev/null)
+  [ "$out" = "default" ] || fail "a project registering no posture must derive it (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --contribution missingproj 2>/dev/null)
+  [ "$out" = "default" ] || fail "an unregistered project must derive its posture (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --contribution forkproj 2>/dev/null)
+  [ "$out" = "fork" ] || fail "a registered fork posture was not read (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --contribution upproj 2>/dev/null)
+  [ "$out" = "upstream" ] || fail "a registered upstream posture was not read (got '$out')"
+
+  # The token composes with the other annotations rather than replacing them.
+  out=$(FM_HOME="$home" "$PROJECT_MODE" upproj 2>/dev/null)
+  [ "$out" = "direct-PR on" ] || fail "the contribution token disturbed the delivery posture (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --contribution bareproj 2>/dev/null)
+  [ "$out" = "fork" ] || fail "a standalone contribution token was not read (got '$out')"
+  out=$(FM_HOME="$home" "$PROJECT_MODE" bareproj 2>/dev/null)
+  [ "$out" = "no-mistakes off" ] || fail "a standalone contribution token was read as a mode (got '$out')"
+
+  # A posture this cannot name is refused, with nothing on stdout to mistake for
+  # an answer - and the delivery gate for the same project still resolves.
+  for proj in dupeproj typoproj; do
+    rc=0
+    out=$(FM_HOME="$home" "$PROJECT_MODE" --contribution "$proj" 2>/dev/null) || rc=$?
+    [ "$rc" -ne 0 ] || fail "$proj: an unnameable contribution posture must refuse"
+    [ -z "$out" ] || fail "$proj: a refused posture still printed '$out'"
+    err=$(FM_HOME="$home" "$PROJECT_MODE" --contribution "$proj" 2>&1 >/dev/null)
+    assert_contains "$err" "contribution posture" "$proj: the refusal must say what it could not name"
+    out=$(FM_HOME="$home" "$PROJECT_MODE" "$proj" 2>/dev/null)
+    [ "$out" = "no-mistakes off" ] \
+      || fail "$proj: a broken contribution token silently changed the delivery gate (got '$out')"
+  done
+
+  # The two queries answer different questions and do not combine.
+  rc=0
+  out=$(FM_HOME="$home" "$PROJECT_MODE" --raw --contribution forkproj 2>/dev/null) || rc=$?
+  [ "$rc" -ne 0 ] || fail "--raw and --contribution must not combine"
+  [ -z "$out" ] || fail "a refused query combination still printed '$out'"
+  pass "fm-project-mode: the registered contribution posture is read, composes, and refuses what it cannot name"
+}
+
 test_ship_spawn_requires_a_valid_delivery_contract
 test_scout_and_secondmate_refuse_delivery_flags
 test_spawn_refuses_a_brief_mode_mismatch
@@ -493,6 +552,7 @@ test_spawn_notices_a_rigor_downgrade_against_the_registry
 test_scout_records_no_delivery_posture
 test_reflag_requires_and_records_the_delivery_contract
 test_project_mode_maps_the_conditional_policy
+test_project_mode_reads_the_registered_contribution_posture
 test_autonomy_reader_keeps_three_values
 test_autonomy_state_producers_and_consumer_are_paired
 echo "# all fm-task-delivery tests passed"

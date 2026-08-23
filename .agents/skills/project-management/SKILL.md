@@ -52,9 +52,23 @@ The optional `+yolo` posture changes routine approval authority but does not cha
 Default it off for every project and every posture, and enable it only on the captain's explicit instruction.
 `AGENTS.md` section 7 owns the complete authority boundary and exceptions when it is on.
 
+## Contribution posture
+
+A fork layout has two trunks a task could be contributed to, and the clone looks the same either way.
+Nothing in the checkout says which side the captain approved, so the registry records it as a `contribute=fork` or `contribute=upstream` token in the same bracket as the delivery mode; the header of `bin/fm-project-mode.sh` owns the exact syntax and vocabulary.
+That token is what makes a dispatch cut the task's branch from the approved trunk and raise its pull request at the approved repository.
+
+Resolve it at add or clone intake whenever the project has an upstream distinct from where it pushes, which is either a separate `upstream` remote or an `origin` that fetches one place and pushes another.
+Ask the captain which side the work lands on rather than inferring it from the remote names, and leave the token off for a single-remote project, where there is only one venue to name.
+Omitting it on a fork layout is not neutral: the resolver then derives the upstream trunk from the remotes, which is the correct answer only for a project that genuinely contributes upstream.
+
+An unregistered project and a project with no token both keep that derivation, so nothing changes for a project nobody declared a posture for.
+A token the parser cannot name stops the dispatch instead of falling back to the derivation, so a typo surfaces as a refused spawn rather than as a pull request raised at the wrong repository.
+Firstmate may still aim one task at the other trunk with an explicit per-task contribution target, which outranks the registered posture for that task alone.
+
 ## Add or clone an existing project
 
-Confirm the source URL, local project name, delivery posture, and autonomy posture, stating the resolved default for each rather than asking the captain to invent one.
+Confirm the source URL, local project name, delivery posture, autonomy posture, and - on a fork layout - the contribution posture above, stating the resolved default for each rather than asking the captain to invent one.
 Clone into `projects/<name>` and add the registry entry only after the destination is known to be unused.
 A `no-mistakes` or `no-mistakes-prod-only` project must have an `origin` remote and must complete the initialization procedure below, because a conditional policy's product-facing work runs the pipeline while its internal-only work still takes the direct PR.
 A `direct-PR` project needs an `origin` remote but skips no-mistakes initialization.

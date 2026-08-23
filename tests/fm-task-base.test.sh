@@ -1055,6 +1055,557 @@ test_spawn_records_the_fork_venue_for_a_retargeted_task() {
   pass "fm-spawn: a task retargeted onto the fork trunk records the fork venue"
 }
 
+
+# --- registered contribution posture ----------------------------------------
+#
+# The defect these guard: a fork layout has TWO trunks a task could be
+# contributed to, and the clone looks identical either way. The resolver read
+# only the remotes, so it sent work the captain had approved for the FORK to the
+# upstream repository - whose trunk does not carry the material that work builds
+# on. The registry holds the captain's answer; these prove it is what decides.
+#
+# Every case below runs the OTHER posture against the SAME checkout, because a
+# venue that moved is not yet a venue that follows the registry.
+
+# The kun-agent-workspace shape, with the checkout named so a registry lookup by
+# project name resolves it: origin IS the fork, a separate `upstream` remote
+# holds the upstream trunk, and the two trunks diverge in BOTH directions so no
+# reachability test can pass by accident.
+make_posture_repo() {  # <name> <fork-commits>
+  local name=$1 fork_commits=$2 dir up fork seed scratch repo i
+  dir="$TMP_ROOT/$name"
+  up="$dir/upstream.git"
+  fork="$dir/fork.git"
+  seed="$dir/seed"
+  scratch="$dir/scratch"
+  repo="$dir/$name"
+  mkdir -p "$seed"
+  git -C "$seed" init -q
+  git -C "$seed" symbolic-ref HEAD refs/heads/main
+  commit_in "$seed" base
+  git clone --quiet --bare "$seed" "$up"
+  git clone --quiet --bare "$seed" "$fork"
+  git clone --quiet "$up" "$scratch"
+  commit_in "$scratch" upstream-only
+  git -C "$scratch" push --quiet origin main
+  git clone --quiet "$fork" "$repo"
+  git -C "$repo" remote add upstream "$up"
+  i=0
+  while [ "$i" -lt "$fork_commits" ]; do
+    i=$((i + 1))
+    commit_in "$repo" "fork-only-$i"
+  done
+  git -C "$repo" fetch --quiet upstream
+  git -C "$repo" remote set-url origin "https://github.com/fixture-fork/$name.git"
+  git -C "$repo" remote set-url upstream "https://github.com/fixture-up/$name.git"
+  printf '%s\n' "$repo"
+}
+
+# `fail` inside a command substitution kills only the subshell, so a fixture
+# that died still hands the caller a string. Every fixture here is checked.
+require_fixture() {  # <path> <label>
+  [ -n "$1" ] && [ -d "$1/.git" ] \
+    || fail "$2: fixture repository did not build (got '$1')"
+}
+
+# Read the resolver through a chosen bin/ tree, so the mutation control below
+# can drive the SAME public functions from a modified copy.
+posture_probe() {  # <bin-dir> <repo> <posture>
+  bash -c '
+    set -u
+    . "$1/fm-ff-lib.sh"
+    . "$1/fm-task-base-lib.sh"
+    task_base_resolve "$2" "$3" || true
+    printf "state=%s\ncontrib=%s\n" "$TASK_BASE_STATE" "$TASK_BASE_CONTRIB"
+    if task_base_venue "$2" "${TASK_BASE_CONTRIB:-HEAD}" "$3"; then
+      printf "venue=%s\n" "$TASK_BASE_VENUE"
+    else
+      printf "venue=REFUSED\n"
+    fi
+  ' _ "$1" "$2" "$3"
+}
+
+probe_field() {  # <probe-output> <field>
+  printf '%s\n' "$1" | sed -n "s/^$2=//p"
+}
+
+# Every ref in each named repository, so a test can prove it moved nothing.
+# A read that fails is kept in the snapshot rather than discarded, so a
+# repository that became unreadable during the run shows up as a difference
+# instead of comparing equal to itself.
+ref_snapshot() {  # <repo-dir> ...
+  local d
+  for d in "$@"; do
+    printf '== %s\n' "$d"
+    git --no-optional-locks -C "$d" for-each-ref --format='%(refname) %(objectname)' 2>&1 \
+      || printf 'UNREADABLE\n'
+  done
+}
+
+# THE CASE FROM THE FIELD. Fork and upstream tips deliberately diverged, the
+# captain's registered posture is the fork, and the same checkout must still
+# answer upstream for a project that registered nothing.
+test_a_registered_fork_posture_selects_the_fork_trunk_and_venue() {
+  local repo fork_tip upstream_tip
+  repo=$(make_posture_repo posture-fork 3)
+  require_fixture "$repo" posture-fork
+  fork_tip=$(git -C "$repo" rev-parse main)
+  upstream_tip=$(git -C "$repo" rev-parse upstream/main)
+  # The fixture is the hard case in BOTH directions, so neither answer below can
+  # come from one trunk simply containing the other.
+  [ "$fork_tip" != "$upstream_tip" ] \
+    || fail "posture-fork: the two trunks are the same commit; the fixture proves nothing"
+  git -C "$repo" merge-base --is-ancestor "$fork_tip" "$upstream_tip" \
+    && fail "posture-fork: the fork trunk is already upstream; the fixture proves nothing"
+  git -C "$repo" merge-base --is-ancestor "$upstream_tip" "$fork_tip" \
+    && fail "posture-fork: the upstream trunk is already on the fork; the fixture proves nothing"
+
+  # The defect, still reproducible on the unregistered default.
+  task_base_resolve "$repo" default || fail "posture-fork: default resolve failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_CONTRIB" = "$upstream_tip" ] \
+    || fail "posture-fork: an unregistered project must keep the derived upstream target"
+  task_base_venue "$repo" "$TASK_BASE_CONTRIB" default \
+    || fail "posture-fork: default venue failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-up/posture-fork' ] \
+    || fail "posture-fork: the derived default must still name upstream, got '$TASK_BASE_VENUE'"
+
+  # The registered posture, on the identical checkout.
+  task_base_resolve "$repo" fork || fail "posture-fork: fork resolve failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_CONTRIB" = "$fork_tip" ] \
+    || fail "posture-fork: a registered fork posture must cut from the fork trunk, got '${TASK_BASE_CONTRIB:0:12}'"
+  [ "$TASK_BASE_CONTRIB" != "$upstream_tip" ] \
+    || fail "posture-fork: the registered fork posture still selected the upstream trunk"
+  [ "$TASK_BASE_SLOT" = "$TASK_BASE_CONTRIB" ] \
+    || fail "posture-fork: the two references must collapse under a fork posture"
+  [ "$TASK_BASE_STATE" = coincident ] \
+    || fail "posture-fork: expected state=coincident, got '$TASK_BASE_STATE'"
+  task_base_venue "$repo" "$TASK_BASE_CONTRIB" fork \
+    || fail "posture-fork: fork venue failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-fork/posture-fork' ] \
+    || fail "posture-fork: a registered fork posture must name the fork venue, got '$TASK_BASE_VENUE'"
+  pass "fm-task-base: a registered fork posture cuts from the fork trunk and names the fork venue"
+}
+
+# The convergence the reachability derivation cannot survive. Once upstream
+# holds everything the fork holds, the fork trunk IS an ancestor of the upstream
+# trunk, so the upstream-first ordering answers "upstream" for work that must
+# still be raised at the fork. Only the registered posture separates them here.
+make_converged_fork_repo() {  # <name>
+  local name=$1 dir up fork seed scratch repo
+  dir="$TMP_ROOT/$name"
+  up="$dir/upstream.git"
+  fork="$dir/fork.git"
+  seed="$dir/seed"
+  scratch="$dir/scratch"
+  repo="$dir/$name"
+  mkdir -p "$seed"
+  git -C "$seed" init -q
+  git -C "$seed" symbolic-ref HEAD refs/heads/main
+  commit_in "$seed" base
+  commit_in "$seed" fork-work
+  git clone --quiet --bare "$seed" "$fork"
+  # Upstream took the fork's work and then moved on, so the fork trunk is
+  # reachable from the upstream trunk and the two are no longer separable by it.
+  git clone --quiet --bare "$seed" "$up"
+  git clone --quiet "$up" "$scratch"
+  commit_in "$scratch" upstream-later
+  git -C "$scratch" push --quiet origin main
+  git clone --quiet "$fork" "$repo"
+  git -C "$repo" remote add upstream "$up"
+  git -C "$repo" fetch --quiet upstream
+  git -C "$repo" remote set-url origin "https://github.com/fixture-fork/$name.git"
+  git -C "$repo" remote set-url upstream "https://github.com/fixture-up/$name.git"
+  printf '%s\n' "$repo"
+}
+
+test_a_registered_fork_posture_holds_when_upstream_already_reaches_the_fork_trunk() {
+  local repo fork_tip
+  repo=$(make_converged_fork_repo posture-converged)
+  require_fixture "$repo" posture-converged
+  fork_tip=$(git -C "$repo" rev-parse main)
+  # The fixture is specifically the case reachability gets wrong.
+  git -C "$repo" merge-base --is-ancestor "$fork_tip" upstream/main \
+    || fail "posture-converged: the fork trunk is not reachable from upstream; this is not the convergence case"
+
+  # Reachability alone hands this fork commit to the upstream venue, which is
+  # the negative control that makes the registered answer below meaningful.
+  task_base_venue "$repo" "$fork_tip" default \
+    || fail "posture-converged: default venue failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-up/posture-converged' ] \
+    || fail "posture-converged: the derivation was expected to answer upstream here, got '$TASK_BASE_VENUE'"
+
+  task_base_venue "$repo" "$fork_tip" fork \
+    || fail "posture-converged: fork venue failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-fork/posture-converged' ] \
+    || fail "posture-converged: a registered fork posture must name the fork venue even when upstream reaches the target, got '$TASK_BASE_VENUE'"
+  pass "fm-task-base: a registered fork posture holds when the upstream trunk already reaches the fork trunk"
+}
+
+# A registered upstream posture is the derivation made explicit, and a
+# repository with no upstream contradicts it. Collapsing onto the fork there
+# would answer "fork" to a question the captain answered "upstream".
+test_a_registered_upstream_posture_refuses_a_repository_with_no_upstream() {
+  local dir rc
+  dir="$TMP_ROOT/posture-noupstream/repo"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" symbolic-ref HEAD refs/heads/main
+  commit_in "$dir" base
+  git -C "$dir" remote add origin 'https://github.com/solo-owner/solo-repo.git'
+
+  # The positive control first: with nothing registered, this repository is the
+  # ordinary collapsed case and must keep answering.
+  task_base_resolve "$dir" default || fail "posture-noupstream: default resolve failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_STATE" = coincident ] \
+    || fail "posture-noupstream: the unregistered default must still collapse, got '$TASK_BASE_STATE'"
+  task_base_venue "$dir" "$TASK_BASE_CONTRIB" default \
+    || fail "posture-noupstream: default venue failed: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/solo-owner/solo-repo' ] \
+    || fail "posture-noupstream: the unregistered default named '$TASK_BASE_VENUE'"
+
+  task_base_resolve "$dir" upstream || fail "posture-noupstream: upstream resolve returned a hard failure"
+  [ "$TASK_BASE_STATE" = unresolved ] \
+    || fail "posture-noupstream: a registered upstream posture with no upstream must be unresolved, got '$TASK_BASE_STATE'"
+  [ -z "$TASK_BASE_CONTRIB" ] \
+    || fail "posture-noupstream: a refused resolution must not still publish a target"
+  assert_contains "$TASK_BASE_ERROR" "registered to contribute upstream" \
+    "posture-noupstream: the refusal must name the contradiction"
+
+  rc=0; task_base_venue "$dir" "$(git -C "$dir" rev-parse main)" upstream || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "posture-noupstream: the venue must be refused, not derived (rc=$rc)"
+  [ -z "$TASK_BASE_VENUE" ] \
+    || fail "posture-noupstream: a refused venue must not still be published"
+  pass "fm-task-base: a registered upstream posture refuses a repository that has no upstream"
+}
+
+# A fork posture names where this repository PUSHES, and a repository configured
+# to push two places has no single fork to name.
+test_a_registered_fork_posture_refuses_a_non_unique_or_missing_push_venue() {
+  local dir rc
+  dir="$TMP_ROOT/posture-pushurls/repo"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  git -C "$dir" symbolic-ref HEAD refs/heads/main
+  commit_in "$dir" base
+
+  # No origin at all: missing, and named as missing rather than derived around.
+  rc=0; task_base_venue "$dir" main fork || rc=$?
+  [ "$rc" -eq 2 ] || fail "posture-pushurls: a repository with no origin must refuse a fork venue (rc=$rc)"
+  assert_contains "$TASK_BASE_ERROR" "no origin remote" \
+    "posture-pushurls: the refusal must name the missing remote"
+
+  # One push url: the positive control, so the refusal below is a verdict.
+  git -C "$dir" remote add origin 'https://github.com/fixture-fork/pushurls.git'
+  task_base_venue "$dir" main fork || fail "posture-pushurls: one push url must resolve: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-fork/pushurls' ] \
+    || fail "posture-pushurls: a single push url named '$TASK_BASE_VENUE'"
+
+  # The same venue written twice in two transports is still ONE venue.
+  git -C "$dir" remote set-url --add --push origin 'https://github.com/fixture-fork/pushurls.git'
+  git -C "$dir" remote set-url --add --push origin 'git@github.com:Fixture-Fork/pushurls'
+  task_base_venue "$dir" main fork \
+    || fail "posture-pushurls: two spellings of one venue must not refuse: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE" = 'github.com/fixture-fork/pushurls' ] \
+    || fail "posture-pushurls: two spellings of one venue named '$TASK_BASE_VENUE'"
+
+  # A genuinely second venue: not unique, so no answer is given.
+  git -C "$dir" remote set-url --add --push origin 'https://github.com/other-owner/pushurls.git'
+  rc=0; task_base_venue "$dir" main fork || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "posture-pushurls: two push venues must refuse rather than pick the first (rc=$rc)"
+  [ -z "$TASK_BASE_VENUE" ] \
+    || fail "posture-pushurls: a refused venue must not still be published"
+  assert_contains "$TASK_BASE_ERROR" "not unique" \
+    "posture-pushurls: the refusal must name the ambiguity"
+
+  # A remote that names no forge at all - a local path - is the one case where
+  # uniqueness has to be judged on the url itself. The tolerance here is
+  # deliberate and matches what a project with no upstream already gets: the url
+  # is recorded and the forge identity is left EMPTY, which bin/fm-pr-check.sh
+  # reports as unchecked rather than reading as agreement. Two different local
+  # paths are still two venues.
+  local pathdir
+  pathdir="$TMP_ROOT/posture-pushpaths/repo"
+  mkdir -p "$pathdir"
+  git -C "$pathdir" init -q
+  git -C "$pathdir" symbolic-ref HEAD refs/heads/main
+  commit_in "$pathdir" base
+  git -C "$pathdir" remote add origin "$TMP_ROOT/posture-pushpaths/fork.git"
+  task_base_venue "$pathdir" main fork \
+    || fail "posture-pushurls: a local-path fork venue must resolve: $TASK_BASE_ERROR"
+  [ "$TASK_BASE_VENUE_URL" = "$TMP_ROOT/posture-pushpaths/fork.git" ] \
+    || fail "posture-pushurls: the local-path venue url was not recorded (got '$TASK_BASE_VENUE_URL')"
+  [ -z "$TASK_BASE_VENUE" ] \
+    || fail "posture-pushurls: a local path names no forge, so its identity must stay empty (got '$TASK_BASE_VENUE')"
+
+  git -C "$pathdir" remote set-url --add --push origin "$TMP_ROOT/posture-pushpaths/fork.git"
+  git -C "$pathdir" remote set-url --add --push origin "$TMP_ROOT/posture-pushpaths/other.git"
+  rc=0; task_base_venue "$pathdir" main fork || rc=$?
+  [ "$rc" -eq 2 ] \
+    || fail "posture-pushurls: two local-path push venues must refuse rather than pick the first (rc=$rc)"
+  assert_contains "$TASK_BASE_ERROR" "not unique" \
+    "posture-pushurls: the local-path refusal must name the ambiguity too"
+  pass "fm-task-base: a fork posture refuses a missing or non-unique push venue rather than picking one"
+}
+
+# A word from outside the registered vocabulary is refused everywhere it is
+# accepted, because the fallback would be the derivation the posture overrides.
+test_an_unknown_posture_is_refused_rather_than_derived() {
+  local repo rc
+  repo=$(make_posture_repo posture-unknown 2)
+  require_fixture "$repo" posture-unknown
+
+  rc=0; task_base_resolve "$repo" sideways || rc=$?
+  [ "$rc" -eq 1 ] || fail "posture-unknown: resolve must refuse an unnamed posture (rc=$rc)"
+  [ "$TASK_BASE_STATE" = unresolved ] \
+    || fail "posture-unknown: expected state=unresolved, got '$TASK_BASE_STATE'"
+  [ -z "$TASK_BASE_CONTRIB" ] \
+    || fail "posture-unknown: a refused resolution must not still publish a target"
+
+  rc=0; task_base_venue "$repo" main sideways || rc=$?
+  [ "$rc" -eq 2 ] || fail "posture-unknown: venue must refuse an unnamed posture (rc=$rc)"
+  [ -z "$TASK_BASE_VENUE" ] \
+    || fail "posture-unknown: a refused venue must not still be published"
+  pass "fm-task-base: a posture outside the registered vocabulary is refused, never derived around"
+}
+
+# --- spawn: the registry decides --------------------------------------------
+
+# A home whose registry carries one project line, so a spawn resolves the
+# captain's registered posture the way a real dispatch does.
+make_posture_home() {  # <dir> <registry-line>
+  local home=$1 line=$2
+  mkdir -p "$home/data" "$home/state" "$home/config" "$home/projects"
+  printf 'codex\n' > "$home/config/crew-harness"
+  touch "$home/state/.last-watcher-beat"
+  printf '%s\n' "$line" > "$home/data/projects.md"
+  printf '%s\n' "$home"
+}
+
+# One fake harness bin serves every spawn below; make_spawn_fakebin above owns
+# its shape.
+POSTURE_FAKEBIN=$(make_spawn_fakebin "$TMP_ROOT/posture-fake")
+
+# Run one spawn against a chosen bin/ tree and return its combined output.
+spawn_posture_task() {  # <bin-dir> <home> <repo> <worktree> <id> [extra spawn args...]
+  local bindir=$1 home=$2 repo=$3 wt=$4 id=$5
+  shift 5
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" FM_FAKE_PANE_PATH="$wt" \
+    PATH="$POSTURE_FAKEBIN:$PATH" \
+    "$bindir/fm-spawn.sh" "$id" "$repo" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION "$@" 2>&1
+}
+
+# The end-to-end guarantee, plus the one no test may assume: resolving a venue
+# must not move anything at either remote.
+test_spawn_lands_a_registered_fork_project_at_the_fork() {
+  local repo home wt id out status fork_tip upstream_tip before after
+  repo=$(make_posture_repo posture-spawn 3)
+  require_fixture "$repo" posture-spawn
+  home=$(make_posture_home "$TMP_ROOT/posture-spawn/home" \
+    '- posture-spawn [no-mistakes contribute=fork] - fixture (added 2026-01-01)')
+  wt="$TMP_ROOT/posture-spawn/wt"
+  fork_tip=$(git -C "$repo" rev-parse main)
+  upstream_tip=$(git -C "$repo" rev-parse upstream/main)
+  git -C "$repo" worktree add --quiet --detach "$wt" "$fork_tip"
+
+  before=$(ref_snapshot "$TMP_ROOT/posture-spawn/fork.git" "$TMP_ROOT/posture-spawn/upstream.git")
+
+  id='posture-spawn-a1'
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    "$BRIEF" "$id" posture-spawn --mode no-mistakes \
+    --slot-base "$fork_tip" --contribution-target "$fork_tip" >/dev/null \
+    || fail "posture-spawn: brief scaffold failed"
+  out=$(spawn_posture_task "$ROOT/bin" "$home" "$repo" "$wt" "$id"); status=$?
+  expect_code 0 "$status" "posture-spawn: spawn should succeed (got: $out)"
+
+  assert_grep "contribution_target=$fork_tip" "$home/state/$id.meta" \
+    "posture-spawn: the registered fork posture must cut from the fork trunk"
+  assert_no_grep "contribution_target=$upstream_tip" "$home/state/$id.meta" \
+    "posture-spawn: the registered fork posture must not select the upstream trunk"
+  assert_grep 'base_state=coincident' "$home/state/$id.meta" \
+    "posture-spawn: a fork posture collapses the two references"
+  assert_grep 'contribution_venue=github.com/fixture-fork/posture-spawn' "$home/state/$id.meta" \
+    "posture-spawn: the pull request venue must be the fork the captain registered"
+  assert_no_grep 'contribution_venue=github.com/fixture-up/posture-spawn' "$home/state/$id.meta" \
+    "posture-spawn: the upstream venue must not survive the registered posture"
+
+  after=$(ref_snapshot "$TMP_ROOT/posture-spawn/fork.git" "$TMP_ROOT/posture-spawn/upstream.git")
+  [ "$before" = "$after" ] \
+    || fail "posture-spawn: resolving the venue moved a remote:"$'\n'"before:"$'\n'"$before"$'\n'"after:"$'\n'"$after"
+  pass "fm-spawn: a project registered contribute=fork is cut from and landed at the fork, and no remote moves"
+}
+
+# Per-task authority stays above the standing one. The SAME registered project,
+# aimed at the upstream trunk for this one task, must land upstream.
+test_an_explicit_upstream_target_outranks_the_registered_fork_posture() {
+  local repo home wt id out status fork_tip upstream_tip
+  repo=$(make_posture_repo posture-override 3)
+  require_fixture "$repo" posture-override
+  home=$(make_posture_home "$TMP_ROOT/posture-override/home" \
+    '- posture-override [no-mistakes contribute=fork] - fixture (added 2026-01-01)')
+  wt="$TMP_ROOT/posture-override/wt"
+  fork_tip=$(git -C "$repo" rev-parse main)
+  upstream_tip=$(git -C "$repo" rev-parse upstream/main)
+  git -C "$repo" worktree add --quiet --detach "$wt" "$fork_tip"
+
+  id='posture-override-a1'
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    "$BRIEF" "$id" posture-override --mode no-mistakes \
+    --slot-base "$fork_tip" --contribution-target "$upstream_tip" >/dev/null \
+    || fail "posture-override: brief scaffold failed"
+  out=$(spawn_posture_task "$ROOT/bin" "$home" "$repo" "$wt" "$id" \
+    --contribution-target "$upstream_tip"); status=$?
+  expect_code 0 "$status" "posture-override: spawn should succeed (got: $out)"
+
+  assert_grep "contribution_target=$upstream_tip" "$home/state/$id.meta" \
+    "posture-override: the explicit per-task target must win over the registered posture"
+  assert_grep 'contribution_venue=github.com/fixture-up/posture-override' "$home/state/$id.meta" \
+    "posture-override: the venue must follow the target this task was actually aimed at"
+  assert_no_grep 'contribution_venue=github.com/fixture-fork/posture-override' "$home/state/$id.meta" \
+    "posture-override: the registered fork venue must not override the explicit target"
+  assert_grep 'base_state=distinct' "$home/state/$id.meta" \
+    "posture-override: the overridden task's two references differ again"
+  pass "fm-spawn: an explicit per-task contribution target outranks the project's registered posture"
+}
+
+# An unregistered project keeps the conservative derived default, unchanged.
+test_an_unregistered_project_keeps_the_derived_default() {
+  local repo home wt id out status fork_tip upstream_tip
+  repo=$(make_posture_repo posture-unregistered 3)
+  require_fixture "$repo" posture-unregistered
+  home=$(make_posture_home "$TMP_ROOT/posture-unregistered/home" \
+    '- someone-else [no-mistakes contribute=fork] - fixture (added 2026-01-01)')
+  wt="$TMP_ROOT/posture-unregistered/wt"
+  fork_tip=$(git -C "$repo" rev-parse main)
+  upstream_tip=$(git -C "$repo" rev-parse upstream/main)
+  git -C "$repo" worktree add --quiet --detach "$wt" "$fork_tip"
+
+  id='posture-unreg-a1'
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    "$BRIEF" "$id" posture-unregistered --mode no-mistakes \
+    --slot-base "$fork_tip" --contribution-target "$upstream_tip" >/dev/null \
+    || fail "posture-unregistered: brief scaffold failed"
+  out=$(spawn_posture_task "$ROOT/bin" "$home" "$repo" "$wt" "$id"); status=$?
+  expect_code 0 "$status" "posture-unregistered: spawn should succeed (got: $out)"
+  assert_grep "contribution_target=$upstream_tip" "$home/state/$id.meta" \
+    "posture-unregistered: an unregistered project must keep the derived upstream target"
+  assert_grep 'contribution_venue=github.com/fixture-up/posture-unregistered' "$home/state/$id.meta" \
+    "posture-unregistered: an unregistered project must keep the derived upstream venue"
+  pass "fm-spawn: a project with no registered posture keeps the derived default"
+}
+
+# A registry line declaring a posture the parser cannot name selects the
+# repository a pull request would be raised at, so the dispatch stops.
+test_a_registry_posture_that_cannot_be_named_stops_the_spawn() {
+  local repo home wt id out status fork_tip upstream_tip
+  repo=$(make_posture_repo posture-typo 3)
+  require_fixture "$repo" posture-typo
+  home=$(make_posture_home "$TMP_ROOT/posture-typo/home" \
+    '- posture-typo [no-mistakes contribute=forq] - fixture (added 2026-01-01)')
+  wt="$TMP_ROOT/posture-typo/wt"
+  fork_tip=$(git -C "$repo" rev-parse main)
+  upstream_tip=$(git -C "$repo" rev-parse upstream/main)
+  git -C "$repo" worktree add --quiet --detach "$wt" "$fork_tip"
+
+  id='posture-typo-a1'
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    "$BRIEF" "$id" posture-typo --mode no-mistakes \
+    --slot-base "$fork_tip" --contribution-target "$upstream_tip" >/dev/null \
+    || fail "posture-typo: brief scaffold failed"
+  out=$(spawn_posture_task "$ROOT/bin" "$home" "$repo" "$wt" "$id"); status=$?
+  [ "$status" -ne 0 ] \
+    || fail "posture-typo: an unnameable registered posture must stop the spawn (got: $out)"
+  assert_contains "$out" "contribution posture" \
+    "posture-typo: the refusal must name what it could not resolve"
+  assert_absent "$home/state/$id.meta" \
+    "posture-typo: a refused spawn must not leave task metadata behind"
+  pass "fm-spawn: a registry line declaring an unnameable contribution posture stops the dispatch"
+}
+
+# MUTATION CONTROL. Every case above rests on one branch: a registered fork
+# posture selects the fork trunk and the fork venue instead of deriving both
+# from the remotes. This removes that branch from a COPY of the shipped code and
+# drives the same two fixtures through the mutant's own public resolver. If they
+# stay green here, they are not testing the protection.
+test_removing_the_posture_branch_restores_the_upstream_preference() {
+  local mutant diverged converged out before after
+  mutant="$TMP_ROOT/posture-mutant"
+  mkdir -p "$mutant"
+  cp -R "$ROOT/bin" "$mutant/bin" || fail "posture-mutant: could not build the mutant tree"
+  diverged=$(make_posture_repo posture-mutant-diverged 3)
+  require_fixture "$diverged" posture-mutant-diverged
+  converged=$(make_converged_fork_repo posture-mutant-converged)
+  require_fixture "$converged" posture-mutant-converged
+
+  # The unmutated COPY runs first, so a red result below is attributable to the
+  # mutation and not to the copy.
+  out=$(posture_probe "$mutant/bin" "$diverged" fork)
+  [ "$(probe_field "$out" contrib)" = "$(git -C "$diverged" rev-parse main)" ] \
+    || fail "posture-mutant: the unmutated copy does not reproduce the fork target, so the mutation proves nothing"
+  out=$(posture_probe "$mutant/bin" "$converged" fork)
+  [ "$(probe_field "$out" venue)" = 'github.com/fixture-fork/posture-mutant-converged' ] \
+    || fail "posture-mutant: the unmutated copy does not reproduce the fork venue, so the mutation proves nothing"
+
+  # Remove the branch by making its condition unsatisfiable, which leaves the
+  # rest of the resolver exactly as shipped.
+  before=$(cat "$mutant/bin/fm-task-base-lib.sh")
+  # The pattern is a shell test written in the copied source, so `$posture` must
+  # reach sed unexpanded - the single quotes are the point.
+  # shellcheck disable=SC2016
+  sed 's/\[ "\$posture" = fork \]/[ "$posture" = fork-removed ]/g' \
+    "$mutant/bin/fm-task-base-lib.sh" > "$mutant/bin/fm-task-base-lib.sh.new" \
+    || fail "posture-mutant: the mutation could not be applied"
+  after=$(cat "$mutant/bin/fm-task-base-lib.sh.new")
+  [ "$before" != "$after" ] \
+    || fail "posture-mutant: the mutation changed nothing, so this control is vacuous"
+  mv "$mutant/bin/fm-task-base-lib.sh.new" "$mutant/bin/fm-task-base-lib.sh"
+
+  # Diverged trunks: the target reverts to the upstream tip.
+  out=$(posture_probe "$mutant/bin" "$diverged" fork)
+  [ "$(probe_field "$out" contrib)" = "$(git -C "$diverged" rev-parse upstream/main)" ] \
+    || fail "posture-mutant: removing the branch did not restore the upstream target; the fixture does not test it"
+  [ "$(probe_field "$out" contrib)" != "$(git -C "$diverged" rev-parse main)" ] \
+    || fail "posture-mutant: the mutant still selected the fork trunk"
+
+  # Converged trunks: the venue reverts to upstream, which is the half the
+  # target value alone can never recover.
+  out=$(posture_probe "$mutant/bin" "$converged" fork)
+  [ "$(probe_field "$out" venue)" = 'github.com/fixture-up/posture-mutant-converged' ] \
+    || fail "posture-mutant: removing the branch did not restore the upstream venue; the fixture does not test it"
+
+  # And through the dispatch itself, which is where the consequence lands. The
+  # brief is scaffolded for the FORK answer the shipped code gives - which the
+  # two references collapsing makes an ordinary brief with no base contract line
+  # at all - so the mutant, resolving two references that differ again, refuses
+  # it and names the upstream commit it reverted to. That is a red the same
+  # fixture cannot produce against the shipped tree.
+  local home wt id fork_tip upstream_tip status
+  home=$(make_posture_home "$TMP_ROOT/posture-mutant/home" \
+    '- posture-mutant-diverged [no-mistakes contribute=fork] - fixture (added 2026-01-01)')
+  wt="$TMP_ROOT/posture-mutant/wt"
+  fork_tip=$(git -C "$diverged" rev-parse main)
+  upstream_tip=$(git -C "$diverged" rev-parse upstream/main)
+  git -C "$diverged" worktree add --quiet --detach "$wt" "$fork_tip"
+  id='posture-mutant-a1'
+  FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
+    "$BRIEF" "$id" posture-mutant-diverged --mode no-mistakes \
+    --slot-base "$fork_tip" --contribution-target "$fork_tip" >/dev/null \
+    || fail "posture-mutant: brief scaffold failed"
+  out=$(spawn_posture_task "$mutant/bin" "$home" "$diverged" "$wt" "$id"); status=$?
+  [ "$status" -ne 0 ] \
+    || fail "posture-mutant: the mutated dispatch accepted the fork-based brief, so the spawn wiring is not under test (got: $out)"
+  assert_contains "$out" "$upstream_tip" \
+    "posture-mutant: the mutated dispatch did not resolve the upstream trunk it was expected to revert to"
+  assert_absent "$home/state/$id.meta" \
+    "posture-mutant: the mutated dispatch still recorded a task"
+  pass "fm-task-base: removing the registered-posture branch restores the upstream preference the fix removed"
+}
+
 test_resolves_two_distinct_references_on_a_fork
 test_coincident_when_there_is_no_distinct_upstream
 test_unresolved_when_the_upstream_trunk_is_unreadable
@@ -1087,3 +1638,13 @@ test_venue_refuses_a_target_on_neither_trunk
 test_venue_identity_is_transport_and_case_insensitive
 test_spawn_records_the_venue_its_contribution_target_names
 test_spawn_records_the_fork_venue_for_a_retargeted_task
+test_a_registered_fork_posture_selects_the_fork_trunk_and_venue
+test_a_registered_fork_posture_holds_when_upstream_already_reaches_the_fork_trunk
+test_a_registered_upstream_posture_refuses_a_repository_with_no_upstream
+test_a_registered_fork_posture_refuses_a_non_unique_or_missing_push_venue
+test_an_unknown_posture_is_refused_rather_than_derived
+test_spawn_lands_a_registered_fork_project_at_the_fork
+test_an_explicit_upstream_target_outranks_the_registered_fork_posture
+test_an_unregistered_project_keeps_the_derived_default
+test_a_registry_posture_that_cannot_be_named_stops_the_spawn
+test_removing_the_posture_branch_restores_the_upstream_preference

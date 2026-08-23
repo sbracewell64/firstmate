@@ -25,9 +25,16 @@
 #   local default-branch tip, and the slot is placed there rather than left at
 #   whatever commit the pool last used. The contribution target is the commit the
 #   task's branch is cut from, so the PR carries no commit the target never had;
-#   on a fork layout that is the upstream trunk, which is NOT the slot base.
+#   on a fork layout contributing upstream that is the upstream trunk, which is
+#   NOT the slot base. Which of a fork layout's two trunks a project contributes
+#   to is the captain's registered posture rather than something the remotes can
+#   say, so the derivation takes it as an input, read here from
+#   bin/fm-project-mode.sh --contribution and refused rather than guessed when
+#   that registry line declares a posture it cannot name.
 #   Derivation cannot see the task's target files, so a task editing code that
-#   exists only on the fork declares its target with the flag instead. When the
+#   exists only on the fork declares its target with the flag instead. That flag
+#   also withholds the registered posture from the venue derivation, so explicit
+#   per-task authority stays above the project's standing one. When the
 #   two coincide nothing changes. When the upstream trunk exists but cannot be
 #   read locally the target is recorded as "unresolved" rather than guessed onto
 #   the slot base, because that guess is the pollution this separates. A ship or
@@ -266,6 +273,10 @@
 # the remote URL that identity came from. Both are resolved AFTER any --slot-base or
 # --contribution-target override, so a retargeted task records the venue it was actually
 # retargeted to; bin/fm-pr-check.sh refuses a pull request that contradicts it.
+# Under a registered fork or upstream posture the venue is the side the registry
+# names rather than the side the target's reachability suggests, because once the
+# captain has named it, reachability answers a different question - and answers it
+# wrongly whenever the two trunks have converged.
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -2147,12 +2158,16 @@ delivery_rigor_rank() {  # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task
   esac
 }
 
+# The registry name for this checkout, read by both the standing-delivery notice
+# below and the contribution posture the base resolution takes as an input, so it
+# is resolved once for every kind of task rather than inside one of them.
+PROJ_NAME=$(basename "$PROJ_ABS")
+
 # Brief/spawn delivery agreement, checked before any endpoint exists.
 # fm-brief.sh records a ship brief's mode as a fixed "Delivery contract: mode=<mode>"
 # line. A spawn that disagrees would launch a worker whose instructions and whose
 # recorded task delivery differ, which is the exact drift this contract prevents.
 if [ "$KIND" = ship ]; then
-  PROJ_NAME=$(basename "$PROJ_ABS")
   BRIEF_MODE=$(sed -n 's/^Delivery contract: mode=\([^ ]*\).*$/\1/p' "$BRIEF" | head -n 1)
   if [ -z "$BRIEF_MODE" ]; then
     echo "warning: $BRIEF records no delivery contract line (scaffolded before ship briefs recorded one); launching on the explicit --mode $MODE - confirm its definition of done matches" >&2
@@ -2181,8 +2196,25 @@ CONTRIB_TARGET=
 BASE_STATE=
 CONTRIB_VENUE=
 CONTRIB_VENUE_URL=
+CONTRIB_POSTURE=default
 if [ "$KIND" != secondmate ]; then
-  if task_base_resolve "$PROJ_ABS"; then
+  # The captain's registered contribution posture, which is the one input the
+  # checkout cannot supply: a fork layout has two trunks a task could be
+  # contributed to and the remotes do not say which one was approved.
+  # bin/fm-project-mode.sh owns the registry line format; an unregistered
+  # project and a project with no registered token both answer "default", which
+  # is the derive-from-the-remotes behavior that predates the token.
+  #
+  # A refusal STOPS THE SPAWN. It means the registry declares a posture this
+  # cannot name, and this value selects the repository the task's pull request
+  # is raised at - so proceeding on the derivation would answer, with no notice,
+  # a question the captain had already answered differently.
+  CONTRIB_POSTURE=$("$FM_ROOT/bin/fm-project-mode.sh" --contribution "$PROJ_NAME" 2>/dev/null) || CONTRIB_POSTURE=
+  if [ -z "$CONTRIB_POSTURE" ]; then
+    echo "error: $ID cannot resolve the contribution posture registered for $PROJ_NAME, so the venue this task contributes to is undetermined; run bin/fm-project-mode.sh --contribution $PROJ_NAME to see which token it could not name, and fix that registry line before dispatching" >&2
+    exit 1
+  fi
+  if task_base_resolve "$PROJ_ABS" "$CONTRIB_POSTURE"; then
     SLOT_BASE=$TASK_BASE_SLOT
     CONTRIB_TARGET=$TASK_BASE_CONTRIB
     BASE_STATE=$TASK_BASE_STATE
@@ -2240,8 +2272,16 @@ if [ "$KIND" != secondmate ]; then
   # task retargeted onto fork-only material has to land at the fork, and that is
   # only knowable from the target this spawn actually settled on.
   # A scout opens no pull request, so it has no venue to be right or wrong about.
+  #
+  # An EXPLICIT --contribution-target withholds the registered posture from that
+  # derivation, and that is what keeps per-task authority above the standing
+  # one: firstmate aiming a single task at the other trunk has declared this
+  # task's side, so the venue must follow the target it was given rather than
+  # the side the project usually contributes to.
+  VENUE_POSTURE=$CONTRIB_POSTURE
+  [ "$CONTRIB_SET" -eq 0 ] || VENUE_POSTURE=default
   if [ "$KIND" != scout ] && [ -n "$CONTRIB_TARGET" ] && [ "$CONTRIB_TARGET" != n/a ]; then
-    if task_base_venue "$PROJ_ABS" "$CONTRIB_TARGET"; then
+    if task_base_venue "$PROJ_ABS" "$CONTRIB_TARGET" "$VENUE_POSTURE"; then
       CONTRIB_VENUE=$TASK_BASE_VENUE
       CONTRIB_VENUE_URL=$TASK_BASE_VENUE_URL
     else
