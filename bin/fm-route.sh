@@ -42,6 +42,30 @@
 #                                            chokepoint reads: available,
 #                                            exhausted, or could-not-observe
 #                                            with the reason and the repair
+#   fm-route.sh role-path --work <id> --repository <dir> --branch <name>
+#                         --base <sha> [--candidate-head <sha>] [--venue <v>]
+#                         [--task <id>] [--worktree <path>] [--slot <name>]
+#                         [--mode <delivery-mode>] [--succeeds-execution <id>]
+#                         --role '<role>|<binding>|<resource path>' ...
+#                         [--contract '<role>|<contract id>' ...]
+#                         [--nm-applicable yes|no]  derived from --mode when unstated
+#                         [--require <role|base> ... | --require-none]
+#                                            what the product must cover; maker,
+#                                            checker and a resolved base when
+#                                            unstated
+#                                            the complete PRE-RESERVATION product
+#                                            for one candidate: the exact semantic
+#                                            work generation, the role/binding/
+#                                            resource path, current qualification,
+#                                            assignment distinction, both bases
+#                                            and the venue, and the SINGULAR
+#                                            custody/mutation owner. It allocates
+#                                            nothing on any verdict, and names one
+#                                            reservation identity only on
+#                                            PERMITTED. bin/fm-role-path-lib.sh
+#                                            owns the product; bin/fm-spawn.sh
+#                                            enforces the same answer before it
+#                                            selects a pool slot
 #   fm-route.sh availability                 every hold still in force
 #   fm-route.sh availability hold <model> [--scope provider] --state <state>
 #                                [--for-seconds <n>] [--evidence <text>]
@@ -67,6 +91,11 @@
 #   3  NO_CANDIDATE - every candidate is ineligible. This is a real, expected
 #      answer that triggers the policy's terminal stop, and it is never a signal
 #      to lower the floor
+#
+# On `role-path` the status is that product's verdict instead:
+#   0  PERMITTED   1  REFUSED   2  usage   4  COULD_NOT_OBSERVE. REFUSED and
+#   COULD_NOT_OBSERVE both allocate nothing; they differ in whether a violation
+#   was established or merely unread, and neither is ever a pass.
 #
 # On `zero-route` the status names the classification instead, because there the
 # distinction between them IS the answer:
@@ -110,6 +139,8 @@ export STATE CONFIG
 . "$SCRIPT_DIR/fm-capacity-lib.sh"
 # shellcheck source=bin/fm-qualification-lib.sh
 . "$SCRIPT_DIR/fm-qualification-lib.sh"
+# shellcheck source=bin/fm-role-path-lib.sh
+. "$SCRIPT_DIR/fm-role-path-lib.sh"
 
 usage() {
   awk '
@@ -132,6 +163,21 @@ HOLD_STATE=
 HOLD_SECONDS=
 HOLD_EVIDENCE=
 HOLD_SCOPE=
+RP_WORK=
+RP_REPO=
+RP_BRANCH=
+RP_BASE=
+RP_HEAD=
+RP_VENUE=
+RP_TASK=
+RP_WORKTREE=
+RP_SLOT=
+RP_MODE=
+RP_SUCCEEDS=
+RP_ROLES=()
+RP_CONTRACTS=()
+RP_REQUIRE=()
+RP_NM_APPLICABLE=
 CMD=
 POS=()
 
@@ -158,6 +204,37 @@ while [ $# -gt 0 ]; do
     --evidence=*) HOLD_EVIDENCE=${1#--evidence=} ;;
     --scope) shift; [ $# -gt 0 ] || die "--scope needs a value"; HOLD_SCOPE=$1 ;;
     --scope=*) HOLD_SCOPE=${1#--scope=} ;;
+    --work) shift; [ $# -gt 0 ] || die "--work needs a value"; RP_WORK=$1 ;;
+    --work=*) RP_WORK=${1#--work=} ;;
+    --repository) shift; [ $# -gt 0 ] || die "--repository needs a value"; RP_REPO=$1 ;;
+    --repository=*) RP_REPO=${1#--repository=} ;;
+    --branch) shift; [ $# -gt 0 ] || die "--branch needs a value"; RP_BRANCH=$1 ;;
+    --branch=*) RP_BRANCH=${1#--branch=} ;;
+    --base) shift; [ $# -gt 0 ] || die "--base needs a value"; RP_BASE=$1 ;;
+    --base=*) RP_BASE=${1#--base=} ;;
+    --candidate-head) shift; [ $# -gt 0 ] || die "--candidate-head needs a value"; RP_HEAD=$1 ;;
+    --candidate-head=*) RP_HEAD=${1#--candidate-head=} ;;
+    --venue) shift; [ $# -gt 0 ] || die "--venue needs a value"; RP_VENUE=$1 ;;
+    --venue=*) RP_VENUE=${1#--venue=} ;;
+    --task) shift; [ $# -gt 0 ] || die "--task needs a value"; RP_TASK=$1 ;;
+    --task=*) RP_TASK=${1#--task=} ;;
+    --worktree) shift; [ $# -gt 0 ] || die "--worktree needs a value"; RP_WORKTREE=$1 ;;
+    --worktree=*) RP_WORKTREE=${1#--worktree=} ;;
+    --slot) shift; [ $# -gt 0 ] || die "--slot needs a value"; RP_SLOT=$1 ;;
+    --slot=*) RP_SLOT=${1#--slot=} ;;
+    --mode) shift; [ $# -gt 0 ] || die "--mode needs a value"; RP_MODE=$1 ;;
+    --mode=*) RP_MODE=${1#--mode=} ;;
+    --succeeds-execution) shift; [ $# -gt 0 ] || die "--succeeds-execution needs a value"; RP_SUCCEEDS=$1 ;;
+    --succeeds-execution=*) RP_SUCCEEDS=${1#--succeeds-execution=} ;;
+    --role) shift; [ $# -gt 0 ] || die "--role needs a value"; RP_ROLES+=("$1") ;;
+    --role=*) RP_ROLES+=("${1#--role=}") ;;
+    --contract) shift; [ $# -gt 0 ] || die "--contract needs a value"; RP_CONTRACTS+=("$1") ;;
+    --contract=*) RP_CONTRACTS+=("${1#--contract=}") ;;
+    --require) shift; [ $# -gt 0 ] || die "--require needs a value"; RP_REQUIRE+=("$1") ;;
+    --require=*) RP_REQUIRE+=("${1#--require=}") ;;
+    --require-none) RP_REQUIRE=(none) ;;
+    --nm-applicable) shift; [ $# -gt 0 ] || die "--nm-applicable needs a value"; RP_NM_APPLICABLE=$1 ;;
+    --nm-applicable=*) RP_NM_APPLICABLE=${1#--nm-applicable=} ;;
     -h|--help) usage; exit 0 ;;
     -*) die "unknown option $1" ;;
     *) if [ -z "$CMD" ]; then CMD=$1; else POS+=("$1"); fi ;;
@@ -167,6 +244,66 @@ done
 
 [ -n "$CMD" ] || { usage; exit 2; }
 command -v jq >/dev/null 2>&1 || die "jq is required to read the routing policy"
+
+# The pre-reservation product is answered BEFORE the routing policy is required,
+# because it is not a routing question: a home that configures no routed pool
+# still has work, roles, bases and custody, and refusing to answer there would
+# make the preflight available only where it happens to be least needed. The
+# route policy digest is stamped when a policy exists and reads `unobserved`
+# when it does not, which is the honest value rather than a missing field.
+if [ "$CMD" = role-path ]; then
+  # Delivery mode is what decides whether no-mistakes owns mutation here, so the
+  # applicability is derived from it rather than asked for twice.
+  if [ -z "$RP_NM_APPLICABLE" ]; then
+    if [ "$RP_MODE" = no-mistakes ]; then RP_NM_APPLICABLE=yes; else RP_NM_APPLICABLE=no; fi
+  fi
+  RP_REQ="work=$RP_WORK
+repository=$RP_REPO
+branch=$RP_BRANCH
+base=$RP_BASE
+candidate_head=$RP_HEAD
+venue=$RP_VENUE
+route=$ROUTE
+config=$CONFIG
+task=$RP_TASK
+worktree=$RP_WORKTREE
+slot=$RP_SLOT
+mode=$RP_MODE
+nm_applicable=$RP_NM_APPLICABLE
+succeeds_execution=$RP_SUCCEEDS"
+  if [ "${#RP_REQUIRE[@]}" -eq 0 ]; then RP_REQUIRE=(maker checker base); fi
+  for rp_entry in "${RP_REQUIRE[@]}"; do
+    # --require-none is the explicit "ask only the custody question" request, and
+    # it must reach the fold as an EMPTY required set rather than as a role named
+    # none, which nothing declares and everything would then fail to cover.
+    [ "$rp_entry" = none ] && continue
+    RP_REQ="$RP_REQ
+require=$rp_entry"
+  done
+  for rp_entry in ${RP_ROLES[@]+"${RP_ROLES[@]}"}; do
+    RP_REQ="$RP_REQ
+role=$rp_entry"
+  done
+  for rp_entry in ${RP_CONTRACTS[@]+"${RP_CONTRACTS[@]}"}; do
+    RP_REQ="$RP_REQ
+contract=$rp_entry"
+  done
+  RP_RC=0
+  fm_role_path_preflight "$RP_REQ" || RP_RC=$?
+  if [ "$JSON" -eq 1 ]; then
+    printf '%s\n' "$FM_ROLE_PATH_PRODUCT"
+  else
+    printf '%s: %s\n' "$FM_ROLE_PATH_VERDICT" "$FM_ROLE_PATH_REASON_CODE"
+    printf '  %s\n' "$FM_ROLE_PATH_REASON"
+    printf '  mutation owner: %s\n' "${FM_ROLE_PATH_MUTATION_OWNER:-none}"
+    if [ -n "$FM_ROLE_PATH_RESERVATION" ]; then
+      printf '  reservation authorized: %s\n' "$FM_ROLE_PATH_RESERVATION"
+    else
+      printf '  reservation authorized: none - this verdict allocates nothing\n'
+    fi
+  fi
+  exit "$RP_RC"
+fi
 
 CONFIG_FILE=$(fm_route_config_path "$CONFIG")
 [ -f "$CONFIG_FILE" ] || die "no routing policy in this home: $CONFIG_FILE"

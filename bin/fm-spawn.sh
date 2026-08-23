@@ -90,6 +90,26 @@
 #   recorded, which is the only way past an exhausted one; it is refused on
 #   --secondmate, whose relaunch is liveness recovery rather than a retry.
 #   bin/fm-attempt.sh owns the record, the migration rule, and the refusal.
+#   --role '<role>|<binding>|<resource path>' declares one leg of the role path
+#   this dispatch claims (maker, checker, adjudicator or publisher), and
+#   --contract '<role>|<contract id>' names a capability contract that leg must
+#   currently hold. --require-role <role> states which legs the preflight must
+#   COVER; declaring none asks only the custody question, and the product records
+#   that so it can never read as a covered path. All three are repeatable.
+#   Immediately before the pool is consulted, these plus the resolved bases,
+#   venue, execution lineage and worktree custody are folded into one
+#   pre-reservation product (bin/fm-role-path-lib.sh; read it with
+#   bin/fm-route.sh role-path). A REFUSED or COULD-NOT-OBSERVE verdict stops the
+#   spawn there, before the pool lock and before `treehouse get`, so nothing is
+#   allocated: no slot, no reservation, no branch, no worktree change, no task
+#   metadata and no worker process. The verdict, its reason code, the named
+#   reservation and the singular mutation owner are recorded on the task even
+#   when it PERMITTED, because a dispatch nobody preflighted and one that passed
+#   are different facts and an absent field must not read as the second.
+#   --allow-unpreflighted <REASON_CODE> waives EXACTLY the one axis it names,
+#   leaving every other refusal in force, and records role_path_waived= on the
+#   task. Use it only on a current explicit captain instruction for that concrete
+#   dispatch; it is not a standing bypass.
 #   --harness <name> is the explicit per-spawn harness/profile adapter. The old
 #   positional harness arg still works for back-compat.
 #   --model <name> and --effort <low|medium|high|xhigh|max> are concrete profile
@@ -401,6 +421,14 @@ CONTRIB_SET=0
 ATTEMPT_BUDGET_SET=0
 SUCCEED_EXECUTION=0
 POS=()
+# The role path this dispatch claims, and the one axis an explicit captain
+# instruction may waive. Repeatable, so a path is stated role by role rather
+# than through one packed value nobody can read back.
+ROLE_PATH_ROLES=()
+ROLE_PATH_CONTRACTS=()
+ROLE_PATH_REQUIRE=()
+ROLE_PATH_WAIVE=
+
 want_value=
 for a in "$@"; do
   if [ -n "$want_value" ]; then
@@ -422,6 +450,10 @@ for a in "$@"; do
       route) ROUTE=$a; ROUTE_SET=1 ;;
       tooling-gap-item) TOOLING_GAP_ITEM=$a; TOOLING_GAP_ITEM_SET=1 ;;
       attempt-budget) ATTEMPT_BUDGET_ARG=$a; ATTEMPT_BUDGET_SET=1 ;;
+      role) ROLE_PATH_ROLES+=("$a") ;;
+      contract) ROLE_PATH_CONTRACTS+=("$a") ;;
+      require-role) ROLE_PATH_REQUIRE+=("$a") ;;
+      allow-unpreflighted) ROLE_PATH_WAIVE=$a ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -445,9 +477,9 @@ for a in "$@"; do
     --yolo=*) YOLO=${a#--yolo=}; YOLO_SET=1 ;;
     --traceparent) want_value=traceparent ;;
     --traceparent=*) TRACEPARENT_ARG=${a#--traceparent=}; TRACEPARENT_SET=1 ;;
-    --slot-base) want_value=slot-base ;;
+    --slot-base) want_value='slot-base' ;;
     --slot-base=*) SLOT_BASE_ARG=${a#--slot-base=}; SLOT_BASE_SET=1 ;;
-    --contribution-target) want_value=contribution-target ;;
+    --contribution-target) want_value='contribution-target' ;;
     --contribution-target=*) CONTRIB_ARG=${a#--contribution-target=}; CONTRIB_SET=1 ;;
     --reason-code) want_value='reason-code' ;;
     --reason-code=*) REASON_CODE=${a#--reason-code=}; REASON_CODE_SET=1 ;;
@@ -459,6 +491,14 @@ for a in "$@"; do
     --tooling-gap-item=*) TOOLING_GAP_ITEM=${a#--tooling-gap-item=}; TOOLING_GAP_ITEM_SET=1 ;;
     --attempt-budget) want_value='attempt-budget' ;;
     --attempt-budget=*) ATTEMPT_BUDGET_ARG=${a#--attempt-budget=}; ATTEMPT_BUDGET_SET=1 ;;
+    --role) want_value='role' ;;
+    --role=*) ROLE_PATH_ROLES+=("${a#--role=}") ;;
+    --contract) want_value='contract' ;;
+    --contract=*) ROLE_PATH_CONTRACTS+=("${a#--contract=}") ;;
+    --require-role) want_value='require-role' ;;
+    --require-role=*) ROLE_PATH_REQUIRE+=("${a#--require-role=}") ;;
+    --allow-unpreflighted) want_value='allow-unpreflighted' ;;
+    --allow-unpreflighted=*) ROLE_PATH_WAIVE=${a#--allow-unpreflighted=} ;;
     *) POS+=("$a") ;;
   esac
 done
@@ -2307,6 +2347,88 @@ real_path_or_raw() {  # <path>
   fi
 }
 
+# ROLE-PATH AND CUSTODY PREFLIGHT (ARC-1). The LAST point before anything is
+# allocated, and deliberately after the bases, the venue and the brief agreement
+# resolve above, because the product it computes is about THIS work generation
+# and every one of those is part of that generation's identity.
+#
+# It composes owners; it decides nothing itself and it writes nothing. What it
+# adds is that the answers are joint: a route decision taken against one
+# generation can no longer admit a dispatch whose custody has already moved
+# under another, and a candidate a live no-mistakes run still owns can no longer
+# be allocated against at all. bin/fm-role-path-lib.sh owns the product.
+#
+# REFUSED and COULD-NOT-OBSERVE both stop here, before the pool lock, before
+# `treehouse get`, before any branch, worktree or endpoint exists, so a refusal
+# leaves nothing behind to clean up. They are reported apart because they are
+# different facts: one violation was established, the other could not be read,
+# and neither is a pass.
+ROLE_PATH_VERDICT=
+ROLE_PATH_REASON_CODE=
+ROLE_PATH_RESERVATION=
+ROLE_PATH_MUTATION_OWNER=
+ROLE_PATH_WAIVED=
+if [ "$KIND" != secondmate ]; then
+  # shellcheck source=bin/fm-role-path-lib.sh
+  . "$SCRIPT_DIR/fm-role-path-lib.sh"
+  rp_nm_applicable=no
+  [ "$MODE" != no-mistakes ] || rp_nm_applicable=yes
+  rp_worktree=
+  rp_succeeds=
+  if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+    rp_worktree=$SUCCEED_WT
+    rp_succeeds=$SUCCEED_EXEC_ID
+  fi
+  RP_REQUEST="work=$ID
+repository=$PROJ_ABS
+branch=fm/$ID
+base=$SLOT_BASE
+venue=$CONTRIB_VENUE
+route=$ROUTE
+config=$CONFIG
+task=$ID
+worktree=$rp_worktree
+mode=$MODE
+nm_applicable=$rp_nm_applicable
+succeeds_execution=$rp_succeeds"
+  for rp_entry in ${ROLE_PATH_ROLES[@]+"${ROLE_PATH_ROLES[@]}"}; do
+    RP_REQUEST="$RP_REQUEST
+role=$rp_entry"
+  done
+  for rp_entry in ${ROLE_PATH_CONTRACTS[@]+"${ROLE_PATH_CONTRACTS[@]}"}; do
+    RP_REQUEST="$RP_REQUEST
+contract=$rp_entry"
+  done
+  for rp_entry in ${ROLE_PATH_REQUIRE[@]+"${ROLE_PATH_REQUIRE[@]}"}; do
+    RP_REQUEST="$RP_REQUEST
+require=$rp_entry"
+  done
+  RP_RC=0
+  fm_role_path_preflight "$RP_REQUEST" || RP_RC=$?
+  ROLE_PATH_VERDICT=$FM_ROLE_PATH_VERDICT
+  ROLE_PATH_REASON_CODE=$FM_ROLE_PATH_REASON_CODE
+  ROLE_PATH_RESERVATION=$FM_ROLE_PATH_RESERVATION
+  ROLE_PATH_MUTATION_OWNER=$FM_ROLE_PATH_MUTATION_OWNER
+  if [ "$RP_RC" -ne 0 ]; then
+    # One named axis, waived by an explicit captain instruction for this exact
+    # dispatch, exactly as bin/fm-pr-merge.sh waives one named check. It waives
+    # the axis it names and nothing else: every other refusal stays in force,
+    # and the waiver is recorded on the task so an ungoverned allocation is
+    # written down rather than merely unmentioned.
+    if [ -n "$ROLE_PATH_WAIVE" ] && [ "$ROLE_PATH_WAIVE" = "$ROLE_PATH_REASON_CODE" ]; then
+      echo "warning: $ID allocated with the $ROLE_PATH_REASON_CODE axis of its role-path and custody preflight waived by explicit instruction: $FM_ROLE_PATH_REASON" >&2
+      ROLE_PATH_WAIVED=$ROLE_PATH_REASON_CODE
+    else
+      echo "error: $ID refused before allocation - role-path and custody preflight returned $ROLE_PATH_VERDICT ($ROLE_PATH_REASON_CODE): $FM_ROLE_PATH_REASON" >&2
+      echo "       Nothing was allocated: no pool slot, no reservation, no branch, no worktree change, no task metadata and no worker process. Read the whole product with: FM_HOME=$FM_HOME bin/fm-route.sh role-path --json --work $ID --repository $PROJ_ABS --branch fm/$ID --base $SLOT_BASE --mode $MODE --require-none" >&2
+      if [ "$ROLE_PATH_VERDICT" = CNO ]; then
+        echo "       This is could-not-observe, not a refusal: repair the observation rather than working around it. A fact that could not be read is never a pass." >&2
+      fi
+      exit 1
+    fi
+  fi
+fi
+
 # Pool allocation, BEFORE any endpoint exists. `treehouse get` resets a slot as
 # part of acquiring it, so the only place this can be decided is ahead of the
 # allocation - by the time the pane's cwd reveals the worktree, an unlanded
@@ -3272,6 +3394,19 @@ fi
   # non-forge venue has when the identity is empty.
   [ -z "$CONTRIB_VENUE" ] || echo "contribution_venue=$CONTRIB_VENUE"
   [ -z "$CONTRIB_VENUE_URL" ] || echo "contribution_venue_url=$CONTRIB_VENUE_URL"
+  # The role-path and custody preflight this allocation was admitted against
+  # (bin/fm-role-path-lib.sh). Recorded even when it PERMITTED, because a
+  # dispatch that was never preflighted and one that passed a preflight are
+  # different facts, and an absent field must not read as the second. The
+  # singular mutation owner is recorded with it, so who was entitled to change
+  # this candidate is a durable record rather than a reconstruction.
+  [ -z "$ROLE_PATH_VERDICT" ] || echo "role_path_verdict=$ROLE_PATH_VERDICT"
+  [ -z "$ROLE_PATH_REASON_CODE" ] || echo "role_path_reason_code=$ROLE_PATH_REASON_CODE"
+  [ -z "$ROLE_PATH_RESERVATION" ] || echo "role_path_reservation=$ROLE_PATH_RESERVATION"
+  [ -z "$ROLE_PATH_MUTATION_OWNER" ] || echo "mutation_owner=$ROLE_PATH_MUTATION_OWNER"
+  # An allocation that proceeded on a waived axis says so by name, so an
+  # ungoverned allocation is written down rather than merely unmentioned.
+  [ -z "$ROLE_PATH_WAIVED" ] || echo "role_path_waived=$ROLE_PATH_WAIVED"
   # Agent-justification record. Written for every task dispatch; a --secondmate
   # spawn provisions a home rather than dispatching a task and carries none.
   [ -z "$REASONING_REQUIRED" ] || echo "reasoning_required=$REASONING_REQUIRED"

@@ -8,6 +8,12 @@
 # direction is unsafe: a false negative hides a genuinely parked run, and a
 # false positive lets teardown act on a run it does not own.
 #
+# It is also the one owner of the COMPLETE run census (fm_nm_census, below),
+# which answers the different question a custody decision needs: not "is this
+# run mine" but "is there any run that currently owns mutation here". The two
+# live together because they read the same source and must never disagree about
+# what that source can and cannot supply.
+#
 # What this file owns is reading and attributing the run record. Bounding the
 # call is owned by bin/fm-timeout-lib.sh, which declares itself the single owner
 # of bounded command execution, so the mechanism selection is not re-derived
@@ -143,4 +149,137 @@ fm_nm_head_matches_worktree() {  # <worktree> <run_head>
     1) return 1 ;;
     *) return 2 ;;
   esac
+}
+
+# ---------------------------------------------------------------------------
+# Complete run census
+# ---------------------------------------------------------------------------
+#
+# The attribution above answers "is THIS run mine". The census answers a
+# different question that no caller could previously ask: "is there ANY run that
+# currently owns mutation here". A custody decision needs the second one, and
+# reading it off the first would credit a one-run answer to a whole-population
+# claim - the wrong-subject failure this fleet names in .agents/skills/wrong-subject.
+#
+# WHAT THE SOURCE CANNOT SUPPLY, stated here rather than inside the fold that
+# consumes it, because a source that quietly answers a narrower question is how a
+# complete-looking census gets credited with completeness it never had:
+#
+#   - `no-mistakes runs` is REPOSITORY-SCOPED. It cannot see a run in any other
+#     repository, so a census is complete FOR ONE REPOSITORY and claims nothing
+#     beyond it. That is the exact scope a branch-custody question needs, and it
+#     is not the scope a fleet-wide question needs.
+#   - It reports NO RUN ID, so a row cannot be re-inspected with `axi status
+#     --run`. A row is identified only by its (status, branch, head) triple.
+#   - Its head is a SHORT SHA that resolves only when the object is reachable
+#     from the reading worktree. A live run commits its fix rounds in its own
+#     gate-repo clone and does not push until the push step, so an unresolvable
+#     head is the NORMAL shape of a live run, never evidence against one.
+#   - It is TRUNCATED by default. The truncation footer is the only completeness
+#     signal it emits, and its absence is what this reader requires.
+#
+# Returns:
+#   0  COMPLETE       one normalized "<status><TAB><branch><TAB><head>" row per
+#                     run on stdout. An empty census is a real, complete answer:
+#                     the tool ran and reported no runs.
+#   3  NOT_INITIALIZED  this repository has no pipeline at all, so no run can own
+#                     anything in it. That is an ESTABLISHED absence, not an
+#                     unread one, and it is reported apart so a caller can record
+#                     it as such instead of as a covered census.
+#   2  COULD-NOT-OBSERVE  the reason on stdout.
+#
+# The three are kept apart because the tool reports the same condition two ways:
+# `no-mistakes runs` exits 1 with its refusal on STDERR, while `axi status` exits
+# 0 with the same refusal on STDOUT (both measured 2026-08-22, v1.40.3). Reading
+# only the status would call the first a broken read and the second a clean empty
+# census - two wrong answers to one question.
+#
+# The uninitialized classification is the one place this reader matches vendor
+# TEXT. It is deliberately the narrow direction: an unrecognised wording falls
+# through to COULD-NOT-OBSERVE, which refuses, so a changed message costs a
+# repair rather than buying a silent pass.
+FM_NM_CENSUS_TERMINAL='completed failed cancelled'
+FM_NM_CENSUS_UNINITIALIZED='repo not initialized'
+
+fm_nm_census() {  # <dir> <timeout_secs> <limit>
+  local dir=$1 timeout_secs=$2 limit=$3 out err errfile rc=0 line status branch head rest
+  errfile=$(mktemp "${TMPDIR:-/tmp}/fm-nm-census.XXXXXX") || {
+    printf 'a temporary file for the run listing could not be created, so which runs exist could not be observed\n'
+    return 2
+  }
+  out=$(fm_nm_run_bounded "$dir" "$timeout_secs" runs --limit "$limit" 2>"$errfile") || rc=$?
+  err=$(cat "$errfile" 2>/dev/null)
+  rm -f "$errfile"
+  # The tool's own refusal, from EITHER stream, before the status is read: the
+  # status alone cannot tell an uninitialized repository from a broken listing.
+  local refusal
+  refusal=$(fm_nm_error_line "$out")
+  case "$out$err" in
+    *"$FM_NM_CENSUS_UNINITIALIZED"*)
+      printf 'no-mistakes is not initialized in %s, so no pipeline run exists there to own anything\n' "$dir"
+      return 3
+      ;;
+  esac
+  if [ "$rc" -eq 124 ]; then
+    printf 'the run listing did not answer within %ss, so which runs exist could not be observed\n' "$timeout_secs"
+    return 2
+  fi
+  if [ "$rc" -ne 0 ]; then
+    printf 'the run listing exited %s, so which runs exist could not be observed\n' "$rc"
+    return 2
+  fi
+  if [ -n "$refusal" ]; then
+    printf 'the run listing refused: %s\n' "$refusal"
+    return 2
+  fi
+  # The only completeness signal this source emits. A listing that says more
+  # rows exist is exactly the population this census may not claim to cover.
+  if printf '%s\n' "$out" | grep -qE '\([0-9]+ more runs'; then
+    printf 'the run listing is truncated at limit %s and reports more runs beyond it, so the census is incomplete\n' "$limit"
+    return 2
+  fi
+  while IFS= read -r line; do
+    line=$(fm_nm_trim "$line")
+    [ -n "$line" ] || continue
+    status=${line%% *}
+    rest=$(fm_nm_trim "${line#* }")
+    branch=${rest%% *}
+    rest=$(fm_nm_trim "${rest#* }")
+    head=${rest%% *}
+    # A row this reader cannot decompose is a run it cannot attribute, and a
+    # census that silently drops one is incomplete while looking whole.
+    if [ -z "$status" ] || [ -z "$branch" ] || [ -z "$head" ] || [ "$branch" = "$status" ]; then
+      printf 'a run listing row could not be read as "<status> <branch> <head>": %s\n' "$line"
+      return 2
+    fi
+    printf '%s\t%s\t%s\n' "$status" "$branch" "$head"
+  done <<EOF
+$out
+EOF
+  return 0
+}
+
+# Whether one census status word names a run that has STOPPED. Anything this
+# fleet has not observed as terminal is treated as live, which is the fail-closed
+# direction: an unrecognized status is a run that may still own an effect, and
+# reading it as finished is what lets a dispatch land on top of a live pipeline.
+fm_nm_census_terminal() {  # <status>
+  local s=$1 t
+  for t in $FM_NM_CENSUS_TERMINAL; do
+    [ "$s" = "$t" ] && return 0
+  done
+  return 1
+}
+
+# A stable identity for one census, so a decision made against it can be shown to
+# have been made against THAT population and not a later one.
+fm_nm_census_digest() {  # <census-rows>
+  local rows=${1:-}
+  if command -v sha256sum >/dev/null 2>&1; then
+    printf 'sha256:%s' "$(printf '%s' "$rows" | sha256sum | cut -c1-16)"
+  elif command -v shasum >/dev/null 2>&1; then
+    printf 'sha256:%s' "$(printf '%s' "$rows" | shasum -a 256 | cut -c1-16)"
+  else
+    printf 'unobserved'
+  fi
 }

@@ -69,6 +69,11 @@
 #       bin/fm-route.sh zero-route is the owner. A route blocked purely because
 #       nobody has qualified a candidate is CONTRADICTED and names the bounded
 #       workflow, never an escalation.
+#   fm-decision-surface.sh check role-path <task-id>
+#       Is "this dispatch may allocate" contradicted by the role path and custody
+#       already recorded for it? bin/fm-role-path-lib.sh is the owner, and the
+#       recorded verdict is read off the task rather than recomputed, so this
+#       reports what the allocation was actually admitted against.
 #   fm-decision-surface.sh owners [--json]
 #       The compensation ledger: owned deterministic work, and pending gaps.
 #   fm-decision-surface.sh platform-seam [--json] [--probe-platform]
@@ -134,11 +139,11 @@ while [ $# -gt 0 ]; do
       [ -z "$SUBCOMMAND" ] || die "unexpected argument '$1'"
       SUBCOMMAND=check
       shift
-      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, certified, or route-qualified"
+      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified, or role-path"
       CHECK_CLAIM=$1
       case "$CHECK_CLAIM" in
         capacity-blocked) ;;
-        decision-pending|duplicate-dispatch|certified|route-qualified)
+        decision-pending|duplicate-dispatch|certified|route-qualified|role-path)
           shift
           [ $# -gt 0 ] || die "check $CHECK_CLAIM needs an id"
           TARGET=$1
@@ -147,11 +152,11 @@ while [ $# -gt 0 ]; do
           # that path names. This surface composes owners; composing one is not
           # a licence to pass it an id nobody checked, so the id is REFUSED here
           # too rather than relied upon to be refused downstream.
-          if [ "$CHECK_CLAIM" = certified ]; then
+          if [ "$CHECK_CLAIM" = certified ] || [ "$CHECK_CLAIM" = role-path ]; then
             fm_task_id_path_safe "$TARGET" || die "unsafe task id: $TARGET"
           fi
           ;;
-        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified" ;;
+        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified, role-path" ;;
       esac
       ;;
     owners)
@@ -296,6 +301,9 @@ owners_json() {
  {"compensation":"role_qualification","status":"owned",
   "owner":"bin/fm-qualification-lib.sh, refused at bin/fm-spawn.sh and reported by bin/fm-route.sh zero-route",
   "note":"whether a binding was OBSERVED to do the job a route requires is computed from a record plus a fresh dependency observation, never remembered; missing and stale evidence are engineering states that activate one bounded workflow, and only a route no candidate can satisfy by qualifying escalates"},
+ {"compensation":"role_path_and_custody_preflight","status":"owned",
+  "owner":"bin/fm-role-path-lib.sh, refused at bin/fm-spawn.sh before pool selection and read by fm-decision-surface.sh check role-path",
+  "note":"one pre-reservation product joins the work generation, the role/binding/resource path, current qualification, assignment distinction, both bases and the venue, and the SINGULAR mutation owner; a refusal or a could-not-observe allocates no slot, reservation, branch, worktree change, metadata or worker, and a live no-mistakes run owning the candidate is a refusal rather than a race"},
  {"compensation":"certification_claim","status":"owned",
   "owner":"bin/fm-certify.sh",
   "note":"CERTIFIED is computed over the applicable predicates for those exact bytes; a route that structurally cannot produce a piece of evidence reports not-applicable with its route rather than being forced into a pass or a failure"},
@@ -768,6 +776,45 @@ check_duplicate_dispatch() {
     "no live task record and no in-flight backlog row under this identity"
 }
 
+# What this dispatch was actually ADMITTED against, read off the task's own
+# durable record rather than recomputed. Recomputing would answer a question
+# about now and credit it to the allocation, which happened against the
+# generation that was current then; those are different facts, and a preflight
+# that passes today says nothing about the one a slot was handed out on.
+check_role_path() {
+  local meta="$FM_HOME/state/$TARGET.meta" verdict_v code_v owner_v waived_v
+  if [ ! -f "$meta" ]; then
+    verdict unevaluable "role-path $TARGET" \
+      "no durable record for $TARGET at $meta, so what its allocation was admitted against cannot be read"
+    return $?
+  fi
+  verdict_v=$(sed -n 's/^role_path_verdict=//p' "$meta" | tail -1)
+  code_v=$(sed -n 's/^role_path_reason_code=//p' "$meta" | tail -1)
+  owner_v=$(sed -n 's/^mutation_owner=//p' "$meta" | tail -1)
+  waived_v=$(sed -n 's/^role_path_waived=//p' "$meta" | tail -1)
+  if [ -z "$verdict_v" ]; then
+    verdict unevaluable "role-path $TARGET" \
+      "$TARGET records no role-path and custody preflight, so this allocation was never preflighted; an absent record is not a passed one"
+    return $?
+  fi
+  if [ -n "$waived_v" ]; then
+    verdict contradicted "role-path $TARGET" \
+      "allocated with the $waived_v axis waived by explicit instruction · mutation owner ${owner_v:-unrecorded}; the axis it names was never established"
+    return $?
+  fi
+  case "$verdict_v" in
+    PERMITTED)
+      verdict not-contradicted "role-path $TARGET" \
+        "preflight PERMITTED · singular mutation owner ${owner_v:-unrecorded}" ;;
+    REFUSED)
+      verdict contradicted "role-path $TARGET" \
+        "preflight REFUSED ($code_v) · ${owner_v:-no owner recorded} holds this candidate" ;;
+    *)
+      verdict unevaluable "role-path $TARGET" \
+        "preflight returned $verdict_v ($code_v), which established no fact about who may mutate this candidate" ;;
+  esac
+}
+
 case "$SUBCOMMAND" in
   owners) render_owners; exit $? ;;
   platform-seam) render_platform_seam; exit $? ;;
@@ -779,6 +826,7 @@ case "$SUBCOMMAND" in
       duplicate-dispatch) check_duplicate_dispatch; exit $? ;;
       certified) check_certified; exit $? ;;
       route-qualified) check_route_qualified; exit $? ;;
+      role-path) check_role_path; exit $? ;;
     esac
     ;;
 esac

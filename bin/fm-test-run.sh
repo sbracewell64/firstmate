@@ -233,6 +233,7 @@ family_for_basename() {
     fm-kimi-harness.test.sh|fm-herdr-lab.test.sh|fm-landed-lib.test.sh|\
     fm-launch-lib.test.sh|fm-lint.test.sh|\
     fm-nm-run-lib.test.sh|fm-qualification.test.sh|\
+    fm-role-path-preflight.test.sh|\
     fm-operational-input.test.sh|fm-pi-primary-types.test.sh|\
     fm-send-popup-settle.test.sh|fm-send-settle.test.sh|\
     fm-subagent-pretool-check.test.sh|\
