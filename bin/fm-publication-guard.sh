@@ -29,9 +29,17 @@
 #   fm-publication-guard.sh prepare --repo <dir> --remote <name|url>
 #                                   --venue <host/owner/repo> --ref <refs/...>
 #                                   --head <sha> --expected-tip <sha|->
-#                                   [--tree <sha>] [--item <work-id>]
+#                                   [--tree <sha>] [--item <work-id>] [--dry-run]
 #       Compile the eligibility verdict for one exact candidate effect and, when
 #       it is permitted, mint the one-use authority that effect must spend.
+#
+#       --dry-run compiles and prints the SAME verdict and writes nothing. Use it
+#       for any probe. A probe that mints is not a probe: `prepare` is only
+#       side-effect-free on the paths where it refuses, so a probe written to
+#       expect a refusal quietly becomes a mint on the day the refusal stops
+#       firing - which is exactly the day nobody wanted a live authority lying
+#       around. The identity is deterministic, so a dry run prints the id that
+#       WOULD be granted and a later real prepare reproduces it.
 #       --expected-tip is required and has no default: a caller that does not
 #       know which tip it planned against has not planned against one, and
 #       defaulting it to whatever is there now would delete the only check that
@@ -189,11 +197,12 @@ resolve_or_exit() {  # <repo> <item> <venue> <ref> <head> <tree> <expected> <obs
 # --- prepare ------------------------------------------------------------------
 
 cmd_prepare() {
-  local repo='' remote='' venue='' ref='' head='' tree='' item='-' expected=''
+  local repo='' remote='' venue='' ref='' head='' tree='' item='-' expected='' dry=0
   local subject epoch=1 id path state f raw now record
 
   while [ $# -gt 0 ]; do
     case $1 in
+      --dry-run) dry=1; shift ;;
       --repo) repo=${2:-}; shift 2 ;;
       --remote) remote=${2:-}; shift 2 ;;
       --venue) venue=${2:-}; shift 2 ;;
@@ -281,6 +290,12 @@ cmd_prepare() {
   id=$(fm_auth_publication_id "$venue" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be digested"
+
+  if [ "$dry" -eq 1 ]; then
+    printf 'ALLOW_EXACT %s generation=%s item=%s\n' "$id" "$FM_PUB_SEAM_GENERATION" "$item"
+    printf 'fm-publication-guard: dry run, no authority was recorded\n' >&2
+    return 0
+  fi
 
   now=$(now_iso)
   record=$(fm_auth_publication_record_new "$id" "$FM_PUB_SEAM_REQUEST" "$venue" "$ref" \

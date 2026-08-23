@@ -62,12 +62,12 @@ The no-mistakes source generation was reconciled at `c0e06bebd0a43f17365af755b98
 
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
-  -> 20 ok, 0 not ok, FM_TEST_CONTRACT status=pass
+  -> 21 ok, 0 not ok, FM_TEST_CONTRACT status=pass
 bin/fm-test-run.sh tests/fm-attest.test.sh
   -> 95 ok, 0 not ok
 ```
 
-Controls selected 20, attempted 20, completed 20 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
+Controls selected 21, attempted 21, completed 21 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
 
 ### Red calibration
 
@@ -91,6 +91,7 @@ Each run stages a full copy of the worktree, injects exactly one defect, and run
 | 11 | the attestation path pushes directly instead of through the guard | `not ok - a publication that could not be placed under this home's governance was published` |
 | 12 | the outcome record is rebuilt from the copy read before the intent | `not ok - intent: the spent record carries no record of the intent written before the act` |
 | 13 | the wiring relays the guard's verdict word as the token | `not ok - token: the refusal doubled its own verdict word instead of naming the reason: REFUSE REFUSE ... (unexpected: 'REFUSE REFUSE')` |
+| 14 | a dry run mints anyway | `not ok - dry-run: a probe minted an authority (0 -> 1): [fm-auth-4403b3ee68f326f7c437f6b624209e33 granted]` |
 
 Reds 06 and 07 are worth reading twice, because both name a token other than the one the defect removed.
 That is defence in depth showing itself rather than a miscalibrated control: with the explicit generation comparison gone the authority identity still fails to recompute, and with the replay refusal gone the remote is already at the head so the second consume becomes a no-effect.
@@ -129,6 +130,17 @@ bin/fm-test-run.sh tests/fm-attest.test.sh
 bin/fm-dead-predicate-check.sh
 bin/fm-lint.sh
 ```
+
+## A probe must not mint
+
+`prepare` is side-effect-free only on the paths where it REFUSES.
+A probe written to expect a refusal therefore stops being a probe on the day that refusal stops firing: it mints instead, and leaves a live one-use authority behind at exactly the moment nobody wanted one.
+
+That is not hypothetical.
+Running this guard's own pinned probe verbatim against the operational home, at a moment when the governing hold record had not yet been provisioned, granted a real authority for a stale head rather than refusing.
+`--dry-run` exists because of it: it compiles and prints the same verdict, names the same deterministic id, and writes nothing.
+
+Any probe, any check-path, and any command that only wants the verdict must use it.
 
 ## Enrolment in the dead-predicate control
 
