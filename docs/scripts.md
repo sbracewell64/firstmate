@@ -142,7 +142,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-merge.sh`         | Forge-verify landing identity, re-verify a PR's current head, then merge a task's canonical full GitHub URL |
 | `fm-landing-authorization.sh` | Mint a one-use landing authorization from a ruled Browser Sol request and spend it exactly once against the exact head it names |
 | `fm-landing-authorization-lib.sh` | Landing-authorization identity, state vocabulary, and the pure mint and spend predicates |
-| `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is Browser-Sol-governed, which request grants its authority, and the spend the merge command runs inside |
+| `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is inside the declared Browser Sol landing domain, which request grants its authority, and the spend the merge command runs inside |
 | `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |
 | `fm-reflag.sh`           | Reflag a scout task in place as a protected ship task with an explicit delivery mode |
 | `fm-attempt.sh`          | Own a task's durable work-attempt count and retry budget, its execution-attempt lineage, and the gate that sanctions replacing one execution attempt in the same lane |

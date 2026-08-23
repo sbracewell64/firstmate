@@ -106,8 +106,9 @@
 # therefore requires changing the single gh-axi invocation at the end.
 #
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
-# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
-# bin/fm-landing-authorization.sh owns the authority itself. What this file adds
+# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints -
+# including which repositories are inside the declared governed landing domain -
+# and bin/fm-landing-authorization.sh owns the authority itself. What this file adds
 # is that the merge command RUNS INSIDE the spend when one governs, so an
 # applicable pull request cannot reach `gh-axi pr merge` without consuming a
 # valid, head-bound, one-use authorization. A pull request no ruling governs
@@ -568,7 +569,11 @@ LANDING_AUTH_ID=
 LANDING_AUTHORIZATION=
 resolve_landing_authority() {  # <head>
   local head=$1
-  if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL"; then
+  # The repository this merge would write, taken from the pull request's own
+  # parsed identity rather than from anything the caller supplies separately, so
+  # the domain is asked about the repository the merge command actually addresses.
+  if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
+    "$PR_OWNER/$PR_REPO"; then
     printf 'error: refusing to merge head %s: %s: %s\n' \
       "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
     return 1

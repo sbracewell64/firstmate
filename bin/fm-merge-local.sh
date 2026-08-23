@@ -32,10 +32,12 @@
 # bin/fm-landing-authorization.sh owns the authority itself. What this file adds
 # is that the fast-forward RUNS INSIDE the spend when one governs, so an
 # applicable candidate cannot reach `git merge --ff-only` without consuming a
-# valid, head-bound, one-use authorization. A candidate no ruling governs lands
-# through exactly the guards above and says so with a reported not-applicable
-# observation, because a silent ungoverned landing is indistinguishable from an
-# authorised one.
+# valid, head-bound, one-use authorization. A candidate PROVEN outside the
+# declared governed landing domain lands through exactly the guards above and says
+# so with a reported not-applicable observation, because a silent ungoverned
+# landing is indistinguishable from an authorised one. A candidate inside that
+# domain with no live review request covering it REFUSES: the seam owns why an
+# absent record is the refusal rather than the permission.
 #
 # A local-only item under Sol review is governed by a ruling on a PUBLISHED head,
 # because a published head is the only one an outside reviewer could ever have
@@ -63,6 +65,11 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
 . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
+# The seam asks which repository this landing writes, and bin/fm-task-base-lib.sh
+# already owns reducing a git remote url to a forge identity. Sourced rather than
+# restated, because a second url parser on the landing path is a second answer.
+# shellcheck source=bin/fm-task-base-lib.sh
+. "$SCRIPT_DIR/fm-task-base-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=${1:?usage: fm-merge-local.sh <task-id>}
 META="$STATE/$ID.meta"
@@ -418,7 +425,33 @@ LANDING_HEAD=$(git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH^{co
   echo "error: the head of $BRANCH in $PROJ could not be read, so whether a ruling governs this landing could not be asked" >&2
   exit 1
 }
-if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" -; then
+# The repository this fast-forward would land into, as the venue's own
+# `owner/name` path, read from the clone's own push remote rather than from the
+# task record: the declared domain must be asked about the repository the merge
+# command actually writes.
+#
+# Three-valued on purpose. A path when the remote resolves, and "-" when it does
+# not - which covers both an unreadable remote configuration and a clone naming no
+# remote at all. Neither is positive proof that this landing is outside a declared
+# domain, and a clone whose remote was removed is exactly the shape a bypass would
+# take, so both are handed to the seam as could-not-observe rather than as an
+# answer. A home that declares an empty domain is unaffected either way, because an
+# empty domain contains nothing whatever this landing turns out to write.
+landing_repository() {  # <dir>
+  local dir=$1 url identity
+  url=$(git --no-optional-locks -C "$dir" remote get-url --push origin 2>/dev/null) || return 1
+  [ -n "$url" ] || return 1
+  identity=$(task_base_venue_identity "$url") || return 1
+  # host/owner/name -> owner/name. The host is addressing rather than identity,
+  # and the seam compares the repository path for exactly that reason.
+  case $identity in
+    */*/*) printf '%s\n' "${identity#*/}" ;;
+    *) return 1 ;;
+  esac
+}
+LANDING_REPO=$(landing_repository "$PROJ") || LANDING_REPO=-
+
+if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - "$LANDING_REPO"; then
   printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
   exit 1
 fi

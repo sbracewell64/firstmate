@@ -48,6 +48,21 @@
 # landing, because the record it could not read is exactly the one that might
 # have governed it.
 #
+# APPLICABILITY IS ALSO POSITIVE AND CLOSED.
+#
+# Reporting the answer is not the same as reaching it honestly. This file's first
+# form reported `not-applicable` faithfully and DERIVED it from an absence: no
+# live correlation record for this item meant no ruling governed it. An obligation
+# that is real but not represented by one exact local record therefore disappeared
+# into the same clean-looking answer as work that was never under review.
+#
+# So `not-applicable` now requires POSITIVE proof that the effect is outside the
+# governed landing domain, and the domain is DECLARED rather than inferred - see
+# the governed-landing-domain section below. Inside the domain, a landing with no
+# live correlation is `FM_LANDING_APPLICABLE_MISSING` and REFUSES. The missing
+# record is what stops the landing rather than what permits it, which is the whole
+# inversion this increment makes.
+#
 # WHY GOVERNANCE IS KEYED ON THE ITEM AND THE AUTHORITY ON THE HEAD.
 #
 # These are two different questions and collapsing them is how a governed
@@ -119,6 +134,7 @@ FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE=FM_LANDING_NOT_APPLICABLE
 FM_LANDING_SEAM_TOKEN_GOVERNED=FM_LANDING_GOVERNED
 # refusals: a verdict was reached and it is no
 FM_LANDING_SEAM_TOKEN_HEAD_UNAPPROVED=FM_LANDING_HEAD_NOT_APPROVED
+FM_LANDING_SEAM_TOKEN_APPLICABLE_MISSING=FM_LANDING_APPLICABLE_MISSING
 FM_LANDING_SEAM_TOKEN_MINT_REFUSED=FM_LANDING_AUTHORIZATION_REFUSED
 FM_LANDING_SEAM_TOKEN_SPEND_REFUSED=FM_LANDING_SPEND_REFUSED
 # could-not-observe: no verdict was reached
@@ -128,6 +144,9 @@ FM_LANDING_SEAM_TOKEN_STORE_UNREADABLE=FM_LANDING_RECORD_STORE_UNREADABLE
 FM_LANDING_SEAM_TOKEN_RECORD_UNREADABLE=FM_LANDING_RECORD_UNREADABLE
 FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED=FM_LANDING_VENUE_UNCONFIGURED
 FM_LANDING_SEAM_TOKEN_CANDIDATE_UNBOUND=FM_LANDING_CANDIDATE_UNBOUND
+FM_LANDING_SEAM_TOKEN_DOMAIN_UNDECLARED=FM_LANDING_DOMAIN_UNDECLARED
+FM_LANDING_SEAM_TOKEN_DOMAIN_UNREADABLE=FM_LANDING_DOMAIN_UNREADABLE
+FM_LANDING_SEAM_TOKEN_CANDIDATE_REPO_UNOBSERVED=FM_LANDING_CANDIDATE_REPOSITORY_UNOBSERVED
 FM_LANDING_SEAM_TOKEN_MINT_UNOBSERVED=FM_LANDING_AUTHORIZATION_UNOBSERVED
 FM_LANDING_SEAM_TOKEN_SPEND_UNOBSERVED=FM_LANDING_SPEND_UNOBSERVED
 FM_LANDING_SEAM_TOKEN_RECEIPT_UNOBSERVED=FM_LANDING_ACT_RECEIPT_UNOBSERVED
@@ -177,6 +196,92 @@ fm_landing_seam_venue_configured() {  # <config-dir>
   [ -n "$repo" ] && [ -n "$issue" ]
 }
 
+# --- the governed landing domain ---------------------------------------------
+#
+# WHY A DECLARED DOMAIN, AND WHY IT IS THE THING THAT MAKES NOT-APPLICABLE REAL.
+#
+# The seam's first form asked one question - is there a live correlation record
+# for this item at this head? - and read NO for "no ruling governs this". That
+# reads an ABSENCE as a positive answer, and it is the same shape as the defect
+# this file was written to close: a landing obligation that is real but not
+# represented by one exact local record disappears into `not-applicable`, and the
+# home looks authorised because nothing spoke. A record that was never written, a
+# store that was never populated, and a review that was promised and never
+# emitted are all indistinguishable from work no ruling was ever going to govern.
+#
+# So applicability is decided from a DECLARATION instead. `landing_domain.repos`
+# in config/sol-control.json names the repositories whose landings this home has
+# placed under Browser Sol control. Inside that domain a landing needs a live
+# granting correlation and REFUSES without one, which is the whole point: the
+# missing record becomes the refusal rather than the permission. Outside it, the
+# landing is not-applicable on POSITIVE grounds - the operator said which
+# repositories are governed and this is not one of them - and lands through the
+# ordinary gates.
+#
+# The four states are kept apart because they need four different repairs.
+#
+#   listed      the declaration names repositories; membership decides
+#   empty       the declaration names none, so nothing in this home is governed.
+#               This is a complete positive answer on its own and needs no
+#               repository identity: an empty set contains nothing.
+#   undeclared  a venue is configured and the domain was never stated. This is
+#               NOT an empty domain. A home that configured Sol control and never
+#               said what it governs cannot answer this question, so it is
+#               could-not-observe and the landing stops with both repairs named.
+#   unreadable  the declaration is present and malformed, which is a defect in
+#               the declaration rather than an answer about this candidate.
+#
+# Repositories are compared as the venue's own `owner/name` path, lowercased,
+# because forge paths are case-insensitive and a case difference that read as a
+# different repository would be a bypass. The host is deliberately not part of
+# the comparison: an ssh host alias and the forge's own name address the same
+# repository, and requiring them to agree would let renaming a remote shed the
+# domain. Two same-path repositories on different hosts therefore both match,
+# which over-includes rather than under-includes - a refusal an operator
+# reconciles rather than a landing nobody authorised.
+
+FM_LANDING_SEAM_DOMAIN_STATE=
+FM_LANDING_SEAM_DOMAIN_REPOS=
+
+fm_landing_seam_domain_read() {  # <config-dir>
+  local file=${1:-}/sol-control.json raw declared repos
+  FM_LANDING_SEAM_DOMAIN_STATE=unreadable
+  FM_LANDING_SEAM_DOMAIN_REPOS=
+  raw=$(cat "$file" 2>/dev/null) || return 0
+  printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 0
+  declared=$(printf '%s' "$raw" | jq -r 'if has("landing_domain") then "yes" else "no" end' 2>/dev/null) || return 0
+  if [ "$declared" != yes ]; then
+    FM_LANDING_SEAM_DOMAIN_STATE=undeclared
+    return 0
+  fi
+  # An explicit null is a malformed declaration rather than a way to say none:
+  # "none" has its own spelling, `{"repos": []}`, and accepting two spellings for
+  # a decision this consequential is how one of them stops being read.
+  repos=$(printf '%s' "$raw" | jq -r '
+      .landing_domain as $d
+      | if ($d | type) != "object" then error("shape")
+        elif ($d | has("repos") | not) then error("shape")
+        elif ($d.repos | type) != "array" then error("shape")
+        elif ([$d.repos[] | select(type != "string")] | length) > 0 then error("shape")
+        elif ([$d.repos[] | select(test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$") | not)] | length) > 0 then error("shape")
+        else ($d.repos[] | ascii_downcase)
+        end' 2>/dev/null) || return 0
+  if [ -z "$repos" ]; then
+    FM_LANDING_SEAM_DOMAIN_STATE=empty
+    return 0
+  fi
+  FM_LANDING_SEAM_DOMAIN_STATE=listed
+  FM_LANDING_SEAM_DOMAIN_REPOS=$repos
+  return 0
+}
+
+fm_landing_seam_domain_contains() {  # <repo-path>
+  local repo
+  repo=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')
+  [ -n "$repo" ] && [ "$repo" != - ] || return 1
+  printf '%s\n' "$FM_LANDING_SEAM_DOMAIN_REPOS" | grep -qxF "$repo"
+}
+
 # --- resolution --------------------------------------------------------------
 #
 # Sets, always, all four:
@@ -212,10 +317,18 @@ fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>]
 # ruling's own pull request head at the moment of use. A local fast-forward is
 # governed by a ruling on a published head precisely because that is the only
 # head an outside reviewer could ever have seen.
-fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-dash>
-  local dir=$1 config=$2 item=$3 head=$4 pr=$5
+#
+# The repository argument is the candidate's own landing repository as an
+# `owner/name` path, or "-" when the caller could not establish one. "-" is a
+# could-not-observe about the candidate, never a claim that it has no repository:
+# it can still reach not-applicable through an empty declared domain, because an
+# empty domain contains nothing whatever the candidate turns out to be, but it
+# can never be shown to be outside a NON-empty one.
+fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-dash> <repo-or-dash>
+  local dir=$1 config=$2 item=$3 head=$4 pr=$5 repo=$6
   local f rid raw stored gate state rec_head rec_pr
   local live=0 granting=0 granting_id='' others=''
+  local venue=0 store=present
 
   if ! fm_landing_seam_candidate_valid "$item" "$head"; then
     fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_CANDIDATE_UNBOUND" \
@@ -223,25 +336,25 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     return $?
   fi
 
+  fm_landing_seam_venue_configured "$config" && venue=1
+
   if [ ! -d "$dir" ]; then
     # A store that does not exist has never held a correlation record, which is a
-    # genuine emptiness rather than an unreadable one.
-    if fm_landing_seam_venue_configured "$config"; then
-      fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
-        "no Browser Sol request has ever been recorded in this home, so no ruling governs $item at $head"
-      return $?
-    fi
-    fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
-      "no Browser Sol control venue is configured in this home and no request has ever been recorded, so no ruling governs $item at $head"
-    return $?
-  fi
-  if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
+    # genuine emptiness rather than an unreadable one. It leaves the live count at
+    # zero and the declared domain decides, exactly as an enumerated empty store
+    # does: whether a missing record permits or refuses is the domain's question,
+    # not the store's.
+    store=absent
+  elif [ ! -r "$dir" ] || [ ! -x "$dir" ]; then
     fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_STORE_UNREADABLE" \
       "the Browser Sol correlation store at $dir could not be enumerated, so this is not an absence of rulings"
     return $?
   fi
 
   for f in "$dir"/*.json; do
+    # An absent store is enumerated as empty rather than by blanking the path,
+    # because a blank path would glob the filesystem root.
+    [ "$store" = present ] || break
     [ -e "$f" ] || continue
     rid=${f##*/}
     rid=${rid%.json}
@@ -290,40 +403,84 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     granting_id=$rid
   done
 
-  if [ "$live" -eq 0 ]; then
-    if fm_landing_seam_venue_configured "$config"; then
-      fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
-        "no live Browser Sol review request governs $item, so this landing is not ruling-governed"
+  if [ "$live" -gt 0 ]; then
+    # An exact live correlation is a stronger statement about this item than any
+    # repository-level declaration, so it decides on its own and the domain is
+    # never consulted. That direction matters: a live request must govern its item
+    # whether or not somebody remembered to list its repository.
+    #
+    # Governed, and the venue is missing. This home holds live Sol requests and no
+    # venue to resolve them against, which is a contradiction in its own
+    # configuration rather than an answer about this candidate.
+    if [ "$venue" -eq 0 ]; then
+      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED" \
+        "$live live Browser Sol request(s) govern $item while no control venue is configured in this home, so whether their rulings apply could not be observed"
       return $?
     fi
+    if [ "$granting" -eq 0 ]; then
+      fm_landing_seam_set refused "$FM_LANDING_SEAM_TOKEN_HEAD_UNAPPROVED" \
+        "$live live Browser Sol request(s) govern $item and none is bound to the head being landed ($head):$others"
+      return $?
+    fi
+    if [ "$granting" -gt 1 ]; then
+      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_AMBIGUOUS" \
+        "$granting live Browser Sol requests claim to govern $item at $head, so which authority this landing would consume could not be determined"
+      return $?
+    fi
+    fm_landing_seam_set governed "$FM_LANDING_SEAM_TOKEN_GOVERNED" \
+      "Browser Sol request $granting_id governs $item at $head" "$granting_id"
+    return $?
+  fi
+
+  # No live correlation names this item. Whether that is permission or a refusal
+  # is decided by the DECLARED domain and never by the absence itself.
+
+  # A home with no control venue has placed nothing under Browser Sol control, so
+  # there is no governed landing domain for a candidate to be inside. That is the
+  # shipped default and the complete answer for every home that never opted in.
+  if [ "$venue" -eq 0 ]; then
     fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
-      "no Browser Sol control venue is configured in this home and no live review request governs $item, so this landing is not ruling-governed"
+      "no Browser Sol control venue is configured in this home, so no landing is inside a governed domain and no ruling governs $item at $head"
     return $?
   fi
 
-  # Governed, and the venue is missing. This is NOT the unconfigured-home case
-  # above: this home holds live Sol requests and no venue to resolve them
-  # against, which is a contradiction in its own configuration rather than an
-  # answer about this candidate.
-  if ! fm_landing_seam_venue_configured "$config"; then
-    fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED" \
-      "$live live Browser Sol request(s) govern $item while no control venue is configured in this home, so whether their rulings apply could not be observed"
+  fm_landing_seam_domain_read "$config"
+  case "$FM_LANDING_SEAM_DOMAIN_STATE" in
+    undeclared)
+      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_DOMAIN_UNDECLARED" \
+        "this home configures a Browser Sol control venue and declares no landing_domain in config/sol-control.json, so whether $item at $head is inside the governed landing domain could not be observed; name the governed repositories as {\"landing_domain\": {\"repos\": [\"owner/name\"]}}, or declare that none are governed with {\"landing_domain\": {\"repos\": []}}"
+      return $?
+      ;;
+    unreadable)
+      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_DOMAIN_UNREADABLE" \
+        "the landing_domain declared in config/sol-control.json is not an object carrying a repos array of owner/name paths, so whether $item at $head is inside the governed landing domain could not be observed"
+      return $?
+      ;;
+    empty)
+      fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
+        "this home declares an empty Browser Sol landing domain, so $item at $head is outside it and no ruling governs this landing"
+      return $?
+      ;;
+  esac
+
+  if [ "$repo" = - ] || [ -z "$repo" ]; then
+    fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_CANDIDATE_REPO_UNOBSERVED" \
+      "this home declares a Browser Sol landing domain and the repository this landing would write could not be established, so whether $item at $head is inside that domain could not be observed"
     return $?
   fi
 
-  if [ "$granting" -eq 0 ]; then
-    fm_landing_seam_set refused "$FM_LANDING_SEAM_TOKEN_HEAD_UNAPPROVED" \
-      "$live live Browser Sol request(s) govern $item and none is bound to the head being landed ($head):$others"
-    return $?
-  fi
-  if [ "$granting" -gt 1 ]; then
-    fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_AMBIGUOUS" \
-      "$granting live Browser Sol requests claim to govern $item at $head, so which authority this landing would consume could not be determined"
+  if ! fm_landing_seam_domain_contains "$repo"; then
+    fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
+      "$repo is not in this home's declared Browser Sol landing domain ($(printf '%s' "$FM_LANDING_SEAM_DOMAIN_REPOS" | tr '\n' ' ')), so $item at $head is outside it and no ruling governs this landing"
     return $?
   fi
 
-  fm_landing_seam_set governed "$FM_LANDING_SEAM_TOKEN_GOVERNED" \
-    "Browser Sol request $granting_id governs $item at $head" "$granting_id"
+  # THE REPAIR. The candidate is inside the declared governed domain and no live
+  # Browser Sol request covers it. The missing record is the refusal, because a
+  # governed landing whose authority was never recorded is exactly the landing
+  # that must not happen on the strength of nothing having been written down.
+  fm_landing_seam_set refused "$FM_LANDING_SEAM_TOKEN_APPLICABLE_MISSING" \
+    "$repo is inside this home's declared Browser Sol landing domain and no live review request covers $item at $head, so the authority this landing must consume does not exist"
   return $?
 }
 

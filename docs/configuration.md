@@ -186,14 +186,23 @@ The seam reports `wiring: not-wired` until the platform projection resolves this
 Detecting that condition needs no configuration and always runs.
 Creating the missing artifact on the `sol-control` channel needs to know where to address it, and that is what this optional local, gitignored file holds.
 
-The file is one JSON object with two required fields.
+The file is one JSON object with two required fields, plus `landing_domain`, which is required only by the landing paths.
 
 ```json
-{ "repo": "owner/name", "issue": 2 }
+{ "repo": "owner/name", "issue": 2, "landing_domain": { "repos": ["owner/product"] } }
 ```
 
 `repo` is the control repository in `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
 `issue` may be a number or a string; both are read the same way.
+
+`landing_domain.repos` names the repositories whose landings this home has placed under Browser Sol control, each as the venue's own `owner/name` path.
+It is compared case-insensitively, because a forge path is case-insensitive and a case difference that read as a different repository would shed the domain by renaming nothing.
+Inside that domain a landing needs a live review request covering its exact head and REFUSES without one; outside it, the landing is not-applicable on positive grounds and proceeds through the ordinary gates.
+`{"repos": []}` declares that no landing in this home is governed, which is the way to keep a control venue for review correspondence without placing any landing under it.
+
+Omitting `landing_domain` entirely is NOT the same as declaring it empty.
+A home that configured Sol control and never said what it governs cannot answer whether a candidate is inside the domain, so both landing paths report `FM_LANDING_DOMAIN_UNDECLARED` and refuse rather than reading the silence as permission.
+A home with no `config/sol-control.json` at all has placed nothing under Sol control and is unaffected, which is the shipped default.
 
 An absent or incomplete file does not make a waiting item clear.
 It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND_TRANSPORT_UNCONFIGURED`, exit 4 - because the sweep genuinely cannot see the venue it would have to look at.
@@ -201,7 +210,8 @@ Detection and emission are separated exactly so an unconfigured venue can never 
 The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
 
 The same venue is what makes a landing ruling-governed.
-[`bin/fm-landing-seam-lib.sh`](../bin/fm-landing-seam-lib.sh) reads this file and the correlation store at both merge chokepoints, so a candidate a live Sol review request governs cannot land without consuming the one-use authorization that request's ruling grants, while a candidate no ruling governs lands through the ordinary gates and reports that explicitly.
+[`bin/fm-landing-seam-lib.sh`](../bin/fm-landing-seam-lib.sh) reads this file and the correlation store at both merge chokepoints, so a candidate a live Sol review request governs cannot land without consuming the one-use authorization that request's ruling grants, while a candidate PROVEN outside the declared landing domain lands through the ordinary gates and reports that explicitly.
+That proof is what `landing_domain` supplies: without it the seam would have to read an absent correlation record as an absence of governance, which is how an obligation that was never written down becomes indistinguishable from work no ruling was going to cover.
 A home holding live Sol requests with this file absent is a contradiction rather than an ungoverned home, and both landing paths refuse it as could-not-observe.
 
 `fm-outbound-artifact.sh check` reports the invariant, and `bin/fm-bootstrap.sh` relays its defects and unevaluable observations at every session start so a stranded item or a blind sweep surfaces without anyone going looking.
