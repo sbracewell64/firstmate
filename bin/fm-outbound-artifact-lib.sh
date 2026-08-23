@@ -152,7 +152,21 @@ emitted
 ruled
 resumed
 closed
-superseded'
+superseded
+quarantined'
+
+# The states in which a record is FINISHED. A finished record is preserved and
+# stays readable - it is evidence - but it can never be applicable, never be
+# adopted by a fresh emit, and never sustain a wait. `quarantined` is the one
+# reached by ruling rather than by completion: a request that was malformed at
+# birth, retired through this owner instead of hand-edited into validity.
+FM_OUTBOUND_TERMINAL_STATES='closed
+superseded
+quarantined'
+
+fm_outbound_state_terminal() {  # <state>
+  printf '%s\n' "$FM_OUTBOUND_TERMINAL_STATES" | grep -qxF "$1"
+}
 
 # Stable classification and refusal tokens. Callers and tests match these rather
 # than prose, so wording can improve without breaking a consumer.
@@ -181,6 +195,10 @@ FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED=FM_OUTBOUND_HEAD_UNOBSERVED
 FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED=FM_OUTBOUND_ARTIFACT_UNOBSERVED
 FM_OUTBOUND_TOKEN_CLONE_UNREADABLE=FM_OUTBOUND_CLONE_UNREADABLE
 FM_OUTBOUND_TOKEN_VENUE_UNRESOLVED=FM_OUTBOUND_VENUE_UNRESOLVED
+# The read SUCCEEDED and cannot name one governed subject - distinct from
+# VENUE_UNRESOLVED, which is about where the question is asked rather than what
+# it is about, and from INCOMPLETE_BINDING, which is a positive contradiction.
+FM_OUTBOUND_TOKEN_SUBJECT_UNRESOLVED=FM_OUTBOUND_SUBJECT_UNRESOLVED
 FM_OUTBOUND_TOKEN_REGISTRY_UNREADABLE=FM_OUTBOUND_PROJECT_REGISTRY_UNREADABLE
 FM_OUTBOUND_TOKEN_LANDING_UNOBSERVED=FM_OUTBOUND_LANDING_TARGET_UNOBSERVED
 FM_OUTBOUND_TOKEN_POSTURE_UNOBSERVED=FM_OUTBOUND_PROJECT_POSTURE_UNOBSERVED
@@ -479,9 +497,26 @@ fm_outbound_record_state_valid() {  # <state>
 # An absent optional field is the literal "-" rather than empty, so "no pull
 # request" and "pull request field omitted" cannot collide into one identity.
 
-fm_outbound_identity_canonical() {  # <gate> <project> <repo> <item> <pr> <head>
+# <gate> <project> <repo> <item> <pr> <head> [<tree>] [<policy>]
+#
+# TREE AND POLICY ARE APPENDED ONLY WHEN SUPPLIED, and that is a compatibility
+# decision rather than an oversight. Every stored record's id is a digest of this
+# text, and record_identity_verdict recomputes it to check the record against its
+# own filename - so adding an unconditional field would change every existing
+# id at once and turn the whole store adverse in a single release. A request that
+# carries no governed tree or policy generation therefore keeps exactly the
+# canonical form it has always had, and one that carries them gets a distinct
+# identity. Which is also the behaviour the ruling asks for: a request bound to a
+# different policy generation is a different question and must not be answerable
+# by its predecessor.
+#
+# An absent OPTIONAL field inside the fixed prefix stays the literal "-", so "no
+# pull request" and "pull request omitted" still cannot collide.
+fm_outbound_identity_canonical() {
   printf 'gate=%s\nproject=%s\nrepo=%s\nitem=%s\npr=%s\nhead=%s\n' \
     "$1" "${2:--}" "${3:--}" "$4" "${5:--}" "${6:--}"
+  [ -z "${7:-}" ] || printf 'tree=%s\n' "$7"
+  [ -z "${8:-}" ] || printf 'policy=%s\n' "$8"
 }
 
 fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
@@ -489,6 +524,100 @@ fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
   sum=$(fm_outbound_identity_canonical "$@" | fm_outbound_digest) || return 1
   [ -n "$sum" ] || return 1
   printf '%s%s\n' "$FM_OUTBOUND_REQUEST_ID_PREFIX" "$sum"
+}
+
+# --- the governed decision subject -------------------------------------------
+#
+# THE SUBJECT IS NOT THE VENUE, and conflating them produced three malformed
+# requests in a row. fm-ob-6267e1c729b9, fm-ob-26660534cd52 and
+# fm-ob-7804557b2dfe each persisted `repo: sbracewell64/firstmate-sol-control`
+# - the CONTROL issue's own repository - while binding a head that exists only
+# in the governed repository the work actually lives in. Browser Sol ruled all
+# three non-actionable for the same reason: a repository/head tuple that cannot
+# identify one real subject is not a request, whatever else it carries.
+#
+# So a request now compiles its subject from ONE validated declaration, and the
+# control repository and issue stay what they always were - the transport venue
+# the question is asked at, recorded as venue metadata and nothing else.
+#
+# WHY THE SUBJECT REPOSITORY IS DECLARED RATHER THAN DERIVED. A clone's remotes
+# look like an authority and are not one here: this fleet's own checkout carries
+# `upstream` at the maintainer's repository and `origin` at the captain's fork,
+# and the governed subject for its candidates is the FORK. Reading a remote by
+# preference would therefore name the wrong repository confidently - the exact
+# failure mode the ruling forbids - and a separate work item already owns that
+# resolver's fork posture. A missing declaration is could-not-observe and
+# refuses; it is never repaired from prose, path, config venue, or a reply.
+#
+# Prints the missing subject fields, one per line, and returns 1 when any is
+# missing - the same shape as fm_outbound_binding_missing, so callers refuse the
+# same way for both.
+fm_outbound_clone_repos() {  # <clone-dir> -> distinct owner/name remotes, one per line
+  [ -n "${1:-}" ] && [ -d "$1" ] || return 0
+  git --no-optional-locks -C "$1" remote -v 2>/dev/null \
+    | awk '{ print $2 }' \
+    | sed -e 's#\.git$##' -e 's#^git@[^:]*:##' -e 's#^[a-z+]*://[^/]*/##' \
+    | grep -E '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' \
+    | sort -u
+}
+
+fm_outbound_subject_missing() {  # <repo> <venue-repo> <clone-dir> <tree> <head> [<declared>]
+  local repo=$1 venue=$2 dir=$3 tree=$4 head=$5 declared=${6:-} missing=0 width
+  # THE RULE THAT ALWAYS APPLIES: the venue is never the subject. This is the
+  # ruled defect itself, and it is refused however the subject was arrived at.
+  if [ -n "$venue" ] && [ "$repo" = "$venue" ]; then
+    printf 'subject-repo-is-transport-venue\n'; missing=1
+  fi
+  if [ -z "$repo" ]; then
+    printf 'subject-repo\n'; missing=1
+  fi
+  if [ -z "$declared" ] && [ "$missing" -eq 0 ] && [ -n "$dir" ] && [ -d "$dir" ]; then
+    # A DERIVED subject is an OBSERVATION only while the clone names exactly one
+    # repository. A clone that names two - a fork and the upstream it was forked
+    # from - cannot say which one the review governs, and picking whichever the
+    # venue rule happens to prefer would emit a governed request against a
+    # repository nobody chose. That is an inference from the config venue, which
+    # is precisely what a governed subject may not be built from, so it refuses.
+    if [ "$(fm_outbound_clone_repos "$dir" | wc -l)" -gt 1 ]; then
+      printf 'subject-repo-ambiguous\n'; missing=1
+    fi
+  fi
+  # THE NAME-SHAPE AND KNOWN-TO-THE-CLONE RULES APPLY TO A DECLARED SUBJECT,
+  # because a declaration is a claim about a named GitHub repository and can be
+  # checked as one. Applying them to a derived subject would refuse every
+  # project whose clone speaks in local paths rather than forge names, which is
+  # a fleet-wide outage rather than a repair; the ambiguity rule above is what
+  # keeps a derived subject honest.
+  if [ -n "$declared" ] && [ "$missing" -eq 0 ]; then
+    if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+      printf 'subject-repo-malformed\n'; missing=1
+    elif [ -n "$dir" ] && [ -d "$dir" ]; then
+      # REFERENTIAL INTEGRITY WITHOUT THE NETWORK. The candidate is
+      # intentionally unpublished and its remote branch is expected absent, so
+      # remote resolution would refuse a subject that is perfectly valid. What
+      # the clone CAN answer is whether it knows this repository at all, which
+      # is what separates a real subject from a plausible-looking name.
+      if ! git --no-optional-locks -C "$dir" remote -v 2>/dev/null \
+         | sed -e 's#\.git[[:space:]]*(.*)$##' -e 's#[[:space:]]*(.*)$##' \
+         | grep -qE "[:/]$(printf '%s' "$repo" | sed 's#[/.]#[/.]#g')\$"; then
+        printf 'subject-repo-unknown-to-clone\n'; missing=1
+      fi
+    fi
+  fi
+  # A declared tree must be the tree of the declared head, or the subject
+  # contradicts itself.
+  if [ -n "$tree" ]; then
+    width=$(fm_outbound_object_width "$dir")
+    if [ -z "$width" ] || ! fm_outbound_is_sha "$tree" "$width"; then
+      printf 'subject-tree-malformed\n'; missing=1
+    elif [ -n "$head" ] && [ -d "$dir" ]; then
+      if ! git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$head^{tree}" 2>/dev/null \
+         | grep -qxF "$tree"; then
+        printf 'subject-tree-not-of-head\n'; missing=1
+      fi
+    fi
+  fi
+  [ "$missing" -eq 0 ]
 }
 
 # --- binding completeness ----------------------------------------------------
@@ -809,9 +938,10 @@ fm_outbound_classify_record() {  # <record-json> [<declared-gate>]
 #
 # Prints applicable | inapplicable | unobservable.
 fm_outbound_applicability() {  # <stored-head> <observed-head> <record-state>
-  case $3 in
-    superseded|closed) printf 'inapplicable\n'; return 0 ;;
-  esac
+  # Every FINISHED state is inapplicable, quarantined included: a request
+  # retired as malformed answers nothing, which is the whole point of retiring
+  # it rather than hand-editing it.
+  if fm_outbound_state_terminal "$3"; then printf 'inapplicable\n'; return 0; fi
   if [ -z "$2" ]; then
     # The head could not be read. Never applicable-by-default: an unobservable
     # head is exactly when a silent pass would hide a moved one.
@@ -823,19 +953,29 @@ fm_outbound_applicability() {  # <stored-head> <observed-head> <record-state>
 
 # --- record construction -----------------------------------------------------
 
-fm_outbound_record_new() {  # <id> <gate> <channel> <project> <repo> <item> <pr> <head> <venue> <now> [<head-source>]
+# <id> <gate> <channel> <project> <repo> <item> <pr> <head> <venue> <now>
+#   [<head-source>] [<tree>] [<policy>]
+#
+# `repo` is the GOVERNED SUBJECT repository - what the request is about - while
+# `venue` stays the transport location it is asked at. They were the same value
+# for three malformed requests, which is what the ruling calls a repository/head
+# tuple that cannot identify one real subject.
+fm_outbound_record_new() {
   jq -n \
     --arg schema "$FM_OUTBOUND_RECORD_SCHEMA" \
     --arg request_id "$1" --arg gate "$2" --arg channel "$3" \
     --arg project "$4" --arg repo "$5" --arg item "$6" \
     --arg pr "$7" --arg head "$8" --arg venue "$9" --arg now "${10}" \
     --arg head_source "${11:-}" \
+    --arg tree "${12:-}" --arg policy "${13:-}" \
     '{schema:$schema,
       request_id:$request_id,
       channel:$channel,
       identity:{gate:$gate,project:$project,repo:$repo,item:$item,
                 pr:(if $pr == "" or $pr == "-" then null else $pr end),
-                head:$head,head_source:$head_source},
+                head:$head,head_source:$head_source,
+                tree:(if $tree == "" then null else $tree end),
+                policy:(if $policy == "" then null else $policy end)},
       venue:$venue,
       state:"emitting",
       comment_id:null,

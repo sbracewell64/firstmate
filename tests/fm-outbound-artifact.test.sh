@@ -2223,6 +2223,265 @@ test_every_declared_token_has_an_emit_site() {
   pass "token vocabulary: all $count declared tokens have an emit site"
 }
 
+# --- the governed subject is not the transport venue -------------------------
+#
+# THE DEFECT, RULED THREE TIMES. Requests fm-ob-6267e1c729b9,
+# fm-ob-26660534cd52 and fm-ob-7804557b2dfe each persisted
+# `repo: sbracewell64/firstmate-sol-control` - the CONTROL issue's own
+# repository - while binding a head that exists only in the governed repository
+# the work lives in. Browser Sol ruled all three non-actionable in the same
+# words: a repository/head tuple that cannot identify one real subject is not a
+# request. The producer had been reading its transport venue as its subject.
+#
+# The controls below are built on that exact shape, and every refusal is
+# asserted to happen with the record store and the forge both untouched -
+# "refuse before durable actionable request and before waiting-state
+# transition" is the requirement, and a refusal that already wrote something
+# would not meet it.
+
+# A demo clone that knows one governed repository, distinct from the control
+# venue the fixtures already configure at o/control.
+declare_subject() {  # <case-dir> <gate> <head> [<repo>] [<tree>] [<policy>]
+  local dir=$1 gate=$2 head=$3 repo=${4:-} tree=${5:-} policy=${6:-}
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n --arg g "$gate" --arg h "$head" --arg r "$repo" --arg t "$tree" --arg p "$policy" \
+    '{gate:$g,head:$h}
+     + (if $r == "" then {} else {repo:$r} end)
+     + (if $t == "" then {} else {tree:$t} end)
+     + (if $p == "" then {} else {policy_generation:$p} end)' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+}
+
+prepare_subject_case() {  # <name> -> case dir
+  local dir
+  dir=$(new_case "$1")
+  # The clone is created by `git clone` from a local path, so its origin names a
+  # directory rather than a repository. Point it at the governed repository the
+  # cases declare, so the clone can actually answer whether it knows that
+  # subject; the remote-tracking refs the heads resolve against already exist.
+  git -C "$dir/home/projects/demo" remote set-url origin https://github.com/o/demo.git
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  printf '%s\n' "$dir"
+}
+
+store_size() {  # <case-dir>
+  find "$1/home/data/outbound-artifacts" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l
+}
+
+test_a_request_refuses_before_it_can_name_a_transport_venue_as_its_subject() {
+  local dir shape out rc records posts head rid
+  # WATCHED RED ON THE HISTORICAL SHAPE ITSELF, plus every neighbouring way a
+  # subject can fail to identify one real thing. Each asserts the store and the
+  # forge are exactly as they were, because the ruling requires the refusal to
+  # land before any durable effect rather than after one.
+  for shape in venue-as-subject unknown-repository contradicting-remotes malformed-repository \
+               contradicting-tree; do
+    dir=$(prepare_subject_case "subject-$shape")
+    head=$HEAD_A
+    case $shape in
+      # THE EXACT DEFECT: the control repository named as the subject.
+      venue-as-subject)      declare_subject "$dir" AWAITING_BROWSER_SOL "$head" o/control ;;
+      unknown-repository)    declare_subject "$dir" AWAITING_BROWSER_SOL "$head" o/nothing-here ;;
+      # NOTHING DECLARED AND THE CLONE NAMES TWO REPOSITORIES. This is the live
+      # shape in the FirstMate home itself, which carries both a fork and the
+      # upstream it was forked from. The venue rule prefers upstream, so a
+      # producer that derived silently would have emitted a governed request
+      # against the maintainer's repository - a repository nobody chose.
+      contradicting-remotes)
+        git -C "$dir/home/projects/demo" remote add upstream https://github.com/o/other.git
+        declare_subject "$dir" AWAITING_BROWSER_SOL "$head" ;;
+      malformed-repository)  declare_subject "$dir" AWAITING_BROWSER_SOL "$head" 'not-a-slug' ;;
+      contradicting-tree)    declare_subject "$dir" AWAITING_BROWSER_SOL "$head" o/demo "$HEAD_B" ;;
+    esac
+    records=$(store_size "$dir"); posts=$(wc -l < "$dir/forge/post_log")
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -ne 0 ] \
+      || fail "subject/$shape: a request without a validated governed subject was emitted: $out"
+    [ "$(store_size "$dir")" -eq "$records" ] \
+      || fail "subject/$shape: a durable record was created by a refused request"
+    [ "$(wc -l < "$dir/forge/post_log")" -eq "$posts" ] \
+      || fail "subject/$shape: a refused request still reached the forge"
+    case $shape in
+      venue-as-subject)
+        printf '%s' "$out" | grep -q 'subject-repo-is-transport-venue' \
+          || fail "subject/$shape: the historical defect was not refused by name: $out" ;;
+      unknown-repository)
+        printf '%s' "$out" | grep -q 'subject-repo-unknown-to-clone' \
+          || fail "subject/$shape: an unresolvable repository was not named: $out" ;;
+      contradicting-remotes)
+        printf '%s' "$out" | grep -q 'subject-repo-ambiguous' \
+          || fail "subject/$shape: a clone naming two repositories was not refused by name: $out" ;;
+      malformed-repository)
+        printf '%s' "$out" | grep -q 'subject-repo-malformed' \
+          || fail "subject/$shape: a subject that is not a repository name was not named: $out" ;;
+      contradicting-tree)
+        printf '%s' "$out" | grep -q 'subject-tree-not-of-head' \
+          || fail "subject/$shape: a tree that is not the head's was not named: $out" ;;
+    esac
+  done
+
+  # PAIRED GREEN FOR THE AMBIGUITY RULE. The same undeclared case, with the
+  # clone naming exactly one repository, is an OBSERVATION rather than a guess,
+  # so it emits and records that repository as the subject. Without this half
+  # the rule above would be satisfied by refusing every derived subject.
+  dir=$(prepare_subject_case subject-derived)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A"
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "subject derived: one unambiguous remote was refused, exit $rc: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 1 ] \
+    || fail "subject derived: expected exactly one logical request"
+  rid=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ "$(jq -r '.identity.repo' "$dir/home/data/outbound-artifacts/$rid.json")" = o/demo ] \
+    || fail "subject derived: the clone's own repository was not recorded as the subject"
+
+  # PAIRED GREEN: the same fixture with a validated governed subject and a
+  # separate transport venue emits exactly one request, and the identity it
+  # records is the SUBJECT repository while the venue stays transport metadata.
+  dir=$(prepare_subject_case subject-valid)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo \
+    "$(git -C "$dir/home/projects/demo" rev-parse "$HEAD_A^{tree}")" pol-2026-08-23-g1
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "subject valid: a validated governed subject was refused, exit $rc: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 1 ] \
+    || fail "subject valid: expected exactly one logical request"
+  rid=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ "$(jq -r '.identity.repo' "$dir/home/data/outbound-artifacts/$rid.json")" = o/demo ] \
+    || fail "subject valid: the identity did not record the governed subject repository"
+  [ "$(jq -r '.venue' "$dir/home/data/outbound-artifacts/$rid.json")" = 'o/control#2' ] \
+    || fail "subject valid: the transport venue was not kept as venue metadata"
+  [ "$(jq -r '.identity.policy' "$dir/home/data/outbound-artifacts/$rid.json")" = pol-2026-08-23-g1 ] \
+    || fail "subject valid: the policy generation is not part of the recorded identity"
+  pass "subject: a venue, unknown, ambiguous, malformed or self-contradicting subject refuses before any durable effect, and a validated one emits once"
+}
+
+test_a_moved_policy_generation_is_a_different_question() {
+  local dir first second
+  # STALE POLICY OR TREE CANNOT ANSWER A SUCCESSOR. Both are part of the
+  # identity, so a request under a superseded policy generation is a different
+  # request - which is what stops a finished one being handed back.
+  dir=$(prepare_subject_case subject-policy)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "" pol-g1
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "policy: first emit failed"
+  first=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "" pol-g2
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "policy: second emit failed"
+  second=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  [ -n "$first" ] && [ "$first" != "$second" ] \
+    || fail "policy: a moved policy generation reused the previous identity ($first)"
+  # And the predecessor is retired rather than left applicable beside it.
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$first.json")" = superseded ] \
+    || fail "policy: the previous policy generation's request stayed live"
+  pass "policy: a moved policy generation asks its own question and retires its predecessor"
+}
+
+test_an_undecidable_subject_is_could_not_observe_rather_than_a_defect() {
+  local dir out rc
+  # THE THREE-VALUE RULE, ON THE SUBJECT. A subject that is positively wrong is
+  # a defect. A subject that is merely UNDECIDED is not: with two repositories
+  # named and nothing declaring which one the review governs, the sweep cannot
+  # compute the identity an artifact would carry, so it never looked for one.
+  # Calling that a defect would assert the invariant is violated on the strength
+  # of a read that did not happen - the exact conversion this module exists to
+  # remove.
+  dir=$(prepare_subject_case subject-undecidable)
+  git -C "$dir/home/projects/demo" remote add upstream https://github.com/o/other.git
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "undecidable subject: expected could-not-observe, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_SUBJECT_UNRESOLVED' \
+    || fail "undecidable subject: the unresolved subject was not named: $out"
+  printf '%s' "$out" | sed -n '/^DEFECT/,/^$/p' | grep -q 'waiting-item' \
+    && fail "undecidable subject: an unread question was reported as a violation: $out"
+
+  # PAIRED HALF: remove the ambiguity and the same fixture reaches a verdict.
+  # Without this the rule above is satisfied by never deciding anything.
+  git -C "$dir/home/projects/demo" remote remove upstream
+  out=$(run_ob "$dir" check 2>&1)
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_SUBJECT_UNRESOLVED' \
+    && fail "undecidable subject: one unambiguous remote still refused to decide: $out"
+  pass "subject: an undecidable subject is could-not-observe, and one unambiguous remote decides"
+}
+test_an_undecidable_subject_is_could_not_observe_rather_than_a_defect
+test_a_malformed_request_is_retired_through_the_owner_and_never_resurrected() {
+  local dir rid out rc before records posts
+  # THE OWNER RETIRES IT; NOTHING HAND-EDITS IT. The ruling forbids editing a
+  # malformed request into validity and equally forbids leaving it sustaining a
+  # wait, so the owner marks it terminal and records under which ruling.
+  dir=$(prepare_subject_case subject-quarantine)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "quarantine: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  [ -n "$rid" ] || fail "quarantine: no request was recorded"
+  before=$(jq -r '.identity.head + " " + (.comment_id // "-")' "$dir/home/data/outbound-artifacts/$rid.json")
+
+  out=$(run_ob "$dir" quarantine --request "$rid" --ruling comment/5387155383 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "quarantine: the owner could not retire the request, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = quarantined \
+    ] || fail "quarantine: the record was not retired"
+  # EVIDENCE PRESERVED. Retiring is not erasing: identity and artifact stay.
+  [ "$(jq -r '.identity.head + " " + (.comment_id // "-")' "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "quarantine: retiring the request altered its evidence"
+  printf '%s' "$(jq -r '.disposition' "$dir/home/data/outbound-artifacts/$rid.json")" \
+    | grep -q '5387155383' \
+    || fail "quarantine: the ruling that retired the request was not recorded"
+
+  # IT CANNOT SATISFY THE WAIT ANY MORE. The item goes back to having no
+  # applicable artifact, which is the honest red state - not a wait quietly
+  # resting on a request that was ruled non-actionable.
+  out=$(run_ob "$dir" check 2>&1)
+  printf '%s' "$out" | sed -n '/^SATISFIED/,$p' | grep -q 'waiting-item' \
+    && fail "quarantine: a retired request still satisfied the item: $out"
+
+  # RESTART CANNOT REBUILD IT. Replaying the emit converges on the same refusal
+  # rather than reconstructing a wait, and posts nothing.
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/control
+  records=$(store_size "$dir"); posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "quarantine restart: the malformed shape emitted again: $out"
+  [ "$(store_size "$dir")" -eq "$records" ] \
+    || fail "quarantine restart: a replay created a durable record"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq "$posts" ] \
+    || fail "quarantine restart: a replay reached the forge"
+
+  # IDEMPOTENT, and never a way to rewrite a completion.
+  out=$(run_ob "$dir" quarantine --request "$rid" --ruling comment/5387155383 2>&1) \
+    || fail "quarantine: a repeat retirement errored: $out"
+  printf '%s' "$out" | grep -q 'already quarantined' \
+    || fail "quarantine: a repeat retirement did not report the existing one: $out"
+  pass "quarantine: the owner retires a malformed request, preserves its evidence, and no restart rebuilds its wait"
+}
+
+test_a_finished_request_is_annotated_rather_than_relabelled() {
+  local dir rid out rc
+  # TWO OF THE THREE RULED REQUESTS WERE ALREADY SUPERSEDED. They apply to
+  # nothing already, so retiring them again would only overwrite the successor
+  # linkage that records which request replaced them. The ruling is recorded and
+  # the state is left alone.
+  dir=$(prepare_subject_case subject-annotate)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "annotate: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  # Move the head so the emit supersedes it, exactly as the live pair were.
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_B" o/demo
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "annotate: successor emit failed"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = superseded \
+    ] || fail "annotate: the fixture did not supersede the predecessor"
+
+  out=$(run_ob "$dir" quarantine --request "$rid" --ruling comment/5385612078 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "annotate: recording a ruling on a finished request failed: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = superseded ] \
+    || fail "annotate: a finished request was relabelled instead of annotated"
+  [ "$(jq -r '.superseded_by' "$dir/home/data/outbound-artifacts/$rid.json")" != null ] \
+    || fail "annotate: the successor linkage was destroyed"
+  printf '%s' "$(jq -r '.disposition' "$dir/home/data/outbound-artifacts/$rid.json")" \
+    | grep -q '5385612078' \
+    || fail "annotate: the ruling was not recorded"
+  pass "annotate: a already-finished request records its ruling without losing its successor linkage"
+}
+
 # --- a moved gate is a new question ------------------------------------------
 #
 # THE SHAPE THIS REPAIRS, from the live store. fm-ob-25c701e04893 asked
@@ -3424,6 +3683,10 @@ test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
 test_every_declared_token_has_an_emit_site
 
+test_a_request_refuses_before_it_can_name_a_transport_venue_as_its_subject
+test_a_moved_policy_generation_is_a_different_question
+test_a_malformed_request_is_retired_through_the_owner_and_never_resurrected
+test_a_finished_request_is_annotated_rather_than_relabelled
 test_a_typed_gate_declaration_outranks_stale_hold_prose
 test_a_moved_gate_asks_its_own_question
 test_a_live_predecessor_is_retired_before_its_successor
