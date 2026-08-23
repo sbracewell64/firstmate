@@ -237,6 +237,198 @@ fm_outbound_sender_valid() {  # <body> <expected-role>
   [ "$value" = "$expected" ]
 }
 
+# --- inbound ruling wire form ------------------------------------------------
+#
+# TWO WIRE FORMS REACH THIS FLEET, and only one of them was readable.
+#
+# The legacy form is the one this module wrote first: an `FM-SOL-RULING <id>`
+# marker plus the request's own binding lines echoed back verbatim. The governed
+# Browser Sol form declares itself instead - `protocol: fm-sol-control/v1`,
+# `kind: ruling` - and names what it is answering in its opening fields.
+#
+# A real ruling was lost to that gap. Comment 5383943043 carried a HOLD for
+# fm-ob-25c701e04893 in the typed form; the reader looked for a marker that was
+# not there and returned FM_OUTBOUND_RULING_IDENTITY_MISMATCH - a claim that the
+# ruling was about other work, when the truth was that this end could not read
+# the form it came in.
+#
+# THEN READING IT BODY-WIDE BROKE THE OTHER DIRECTION, and that is the failure
+# this parser is shaped around. A control issue is a CONVERSATION: rulings quote
+# earlier rulings, requests carry fenced examples of the wire format, and
+# operators paste protocol snippets while discussing them. Scanning a whole body
+# for `protocol:` or `in_reply_to:` therefore finds fields that were never the
+# body's own - a full poll reported dozens of ambiguous candidates from
+# legitimate rulings quoting their predecessors, and read two compatibility
+# REQUESTS as rulings because their fenced examples contained the legacy marker.
+#
+# So a ruling's identity is read from its ENVELOPE and nowhere else.
+#
+#   The envelope is the leading run of the body: unindented `key: value` lines
+#   and blank lines, starting at the first non-blank line, ending at the first
+#   line that is neither - a bare `key:` opening a block (`exact_subject:`), a
+#   content section (`observed:`, `ruling:`, `stale_state_protection:`), an
+#   indented line, a list item, or prose.
+#
+#   Fenced regions are removed before any of that, because a fenced block is by
+#   definition an EXAMPLE of the protocol rather than an instance of it.
+#
+# Everything after the envelope is discussion. It is never a field, never a
+# form declaration, and never an ambiguity - which is what lets a ruling quote
+# its predecessor without becoming unreadable.
+#
+# ACCEPTING THE FORM IS NOT ACCEPTING THE VERDICT. Everything here answers "which
+# request does this body speak about, and does its envelope say so once". What
+# the ruling DECIDED stays a string this module records verbatim; whether that
+# word authorizes anything is bin/fm-landing-authorization-lib.sh's closed list,
+# where a word outside it - HOLD included - is unrecognized and stops the act.
+
+# The typed form's kind, alongside the protocol constant it shares with the
+# request wire form.
+FM_OUTBOUND_RULING_KIND='ruling'
+
+# The envelope of a body: the canonical top-level region, fences removed.
+#
+# POSITION IS THE RULE, not search. A line qualifies only where an envelope can
+# still be running, so the first line that is not an unindented `key: value`,
+# not a canonical marker line, and not blank ends it for good.
+fm_outbound_ruling_envelope() {  # <body> -> the envelope's lines
+  # The id pattern is rebuilt here as an ERE. FM_OUTBOUND_REQUEST_ID_PATTERN is a
+  # BASIC regex - it spells its repeat `\{12\}` - and awk reads EXTENDED, where
+  # that is a literal brace and matches nothing. Passing it through unchanged
+  # silently stopped every legacy marker from being an envelope line.
+  printf '%s\n' "$1" | awk -v marker="$FM_OUTBOUND_RULING_MARKER" \
+    -v idpat="${FM_OUTBOUND_REQUEST_ID_PREFIX}[0-9a-f]{${FM_OUTBOUND_REQUEST_ID_HEX_WIDTH}}" '
+    BEGIN { fence = 0; ended = 0; seen = 0 }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      # A fenced region is an EXAMPLE of the protocol, never an instance of it.
+      if (line ~ /^[[:space:]]*(```|~~~)/) { fence = 1 - fence; next }
+      if (fence) next
+      if (ended) next
+      if (line ~ /^[[:space:]]*$/) { next }          # blanks never end an envelope
+      # The canonical legacy marker is an envelope line, so a body carrying both
+      # forms is visible as one envelope holding two declarations.
+      if (line ~ ("^" marker " " idpat "$")) { print line; seen = 1; next }
+      # An unindented key with a NON-EMPTY value. A bare `key:` opens a block and
+      # is where the envelope stops.
+      if (line ~ /^[A-Za-z_][A-Za-z0-9_.-]*:[[:space:]]+[^[:space:]]/) { print line; seen = 1; next }
+      ended = 1
+    }' 2>/dev/null || true
+}
+
+# Read ONE field from an envelope.
+#
+# Prints the trimmed value and returns 0 only when exactly one envelope line IS
+# that field. Returns 1 when absent and 2 when duplicated, because those are
+# different repairs: one envelope forgot to say, the other said twice and cannot
+# be resolved by taking either.
+#
+# The key is restricted to lowercase and underscore so it can never carry a
+# regex metacharacter into the patterns below. Every caller passes a literal
+# from this module; the guard is here so that stays true.
+fm_outbound_envelope_field() {  # <envelope> <key> -> value; 0 unique · 1 absent · 2 duplicated
+  local envelope=$1 key=$2 count value
+  case $key in
+    ''|*[!a-z_]*) return 2 ;;
+  esac
+  count=$(printf '%s\n' "$envelope" | grep -c "^$key:" || true)
+  case $count in ''|*[!0-9]*) count=0 ;; esac
+  [ "$count" -ne 0 ] || return 1
+  [ "$count" -eq 1 ] || return 2
+  value=$(printf '%s\n' "$envelope" | sed -n "s/^$key://p" | tr -d '\r')
+  value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  printf '%s\n' "$value"
+}
+
+# Which wire form does this envelope declare, if either?
+#
+# Prints legacy | typed | both | none.
+#
+# The typed form must BEGIN with its preamble: the envelope's first two lines
+# are exactly the protocol and the ruling kind. The legacy form must begin with
+# its canonical marker line. Neither is discovered by search, so a quoted
+# example cannot promote a comment into a ruling.
+#
+# `both` is a real answer rather than a preference order: an envelope declaring
+# itself typed while also carrying a canonical legacy marker has two
+# declarations and no stated precedence, and choosing one would be choosing for
+# the sender.
+fm_outbound_ruling_form() {  # <body> -> legacy|typed|both|none
+  local body=$1 envelope first second legacy typed_present=0
+  envelope=$(fm_outbound_ruling_envelope "$body")
+  [ -n "$envelope" ] || { printf 'none\n'; return 0; }
+  first=$(printf '%s\n' "$envelope" | sed -n '1p')
+  second=$(printf '%s\n' "$envelope" | sed -n '2p')
+  legacy=$(printf '%s\n' "$envelope" | grep -c "^$FM_OUTBOUND_RULING_MARKER " || true)
+  case $legacy in ''|*[!0-9]*) legacy=0 ;; esac
+  if printf '%s\n' "$envelope" | grep -qxF "protocol: $FM_OUTBOUND_PROTOCOL" \
+     && printf '%s\n' "$envelope" | grep -qxF "kind: $FM_OUTBOUND_RULING_KIND"; then
+    typed_present=1
+  fi
+
+  # TWO DECLARATIONS IN ONE ENVELOPE, in either combination. The sender stated no
+  # precedence between them, so picking one would be picking for the sender.
+  if [ "$legacy" -gt 1 ]; then printf 'both\n'; return 0; fi
+  if [ "$typed_present" -eq 1 ] && [ "$legacy" -gt 0 ]; then printf 'both\n'; return 0; fi
+
+  # A FORM MUST BEGIN ITS ENVELOPE. A preamble or marker further down is a field
+  # the sender happened to include, not a declaration of what this body is, and
+  # promoting it is how quoted examples became rulings.
+  if [ "$first" = "protocol: $FM_OUTBOUND_PROTOCOL" ] \
+     && [ "$second" = "kind: $FM_OUTBOUND_RULING_KIND" ]; then
+    printf 'typed\n'; return 0
+  fi
+  case $first in
+    "$FM_OUTBOUND_RULING_MARKER "*) printf 'legacy\n'; return 0 ;;
+  esac
+  printf 'none\n'
+}
+
+# The request id a TYPED envelope says it answers.
+#
+# FOUR ANSWERS, and the fourth is the one that matters. `in_reply_to` may name a
+# request this mechanism does not correlate at all: measured on the live control
+# issue, 37 of 43 typed rulings answer a foreign identity - a bare comment id, or
+# an `FM-SOL-...` name - because this issue carries far more conversation than
+# this fleet's own correlation records.
+#
+# That is NOT AMBIGUITY. Reporting it as such is what turned one poll into dozens
+# of FM_OUTBOUND_AMBIGUOUS_CANDIDATES and drove the whole sweep to a failure
+# status, over rulings that were never addressed to a request in this store. A
+# ruling for someone else is simply not ours, and the honest handling is the same
+# as for a comment carrying no request at all: pass over it in silence.
+#
+# Ambiguity is kept for the one case that genuinely cannot be resolved - the same
+# field stated twice in one envelope - because there the body IS addressing us
+# and we still cannot tell what it said.
+#
+#   0 a well-formed request id in this store's scheme
+#   1 absent
+#   2 stated more than once in the envelope: ambiguous
+#   3 stated once, but naming an identity this mechanism does not correlate
+fm_outbound_typed_ruling_request() {  # <body> -> request id
+  local body=$1 value rc
+  value=$(fm_outbound_envelope_field "$(fm_outbound_ruling_envelope "$body")" in_reply_to); rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$value" | grep -q "^$FM_OUTBOUND_REQUEST_ID_PATTERN\$" || return 3
+  printf '%s\n' "$value"
+}
+
+# The request id a LEGACY envelope declares, from its canonical first line.
+fm_outbound_legacy_ruling_request() {  # <body> -> request id; 0 unique · 1 absent · 2 unusable
+  local body=$1 envelope lines value
+  envelope=$(fm_outbound_ruling_envelope "$body")
+  lines=$(printf '%s\n' "$envelope" | grep -c "^$FM_OUTBOUND_RULING_MARKER " || true)
+  case $lines in ''|*[!0-9]*) lines=0 ;; esac
+  [ "$lines" -ne 0 ] || return 1
+  [ "$lines" -eq 1 ] || return 2
+  value=$(printf '%s\n' "$envelope" \
+    | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \($FM_OUTBOUND_REQUEST_ID_PATTERN\)\$/\1/p")
+  [ -n "$value" ] || return 2
+  printf '%s\n' "$value"
+}
+
 # --- digest ------------------------------------------------------------------
 
 FM_OUTBOUND_REQUEST_ID_PREFIX='fm-ob-'
@@ -577,7 +769,29 @@ fm_outbound_classify_record() {  # <record-json> [<declared-gate>]
     return 0
   fi
   if [ "$hold_kind" = "external" ] && fm_outbound_prose_matches "$hay"; then
-    gate=$(fm_outbound_gate_from_prose "$hay")
+    # A TYPED DECLARATION WINS OVER PROSE WHEREVER IT EXISTS, not only where the
+    # row's hold-kind has already been migrated to `outbound`.
+    #
+    # Prose is a MIGRATION surface and it goes stale: a hold sentence is written
+    # once and rarely rewritten, while the gate an item is actually at moves as
+    # the work moves. Reading the stale sentence in preference to a current
+    # declaration reproduced a PREDECESSOR's identity - measured on
+    # candidate-publication-effect-guard, whose declaration had moved to
+    # EXACT_HEAD_BROWSER_REVIEW_REQUIRED while its hold sentence still said
+    # "Awaiting Browser Sol". The recomputed identity was the closed
+    # AWAITING_BROWSER_SOL request, so a fresh gate silently adopted a finished
+    # one instead of asking its own question.
+    #
+    # The TIER still says prose, because prose is what recognised the row as
+    # waiting at all. Only the gate comes from the declaration, and only when
+    # that declaration is valid; an absent or invalid one leaves the prose gate
+    # exactly as it was.
+    gate=
+    if fm_outbound_gate_valid "$declared_gate"; then
+      gate=$declared_gate
+    else
+      gate=$(fm_outbound_gate_from_prose "$hay")
+    fi
     printf 'waiting\t%s\tprose\n' "$gate"
     return 0
   fi

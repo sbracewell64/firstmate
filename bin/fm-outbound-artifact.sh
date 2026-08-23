@@ -480,6 +480,117 @@ observe_head() {  # <item> <pr-url> <project> -> sha<TAB>source or empty
 # Return 0 found (prints the forge identity), 1 provably absent, 2 could not
 # observe, 3 the channel's venue is not configured at all.
 
+# The envelope spellings this fleet has actually received for each binding.
+#
+# A MIGRATION SURFACE, not an extension point. Every name here was observed on
+# the live control issue; adding one to make a body join is how the join stops
+# meaning anything. Where an envelope carries more than one spelling of the same
+# binding they must agree, so a longer list never loosens the join - it only
+# lets a genuine ruling be read.
+ruling_field_aliases() {  # <binding> -> the envelope keys that state it
+  case $1 in
+    request) printf 'in_reply_to\n' ;;
+    item)    printf 'expected_item\nitem\n' ;;
+    head)    printf 'expected_head_sha\nhead\n' ;;
+    gate)    printf 'expected_gate\n' ;;
+    project) printf 'expected_project\n' ;;
+    repo)    printf 'expected_repo\n' ;;
+    pr)      printf 'expected_pull_request\n' ;;
+  esac
+}
+
+# THE RULING-IDENTITY JOIN, for both wire forms.
+#
+# One join with two readers, not two joins. The legacy branch delegates to the
+# echoed-binding matcher below, unchanged; the typed branch reads the governed
+# fields. Both answer the same question about the same record, and neither is a
+# second store, parser or transport - the typed reader is the module's own
+# field primitive from bin/fm-outbound-artifact-lib.sh.
+#
+# EVERY AVAILABLE BINDING IS JOINED, and "available" is decided by the body.
+# request, item and exact head are required, because without all three the body
+# has not said which work at which head it rules. gate, project, repo and pull
+# request are checked WHEN THE BODY CARRIES THEM: a body that omits one has not
+# contradicted anything, and a body that states one wrongly has. Silence and
+# disagreement are different answers and are kept that way.
+#
+# Nothing here is resolved by position or precedence. A required field that is
+# absent, duplicated, or malformed refuses, and so does a body whose form is
+# itself ambiguous - and every one of those refusals happens before any record
+# is written, so a refused ruling mutates nothing.
+#
+# Returns 0 joined · 1 the body names other work · 2 ambiguous or unreadable.
+# Set by ruling_identity_join to name the binding that stopped it, so a refusal
+# points at the repair. "no exact head" and "two items" are different fixes, and
+# a single ambiguity sentence sends an operator looking for the wrong one.
+RULING_JOIN_DETAIL=
+ruling_identity_join() {  # <body> <record-json> [<form>]
+  local body=$1 rec=$2 form=${3:-} envelope value rc key want alias found
+  RULING_JOIN_DETAIL=
+  [ -n "$form" ] || form=$(fm_outbound_ruling_form "$body")
+  case $form in
+    legacy)
+      artifact_body_matches_identity "$body" "$rec" "$FM_OUTBOUND_RULING_MARKER" || return 1
+      return 0 ;;
+    typed) ;;
+    both) RULING_JOIN_DETAIL="its envelope declares more than one ruling form"; return 2 ;;
+    *) RULING_JOIN_DETAIL="it declares no ruling form"; return 1 ;;
+  esac
+  envelope=$(fm_outbound_ruling_envelope "$body")
+
+  # Required bindings. Absent or duplicated is could-not-observe, never a
+  # mismatch: we did not learn the envelope is about other work, we learned it
+  # did not say once which work it is about.
+  #
+  # TWO SPELLINGS PER BINDING, because the governed sender uses both. Comment
+  # 5383943043 states `expected_item`/`expected_head_sha`; comments 5384188549
+  # and 5384189401 state a bare `item`. Reading only one vocabulary would refuse
+  # genuine rulings for a naming choice. Where an envelope states BOTH, they must
+  # agree - two spellings disagreeing is a contradiction inside one envelope and
+  # is refused rather than resolved by preferring either.
+  for key in request item head; do
+    case $key in
+      request) want=$(printf '%s' "$rec" | jq -r '.request_id') ;;
+      item)    want=$(printf '%s' "$rec" | jq -r '.identity.item') ;;
+      head)    want=$(printf '%s' "$rec" | jq -r '.identity.head') ;;
+    esac
+    found=0
+    for alias in $(ruling_field_aliases "$key"); do
+      value=$(fm_outbound_envelope_field "$envelope" "$alias"); rc=$?
+      case $rc in
+        1) continue ;;
+        2) RULING_JOIN_DETAIL="its envelope states $alias more than once"; return 2 ;;
+      esac
+      [ -n "$value" ] || { RULING_JOIN_DETAIL="its envelope states an empty $alias"; return 2; }
+      [ "$value" = "$want" ] || { RULING_JOIN_DETAIL="its $alias names $value, not $want"; return 1; }
+      found=1
+    done
+    if [ "$found" -ne 1 ]; then
+      RULING_JOIN_DETAIL="its envelope states no $key"
+      return 2
+    fi
+  done
+
+  # Optional bindings, joined only where the envelope supplies them.
+  for key in gate project repo pr; do
+    case $key in
+      gate)    want=$(printf '%s' "$rec" | jq -r '.identity.gate') ;;
+      project) want=$(printf '%s' "$rec" | jq -r '.identity.project') ;;
+      repo)    want=$(printf '%s' "$rec" | jq -r '.identity.repo') ;;
+      pr)      want=$(printf '%s' "$rec" | jq -r '.identity.pr // "-"') ;;
+    esac
+    for alias in $(ruling_field_aliases "$key"); do
+      value=$(fm_outbound_envelope_field "$envelope" "$alias"); rc=$?
+      case $rc in
+        1) continue ;;          # not supplied: nothing to contradict
+        2) RULING_JOIN_DETAIL="its envelope states $alias more than once"; return 2 ;;
+      esac
+      [ "$value" = "$want" ] || { RULING_JOIN_DETAIL="its $alias names $value, not $want"; return 1; }
+    done
+  done
+  return 0
+}
+
 artifact_body_matches_identity() {  # <body> <record-json> <marker>
   local body=$1 rec=$2 marker=$3
   printf '%s\n' "$body" | grep -Fqx "$marker $(printf '%s' "$rec" | jq -r '.request_id')" \
@@ -1248,8 +1359,8 @@ sweep_exit() {
 # non-terminal records; reading every file is what it costs to reach that
 # decision. Narrowing this would mean indexing the store, which is a change to
 # the record format rather than to this loop.
-supersede_other_heads() {  # <item> <current-request-id> <current-head>
-  local item=$1 rid=$2 head=$3 f other rec read_rc raw subject
+supersede_other_heads() {  # <item> <current-request-id> <current-head> <current-gate>
+  local item=$1 rid=$2 head=$3 gate=$4 f other rec read_rc raw subject reason
   [ -d "$RECORD_DIR" ] || return 0
   for f in "$RECORD_DIR"/*.json; do
     [ -f "$f" ] || continue
@@ -1281,13 +1392,29 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head>
         *) return 2 ;;
       esac
     fi
-    printf '%s' "$rec" | jq -e --arg i "$item" --arg h "$head" \
-      '.identity.item == $i and .identity.head != $h and .state != "closed" and .state != "superseded"' \
+    # A PREDECESSOR IS ANY LIVE REQUEST FOR THIS ITEM AT A DIFFERENT IDENTITY,
+    # and the gate is part of that identity just as the head is. An item whose
+    # GATE moves - AWAITING_BROWSER_SOL self-handled, then
+    # EXACT_HEAD_BROWSER_REVIEW_REQUIRED at the same head - asks a genuinely
+    # different question, so the old request must not stay applicable beside the
+    # new one. Superseding on a moved head alone left exactly that: two live
+    # requests for one item, differing only in what they asked.
+    #
+    # TERMINAL RECORDS ARE PRESERVED, not rewritten. A closed or superseded
+    # predecessor is finished history and the jq below excludes it, so this
+    # linkage only ever retires something still live.
+    printf '%s' "$rec" | jq -e --arg i "$item" --arg h "$head" --arg g "$gate" \
+      '.identity.item == $i
+       and (.identity.head != $h or .identity.gate != $g)
+       and .state != "closed" and .state != "superseded"' \
       >/dev/null 2>&1 || continue
+    reason='bound to a head that moved'
+    printf '%s' "$rec" | jq -e --arg h "$head" '.identity.head == $h' >/dev/null 2>&1 \
+      && reason='bound to a gate that moved'
     rec=$(printf '%s' "$rec" | jq --arg s "$rid" --arg n "$(now_iso)" \
       '.state = "superseded" | .superseded_by = $s | .updated = $n')
     record_write "$other" "$rec" || return 2
-    printf 'superseded: %s (bound to a head that moved)\n' "$other"
+    printf 'superseded: %s (%s)\n' "$other" "$reason"
   done
 }
 
@@ -1309,7 +1436,7 @@ require_unique_backlog_record() {  # <item>
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
   local rec gate channel project pr_url pr_ref head_observation head head_source venue missing rid record
-  local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc
+  local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc existing_state
 
   read_snapshot || die "fleet backlog could not be read" 4
   require_unique_backlog_record "$item"
@@ -1372,7 +1499,7 @@ cmd_emit() {
   fi
   EMIT_LOCK="$RECORD_DIR/.$rid.lock"
 
-  supersede_other_heads "$item" "$rid" "$head"; supersede_rc=$?
+  supersede_other_heads "$item" "$rid" "$head" "$gate"; supersede_rc=$?
   if [ "$supersede_rc" -ne 0 ]; then
     case $supersede_rc in
       5) die "$FM_OUTBOUND_TOKEN_IDENTITY: a keyed correlation record belongs to another request" 3 ;;
@@ -1389,6 +1516,26 @@ cmd_emit() {
   if [ "$dedupe_rc" -eq 0 ]; then
     existing=$(record_read "$rid"); record_rc=$?
     if [ "$record_rc" -eq 0 ]; then
+      # A FINISHED REQUEST CANNOT ANSWER A FRESH ONE. `closed` and `superseded`
+      # are terminal, and fm_outbound_applicability has always called them
+      # INAPPLICABLE - but this adoption path never asked, so a completed
+      # correlation was reported as "already requested" and the item went on
+      # waiting on an artifact whose question had already been answered and
+      # retired. Measured on fm-ob-25c701e04893, closed after its HOLD was
+      # self-handled, adopted by a later request at the same identity.
+      #
+      # Refusing here rather than reopening: the identity is deterministic, so
+      # the same gate, item and head always name this same finished record. What
+      # has to move is the item's own state, and saying so is the repair.
+      existing_state=$(printf '%s' "$existing" | jq -r '.state')
+      case $existing_state in
+        closed|superseded)
+          printf '%s: %s already names %s, which is %s and cannot answer a new request\n' \
+            "$FM_OUTBOUND_TOKEN_MISMATCH" "$item" "$rid" "$existing_state" >&2
+          printf 'Its gate, head and item are unchanged, so a fresh request would carry the same identity.\n' >&2
+          printf 'Nothing was posted and the finished record is untouched.\n' >&2
+          exit 3 ;;
+      esac
       record=$(printf '%s' "$existing" | jq --arg c "$found" --arg n "$(now_iso)" \
         '.comment_id = $c | .state = (if .state == "emitting" then "emitted" else .state end) | .updated = $n')
     else
@@ -1551,6 +1698,7 @@ require_record_applicable_now() {  # <request-id> <record-json>
 
 cmd_ruling() {  # <request-id> <comment-id> <issue>
   local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict verdict_count
+  local form join_rc verdict_key other_key other_count
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -1588,9 +1736,23 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
       exit 3
     }
   body=$(printf '%s' "$artifact" | jq -r '.body')
-  if ! artifact_body_matches_identity "$body" "$rec" "$FM_OUTBOUND_RULING_MARKER"; then
-      printf '%s: comment %s does not carry the exact request identity\n' \
-        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
+  form=$(fm_outbound_ruling_form "$body")
+  ruling_identity_join "$body" "$rec" "$form"; join_rc=$?
+  if [ "$join_rc" -eq 2 ]; then
+    # AMBIGUOUS, not MISMATCH. The body may well be this request's ruling; what
+    # we could not do is read WHICH request it names once. Reporting that as a
+    # mismatch sends an operator looking for a misaddressed ruling instead of
+    # for the duplicated or missing field that is actually there.
+    printf '%s: comment %s cannot be joined - %s\n' \
+      "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" \
+      "${RULING_JOIN_DETAIL:-its envelope does not state the request identity once}" >&2
+    printf 'Refusing rather than choosing a field by position. Nothing was written.\n' >&2
+    exit 4
+  fi
+  if [ "$join_rc" -ne 0 ]; then
+      printf '%s: comment %s does not carry the exact request identity - %s\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" \
+        "${RULING_JOIN_DETAIL:-its envelope names other work}" >&2
       exit 3
   fi
   # THE SENDER, before the verdict. A body that does not establish who sent it
@@ -1624,15 +1786,32 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
   # order, and as an unparseable construct reporting could-not-observe rather
   # than being skipped: an ambiguous input is refused loudly and then fixed, and
   # is never resolved into a confident answer nobody chose.
-  verdict_count=$(printf '%s\n' "$body" | grep -c '^verdict: ' || true)
+  # EACH FORM STATES ITS VERDICT UNDER ITS OWN KEY - `verdict:` on the legacy
+  # form, `decision:` on the typed one - and a body carrying BOTH keys is
+  # refused rather than resolved by preferring either. Two verdict channels in
+  # one body is the same ambiguity as two verdict lines, arriving one level up.
+  if [ "$form" = typed ]; then verdict_key='decision'; other_key='verdict'
+  else verdict_key='verdict'; other_key='decision'; fi
+  other_count=$(printf '%s\n' "$body" | grep -c "^$other_key: " || true)
+  case $other_count in ''|*[!0-9]*) other_count=0 ;; esac
+  if [ "$other_count" -ne 0 ]; then
+    printf '%s: comment %s is a %s-form ruling that also carries %s "%s:" line(s)\n' \
+      "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$form" "$other_count" "$other_key" >&2
+    printf 'Refusing rather than preferring one verdict key over the other. Nothing was written.\n' >&2
+    exit 4
+  fi
+  verdict_count=$(printf '%s\n' "$body" | grep -c "^$verdict_key: " || true)
   case $verdict_count in ''|*[!0-9]*) verdict_count=0 ;; esac
   if [ "$verdict_count" -ne 1 ]; then
-    printf '%s: comment %s carries %s verdict lines; exactly one is required\n' \
-      "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$verdict_count" >&2
+    printf '%s: comment %s carries %s %s lines; exactly one is required\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$verdict_count" "$verdict_key" >&2
     printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own verdict once.\n' >&2
     exit 3
   fi
-  verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p')
+  # Recorded VERBATIM. This module never decides what a word authorizes; the
+  # closed list in bin/fm-landing-authorization-lib.sh does, and a word outside
+  # it - HOLD included - is unrecognized there and stops the act.
+  verdict=$(printf '%s\n' "$body" | sed -n "s/^$verdict_key: //p")
   rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg v "$verdict" --arg n "$(now_iso)" \
     '.ruling = {comment_id:$c, verdict:$v, observed:$n} | .state = "ruled" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
@@ -1640,7 +1819,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
 }
 
 cmd_poll() {
-  local comments row body rid marker_count comment rc failed=0 poll_record poll_state out
+  local comments row body rid comment rc failed=0 poll_record poll_state out form marker_count
   read_sol_config || return 0
   probe_budget || die "the ruling poll probe budget is exhausted" 4
   # fm-retrieval-audit: complete-source - --paginate traverses every issue-comment page before absence is concluded.
@@ -1652,21 +1831,47 @@ cmd_poll() {
       || { failed=4; continue; }
     body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') \
       || { failed=4; continue; }
-    rid=$(printf '%s\n' "$body" \
-      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \($FM_OUTBOUND_REQUEST_ID_PATTERN\)$/\1/p")
-    marker_count=$(printf '%s\n' "$rid" | grep -c . || true)
-    [ "$marker_count" -ne 0 ] || continue
-    # AMBIGUOUS, not MISMATCH. A mismatch says the one candidate found is not
-    # about this work; ambiguity says several were found and none can be chosen.
-    # Labelling this a mismatch sends the operator asking why a ruling was
-    # misaddressed when the truth is that one comment carried two markers.
-    if [ "$marker_count" -gt 1 ]; then
-      printf '%s: comment %s carries %s ruling marker lines, so which request it rules is ambiguous\n' \
-        "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$marker_count" >&2
-      printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own request once.\n' >&2
-      [ "$failed" -ne 0 ] || failed=3
-      continue
+    # DISCOVERY READS BOTH WIRE FORMS. Reading only the legacy marker is how a
+    # real typed ruling went unseen: the poll never selected the comment at all,
+    # so nothing was mismatched and nothing was reported - the join simply never
+    # happened. A form this poll cannot read is skipped, but it must not be
+    # skipped merely for being the other supported form.
+    form=$(fm_outbound_ruling_form "$body")
+    case $form in
+      both)
+        marker_count=$(fm_outbound_ruling_envelope "$body" \
+          | grep -c "^$FM_OUTBOUND_RULING_MARKER " || true)
+        case $marker_count in ''|*[!0-9]*) marker_count=0 ;; esac
+        printf '%s: comment %s declares more than one ruling form in its envelope (%s ruling marker lines)\n' \
+          "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$marker_count" >&2
+        printf 'Refusing rather than preferring one declaration over the other.\n' >&2
+        [ "$failed" -ne 0 ] || failed=3
+        continue ;;
+      none) continue ;;
+    esac
+    if [ "$form" = typed ]; then
+      rid=$(fm_outbound_typed_ruling_request "$body"); rc=$?
+    else
+      rid=$(fm_outbound_legacy_ruling_request "$body"); rc=$?
     fi
+    # NOT OURS IS NOT AMBIGUOUS. An envelope with no request, or one naming an
+    # identity this mechanism does not correlate, is passed over in silence -
+    # this control issue carries far more conversation than correlation records,
+    # and treating every other participant's ruling as a defect is what turned
+    # one poll into dozens of ambiguity reports and a failing status.
+    case $rc in
+      0) ;;
+      1|3) continue ;;
+      *)
+        # The one genuinely unresolvable case: the envelope addresses us and
+        # states its request more than once, so which one it rules cannot be
+        # chosen without choosing for the sender.
+        printf '%s: comment %s states its request more than once in its envelope\n' \
+          "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" >&2
+        printf 'Refusing rather than reading one by position.\n' >&2
+        [ "$failed" -ne 0 ] || failed=3
+        continue ;;
+    esac
     poll_record=$(record_read "$rid") || poll_record=
     if [ -n "$poll_record" ]; then
       poll_state=$(printf '%s' "$poll_record" | jq -r '.state')

@@ -1309,10 +1309,18 @@ test_poll_requires_exactly_one_ruling_marker() {
   dir=$(new_case poll-marker-count)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: emit failed"
   rid=$(emitted_request_id "$dir")
+  # TWO DECLARATIONS IN ONE ENVELOPE. Both markers sit in the canonical region,
+  # so which request this body rules cannot be chosen without choosing for the
+  # sender. A marker quoted LATER, after the envelope, is a different case and
+  # is covered below.
   write_ruling "$dir" "$rid" 570 accepted
-  printf 'FM-SOL-RULING fm-ob-deadbeefcafe\n' >> "$dir/forge/ruling_body"
+  {
+    printf 'FM-SOL-RULING fm-ob-deadbeefcafe\n'
+    cat "$dir/forge/ruling_body"
+  } > "$dir/forge/ruling_body.two"
+  mv "$dir/forge/ruling_body.two" "$dir/forge/ruling_body"
   out=$(run_ob "$dir" poll 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "poll marker count: two markers returned $rc: $out"
+  [ "$rc" -eq 3 ] || fail "poll marker count: two envelope markers returned $rc: $out"
   printf '%s' "$out" | grep -q '2 ruling marker lines' \
     || fail "poll marker count: refusal did not name the count: $out"
   # AMBIGUITY, not a mismatch. A mismatch says the one candidate found is not
@@ -1330,6 +1338,21 @@ test_poll_requires_exactly_one_ruling_marker() {
     || fail "poll marker count: exactly one marker was refused"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
   [ "$state" = "ruled" ] || fail "poll marker count: one marker left state $state"
+
+  # A MARKER QUOTED AFTER THE ENVELOPE IS NOT A SECOND DECLARATION. Rulings on
+  # this control plane quote their predecessors as a matter of course, and a
+  # body-wide count turned every one of those into an ambiguity report - which
+  # is what made a real full poll unusable.
+  dir=$(new_case poll-marker-quoted-later)
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: quoted-marker emit failed"
+  rid=$(emitted_request_id "$dir")
+  write_ruling "$dir" "$rid" 575 accepted
+  printf '\nFor reference the earlier ruling said:\n\nFM-SOL-RULING fm-ob-deadbeefcafe\n' \
+    >> "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "poll marker count: a quoted marker made a valid ruling ambiguous, exit $rc: $out"
+  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
+  [ "$state" = "ruled" ] || fail "poll marker count: a quoted marker blocked the join, state $state"
 
   dir=$(new_case poll-marker-malformed-and-valid)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: malformed companion emit failed"
@@ -2200,6 +2223,634 @@ test_every_declared_token_has_an_emit_site() {
   pass "token vocabulary: all $count declared tokens have an emit site"
 }
 
+# --- a moved gate is a new question ------------------------------------------
+#
+# THE SHAPE THIS REPAIRS, from the live store. fm-ob-25c701e04893 asked
+# AWAITING_BROWSER_SOL for candidate-publication-effect-guard at head
+# cf4c640b..., was ruled HOLD, was self-handled by the evidence bundle, and was
+# CLOSED. The item then moved to EXACT_HEAD_BROWSER_REVIEW_REQUIRED at the SAME
+# head - a different question about the same bytes - and emit answered
+# "already requested: fm-ob-25c701e04893", handing back a finished correlation
+# instead of asking the new question.
+#
+# Two faults, and both are needed to produce it:
+#   the item's typed gate declaration was ignored while its hold-kind was still
+#   `external`, so the stale hold sentence recomputed the PREDECESSOR's identity;
+#   and the dedupe path adopted a `closed` record, which
+#   fm_outbound_applicability has always called inapplicable but which this path
+#   never asked about.
+
+prepare_gate_move_case() {  # <name> <declared-gate> <predecessor-state> -> case dir
+  local dir=$1 gate=$2 state=$3 rid head
+  dir=$(new_case "$1")
+  # The row stays `external` with a hold sentence naming the OLD gate, exactly
+  # as the live backlog row did.
+  write_snapshot "$dir/snap.json" external 'Awaiting Browser Sol exact-head publication ruling'
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "gate move: predecessor emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "gate move: no predecessor was recorded"
+  jq --arg s "$state" '.state = $s' "$dir/home/data/outbound-artifacts/$rid.json" > "$dir/tmp.json"
+  mv "$dir/tmp.json" "$dir/home/data/outbound-artifacts/$rid.json"
+  # The item's declaration moves; its prose does not.
+  jq -n --arg g "$gate" --arg h "$head" '{gate:$g,head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  printf '%s %s %s\n' "$dir" "$rid" "$head"
+}
+
+test_a_moved_gate_asks_its_own_question() {
+  local dir rid head out rc posts before successor live
+  # RED FIRST, from the opposite structured state: with the declaration still at
+  # the OLD gate, the identity is genuinely unchanged and the finished record
+  # must NOT be handed back as an answer.
+  read -r dir rid head <<< "$(prepare_gate_move_case gatemove-same AWAITING_BROWSER_SOL closed)"
+  [ -n "$dir" ] || fail "gate move: fixture produced no case"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "gate move RED: a closed request answered a fresh one: $out"
+  printf '%s' "$out" | grep -q 'closed and cannot answer a new request' \
+    || fail "gate move RED: refused for the wrong reason: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 0 ] \
+    || fail "gate move RED: a request was posted against a finished correlation"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "gate move RED: the finished record was rewritten"
+
+  # GREEN: the declaration moves to a new gate at the SAME item and head. That
+  # is a different question, so it gets its own request - and the closed
+  # predecessor is left exactly as it was.
+  read -r dir rid head <<< "$(prepare_gate_move_case gatemove-new EXACT_HEAD_BROWSER_REVIEW_REQUIRED closed)"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "gate move GREEN: the new gate was refused, exit $rc: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 1 ] \
+    || fail "gate move GREEN: expected exactly one posted request"
+  successor=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ -n "$successor" ] && [ "$successor" != "$rid" ] \
+    || fail "gate move GREEN: the successor reused the predecessor's identity: $out"
+  [ "$(jq -r '.identity.gate' "$dir/home/data/outbound-artifacts/$successor.json")" \
+    = EXACT_HEAD_BROWSER_REVIEW_REQUIRED ] \
+    || fail "gate move GREEN: the successor is not bound to the declared gate"
+  [ "$(jq -r '.identity.head' "$dir/home/data/outbound-artifacts/$successor.json")" = "$head" ] \
+    || fail "gate move GREEN: the successor moved the head as well as the gate"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "gate move GREEN: the closed predecessor was rewritten"
+
+  # REPLAY: the same gate, item and head stays idempotent.
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1) \
+    || fail "gate move REPLAY: a repeat cycle errored: $out"
+  printf '%s' "$out" | grep -q 'already requested' \
+    || fail "gate move REPLAY: the repeat cycle did not report the existing request: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 0 ] \
+    || fail "gate move REPLAY: a second request was posted for one identity"
+  pass "gate move: a moved gate gets its own request, a finished one answers nothing, and a replay posts nothing"
+}
+
+test_a_live_predecessor_is_retired_before_its_successor() {
+  local dir rid head out rc successor live
+  # NEVER TWO APPLICABLE REQUESTS. When the old gate's request is still LIVE, it
+  # is superseded as part of the same emit, so the item is never left with two
+  # requests differing only in what they asked.
+  read -r dir rid head <<< "$(prepare_gate_move_case gatemove-live EXACT_HEAD_BROWSER_REVIEW_REQUIRED emitted)"
+  [ -n "$dir" ] || fail "live predecessor: fixture produced no case"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "live predecessor: the successor was refused, exit $rc: $out"
+  printf '%s' "$out" | grep -q "superseded: $rid" \
+    || fail "live predecessor: the live old-gate request was not retired: $out"
+  printf '%s' "$out" | grep -q 'gate that moved' \
+    || fail "live predecessor: the retirement did not name what moved: $out"
+  successor=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = superseded \
+    ] || fail "live predecessor: the predecessor is not superseded"
+  # LAWFUL LINKAGE, in both directions of reading: the retired record names the
+  # request that replaced it.
+  [ "$(jq -r '.superseded_by' "$dir/home/data/outbound-artifacts/$rid.json")" = "$successor" ] \
+    || fail "live predecessor: the predecessor does not name its successor"
+  live=$(grep -l '"item": "waiting-item"' "$dir/home/data/outbound-artifacts"/*.json 2>/dev/null \
+    | xargs -r jq -r 'select(.state != "closed" and .state != "superseded") | .request_id' | tr '\n' ' ')
+  [ "$(printf '%s' "$live" | wc -w)" -eq 1 ] \
+    || fail "live predecessor: the item was left with more than one live request: $live"
+  pass "live predecessor: a live old-gate request is retired and linked, leaving exactly one live request"
+}
+
+test_a_typed_gate_declaration_outranks_stale_hold_prose() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  # THE UPSTREAM HALF. A hold sentence is written once and rarely rewritten,
+  # while the gate an item is at moves as the work moves. Reading the sentence
+  # in preference to a current declaration is what recomputed a predecessor's
+  # identity in the first place.
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    row='{"structured":true,"state":"queued","hold_kind":"external","hold_reason":"Awaiting Browser Sol exact-head publication ruling","title":"t","raw":"r"}'
+    printf 'declared=%s\n' "$(fm_outbound_classify_record "$row" EXACT_HEAD_BROWSER_REVIEW_REQUIRED | cut -f2)"
+    printf 'tier=%s\n' "$(fm_outbound_classify_record "$row" EXACT_HEAD_BROWSER_REVIEW_REQUIRED | cut -f3)"
+    # With no declaration, the prose still decides exactly as before.
+    printf 'prose_only=%s\n' "$(fm_outbound_classify_record "$row" | cut -f2)"
+    # An INVALID declaration is not a licence to invent a gate.
+    printf 'invalid=%s\n' "$(fm_outbound_classify_record "$row" NOT_A_GATE | cut -f2)"
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -qx 'declared=EXACT_HEAD_BROWSER_REVIEW_REQUIRED' \
+    || fail "declaration: stale hold prose outranked the typed declaration: $out"
+  printf '%s' "$out" | grep -qx 'tier=prose' \
+    || fail "declaration: the recognition tier stopped naming what recognised the row: $out"
+  printf '%s' "$out" | grep -qx 'prose_only=AWAITING_BROWSER_SOL' \
+    || fail "declaration: prose stopped deciding when no declaration exists: $out"
+  printf '%s' "$out" | grep -qx 'invalid=AWAITING_BROWSER_SOL' \
+    || fail "declaration: an invalid declaration displaced the prose gate: $out"
+  printf '%s' "$out" | grep -qx 'done' \
+    || fail "declaration: the control did not run to completion: $out"
+  pass "declaration: a valid typed gate outranks stale hold prose, and absent or invalid leaves prose deciding"
+}
+
+# --- the governed typed ruling wire form -------------------------------------
+#
+# A REAL RULING WAS LOST TO THIS GAP. Browser Sol answered fm-ob-25c701e04893 in
+# control comment 5383943043 with `protocol: fm-sol-control/v1`, `kind: ruling`
+# and `in_reply_to`/`expected_item`/`expected_head_sha`. The reader accepted only
+# the legacy `FM-SOL-RULING` marker plus the request's echoed binding lines, so
+# `ruling` returned FM_OUTBOUND_RULING_IDENTITY_MISMATCH - a claim that the
+# comment was about other work - and `poll` never selected the comment at all.
+#
+# THE BODY ITSELF IS THE HARD PART, and these fixtures keep its exact hazards.
+# That comment quotes a DIFFERENT head (25427e9e...) in prose while explaining
+# that the prior hold does not transfer, quotes its own head three more times,
+# and carries `captain_required` TWICE. So a reader that searches the body for a
+# sha has several to choose from, and a reader that demands every key appear once
+# rejects a real ruling over a field it never needed. Both traps are asserted.
+
+# The literal body of control comment 5383943043, byte for byte.
+TYPED_RULING_REAL_BODY='protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: fm-ob-25c701e04893
+from: browser-sol
+
+decision: HOLD
+authority: captain-delegated-browser-sol
+captain_required: false
+
+expected_item: candidate-publication-effect-guard
+expected_head_sha: cf4c640bb1c7561b6c65f28cb1346c25ebe36d40
+expected_tree_sha: 7bea6e5ac64d76768e60decd5a22a0db66ca6b5e
+expected_policy_generation: pol-2026-08-23-g1
+
+observed:
+  - This is a fresh exact-head request; the prior HOLD for 25427e9e39931d25984227943c892d59edf5c072 does not transfer.
+  - Direct GitHub retrieval still cannot resolve FirstMate commit cf4c640bb1c7561b6c65f28cb1346c25ebe36d40, consistent with the request'"'"'s expected remote tip being absent.
+
+ruling:
+  - Until those artifacts are independently inspectable, APPROVE_EXACT is not available.
+
+stale_state_protection:
+  - This HOLD applies only to head cf4c640bb1c7561b6c65f28cb1346c25ebe36d40 / tree 7bea6e5ac64d76768e60decd5a22a0db66ca6b5e / policy pol-2026-08-23-g1.
+
+captain_required: false'
+
+test_typed_ruling_form_is_read_field_by_field() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    envelope=
+    body=$TYPED_RULING_REAL_BODY
+    envelope=$(fm_outbound_ruling_envelope "$body")
+    printf 'form=%s\n' "$(fm_outbound_ruling_form "$body")"
+    printf 'request=%s\n' "$(fm_outbound_typed_ruling_request "$body")"
+    printf 'item=%s\n' "$(fm_outbound_envelope_field "$envelope" expected_item)"
+    printf 'head=%s\n' "$(fm_outbound_envelope_field "$envelope" expected_head_sha)"
+    printf 'decision=%s\n' "$(fm_outbound_envelope_field "$envelope" decision)"
+    # A field the envelope never carries is ABSENT, which is not a contradiction.
+    fm_outbound_envelope_field "$envelope" expected_gate >/dev/null 2>&1
+    printf 'gate_rc=%s\n' "$?"
+    # THE ENVELOPE ENDS BEFORE THE PROSE, so the second `captain_required` -
+    # which sits after the content sections - is outside it and the field reads
+    # cleanly. Body-wide this was a duplicate; that is the whole difference.
+    fm_outbound_envelope_field "$envelope" captain_required >/dev/null 2>&1
+    printf 'captain_rc=%s\n' "$?"
+    # ...and must still not disqualify the ruling, or a real body is refused
+    # over a key the join never reads.
+    printf 'form_again=%s\n' "$(fm_outbound_ruling_form "$body")"
+    # Form boundaries.
+    # A marker appended AFTER the content sections is a quotation, not a second
+    # declaration - the case that made real rulings unreadable body-wide.
+    printf 'quoted_marker=%s\n' "$(fm_outbound_ruling_form "$body
+FM-SOL-RULING fm-ob-25c701e04893")"
+    printf 'legacy=%s\n' "$(fm_outbound_ruling_form 'FM-SOL-RULING fm-ob-25c701e04893
+verdict: approved')"
+    printf 'none=%s\n' "$(fm_outbound_ruling_form 'just some prose')"
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -qx 'form=typed' \
+    || fail "typed shape: the real comment was not read as the typed form: $out"
+  printf '%s' "$out" | grep -qx 'request=fm-ob-25c701e04893' \
+    || fail "typed shape: in_reply_to was not read: $out"
+  printf '%s' "$out" | grep -qx 'item=candidate-publication-effect-guard' \
+    || fail "typed shape: expected_item was not read: $out"
+  # THE SUBSTRING TRAP. The body names 25427e9e... in prose; only the field is
+  # the head, and any reader that searched the body could have taken the other.
+  printf '%s' "$out" | grep -qx 'head=cf4c640bb1c7561b6c65f28cb1346c25ebe36d40' \
+    || fail "typed shape: expected_head_sha was not read from its own field: $out"
+  printf '%s' "$out" | grep -q '25427e9e' \
+    && fail "typed shape: a head quoted in prose was read as a field: $out"
+  printf '%s' "$out" | grep -qx 'decision=HOLD' \
+    || fail "typed shape: the decision was not read: $out"
+  printf '%s' "$out" | grep -qx 'gate_rc=1' \
+    || fail "typed shape: an absent optional binding was not reported absent: $out"
+  printf '%s' "$out" | grep -qx 'captain_rc=0' \
+    || fail "typed shape: a key repeated only outside the envelope was still read as duplicated: $out"
+  printf '%s' "$out" | grep -qx 'form_again=typed' \
+    || fail "typed shape: a key repeated after the envelope disqualified a real ruling: $out"
+  printf '%s' "$out" | grep -qx 'quoted_marker=typed' \
+    || fail "typed shape: a marker quoted after the envelope changed the body's form: $out"
+  printf '%s' "$out" | grep -qx 'legacy=legacy' \
+    || fail "typed shape: the legacy marker stopped being recognised: $out"
+  printf '%s' "$out" | grep -qx 'none=none' \
+    || fail "typed shape: an unrelated body was claimed as a ruling: $out"
+  printf '%s' "$out" | grep -qx 'done' \
+    || fail "typed shape: the control did not run to completion: $out"
+  pass "typed shape: comment 5383943043's exact form is read field by field, and prose is never a field"
+}
+
+# The same shape as comment 5383943043, bound to whatever the fixture actually
+# emitted. The foreign head quoted in prose is kept, so every end-to-end case
+# below also carries the substring trap.
+write_typed_ruling() {  # <case-dir> <request-id> <item> <head> <comment-id> [<decision>]
+  local dir=$1 rid=$2 item=$3 head=$4 comment=$5 decision=${6:-HOLD}
+  cat > "$dir/forge/ruling_body" <<TYPED
+protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: $rid
+from: browser-sol
+
+decision: $decision
+authority: captain-delegated-browser-sol
+captain_required: false
+
+expected_item: $item
+expected_head_sha: $head
+
+observed:
+  - The prior HOLD for 25427e9e39931d25984227943c892d59edf5c072 does not transfer.
+
+captain_required: false
+TYPED
+  printf '%s\n' "$comment" > "$dir/forge/ruling_id"
+}
+
+emitted_rid_and_head() {  # <case-dir> -> prints "<rid> <head>"
+  local dir=$1 rid head
+  rid=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  head=$(jq -r '.identity.head' "$dir/home/data/outbound-artifacts/$rid.json" 2>/dev/null)
+  [ -n "$rid" ] && [ -n "$head" ] || return 1
+  printf '%s %s\n' "$rid" "$head"
+}
+
+# Real shapes from the control issue that a body-wide reader got wrong. Each is
+# the exact envelope plus the exact hazard region of the comment it names; the
+# discussion in between is elided because it is precisely what must NOT be read.
+#
+#   5385768382  a compatibility REQUEST whose fenced ```text block contains the
+#               canonical legacy marker. Read body-wide it became a `legacy`
+#               ruling for fm-ob-25c701e04893 - a request re-read as its own
+#               answer.
+#   5351039509  a genuine typed ruling that later quotes `protocol:` at column 0
+#               while explaining the format. Read body-wide the duplicate made
+#               its form `both`, so a real ruling was refused.
+#   5301874460  a genuine typed ruling answering a FOREIGN identity. 37 of the
+#               43 typed rulings on this issue are like it, and calling each one
+#               ambiguous is what produced the report storm.
+#   5384189401  a genuine typed ruling for one of our requests whose exact head
+#               lives in a nested `exact_subject:` block, so its envelope states
+#               no top-level head at all.
+# shellcheck disable=SC2016  # a verbatim fixture: backticks are the comment's own markdown
+FIXTURE_5385768382='Browser Sol protocol compatibility follow-up for existing request `fm-ob-25c701e04893`.
+
+Please re-emit the same HOLD in a new comment that includes these exact standalone lines:
+
+```text
+FM-SOL-RULING fm-ob-25c701e04893
+gate: AWAITING_BROWSER_SOL
+project: kun-agent-workspace
+repo: sbracewell64/firstmate-sol-control
+item: candidate-publication-effect-guard
+pull-request: -
+exact-head: cf4c640bb1c7561b6c65f28cb1346c25ebe36d40
+```'
+
+FIXTURE_5351039509='protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: fm-ob-aaaaaaaaaaaa
+from: browser-sol
+
+decision: HOLD
+
+observed:
+  - Something worth recording.
+
+Continue using:
+
+sbracewell64/firstmate-sol-control
+protocol: fm-sol-control/v1
+
+For genuine BROWSER_SOL decisions:'
+
+FIXTURE_5301874460='protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: SOL-FM-AUTOMATION-001
+from: browser-sol
+
+decision: PROCEED_WITH_CONDITIONS
+authority: captain-delegated-browser-sol'
+
+FIXTURE_5384189401='protocol: fm-sol-control/v1
+kind: ruling
+
+id: SOL-FM-SSSF-LAUNCH1-R1-CURRENT-MAIN-REBASE-FIRST-20260823
+in_reply_to: fm-ob-badaf425089f
+from: browser-sol
+to: firstmate
+
+project: SSSF
+repository: sbracewell64/inkwell-agent-sandboxes-and-software-factory
+item: sssf-launch-1-r1
+authority: captain-delegated-browser-sol
+captain_required: false
+
+decision: REVISE_REBASE_BEFORE_SEMANTIC_REVIEW
+
+exact_subject:
+  pr: 19
+  head: 6f409ff111ddca747e76f1fde20645f98e09d7d2
+
+observed:
+  - GitHub exposes PR #19 open and mergeable at the exact head above.'
+
+test_ruling_form_is_bounded_by_the_envelope() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  # A CONTROL ISSUE IS A CONVERSATION. Rulings quote their predecessors,
+  # requests carry worked examples of the wire format, and operators paste
+  # protocol snippets while discussing them. Every case below is a body whose
+  # DISCUSSION contains something a body-wide reader mistook for a declaration.
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    printf 'fenced_request_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5385768382")"
+    printf 'quoting_ruling_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5351039509")"
+    printf 'foreign_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5301874460")"
+    printf 'nested_head_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5384189401")"
+    # The quoting ruling still states its own request exactly once.
+    printf 'quoting_request=%s\n' "$(fm_outbound_typed_ruling_request "$FIXTURE_5351039509")"
+    # A foreign identity is NOT OURS (3), never ambiguity (2).
+    fm_outbound_typed_ruling_request "$FIXTURE_5301874460" >/dev/null 2>&1
+    printf 'foreign_rc=%s\n' "$?"
+    # The nested block is outside the envelope, so its head is not a field.
+    printf 'nested_envelope_head=[%s]\n' \
+      "$(fm_outbound_envelope_field "$(fm_outbound_ruling_envelope "$FIXTURE_5384189401")" head)"
+    printf 'nested_envelope_item=%s\n' \
+      "$(fm_outbound_envelope_field "$(fm_outbound_ruling_envelope "$FIXTURE_5384189401")" item)"
+    # An envelope declaring both forms has two declarations and no precedence.
+    printf 'mixed=%s\n' "$(fm_outbound_ruling_form 'FM-SOL-RULING fm-ob-aaaaaaaaaaaa
+protocol: fm-sol-control/v1
+kind: ruling')"
+    # The preamble must BEGIN the envelope, not merely appear in it.
+    printf 'late_preamble=%s\n' "$(fm_outbound_ruling_form 'id: SOL-X
+protocol: fm-sol-control/v1
+kind: ruling')"
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -qx 'fenced_request_form=none' \
+    || fail "envelope: a fenced example promoted a REQUEST into a ruling: $out"
+  printf '%s' "$out" | grep -qx 'quoting_ruling_form=typed' \
+    || fail "envelope: a ruling quoting the protocol in prose was not read as itself: $out"
+  printf '%s' "$out" | grep -qx 'quoting_request=fm-ob-aaaaaaaaaaaa' \
+    || fail "envelope: the quoting ruling's own request was not read: $out"
+  printf '%s' "$out" | grep -qx 'foreign_form=typed' \
+    || fail "envelope: a genuine foreign-scheme ruling was not read as typed: $out"
+  printf '%s' "$out" | grep -qx 'foreign_rc=3' \
+    || fail "envelope: a foreign identity was not reported as not-ours: $out"
+  printf '%s' "$out" | grep -qx 'nested_head_form=typed' \
+    || fail "envelope: a ruling with a nested subject block was not read as typed: $out"
+  printf '%s' "$out" | grep -qx 'nested_envelope_head=\[\]' \
+    || fail "envelope: an indented value inside a nested block was read as an envelope field: $out"
+  printf '%s' "$out" | grep -qx 'nested_envelope_item=sssf-launch-1-r1' \
+    || fail "envelope: a bare top-level item was not read: $out"
+  printf '%s' "$out" | grep -qx 'mixed=both' \
+    || fail "envelope: an envelope declaring both forms was resolved instead of refused: $out"
+  printf '%s' "$out" | grep -qx 'late_preamble=none' \
+    || fail "envelope: a preamble that does not begin the envelope was accepted: $out"
+  printf '%s' "$out" | grep -qx 'done' \
+    || fail "envelope: the control did not run to completion: $out"
+  pass "envelope: form and fields come from the canonical envelope, never from quoted, fenced or nested text"
+}
+
+test_a_ruling_without_a_top_level_head_refuses_without_writing() {
+  local dir rid head out rc before
+  # 5384188549 and 5384189401 are genuine rulings for our own requests whose
+  # exact head lives in a nested block. Their envelope states no head, so the
+  # identity cannot be joined - and a ruling that cannot be joined must leave
+  # the record exactly as it found it.
+  dir=$(new_case nestedhead)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "nested head: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "nested head: the fixture recorded no request"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  {
+    printf 'protocol: fm-sol-control/v1\nkind: ruling\n\n'
+    printf 'in_reply_to: %s\nfrom: browser-sol\n\n' "$rid"
+    printf 'item: waiting-item\ndecision: REVISE\n\n'
+    printf 'exact_subject:\n  head: %s\n\nobserved:\n  - nested.\n' "$head"
+  } > "$dir/forge/ruling_body"
+  printf '71\n' > "$dir/forge/ruling_id"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 71 --issue 2 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "nested head: a ruling stating no top-level head was joined: $out"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "nested head: a refused ruling mutated the record"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = emitted ] \
+    || fail "nested head: the record left its pre-ruling state"
+
+  # PAIRED GREEN: the same ruling with the head lifted into its envelope joins,
+  # so the refusal is the missing top-level identity and not the fixture.
+  {
+    printf 'protocol: fm-sol-control/v1\nkind: ruling\n\n'
+    printf 'in_reply_to: %s\nfrom: browser-sol\n\n' "$rid"
+    printf 'item: waiting-item\nhead: %s\ndecision: REVISE\n\n' "$head"
+    printf 'observed:\n  - lifted.\n'
+  } > "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 71 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "nested head GREEN: the same ruling with a top-level head was refused, exit $rc: $out"
+  [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = REVISE \
+    ] || fail "nested head GREEN: the verdict was not recorded verbatim"
+  pass "nested head: an envelope with no top-level head refuses untouched; the same ruling stating one joins"
+}
+
+test_typed_ruling_joins_and_records_its_verdict_verbatim() {
+  local dir rid head out rc before after
+  dir=$(new_case typedjoin)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "typed join: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "typed join: the fixture recorded no request"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+
+  # RED FIRST: the identical body with its protocol line removed is no longer a
+  # form this reader claims to understand, so it refuses and writes nothing.
+  # This is the pre-repair condition reproduced from the opposite direction.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 61
+  grep -v '^protocol: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.tmp"
+  mv "$dir/forge/ruling_body.tmp" "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 61 --issue 2 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "typed join RED: an unreadable form was joined anyway: $out"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "typed join RED: a refused ruling mutated the record"
+
+  # GREEN: the governed shape, joined, with the verdict recorded VERBATIM.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 61
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 61 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "typed join GREEN: the governed ruling was refused, exit $rc: $out"
+  after=$(jq -r '.state + " " + .ruling.verdict + " " + .ruling.comment_id' \
+    "$dir/home/data/outbound-artifacts/$rid.json")
+  [ "$after" = "ruled HOLD 61" ] \
+    || fail "typed join GREEN: expected 'ruled HOLD 61', got '$after'"
+  pass "typed join: the governed form joins and its verdict is recorded verbatim"
+}
+
+test_typed_ruling_refuses_every_unjoinable_shape() {
+  local dir rid head shape out rc before
+  # EVERY WAY THE JOIN CAN FAIL TO BE UNIQUE AND NON-CONTRADICTORY. Each one must
+  # refuse with the record byte-identical afterwards, because a ruling this end
+  # could not join must leave no trace that it did.
+  for shape in wrong-item wrong-head wrong-request missing-head duplicate-head \
+               contradicting-project malformed-request both-forms both-verdicts; do
+    dir=$(new_case "typedbad-$shape")
+    declare_gate "$dir/home" AWAITING_BROWSER_SOL
+    write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+    run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+      || fail "typed refusal/$shape: emit failed"
+    read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+    [ -n "$rid" ] || fail "typed refusal/$shape: the fixture recorded no request"
+    before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+    write_typed_ruling "$dir" "$rid" waiting-item "$head" 62
+    case $shape in
+      wrong-item)    sed -i "s/^expected_item: .*/expected_item: another-item/" "$dir/forge/ruling_body" ;;
+      wrong-head)    sed -i "s/^expected_head_sha: .*/expected_head_sha: $HEAD_B/" "$dir/forge/ruling_body" ;;
+      wrong-request) sed -i "s/^in_reply_to: .*/in_reply_to: fm-ob-000000000000/" "$dir/forge/ruling_body" ;;
+      missing-head)  sed -i "/^expected_head_sha: /d" "$dir/forge/ruling_body" ;;
+      # INSIDE the envelope, not appended. A field repeated after the content
+      # sections is a quotation the envelope rule deliberately ignores, so
+      # appending would test the opposite of what this case is named for.
+      duplicate-head) sed -i "/^expected_head_sha: /a expected_head_sha: $HEAD_B" "$dir/forge/ruling_body" ;;
+      contradicting-project) sed -i "/^expected_item: /a expected_project: not-the-project" "$dir/forge/ruling_body" ;;
+      malformed-request) sed -i "s/^in_reply_to: .*/in_reply_to: not-a-request-id/" "$dir/forge/ruling_body" ;;
+      both-forms)    sed -i "/^in_reply_to: /a FM-SOL-RULING $rid" "$dir/forge/ruling_body" ;;
+      # The verdict is read from the whole body, not the envelope: a legacy
+      # ruling states `verdict:` after its prose, so an envelope-only read would
+      # stop seeing legacy verdicts entirely. A typed body carrying the other
+      # form's verdict key anywhere is therefore still refused.
+      both-verdicts) printf 'verdict: approved\n' >> "$dir/forge/ruling_body" ;;
+    esac
+    out=$(run_ob "$dir" ruling --request "$rid" --comment 62 --issue 2 2>&1); rc=$?
+    [ "$rc" -ne 0 ] \
+      || fail "typed refusal/$shape: an unjoinable ruling was accepted: $out"
+    [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+      || fail "typed refusal/$shape: a refused ruling mutated the record"
+    [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = emitted ] \
+      || fail "typed refusal/$shape: the record left its pre-ruling state"
+
+    # PAIRED GREEN, so no shape can pass by the fixture never joining anything.
+    write_typed_ruling "$dir" "$rid" waiting-item "$head" 62
+    case $shape in
+      contradicting-project)
+        # The same optional binding, stated correctly and in the same place.
+        sed -i "/^expected_item: /a expected_project: $(jq -r '.identity.project' \
+          "$dir/home/data/outbound-artifacts/$rid.json")" "$dir/forge/ruling_body" ;;
+    esac
+    out=$(run_ob "$dir" ruling --request "$rid" --comment 62 --issue 2 2>&1); rc=$?
+    [ "$rc" -eq 0 ] \
+      || fail "typed refusal/$shape: the paired joinable ruling was refused, exit $rc: $out"
+  done
+  pass "typed refusal: wrong item, head, request, missing, duplicated, contradicting, malformed and both-form bodies all refuse with the record untouched"
+}
+
+test_typed_ruling_is_discovered_by_poll() {
+  local dir rid head out rc
+  dir=$(new_case typedpoll)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "typed poll: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "typed poll: the fixture recorded no request"
+
+  # THE SYMPTOM THAT HID THE REAL RULING. Discovery read only the legacy marker,
+  # so a typed comment was not selected at all: no join, no mismatch, no line -
+  # the fleet simply never saw it. Silence is the failure being controlled here,
+  # so the assertion is that the record MOVED, not that a message appeared.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 63
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "typed poll: poll reported a failure, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = ruled ] \
+    || fail "typed poll: the typed ruling was never selected by discovery: $out"
+  [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = HOLD ] \
+    || fail "typed poll: the joined verdict is not the one the body stated: $out"
+  pass "typed poll: discovery selects the governed form instead of skipping it in silence"
+}
+
+test_a_hold_ruling_never_becomes_a_landing_authority() {
+  local dir rid head out rc auth
+  auth="$ROOT/bin/fm-landing-authorization.sh"
+  [ -x "$auth" ] || { printf 'skip: %s is not executable\n' "$auth"; return 0; }
+  dir=$(new_case typedhold)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "hold: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "hold: the fixture recorded no request"
+
+  # JOINING A RULING IS NOT ACCEPTING ITS VERDICT. HOLD is recorded, and the
+  # authority owner's closed list refuses to read it as approval.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 64 HOLD
+  run_ob "$dir" ruling --request "$rid" --comment 64 --issue 2 >/dev/null 2>&1 \
+    || fail "hold: the HOLD ruling did not join"
+  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "hold: a HOLD ruling minted a landing authority: $out"
+  printf '%s' "$out" | grep -q 'FM_AUTH_VERDICT_UNRECOGNIZED' \
+    || fail "hold: refused for the wrong reason: $out"
+  [ -z "$(ls -A "$dir/home/data/landing-authorizations" 2>/dev/null)" ] \
+    || fail "hold: a HOLD ruling left a landing authority behind"
+
+  # PAIRED GREEN: the same path with an approving verdict does mint, so the
+  # refusal above is the verdict being classified and not the fixture failing.
+  dir=$(new_case typedapprove)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "hold GREEN: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 65 approved
+  run_ob "$dir" ruling --request "$rid" --comment 65 --issue 2 >/dev/null 2>&1 \
+    || fail "hold GREEN: the approving ruling did not join"
+  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "hold GREEN: an approving ruling failed to mint, exit $rc: $out"
+  pass "hold: a joined HOLD is recorded and refused as authority, while an approving verdict still mints"
+}
+
 # --- record isolation: one broken record is not every item's blocker ---------
 #
 # THE DEFECT THESE CONTROL. Superseding an item's older heads is a decision
@@ -2773,6 +3424,16 @@ test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
 test_every_declared_token_has_an_emit_site
 
+test_a_typed_gate_declaration_outranks_stale_hold_prose
+test_a_moved_gate_asks_its_own_question
+test_a_live_predecessor_is_retired_before_its_successor
+test_typed_ruling_form_is_read_field_by_field
+test_ruling_form_is_bounded_by_the_envelope
+test_a_ruling_without_a_top_level_head_refuses_without_writing
+test_typed_ruling_joins_and_records_its_verdict_verbatim
+test_typed_ruling_refuses_every_unjoinable_shape
+test_typed_ruling_is_discovered_by_poll
+test_a_hold_ruling_never_becomes_a_landing_authority
 test_unrelated_broken_record_does_not_block_an_exact_request
 test_unrelated_identity_mismatch_does_not_block_an_exact_request
 test_skipped_record_stays_adverse_everywhere_else
