@@ -126,6 +126,24 @@ Step 2 is what makes steps 1 and 3 evidence about the hold rather than about a m
 An earlier attempt at step 2 refused with `FM_PUB_IDENTITY_UNMAPPED` because the probe policy named an author the commit does not carry.
 That is recorded rather than removed: it is the guard declining to publish under an identity nobody declared, observed on the real remote, and it is the one axis a synthetic fixture is least able to get wrong by accident.
 
+### The governed subject, against the provisioned records
+
+The probe above ran before this home's governance was provisioned, which is why it names a policy-only verdict.
+Repeated on 2026-08-23 against the completed provisioning - identity policy generation `pol-2026-08-23-g1` and canonical request `fm-ob-4e8925ac8dae`, gate `AWAITING_BROWSER_SOL`, emitted and unruled - it reaches the refusal the governance is there to produce.
+
+Subject: head `25427e9e39931d25984227943c892d59edf5c072`, tree `910b6a74f7afc9b61226aff6dee9046f3dc2e250`, ref `refs/heads/fm/candidate-publication-effect-guard`.
+
+| Step | State | Observed result |
+| ---- | ----- | --------------- |
+| 1 | the canonical request holds this exact head, unruled | `REFUSE FM_PUB_ACTIVE_HOLD: 1 live Browser Sol request(s) hold candidate-publication-effect-guard and none approves publishing 25427e9e...: fm-ob-4e8925ac8dae(AWAITING_BROWSER_SOL/emitted unruled)` |
+| 2 | the same head and policy with that hold absent | `ALLOW_EXACT fm-auth-873c92ff3bdc6989eb91e233b56629ad` |
+| 3 | the hold restored | identical to step 1 |
+
+Step 2 ran in a scratch home so the operational store was never written, and it is what makes steps 1 and 3 evidence about the request rather than about a mechanism that refuses everything.
+
+Across all three the operational authorization store stayed byte-identical (`sha256 4e1782f3...`, one record) and the remote ref stayed absent.
+That is the property the whole probe exists to demonstrate: asking the question changes nothing.
+
 ## Refreshing this record
 
 ```
@@ -144,7 +162,16 @@ That is not hypothetical.
 Running this guard's own pinned probe verbatim against the operational home, at a moment when the governing hold record had not yet been provisioned, granted a real authority for a stale head rather than refusing.
 `--dry-run` exists because of it: it compiles and prints the same verdict, names the same deterministic id, and writes nothing.
 
-Any probe, any check-path, and any command that only wants the verdict must use it.
+The corrected form, and the one every probe of this guard must use:
+
+```
+bin/fm-publication-guard.sh prepare --dry-run --repo <dir> --remote <name|url> \
+  --venue <host/owner/repo> --ref <refs/...> --head <sha> --expected-tip <sha|-> \
+  --item <work-id>
+```
+
+Any probe, any check-path, and any command that only wants the verdict must use `prepare --dry-run`.
+Bare `prepare` is the granting path, and a probe written against it is only side-effect-free by accident of which branch it happens to take.
 
 ## Retiring an authority that must never be spent
 
