@@ -42,6 +42,28 @@
 #   fm-outbound-artifact.sh close --request <id> --disposition <text>
 #       Complete the correlation with the outcome.
 #   fm-outbound-artifact.sh show <request-id>
+#
+#   MATERIAL PUBLICATION - one request that carries exact bytes rather than only
+#   a question, published as several comments and completed only once every one
+#   of them reconstructs the subject that was prepared.
+#   fm-outbound-artifact.sh material prepare <item-id> --manifest <path>
+#                                            [--venue <owner/name>#<issue>]
+#       Bind a generation: the venue, the declared universe, its content digests
+#       and its deterministic parts. Idempotent for the same subject; a DIFFERENT
+#       subject is refused here and becomes a successor instead.
+#   fm-outbound-artifact.sh material emit --request <id>
+#       Publish every part not already exact at the record's venue. Resumable,
+#       bounded, and idempotent per part.
+#   fm-outbound-artifact.sh material verify --request <id> [--json]
+#       Reobserve every part and reconstruct the subject. Never mutates the venue.
+#   fm-outbound-artifact.sh material complete --request <id>
+#       The single completion transition: verify, then emit the successor request
+#       exactly once.
+#   fm-outbound-artifact.sh material succeed --request <id> --manifest <path>
+#       Open ONE successor generation for a stale subject, preserving the prior
+#       generation verbatim.
+#   fm-outbound-artifact.sh material show <request-id> [--json]
+#       What the record holds. Reading is not verification and says so.
 #   fm-outbound-artifact.sh --help
 #
 # Exit status is the verdict, so a caller that ignores stdout still stops safely:
@@ -109,6 +131,14 @@
 #                               bin/fm-bootstrap.sh - because a single name
 #                               cannot mean both without one of them widening
 #                               the other.
+#   FM_OUTBOUND_MATERIAL_PART_BYTES
+#                               wire bytes per published part (default 45600,
+#                               chosen under a 65536-character comment body with
+#                               room for the part's own binding header)
+#   FM_OUTBOUND_MATERIAL_MAX_PARTS
+#                               refuse a generation needing more parts than this
+#                               (default 64). The bound is REPORTED, never
+#                               silently applied by truncating the universe.
 # fail-closed-predicates: enforced
 set -u
 
@@ -1579,6 +1609,1030 @@ cmd_close() {  # <request-id> <disposition>
   printf 'closed: %s - %s\n' "$rid" "$disp"
 }
 
+# --- material universe: multipart publication --------------------------------
+#
+# bin/fm-outbound-artifact-lib.sh owns the contract - why the material block
+# lives inside this record, what the three digests separate, and what EXACT
+# versus DERIVATIVE means. This section owns only the mechanics that contract
+# excludes: reading the declared universe off disk, building the deterministic
+# payload, cutting it into parts, publishing them idempotently, reobserving them
+# at the record's own venue, and the single completion transition.
+#
+# THE ONE RULE THAT IS EASY TO LOSE HERE. Every material command addresses the
+# venue stored in the RECORD. config/sol-control.json seeds a venue at
+# preparation and is never consulted again, because a generation is published
+# across many calls and a config edit between two of them would retarget a
+# half-published generation - parts on one issue, the rest on another, and a
+# completion that reconstructs from neither.
+
+MATERIAL_PART_BYTES="${FM_OUTBOUND_MATERIAL_PART_BYTES:-45600}"
+MATERIAL_MAX_PARTS="${FM_OUTBOUND_MATERIAL_MAX_PARTS:-64}"
+
+# base64's decode flag is spelled -d by GNU coreutils and -D by the BSD tool, so
+# it is probed against a known vector rather than assumed. An undeterminable
+# flag refuses: guessing it would decode nothing and report a reconstruction
+# mismatch, blaming the remote for a local capability gap.
+B64_DECODE_FLAG=
+require_base64() {
+  [ -z "$B64_DECODE_FLAG" ] || return 0
+  command -v base64 >/dev/null 2>&1 || return 1
+  if [ "$(printf 'YQ==' | base64 -d 2>/dev/null)" = a ]; then B64_DECODE_FLAG=-d; return 0; fi
+  if [ "$(printf 'YQ==' | base64 -D 2>/dev/null)" = a ]; then B64_DECODE_FLAG=-D; return 0; fi
+  return 1
+}
+
+# The prepared wire form, kept beside the record it belongs to. It is a
+# CHECKPOINT and never an authority: it is content-addressed by the generation's
+# subject digest and re-verified against it on every read, so a corrupted or
+# swapped payload is could-not-observe rather than a silently different
+# publication. Keeping it here is also what stops this from becoming a second
+# state store - same directory, same owner, same lifetime as the record.
+material_payload_path() { printf '%s/%s.g%s.payload\n' "$RECORD_DIR" "$1" "$2"; }
+
+# Read the declared universe and resolve every entry against the bytes on disk.
+#   0 resolved · 1 the manifest is unreadable or malformed
+#   2 an entry's source could not be observed
+material_resolve_manifest() {  # <manifest-file>
+  local file=$1 raw rows row path class source authority digest bytes resolved
+  [ -n "$file" ] && [ -r "$file" ] || return 1
+  raw=$(cat "$file" 2>/dev/null) || return 1
+  printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_MATERIAL_MANIFEST_SCHEMA" \
+    '.schema == $s and (.entries | type) == "array" and (.subject | type) == "string"' \
+    >/dev/null 2>&1 || return 1
+  rows=$(printf '%s' "$raw" | jq -r \
+    '.entries[] | [(.path // ""), (.classification // ""), (.source // ""), (.authority // "")] | @base64') \
+    || return 1
+  resolved='[]'
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    path=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0]') || return 1
+    class=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') || return 1
+    source=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[2]') || return 1
+    authority=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[3]') || return 1
+    [ -n "$path" ] || return 1
+    fm_outbound_material_class_valid "$class" || return 1
+    # BOTH classes resolve real local bytes. A derivative entry transmits
+    # nothing, but its digest is still an observation of an artifact that exists
+    # rather than a value someone typed, which is what lets the universe be
+    # counted rather than merely declared.
+    [ -n "$source" ] && [ -r "$source" ] && [ -f "$source" ] || return 2
+    digest=$(fm_outbound_sha256 < "$source") || return 2
+    bytes=$(wc -c < "$source" | tr -d ' ') || return 2
+    case $bytes in ''|*[!0-9]*) return 2 ;; esac
+    resolved=$(printf '%s' "$resolved" | jq \
+      --arg p "$path" --arg c "$class" --arg d "$digest" --argjson b "$bytes" \
+      --arg a "$authority" --arg s "$source" \
+      '. + [{path:$p,classification:$c,digest:$d,bytes:$b,
+             authority:(if $a == "" then null else $a end),source:$s}]') || return 1
+  done <<< "$rows"
+  printf '%s' "$raw" | jq -c --argjson e "$resolved" '.entries = $e'
+}
+
+# The deterministic payload byte stream. Entries in path order, a fixed header
+# per entry, and bytes ONLY for an EXACT entry - the classification made real on
+# the wire rather than merely recorded next to it.
+material_build_payload() {  # <resolved-manifest-json> <manifest-identity> <out-file>
+  local manifest=$1 identity=$2 out=$3 rows row path class digest bytes authority source
+  rows=$(printf '%s' "$manifest" | jq -r \
+    '.entries | sort_by(.path)[]
+     | [.path, .classification, .digest, (.bytes | tostring), (.authority // "-"), .source] | @base64') \
+    || return 1
+  {
+    printf '%s\n' "$FM_OUTBOUND_MATERIAL_PAYLOAD_SCHEMA"
+    printf 'manifest-identity=%s\n' "$identity"
+    printf 'subject=%s\n' "$(printf '%s' "$manifest" | jq -r '.subject')"
+    printf 'required-total=%s\n' "$(printf '%s' "$manifest" | jq -r '.required_total')"
+    printf 'entry-count=%s\n' "$(printf '%s' "$manifest" | jq -r '.entries | length')"
+  } > "$out" || return 1
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    path=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0]') || return 1
+    class=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') || return 1
+    digest=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[2]') || return 1
+    bytes=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[3]') || return 1
+    authority=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[4]') || return 1
+    source=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[5]') || return 1
+    printf 'entry %s class=%s digest=%s bytes=%s authority=%s\n' \
+      "$path" "$class" "$digest" "$bytes" "$authority" >> "$out" || return 1
+    if [ "$class" = EXACT ]; then
+      cat "$source" >> "$out" || return 2
+    fi
+    printf '\n' >> "$out" || return 1
+  done <<< "$rows"
+}
+
+# The wire form: one unbroken base64 line, so a part boundary is a byte offset
+# rather than a line count and the same payload always cuts the same way.
+material_build_wire() {  # <payload-file> <out-file>
+  base64 < "$1" | tr -d '\n' > "$2"
+}
+
+material_wire_total() {  # <wire-file>
+  local size
+  size=$(wc -c < "$1" | tr -d ' ') || return 1
+  case $size in ''|*[!0-9]*) return 1 ;; esac
+  [ "$size" -gt 0 ] || return 1
+  printf '%s\n' "$(( (size + MATERIAL_PART_BYTES - 1) / MATERIAL_PART_BYTES ))"
+}
+
+# One part's canonical chunk: its byte slice plus exactly one newline, so what
+# the fence encloses and what the digest covers are the same bytes.
+material_cut_chunk() {  # <wire-file> <index> <out-file>
+  dd if="$1" bs="$MATERIAL_PART_BYTES" skip="$(($2 - 1))" count=1 > "$3" 2>/dev/null || return 1
+  printf '\n' >> "$3"
+}
+
+# The record's venue, and only the record's. Prints repository<TAB>issue.
+material_record_venue() {  # <record-json>
+  local repo issue
+  repo=$(printf '%s' "$1" | jq -r '.material.venue.repository // ""')
+  issue=$(printf '%s' "$1" | jq -r \
+    'if (.material.venue.issue // null) == null then "" else (.material.venue.issue | tostring) end')
+  fm_outbound_venue_valid "$repo" "$issue" || return 1
+  printf '%s\t%s\n' "$repo" "$issue"
+}
+
+# The venue's COMPLETE comment collection, or a could-not-observe.
+#
+# Completeness is PROVED rather than assumed. The issue object states how many
+# comments it has, and a listing returning fewer than that is a truncated read -
+# exactly the input that would otherwise let a missing part read as a part that
+# was never posted. A listing with MORE is a comment added between the two
+# reads, which is not truncation.
+material_read_venue_comments() {  # <repository> <issue> <out-file>
+  local repo=$1 issue=$2 out=$3 declared observed
+  probe_budget || return 2
+  # fm-retrieval-audit: not-a-collection - this reads one issue object named by repository and number for its own declared comment count.
+  declared=$(obs gh api "repos/$repo/issues/$issue" --jq '.comments') || return 2
+  case $declared in ''|*[!0-9]*) return 2 ;; esac
+  probe_budget || return 2
+  # fm-retrieval-audit: complete-source - --paginate traverses every page and the returned count is reconciled against the issue's own declared comment total immediately below.
+  obs gh api "repos/$repo/issues/$issue/comments" --paginate \
+    --jq '.[] | [.id, .body] | @base64' > "$out" || return 2
+  observed=$(grep -c . < "$out" || true)
+  case $observed in ''|*[!0-9]*) return 2 ;; esac
+  [ "$observed" -ge "$declared" ] || return 2
+  return 0
+}
+
+# Observe ONE part in an already-complete collection, writing its exact chunk.
+#   0 present and exact (prints the comment id) · 1 provably absent
+#   2 could not observe · 6 identity collision · 8 binding mismatch
+#   9 the part's own digest does not cover its own bytes
+#   10 addressed to a different venue
+#
+# The refusal ORDER is the fold's severity, not the order the comments happened
+# to arrive in: a collision outranks a bad digest, which outranks a wrong venue,
+# which outranks a mismatched binding, which outranks an unreadable body, which
+# outranks a match. Reading them in arrival order would let one well-formed
+# duplicate certify a part that another comment is actively contradicting.
+material_observe_part() {  # <comments-file> <record-json> <index> <identity> <out-chunk>
+  local comments=$1 rec=$2 index=$3 identity=$4 out=$5
+  local row id body claimed chunk actual
+  local found_id='' found_digest='' collision=0 unreadable=0 mismatch=0 digestbad=0 venuebad=0
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    id=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0] | tostring' 2>/dev/null) \
+      || { unreadable=1; continue; }
+    body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]' 2>/dev/null) \
+      || { unreadable=1; continue; }
+    # Only a comment CLAIMING this part identity is judged here. Everything else
+    # in the venue is another request, another generation, or another fleet's
+    # traffic, and none of it is evidence about this part.
+    printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_MATERIAL_BODY_MARKER $identity" || continue
+    if ! fm_outbound_material_part_venue_binds "$body" "$rec"; then
+      venuebad=1; continue
+    fi
+    if ! fm_outbound_material_part_binds "$body" "$rec" "$index" "$identity"; then
+      mismatch=1; continue
+    fi
+    claimed=$(fm_outbound_material_part_claimed_digest "$body") || { unreadable=1; continue; }
+    chunk=$(fm_outbound_material_part_chunk "$body") || { unreadable=1; continue; }
+    actual=$(printf '%s\n' "$chunk" | fm_outbound_sha256) || { unreadable=1; continue; }
+    if [ "$claimed" != "$actual" ]; then digestbad=1; continue; fi
+    if [ -n "$found_id" ] && [ "$found_digest" != "$actual" ]; then collision=1; continue; fi
+    found_id=$id
+    found_digest=$actual
+    printf '%s\n' "$chunk" > "$out" || { unreadable=1; continue; }
+  done < "$comments"
+  [ "$collision" -eq 0 ] || return 6
+  [ "$digestbad" -eq 0 ] || return 9
+  [ "$venuebad" -eq 0 ] || return 10
+  [ "$mismatch" -eq 0 ] || return 8
+  [ "$unreadable" -eq 0 ] || return 2
+  [ -n "$found_id" ] || return 1
+  printf '%s\n' "$found_id"
+}
+
+# Reobserve an entire generation and prove it reconstructs the exact subject.
+# Prints a report row per part on stderr-free stdout via the caller; returns:
+#   0 every part exact and the reconstruction matches
+#   3 a refusal that names a wrong part, generation, venue or duplicate
+#   4 could not observe
+#
+# THE TWO CHECKS ARE NOT REDUNDANT. Per-part digests catch a part whose bytes
+# changed under a stale claim; the reconstruction catches a part whose claim was
+# updated to match its new bytes. An attacker who can edit a comment can do the
+# second, and only the subject digest - computed before anything was published -
+# refuses it.
+MATERIAL_VERIFIED=
+MATERIAL_VERIFY_REASON=
+material_verify_generation() {  # <record-json> <comments-file> <work-dir>
+  local rec=$1 comments=$2 work=$3
+  local total subject rid gen index identity comment rc verified joined actual
+  MATERIAL_VERIFIED=
+  MATERIAL_VERIFY_REASON=
+  total=$(printf '%s' "$rec" | jq -r '.material.parts.total')
+  subject=$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  case $total in ''|*[!0-9]*) MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_MATERIAL_ABSENT; return 4 ;; esac
+  verified='{}'
+  : > "$work/joined" || { MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE; return 4; }
+  index=1
+  while [ "$index" -le "$total" ]; do
+    identity=$(fm_outbound_part_identity "$rid" "$gen" "$subject" "$index" "$total") \
+      || { MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_PART_UNREADABLE; return 4; }
+    comment=$(material_observe_part "$comments" "$rec" "$index" "$identity" "$work/chunk"); rc=$?
+    case $rc in
+      0) : ;;
+      1) MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_PART_MISSING part $index/$total"; return 3 ;;
+      6) MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_IDENTITY_COLLISION part $index/$total"; return 3 ;;
+      8) MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_GENERATION_MISMATCH part $index/$total"; return 3 ;;
+      9) MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_RECONSTRUCTION part $index/$total does not cover its own bytes"; return 3 ;;
+      10) MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_VENUE_MISMATCH part $index/$total is addressed to another venue"; return 3 ;;
+      *) MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_PART_UNREADABLE part $index/$total"; return 4 ;;
+    esac
+    cat "$work/chunk" >> "$work/joined" \
+      || { MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_PART_UNREADABLE; return 4; }
+    verified=$(printf '%s' "$verified" | jq \
+      --arg k "$index" --arg c "$comment" --arg d "$(fm_outbound_sha256 < "$work/chunk")" \
+      '.[$k] = {comment_id:$c, part_digest:$d}') \
+      || { MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_PART_UNREADABLE; return 4; }
+    index=$((index + 1))
+  done
+  require_base64 || { MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE; return 4; }
+  joined="$work/reconstructed"
+  tr -d '\n' < "$work/joined" | base64 "$B64_DECODE_FLAG" > "$joined" 2>/dev/null \
+    || { MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_RECONSTRUCTION the reassembled parts did not decode"; return 3; }
+  actual=$(fm_outbound_sha256 < "$joined") \
+    || { MATERIAL_VERIFY_REASON=$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE; return 4; }
+  if [ "$actual" != "$subject" ]; then
+    MATERIAL_VERIFY_REASON="$FM_OUTBOUND_TOKEN_RECONSTRUCTION reassembled $actual, generation declares $subject"
+    return 3
+  fi
+  MATERIAL_VERIFIED=$verified
+  return 0
+}
+
+# The prepared wire form for a generation, re-proved against the record's own
+# subject digest before a single byte of it is used.
+material_require_wire() {  # <record-json> <work-dir> -> prints the wire path
+  local rec=$1 work=$2 rid gen subject payload actual
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  subject=$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')
+  payload=$(material_payload_path "$rid" "$gen")
+  [ -r "$payload" ] || return 1
+  actual=$(fm_outbound_sha256 < "$payload") || return 1
+  [ "$actual" = "$subject" ] || return 1
+  material_build_wire "$payload" "$work/wire" || return 1
+  printf '%s\n' "$work/wire"
+}
+
+# Has the subject this generation was prepared from moved since?
+#   0 unchanged · 1 moved · 2 could not observe
+#
+# "Moved" is asked of the RECORD's own bound head against the item's head now,
+# reusing the applicability rule the single-comment path already owns. There is
+# no second staleness rule here, and deliberately so: two rules for "is this
+# still about the same thing" is how a laundered generation gets published.
+material_subject_moved() {  # <record-json>
+  local rec=$1 item project pr_url head_observation head
+  item=$(printf '%s' "$rec" | jq -r '.identity.item // ""')
+  [ -n "$item" ] || return 2
+  read_snapshot || return 2
+  require_unique_backlog_record "$item"
+  project=$(printf '%s' "$BACKLOG_RECORD" | jq -r '.repo // ""')
+  pr_url=$(printf '%s' "$BACKLOG_RECORD" | jq -r '.pr_url // ""')
+  head_observation=$(observe_head "$item" "$pr_url" "$project")
+  head=$(printf '%s' "$head_observation" | cut -f1)
+  [ -n "$head" ] || return 2
+  case "$(fm_outbound_applicability \
+    "$(printf '%s' "$rec" | jq -r '.identity.head // ""')" "$head" \
+    "$(printf '%s' "$rec" | jq -r '.state')")" in
+    applicable) return 0 ;;
+    inapplicable) return 1 ;;
+    *) return 2 ;;
+  esac
+}
+
+# Mark the CURRENT generation stale, preserving it exactly. Nothing about the
+# generation's own evidence is touched: its published parts, its digests and its
+# identities stay as they were, because a stale generation is a historical fact
+# about what was published rather than a draft to be corrected.
+material_mark_stale() {  # <request-id> <record-json> <reason>
+  local rid=$1 rec=$2 reason=$3
+  rec=$(printf '%s' "$rec" | jq --arg r "$reason" --arg n "$(now_iso)" \
+    '.material.stale = {reason:$r, at:$n} | .updated = $n') || return 1
+  record_write "$rid" "$rec"
+}
+
+material_require_record() {  # <request-id>; sets RECORD or exits
+  require_record "$1"
+  printf '%s' "$RECORD" | jq -e --arg s "$FM_OUTBOUND_MATERIAL_SCHEMA" \
+    '.material.schema? == $s' >/dev/null 2>&1 || {
+      printf '%s: request %s carries no material generation to act on\n' \
+        "$FM_OUTBOUND_TOKEN_MATERIAL_ABSENT" "$1" >&2
+      exit 3
+    }
+}
+
+# Every computed axis, refused if it falls outside its declared vocabulary.
+material_render_states() {  # <record-json>
+  local rec=$1 pub next disp
+  pub=$(fm_outbound_material_publication_state "$rec") || return 1
+  next=$(fm_outbound_material_next_request_state "$rec") || return 1
+  disp=$(fm_outbound_material_disposition_state "$rec") || return 1
+  fm_outbound_material_lifecycle_valid "$FM_OUTBOUND_PUBLICATION_STATES" "$pub" || return 1
+  fm_outbound_material_lifecycle_valid "$FM_OUTBOUND_NEXT_REQUEST_STATES" "$next" || return 1
+  fm_outbound_material_lifecycle_valid "$FM_OUTBOUND_DISPOSITION_STATES" "$disp" || return 1
+  printf '%s\t%s\t%s\n' "$pub" "$next" "$disp"
+}
+
+cmd_material_prepare() {  # <item> <manifest-file> <declared-venue>
+  local item=$1 manifest_file=$2 declared_venue=$3
+  local rec gate channel project pr_ref pr_url head_observation head head_source
+  local venue_repo venue_issue venue_pair missing rid manifest resolve_rc
+  local accounting verdict required classified exact derivative omitted duplicates
+  local identity payload wire total index part_identity identities record material now
+  local subject_digest record_rc
+
+  read_snapshot || die "fleet backlog could not be read" 4
+  require_unique_backlog_record "$item"
+  rec=$BACKLOG_RECORD
+  gate=$(classify_record "$rec" | cut -f2)
+  channel=$(fm_outbound_gate_channel "$gate")
+  if [ -z "$channel" ]; then
+    printf '%s: %s has no typed gate, so no material generation can be bound to it\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" >&2
+    exit 3
+  fi
+  if ! fm_outbound_channel_can_emit "$channel"; then
+    printf '%s: %s is on the %s channel, which this mechanism detects but never creates.\n' \
+      "$FM_OUTBOUND_TOKEN_DETECT_ONLY" "$item" "$channel" >&2
+    exit 3
+  fi
+
+  # The venue is bound HERE, once. An explicit --venue wins; otherwise the
+  # configured default seeds it. Neither is consulted again for this record.
+  if [ -n "$declared_venue" ]; then
+    venue_pair=$(fm_outbound_venue_split "$declared_venue") || {
+      printf '%s: --venue %s is not a <owner/name>#<positive-issue> venue\n' \
+        "$FM_OUTBOUND_TOKEN_VENUE_INVALID" "$declared_venue" >&2
+      exit 3
+    }
+  else
+    read_sol_config || {
+      printf '%s: no --venue was given and config/sol-control.json is absent or incomplete\n' \
+        "$FM_OUTBOUND_TOKEN_UNCONFIGURED" >&2
+      exit 4
+    }
+    venue_pair=$(fm_outbound_venue_split "$(fm_outbound_venue_canonical "$SOL_REPO" "$SOL_ISSUE")") || {
+      printf '%s: the configured venue %s#%s is not addressable\n' \
+        "$FM_OUTBOUND_TOKEN_VENUE_INVALID" "$SOL_REPO" "$SOL_ISSUE" >&2
+      exit 3
+    }
+  fi
+  venue_repo=$(printf '%s' "$venue_pair" | cut -f1)
+  venue_issue=$(printf '%s' "$venue_pair" | cut -f2)
+
+  project=$(printf '%s' "$rec" | jq -r '.repo // ""')
+  pr_url=$(printf '%s' "$rec" | jq -r '.pr_url // ""')
+  pr_ref=$(printf '%s' "$rec" | jq -r '.pr_url // "-"')
+  head_observation=$(observe_head "$item" "$pr_url" "$project")
+  head=$(printf '%s' "$head_observation" | cut -f1)
+  head_source=$(printf '%s' "$head_observation" | cut -f2)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue_repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+  if [ -n "$missing" ]; then
+    printf '%s: cannot bind a material generation for %s - missing %s\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" \
+      "$(printf '%s' "$missing" | tr '\n' ',' | sed 's/,$//')" >&2
+    exit 3
+  fi
+  rid=$(fm_outbound_request_id "$gate" "$project" "$venue_repo" "$item" "$pr_ref" "$head") \
+    || die "could not compute a request identity" 4
+
+  manifest=$(material_resolve_manifest "$manifest_file"); resolve_rc=$?
+  case $resolve_rc in
+    0) : ;;
+    2) printf '%s: an entry in %s names bytes that could not be read\n' \
+         "$FM_OUTBOUND_TOKEN_MANIFEST_UNREADABLE" "$manifest_file" >&2
+       exit 4 ;;
+    *) printf '%s: %s is not a readable %s document\n' \
+         "$FM_OUTBOUND_TOKEN_MANIFEST_UNREADABLE" "$manifest_file" \
+         "$FM_OUTBOUND_MATERIAL_MANIFEST_SCHEMA" >&2
+       exit 4 ;;
+  esac
+
+  accounting=$(fm_outbound_material_accounting "$manifest")
+  required=$(printf '%s' "$accounting" | cut -f1)
+  classified=$(printf '%s' "$accounting" | cut -f2)
+  exact=$(printf '%s' "$accounting" | cut -f3)
+  derivative=$(printf '%s' "$accounting" | cut -f4)
+  omitted=$(printf '%s' "$accounting" | cut -f5)
+  duplicates=$(printf '%s' "$accounting" | cut -f6)
+  verdict=$(printf '%s' "$accounting" | cut -f7)
+  case $verdict in
+    complete) : ;;
+    incomplete)
+      printf '%s: %s declares %s required artifacts and classified %s (%s omitted, %s duplicated)\n' \
+        "$FM_OUTBOUND_TOKEN_UNIVERSE_INCOMPLETE" "$manifest_file" \
+        "$required" "$classified" "$omitted" "$duplicates" >&2
+      exit 3 ;;
+    *)
+      printf '%s: the universe declared by %s could not be counted, so its completeness is unknown\n' \
+        "$FM_OUTBOUND_TOKEN_UNIVERSE_UNCERTAIN" "$manifest_file" >&2
+      exit 4 ;;
+  esac
+
+  identity=$(fm_outbound_material_canonical "$manifest" | fm_outbound_sha256) \
+    || die "the manifest identity could not be computed" 4
+  payload="$SCRATCH/payload"
+  material_build_payload "$manifest" "$identity" "$payload" || {
+    printf '%s: the declared universe could not be assembled into a payload\n' \
+      "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE" >&2
+    exit 4
+  }
+  subject_digest=$(fm_outbound_sha256 < "$payload") \
+    || die "the subject digest could not be computed" 4
+  require_base64 || die "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE: no usable base64 decoder was found" 4
+  wire="$SCRATCH/wire"
+  material_build_wire "$payload" "$wire" || die "the wire form could not be built" 4
+  total=$(material_wire_total "$wire") || die "the part count could not be computed" 4
+  if ! fm_outbound_material_total_valid "$total" "$MATERIAL_MAX_PARTS"; then
+    printf '%s: this universe needs %s parts and the bound is %s\n' \
+      "$FM_OUTBOUND_TOKEN_PART_BOUND" "$total" "$MATERIAL_MAX_PARTS" >&2
+    exit 3
+  fi
+
+  mkdir -p "$RECORD_DIR" || die "cannot create $RECORD_DIR" 4
+  if ! fm_lock_try_acquire "$RECORD_DIR/.$rid.lock"; then
+    printf '%s: another emit for %s is already in flight\n' \
+      "$FM_OUTBOUND_TOKEN_IN_FLIGHT" "$rid" >&2
+    exit 3
+  fi
+  EMIT_LOCK="$RECORD_DIR/.$rid.lock"
+
+  record=$(record_read "$rid"); record_rc=$?
+  case $record_rc in
+    0) : ;;
+    1) record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue_repo" \
+         "$item" "$pr_ref" "$head" \
+         "$(fm_outbound_venue_canonical "$venue_repo" "$venue_issue")" "$(now_iso)" "$head_source") ;;
+    5) die "$FM_OUTBOUND_TOKEN_IDENTITY: correlation record $rid belongs to another request" 3 ;;
+    *) die "$FM_OUTBOUND_TOKEN_UNREADABLE: correlation record $rid could not be validated" 4 ;;
+  esac
+
+  # RE-PREPARING THE SAME SUBJECT IS A NO-OP, and re-preparing a DIFFERENT one
+  # is refused rather than applied. That asymmetry is the whole successor rule:
+  # an interrupted preparation must be safe to repeat, and a changed universe
+  # must never be written over a generation that has already published parts
+  # under the old one. The second case is what `material succeed` exists for.
+  if printf '%s' "$record" | jq -e --arg s "$FM_OUTBOUND_MATERIAL_SCHEMA" \
+    '.material.schema? == $s' >/dev/null 2>&1; then
+    if printf '%s' "$record" | jq -e --arg m "$identity" --arg d "$subject_digest" \
+      '.material.generation.manifest_identity == $m and .material.generation.subject_digest == $d' \
+      >/dev/null 2>&1; then
+      cp "$payload" "$(material_payload_path "$rid" \
+        "$(printf '%s' "$record" | jq -r '.material.generation.artifact_generation')")" \
+        || die "the prepared payload could not be checkpointed" 4
+      record_write "$rid" "$record" || die "could not write the correlation record" 4
+      printf 'already prepared: %s generation %s, %s part(s)\n' "$rid" \
+        "$(printf '%s' "$record" | jq -r '.material.generation.artifact_generation')" \
+        "$(printf '%s' "$record" | jq -r '.material.parts.total')"
+      release_emit_lock
+      return 0
+    fi
+    printf '%s: %s already carries generation %s for a different subject\n' \
+      "$FM_OUTBOUND_TOKEN_SUBJECT_MOVED" "$rid" \
+      "$(printf '%s' "$record" | jq -r '.material.generation.artifact_generation')" >&2
+    printf 'A changed universe becomes an explicit successor generation, never an overwrite: open one with material succeed.\n' >&2
+    exit 3
+  fi
+
+  identities='[]'
+  index=1
+  while [ "$index" -le "$total" ]; do
+    part_identity=$(fm_outbound_part_identity "$rid" 1 "$subject_digest" "$index" "$total") \
+      || die "a part identity could not be computed" 4
+    identities=$(printf '%s' "$identities" | jq --arg i "$part_identity" '. + [$i]') \
+      || die "the part identity list could not be built" 4
+    index=$((index + 1))
+  done
+
+  now=$(now_iso)
+  material=$(fm_outbound_material_new "$venue_repo" "$venue_issue" "$rid" 1 \
+    "$identity" "$subject_digest" "$total" "$identities" \
+    "$(jq -n --argjson r "$required" --argjson c "$classified" --argjson x "$exact" \
+        --argjson d "$derivative" --argjson o "$omitted" --argjson u "$duplicates" \
+        --arg v "$verdict" \
+        '{required:$r,classified:$c,exact:$x,derivative:$d,omitted:$o,duplicates:$u,verdict:$v}')" \
+    "$now") || die "the material generation could not be built" 4
+  record=$(printf '%s' "$record" | jq --argjson m "$material" --arg n "$now" \
+    '.material = $m | .updated = $n') || die "the record could not be extended" 4
+  cp "$payload" "$(material_payload_path "$rid" 1)" \
+    || die "the prepared payload could not be checkpointed" 4
+  record_write "$rid" "$record" || die "could not write the correlation record" 4
+  printf 'prepared: %s generation 1 for %s#%s - %s part(s), %s exact, %s derivative, %s required\n' \
+    "$rid" "$venue_repo" "$venue_issue" "$total" "$exact" "$derivative" "$required"
+  release_emit_lock
+}
+
+cmd_material_emit() {  # <request-id>
+  local rid=$1 rec venue_pair venue_repo venue_issue comments rc wire total subject gen
+  local index identity comment attempt delay body posted=0 adopted=0 moved_rc
+
+  material_require_record "$rid"; rec=$RECORD
+  case "$(fm_outbound_material_publication_state "$rec")" in
+    TERMINAL)
+      printf '%s: request %s is closed or superseded; its generation is history\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" >&2
+      exit 3 ;;
+    STALE)
+      printf '%s: generation %s of %s is stale; publish its successor, never more of it\n' \
+        "$FM_OUTBOUND_TOKEN_SUBJECT_MOVED" \
+        "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')" "$rid" >&2
+      exit 3 ;;
+    COMPLETE_VERIFIED)
+      printf 'already complete: %s generation %s needs no further parts\n' "$rid" \
+        "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')"
+      return 0 ;;
+  esac
+
+  # THE SUBJECT IS RECHECKED BEFORE ANY BYTE IS ADDED, not only before
+  # completion. Publishing one more part of a generation whose subject has
+  # already moved manufactures evidence about a head nobody is asking about, and
+  # it does so under an identity that still looks current.
+  material_subject_moved "$rec"; moved_rc=$?
+  case $moved_rc in
+    0) : ;;
+    1) material_mark_stale "$rid" "$rec" "the bound head moved before this generation finished publishing" \
+         || die "could not record that generation went stale" 4
+       printf '%s: the head %s was bound to has moved; generation %s is now stale\n' \
+         "$FM_OUTBOUND_TOKEN_SUBJECT_MOVED" "$rid" \
+         "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')" >&2
+       exit 3 ;;
+    *) printf '%s: whether %s still describes its subject could not be observed; refusing to publish more of it\n' \
+         "$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED" "$rid" >&2
+       exit 4 ;;
+  esac
+
+  venue_pair=$(material_record_venue "$rec") || {
+    printf '%s: the venue recorded for %s is not addressable\n' \
+      "$FM_OUTBOUND_TOKEN_VENUE_INVALID" "$rid" >&2
+    exit 3
+  }
+  venue_repo=$(printf '%s' "$venue_pair" | cut -f1)
+  venue_issue=$(printf '%s' "$venue_pair" | cut -f2)
+
+  require_base64 || die "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE: no usable base64 decoder was found" 4
+  wire=$(material_require_wire "$rec" "$SCRATCH") || {
+    printf '%s: the prepared payload for %s is absent or no longer digests to its own generation\n' \
+      "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE" "$rid" >&2
+    printf 'Re-run material prepare with the same manifest; the same universe produces the same bytes.\n' >&2
+    exit 4
+  }
+
+  if ! fm_lock_try_acquire "$RECORD_DIR/.$rid.lock"; then
+    printf '%s: another emit for %s is already in flight\n' \
+      "$FM_OUTBOUND_TOKEN_IN_FLIGHT" "$rid" >&2
+    exit 3
+  fi
+  EMIT_LOCK="$RECORD_DIR/.$rid.lock"
+
+  total=$(printf '%s' "$rec" | jq -r '.material.parts.total')
+  subject=$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  comments="$SCRATCH/venue-comments"
+  material_read_venue_comments "$venue_repo" "$venue_issue" "$comments"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s: the complete comment collection of %s#%s could not be read, so no part is provably absent\n' \
+      "$FM_OUTBOUND_TOKEN_COLLECTION_TRUNCATED" "$venue_repo" "$venue_issue" >&2
+    exit 4
+  fi
+
+  index=1
+  while [ "$index" -le "$total" ]; do
+    identity=$(fm_outbound_part_identity "$rid" "$gen" "$subject" "$index" "$total") \
+      || die "a part identity could not be computed" 4
+    comment=$(material_observe_part "$comments" "$rec" "$index" "$identity" "$SCRATCH/observed"); rc=$?
+    case $rc in
+      0)
+        # ALREADY PUBLISHED AND EXACT. This is both ordinary duplicate
+        # suppression and the resume path, because they are the same question,
+        # and it is why an interrupted publication costs one reobservation
+        # rather than a second copy of every part already on the venue.
+        rec=$(printf '%s' "$rec" | jq --arg k "$index" --arg c "$comment" --arg n "$(now_iso)" \
+          '.material.parts.published[$k] = $c | .updated = $n') \
+          || die "the published part could not be recorded" 4
+        record_write "$rid" "$rec" || die "could not write the correlation record" 4
+        adopted=$((adopted + 1))
+        index=$((index + 1))
+        continue ;;
+      1) : ;;
+      6) die "$FM_OUTBOUND_TOKEN_IDENTITY_COLLISION: two comments claim part $index/$total of $rid with different bytes" 3 ;;
+      8) die "$FM_OUTBOUND_TOKEN_GENERATION_MISMATCH: a comment claims part $index/$total of $rid but binds a different generation" 3 ;;
+      9) die "$FM_OUTBOUND_TOKEN_RECONSTRUCTION: part $index/$total of $rid does not cover its own bytes" 3 ;;
+      10) die "$FM_OUTBOUND_TOKEN_VENUE_MISMATCH: a comment claims part $index/$total of $rid but is addressed to another venue" 3 ;;
+      *) die "$FM_OUTBOUND_TOKEN_PART_UNREADABLE: part $index/$total of $rid could not be observed; refusing to post over it" 4 ;;
+    esac
+
+    material_cut_chunk "$wire" "$index" "$SCRATCH/chunk" \
+      || die "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE: part $index could not be cut from the prepared payload" 4
+    body=$(fm_outbound_material_part_body "$rec" "$index" "$identity" \
+      "$(fm_outbound_sha256 < "$SCRATCH/chunk")" "$SCRATCH/chunk") \
+      || die "part $index could not be rendered" 4
+
+    attempt=0
+    delay=$BACKOFF_BASE
+    while [ "$attempt" -lt "$ATTEMPTS" ]; do
+      attempt=$((attempt + 1))
+      # fm-retrieval-audit: write - this creates a comment and draws no conclusion from a collection read.
+      if jq -n --arg b "$body" '{body:$b}' | obs gh api \
+        "repos/$venue_repo/issues/$venue_issue/comments" --input - >/dev/null; then
+        break
+      fi
+      # A failed transport response is not a failed post. Reobserve before
+      # retrying, exactly as the single-comment path does, so an accepted
+      # comment whose response was lost is adopted instead of duplicated.
+      material_read_venue_comments "$venue_repo" "$venue_issue" "$comments" \
+        || die "$FM_OUTBOUND_TOKEN_PART_UNREADABLE: part $index presence could not be reobserved after a transport failure" 4
+      if material_observe_part "$comments" "$rec" "$index" "$identity" "$SCRATCH/observed" >/dev/null; then
+        break
+      fi
+      [ "$attempt" -lt "$ATTEMPTS" ] || \
+        die "$FM_OUTBOUND_TOKEN_PART_MISSING: part $index/$total of $rid was not accepted after $ATTEMPTS attempts; every earlier part stays published" 4
+      case $delay in ''|*[!0-9]*) delay=0 ;; esac
+      if [ "$delay" -gt 0 ]; then sleep "$delay"; delay=$((delay * 2)); fi
+    done
+
+    material_read_venue_comments "$venue_repo" "$venue_issue" "$comments" \
+      || die "$FM_OUTBOUND_TOKEN_PART_UNREADABLE: part $index could not be confirmed after posting" 4
+    comment=$(material_observe_part "$comments" "$rec" "$index" "$identity" "$SCRATCH/observed"); rc=$?
+    [ "$rc" -eq 0 ] || \
+      die "$FM_OUTBOUND_TOKEN_PART_MISSING: part $index/$total of $rid was posted but could not be reobserved" 4
+    rec=$(printf '%s' "$rec" | jq --arg k "$index" --arg c "$comment" --arg n "$(now_iso)" \
+      '.material.parts.published[$k] = $c | .updated = $n') \
+      || die "the published part could not be recorded" 4
+    # CHECKPOINT PER PART, not per run. An interruption after part 7 of 9 must
+    # cost two parts, not nine.
+    record_write "$rid" "$rec" || die "could not write the correlation record" 4
+    posted=$((posted + 1))
+    index=$((index + 1))
+  done
+
+  printf 'published: %s generation %s on %s#%s - %s part(s) posted, %s already exact\n' \
+    "$rid" "$gen" "$venue_repo" "$venue_issue" "$posted" "$adopted"
+  release_emit_lock
+}
+
+cmd_material_verify() {  # <request-id> <json>
+  local rid=$1 json=$2 rec venue_pair venue_repo venue_issue comments rc gen states
+  material_require_record "$rid"; rec=$RECORD
+  venue_pair=$(material_record_venue "$rec") || {
+    printf '%s: the venue recorded for %s is not addressable\n' \
+      "$FM_OUTBOUND_TOKEN_VENUE_INVALID" "$rid" >&2
+    exit 3
+  }
+  venue_repo=$(printf '%s' "$venue_pair" | cut -f1)
+  venue_issue=$(printf '%s' "$venue_pair" | cut -f2)
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  comments="$SCRATCH/venue-comments"
+  material_read_venue_comments "$venue_repo" "$venue_issue" "$comments"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s: the complete comment collection of %s#%s could not be read, so this generation is NOT reported complete\n' \
+      "$FM_OUTBOUND_TOKEN_COLLECTION_TRUNCATED" "$venue_repo" "$venue_issue" >&2
+    exit 4
+  fi
+  material_verify_generation "$rec" "$comments" "$SCRATCH"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$MATERIAL_VERIFY_REASON" >&2
+    printf 'Generation %s of %s is NOT complete and no transition follows from it.\n' "$gen" "$rid" >&2
+    exit "$rc"
+  fi
+  rec=$(printf '%s' "$rec" | jq --argjson v "$MATERIAL_VERIFIED" --arg n "$(now_iso)" \
+    '.material.parts.verified = $v | .updated = $n') \
+    || die "the verification result could not be recorded" 4
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+  if [ "$json" = 1 ]; then
+    printf '%s' "$rec" | jq '.material'
+    return 0
+  fi
+  states=$(material_render_states "$rec") || die "a computed lifecycle value fell outside its declared vocabulary" 4
+  printf '%s: %s generation %s reconstructed the exact subject %s from %s part(s) at %s#%s\n' \
+    "$FM_OUTBOUND_TOKEN_MATERIAL_COMPLETE" "$rid" "$gen" \
+    "$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')" \
+    "$(printf '%s' "$rec" | jq -r '.material.parts.total')" "$venue_repo" "$venue_issue"
+  printf '  publication: %s · next request: %s · correlation: %s\n' \
+    "$(printf '%s' "$states" | cut -f1)" \
+    "$(printf '%s' "$states" | cut -f2)" \
+    "$(printf '%s' "$states" | cut -f3)"
+}
+
+# THE COMPLETION TRANSITION, AND THE ONLY ONE.
+#
+# Completion is reached by evidence rather than by arriving here: the generation
+# is reobserved and reconstructed inside this call, and the successor request is
+# emitted by THAT result rather than by the shell reaching the next line. That is
+# the difference the contract asks for - a publication that is complete because
+# its bytes were proven, not because a script ran to the end.
+cmd_material_complete() {  # <request-id>
+  local rid=$1 rec venue_pair venue_repo venue_issue comments rc gen moved_rc
+  local body found now
+  material_require_record "$rid"; rec=$RECORD
+
+  case "$(fm_outbound_material_publication_state "$rec")" in
+    COMPLETE_VERIFIED)
+      # EXACTLY ONE TRANSITION. A second call is refused rather than treated as
+      # a repeat, because the transition has an outward effect and "do it again
+      # if it already happened" is how one request becomes two.
+      printf '%s: generation %s of %s already completed at %s\n' \
+        "$FM_OUTBOUND_TOKEN_ALREADY_COMPLETE" \
+        "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')" "$rid" \
+        "$(printf '%s' "$rec" | jq -r '.material.completed.at')" >&2
+      exit 3 ;;
+    TERMINAL)
+      printf '%s: request %s is closed or superseded and cannot complete a generation\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" >&2
+      exit 3 ;;
+    STALE)
+      printf '%s: generation %s of %s is stale and can never complete; its successor must\n' \
+        "$FM_OUTBOUND_TOKEN_SUBJECT_MOVED" \
+        "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')" "$rid" >&2
+      exit 3 ;;
+  esac
+
+  material_subject_moved "$rec"; moved_rc=$?
+  case $moved_rc in
+    0) : ;;
+    1) material_mark_stale "$rid" "$rec" "the bound head moved before this generation completed" \
+         || die "could not record that generation went stale" 4
+       printf '%s: the head %s was bound to moved before completion; the generation is stale and no request follows it\n' \
+         "$FM_OUTBOUND_TOKEN_SUBJECT_MOVED" "$rid" >&2
+       exit 3 ;;
+    *) printf '%s: whether %s still describes its subject could not be observed; refusing to complete it\n' \
+         "$FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED" "$rid" >&2
+       exit 4 ;;
+  esac
+
+  venue_pair=$(material_record_venue "$rec") || {
+    printf '%s: the venue recorded for %s is not addressable\n' \
+      "$FM_OUTBOUND_TOKEN_VENUE_INVALID" "$rid" >&2
+    exit 3
+  }
+  venue_repo=$(printf '%s' "$venue_pair" | cut -f1)
+  venue_issue=$(printf '%s' "$venue_pair" | cut -f2)
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+
+  if ! fm_lock_try_acquire "$RECORD_DIR/.$rid.lock"; then
+    printf '%s: another emit for %s is already in flight\n' \
+      "$FM_OUTBOUND_TOKEN_IN_FLIGHT" "$rid" >&2
+    exit 3
+  fi
+  EMIT_LOCK="$RECORD_DIR/.$rid.lock"
+
+  comments="$SCRATCH/venue-comments"
+  material_read_venue_comments "$venue_repo" "$venue_issue" "$comments"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s: the complete comment collection of %s#%s could not be read, so completeness is unknown and completion is refused\n' \
+      "$FM_OUTBOUND_TOKEN_COLLECTION_TRUNCATED" "$venue_repo" "$venue_issue" >&2
+    exit 4
+  fi
+  # THE SAME FOLD `verify` USES. Not a second, lighter check that happens to run
+  # at completion: one owner for "is this generation exact", so completion can
+  # never accept what verification would refuse.
+  material_verify_generation "$rec" "$comments" "$SCRATCH"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s\n' "$MATERIAL_VERIFY_REASON" >&2
+    printf 'Generation %s of %s is not complete, so no successor request is emitted.\n' "$gen" "$rid" >&2
+    exit "$rc"
+  fi
+
+  now=$(now_iso)
+  rec=$(printf '%s' "$rec" | jq --argjson v "$MATERIAL_VERIFIED" --arg n "$now" \
+    '.material.parts.verified = $v
+     | .material.completed = {at:$n, parts:(.material.parts.total)}
+     | .updated = $n') || die "completion could not be recorded" 4
+  # CHECKPOINT BEFORE THE OUTWARD EFFECT, the same order the single-comment emit
+  # uses: a process killed between here and the post leaves durable evidence that
+  # a successor may be in flight, and the adoption below reads the venue rather
+  # than guessing from it.
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+
+  body=$(fm_outbound_material_next_request_body "$rec") \
+    || die "the successor request could not be rendered" 4
+  found=$(sol_material_next_present "$comments" "$rid"); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    # fm-retrieval-audit: write - this creates a comment and draws no conclusion from a collection read.
+    jq -n --arg b "$body" '{body:$b}' | obs gh api \
+      "repos/$venue_repo/issues/$venue_issue/comments" --input - >/dev/null \
+      || die "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED: the successor request for $rid was not accepted; the generation stays complete and the transition stays untaken" 4
+    material_read_venue_comments "$venue_repo" "$venue_issue" "$comments" \
+      || die "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED: the successor request for $rid could not be confirmed" 4
+    found=$(sol_material_next_present "$comments" "$rid") \
+      || die "$FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED: the successor request for $rid was posted but could not be reobserved" 4
+  fi
+  rec=$(printf '%s' "$rec" | jq --arg c "$found" --arg n "$(now_iso)" \
+    '.material.next_request = {comment_id:$c, at:$n}
+     | .comment_id = (.comment_id // $c)
+     | .state = (if .state == "emitting" then "emitted" else .state end)
+     | .updated = $n') || die "the successor request could not be recorded" 4
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+  printf 'complete: %s generation %s verified at %s#%s; successor request is comment %s\n' \
+    "$rid" "$gen" "$venue_repo" "$venue_issue" "$found"
+  release_emit_lock
+}
+
+# The successor request in an already-complete collection, matched on the
+# request marker the single-comment path already owns.
+sol_material_next_present() {  # <comments-file> <request-id>
+  local comments=$1 rid=$2 row id body
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    id=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[0] | tostring' 2>/dev/null) || continue
+    body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]' 2>/dev/null) || continue
+    printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_BODY_MARKER $rid" || continue
+    printf '%s\n' "$id"
+    return 0
+  done < "$comments"
+  return 1
+}
+
+# ONE EXPLICIT SUCCESSOR, AFTER A RECHECK, AND NEVER A REWRITE.
+#
+# The prior generation is pushed into history exactly as it stands - its parts,
+# its comment ids, its digests, its staleness reason - and the successor starts
+# clean at generation+1. Nothing about what was already published is edited,
+# because the published parts are a true record of what a reviewer was shown and
+# a corrected copy of that record would be a lie about the past.
+cmd_material_succeed() {  # <request-id> <manifest-file>
+  local rid=$1 manifest_file=$2 rec manifest resolve_rc accounting verdict
+  local required classified exact derivative omitted duplicates identity payload
+  local subject_digest wire total index part_identity identities gen next_gen now material
+  material_require_record "$rid"; rec=$RECORD
+
+  if [ "$(fm_outbound_material_publication_state "$rec")" != STALE ]; then
+    printf '%s: generation %s of %s is not stale, so it has no successor to open\n' \
+      "$FM_OUTBOUND_TOKEN_NOT_STALE" \
+      "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')" "$rid" >&2
+    printf 'A successor is how a MOVED subject is republished; it is never a way to replace a generation that still stands.\n' >&2
+    exit 3
+  fi
+
+  manifest=$(material_resolve_manifest "$manifest_file"); resolve_rc=$?
+  case $resolve_rc in
+    0) : ;;
+    2) printf '%s: an entry in %s names bytes that could not be read\n' \
+         "$FM_OUTBOUND_TOKEN_MANIFEST_UNREADABLE" "$manifest_file" >&2
+       exit 4 ;;
+    *) printf '%s: %s is not a readable %s document\n' \
+         "$FM_OUTBOUND_TOKEN_MANIFEST_UNREADABLE" "$manifest_file" \
+         "$FM_OUTBOUND_MATERIAL_MANIFEST_SCHEMA" >&2
+       exit 4 ;;
+  esac
+
+  accounting=$(fm_outbound_material_accounting "$manifest")
+  required=$(printf '%s' "$accounting" | cut -f1)
+  classified=$(printf '%s' "$accounting" | cut -f2)
+  exact=$(printf '%s' "$accounting" | cut -f3)
+  derivative=$(printf '%s' "$accounting" | cut -f4)
+  omitted=$(printf '%s' "$accounting" | cut -f5)
+  duplicates=$(printf '%s' "$accounting" | cut -f6)
+  verdict=$(printf '%s' "$accounting" | cut -f7)
+  case $verdict in
+    complete) : ;;
+    incomplete)
+      printf '%s: the successor universe declares %s required artifacts and classified %s (%s omitted, %s duplicated)\n' \
+        "$FM_OUTBOUND_TOKEN_UNIVERSE_INCOMPLETE" "$required" "$classified" "$omitted" "$duplicates" >&2
+      exit 3 ;;
+    *)
+      printf '%s: the successor universe could not be counted, so its completeness is unknown\n' \
+        "$FM_OUTBOUND_TOKEN_UNIVERSE_UNCERTAIN" >&2
+      exit 4 ;;
+  esac
+
+  identity=$(fm_outbound_material_canonical "$manifest" | fm_outbound_sha256) \
+    || die "the manifest identity could not be computed" 4
+  payload="$SCRATCH/payload"
+  material_build_payload "$manifest" "$identity" "$payload" || {
+    printf '%s: the successor universe could not be assembled into a payload\n' \
+      "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE" >&2
+    exit 4
+  }
+  subject_digest=$(fm_outbound_sha256 < "$payload") \
+    || die "the successor subject digest could not be computed" 4
+  require_base64 || die "$FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE: no usable base64 decoder was found" 4
+  wire="$SCRATCH/wire"
+  material_build_wire "$payload" "$wire" || die "the wire form could not be built" 4
+  total=$(material_wire_total "$wire") || die "the part count could not be computed" 4
+  if ! fm_outbound_material_total_valid "$total" "$MATERIAL_MAX_PARTS"; then
+    printf '%s: the successor universe needs %s parts and the bound is %s\n' \
+      "$FM_OUTBOUND_TOKEN_PART_BOUND" "$total" "$MATERIAL_MAX_PARTS" >&2
+    exit 3
+  fi
+
+  if ! fm_lock_try_acquire "$RECORD_DIR/.$rid.lock"; then
+    printf '%s: another emit for %s is already in flight\n' \
+      "$FM_OUTBOUND_TOKEN_IN_FLIGHT" "$rid" >&2
+    exit 3
+  fi
+  EMIT_LOCK="$RECORD_DIR/.$rid.lock"
+
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  case $gen in ''|*[!0-9]*) die "the current generation could not be read" 4 ;; esac
+  next_gen=$((gen + 1))
+
+  identities='[]'
+  index=1
+  while [ "$index" -le "$total" ]; do
+    part_identity=$(fm_outbound_part_identity "$rid" "$next_gen" "$subject_digest" "$index" "$total") \
+      || die "a successor part identity could not be computed" 4
+    identities=$(printf '%s' "$identities" | jq --arg i "$part_identity" '. + [$i]') \
+      || die "the successor part identity list could not be built" 4
+    index=$((index + 1))
+  done
+
+  now=$(now_iso)
+  material=$(fm_outbound_material_new \
+    "$(printf '%s' "$rec" | jq -r '.material.venue.repository')" \
+    "$(printf '%s' "$rec" | jq -r '.material.venue.issue')" \
+    "$rid" "$next_gen" "$identity" "$subject_digest" "$total" "$identities" \
+    "$(jq -n --argjson r "$required" --argjson c "$classified" --argjson x "$exact" \
+        --argjson d "$derivative" --argjson o "$omitted" --argjson u "$duplicates" \
+        --arg v "$verdict" \
+        '{required:$r,classified:$c,exact:$x,derivative:$d,omitted:$o,duplicates:$u,verdict:$v}')" \
+    "$now") || die "the successor generation could not be built" 4
+  # The prior generation moves into history VERBATIM, with its own history
+  # dropped so the list stays flat rather than nesting each ancestor inside the
+  # next. Nothing else about it is touched.
+  rec=$(printf '%s' "$rec" | jq --argjson m "$material" --arg n "$now" \
+    '.material as $prior
+     | .material = ($m | .history = ($prior.history + [$prior | del(.history)]))
+     | .updated = $n') || die "the successor could not be recorded" 4
+  cp "$payload" "$(material_payload_path "$rid" "$next_gen")" \
+    || die "the successor payload could not be checkpointed" 4
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+  printf 'succeeded: %s generation %s opened after generation %s went stale - %s part(s), %s exact, %s derivative\n' \
+    "$rid" "$next_gen" "$gen" "$total" "$exact" "$derivative"
+  release_emit_lock
+}
+
+# Material visibility, queryable from the owner that already holds it. Reading
+# is not verification and says so: every count here is what the RECORD holds,
+# and only `material verify` reobserves the venue.
+cmd_material_show() {  # <request-id> <json>
+  local rid=$1 json=$2 rec states published verified
+  material_require_record "$rid"; rec=$RECORD
+  if [ "$json" = 1 ]; then
+    states=$(material_render_states "$rec") || die "a computed lifecycle value fell outside its declared vocabulary" 4
+    printf '%s' "$rec" | jq --arg p "$(printf '%s' "$states" | cut -f1)" \
+      --arg n "$(printf '%s' "$states" | cut -f2)" \
+      --arg d "$(printf '%s' "$states" | cut -f3)" \
+      '.material + {publication_state:$p, next_request_state:$n, disposition_state:$d}'
+    return 0
+  fi
+  states=$(material_render_states "$rec") || die "a computed lifecycle value fell outside its declared vocabulary" 4
+  published=$(printf '%s' "$rec" | jq -r '.material.parts.published | length')
+  verified=$(printf '%s' "$rec" | jq -r '.material.parts.verified | length')
+  printf '%s\n' "$rid"
+  printf '  item: %s · head: %s\n' \
+    "$(printf '%s' "$rec" | jq -r '.identity.item')" \
+    "$(printf '%s' "$rec" | jq -r '.identity.head')"
+  printf '  venue: %s#%s\n' \
+    "$(printf '%s' "$rec" | jq -r '.material.venue.repository')" \
+    "$(printf '%s' "$rec" | jq -r '.material.venue.issue')"
+  printf '  generation: %s · manifest: %s · subject: %s\n' \
+    "$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')" \
+    "$(printf '%s' "$rec" | jq -r '.material.generation.manifest_identity')" \
+    "$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')"
+  printf '  parts: %s total · %s published · %s verified (record state, not a reobservation)\n' \
+    "$(printf '%s' "$rec" | jq -r '.material.parts.total')" "$published" "$verified"
+  printf '  universe: %s required · %s exact · %s derivative · %s omitted · %s duplicated · %s\n' \
+    "$(printf '%s' "$rec" | jq -r '.material.accounting.required')" \
+    "$(printf '%s' "$rec" | jq -r '.material.accounting.exact')" \
+    "$(printf '%s' "$rec" | jq -r '.material.accounting.derivative')" \
+    "$(printf '%s' "$rec" | jq -r '.material.accounting.omitted')" \
+    "$(printf '%s' "$rec" | jq -r '.material.accounting.duplicates')" \
+    "$(printf '%s' "$rec" | jq -r '.material.accounting.verdict')"
+  printf '  publication: %s · next request: %s · correlation: %s\n' \
+    "$(printf '%s' "$states" | cut -f1)" \
+    "$(printf '%s' "$states" | cut -f2)" \
+    "$(printf '%s' "$states" | cut -f3)"
+  printf '  superseded generations: %s\n' \
+    "$(printf '%s' "$rec" | jq -r '.material.history | length')"
+}
+
 # --- entry -------------------------------------------------------------------
 
 usage() { sed -n '2,/^set -u$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
@@ -1714,6 +2768,51 @@ case $CMD in
   show)
     [ $# -gt 0 ] || die "show needs a request id"
     record_read "$1" || die "no readable record for '$1'" 4
+    ;;
+  material)
+    [ $# -gt 0 ] || die "material needs a subcommand"
+    SUB=$1; shift
+    RID=; ITEM=; MANIFEST=; VENUE=; MJSON=0
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --request) RID=${2:-}; shift 2 ;;
+        --manifest) MANIFEST=${2:-}; shift 2 ;;
+        --venue) VENUE=${2:-}; shift 2 ;;
+        --json) MJSON=1; shift ;;
+        -*) die "unknown option '$1'" ;;
+        *) ITEM=$1; shift ;;
+      esac
+    done
+    case $SUB in
+      prepare)
+        [ -n "$ITEM" ] || die "material prepare needs an item id"
+        [ -n "$MANIFEST" ] || die "material prepare needs --manifest"
+        cmd_material_prepare "$ITEM" "$MANIFEST" "$VENUE"
+        ;;
+      emit)
+        [ -n "$RID" ] || die "material emit needs --request"
+        cmd_material_emit "$RID"
+        ;;
+      verify)
+        [ -n "$RID" ] || die "material verify needs --request"
+        cmd_material_verify "$RID" "$MJSON"
+        ;;
+      complete)
+        [ -n "$RID" ] || die "material complete needs --request"
+        cmd_material_complete "$RID"
+        ;;
+      succeed)
+        [ -n "$RID" ] || die "material succeed needs --request"
+        [ -n "$MANIFEST" ] || die "material succeed needs --manifest"
+        cmd_material_succeed "$RID" "$MANIFEST"
+        ;;
+      show)
+        [ -n "$RID" ] || RID=$ITEM
+        [ -n "$RID" ] || die "material show needs a request id"
+        cmd_material_show "$RID" "$MJSON"
+        ;;
+      *) die "unknown material subcommand '$SUB'" ;;
+    esac
     ;;
   *) die "unknown command '$CMD'" ;;
 esac

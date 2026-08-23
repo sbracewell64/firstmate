@@ -244,14 +244,28 @@ FM_OUTBOUND_REQUEST_ID_HEX_WIDTH=12
 FM_OUTBOUND_REQUEST_ID_PATTERN="${FM_OUTBOUND_REQUEST_ID_PREFIX}[0-9a-f]\\{${FM_OUTBOUND_REQUEST_ID_HEX_WIDTH}\\}"
 export FM_OUTBOUND_REQUEST_ID_PATTERN
 
-fm_outbound_digest() {  # reads stdin, prints a lowercase hex request digest
+# ONE hashing owner for this module, at full width. The request id truncates it
+# and the material block does not, so a change of hash here moves both together
+# rather than leaving two functions to drift into two different digests of the
+# same bytes.
+fm_outbound_sha256() {  # reads stdin, prints the full lowercase hex sha256
   if command -v sha256sum >/dev/null 2>&1; then
-    sha256sum | awk -v width="$FM_OUTBOUND_REQUEST_ID_HEX_WIDTH" '{print substr($1,1,width)}'
+    sha256sum | awk '{print $1}'
   elif command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 | awk -v width="$FM_OUTBOUND_REQUEST_ID_HEX_WIDTH" '{print substr($1,1,width)}'
+    shasum -a 256 | awk '{print $1}'
   else
     return 1
   fi
+}
+
+fm_outbound_digest() {  # reads stdin, prints a lowercase hex request digest
+  local full
+  full=$(fm_outbound_sha256) || return 1
+  case $full in
+    "") return 1 ;;
+  esac
+  printf '%s\n' "$(printf '%s' "$full" \
+    | cut -c "1-$FM_OUTBOUND_REQUEST_ID_HEX_WIDTH")"
 }
 
 # --- gate vocabulary ---------------------------------------------------------
@@ -599,6 +613,486 @@ fm_outbound_request_body() {  # <record-json> [<rationale-file>]
     cat "$rationale"
     printf '\n'
   fi
+}
+
+# --- the material universe: content-addressed multipart publication ----------
+#
+# WHY THIS LIVES INSIDE THE OUTBOUND RECORD RATHER THAN BESIDE IT
+#
+# A control request sometimes has to carry MATERIAL - the exact bytes a reviewer
+# must read - and not only a question about a head. The bytes do not fit in one
+# comment, so the request becomes several, and the moment a request is several
+# comments three facts nobody owned have to be owned: which parts exist, whether
+# what comes back reconstructs the exact bytes that went out, and whether the
+# thing being published still describes the subject that was prepared.
+#
+# One such publication has already been completed BY HAND on this control plane.
+# It worked, which is precisely the problem: it is a positive transport fixture
+# with no code behind it, so nothing can repeat it, resume it after an
+# interruption, or refuse it when it goes wrong.
+#
+# It is filed HERE, and not next to here, for the same reason the pull-request
+# channel was folded into this invariant rather than built alongside it. A
+# second publisher brings a second identity rule, a second dedupe story and a
+# second answer to "is this correlation finished" - the second control plane the
+# original authorisation forbids. So a multipart publication is ONE outbound
+# record carrying an OPTIONAL material block, joined to the same request
+# identity, written under the same lock, into the same record directory, over
+# the same forge seam.
+#
+# THE RECORD SCHEMA IS DELIBERATELY NOT BUMPED. `material` is optional and
+# carries its own schema, so the two version separately - the rule the record
+# schema constant above already states. Bumping the record to v2 would make
+# every historical record invalid on read, and this fleet's historical records
+# include the malformed and adverse ones it is required to preserve. An additive
+# optional block leaves every one of them exactly as readable as it was.
+#
+# THREE DIGESTS, BECAUSE COLLAPSING ANY TWO LOSES A DISTINCT REFUSAL
+#
+#   manifest identity  digests the ENTRY TABLE - path, class, content digest,
+#                      size, bound authority - and nothing else. It answers
+#                      "is this the same declared universe".
+#   subject digest     digests the PAYLOAD BYTE STREAM that entry table resolves
+#                      to. It answers "do the bytes that came back equal the
+#                      bytes that went out", which a table alone cannot: a table
+#                      can be entirely right about files that were never sent.
+#   part digest        digests ONE wire chunk. It answers "WHICH part is wrong"
+#                      when a reconstruction fails, and a reconstruction that can
+#                      only say "something changed" is not actionable.
+#
+# EXACT VERSUS DERIVATIVE IS A CLASSIFICATION, NOT A QUALITY JUDGEMENT. An EXACT
+# entry publishes its bytes verbatim and stands on them. A DERIVATIVE entry
+# publishes NO bytes at all: it declares its own content digest and names the
+# already-published authority it derives from, and it grants no independent
+# authority. The distinction is load-bearing because the failure it prevents has
+# been observed on this control plane - a derived disposition read as though it
+# were an independent ruling. Both classes are counted in the universe; only one
+# is transmitted.
+
+FM_OUTBOUND_MATERIAL_SCHEMA='fm-outbound-material.v1'
+FM_OUTBOUND_MATERIAL_MANIFEST_SCHEMA='fm-outbound-material-manifest.v1'
+# shellcheck disable=SC2034  # contract constant consumed by the sourcing command
+FM_OUTBOUND_MATERIAL_PAYLOAD_SCHEMA='fm-outbound-material-payload/v1'
+
+# The part marker, derived from the protocol name exactly as the request marker
+# is, so the wire can never disagree with the constant. It is a DIFFERENT marker
+# from the request's: a part is not a request, and a reader that cannot tell them
+# apart would adopt a part as the artifact that satisfies the gate.
+FM_OUTBOUND_MATERIAL_BODY_MARKER="$FM_OUTBOUND_PROTOCOL material-part:"
+
+# The wire fence. Five dashes, chosen so it cannot occur inside what it fences:
+# the chunk between them is base64, whose alphabet has no '-' at all. That is a
+# property of the encoding rather than an inspection of the payload, which is
+# what makes exact extraction decidable instead of merely likely.
+FM_OUTBOUND_MATERIAL_FENCE_BEGIN='-----FM-MATERIAL-PART-BEGIN-----'
+FM_OUTBOUND_MATERIAL_FENCE_END='-----FM-MATERIAL-PART-END-----'
+
+# The closed classification vocabulary for one entry in the universe.
+FM_OUTBOUND_MATERIAL_CLASSES='EXACT
+DERIVATIVE_OF_PUBLISHED_AUTHORITY'
+
+# Publication lifecycle, and the two orthogonal axes beside it. All three are
+# COMPUTED from the record's own evidence rather than stored, for the reason the
+# commitment register states: a stored state is a second claim that can disagree
+# with the facts it summarises, and this one summarises facts - published parts,
+# verified parts, staleness, closure - that are already durable.
+# shellcheck disable=SC2034  # contract constants consumed by sourcing callers
+{
+FM_OUTBOUND_PUBLICATION_STATES='PREPARED
+PARTIAL
+COMPLETE_VERIFIED
+STALE
+TERMINAL'
+FM_OUTBOUND_NEXT_REQUEST_STATES='NOT_ELIGIBLE
+ELIGIBLE
+EMITTED'
+FM_OUTBOUND_DISPOSITION_STATES='OPEN
+PUBLISHED'
+}
+
+# The declared vocabularies above are ENFORCED rather than documented. Each fold
+# below computes a value and this predicate refuses one outside its axis's closed
+# set, so a fold that grows a sixth publication state cannot ship it as prose: a
+# vocabulary nothing checks is a comment wearing a constant's clothes, and this
+# module has already written down that an unemitted constant documents a
+# classification that cannot occur.
+fm_outbound_material_lifecycle_valid() {  # <vocabulary> <value>
+  printf '%s\n' "$1" | grep -qxF "$2"
+}
+
+# Material refusal and could-not-observe tokens, under the same rule as the
+# vocabulary above: every token here must have an emit site, and the test that
+# reads these declarations refuses one this module never expands.
+# shellcheck disable=SC2034  # contract constants consumed by sourcing callers
+{
+FM_OUTBOUND_TOKEN_MATERIAL_ABSENT=FM_OUTBOUND_MATERIAL_ABSENT
+FM_OUTBOUND_TOKEN_MANIFEST_UNREADABLE=FM_OUTBOUND_MATERIAL_MANIFEST_UNREADABLE
+FM_OUTBOUND_TOKEN_UNIVERSE_INCOMPLETE=FM_OUTBOUND_MATERIAL_UNIVERSE_INCOMPLETE
+FM_OUTBOUND_TOKEN_UNIVERSE_UNCERTAIN=FM_OUTBOUND_MATERIAL_UNIVERSE_UNCERTAIN
+FM_OUTBOUND_TOKEN_VENUE_INVALID=FM_OUTBOUND_MATERIAL_VENUE_INVALID
+FM_OUTBOUND_TOKEN_VENUE_MISMATCH=FM_OUTBOUND_MATERIAL_VENUE_MISMATCH
+FM_OUTBOUND_TOKEN_PART_BOUND=FM_OUTBOUND_MATERIAL_PART_BOUND_EXCEEDED
+FM_OUTBOUND_TOKEN_PART_MISSING=FM_OUTBOUND_MATERIAL_PART_MISSING
+FM_OUTBOUND_TOKEN_PART_UNREADABLE=FM_OUTBOUND_MATERIAL_PART_UNREADABLE
+FM_OUTBOUND_TOKEN_IDENTITY_COLLISION=FM_OUTBOUND_MATERIAL_IDENTITY_COLLISION
+FM_OUTBOUND_TOKEN_GENERATION_MISMATCH=FM_OUTBOUND_MATERIAL_GENERATION_MISMATCH
+FM_OUTBOUND_TOKEN_RECONSTRUCTION=FM_OUTBOUND_MATERIAL_RECONSTRUCTION_MISMATCH
+FM_OUTBOUND_TOKEN_COLLECTION_TRUNCATED=FM_OUTBOUND_MATERIAL_COLLECTION_TRUNCATED
+FM_OUTBOUND_TOKEN_SUBJECT_MOVED=FM_OUTBOUND_MATERIAL_SUBJECT_MOVED
+FM_OUTBOUND_TOKEN_ALREADY_COMPLETE=FM_OUTBOUND_MATERIAL_ALREADY_COMPLETE
+FM_OUTBOUND_TOKEN_NOT_STALE=FM_OUTBOUND_MATERIAL_NOT_STALE
+FM_OUTBOUND_TOKEN_PAYLOAD_UNREADABLE=FM_OUTBOUND_MATERIAL_PAYLOAD_UNREADABLE
+FM_OUTBOUND_TOKEN_MATERIAL_COMPLETE=FM_OUTBOUND_MATERIAL_COMPLETE_VERIFIED
+}
+
+# --- venue identity ----------------------------------------------------------
+#
+# THE VENUE IS BOUND INTO THE RECORD, AND THE RECORD IS THE AUTHORITY.
+#
+# The single-comment path resolves its venue from config/sol-control.json on
+# every read, which is correct for it: one fleet, one control issue, and a
+# request that is re-derived from live state each time. Material publication
+# cannot work that way. A generation is published to ONE issue over many calls
+# and many minutes, and re-reading a process-global default between those calls
+# means an edit to the config silently retargets a half-published generation -
+# parts on one issue, the rest on another, and a completion that reconstructs
+# from neither. So the venue is captured once at preparation and every later
+# call addresses THAT venue. The configured default seeds it; it never overrides
+# it.
+fm_outbound_venue_valid() {  # <repository> <issue>
+  printf '%s' "$1" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' || return 1
+  # A positive integer, so "0", "007" and "9x" are all refused. An issue number
+  # is an identity, and a leading zero makes two spellings of one identity.
+  printf '%s' "$2" | grep -Eq '^[1-9][0-9]*$'
+}
+
+fm_outbound_venue_canonical() {  # <repository> <issue>
+  printf '%s#%s\n' "$1" "$2"
+}
+
+fm_outbound_venue_split() {  # <repo#issue> -> repository<TAB>issue
+  local venue=$1 repo issue
+  case $venue in *'#'*) ;; *) return 1 ;; esac
+  repo=${venue%#*}
+  issue=${venue##*#}
+  fm_outbound_venue_valid "$repo" "$issue" || return 1
+  printf '%s\t%s\n' "$repo" "$issue"
+}
+
+# --- the declared universe ---------------------------------------------------
+
+fm_outbound_material_class_valid() {  # <classification>
+  printf '%s\n' "$FM_OUTBOUND_MATERIAL_CLASSES" | grep -qxF "$1"
+}
+
+# COMPLETE-UNIVERSE ACCOUNTING, AS ONE FOLD AND THREE VALUES.
+#
+# The question is not "did every entry publish" but "is the set of entries the
+# whole set there was". Those are different, and only the second can refuse a
+# publication that is internally consistent about a universe someone silently
+# trimmed. So the manifest declares how many artifacts the universe REQUIRES,
+# independently of how many it lists, and this fold compares them.
+#
+# Prints one tab-separated row:
+#   <required> <classified> <exact> <derivative> <omitted> <duplicates> <verdict>
+# verdict is complete | incomplete | uncertain, and uncertain is a real answer:
+# a manifest that cannot be parsed, that declares no required total, that
+# carries an entry outside the closed class vocabulary, or that declares an
+# EMPTY universe is not a clean universe - it is one nobody measured. A
+# publication is allowed to proceed on `complete` alone.
+fm_outbound_material_accounting() {  # <manifest-json>
+  local out
+  out=$(printf '%s' "$1" | jq -r --argjson classes "$(printf '%s\n' "$FM_OUTBOUND_MATERIAL_CLASSES" | jq -Rn '[inputs | select(length > 0)]')" '
+    def uncertain: [-1,-1,-1,-1,-1,-1,"uncertain"];
+    if type != "object" then uncertain
+    elif (.required_total | type) != "number" or (.entries | type) != "array" then uncertain
+    else
+      (.required_total) as $req
+      | (.entries) as $e
+      | ($e | length) as $n
+      | ([$e[] | select(.classification == "EXACT")] | length) as $x
+      | ([$e[] | select(.classification == "DERIVATIVE_OF_PUBLISHED_AUTHORITY")] | length) as $d
+      | ($n - ($e | map(.path) | unique | length)) as $dup
+      | ($req - $n) as $om
+      | [$req, $n, $x, $d, $om, $dup,
+         (if ($req < 1)
+             or ($e | any((.classification // "") as $c | ($classes | index($c)) == null))
+             or ($e | any(.path == null or .digest == null))
+             # A DERIVATIVE entry that names no published authority claims to
+             # derive from something and declines to say what. What it grants
+             # cannot be established from it, so the universe it belongs to
+             # cannot be counted - uncertain, not merely short.
+             or ($e | any(.classification == "DERIVATIVE_OF_PUBLISHED_AUTHORITY"
+                          and ((.authority // "") == "")))
+             or (($x + $d) != $n)
+          then "uncertain"
+          elif ($dup != 0) or ($om != 0) then "incomplete"
+          else "complete" end)]
+    end | @tsv' 2>/dev/null) || out=
+  if [ -z "$out" ]; then
+    printf -- '-1\t-1\t-1\t-1\t-1\t-1\tuncertain\n'
+    return 0
+  fi
+  printf '%s\n' "$out"
+}
+
+# The canonical entry table. Deterministic across shells and jq versions:
+# entries in path order, a fixed field order, and an absent optional field as
+# the literal "-" so "no bound authority" and "authority field omitted" cannot
+# collide into one digest - the same rule the request identity already uses.
+fm_outbound_material_canonical() {  # <manifest-json>
+  printf '%s' "$1" | jq -r \
+    --arg schema "$FM_OUTBOUND_MATERIAL_MANIFEST_SCHEMA" '
+    "manifest-schema=" + $schema,
+    "subject=" + (.subject // "-"),
+    "required-total=" + ((.required_total // 0) | tostring),
+    (.entries | sort_by(.path)[]
+      | "entry=" + .path
+        + " class=" + .classification
+        + " digest=" + .digest
+        + " bytes=" + ((.bytes // 0) | tostring)
+        + " authority=" + (.authority // "-"))'
+}
+
+# --- part identity -----------------------------------------------------------
+#
+# The identity is bound to the POSITION and not to the content, which is the
+# opposite of every other digest here and is the deliberate choice that makes a
+# collision detectable at all. Content-bound identities cannot collide by
+# construction, so two comments carrying different bytes for one part would be
+# two unrelated parts and the wrong-bytes case would have no name. Position-bound
+# identities let exactly that be observed: same identity, different part digest,
+# refused as a collision.
+fm_outbound_part_identity_canonical() {  # <request-id> <generation> <subject-digest> <index> <total>
+  printf 'request=%s\ngeneration=%s\nsubject=%s\nindex=%s\ntotal=%s\n' \
+    "$1" "$2" "$3" "$4" "$5"
+}
+
+fm_outbound_part_identity() {  # <request-id> <generation> <subject-digest> <index> <total>
+  fm_outbound_part_identity_canonical "$@" | fm_outbound_sha256
+}
+
+# A bounded positive count, stated here rather than at the call site so the
+# bound is part of the contract and not of one command's argument parsing.
+fm_outbound_material_total_valid() {  # <total> <max>
+  case $1 in ''|*[!0-9]*) return 1 ;; esac
+  case $2 in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -ge 1 ] || return 1
+  [ "$1" -le "$2" ]
+}
+
+# --- the wire ----------------------------------------------------------------
+
+# One part's exact body. Every binding field the verifier compares appears
+# verbatim and on its own line, so verification is whole-line equality rather
+# than a parse: the same discipline artifact_body_matches_identity already uses
+# for a request.
+fm_outbound_material_part_body() {  # <record-json> <index> <identity> <chunk-digest> <chunk-file>
+  local rec=$1 index=$2 identity=$3 chunk_digest=$4 chunk=$5
+  local rid gen subject manifest venue total
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  subject=$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')
+  manifest=$(printf '%s' "$rec" | jq -r '.material.generation.manifest_identity')
+  venue=$(printf '%s' "$rec" | jq -r \
+    '.material.venue.repository + "#" + (.material.venue.issue | tostring)')
+  total=$(printf '%s' "$rec" | jq -r '.material.parts.total')
+  printf '%s %s\n\n' "$FM_OUTBOUND_MATERIAL_BODY_MARKER" "$identity"
+  printf 'from: firstmate\n'
+  printf 'protocol: %s\n' "$FM_OUTBOUND_PROTOCOL"
+  printf 'request: %s\n' "$rid"
+  printf 'generation: %s\n' "$gen"
+  printf 'subject: %s\n' "$subject"
+  printf 'manifest: %s\n' "$manifest"
+  printf 'venue: %s\n' "$venue"
+  printf 'part: %s/%s\n' "$index" "$total"
+  printf 'part-digest: %s\n' "$chunk_digest"
+  printf '\nThis part carries material bytes and rules on nothing.\n'
+  printf 'It is one member of a generation that is complete only when every part reconstructs the exact subject digest above.\n'
+  printf '\n%s\n' "$FM_OUTBOUND_MATERIAL_FENCE_BEGIN"
+  cat "$chunk"
+  printf '%s\n' "$FM_OUTBOUND_MATERIAL_FENCE_END"
+}
+
+# THE VENUE IS ITS OWN QUESTION, asked separately and answered under its own
+# name. Folding it into the generation check would report "wrong generation" for
+# a part that names this generation perfectly and was addressed to a different
+# issue, and the repair for those two is nothing alike: one regenerates a
+# publication, the other retargets it. This module's own header already records
+# that two tokens were lost exactly this way - the condition detected at a live
+# site and reported under a neighbouring token - so the split is written into the
+# predicates rather than left to the caller's discipline.
+fm_outbound_material_part_venue_binds() {  # <body> <record-json>
+  local venue
+  venue=$(printf '%s' "$2" | jq -r \
+    '.material.venue.repository + "#" + (.material.venue.issue | tostring)')
+  printf '%s\n' "$1" | grep -Fqx "venue: $venue"
+}
+
+# Does this body bind to exactly this part of exactly this generation? Whole-line
+# equality on every axis, so a body that agrees about the request and disagrees
+# about the generation is refused rather than adopted.
+fm_outbound_material_part_binds() {  # <body> <record-json> <index> <identity>
+  local body=$1 rec=$2 index=$3 identity=$4
+  local rid gen subject manifest total
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  subject=$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')
+  manifest=$(printf '%s' "$rec" | jq -r '.material.generation.manifest_identity')
+  total=$(printf '%s' "$rec" | jq -r '.material.parts.total')
+  printf '%s\n' "$body" | grep -Fqx "$FM_OUTBOUND_MATERIAL_BODY_MARKER $identity" \
+    && printf '%s\n' "$body" | grep -Fqx "request: $rid" \
+    && printf '%s\n' "$body" | grep -Fqx "generation: $gen" \
+    && printf '%s\n' "$body" | grep -Fqx "subject: $subject" \
+    && printf '%s\n' "$body" | grep -Fqx "manifest: $manifest" \
+    && printf '%s\n' "$body" | grep -Fqx "part: $index/$total"
+}
+
+# The part digest the body CLAIMS, or empty. Exactly one such line or none:
+# two claims is an ambiguous body, and an ambiguous body is could-not-observe
+# rather than a value to read by position.
+fm_outbound_material_part_claimed_digest() {  # <body>
+  local lines count
+  lines=$(printf '%s\n' "$1" | sed -n 's/^part-digest: //p')
+  count=$(printf '%s\n' "$lines" | grep -c . || true)
+  case $count in ''|*[!0-9]*) count=0 ;; esac
+  [ "$count" -eq 1 ] || return 1
+  printf '%s\n' "$lines"
+}
+
+# The fenced chunk, byte for byte. Exactly one complete fenced block or a
+# refusal: zero is an unreadable part and two is an ambiguous one, and neither
+# is a chunk to hash.
+fm_outbound_material_part_chunk() {  # <body>
+  local body=$1 opens closes
+  # `--` is load-bearing: both fences begin with a dash, so without it grep
+  # reads the pattern as an option bundle and the chunk is never found. The test
+  # library carries the same guard on assert_grep for the same reason.
+  opens=$(printf '%s\n' "$body" | grep -cFx -- "$FM_OUTBOUND_MATERIAL_FENCE_BEGIN" || true)
+  closes=$(printf '%s\n' "$body" | grep -cFx -- "$FM_OUTBOUND_MATERIAL_FENCE_END" || true)
+  case $opens in ''|*[!0-9]*) opens=0 ;; esac
+  case $closes in ''|*[!0-9]*) closes=0 ;; esac
+  [ "$opens" -eq 1 ] && [ "$closes" -eq 1 ] || return 1
+  printf '%s\n' "$body" | awk \
+    -v b="$FM_OUTBOUND_MATERIAL_FENCE_BEGIN" \
+    -v e="$FM_OUTBOUND_MATERIAL_FENCE_END" '
+    $0 == e { inside = 0; next }
+    inside { print }
+    $0 == b { inside = 1 }'
+}
+
+# --- computed lifecycle ------------------------------------------------------
+#
+# THREE AXES, FOLDED SEPARATELY, BECAUSE THEY ANSWER THREE QUESTIONS.
+#
+# publication_state  is the material published and proven?
+# next_request_state has the transition this publication gates been taken?
+# disposition_state  is the correlation itself finished?
+#
+# A publication can be COMPLETE_VERIFIED with its correlation still OPEN, and
+# that is the ordinary shape rather than an anomaly: proving the bytes arrived
+# is not the same as recording what came of them. Folding the three into one
+# state would make the finished-looking case indistinguishable from the finished
+# one, which is the exact conflation the terminal-disposition control refuses.
+
+fm_outbound_material_publication_state() {  # <record-json>
+  local rec=$1 state published total
+  printf '%s' "$rec" | jq -e '.material.schema? != null' >/dev/null 2>&1 || return 1
+  state=$(printf '%s' "$rec" | jq -r '.state // ""')
+  case $state in
+    closed|superseded) printf 'TERMINAL\n'; return 0 ;;
+  esac
+  if printf '%s' "$rec" | jq -e '.material.stale != null' >/dev/null 2>&1; then
+    printf 'STALE\n'; return 0
+  fi
+  if printf '%s' "$rec" | jq -e '.material.completed != null' >/dev/null 2>&1; then
+    printf 'COMPLETE_VERIFIED\n'; return 0
+  fi
+  published=$(printf '%s' "$rec" | jq -r '.material.parts.published | length')
+  total=$(printf '%s' "$rec" | jq -r '.material.parts.total')
+  case $published in ''|*[!0-9]*) return 1 ;; esac
+  case $total in ''|*[!0-9]*) return 1 ;; esac
+  if [ "$published" -eq 0 ]; then printf 'PREPARED\n'; else printf 'PARTIAL\n'; fi
+}
+
+fm_outbound_material_next_request_state() {  # <record-json>
+  local rec=$1
+  printf '%s' "$rec" | jq -e '.material.schema? != null' >/dev/null 2>&1 || return 1
+  if printf '%s' "$rec" | jq -e '.material.next_request != null' >/dev/null 2>&1; then
+    printf 'EMITTED\n'; return 0
+  fi
+  if [ "$(fm_outbound_material_publication_state "$rec")" = COMPLETE_VERIFIED ]; then
+    printf 'ELIGIBLE\n'; return 0
+  fi
+  printf 'NOT_ELIGIBLE\n'
+}
+
+fm_outbound_material_disposition_state() {  # <record-json>
+  local rec=$1
+  printf '%s' "$rec" | jq -e '.material.schema? != null' >/dev/null 2>&1 || return 1
+  if printf '%s' "$rec" | jq -e '.disposition != null' >/dev/null 2>&1; then
+    printf 'PUBLISHED\n'
+  else
+    printf 'OPEN\n'
+  fi
+}
+
+# --- record construction -----------------------------------------------------
+
+fm_outbound_material_new() {  # <repo> <issue> <rid> <generation> <manifest-identity> <subject-digest> <total> <identities-json> <accounting-json> <now>
+  jq -n \
+    --arg schema "$FM_OUTBOUND_MATERIAL_SCHEMA" \
+    --arg protocol "$FM_OUTBOUND_PROTOCOL" \
+    --arg repository "$1" --argjson issue "$2" --arg request_id "$3" \
+    --argjson generation "$4" --arg manifest "$5" --arg subject "$6" \
+    --argjson total "$7" --argjson identities "$8" --argjson accounting "$9" \
+    --arg now "${10}" \
+    '{schema:$schema,
+      venue:{repository:$repository,issue:$issue,protocol:$protocol,request_id:$request_id},
+      generation:{artifact_generation:$generation,manifest_identity:$manifest,
+                  subject_digest:$subject},
+      parts:{total:$total,identities:$identities,published:{},verified:{}},
+      accounting:$accounting,
+      stale:null,
+      completed:null,
+      next_request:null,
+      prepared:$now,
+      history:[]}'
+}
+
+# The successor request body, emitted exactly once by the completion transition.
+# It is a REQUEST like any other on this channel - it carries the request marker
+# and the same binding lines - so the inbound ruling path joins onto it with no
+# second correlation rule. What it adds is the proof the reviewer needs to find
+# the material: the venue, the generation, and the exact digests that generation
+# reconstructed to.
+fm_outbound_material_next_request_body() {  # <record-json>
+  local rec=$1 rid gen subject manifest venue total
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  gen=$(printf '%s' "$rec" | jq -r '.material.generation.artifact_generation')
+  subject=$(printf '%s' "$rec" | jq -r '.material.generation.subject_digest')
+  manifest=$(printf '%s' "$rec" | jq -r '.material.generation.manifest_identity')
+  venue=$(printf '%s' "$rec" | jq -r \
+    '.material.venue.repository + "#" + (.material.venue.issue | tostring)')
+  total=$(printf '%s' "$rec" | jq -r '.material.parts.total')
+  printf '%s %s\n\n' "$FM_OUTBOUND_BODY_MARKER" "$rid"
+  printf '%s\n' "$(printf '%s' "$rec" | jq -r '
+    "from: firstmate",
+    "gate: " + .identity.gate,
+    "project: " + .identity.project,
+    "repo: " + .identity.repo,
+    "item: " + .identity.item,
+    "pull-request: " + (.identity.pr // "-"),
+    "exact-head: " + .identity.head,
+    "requested: " + .created')"
+  printf 'material-venue: %s\n' "$venue"
+  printf 'material-generation: %s\n' "$gen"
+  printf 'material-manifest: %s\n' "$manifest"
+  printf 'material-subject: %s\n' "$subject"
+  printf 'material-parts: %s\n' "$total"
+  printf '\nThis request is bound to the exact head above.\n'
+  printf 'The material generation above was reobserved at that venue and reconstructed to the exact subject digest named here.\n'
+  printf 'A ruling on any other head is not applicable to it and will not be applied.\n'
 }
 
 # fail-closed-predicates: enforced

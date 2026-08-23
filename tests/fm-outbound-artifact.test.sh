@@ -2200,6 +2200,847 @@ test_every_declared_token_has_an_emit_site() {
   pass "token vocabulary: all $count declared tokens have an emit site"
 }
 
+# --- material universe fixtures ---------------------------------------------
+#
+# A SECOND, ISSUE-AWARE FORGE SHIM, and the reason it is second rather than an
+# extension of the one above. The shim the other cases share keeps one comment
+# list for the whole forge, which is invisible to them because they all address
+# one issue. For material publication that would make the central control
+# VACUOUS: "the owner addresses the venue its record binds" cannot fail against
+# a forge where every issue is the same list, so a hardcoded issue would pass.
+# This shim keeps a list per issue, which is what lets that control go red.
+make_material_gh() {  # <case-dir>
+  mkdir -p "$1/bin" "$1/forge"
+  printf '%s\n' "$HEAD_A" > "$1/forge/head"
+  printf '5000\n' > "$1/forge/next_id"
+  printf '0\n' > "$1/forge/fail_remaining"
+  : > "$1/forge/post_log"
+  cat > "$1/bin/gh" <<'SH'
+#!/usr/bin/env bash
+# Issue-aware gh api shim: per-issue comment lists, an issue object that states
+# its own comment count, and a scripted post-failure budget.
+F="$FORGE_DIR"
+path=
+for a in "$@"; do case $a in repos/*) path=$a ;; esac; done
+is_post=0
+case " $* " in *" --input "*) is_post=1 ;; esac
+
+case "$path" in
+  */pulls/[0-9]*)
+    cat "$F/head"; exit 0 ;;
+  */issues/*/comments)
+    issue=${path%/comments}; issue=${issue##*/}
+    if [ "$is_post" = 1 ]; then
+      payload=$(cat)
+      body=$(printf '%s' "$payload" | jq -r '.body')
+      left=$(cat "$F/fail_remaining" 2>/dev/null || echo 0)
+      if [ "$left" -gt 0 ]; then
+        printf '%s\n' "$((left - 1))" > "$F/fail_remaining"
+        echo "simulated transport failure" >&2
+        exit 1
+      fi
+      # Fail only AFTER a prefix has landed. Failing the first N posts leaves no
+      # prefix at all, which tests an empty publication rather than a resumed
+      # one - the exact vacuity the resume case asserts against.
+      if [ -f "$F/allow_posts" ]; then
+        allow=$(cat "$F/allow_posts")
+        if [ "$(grep -c . < "$F/post_log")" -ge "$allow" ]; then
+          echo "simulated transport failure after $allow posts" >&2
+          exit 1
+        fi
+      fi
+      id=$(cat "$F/next_id")
+      printf '%s\n' "$((id + 1))" > "$F/next_id"
+      printf '%s\n' "$body" > "$F/body-$id"
+      printf '%s\n' "$id" >> "$F/comments-$issue"
+      printf '%s %s\n' "$issue" "$id" >> "$F/post_log"
+      printf '{"id":%s}\n' "$id"
+      exit 0
+    fi
+    [ -f "$F/inject-$issue" ] && cat "$F/inject-$issue"
+    [ -f "$F/comments-$issue" ] || exit 0
+    while read -r id; do
+      [ -n "$id" ] || continue
+      [ -f "$F/body-$id" ] || continue
+      jq -nr --argjson id "$id" --rawfile body "$F/body-$id" '[$id,$body] | @base64'
+    done < "$F/comments-$issue"
+    exit 0 ;;
+  */issues/[0-9]*)
+    issue=${path##*/}
+    if [ -f "$F/declared-$issue" ]; then cat "$F/declared-$issue"; exit 0; fi
+    if [ -f "$F/comments-$issue" ]; then grep -c . < "$F/comments-$issue"; else echo 0; fi
+    exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$1/bin/gh"
+}
+
+# A declared universe with real bytes on disk: two EXACT artifacts that publish
+# their bytes, and one DERIVATIVE that binds a published authority and transmits
+# nothing at all.
+seed_material() {  # <case-dir> [<extra-exact-bytes>]
+  local dir=$1 filler=${2:-}
+  mkdir -p "$dir/material"
+  printf 'seam integrity assessment\nfindings B, H and J remain remediation inputs\n%s' \
+    "$filler" > "$dir/material/report.md"
+  printf '{"seams":[{"id":"B"},{"id":"H"},{"id":"J"}]}\n' > "$dir/material/seams.json"
+  printf 'disposition derived from published ruling 5377607664; grants no independent authority\n' \
+    > "$dir/material/disposition.md"
+  jq -n --arg d "$dir/material" '{
+    schema:"fm-outbound-material-manifest.v1",
+    subject:"sol-fm-control-artifact-visibility-001-g1",
+    required_total:3,
+    entries:[
+      {path:"payload/seam-integrity-assessment/report.md",
+       classification:"EXACT",source:($d+"/report.md")},
+      {path:"payload/seam-integrity-assessment/seams.json",
+       classification:"EXACT",source:($d+"/seams.json")},
+      {path:"independent-review-disposition.md",
+       classification:"DERIVATIVE_OF_PUBLISHED_AUTHORITY",
+       source:($d+"/disposition.md"),authority:"5377607664"}]}' \
+    > "$dir/material/manifest.json"
+}
+
+new_material_case() {  # <name> [<issue>] -> prints case dir
+  local dir issue=${2:-9}
+  dir=$(new_case "$1")
+  make_material_gh "$dir"
+  printf '{"repo":"o/control","issue":%s}\n' "$issue" > "$dir/home/config/sol-control.json"
+  seed_material "$dir"
+  printf '%s\n' "$dir"
+}
+
+# Parts are cut small on purpose so an ordinary fixture publishes SEVERAL of
+# them. A one-part generation would exercise multipart nowhere - every ordering,
+# resume, duplicate and reconstruction control needs a real prefix and a real
+# remainder to be about anything.
+run_obm() {  # <case-dir> <args...>
+  local dir=$1; shift
+  PATH="$dir/bin:$PATH" FORGE_DIR="$dir/forge" \
+    FM_HOME="$dir/home" FM_OUTBOUND_SNAPSHOT="$dir/snap.json" \
+    FM_OUTBOUND_BACKOFF_BASE=0 FM_OUTBOUND_MATERIAL_PART_BYTES=120 \
+    REAL_GIT="$(command -v git)" \
+    "$OB" "$@"
+}
+
+material_prepare() {  # <case-dir> [<venue>] -> prints the request id
+  local dir=$1 venue=${2:-} out
+  if [ -n "$venue" ]; then
+    out=$(run_obm "$dir" material prepare waiting-item \
+      --manifest "$dir/material/manifest.json" --venue "$venue") || return 1
+  else
+    out=$(run_obm "$dir" material prepare waiting-item \
+      --manifest "$dir/material/manifest.json") || return 1
+  fi
+  printf '%s\n' "$out" | sed -n 's/^prepared: \([^ ]*\) .*/\1/p'
+}
+
+# Which comment ids on <issue> carry a material part of <request>?
+material_part_ids() {  # <case-dir> <issue> <request-id>
+  local dir=$1 issue=$2 rid=$3 id
+  [ -f "$dir/forge/comments-$issue" ] || return 0
+  while read -r id; do
+    [ -n "$id" ] || continue
+    [ -f "$dir/forge/body-$id" ] || continue
+    grep -q "^fm-sol-control/v1 material-part: " "$dir/forge/body-$id" || continue
+    grep -qx "request: $rid" "$dir/forge/body-$id" || continue
+    printf '%s\n' "$id"
+  done < "$dir/forge/comments-$issue"
+}
+
+material_count_parts() {  # <case-dir> <issue> <request-id>
+  material_part_ids "$@" | grep -c . || true
+}
+
+# How many successor REQUESTS (not parts) for <request> sit on <issue>.
+material_count_requests() {  # <case-dir> <issue> <request-id>
+  local dir=$1 issue=$2 rid=$3 id n=0
+  [ -f "$dir/forge/comments-$issue" ] || { printf '0\n'; return 0; }
+  while read -r id; do
+    [ -n "$id" ] || continue
+    [ -f "$dir/forge/body-$id" ] || continue
+    grep -qx "fm-sol-control/v1 request: $rid" "$dir/forge/body-$id" && n=$((n + 1))
+  done < "$dir/forge/comments-$issue"
+  printf '%s\n' "$n"
+}
+
+material_add_raw_comment() {  # <case-dir> <issue> <body-file> -> prints the id
+  local dir=$1 issue=$2 body=$3 id
+  id=$(cat "$dir/forge/next_id")
+  printf '%s\n' "$((id + 1))" > "$dir/forge/next_id"
+  cp "$body" "$dir/forge/body-$id"
+  printf '%s\n' "$id" >> "$dir/forge/comments-$issue"
+  printf '%s\n' "$id"
+}
+
+# --- material: the positive fixture, and its non-vacuity half ---------------
+
+test_material_publishes_and_reconstructs_the_exact_universe() {
+  local dir rid out rc parts joined decoded record victim
+  dir=$(new_material_case cmat-positive 9)
+
+  rid=$(material_prepare "$dir") || fail "material: preparation refused a complete universe"
+  [ -n "$rid" ] || fail "material: preparation named no request id"
+
+  record="$dir/home/data/outbound-artifacts/$rid.json"
+  parts=$(jq -r '.material.parts.total' "$record")
+  # NON-VACUITY, ASSERTED RATHER THAN ASSUMED. Every control below is about a
+  # publication with a prefix and a remainder; against a single part they would
+  # all pass while testing nothing.
+  [ "$parts" -ge 3 ] \
+    || fail "material: fixture produced $parts part(s); the multipart controls need at least 3"
+  [ "$(jq -r '.material.venue.issue' "$record")" = 9 ] \
+    || fail "material: the record did not bind the venue it was prepared for"
+  [ "$(jq -r '.material.accounting.verdict' "$record")" = complete ] \
+    || fail "material: a complete universe was not accounted complete"
+  [ "$(jq -r '.material.accounting.exact' "$record")" = 2 ] \
+    || fail "material: exact entries were miscounted"
+  [ "$(jq -r '.material.accounting.derivative' "$record")" = 1 ] \
+    || fail "material: derivative entries were miscounted"
+
+  out=$(run_obm "$dir" material emit --request "$rid") \
+    || fail "material: emit refused a prepared generation"$'\n'"$out"
+  [ "$(material_count_parts "$dir" 9 "$rid")" = "$parts" ] \
+    || fail "material: emit did not publish every part to the bound issue"
+
+  out=$(run_obm "$dir" material verify --request "$rid"); rc=$?
+  expect_code 0 "$rc" "material: verify refused an exact publication"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_COMPLETE_VERIFIED \
+    "material: an exact publication was not reported verified"
+
+  # THE REAL EXACTNESS CLAIM, checked against the SOURCE BYTES rather than
+  # against a digest this code also computed. A digest comparison proves the
+  # pipeline is self-consistent; only the original file proves it published the
+  # artifact the captain actually has.
+  joined="$dir/joined"; : > "$joined"
+  material_part_ids "$dir" 9 "$rid" | while read -r id; do
+    awk '/^-----FM-MATERIAL-PART-BEGIN-----$/{f=1;next}
+         /^-----FM-MATERIAL-PART-END-----$/{f=0}
+         f{print}' "$dir/forge/body-$id" >> "$joined"
+  done
+  decoded="$dir/decoded"
+  tr -d '\n' < "$joined" | base64 -d > "$decoded" 2>/dev/null \
+    || fail "material: the published parts did not reassemble into decodable bytes"
+  grep -q 'findings B, H and J remain remediation inputs' "$decoded" \
+    || fail "material: an EXACT artifact's own bytes are not retrievable from the venue"
+  grep -q '"seams"' "$decoded" \
+    || fail "material: the second EXACT artifact's bytes are not retrievable from the venue"
+  # The derivative is DECLARED and its authority bound, and its bytes are not
+  # on the wire. Both halves matter: present-but-unclassified and absent-and-
+  # unmentioned are each the wrong answer.
+  grep -q 'independent-review-disposition.md class=DERIVATIVE_OF_PUBLISHED_AUTHORITY' "$decoded" \
+    || fail "material: the derivative entry was not declared in the published universe"
+  grep -q 'authority=5377607664' "$decoded" \
+    || fail "material: the derivative entry did not bind its published authority"
+  grep -q 'grants no independent authority' "$decoded" \
+    && fail "material: a DERIVATIVE entry published its bytes; only EXACT entries may"
+
+  out=$(run_obm "$dir" material complete --request "$rid"); rc=$?
+  expect_code 0 "$rc" "material: completion refused a verified generation"$'\n'"$out"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 1 ] \
+    || fail "material: completion did not emit exactly one successor request"
+  [ "$(jq -r '.material.completed.at' "$record")" != null ] \
+    || fail "material: completion left no durable record"
+
+  # THE NON-VACUITY HALF. The same commands, against the same generation, with
+  # one published part removed - and it must go red rather than reporting the
+  # publication it just certified.
+  victim=$(material_part_ids "$dir" 9 "$rid" | head -1)
+  rm -f "$dir/forge/body-$victim"
+  sed -i "/^$victim\$/d" "$dir/forge/comments-9"
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "material: verification passed a generation missing one of its parts"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_PART_MISSING \
+    "material: a missing part went red for the wrong reason"
+
+  pass "material: an exact universe publishes, reconstructs byte-for-byte, and completes once"
+}
+
+
+# Rewrite one published part in place. <chunk> replaces the fenced bytes;
+# <mode> exact recomputes the part digest to match (a tamper that repairs its
+# own claim) and stale leaves it (a tamper that does not).
+material_tamper_part() {  # <case-dir> <comment-id> <chunk> <exact|stale>
+  local dir=$1 id=$2 chunk=$3 mode=$4 digest tmp
+  digest=$(printf '%s\n' "$chunk" | sha256sum | awk '{print $1}')
+  tmp="$dir/tampered-$id"
+  awk -v c="$chunk" -v d="$digest" -v mode="$mode" '
+    /^part-digest: / { if (mode == "exact") { print "part-digest: " d; next } }
+    /^-----FM-MATERIAL-PART-BEGIN-----$/ { print; print c; skip = 1; next }
+    skip && /^-----FM-MATERIAL-PART-END-----$/ { skip = 0; print; next }
+    skip { next }
+    { print }' "$dir/forge/body-$id" > "$tmp"
+  mv "$tmp" "$dir/forge/body-$id"
+}
+
+# Permute a published part's bytes IN PLACE, keeping the chunk exactly as long
+# and entirely inside the base64 alphabet, and repair its part digest to match.
+#
+# WHY NOT JUST SUBSTITUTE ARBITRARY BYTES. Because a shorter or non-alphabet
+# chunk makes the REASSEMBLED STREAM fail to decode, and the decode failure
+# refuses under the same token the digest comparison does. The test then passes
+# whether or not the subject digest is ever consulted - which is exactly what a
+# mutation of the reconstruction check proved: with that check deleted the case
+# stayed green. A same-length, in-alphabet permutation decodes cleanly, so the
+# only thing left that can refuse it is the subject digest itself.
+material_permute_part_bytes() {  # <case-dir> <comment-id>
+  local dir=$1 id=$2 chunk permuted digest tmp
+  chunk=$(awk '/^-----FM-MATERIAL-PART-BEGIN-----$/{f=1;next}
+               /^-----FM-MATERIAL-PART-END-----$/{f=0}
+               f{print}' "$dir/forge/body-$id")
+  permuted=$(printf '%s' "$chunk" | tr \
+    'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789' \
+    'BCDEFGHIJKLMNOPQRSTUVWXYZAbcdefghijklmnopqrstuvwxyza1234567890')
+  [ "${#permuted}" = "${#chunk}" ] \
+    || fail "material tamper: the permutation changed the chunk length, so this tests decoding rather than the digest"
+  [ "$permuted" != "$chunk" ] \
+    || fail "material tamper: the permutation left the bytes unchanged, so nothing was tampered"
+  tmp="$dir/permuted-$id"
+  awk -v c="$permuted" '
+    /^-----FM-MATERIAL-PART-BEGIN-----$/ { print; print c; skip = 1; next }
+    skip && /^-----FM-MATERIAL-PART-END-----$/ { skip = 0; print; next }
+    skip { next }
+    { print }' "$dir/forge/body-$id" > "$tmp"
+  mv "$tmp" "$dir/forge/body-$id"
+}
+
+# Repair a part's own digest claim so it covers whatever bytes the part now
+# carries. Together with the permutation above this makes a MINIMAL PAIR: the
+# identical tampered bytes sit on the venue in both halves, and the only thing
+# that changes is whether the part's claim was updated to match them.
+material_repair_part_digest() {  # <case-dir> <comment-id>
+  local dir=$1 id=$2 chunk digest tmp
+  chunk=$(awk '/^-----FM-MATERIAL-PART-BEGIN-----$/{f=1;next}
+               /^-----FM-MATERIAL-PART-END-----$/{f=0}
+               f{print}' "$dir/forge/body-$id")
+  digest=$(printf '%s\n' "$chunk" | sha256sum | awk '{print $1}')
+  tmp="$dir/repaired-$id"
+  awk -v d="$digest" '
+    /^part-digest: / { print "part-digest: " d; next } { print }' \
+    "$dir/forge/body-$id" > "$tmp"
+  mv "$tmp" "$dir/forge/body-$id"
+}
+
+material_rewrite_line() {  # <case-dir> <comment-id> <prefix> <replacement>
+  local dir=$1 id=$2 prefix=$3 replacement=$4 tmp
+  # `tmp` is assigned on its own line, not in the `local` list above: bash
+  # expands every right-hand side BEFORE assigning any of them, so a derived
+  # value there would read the unset global rather than this call's arguments.
+  tmp="$dir/rewritten-$id"
+  awk -v p="$prefix" -v r="$replacement" '
+    index($0, p) == 1 { print r; next } { print }' "$dir/forge/body-$id" > "$tmp"
+  mv "$tmp" "$dir/forge/body-$id"
+}
+
+material_write_manifest() {  # <case-dir> <entries-json> <required-total>
+  jq -n --argjson e "$2" --argjson r "$3" \
+    '{schema:"fm-outbound-material-manifest.v1",
+      subject:"accounting-fixture",required_total:$r,entries:$e}' \
+    > "$1/material/manifest.json"
+}
+
+# --- material: the venue is the record's, never the configuration's ----------
+
+test_material_addresses_the_venue_its_record_binds() {
+  local dir rid out rc issue
+  # THE CONTROL THE OWNER INSPECTION NAMED FIRST. The transport this generalises
+  # was fixed to one issue through a process-global default, so the question is
+  # not whether some issue works but whether the issue is read from the RECORD.
+  # The shim keeps a list per issue precisely so a hardcoded one goes red here.
+  for issue in 8 11 12 13; do
+    dir=$(new_material_case "cmat-venue-$issue" 9)
+    # Config says 9; the record is prepared against a DIFFERENT issue. If the
+    # owner ever consults the configuration again, every assertion below fails.
+    rid=$(material_prepare "$dir" "o/control#$issue") \
+      || fail "material venue: preparation refused venue o/control#$issue"
+    [ "$(jq -r '.material.venue.issue' "$dir/home/data/outbound-artifacts/$rid.json")" = "$issue" ] \
+      || fail "material venue: the record did not bind issue $issue"
+    out=$(run_obm "$dir" material emit --request "$rid") \
+      || fail "material venue: emit refused issue $issue"$'\n'"$out"
+    [ "$(material_count_parts "$dir" "$issue" "$rid")" -ge 3 ] \
+      || fail "material venue: parts did not land on the bound issue $issue"
+    [ "$(material_count_parts "$dir" 9 "$rid")" = 0 ] \
+      || fail "material venue: parts leaked onto the configured issue 9 instead of bound issue $issue"
+    [ "$(material_count_parts "$dir" 2 "$rid")" = 0 ] \
+      || fail "material venue: parts reached the historical issue-2 constant"
+  done
+
+  # AND THE CONFIGURATION MOVING UNDER A HALF-PUBLISHED GENERATION CHANGES
+  # NOTHING. This is the failure the per-record venue exists for: a config edit
+  # between two calls must not retarget the publication already under way.
+  dir=$(new_material_case cmat-venue-stable 9)
+  rid=$(material_prepare "$dir" "o/control#11") || fail "material venue: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null \
+    || fail "material venue: emit refused"
+  printf '{"repo":"o/control","issue":2}\n' > "$dir/home/config/sol-control.json"
+  out=$(run_obm "$dir" material verify --request "$rid"); rc=$?
+  expect_code 0 "$rc" "material venue: a retargeted configuration broke a bound generation"$'\n'"$out"
+  out=$(run_obm "$dir" material complete --request "$rid") \
+    || fail "material venue: completion followed the configuration instead of the record"
+  [ "$(material_count_requests "$dir" 11 "$rid")" = 1 ] \
+    || fail "material venue: the successor request did not go to the bound venue"
+  [ "$(material_count_requests "$dir" 2 "$rid")" = 0 ] \
+    || fail "material venue: the successor request followed the edited configuration"
+
+  # THE RED HALF, so none of the above is a shim that answers yes to everything:
+  # a generation whose parts are on another issue must not verify.
+  dir=$(new_material_case cmat-venue-red 9)
+  rid=$(material_prepare "$dir" "o/control#11") || fail "material venue: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material venue: emit refused"
+  mv "$dir/forge/comments-11" "$dir/forge/comments-12"
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material venue: a generation whose parts moved issues still verified"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_PART_MISSING \
+    "material venue: parts on another issue were not reported absent from the bound one"
+
+  pass "material venue: every call addresses the record's own issue, not the configured one"
+}
+
+# --- material: an incomplete publication forbids the transition -------------
+
+test_material_omitted_part_forbids_the_completion_transition() {
+  local dir rid out rc victim record
+  dir=$(new_material_case cmat-omitted 9)
+  rid=$(material_prepare "$dir") || fail "material omitted: preparation refused"
+  record="$dir/home/data/outbound-artifacts/$rid.json"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material omitted: emit refused"
+
+  # Drop one part from the middle, so this is a genuine gap rather than a short
+  # publication that never started.
+  victim=$(material_part_ids "$dir" 9 "$rid" | sed -n '2p')
+  [ -n "$victim" ] || fail "material omitted: the fixture published too few parts to omit one"
+  rm -f "$dir/forge/body-$victim"
+  sed -i "/^$victim\$/d" "$dir/forge/comments-9"
+
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material omitted: a gap was not a refusal"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_PART_MISSING \
+    "material omitted: the gap went red for the wrong reason"
+
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material omitted: completion accepted an incomplete generation"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_PART_MISSING \
+    "material omitted: completion refused for the wrong reason"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 0 ] \
+    || fail "material omitted: an incomplete generation still emitted its successor request"
+  [ "$(jq -r '.material.completed' "$record")" = null ] \
+    || fail "material omitted: an incomplete generation was recorded complete"
+  assert_contains "$(run_obm "$dir" material show --request "$rid")" 'next request: NOT_ELIGIBLE' \
+    "material omitted: an incomplete generation reported an eligible transition"
+
+  pass "material omitted: a missing part is PARTIAL and no transition follows it"
+}
+
+# --- material: duplicates, told apart by their bytes ------------------------
+
+test_material_duplicate_part_is_a_collision_only_when_the_bytes_differ() {
+  local dir rid out rc target before
+  dir=$(new_material_case cmat-dupe 9)
+  rid=$(material_prepare "$dir") || fail "material duplicate: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material duplicate: emit refused"
+  target=$(material_part_ids "$dir" 9 "$rid" | head -1)
+
+  # SAME BYTES. A venue that carries one part twice, identically, is untidy and
+  # not ambiguous: there is exactly one answer to what part 1 contains.
+  cp "$dir/forge/body-$target" "$dir/forge/body-7001"
+  printf '7001\n' >> "$dir/forge/comments-9"
+  out=$(run_obm "$dir" material verify --request "$rid"); rc=$?
+  expect_code 0 "$rc" "material duplicate: an identical duplicate was treated as ambiguous"$'\n'"$out"
+  before=$(grep -c . < "$dir/forge/post_log")
+  run_obm "$dir" material emit --request "$rid" >/dev/null \
+    || fail "material duplicate: emit refused an already-published generation"
+  [ "$(grep -c . < "$dir/forge/post_log")" = "$before" ] \
+    || fail "material duplicate: re-emitting posted a second copy of an already exact part"
+
+  # DIFFERENT BYTES. Now the venue answers "what does part 1 contain" two ways,
+  # and no reading of it is safe - including the one that happens to be right.
+  material_tamper_part "$dir" 7001 "ZGlmZmVyZW50IGJ5dGVz" exact
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material duplicate: conflicting duplicates did not refuse"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_IDENTITY_COLLISION \
+    "material duplicate: conflicting duplicates were not named a collision"
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material duplicate: completion accepted a colliding part"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 0 ] \
+    || fail "material duplicate: a colliding generation emitted its successor request"
+
+  pass "material duplicate: identical is idempotent, conflicting is a refused collision"
+}
+
+# --- material: an interrupted publication resumes at the gap ----------------
+
+test_material_resumes_after_an_interrupted_publication() {
+  local dir rid out rc total posted_first posted_second first_ids second_ids
+  dir=$(new_material_case cmat-resume 9)
+  rid=$(material_prepare "$dir") || fail "material resume: preparation refused"
+  total=$(jq -r '.material.parts.total' "$dir/home/data/outbound-artifacts/$rid.json")
+
+  # Interrupt the publication partway: a real prefix lands and then every
+  # further attempt is refused, which is what an interrupted publication looks
+  # like from the inside.
+  printf '2\n' > "$dir/forge/allow_posts"
+  out=$(run_obm "$dir" material emit --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material resume: an exhausted transport reported success"
+  posted_first=$(material_count_parts "$dir" 9 "$rid")
+  [ "$posted_first" -ge 1 ] \
+    || fail "material resume: the interrupted run published no prefix, so resume is untested"
+  [ "$posted_first" -lt "$total" ] \
+    || fail "material resume: the interrupted run published everything, so resume is untested"
+  first_ids=$(material_part_ids "$dir" 9 "$rid" | tr '\n' ' ')
+
+  # Resume. The prefix must be adopted rather than republished.
+  rm -f "$dir/forge/allow_posts"
+  out=$(run_obm "$dir" material emit --request "$rid"); rc=$?
+  expect_code 0 "$rc" "material resume: the resumed publication refused"$'\n'"$out"
+  assert_contains "$out" "$posted_first already exact" \
+    "material resume: the already-published prefix was not adopted"
+  posted_second=$(material_count_parts "$dir" 9 "$rid")
+  [ "$posted_second" = "$total" ] \
+    || fail "material resume: resume left $posted_second of $total parts published"
+  second_ids=$(material_part_ids "$dir" 9 "$rid" | tr '\n' ' ')
+  case "$second_ids" in
+    "$first_ids"*) : ;;
+    *) fail "material resume: the prefix's own comments changed across the resume" ;;
+  esac
+  run_obm "$dir" material verify --request "$rid" >/dev/null \
+    || fail "material resume: a resumed publication did not reconstruct"
+
+  pass "material resume: an interrupted publication continues at the first missing part"
+}
+
+# --- material: tampering, caught by two checks that are not redundant -------
+
+test_material_remote_tampering_fails_per_part_and_on_reconstruction() {
+  local dir rid out rc target
+  dir=$(new_material_case cmat-tamper 9)
+  rid=$(material_prepare "$dir") || fail "material tamper: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material tamper: emit refused"
+  target=$(material_part_ids "$dir" 9 "$rid" | sed -n '2p')
+
+  # TAMPER ONE: the bytes change and the claim does not. The part's own digest
+  # catches this without any reconstruction. The bytes are permuted rather than
+  # replaced so that this half and the next differ in exactly one thing.
+  material_permute_part_bytes "$dir" "$target"
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material tamper: a part contradicting its own digest verified"
+  assert_contains "$out" 'does not cover its own bytes' \
+    "material tamper: a stale part digest was not named"
+
+  # TAMPER TWO: the bytes change, the claim is REPAIRED to match, and the stream
+  # still decodes. Every per-part check now passes and the reassembly succeeds,
+  # so the ONLY thing that can still refuse it is the subject digest fixed
+  # before anything was published. This is the half that proves the two checks
+  # are not one check written twice.
+  material_repair_part_digest "$dir" "$target"
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material tamper: a self-consistent tamper verified"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_RECONSTRUCTION_MISMATCH \
+    "material tamper: a self-consistent tamper was not caught by reconstruction"
+  # RED FOR THE RIGHT REASON. The decode-failure path refuses under this same
+  # token, so the case must name the comparison that actually caught it.
+  assert_contains "$out" 'generation declares' \
+    "material tamper: reconstruction refused, but on decoding rather than on the subject digest"
+  assert_not_contains "$out" 'did not decode' \
+    "material tamper: the reassembled stream failed to decode, so the subject digest was never consulted"
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material tamper: completion accepted tampered material"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 0 ] \
+    || fail "material tamper: tampered material still emitted a successor request"
+
+  pass "material tamper: a stale claim fails per part, a repaired claim fails reconstruction"
+}
+
+# --- material: wrong generation and wrong venue are different answers -------
+
+test_material_generation_and_venue_mismatches_are_named_apart() {
+  local dir rid out rc target
+  dir=$(new_material_case cmat-mismatch 9)
+  rid=$(material_prepare "$dir") || fail "material mismatch: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material mismatch: emit refused"
+  target=$(material_part_ids "$dir" 9 "$rid" | head -1)
+
+  material_rewrite_line "$dir" "$target" 'generation: ' 'generation: 2'
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material mismatch: a part binding another generation verified"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_GENERATION_MISMATCH \
+    "material mismatch: a wrong generation was not named"
+  material_rewrite_line "$dir" "$target" 'generation: ' 'generation: 1'
+
+  # THE SAME PART, PERFECT ABOUT ITS GENERATION, ADDRESSED SOMEWHERE ELSE. These
+  # two must not share a token: one repair regenerates a publication and the
+  # other retargets it.
+  material_rewrite_line "$dir" "$target" 'venue: ' 'venue: o/control#13'
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material mismatch: a part addressed elsewhere verified"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_VENUE_MISMATCH \
+    "material mismatch: a wrong venue was not named under its own token"
+  assert_not_contains "$out" FM_OUTBOUND_MATERIAL_GENERATION_MISMATCH \
+    "material mismatch: a wrong venue was reported as a wrong generation"
+
+  pass "material mismatch: wrong generation and wrong venue refuse under separate names"
+}
+
+# --- material: a moved subject goes stale and gets ONE successor ------------
+
+test_material_moved_subject_is_stale_and_takes_one_successor() {
+  local dir rid out rc record prior_parts
+  dir=$(new_material_case cmat-stale 9)
+  rid=$(material_prepare "$dir") || fail "material stale: preparation refused"
+  record="$dir/home/data/outbound-artifacts/$rid.json"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material stale: emit refused"
+  run_obm "$dir" material verify --request "$rid" >/dev/null || fail "material stale: verify refused"
+  prior_parts=$(jq -c '.material.parts.published' "$record")
+
+  # The subject moves BEFORE the transition is taken.
+  set_head "$dir" "$HEAD_B"
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material stale: a moved subject still completed"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_SUBJECT_MOVED \
+    "material stale: a moved subject was not named"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 0 ] \
+    || fail "material stale: a moved subject still emitted its successor request"
+  assert_contains "$(run_obm "$dir" material show --request "$rid")" 'publication: STALE' \
+    "material stale: the generation was not reported stale"
+
+  # A stale generation can never be completed or extended, only succeeded.
+  out=$(run_obm "$dir" material emit --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material stale: a stale generation accepted more parts"
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material stale: a stale generation completed on a second attempt"
+
+  # ONE explicit successor, and the prior generation preserved VERBATIM.
+  printf 'a later revision of the seam assessment\n' >> "$dir/material/report.md"
+  out=$(run_obm "$dir" material succeed --request "$rid" \
+    --manifest "$dir/material/manifest.json"); rc=$?
+  expect_code 0 "$rc" "material stale: the successor was refused"$'\n'"$out"
+  [ "$(jq -r '.material.generation.artifact_generation' "$record")" = 2 ] \
+    || fail "material stale: the successor did not open generation 2"
+  [ "$(jq -r '.material.history | length' "$record")" = 1 ] \
+    || fail "material stale: the prior generation was not retained"
+  [ "$(jq -c '.material.history[0].parts.published' "$record")" = "$prior_parts" ] \
+    || fail "material stale: the prior generation's published evidence was rewritten"
+  [ "$(jq -r '.material.history[0].generation.artifact_generation' "$record")" = 1 ] \
+    || fail "material stale: the retained generation lost its own number"
+  [ "$(jq -r '.material.history[0].stale.reason' "$record")" != null ] \
+    || fail "material stale: the retained generation was laundered clean of its staleness"
+  [ "$(jq -r '.material.parts.published | length' "$record")" = 0 ] \
+    || fail "material stale: the successor inherited the prior generation's published parts"
+  [ "$(jq -r '.material.generation.subject_digest' "$record")" \
+    != "$(jq -r '.material.history[0].generation.subject_digest' "$record")" ] \
+    || fail "material stale: the successor carries the prior generation's subject"
+
+  # A SECOND SUCCESSOR IS REFUSED. The record is no longer stale, and a
+  # successor is how a moved subject is republished - never a way to replace a
+  # generation that still stands.
+  out=$(run_obm "$dir" material succeed --request "$rid" \
+    --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 3 "$rc" "material stale: a second successor was opened"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_NOT_STALE \
+    "material stale: the second successor was refused for the wrong reason"
+
+  pass "material stale: a moved subject takes exactly one successor and launders nothing"
+}
+
+# --- material: the completion transition happens exactly once ---------------
+
+test_material_completion_transition_is_taken_exactly_once() {
+  local dir rid out rc
+  dir=$(new_material_case cmat-once 9)
+  rid=$(material_prepare "$dir") || fail "material once: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material once: emit refused"
+  run_obm "$dir" material complete --request "$rid" >/dev/null || fail "material once: completion refused"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 1 ] \
+    || fail "material once: completion did not emit exactly one successor request"
+
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material once: a replayed completion was accepted"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_ALREADY_COMPLETE \
+    "material once: a replayed completion was refused for the wrong reason"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 1 ] \
+    || fail "material once: a replayed completion emitted a second request"
+
+  # AND THE CORRELATION IS NOT FINISHED BY IT. Proving the bytes arrived is not
+  # the same fact as recording what came of them, and a publication that closed
+  # its own correlation would lose the second one.
+  assert_contains "$(run_obm "$dir" material show --request "$rid")" 'correlation: OPEN' \
+    "material once: completion silently closed the correlation"
+  [ "$(jq -r '.disposition' "$dir/home/data/outbound-artifacts/$rid.json")" = null ] \
+    || fail "material once: completion invented a disposition"
+
+  pass "material once: exactly one transition, and the correlation stays open"
+}
+
+# --- material: an unprovable collection is never complete -------------------
+
+test_material_unprovable_collection_is_could_not_observe() {
+  local dir rid out rc
+  dir=$(new_material_case cmat-cno 9)
+  rid=$(material_prepare "$dir") || fail "material cno: preparation refused"
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material cno: emit refused"
+  run_obm "$dir" material verify --request "$rid" >/dev/null \
+    || fail "material cno: the fixture did not verify before being broken"
+
+  # TRUNCATION. The venue states it holds more comments than the listing
+  # returned, so absence cannot be concluded from that listing at all.
+  printf '999\n' > "$dir/forge/declared-9"
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  expect_code 4 "$rc" "material cno: a truncated collection was not could-not-observe"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_COLLECTION_TRUNCATED \
+    "material cno: truncation was not named"
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  expect_code 4 "$rc" "material cno: completion accepted a truncated collection"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 0 ] \
+    || fail "material cno: a truncated collection still emitted a successor request"
+  rm -f "$dir/forge/declared-9"
+
+  # AN UNREADABLE COMMENT. A row the reader cannot decode is a comment whose
+  # content is unknown, and an unknown comment cannot certify or refute a part.
+  printf 'not-a-base64-row\n' > "$dir/forge/inject-9"
+  out=$(run_obm "$dir" material verify --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material cno: an unreadable comment was read as a clean collection"
+  out=$(run_obm "$dir" material complete --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "material cno: completion accepted an unreadable collection"
+  [ "$(material_count_requests "$dir" 9 "$rid")" = 0 ] \
+    || fail "material cno: an unreadable collection still emitted a successor request"
+
+  pass "material cno: truncated and unreadable collections refuse and never complete"
+}
+
+# --- material: the universe is counted, not merely declared -----------------
+
+test_material_universe_accounting_refuses_what_it_cannot_count() {
+  local dir out rc entries
+  dir=$(new_material_case cmat-universe 9)
+  entries=$(jq -c '.entries' "$dir/material/manifest.json")
+
+  # OMITTED. Three artifacts listed where four are required is not a smaller
+  # universe, it is an unaccounted one.
+  material_write_manifest "$dir" "$entries" 4
+  out=$(run_obm "$dir" material prepare waiting-item --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 3 "$rc" "material universe: an omitted artifact was published"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_UNIVERSE_INCOMPLETE \
+    "material universe: an omitted artifact was not named"
+
+  # DUPLICATED. The same path twice inflates the count without adding an
+  # artifact, which is the same defect arriving from the other side.
+  material_write_manifest "$dir" \
+    "$(printf '%s' "$entries" | jq -c '. + [.[0]]')" 4
+  out=$(run_obm "$dir" material prepare waiting-item --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 3 "$rc" "material universe: a duplicated entry was published"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_UNIVERSE_INCOMPLETE \
+    "material universe: a duplicated entry was not named"
+
+  # UNCERTAIN, and it is a THIRD answer rather than a polite incomplete. An
+  # entry outside the closed class vocabulary means the universe was never
+  # classified, which is not the same as classified and short.
+  material_write_manifest "$dir" \
+    "$(printf '%s' "$entries" | jq -c '.[0].classification = "PROBABLY_FINE" | .')" 3
+  out=$(run_obm "$dir" material prepare waiting-item --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 4 "$rc" "material universe: an unclassifiable entry was not could-not-observe"
+
+  # A DERIVATIVE THAT BINDS NO AUTHORITY. It claims to derive from something
+  # published and names nothing, so what it grants cannot be established.
+  material_write_manifest "$dir" \
+    "$(printf '%s' "$entries" | jq -c '.[2].authority = null | .')" 3
+  out=$(run_obm "$dir" material prepare waiting-item --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 4 "$rc" "material universe: an unbound derivative was accepted"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_UNIVERSE_UNCERTAIN \
+    "material universe: an unbound derivative was not named uncertain"
+
+  # AN EMPTY UNIVERSE IS NOT A CLEAN ONE. A manifest that requires nothing
+  # measures nothing, and a publication proving nothing must not read as proof.
+  material_write_manifest "$dir" '[]' 0
+  out=$(run_obm "$dir" material prepare waiting-item --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 4 "$rc" "material universe: an empty universe was accepted as complete"
+
+  # BYTES THAT ARE NOT THERE. A digest cannot be an observation of a file that
+  # could not be read.
+  material_write_manifest "$dir" \
+    "$(printf '%s' "$entries" | jq -c '.[0].source = "/nonexistent/report.md" | .')" 3
+  out=$(run_obm "$dir" material prepare waiting-item --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 4 "$rc" "material universe: an unreadable artifact was accepted"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_MANIFEST_UNREADABLE \
+    "material universe: an unreadable artifact was not named"
+
+  pass "material universe: omitted, duplicated, unclassifiable and unreadable universes all refuse"
+}
+
+# --- material: preparation is idempotent, and never an overwrite ------------
+
+test_material_preparation_repeats_but_never_overwrites_a_subject() {
+  local dir rid out rc again digest_before
+  dir=$(new_material_case cmat-prepare 9)
+  rid=$(material_prepare "$dir") || fail "material prepare: preparation refused"
+  digest_before=$(jq -r '.material.generation.subject_digest' \
+    "$dir/home/data/outbound-artifacts/$rid.json")
+  run_obm "$dir" material emit --request "$rid" >/dev/null || fail "material prepare: emit refused"
+
+  # THE SAME UNIVERSE, PREPARED AGAIN. An interrupted preparation must be safe
+  # to repeat, so this is a no-op that keeps the published parts.
+  out=$(run_obm "$dir" material prepare waiting-item \
+    --manifest "$dir/material/manifest.json"); rc=$?
+  expect_code 0 "$rc" "material prepare: repeating the same preparation refused"$'\n'"$out"
+  assert_contains "$out" 'already prepared' \
+    "material prepare: a repeat was not recognised as one"
+  [ "$(jq -r '.material.parts.published | length' \
+    "$dir/home/data/outbound-artifacts/$rid.json")" -gt 0 ] \
+    || fail "material prepare: a repeat discarded the published parts"
+
+  # A DIFFERENT UNIVERSE UNDER THE SAME REQUEST IS REFUSED HERE. Overwriting the
+  # generation would leave parts on the venue that no record any longer
+  # describes - published evidence for a subject nobody can name.
+  printf 'a changed artifact\n' >> "$dir/material/report.md"
+  again=$(run_obm "$dir" material prepare waiting-item \
+    --manifest "$dir/material/manifest.json" 2>&1); rc=$?
+  expect_code 3 "$rc" "material prepare: a changed universe overwrote a live generation"
+  assert_contains "$again" FM_OUTBOUND_MATERIAL_SUBJECT_MOVED \
+    "material prepare: a changed universe was not named"
+  [ "$(jq -r '.material.generation.subject_digest' \
+    "$dir/home/data/outbound-artifacts/$rid.json")" = "$digest_before" ] \
+    || fail "material prepare: the refused preparation still moved the subject"
+
+  pass "material prepare: the same subject repeats safely, a different one is refused"
+}
+
+# --- material: historical and adverse records survive the extension ---------
+
+test_material_extension_preserves_historical_records() {
+  local dir rid out rc legacy malformed
+  dir=$(new_material_case cmat-historical 9)
+  # A record written before material publication existed: schema v1, no material
+  # block at all. The record schema is deliberately NOT bumped, so this must
+  # still read exactly as it did.
+  rid=$(run_ob "$dir" emit waiting-item | sed -n 's/^requested: \([^ ]*\) .*/\1/p')
+  [ -n "$rid" ] || fail "material historical: the single-comment path stopped emitting"
+  legacy="$dir/home/data/outbound-artifacts/$rid.json"
+  [ "$(jq -r '.schema' "$legacy")" = fm-outbound-artifact.v1 ] \
+    || fail "material historical: the record schema was bumped, invalidating every stored record"
+  [ "$(jq -r '.material // "absent"' "$legacy")" = absent ] \
+    || fail "material historical: a single-comment record grew a material block"
+  run_ob "$dir" show "$rid" >/dev/null \
+    || fail "material historical: a pre-material record stopped being readable"
+
+  # Acting on it as material refuses by NAME rather than crashing or inventing
+  # an empty generation.
+  out=$(run_obm "$dir" material show --request "$rid" 2>&1); rc=$?
+  expect_code 3 "$rc" "material historical: a record with no material block did not refuse cleanly"
+  assert_contains "$out" FM_OUTBOUND_MATERIAL_ABSENT \
+    "material historical: the absent material block was not named"
+
+  # An ADVERSE record - unparseable bytes filed under a request id - is
+  # preserved rather than repaired or deleted, and the sweep still runs.
+  malformed="$dir/home/data/outbound-artifacts/fm-ob-000000000000.json"
+  printf 'this is not json {{{\n' > "$malformed"
+  run_ob "$dir" check >/dev/null 2>&1
+  [ -f "$malformed" ] || fail "material historical: a malformed record was destroyed by a sweep"
+  [ "$(cat "$malformed")" = 'this is not json {{{' ] \
+    || fail "material historical: a malformed record was rewritten"
+
+  pass "material historical: pre-material and malformed records survive unchanged"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
@@ -2278,5 +3119,18 @@ test_could_not_observe_has_its_own_section
 test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
 test_every_declared_token_has_an_emit_site
+test_material_publishes_and_reconstructs_the_exact_universe
+test_material_addresses_the_venue_its_record_binds
+test_material_omitted_part_forbids_the_completion_transition
+test_material_duplicate_part_is_a_collision_only_when_the_bytes_differ
+test_material_resumes_after_an_interrupted_publication
+test_material_remote_tampering_fails_per_part_and_on_reconstruction
+test_material_generation_and_venue_mismatches_are_named_apart
+test_material_moved_subject_is_stale_and_takes_one_successor
+test_material_completion_transition_is_taken_exactly_once
+test_material_unprovable_collection_is_could_not_observe
+test_material_universe_accounting_refuses_what_it_cannot_count
+test_material_preparation_repeats_but_never_overwrites_a_subject
+test_material_extension_preserves_historical_records
 
 printf '\nall fm-outbound-artifact tests passed\n'

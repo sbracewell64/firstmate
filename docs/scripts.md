@@ -20,7 +20,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-decision-surface.sh` | Compose the read-only operational decision surface, refuse a claim structured state contradicts, and report the compensation ledger and platform seam |
 | `fm-dead-predicate-check.sh` | Refuse enrolled shell files containing functions with no repository-wide call site, and report unevaluable syntax or enrollment |
 | `fm-outbound-artifact-lib.sh` | Own the outbound-artifact invariant, gate vocabulary, identity rule, recognizer, and correlation-record shape |
-| `fm-outbound-artifact.sh` | Observe waiting-item artifacts, emit eligible requests, and correlate rulings through disposition |
+| `fm-outbound-artifact.sh` | Observe waiting-item artifacts, emit eligible requests, publish a material universe as verified multipart generations, and correlate rulings through disposition |
 | `fm-certify.sh`          | Derive whether the applicable certification predicates hold for a task's exact bytes |
 | `fm-independence-lib.sh` | Derive verifier identity and independence from validation-pipeline invocation records |
 | `fm-update.sh`           | Fast-forward-only self-update of firstmate and local or remote secondmate homes       |
