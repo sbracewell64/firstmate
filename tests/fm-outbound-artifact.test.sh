@@ -2200,6 +2200,500 @@ test_every_declared_token_has_an_emit_site() {
   pass "token vocabulary: all $count declared tokens have an emit site"
 }
 
+# --- record isolation: one broken record is not every item's blocker ---------
+#
+# THE DEFECT THESE CONTROL. Superseding an item's older heads is a decision
+# about THAT item, but reaching it validated every record in the store first, so
+# a single preserved adverse record refused every NEW request in the fleet. It
+# was measured on the live store: an exact, complete, well-bound request for
+# candidate-publication-effect-guard returned FM_OUTBOUND_RECORD_UNREADABLE
+# before transport because fm-ob-18a4c958c445.json - whose own identity names
+# ae-xp1-registered-external-target - could not be validated.
+#
+# The repair is a SCOPE test that runs before the validity test, and the whole
+# safety argument rests on its direction: unrelatedness must be POSITIVELY
+# established from the record's own bytes, and every other outcome keeps the
+# record in scope. So each control below is a PAIR over one fixture with one
+# field changed - the same store record, once naming another item and once not,
+# or once readable and once not - because a control that only ever answers one
+# way cannot tell the scope test from a mechanism that skips everything.
+
+# A home with two waiting items on two different projects. The second project's
+# record is the one driven adverse; the first item's request is the one that
+# must still be reachable.
+prepare_isolation_case() {  # <name> -> prints case dir
+  local dir
+  dir=$(new_case "$1")
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  printf -- '- other [no-mistakes] - other project (added 2026-08-16)\n' >> "$dir/home/data/projects.md"
+  git clone -q --no-hardlinks "$HEAD_REPO" "$dir/home/projects/other" 2>/dev/null
+  jq -n --arg h "$HEAD_A" '
+    {schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[
+      {order:1,state:"queued",structured:true,id:"waiting-item",
+       title:"needs independent review",hold_kind:"outbound",
+       hold_reason:"awaiting browser sol",repo:"demo",
+       pr_url:"https://github.com/o/r/pull/4",body_excerpt:null},
+      {order:2,state:"queued",structured:true,id:"other-item",
+       title:"a different work item entirely",hold_kind:"outbound",
+       hold_reason:"awaiting browser sol",repo:"other",
+       pr_url:null,body_excerpt:null},
+      {order:3,state:"queued",structured:true,id:"ordinary-item",
+       title:"ordinary queued work",hold_kind:null,hold_reason:null,
+       repo:"demo",pr_url:null,body_excerpt:null}]}}' > "$dir/snap.json"
+  mkdir -p "$dir/home/data/waiting-item" "$dir/home/data/other-item"
+  jq -n --arg h "$HEAD_A" '{gate:"INDEPENDENT_BROWSER_REVIEW_REQUIRED",head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  jq -n --arg h "$HEAD_A" '{gate:"INDEPENDENT_BROWSER_REVIEW_REQUIRED",head:$h}' \
+    > "$dir/home/data/other-item/outbound-gate.json"
+  printf '%s\n' "$dir"
+}
+
+# The store record another item owns, after one real emit for that item. It is
+# produced by the command under test rather than hand-authored, so its identity
+# digest, filename and content agree exactly as the live one does.
+other_item_record() {  # <case-dir> -> prints the record path
+  local dir=$1 rid
+  run_ob "$dir" emit other-item >/dev/null 2>&1 \
+    || fail "isolation fixture: the unrelated item's own emit failed"
+  rid=$(grep ' ' "$dir/forge/comments" | awk '$2 != "" {print $2}' | tail -1)
+  [ -n "$rid" ] || fail "isolation fixture: no request id was recorded for the unrelated item"
+  [ -f "$dir/home/data/outbound-artifacts/$rid.json" ] \
+    || fail "isolation fixture: the unrelated item left no correlation record"
+  printf '%s\n' "$dir/home/data/outbound-artifacts/$rid.json"
+}
+
+posts_since() {  # <case-dir> <before-count> -> prints posts added
+  printf '%s\n' "$(( $(wc -l < "$1/forge/post_log") - $2 ))"
+}
+
+# `fail` inside a command substitution kills only the subshell, so a fixture
+# that echoes its path hands the caller an empty string and sails on. Every
+# caller of other_item_record runs this, which is what turns that swallowed
+# refusal back into a failure instead of an empty path fed to jq and git.
+require_record_path() {  # <path> <label>
+  [ -n "$1" ] && [ -f "$1" ] \
+    || fail "$2: the fixture produced no correlation record path"
+}
+
+test_unrelated_broken_record_does_not_block_an_exact_request() {
+  local dir record before rc out bytes_before bytes_after posts
+  dir=$(prepare_isolation_case iso-unrelated)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "isolation"
+
+  # Drive the unrelated record adverse the way the live one is: its project's
+  # clone stops being readable, so the object format is undeterminable, so its
+  # own binding no longer resolves. Nothing about the record's bytes changes.
+  rm -rf "$dir/home/projects/other"
+  bytes_before=$(cksum < "$record")
+
+  # RED HALF. The identical record, differing only in the item it names. With
+  # this item as its subject it is in scope, it fails to validate, and the
+  # request must not be posted. This is the half that proves the green half is
+  # the scope test rather than a mechanism that skips every record.
+  jq '.identity.item = "waiting-item"' "$record" > "$record.red"
+  cp "$record" "$record.orig"
+  mv "$record.red" "$record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "isolation RED: a same-item record that does not validate still permitted an emit: $out"
+  printf '%s' "$out" | grep -qE 'FM_OUTBOUND_RECORD_UNREADABLE|FM_OUTBOUND_IDENTITY_REFUSED' \
+    || fail "isolation RED: refused for the wrong reason: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 0 ] \
+    || fail "isolation RED: $posts request(s) were posted while a same-item record was unvalidatable"
+
+  # GREEN HALF. One field back to what it was. The record is exactly as broken,
+  # and it is now provably about other work.
+  mv "$record.orig" "$record"
+  [ "$(cksum < "$record")" = "$bytes_before" ] \
+    || fail "isolation: the fixture failed to restore the unrelated record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "isolation GREEN: an exact request for unrelated work was refused, exit $rc: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 1 ] \
+    || fail "isolation GREEN: expected exactly one posted request, got $posts"
+
+  # PRESERVED BYTE FOR BYTE. Skipping a record is not touching it: a pass that
+  # quietly repaired, superseded or rewrote the adverse record would satisfy
+  # every assertion above while destroying the evidence it names.
+  bytes_after=$(cksum < "$record")
+  [ "$bytes_after" = "$bytes_before" ] \
+    || fail "isolation: the skipped record was rewritten rather than left alone"
+  pass "isolation: an unrelated unvalidatable record permits an exact request and is left untouched"
+}
+
+test_unrelated_identity_mismatch_does_not_block_an_exact_request() {
+  local dir record before out rc posts
+  # THE OTHER ADVERSE CLASS, kept apart on purpose. The case above is
+  # could-not-observe: the record's binding stops resolving. This one is a true
+  # IDENTITY MISMATCH - perfectly readable, its binding resolves, and its
+  # recomputed identity simply does not match the id it is filed under. The two
+  # need different repairs, so a control that only ever produced one of them
+  # would leave the other unmeasured.
+  dir=$(prepare_isolation_case iso-mismatch)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "mismatch"
+
+  # RED HALF: the mismatch names THIS item, so it is in scope and must refuse
+  # with the identity token rather than the unreadable one.
+  jq '.identity.item = "waiting-item"' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "mismatch RED: a same-item identity mismatch did not refuse with a verdict, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_IDENTITY_REFUSED' \
+    || fail "mismatch RED: refused for the wrong reason: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
+    && fail "mismatch RED: a readable foreign record was reported as unreadable: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 0 ] \
+    || fail "mismatch RED: $posts request(s) posted against a same-item identity mismatch"
+
+  # GREEN HALF: still a mismatch, still unrepaired, but its subject is once more
+  # provably another item. Mutating the HEAD keeps the record readable and its
+  # binding resolvable, so the adverse class here is mismatch and not absence.
+  jq --arg h "$HEAD_B" '.identity.item = "other-item" | .identity.head = $h' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "mismatch GREEN: an exact request was blocked by another item's mismatch, exit $rc: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 1 ] \
+    || fail "mismatch GREEN: expected exactly one posted request, got $posts"
+  [ "$(jq -r '.identity.item' "$record")" = "other-item" ] \
+    || fail "mismatch GREEN: the skipped record was rewritten"
+  [ "$(jq -r '.identity.head' "$record")" = "$HEAD_B" ] \
+    || fail "mismatch GREEN: the skipped record's head was superseded by another item's emit"
+  [ "$(jq -r '.state' "$record")" != "superseded" ] \
+    || fail "mismatch GREEN: another item's emit superseded a record it does not own"
+  pass "mismatch: an unrelated identity mismatch permits an exact request; the same mismatch on this item refuses"
+}
+
+test_skipped_record_stays_adverse_everywhere_else() {
+  local dir record rid out rc
+  dir=$(prepare_isolation_case iso-adverse)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "adverse"
+  rid=$(basename "$record" .json)
+  rm -rf "$dir/home/projects/other"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+    || fail "adverse: the exact unrelated request was refused"
+
+  # THE SKIP IS SCOPED TO ONE DECISION AND GRANTS NOTHING. The record must still
+  # be adverse on every surface that reports it, or this repair would have
+  # converted a loud blocker into silence - which is the failure this whole
+  # module exists to refuse.
+  out=$(run_ob "$dir" show "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "adverse: show treated the skipped record as readable, exit $rc: $out"
+
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "adverse: the sweep did not stay could-not-observe, exit $rc: $out"
+  # Reported against the item it actually belongs to, which is where an operator
+  # repairs a correlation fault. Asserted by SECTION rather than by total count:
+  # the count also carries the project's own unreadable-clone row, and pinning
+  # it would make this control fail for a reason it is not about.
+  printf '%s' "$out" | sed -n '/^COULD NOT OBSERVE/,/^SATISFIED/p' | grep -q 'other-item' \
+    || fail "adverse: the broken record's item was not filed under could-not-observe: $out"
+  # And it can never read as satisfied - not the item holding it, and not by
+  # lending its presence to the item whose request did go through.
+  printf '%s' "$out" | grep -q 'SATISFIED (1)' \
+    || fail "adverse: the item that DID get its request is not reported satisfied: $out"
+  printf '%s' "$out" | sed -n '/^SATISFIED/,$p' | grep -q 'other-item' \
+    && fail "adverse: the item holding the broken record was reported satisfied: $out"
+  pass "adverse: a skipped record stays could-not-observe on show and in the sweep, and never satisfied"
+}
+
+test_unpositionable_subject_always_refuses() {
+  local dir record shape content before out rc posts good
+  # EVERY WAY A SUBJECT CAN FAIL TO BE ESTABLISHED. None of these records is
+  # about the item being requested, and every one of them must still refuse:
+  # the skip requires unrelatedness POSITIVELY established, so "cannot tell"
+  # keeps the record in scope. Each shape is paired with the same bytes made
+  # readable, so no shape can pass by being ignored.
+  for shape in malformed missing-item null-item empty-item duplicate-item \
+               duplicate-identity two-documents unknown-schema missing-schema; do
+    dir=$(prepare_isolation_case "iso-subject-$shape")
+    record=$(other_item_record "$dir")
+    require_record_path "$record" "subject/$shape"
+    good=$(cat "$record")
+    case $shape in
+      malformed)         content=$(printf '%s' "$good" | head -c 40) ;;
+      missing-item)      content=$(printf '%s' "$good" | jq 'del(.identity.item)') ;;
+      null-item)         content=$(printf '%s' "$good" | jq '.identity.item = null') ;;
+      empty-item)        content=$(printf '%s' "$good" | jq '.identity.item = ""') ;;
+      duplicate-item)    content=$(printf '%s' "$good" | jq -c '.' | sed 's/"item":"[^"]*"/"item":"alpha","item":"beta"/') ;;
+      duplicate-identity) content=$(printf '%s\n%s' \
+                            "$(printf '%s' "$good" | jq -c '.' | sed 's/}$//')" \
+                            "$(printf '%s' "$good" | jq -c '{identity:.identity}' | sed -e 's/^{/,/')") ;;
+      two-documents)     content=$(printf '%s\n%s' "$(printf '%s' "$good" | jq -c '.')" \
+                            "$(printf '%s' "$good" | jq -c '.identity.item = "second"')") ;;
+      unknown-schema)    content=$(printf '%s' "$good" | jq '.schema = "some-other-record.v9"') ;;
+      missing-schema)    content=$(printf '%s' "$good" | jq 'del(.schema)') ;;
+    esac
+    printf '%s\n' "$content" > "$record"
+    # NON-VACUITY: every shape but one must still be PARSABLE. Without this the
+    # first fixture that accidentally emitted unbalanced bytes would refuse for
+    # the malformed reason while wearing another shape's name, and the case
+    # would report a control it never ran. One of these did exactly that.
+    if [ "$shape" = malformed ]; then
+      jq -e . "$record" >/dev/null 2>&1 \
+        && fail "subject/$shape: the fixture produced parsable JSON, so nothing here is testing malformed bytes"
+    else
+      jq -e . "$record" >/dev/null 2>&1 \
+        || fail "subject/$shape: the fixture produced unparsable JSON, so this case is testing malformed bytes rather than $shape"
+    fi
+    before=$(wc -l < "$dir/forge/post_log")
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -ne 0 ] \
+      || fail "subject/$shape: a record with no establishable subject permitted an emit: $out"
+    posts=$(posts_since "$dir" "$before")
+    [ "$posts" -eq 0 ] \
+      || fail "subject/$shape: $posts request(s) posted while a subject could not be established"
+
+    # THE PAIRED GREEN. The same store, the same request, the same everything
+    # except that the record now says plainly whose it is. Without this half a
+    # shape could "pass" because the fixture never let any emit through.
+    printf '%s\n' "$good" > "$record"
+    before=$(wc -l < "$dir/forge/post_log")
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -eq 0 ] \
+      || fail "subject/$shape: the paired readable record refused the same request, exit $rc: $out"
+    posts=$(posts_since "$dir" "$before")
+    [ "$posts" -eq 1 ] \
+      || fail "subject/$shape: the paired readable case posted $posts requests, expected 1"
+  done
+  pass "subject: malformed, absent, empty, ambiguous and foreign-schema records all refuse, and their readable pairs do not"
+}
+
+test_isolation_preserves_head_and_idempotency() {
+  local dir record before out rc posts
+  dir=$(prepare_isolation_case iso-head)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "isolation head"
+  rm -rf "$dir/home/projects/other"
+
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+    || fail "isolation head: the first exact request was refused"
+
+  # IDEMPOTENCY IS NOT WEAKENED BY THE SKIP. Five further cycles at the same
+  # identity, exactly as a repeating scheduler produces them.
+  before=$(wc -l < "$dir/forge/post_log")
+  for _ in 1 2 3 4 5; do
+    out=$(run_ob "$dir" emit waiting-item 2>&1) \
+      || fail "isolation head: a repeat cycle errored: $out"
+    printf '%s' "$out" | grep -q 'already requested' \
+      || fail "isolation head: a repeat cycle did not report the existing request: $out"
+  done
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 0 ] \
+    || fail "isolation head: five repeat cycles posted $posts further requests, expected 0"
+
+  # AND THE WRONG HEAD IS STILL THE WRONG HEAD. Exact-head binding is the one
+  # thing a scope test must never loosen: the request just made says nothing
+  # about a head it was not bound to.
+  #
+  # Moved at the DECLARATION, which is what a typed gate binds to. Moving the
+  # forge shim instead would leave the declared head standing and the item
+  # satisfied, and the control would then be measuring the fixture.
+  jq -n --arg h "$HEAD_B" '{gate:"INDEPENDENT_BROWSER_REVIEW_REQUIRED",head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "isolation head: expected the sweep to stay could-not-observe alongside the broken record, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_STALE_HEAD' \
+    || fail "isolation head: a moved head no longer reports its previous request inapplicable: $out"
+  pass "isolation: repeat cycles still dedupe, and a moved head still invalidates the request"
+}
+
+# --- sweep size --------------------------------------------------------------
+
+test_sweep_survives_a_row_set_larger_than_one_argument() {
+  local dir repo out rc bytes rows limit=131072 i item base
+  # A ROW SET HAS NO BOUND THIS COMMAND CONTROLS - it is however many branches
+  # and waiting items a fleet has. The fold used to hand its result to a second
+  # jq as `--argjson rows "$row"`, and Linux caps ONE argument at
+  # MAX_ARG_STRLEN (128KB), far below the 2MB total, so past that size the
+  # sweep died with "Argument list too long" and printed no rows and no reason
+  # - a sweep that reports nothing while looking exactly like a quiet fleet.
+  #
+  # This was unreachable while firstmate's own repository could not be resolved
+  # and contributed one clone-unreadable row. It became reachable the moment it
+  # could: that repository alone carries a few hundred candidate branches.
+  dir=$(new_case sweepsize)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  git -C "$repo" remote add origin https://github.com/o/demo.git 2>/dev/null || true
+  git -C "$repo" branch -M main
+  # Unlanded work with no lifecycle record: each ref becomes one
+  # WORK_STATE_UNOBSERVED row and spends no forge probe, so the row set grows
+  # without the sweep going anywhere near the network.
+  git -C "$repo" checkout -q -b unlanded
+  printf 'unlanded\n' > "$repo/f"
+  git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false commit -qm 'never landed'
+  base=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q main
+  # Long names so the byte target is reached with few refs; one batched update
+  # rather than several hundred git invocations.
+  item=$(printf 'w%.0s' $(seq 1 200))
+  {
+    for i in $(seq 1 350); do printf 'create refs/heads/fm/%s-%s %s\n' "$item" "$i" "$base"; done
+  } | git -C "$repo" update-ref --stdin \
+    || fail "sweep size: the fixture could not create its refs"
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+
+  out=$(run_ob "$dir" check --json 2>"$dir/sweep.err"); rc=$?
+  grep -q 'Argument list too long' "$dir/sweep.err" \
+    && fail "sweep size: the sweep died on argument size: $(cat "$dir/sweep.err")"
+  [ "$rc" -eq 4 ] \
+    || fail "sweep size: expected could-not-observe over unrecorded work, exit $rc"
+  rows=$(printf '%s' "$out" | jq '.rows | length' 2>/dev/null) \
+    || fail "sweep size: the sweep produced no readable document"
+  [ "$rows" -ge 350 ] \
+    || fail "sweep size: expected at least 350 rows, got $rows"
+
+  # NON-VACUITY: the fixture has to actually reach the regime that used to fail.
+  # A row set comfortably under the cap would pass this case without exercising
+  # anything it is about.
+  bytes=$(printf '%s' "$out" | jq -c '.rows' | wc -c)
+  [ "$bytes" -gt "$limit" ] \
+    || fail "sweep size: the row set is only $bytes bytes, under the $limit-byte single-argument cap, so this control did not reach the failing regime"
+  pass "sweep size: a row set past the $limit-byte single-argument cap still reports every row"
+}
+
+# --- the operational home's own repository -----------------------------------
+
+# A home that IS the checkout of one registered project - firstmate's own shape,
+# and the only project whose clone is not under $PROJECTS.
+prepare_home_repo_case() {  # <name> <register:yes|no> -> prints case dir
+  local name=$1 register=$2 dir home head
+  dir="$TMP_ROOT/$name"
+  mkdir -p "$dir"
+  make_gh "$dir"
+  # The home directory's NAME is the project name, and the home is the top level
+  # of that repository.
+  home="$dir/selfrepo"
+  mkdir -p "$home/data" "$home/config" "$home/state" "$home/projects"
+  git -C "$home" init -q
+  git -C "$home" config user.email fixture@example.com
+  git -C "$home" config user.name Fixture
+  printf 'a\n' > "$home/f"
+  git -C "$home" add f
+  git -C "$home" -c commit.gpgsign=false commit -qm a
+  git -C "$home" checkout -q -b fm/self-item
+  printf 'b\n' > "$home/f"
+  git -C "$home" add f
+  git -C "$home" -c commit.gpgsign=false commit -qm 'work on firstmate itself'
+  head=$(git -C "$home" rev-parse HEAD)
+  : > "$home/data/projects.md"
+  if [ "$register" = yes ]; then
+    printf -- '- selfrepo [no-mistakes] - firstmate itself (added 2026-08-04)\n' \
+      > "$home/data/projects.md"
+  fi
+  configure_venue "$home"
+  mkdir -p "$home/data/self-item"
+  jq -n --arg gate INDEPENDENT_BROWSER_REVIEW_REQUIRED --arg head "$head" \
+    '{gate:$gate,head:$head}' > "$home/data/self-item/outbound-gate.json"
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[
+    {order:1,state:"queued",structured:true,id:"self-item",
+     title:"work on firstmate itself",hold_kind:"outbound",
+     hold_reason:"awaiting browser sol",repo:"selfrepo",
+     pr_url:null,body_excerpt:null}]}}' > "$dir/snap.json"
+  printf '%s\n' "$dir"
+}
+
+run_home_repo() {  # <case-dir> <args...>
+  local dir=$1; shift
+  PATH="$dir/bin:$PATH" FORGE_DIR="$dir/forge" \
+    FM_HOME="$dir/selfrepo" FM_OUTBOUND_SNAPSHOT="$dir/snap.json" \
+    FM_OUTBOUND_BACKOFF_BASE=0 REAL_GIT="$(command -v git)" \
+    "$OB" "$@"
+}
+
+test_operational_home_repository_needs_no_environment_override() {
+  local dir out rc posts
+  # RED FIRST, and for the RIGHT reason. The identical home with the project
+  # absent from the registry: the resolution requires registry evidence, so the
+  # exact head is unreadable, the binding is incomplete, and nothing is posted.
+  # This is what makes the green half evidence of a registry-backed resolution
+  # rather than of a home path being adopted on sight.
+  dir=$(prepare_home_repo_case selfrepo-unregistered no)
+  out=$(run_home_repo "$dir" emit self-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "home repo RED: an unregistered project resolved to the home anyway: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_INCOMPLETE_BINDING' \
+    || fail "home repo RED: refused for the wrong reason: $out"
+  printf '%s' "$out" | grep -q 'missing head' \
+    || fail "home repo RED: the refusal did not name the unreadable head: $out"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+    || fail "home repo RED: a request was posted from an unresolvable binding"
+
+  # GREEN. Registered, and the home is that repository's top level. No
+  # FM_PROJECTS_OVERRIDE is set anywhere in run_home_repo - that variable is
+  # test isolation, and needing it to reach this project in production was the
+  # defect.
+  dir=$(prepare_home_repo_case selfrepo-registered yes)
+  [ -z "${FM_PROJECTS_OVERRIDE:-}" ] \
+    || fail "home repo: the environment already carried FM_PROJECTS_OVERRIDE, so this proves nothing"
+  out=$(run_home_repo "$dir" emit self-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "home repo GREEN: the home's own repository still could not be resolved, exit $rc: $out"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 1 ] \
+    || fail "home repo GREEN: expected one posted request, got $posts"
+  out=$(run_home_repo "$dir" check 2>&1)
+  # THE RESOLUTION'S OWN SIGNATURE, asserted instead of the whole-sweep exit.
+  # Resolving this project also makes its branches visible to the inventory
+  # pass for the first time, so the sweep legitimately carries rows this
+  # control is not about; pinning the exit would make it fail for them.
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLONE_UNREADABLE' \
+    && fail "home repo GREEN: the project's clone is still unreadable, so nothing was resolved: $out"
+  printf '%s' "$out" | sed -n '/^SATISFIED/,$p' | grep -q 'self-item' \
+    || fail "home repo GREEN: the resolved request is not reported satisfied: $out"
+  pass "home repo: a registered project whose checkout IS the home resolves with no environment override"
+}
+
+test_home_repository_never_displaces_an_ordinary_clone() {
+  local dir out rc head_clone head_home
+  # ALL OTHER PROJECT RESOLUTION IS UNCHANGED, and the precedence is the reason.
+  # A real clone under $PROJECTS always wins, so a home that does keep one is
+  # untouched by this resolution. Driven by giving the clone and the home
+  # DIFFERENT heads for the same branch and asserting which one was read.
+  dir=$(prepare_home_repo_case selfrepo-clone-wins yes)
+  # Cloned from an UNRELATED repository on purpose. Cloning the home instead
+  # shares its objects, so the home's head resolves in the clone too and the
+  # case cannot tell which repository was read - it passes either way, which is
+  # no control at all.
+  git clone -q --no-hardlinks "$HEAD_REPO" "$dir/selfrepo/projects/selfrepo" 2>/dev/null \
+    || fail "clone precedence: the fixture clone could not be created"
+  head_home=$(git -C "$dir/selfrepo" rev-parse refs/heads/fm/self-item)
+  git -C "$dir/selfrepo/projects/selfrepo" rev-parse --verify --quiet "$head_home^{object}" >/dev/null 2>&1 \
+    && fail "clone precedence: the fixture clone already contains the home's head, so it proves nothing"
+  head_clone=$(git -C "$dir/selfrepo/projects/selfrepo" rev-parse HEAD)
+  [ "$head_clone" != "$head_home" ] \
+    || fail "clone precedence: the fixture failed to make the two repositories differ"
+
+  # The declared head is the home's, and it does NOT exist in the clone. If the
+  # clone is what gets read - which is the unchanged behaviour - that head does
+  # not resolve and the binding is refused.
+  out=$(run_home_repo "$dir" emit self-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "clone precedence: the home displaced a real clone under \$PROJECTS: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_INCOMPLETE_BINDING' \
+    || fail "clone precedence: refused for the wrong reason: $out"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+    || fail "clone precedence: a request was posted against the wrong repository"
+  pass "clone precedence: an existing clone under \$PROJECTS still wins over the home"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
@@ -2278,5 +2772,14 @@ test_could_not_observe_has_its_own_section
 test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
 test_every_declared_token_has_an_emit_site
+
+test_unrelated_broken_record_does_not_block_an_exact_request
+test_unrelated_identity_mismatch_does_not_block_an_exact_request
+test_skipped_record_stays_adverse_everywhere_else
+test_unpositionable_subject_always_refuses
+test_isolation_preserves_head_and_idempotency
+test_sweep_survives_a_row_set_larger_than_one_argument
+test_operational_home_repository_needs_no_environment_override
+test_home_repository_never_displaces_an_ordinary_clone
 
 printf '\nall fm-outbound-artifact tests passed\n'

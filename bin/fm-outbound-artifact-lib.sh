@@ -409,6 +409,67 @@ FM_OUTBOUND_IDENTITY_MISMATCH='IDENTITY_MISMATCH'
 FM_OUTBOUND_IDENTITY_CNO='COULD_NOT_OBSERVE'
 }
 
+# --- record subject ----------------------------------------------------------
+#
+# WHICH WORK ITEM IS THIS RECORD ABOUT, when the record's own bytes settle it?
+#
+# This exists because "is this record valid" and "is this record even about the
+# work in front of me" are different questions, and answering the first in order
+# to reach the second is what let ONE preserved adverse record stop EVERY new
+# request in the fleet. A record filed for another item can be as broken as it
+# likes without saying anything at all about the item being requested now, so a
+# decision scoped to one item must be able to set that record aside WITHOUT
+# certifying it - which is exactly what this predicate does and all it does.
+#
+# It is deliberately the WEAKEST reading in this module, and it grants nothing.
+# It never certifies a record, never substitutes for a caller's own identity
+# verdict, and a subject it prints belongs to a record that remains unvalidated
+# in every other respect. Its ONLY licensed use is to skip a decision that
+# provably does not concern this record. Reading it as "this record is fine"
+# would rebuild, one level down, the collapse the identity vocabulary above
+# exists to prevent.
+#
+# TWO VALUES HERE, BY CONSTRUCTION. It answers "the subject is exactly this" or
+# "could not observe", and there is no third answer, because the caller that
+# could not observe a subject must behave exactly as if the record were its own.
+# Fail-closed lives in that asymmetry: an unobservable subject keeps the record
+# in scope, so nothing is ever skipped on a guess.
+#
+# COUNT, THEN COMPARE - the same rule fm_outbound_sender_valid applies to
+# `from:`, here for the same reason. jq resolves a duplicated object key to
+# whichever copy was written LAST, so a record carrying two subjects reads as a
+# record about one of them, chosen by write order. A record with two subjects is
+# not a record about the last one; it is a record whose subject is AMBIGUOUS,
+# and an ambiguous subject is could-not-observe rather than a value to pick
+# from. The same count refuses a file holding more than one top-level document,
+# where the paths collide and neither document owns the answer.
+#
+# The schema is counted the same way and required to match, because the meaning
+# of `.identity.item` is defined by this record schema and nothing else. A field
+# at that path in a document of some other shape is a string this module has no
+# grounds to read as a work item.
+#
+# Prints the item and returns 0 only when every one of those holds. Returns 1 -
+# could-not-observe - for unparsable JSON, more than one top-level document, an
+# unknown or duplicated schema, and a missing, empty, non-string, or duplicated
+# item.
+fm_outbound_record_subject() {  # <record-json> -> item, or non-zero
+  local raw=$1 item
+  # --stream emits one [path,value] event per OCCURRENCE, so a duplicated key
+  # arrives as two events rather than collapsing into the last one. That is the
+  # whole reason the check is built on it rather than on an ordinary read.
+  item=$(printf '%s' "$raw" | jq -rn --stream --arg s "$FM_OUTBOUND_RECORD_SCHEMA" '
+    [inputs | select(length == 2)] as $events
+    | [$events[] | select(.[0] == ["schema"]) | .[1]] as $schemas
+    | [$events[] | select(.[0] == ["identity","item"]) | .[1]] as $items
+    | if ($schemas | length) == 1 and $schemas[0] == $s
+         and ($items | length) == 1
+         and ($items[0] | type) == "string" and $items[0] != ""
+      then $items[0] else empty end' 2>/dev/null) || return 1
+  [ -n "$item" ] || return 1
+  printf '%s\n' "$item"
+}
+
 # --- the prose recognizer ----------------------------------------------------
 #
 # Tier 2's closed token set. Every token names a way this fleet has actually

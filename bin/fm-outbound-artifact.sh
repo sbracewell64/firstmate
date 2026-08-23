@@ -194,6 +194,80 @@ probe_budget_reset() {
   : > "$PROBE_CAPPED"
 }
 
+# --- project clone resolution ------------------------------------------------
+#
+# WHERE A REGISTERED PROJECT'S CLONE ACTUALLY IS.
+#
+# Nearly always $PROJECTS/<name>, and for every project but one that is the
+# whole rule. The exception is firstmate's OWN repository: the operational home
+# IS that checkout, so $PROJECTS/<name> names a directory that has never
+# existed. The consequence is not cosmetic - the object format is read from the
+# clone, an undeterminable width refuses every candidate head by contract, and
+# so every exact head for that project was unobservable and no request for it
+# could be bound at all.
+#
+# The only way to observe one was to point FM_PROJECTS_OVERRIDE at the home's
+# parent directory. That variable is TEST isolation (docs/configuration.md), and
+# using it as configuration resolves this project by BREAKING every other one:
+# with the override in place a sibling project's clone is no longer under
+# $PROJECTS at all, so its stored correlation records stop validating and turn
+# could-not-observe. The two defects this file was repaired for are that trade,
+# seen from its two ends.
+#
+# So the home's own repository is resolved here, from evidence, under three
+# conditions that must ALL hold. Each one closes a different way of guessing:
+#
+#   1. $PROJECTS/<name> does not exist. A real clone always wins, so no existing
+#      resolution changes and a home that does keep one is untouched.
+#   2. The project is REGISTERED in data/projects.md, read through the same
+#      registry reader the inventory pass already uses. An unreadable registry
+#      is could-not-observe and never an empty one, so a caller-supplied name
+#      can never reach the home through a registry nobody could read.
+#   3. $FM_HOME is itself the TOP LEVEL of a git repository whose directory name
+#      is that project. Read from git and compared as resolved physical paths,
+#      never inferred from a name matching - a home that merely sits somewhere
+#      inside a repository is not that repository's clone.
+#
+# Anything short of all three is could-not-observe, which leaves the ordinary
+# path in place and the head unobserved - the same answer as before this
+# resolution existed. Nothing here writes, and every read it enables is a read.
+
+# Resolved ONCE at startup rather than per call. Every consumer below runs
+# inside a command substitution, and a global assigned in a subshell dies with
+# it, so a lazily memoized answer would be recomputed on every single call while
+# reading as if it were cached.
+HOME_REPO_PROJECT=
+resolve_home_repo_project() {
+  local top home_phys top_phys
+  top=$(git --no-optional-locks -C "$FM_HOME" rev-parse --show-toplevel 2>/dev/null) || return 0
+  [ -n "$top" ] || return 0
+  home_phys=$(cd "$FM_HOME" 2>/dev/null && pwd -P) || return 0
+  top_phys=$(cd "$top" 2>/dev/null && pwd -P) || return 0
+  [ "$home_phys" = "$top_phys" ] || return 0
+  HOME_REPO_PROJECT=${top_phys##*/}
+}
+resolve_home_repo_project
+
+registered_projects() {
+  local reg="$DATA/projects.md"
+  [ -r "$reg" ] || return 1
+  sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg"
+}
+
+# The ONE place a project name becomes a directory. Prints the ordinary
+# $PROJECTS path unless all three conditions above hold, so a caller that gets
+# an unusable directory back is in exactly the position it was in before.
+project_dir() {  # <project> -> clone directory
+  local project=$1
+  if [ ! -d "$PROJECTS/$project" ] && [ -n "$HOME_REPO_PROJECT" ] \
+     && [ "$project" = "$HOME_REPO_PROJECT" ] \
+     && registered_projects 2>/dev/null | grep -qxF -- "$project"; then
+    printf '%s\n' "$FM_HOME"
+    return 0
+  fi
+  printf '%s\n' "$PROJECTS/$project"
+}
+
 # --- durable records ---------------------------------------------------------
 
 record_path() { printf '%s/%s.json\n' "$RECORD_DIR" "$1"; }
@@ -239,7 +313,7 @@ record_identity_verdict() {  # <record-json> <expected-id>
   case $head_source in ""|declared|forge|local) ;; *) record_identity_cno; return 0 ;; esac
   # An identity that cannot be bound cannot be compared: that is an absent
   # identity, not one naming something else.
-  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" \
+  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$(project_dir "$project")" "$head_source" \
     >/dev/null 2>&1 || { record_identity_cno; return 0; }
   computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head") \
     || { record_identity_cno; return 0; }
@@ -377,7 +451,7 @@ branch_head() {  # <clone-dir> <item> -> sha or empty
 # non-identity to the binding check and letting it surface as evidence.
 observe_head() {  # <item> <pr-url> <project> -> sha<TAB>source or empty
   local item=$1 pr_url=$2 project=$3 head width dir=
-  [ -z "$project" ] || dir="$PROJECTS/$project"
+  [ -z "$project" ] || dir=$(project_dir "$project")
   # The width comes from the target repository, so it is resolved ONCE here and
   # every step of the cascade is judged against it. With no readable repository
   # the width is undeterminable, and an undeterminable width refuses every
@@ -467,7 +541,11 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
 # remotes rather than guessed from a name, because this fleet's projects
 # routinely fetch from upstream and push to a fork.
 project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
-  local dir=$PROJECTS/$1 declared=${2:-} url
+  local declared=${2:-} url dir
+  # Split from the assignments above deliberately: bash expands every `local`
+  # right-hand side before assigning any of them, so a path built from a
+  # positional in the same declaration is a standing hazard.
+  dir=$(project_dir "$1")
   if [ -n "$declared" ]; then printf '%s\n' "$declared"; return 0; fi
   [ -d "$dir/.git" ] || return 0
   url=$(obs git --no-optional-locks -C "$dir" remote get-url upstream) || url=
@@ -508,11 +586,9 @@ project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
 # it cannot read, or a venue it cannot reach, is COULD_NOT_OBSERVE for that item
 # BY NAME - never folded into a no-unsubmitted-work conclusion, which would be
 # the completeness defect this pass exists to remove.
-registered_pr_projects() {
-  local reg="$DATA/projects.md"
-  [ -r "$reg" ] || return 1
-  sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg"
-}
+#
+# It reads its project list through registered_projects, which lives with the
+# clone resolution above because project_dir consults the same registry.
 
 # Is this head already contained in what the project lands onto? Landed work is
 # not unsubmitted work, so it is excluded before anything is reported.
@@ -659,7 +735,7 @@ branch_inventory_rows() {  # appends row_json lines to $1
   local seen="$SCRATCH/inventory-identities"
   local project_mode_command=${FM_OUTBOUND_PROJECT_MODE_COMMAND:-$SCRIPT_DIR/fm-project-mode.sh}
   : > "$seen"
-  projects=$(registered_pr_projects); rc=$?
+  projects=$(registered_projects); rc=$?
   if [ "$rc" -ne 0 ]; then
     row_json project-registry "" inventory pull-request "" "" "" "" \
       unevaluable "$FM_OUTBOUND_TOKEN_REGISTRY_UNREADABLE" "" "" 0 >> "$out"
@@ -675,7 +751,7 @@ branch_inventory_rows() {  # appends row_json lines to $1
     fi
     mode=${mode%% *}
     [ "$mode" = "local-only" ] && continue
-    dir="$PROJECTS/$project"
+    dir=$(project_dir "$project")
     if [ ! -d "$dir/.git" ]; then
       row_json "$project" "" inventory pull-request "$project" "" "" "" \
         unevaluable "$FM_OUTBOUND_TOKEN_CLONE_UNREADABLE" "" "" 0 >> "$out"
@@ -787,7 +863,7 @@ row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <ve
 
 sweep() {
   local rows count i rec verdict gate tier item project pr_url pr_ref head_observation head head_source
-  local channel venue repo rid missing stale present rc row token capped cls
+  local channel venue repo rid missing stale present rc token capped cls
   local existing record_state applicability record_rc all_records
 
   probe_budget_reset
@@ -864,7 +940,7 @@ sweep() {
     # An item that is BOTH untyped and headless keeps the stronger verdict: the
     # gate is a read that succeeded and found nothing, so the item is provably
     # unbindable whatever the head turns out to be.
-    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$(project_dir "$project")" "$head_source" || true)
     if [ -n "$missing" ]; then
       if [ "$missing" = head ]; then
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
@@ -959,13 +1035,25 @@ sweep() {
   # than only the rows somebody already annotated. A backlog row wins on a
   # collision: it carries gate and correlation context the ref alone does not.
   branch_inventory_rows "$rows"
-  row=$(jq -s 'reduce .[] as $r ([];
-                 if $r.tier == "inventory" and $r.verdict != "unevaluable"
-                    and any(.[]; ._identity == $r._identity and .tier != "inventory")
-                 then . else . + [$r] end) | map(del(._identity))' < "$rows")
   if probes_capped; then capped=true; else capped=false; fi
-  SWEEP=$(jq -n --argjson rows "$row" --argjson capped "$capped" \
-    '{schema:"fm-outbound-sweep.v1",readable:true,capped:$capped,rows:$rows,reason:null}')
+  # THE ROWS REACH jq THROUGH stdin, NEVER THROUGH argv. They used to be folded
+  # in one jq and then handed to a second as `--argjson rows "$row"`, which
+  # Linux caps at MAX_ARG_STRLEN - 128KB for ONE argument, well under the 2MB
+  # total - so a sweep simply died with "Argument list too long", printing no
+  # rows and no reason. Observed the moment this command could read firstmate's
+  # own repository: ~250 candidate branches is already past the cap, and the
+  # sweep that was meant to report them reported nothing at all.
+  #
+  # A row set has no bound this file controls - it is however many branches and
+  # waiting items a fleet has - so the fix is structural rather than a bigger
+  # number: one jq, rows read from the file, nothing large on a command line.
+  SWEEP=$(jq -s --argjson capped "$capped" '
+    (reduce .[] as $r ([];
+       if $r.tier == "inventory" and $r.verdict != "unevaluable"
+          and any(.[]; ._identity == $r._identity and .tier != "inventory")
+       then . else . + [$r] end) | map(del(._identity))) as $rows
+    | {schema:"fm-outbound-sweep.v1",readable:true,capped:$capped,rows:$rows,reason:null}' \
+    < "$rows")
 }
 
 # --- rendering and verdict ---------------------------------------------------
@@ -1121,21 +1209,70 @@ sweep_exit() {
 # A transport failure therefore never loses the request: attempts are recorded in
 # the durable record and the item stays red until an artifact is observed.
 
+# SUPERSEDING THIS ITEM'S OLDER HEADS IS A DECISION ABOUT THIS ITEM. Reaching it
+# used to require VALIDATING every record in the store first, and that ordering
+# is the defect repaired here: one preserved adverse record - kept deliberately,
+# filed for a completely different work item, and correctly classified adverse
+# everywhere it is reported - refused every NEW request in the fleet, including
+# an exact, complete, well-bound one for work it says nothing about. Measured:
+# an exact request for candidate-publication-effect-guard returned
+# FM_OUTBOUND_RECORD_UNREADABLE before transport because
+# fm-ob-18a4c958c445.json, whose own identity names ae-xp1-registered-external-
+# target, could not be validated. A record's own brokenness became every other
+# item's blocker, which is a fleet-wide outage produced by a correlation fault
+# in one row.
+#
+# So the scope test now runs BEFORE the validity test, and only in that
+# direction. A record this pass can positively read as belonging to ANOTHER item
+# is skipped for THIS decision, because superseding is defined over records for
+# THIS item and such a record was never a candidate for it.
+#
+# WHAT THE SKIP IS NOT. It is not a repair, not a certification, and not a
+# narrowing of the invariant. The record is untouched, still adverse to
+# record_read and `show`, and still reported through the item it actually
+# belongs to by the sweep - which is where a correlation fault is an operator's
+# to fix. Nothing here can make a record satisfy anything.
+#
+# SAME-ITEM SAFETY IS UNCHANGED, and the asymmetry is what preserves it. The
+# skip needs unrelatedness POSITIVELY established from the record's own bytes;
+# every other outcome keeps the record in scope and reaches the identical
+# refusal as before. A record for this item whose identity mismatches, one whose
+# subject is absent, ambiguous or duplicated, and one that will not parse at all
+# are all still validated here and still refuse with zero posted.
+#
+# THE BOUND, STATED: this pass is O(records in the store), by construction and
+# not by oversight. The store is content-addressed - a record is named
+# fm-ob-<digest>.json where the digest is over the canonical identity - so the
+# work item cannot be recovered from a filename and no cheap name filter can
+# narrow the walk. The jq below is what scopes the WRITE to this item and to
+# non-terminal records; reading every file is what it costs to reach that
+# decision. Narrowing this would mean indexing the store, which is a change to
+# the record format rather than to this loop.
 supersede_other_heads() {  # <item> <current-request-id> <current-head>
-  local item=$1 rid=$2 head=$3 f other rec read_rc
+  local item=$1 rid=$2 head=$3 f other rec read_rc raw subject
   [ -d "$RECORD_DIR" ] || return 0
-  # THE BOUND, STATED: this pass is O(records in the store), by construction and
-  # not by oversight. The store is content-addressed - a record is named
-  # fm-ob-<digest>.json where the digest is over the canonical identity - so the
-  # work item cannot be recovered from a filename and no cheap name filter can
-  # narrow the walk. The jq below is what scopes the DECISION to this item and
-  # to non-terminal records; reading every file is what it costs to reach that
-  # decision. Narrowing this would mean indexing the store, which is a change to
-  # the record format rather than to this loop.
   for f in "$RECORD_DIR"/*.json; do
     [ -f "$f" ] || continue
     other=${f##*/}
     other=${other%.json}
+    raw=$(cat "$f" 2>/dev/null) || raw=
+    if subject=$(fm_outbound_record_subject "$raw"); then
+      # Positively another item's record: outside this decision entirely. Note
+      # this consults the record's OWN bytes, never its filename - a filename is
+      # what a record can disagree with, which is the condition being guarded.
+      [ "$subject" = "$item" ] || continue
+    else
+      # THE SUBJECT COULD NOT BE ESTABLISHED, so this record can be shown
+      # neither to be another item's nor to be readable as this one's. It
+      # refuses HERE rather than falling through, because the validator below
+      # resolves a duplicated key by write order: handed a record carrying two
+      # subjects it reads the last one, finds it consistent, and returns a
+      # confident verdict about a record whose subject is ambiguous - which is
+      # then skipped as another item's without anything ever refusing. Measured
+      # as exactly that: a duplicated `identity` permitted an emit while the
+      # scope test above had already declined to read it.
+      return 2
+    fi
     rec=$(record_read "$other"); read_rc=$?
     if [ "$read_rc" -ne 0 ]; then
       case $read_rc in
@@ -1208,7 +1345,7 @@ cmd_emit() {
   fi
   venue=$SOL_REPO
 
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" "$(project_dir "$project")" "$head_source" || true)
   if [ -n "$missing" ]; then
     printf '%s: cannot construct an exact-head-bound request for %s - missing %s\n' \
       "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" \
@@ -1394,7 +1531,7 @@ require_record_applicable_now() {  # <request-id> <record-json>
     repo=$SOL_REPO
     current_venue="$SOL_REPO#$SOL_ISSUE"
   fi
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$(project_dir "$project")" "$head_source" || true)
   [ -z "$missing" ] || die "the current identity for $item is incomplete: $(printf '%s' "$missing" | tr '\n' ',')" 4
   stored_identity=$(printf '%s' "$rec" | jq -r \
     '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head] | @tsv')
