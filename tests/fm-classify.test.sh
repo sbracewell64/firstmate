@@ -246,22 +246,41 @@ record_disposition() {  # <home> <task> <key> <value>
 }
 
 test_disposition_vocabulary_is_total_and_non_vacuous() {
-  local home member got reached=0 checked=0
+  local home member got reached=0 checked=0 recordable=0 derived=0
 
   home=$(disposition_home dispo)
 
   # Every member reachable. Four are recorded-only by design (no structured fleet
   # fact establishes them and prose is not evidence), so they are driven through
   # the record; the rest are driven through the derivation as well, below.
+  #
+  # The DERIVED-ONLY members are driven the other way, and the direction is the
+  # point: recorded, one of them would let a decision file declare that nobody
+  # owes a live captain decision, and the consumers that skip those entries would
+  # skip a real decision. So a record naming one must come back could-not-observe,
+  # exactly as an unknown value does, and the member itself is reached through the
+  # fold instead - tests/fm-commitment-register.test.sh's
+  # freshness_expiry_is_not_a_reopen, which owns the fixtures that reach it.
   for member in $FM_DECISION_DISPOSITION_VOCABULARY; do
     record_disposition "$home" "rec$reached" k "$member"
     got=$(decision_disposition "rec$reached" k needs-decision "$home")
-    [ "$got" = "$member" ] \
-      || fail "recorded disposition $member came back as $got, so that member is unreachable"
+    if decision_disposition_is_derived_only "$member"; then
+      [ "$got" = CNO_DECISION_SUBJECT ] \
+        || fail "recorded disposition $member came back as $got; a derived-only member may never be declared by a record"
+      derived=$((derived + 1))
+    else
+      [ "$got" = "$member" ] \
+        || fail "recorded disposition $member came back as $got, so that member is unreachable"
+      recordable=$((recordable + 1))
+    fi
     reached=$((reached + 1))
   done
-  [ "$reached" -eq 8 ] \
+  [ "$reached" -eq 9 ] \
     || fail "the vocabulary has $reached members; every one must be driven, not counted"
+  [ "$recordable" -eq 8 ] \
+    || fail "$recordable members round-tripped through a record; the recorded path must stay non-vacuous"
+  [ "$derived" -eq 1 ] \
+    || fail "$derived members were refused as records; a refusal that refuses nothing proves nothing"
 
   # Derived, with no record at all. Absent metadata is the subject itself being
   # unobservable, which is could-not-observe rather than a captain decision.

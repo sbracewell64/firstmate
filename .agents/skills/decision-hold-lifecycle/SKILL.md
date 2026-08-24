@@ -25,6 +25,8 @@ The hold remains the authoritative Captain's Call item until the captain's answe
 Record whose decision an open one is with `bin/fm-decision-hold.sh disposition`, from the closed vocabulary `FM_DECISION_DISPOSITION_VOCABULARY` owns in `bin/fm-classify-lib.sh`.
 Four of its members - `CAPTAIN_DEFERRED`, `BROWSER_SOL`, `EXTERNAL_DEPENDENCY`, and `WITHDRAWN` - are established only by that record, because no structured fleet fact establishes them and reading them out of a note's prose would credit a verdict to a sentence rather than to the decision.
 The rest derive from the task's own metadata and its verb, and an entry whose disposition cannot be established carries `CNO_DECISION_SUBJECT`, which is an answer rather than a missing field.
+`CNO_DECISION_VERIFICATION` is not a decision at all and may never be recorded: it marks a resolution whose criterion could not be verified now, so nobody owes a ruling, no hold is owed, and what needs attention is the evidence rather than the captain.
+An observation that aged out is not a reopen; only a later `blocked` or `needs-decision` event reopens a key.
 Resolved findings, recommendations that need no captain choice, and prose that merely sounds decision-like do not create holds.
 Bearings reads the resulting structured state and must never compensate by scraping historical reports, visual-review artifacts, terminal output, chat, or other prose.
 

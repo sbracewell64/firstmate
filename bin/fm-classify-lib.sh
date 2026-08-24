@@ -712,12 +712,78 @@ FM_CLASSIFY_DECISION_PROBE_MAX_DEFAULT=0
 #   EXTERNAL_DEPENDENCY            waiting on something outside the fleet
 #   CNO_DECISION_SUBJECT           could not be established
 #   WITHDRAWN                      no longer a decision anyone owes
-FM_DECISION_DISPOSITION_VOCABULARY='CAPTAIN_REQUIRED_AND_BLOCKING CAPTAIN_REQUIRED_NONBLOCKING CAPTAIN_DEFERRED BROWSER_SOL SELF_HANDLE EXTERNAL_DEPENDENCY CNO_DECISION_SUBJECT WITHDRAWN'
+#   CNO_DECISION_VERIFICATION      the durable lifecycle resolved this and nobody
+#                                  owes a ruling; what could not be established is
+#                                  whether its resolving criterion is STILL
+#                                  verified. See FRESHNESS IS NOT A REOPEN below.
+FM_DECISION_DISPOSITION_VOCABULARY='CAPTAIN_REQUIRED_AND_BLOCKING CAPTAIN_REQUIRED_NONBLOCKING CAPTAIN_DEFERRED BROWSER_SOL SELF_HANDLE EXTERNAL_DEPENDENCY CNO_DECISION_SUBJECT WITHDRAWN CNO_DECISION_VERIFICATION'
+
+# --- FRESHNESS IS NOT A REOPEN -----------------------------------------------
+#
+# Browser Sol ruling SOL-FM-SUPERVISOR-HANDOFF-GEN4-FP1-DISPOSITION-20260824, and
+# the defect it names was measured: a key whose durable lifecycle is
+# `blocked -> resolved` with NO later reopen event came back from this fold as
+# (blocked, CAPTAIN_REQUIRED_AND_BLOCKING) an hour later, because the PASS
+# observation that accepted its resolution had aged out of the probe cache's
+# freshness bound. Two censuses of an UNCHANGED durable stream disagreed, and the
+# later one manufactured a captain-owed blocking decision out of expired
+# instrumentation.
+#
+# TWO AXES, NOT ONE. A decision's SEMANTIC LIFECYCLE comes from the durable status
+# stream and nothing else: opened by needs-decision/blocked, closed by resolved,
+# reopened only by a later authoritative needs-decision/blocked. Whether its
+# criterion is verified RIGHT NOW is a separate OBSERVATION, and observations
+# expire. Losing an observation is not an event in the lifecycle.
+#
+# So the fold below decides the two separately. Only a probe that OBSERVED FAILURE
+# contradicts a resolution claim and keeps the decision open under its own opening
+# verb. Every could-not-observe result - an expired stored observation, a stored
+# observation about a different subject, none stored at all, an unreadable
+# decision file, a missing interpreter, a probe this caller may not run - leaves
+# the semantic state resolved and reports the VERIFICATION axis as
+# could-not-observe: verb FM_DECISION_VERIFICATION_STALE_VERB, disposition
+# CNO_DECISION_VERIFICATION, carrying the interpreter's own evidence for which of
+# those it was.
+#
+# WHAT THIS DOES NOT DO. It does not treat an expired PASS as still current. The
+# entry STAYS IN THE LISTING saying the criterion is unverified, the closure gate
+# still returns could-not-observe rather than PASS, and no predicate that requires
+# a current PASS is satisfied by it - which is the fail-closed half of the
+# 2026-08-10 ruling above, unchanged. What changes is only the TYPE of what is
+# reported: an unverified resolution, not a captain's decision.
+#
+# CNO_DECISION_VERIFICATION IS DERIVED HERE AND MAY NEVER BE RECORDED. A
+# disposition block naming it would let a file mark a genuinely open captain
+# decision as nobody's, and consumers that skip it would then skip that decision.
+# _fm_decision_recorded_disposition refuses it as a recorded value and
+# bin/fm-decision-hold.sh refuses to write one, so the only way to reach it is the
+# fold's own verification path.
+FM_DECISION_DISPOSITION_DERIVED_ONLY='CNO_DECISION_VERIFICATION'
+
+# The verb carried by an entry whose semantic lifecycle is resolved and whose
+# verification is could-not-observe. Deliberately NOT an opening verb: consumers
+# that count captain-owed work read this field (bin/fm-fleet-snapshot.sh derives
+# pending_decision and blocked_event from it), and an entry nobody owes a ruling
+# on must not answer to either.
+#
+# `stale` carries a second, older fleet sense - a WORKER that has been quiet too
+# long, the `stale` wake kind - so this one is always written in its qualified
+# form. docs/vocabulary-collisions.md owns that ruling.
+FM_DECISION_VERIFICATION_STALE_VERB=verification-stale
 
 # 0 if <value> is a member of that vocabulary.
 decision_disposition_is_known() {  # <value>
   [ -n "${1:-}" ] || return 1
   case " $FM_DECISION_DISPOSITION_VOCABULARY " in
+    *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+# 0 if <value> is a member this fold DERIVES and no record may declare.
+decision_disposition_is_derived_only() {  # <value>
+  [ -n "${1:-}" ] || return 1
+  case " $FM_DECISION_DISPOSITION_DERIVED_ONLY " in
     *" $1 "*) return 0 ;;
   esac
   return 1
@@ -766,7 +832,14 @@ _fm_decision_recorded_disposition() {  # <decision-file>
     line=${line#"${line%%[![:space:]]*}"}
     line=${line%"${line##*[![:space:]]}"}
     [ -n "$line" ] || continue
-    decision_disposition_is_known "$line" && printf '%s' "$line"
+    # A derived-only member is refused here exactly as an unknown value is: it
+    # prints nothing, so the caller answers CNO_DECISION_SUBJECT rather than
+    # letting a file declare that nobody owes this decision. See FRESHNESS IS NOT
+    # A REOPEN above.
+    if decision_disposition_is_known "$line" \
+      && ! decision_disposition_is_derived_only "$line"; then
+      printf '%s' "$line"
+    fi
     return 0
   done < "$file" 2>/dev/null
   [ "$inside" -eq 0 ] || return 0
@@ -928,10 +1001,11 @@ decision_close_refused() {  # <task-id> <key> [home] [execute]
   return 4
 }
 
-# The verb currently recorded for <key>, or empty when the key is not open. Used
-# by the closure gate so a refused resolution keeps the decision's own opening
-# verb rather than being relabelled by the refusal.
-_fm_decision_verb() {  # <open-set> <key>
+# The verb recorded for <key> in a "<key>\t<verb>..." set, or empty when the set
+# has no record for it. The closure gate reads the OPENING-verb set with it, so a
+# resolution its probe observed failing keeps the verb the decision was opened
+# under rather than being relabelled by the refusal.
+_fm_decision_verb() {  # <set> <key>
   local set=$1 key=$2 line rest
   while IFS= read -r line; do
     [ -n "$line" ] || continue
@@ -964,10 +1038,19 @@ $set
 EOF
   printf '%s' "$out"
 }
-# Fold the WHOLE status stream into the set of decisions still open. Prints one
-# TAB-separated "<key>\t<verb>\t<disposition>\t<summary>" line per still-open
-# decision, in most-recently-opened-last order; prints nothing when none are open.
-# The free-text summary is LAST so a consumer reading three fields cannot split it.
+# Fold the WHOLE status stream into the decision census. Prints one TAB-separated
+# "<key>\t<verb>\t<disposition>\t<summary>" line per entry, in
+# most-recently-opened-last order; prints nothing when the census is empty. The
+# free-text summary is LAST so a consumer reading three fields cannot split it.
+#
+# The census carries two kinds of entry and every entry says which it is in its
+# DISPOSITION field, so no consumer has to infer it: decisions someone owes a
+# ruling on, and typed in-band instrument facts - CNO_DECISION_UNIVERSE for a
+# status log that could not be enumerated safely, CNO_DECISION_VERIFICATION for a
+# resolution whose criterion could not be verified now (FRESHNESS IS NOT A REOPEN
+# above). decision_entry_is_ruling_owed below is the one owner of that split; a
+# consumer that inventories, holds, or escalates decisions asks it rather than
+# testing for a member itself.
 #
 # ENUMERATION, not verification: this always completes, at the price of a bounded
 # number of file reads per key, and executes a registered probe only within a
@@ -984,7 +1067,7 @@ EOF
 # path resolution rather than this directory-local glob.
 status_open_decisions() {  # <status-file>
   local f=$1 line verb key note resolve held open='' stripped task home refusal prior
-  local disposition probe_budget probes_spent=0 close_rc close_verdict
+  local disposition probe_budget probes_spent=0 close_rc close_verdict opened=''
   if [ ! -f "$f" ] || [ ! -r "$f" ] || [ -L "$f" ]; then
     printf 'CNO_DECISION_UNIVERSE\tCNO_DECISION_UNIVERSE\tCNO_DECISION_SUBJECT\tstatus log %s could not be read safely, so its decision universe is unknown\n' "${f##*/}"
     return 0
@@ -1014,6 +1097,13 @@ status_open_decisions() {  # <status-file>
         open=$(_fm_decision_drop "$open" "$key")
         [ -n "$open" ] && open="${open}"$'\n'
         open="${open}${key}"$'\t'"${verb}"$'\t'"${disposition}"$'\t'"${note}"$'\n'
+        # The key's OPENING verb, kept apart from the live record because the
+        # record's verb field no longer always holds one: a verification-stale
+        # projection puts a non-opening verb there, and a later probe FAILURE has
+        # to restore the verb the captain's decision was actually opened under.
+        opened=$(_fm_decision_drop "$opened" "$key")
+        [ -n "$opened" ] && opened="${opened}"$'\n'
+        opened="${opened}${key}"$'\t'"${verb}"$'\n'
         ;;
       "$resolve")
         # A resolution is a CLAIM that the criterion is met. When the key carries
@@ -1041,12 +1131,26 @@ status_open_decisions() {  # <status-file>
             refusal="${refusal:+$refusal; }unrecognized decision-close result $close_rc, so the resolution is not accepted"
             ;;
         esac
-        if [ "$close_verdict" != PASS ]; then
-          prior=$(_fm_decision_verb "$open" "$key")
+        if [ "$close_verdict" = FAIL ]; then
+          # OBSERVED-BAD about the criterion, which is the one verification result
+          # that contradicts the resolution claim. The decision stays open under
+          # the verb it was opened with, exactly as before.
+          prior=$(_fm_decision_verb "$opened" "$key")
           open=$(_fm_decision_drop "$open" "$key")
           [ -n "$open" ] && open="${open}"$'\n'
           disposition=$(decision_disposition "$task" "$key" "${prior:-needs-decision}" "$home")
           open="${open}${key}"$'\t'"${prior:-needs-decision}"$'\t'"${disposition}"$'\t'"${refusal}"$'\n'
+        elif [ "$close_verdict" != PASS ]; then
+          # COULD-NOT-OBSERVE about the criterion. FRESHNESS IS NOT A REOPEN above
+          # owns why this may not become a captain-owed decision: the durable
+          # lifecycle resolved this key and no later event reopened it, so the
+          # semantic state is resolved and only the VERIFICATION axis is unknown.
+          # The entry stays in the listing carrying the interpreter's own evidence
+          # for which could-not-observe this is, so nothing reads the expired
+          # observation as a current one.
+          open=$(_fm_decision_drop "$open" "$key")
+          [ -n "$open" ] && open="${open}"$'\n'
+          open="${open}${key}"$'\t'"${FM_DECISION_VERIFICATION_STALE_VERB}"$'\t'CNO_DECISION_VERIFICATION$'\t'"${refusal}"$'\n'
         else
           # Accepted. `refusal` still holds whatever the gate disclosed about WHY
           # - a stored observation with its time, or an attested criterion
@@ -1101,6 +1205,25 @@ $open
 EOF
   done
   return 0
+}
+
+# 0 when a census entry names a decision SOMEONE OWES A RULING ON, 1 when it is
+# one of the typed instrument facts the same listing carries in band.
+#
+# The ONE owner of that split, because getting it wrong in either direction is a
+# real failure and the two failures are opposite: a consumer that treats an
+# instrument fact as a decision demands a captain hold for something nobody owes
+# and blocks a completed task's cleanup on it, while a consumer that drops a real
+# decision loses it. Both were reachable while each consumer hand-tested for a
+# member itself, which is why this is a function rather than a comparison
+# repeated at every consumer.
+#
+# An entry whose disposition field is empty or unrecognized is RULING OWED, which
+# is the fail-closed direction: a listing this reader cannot classify keeps its
+# decision rather than losing it to a field it could not parse.
+decision_entry_is_ruling_owed() {  # <key> <disposition>
+  [ "${1:-}" != CNO_DECISION_UNIVERSE ] || return 1
+  ! decision_disposition_is_derived_only "${2:-}"
 }
 
 # --- blocking_on: DERIVED, never declared ------------------------------------

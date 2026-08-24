@@ -348,8 +348,23 @@
 #     where the cache was meant to help, while a worktree whose head moved past the
 #     recorded verdict would still be answered from before;
 #   - past the freshness bound it is not served at all: the probe re-runs, and if
-#     it cannot re-run the answer is could-not-observe, never the stale verdict.
+#     it cannot re-run the answer is could-not-observe, never the stale verdict;
+#   - and that could-not-observe NAMES WHICH ONE IT IS. An observation that
+#     expired, one that was never made, and one made about a different subject are
+#     three different facts about the same key, and a reader deciding whether a
+#     resolution is unverified or was never verified cannot tell them apart from
+#     "no fresh result". probe_cache_read records the cause and probe_not_run_yet
+#     writes it into the evidence, which bin/fm-classify-lib.sh's fold then carries
+#     verbatim onto the entry it projects. Naming the cause is the whole of what it
+#     buys: none of the three may close a key.
 # The cache is an accelerator for an answer, never a substitute for one.
+#
+# AN EXPIRED OBSERVATION IS NOT A REOPEN. Browser Sol ruling
+# SOL-FM-SUPERVISOR-HANDOFF-GEN4-FP1-DISPOSITION-20260824 separates a decision's
+# semantic lifecycle from the freshness of the observation that resolved it. This
+# file owns only the second: it reports what it observed and when, and never a
+# lifecycle state. bin/fm-classify-lib.sh's FRESHNESS IS NOT A REOPEN owns what a
+# could-not-observe answer means for the decision it is about.
 #
 # THE FRESHNESS BOUND IS DERIVED FROM THE PASS THAT POPULATES IT, and getting that
 # relationship wrong is self-defeating rather than merely slow. The bound was
@@ -535,9 +550,37 @@ probe_not_executed() {  # <what>
 # from a probe that failed: the verifier is available and reachable, no verdict
 # exists yet, and one is obtainable by asking the expensive question about this
 # key. Still could-not-observe, so it closes nothing.
+#
+# It names WHICH could-not-observe, from PROBE_CACHE_MISS above. An expired
+# observation in particular says what it recorded and when, because the reader of
+# this line is deciding whether a resolution is unverified or was never verified
+# at all, and bin/fm-classify-lib.sh's fold carries the line verbatim onto the
+# entry it projects. The word stale is used only in its qualified
+# verification-stale form; docs/vocabulary-collisions.md owns that ruling.
 probe_not_run_yet() {  # <what>
+  local why
+  case "$PROBE_CACHE_MISS" in
+    expired)
+      why="its last observation is VERIFICATION-STALE - ${PROBE_CACHE_STALE_RESULT:-a result} recorded at ${PROBE_CACHE_STALE_ISO:-an unrecorded time}, ${PROBE_CACHE_STALE_AGE:+${PROBE_CACHE_STALE_AGE}s ago, }past the ${PROBE_CACHE_TTL}s freshness bound, so it is not served as a current one"
+      ;;
+    subject-moved)
+      why="its stored observation was made against a DIFFERENT subject (decision-file bytes, task worktree or head), so it is not transferable to what is asked now and is refused rather than served"
+      ;;
+    unreadable)
+      why="its stored observation could not be read, so no result stands in for one"
+      ;;
+    disabled)
+      why="the result store is switched off, so no earlier observation is available"
+      ;;
+    not-consulted)
+      why="the current time could not be established, so no stored observation could be judged for freshness and none was served"
+      ;;
+    *)
+      why="it has no stored observation inside the ${PROBE_CACHE_TTL}s freshness bound"
+      ;;
+  esac
   probe_answer NO_VERIFIER_RAN verification_incomplete \
-    "NOT PROBED YET: $1 has no stored observation inside the ${PROBE_CACHE_TTL}s freshness bound and this caller is enumerating rather than verifying, so the criterion is could-not-observe and stays open until a verifying caller spends the probe"
+    "NOT PROBED YET: $1 was not run because this caller is enumerating rather than verifying, and $why; the criterion is could-not-observe and stays unverified until a verifying caller spends the probe"
 }
 
 # Does every harness firstmate can launch compose a session whose permission
@@ -1148,27 +1191,73 @@ probe_cache_path() {  # <task> <key>
   printf '%s/%s' "$PROBE_CACHE_DIR" "$(printf '%s' "$safe" | tr -c 'A-Za-z0-9._-' '_')"
 }
 
+# WHY A MISS MISSED IS ITSELF AN OBSERVATION. A caller that only learns "no fresh
+# result" cannot tell an observation that EXPIRED from one that was never made or
+# one made about a DIFFERENT subject, and those are three different facts about
+# the same key: the first says the criterion was verified and the evidence aged
+# out, the second says it was never verified here, the third says a stored PASS
+# exists and is not transferable to what is being asked now. The open-decision
+# fold reports all three as could-not-observe, deliberately - none of them may
+# close a key - but what it puts in front of a reader has to say which one it was,
+# so the miss cause is recorded here rather than reconstructed from prose later.
+#
+# The set is closed and every non-serving path sets exactly one member:
+#   not-consulted  the store was never asked, because the current time this
+#                  freshness judgement needs could not be established
+#   disabled       the cache is switched off (TTL 0)
+#   no-entry       nothing stored for this key
+#   unreadable     a record exists and this process could not parse it
+#   subject-moved  a record exists for a DIFFERENT decision-file/worktree/head
+#   expired        a record for THIS subject, older than the freshness bound
+PROBE_CACHE_MISS=
+# Set alongside PROBE_CACHE_MISS=expired only, describing the observation that
+# aged out: the result it recorded, when it was made, and how old it now is.
+PROBE_CACHE_STALE_RESULT=
+PROBE_CACHE_STALE_ISO=
+PROBE_CACHE_STALE_AGE=
+
+probe_cache_miss() {  # <cause>
+  PROBE_CACHE_MISS=$1
+  PROBE_CACHE_STALE_RESULT=
+  PROBE_CACHE_STALE_ISO=
+  PROBE_CACHE_STALE_AGE=
+  return 1
+}
+
 # 0 with PROBE_* set from a result still inside the freshness bound. Anything
 # else - no entry, a different fingerprint, an unreadable or malformed line, or an
-# observation older than the bound - returns 1, and the caller runs the probe.
+# observation older than the bound - returns 1 with PROBE_CACHE_MISS naming which,
+# and the caller runs the probe.
 probe_cache_read() {  # <task> <key> <fingerprint> <now>
   local path line stamp iso fp result reason evidence age t=$'\t'
-  [ "$PROBE_CACHE_TTL" -gt 0 ] 2>/dev/null || return 1
+  [ "$PROBE_CACHE_TTL" -gt 0 ] 2>/dev/null || { probe_cache_miss disabled; return 1; }
   path=$(probe_cache_path "$1" "$2")
-  [ -r "$path" ] || return 1
-  IFS= read -r line < "$path" 2>/dev/null || return 1
-  case "$line" in *"$t"*"$t"*"$t"*"$t"*"$t"*) ;; *) return 1 ;; esac
+  [ -r "$path" ] || { probe_cache_miss no-entry; return 1; }
+  IFS= read -r line < "$path" 2>/dev/null || { probe_cache_miss unreadable; return 1; }
+  case "$line" in *"$t"*"$t"*"$t"*"$t"*"$t"*) ;; *) probe_cache_miss unreadable; return 1 ;; esac
   stamp=${line%%"$t"*};  line=${line#*"$t"}
   iso=${line%%"$t"*};    line=${line#*"$t"}
   fp=${line%%"$t"*};     line=${line#*"$t"}
   result=${line%%"$t"*}; line=${line#*"$t"}
   reason=${line%%"$t"*}
   evidence=${line#*"$t"}
-  [ -n "$stamp" ] && [ -n "$result" ] && [ -n "$reason" ] || return 1
-  case "$stamp" in ''|*[!0-9]*) return 1 ;; esac
-  [ "$fp" = "$3" ] || return 1
+  [ -n "$stamp" ] && [ -n "$result" ] && [ -n "$reason" ] || { probe_cache_miss unreadable; return 1; }
+  case "$stamp" in ''|*[!0-9]*) probe_cache_miss unreadable; return 1 ;; esac
+  # A stored result about a different decision file, worktree or head is not an
+  # answer to what is being asked now, however fresh it is. It is refused rather
+  # than transferred, and it is refused as its OWN cause: reporting it as an
+  # expiry would say the criterion was verified and merely aged, which is a claim
+  # about a subject nobody observed.
+  [ "$fp" = "$3" ] || { probe_cache_miss subject-moved; return 1; }
   age=$(( $4 - stamp ))
-  [ "$age" -ge 0 ] && [ "$age" -le "$PROBE_CACHE_TTL" ] || return 1
+  if [ "$age" -lt 0 ] || [ "$age" -gt "$PROBE_CACHE_TTL" ]; then
+    probe_cache_miss expired
+    PROBE_CACHE_STALE_RESULT=$result
+    PROBE_CACHE_STALE_ISO=$iso
+    [ "$age" -ge 0 ] && PROBE_CACHE_STALE_AGE=$age
+    return 1
+  fi
+  PROBE_CACHE_MISS=
   # The observation time rides the evidence, so nothing downstream - a refusal
   # note, a fold record, a human read - can mistake this for a fresh answer.
   probe_answer "$result" "$reason" \
@@ -1199,6 +1288,11 @@ PROBE_FROM_CACHE=0
 run_decision_probe() {  # <task> <key>
   local task=$1 key=$2 wt out rc fingerprint now iso stamps
   PROBE_FROM_CACHE=0
+  # Reset per key, not per process: a report that walks several entries must not
+  # describe this key's miss with the last key's cause. The reset value is the one
+  # that is true before the store is consulted, so a path that never reaches
+  # probe_cache_read reports THAT rather than inheriting "nothing was stored".
+  probe_cache_miss not-consulted || :
   if [ "$DP_TIER" = attested ]; then
     # Marked and visible, never verified: an attested criterion has no verdict to
     # reach, so it stays could-not-observe by construction rather than by failure.

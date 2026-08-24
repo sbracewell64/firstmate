@@ -2131,6 +2131,323 @@ JSON
   pass "probes is validated as a shape, and every probe it declares is a constrained target"
 }
 
+# --- freshness is not a reopen ------------------------------------------------
+#
+# THE PROPERTY, from Browser Sol ruling
+# SOL-FM-SUPERVISOR-HANDOFF-GEN4-FP1-DISPOSITION-20260824: a decision's SEMANTIC
+# LIFECYCLE and the FRESHNESS of the observation that resolved it are two axes,
+# and losing the second may not move the first. The measured defect was exactly
+# that collapse - a key whose durable stream is `blocked -> resolved` with no
+# later reopen came back an hour later as (blocked, CAPTAIN_REQUIRED_AND_BLOCKING)
+# because its PASS observation had aged out - so two censuses of an UNCHANGED
+# stream disagreed and the later one invented a captain-owed blocking decision.
+#
+# Every case below is driven with the control that makes it non-vacuous, and the
+# controls are the two opposite failures: reopening a resolved decision from
+# expired instrumentation, and the equally wrong repair of serving the expired
+# PASS as though it were current. The freshness bound is moved with the declared
+# FM_COMMITMENT_PROBE_CACHE_TTL rather than by editing a stored record, so what
+# ages the observation is the same bound production uses.
+
+# The open-decision fold, through its public entry point. Prints the census;
+# stderr - where the accept path discloses that a verdict was SERVED rather than
+# observed - goes to <errfile> so a case can read it.
+fold_census() {  # <home> <task> <errfile> [NAME=VALUE...]
+  local home=$1 task=$2 err=$3
+  shift 3
+  # shellcheck disable=SC2016  # the script is the fold's own arguments, expanded by the inner shell
+  env "$@" FM_HOME="$home" bash -c '
+    . "$1/bin/fm-classify-lib.sh"
+    status_open_decisions "$2"
+  ' _ "$ROOT" "$home/state/$task.status" 2>"$err"
+}
+
+# The <field>th TAB-separated field of a one-entry census.
+census_field() {  # <census> <field>
+  printf '%s' "$1" | head -1 | cut -f"$2"
+}
+
+# The observation time a served acceptance discloses, so two acceptances can be
+# compared without reading the store's own format.
+disclosed_observation() {  # <text>
+  printf '%s' "$1" | sed -n 's/.*\[observed \([^,]*\),.*/\1/p' | head -1
+}
+
+freshness_expiry_is_not_a_reopen() {
+  local home wt marker out err rc ran iso_first iso_second before after stale_refusal ttl='FM_COMMITMENT_PROBE_CACHE_TTL=10'
+  # The declared bound, moved for this case only: what ages the observation is
+  # the same freshness bound production reads, not an edit to a stored record.
+
+  home=$(make_home freshness)
+  wt=$(give_worktree "$home" fresh1)
+  # A fixture path that came back empty would turn every git -C below into a
+  # command against the checkout these tests live in.
+  [ -n "$wt" ] && [ -d "$wt" ] || fail "the fresh1 fixture worktree was not created"
+  git -C "$wt" init -q
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m 'the head the criterion is verified against'
+  marker="$TMP_ROOT/freshness-runs"
+  : > "$marker"
+  write_decision "$home" fresh1 crit "tier: executable
+run: printf 'x\n' >> $marker"
+  printf 'blocked [key=crit]: the ruled finding, work stopped\n' > "$home/state/fresh1.status"
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/fresh1.status"
+  err="$TMP_ROOT/freshness-stderr"
+
+  # 1. RESOLVED + AN OBSERVATION MADE NOW. The verifying caller spends its budget,
+  #    the probe runs, and the decision closes. Positive and non-vacuous: the
+  #    count is what ran, not the absence of a failure.
+  out=$(fold_census "$home" fresh1 "$err" FM_CLASSIFY_DECISION_PROBE_MAX=5)
+  ran=$(grep -c . "$marker")
+  [ "$ran" -eq 1 ] || fail "the verifying fold must execute the registered probe once, executed $ran"
+  [ -z "$out" ] || fail "a resolution its probe passes must close the decision, got: $out"
+
+  # 2. RESOLVED + AN UNEXPIRED MATCHING PASS + NO REOPEN. The same unchanged
+  #    stream, read inside the freshness bound, still closes - and executes
+  #    nothing, so what closed it is the stored observation.
+  out=$(fold_census "$home" fresh1 "$err" "$ttl")
+  ran=$(grep -c . "$marker")
+  [ "$ran" -eq 1 ] || fail "reading inside the freshness bound must execute no probe, executions now $ran"
+  [ -z "$out" ] || fail "an unexpired matching PASS must keep the decision closed, got: $out"
+  iso_first=$(disclosed_observation "$(cat "$err")")
+  [ -n "$iso_first" ] \
+    || fail "a served acceptance must disclose when the observation was made: $(cat "$err")"
+
+  # And the CONTROL for case 3 below, taken while the PASS is still current: the
+  # predicate that requires a current PASS is satisfied here, so its refusal after
+  # expiry is a real refusal rather than a predicate that never passes.
+  out=$(FM_COMMITMENT_PROBE_CACHE_TTL=10 run_reg "$TMP_ROOT/freshness/unused" "$home" --cache-only --closes fresh1 crit); rc=$?
+  expect_code 0 "$rc" "control: an unexpired PASS must satisfy the closure predicate"
+
+  # Age the observation past its declared bound. Nothing else about the subject
+  # moves: same status stream, same decision bytes, same worktree, same head.
+  before=$(cksum < "$home/state/fresh1.status")
+  # 11s against a 10s bound: only this deliberate wait may cross it, so a loaded
+  # machine cannot expire the observation between the two reads above.
+  sleep 11
+
+  # 3. AN EXPIRED PASS SATISFIES NO PREDICATE THAT REQUIRES A CURRENT ONE.
+  out=$(FM_COMMITMENT_PROBE_CACHE_TTL=10 run_reg "$TMP_ROOT/freshness/unused" "$home" --cache-only --closes fresh1 crit); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "an expired PASS was served as a current one; the closure predicate must refuse it"
+  stale_refusal=$out
+
+  # 4. AND THE FOLD DOES NOT REOPEN IT. Semantic state resolved, verification
+  #    could-not-observe - never a captain-owed blocking decision manufactured
+  #    from expired instrumentation.
+  out=$(fold_census "$home" fresh1 "$err" "$ttl")
+  ran=$(grep -c . "$marker")
+  [ "$ran" -eq 1 ] || fail "the enumerating fold must not reprobe, executions now $ran"
+  [ "$(printf '%s' "$out" | grep -c .)" -eq 1 ] \
+    || fail "the key must stay in the census carrying its lost freshness, got: $out"
+  [ "$(census_field "$out" 2)" = verification-stale ] \
+    || fail "an expired observation reopened the decision as '$(census_field "$out" 2)'; freshness is not a reopen"
+  [ "$(census_field "$out" 3)" = CNO_DECISION_VERIFICATION ] \
+    || fail "the verification axis must be could-not-observe, got '$(census_field "$out" 3)'"
+  assert_not_contains "$out" CAPTAIN_REQUIRED \
+    "no captain-owed decision may be manufactured from stale instrumentation"
+  # And BOTH surfaces say the evidence aged out rather than that none was ever
+  # stored: an unverified resolution and one never verified are different facts,
+  # and a reader deciding what to do about this key needs to tell them apart.
+  for out in "$stale_refusal" "$out"; do
+    assert_contains "$out" "VERIFICATION-STALE" \
+      "the evidence must say it aged out, not merely that no result was found"
+    assert_contains "$out" "PASS recorded at" \
+      "the evidence must name the observation that aged out, so a reader can tell it from one never made"
+  done
+
+  # 5. RESTART/REPLAY. The same durable inputs classify the same way, and nothing
+  #    is written anywhere: no reopen event, no close event, no probe.
+  out=$(fold_census "$home" fresh1 "$err" "$ttl")
+  after=$(cksum < "$home/state/fresh1.status")
+  ran=$(grep -c . "$marker")
+  [ "$ran" -eq 1 ] || fail "replay executed a probe; executions now $ran"
+  [ "$before" = "$after" ] \
+    || fail "the fold wrote to the durable status stream; a census may not create lifecycle events"
+  [ "$(census_field "$out" 2)" = verification-stale ] && [ "$(census_field "$out" 3)" = CNO_DECISION_VERIFICATION ] \
+    || fail "replay classified the same state differently: $out"
+
+  # 6. THE BOUNDED AUTHORITATIVE REPROBE. A caller whose policy grants a budget
+  #    re-establishes the criterion instead of reporting it unverified, and the
+  #    acceptance that follows rests on a NEW observation, not the expired one.
+  out=$(fold_census "$home" fresh1 "$err" "$ttl" FM_CLASSIFY_DECISION_PROBE_MAX=5)
+  ran=$(grep -c . "$marker")
+  [ "$ran" -eq 2 ] || fail "the budgeted fold must reprobe the expired criterion once, executions now $ran"
+  [ -z "$out" ] || fail "a reprobe that passes must close the decision, got: $out"
+
+  out=$(FM_COMMITMENT_PROBE_CACHE_TTL=10 run_reg "$TMP_ROOT/freshness/unused" "$home" --cache-only --closes fresh1 crit); rc=$?
+  expect_code 0 "$rc" "after the reprobe the closure predicate must be satisfied again"
+  iso_second=$(disclosed_observation "$out")
+  [ -n "$iso_second" ] || fail "the refreshed acceptance must disclose its observation time: $out"
+  [ "$iso_second" != "$iso_first" ] \
+    || fail "the reprobe reused the expired observation time $iso_first; the evidence was not refreshed"
+
+  pass "an expired resolving observation is verification-stale, never a reopen, and a granted budget re-establishes it"
+}
+
+# THE PROPERTY: a stored PASS is an answer about ONE subject - these decision
+# bytes, this worktree, this head - and is refused rather than transferred when
+# the subject moved, however fresh it is. Refused is not reopened either: the
+# lifecycle is still resolved, and it is the verification that is unknown.
+a_moved_subject_never_transfers_the_old_pass() {
+  local home wt out rc err ran marker
+
+  home=$(make_home movedsubj)
+  wt=$(give_worktree "$home" moved1)
+  # A fixture path that came back empty would turn every git -C below into a
+  # command against the checkout these tests live in.
+  [ -n "$wt" ] && [ -d "$wt" ] || fail "the moved1 fixture worktree was not created"
+  git -C "$wt" init -q
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m 'the head the criterion is verified against'
+  marker="$TMP_ROOT/movedsubj-runs"
+  : > "$marker"
+  write_decision "$home" moved1 crit "tier: executable
+run: printf 'x\n' >> $marker"
+  printf 'blocked [key=crit]: the ruled finding, work stopped\n' > "$home/state/moved1.status"
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/moved1.status"
+  err="$TMP_ROOT/movedsubj-stderr"
+
+  fold_census "$home" moved1 "$err" FM_CLASSIFY_DECISION_PROBE_MAX=5 >/dev/null
+
+  # The control first: nothing moved, so the stored PASS answers and the key is
+  # closed. Without it the refusals below would prove only that nothing ever
+  # closes.
+  out=$(run_reg "$TMP_ROOT/movedsubj/unused" "$home" --cache-only --closes moved1 crit); rc=$?
+  expect_code 0 "$rc" "control: an unmoved subject must be answered from its stored observation"
+
+  # HEAD. A new commit is the ordinary way a criterion becomes met or stops being
+  # met, so a verdict from before it is about a different question.
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m 'the lane moved past the recorded verdict'
+  out=$(run_reg "$TMP_ROOT/movedsubj/unused" "$home" --cache-only --closes moved1 crit); rc=$?
+  [ "$rc" -ne 0 ] || fail "a stored PASS was transferred across a moved head"
+  assert_contains "$out" "DIFFERENT subject" \
+    "the refusal must say the observation was about another subject, not that none was stored"
+  assert_not_contains "$out" "VERIFICATION-STALE" \
+    "a moved subject is not an expiry: reporting it as one would claim this subject was verified and merely aged"
+
+  out=$(fold_census "$home" moved1 "$err")
+  ran=$(grep -c . "$marker")
+  [ "$ran" -eq 1 ] || fail "the enumerating fold must execute no probe, executions now $ran"
+  [ "$(census_field "$out" 2)" = verification-stale ] \
+    || fail "a moved subject reopened the decision as '$(census_field "$out" 2)'"
+  [ "$(census_field "$out" 3)" = CNO_DECISION_VERIFICATION ] \
+    || fail "a moved subject must report could-not-observe verification, got '$(census_field "$out" 3)'"
+
+  # DECISION BYTES. A rewritten criterion is a different question too, and the
+  # head is put back first so the bytes are the only thing that moved.
+  git -C "$wt" reset -q --hard HEAD~1
+  out=$(run_reg "$TMP_ROOT/movedsubj/unused" "$home" --cache-only --closes moved1 crit); rc=$?
+  expect_code 0 "$rc" "control: restoring the head must make the stored observation answerable again"
+  write_decision "$home" moved1 crit "tier: executable
+run: printf 'x\n' >> $marker # the criterion was rewritten"
+  out=$(run_reg "$TMP_ROOT/movedsubj/unused" "$home" --cache-only --closes moved1 crit); rc=$?
+  [ "$rc" -ne 0 ] || fail "a stored PASS was transferred onto rewritten decision bytes"
+  assert_contains "$out" "DIFFERENT subject" \
+    "the refusal must name the subject mismatch"
+  pass "a stored PASS is refused rather than transferred when its subject moved, and refusing is not reopening"
+}
+
+# THE PROPERTY: an explicit authoritative reopen is an EVENT in the lifecycle and
+# outranks everything the verification axis says. The stale projection must never
+# swallow one.
+an_explicit_reopen_after_the_observation_wins() {
+  local home wt out err marker ttl='FM_COMMITMENT_PROBE_CACHE_TTL=0'
+
+  home=$(make_home reopen)
+  wt=$(give_worktree "$home" reopen1)
+  # A fixture path that came back empty would turn every git -C below into a
+  # command against the checkout these tests live in.
+  [ -n "$wt" ] && [ -d "$wt" ] || fail "the reopen1 fixture worktree was not created"
+  git -C "$wt" init -q
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m base
+  marker="$TMP_ROOT/reopen-runs"
+  : > "$marker"
+  write_decision "$home" reopen1 crit "tier: executable
+run: printf 'x\n' >> $marker"
+  printf 'blocked [key=crit]: the ruled finding, work stopped\n' > "$home/state/reopen1.status"
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/reopen1.status"
+  err="$TMP_ROOT/reopen-stderr"
+
+  # With the result store switched off the enumerating fold can never observe the
+  # criterion, which is the state the reopen has to win from.
+  out=$(fold_census "$home" reopen1 "$err" "$ttl")
+  [ "$(census_field "$out" 2)" = verification-stale ] \
+    || fail "control: with no observation available the entry must be verification-stale, got: $out"
+
+  printf 'blocked [key=crit]: the captain reopened it\n' >> "$home/state/reopen1.status"
+  out=$(fold_census "$home" reopen1 "$err" "$ttl")
+  [ "$(census_field "$out" 2)" = blocked ] \
+    || fail "an explicit reopen must win over the verification axis, got '$(census_field "$out" 2)'"
+  [ "$(census_field "$out" 3)" = CAPTAIN_REQUIRED_AND_BLOCKING ] \
+    || fail "a reopened blocked decision is the captain's, got '$(census_field "$out" 3)'"
+  assert_contains "$out" "the captain reopened it" \
+    "the reopened entry must carry the reopening event's own note"
+
+  printf 'resolved [key=crit]: fixed again\n' >> "$home/state/reopen1.status"
+  printf 'needs-decision [key=crit]: and a question after that\n' >> "$home/state/reopen1.status"
+  out=$(fold_census "$home" reopen1 "$err" "$ttl")
+  [ "$(census_field "$out" 2)" = needs-decision ] \
+    || fail "a later needs-decision must reopen it too, got '$(census_field "$out" 2)'"
+  [ "$(census_field "$out" 3)" = CAPTAIN_REQUIRED_NONBLOCKING ] \
+    || fail "a reopened needs-decision is the captain's, got '$(census_field "$out" 3)'"
+  pass "an explicit authoritative reopen outranks the verification axis"
+}
+
+# THE PROPERTY: only an OBSERVED FAILURE contradicts a resolution claim, and when
+# one does the decision comes back under the verb it was OPENED with. The verb
+# field no longer always holds an opening verb - a verification-stale projection
+# puts a different token there - so the opening verb is kept apart from the live
+# record rather than read back out of it.
+an_observed_failure_keeps_the_opening_verb() {
+  local home wt out err marker
+
+  home=$(make_home openingverb)
+  wt=$(give_worktree "$home" verb1)
+  # A fixture path that came back empty would turn every git -C below into a
+  # command against the checkout these tests live in.
+  [ -n "$wt" ] && [ -d "$wt" ] || fail "the verb1 fixture worktree was not created"
+  git -C "$wt" init -q
+  git -C "$wt" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    commit -q --allow-empty -m base
+  err="$TMP_ROOT/openingverb-stderr"
+
+  # A probe whose answer CHANGES between two runs in the same pass: it passes
+  # while the marker is there and consumes it. That is what makes this case
+  # discriminating rather than decorative - the key closes on the first
+  # resolution, so the live record no longer holds its opening verb when the
+  # second resolution's failure reopens it.
+  marker="$wt/one-shot"
+  : > "$marker"
+  write_decision "$home" verb1 crit 'tier: executable
+run: test -f one-shot && rm -f one-shot'
+  printf 'blocked [key=crit]: the ruled finding, work stopped\n' > "$home/state/verb1.status"
+  printf 'resolved [key=crit]: fix applied\n' >> "$home/state/verb1.status"
+  printf 'resolved [key=crit]: and applied again\n' >> "$home/state/verb1.status"
+
+  out=$(fold_census "$home" verb1 "$err" FM_COMMITMENT_PROBE_CACHE_TTL=0 FM_CLASSIFY_DECISION_PROBE_MAX=5)
+  [ "$(census_field "$out" 2)" = blocked ] \
+    || fail "a reopened decision must carry the verb it was opened with, got '$(census_field "$out" 2)'"
+  [ "$(census_field "$out" 3)" = CAPTAIN_REQUIRED_AND_BLOCKING ] \
+    || fail "a blocked decision whose criterion is not met is blocking, got '$(census_field "$out" 3)'"
+  assert_contains "$out" "the criterion is not met" \
+    "the reopened entry must carry the observed failure as its reason"
+  assert_not_contains "$out" verification-stale \
+    "an observed failure is not could-not-observe: it is the one verification result that contradicts the claim"
+
+  # The control, and the direction that matters: the SAME stream with the
+  # criterion met throughout closes, so the case above is not simply asserting
+  # that this fold never closes anything.
+  : > "$marker"
+  write_decision "$home" verb1 crit 'tier: executable
+run: test -f one-shot'
+  out=$(fold_census "$home" verb1 "$err" FM_COMMITMENT_PROBE_CACHE_TTL=0 FM_CLASSIFY_DECISION_PROBE_MAX=5)
+  [ -z "$out" ] || fail "control: a criterion met on every run must close the decision, got: $out"
+  pass "an observed failure keeps the decision open under its opening verb"
+}
+
 red_capable_then_retires
 three_values_are_distinct
 status_word_cannot_satisfy
@@ -2165,3 +2482,7 @@ cache_warms_because_its_bound_outlives_the_pass_that_fills_it
 fold_spends_no_subprocess_on_a_decision_without_a_probe
 fold_refuses_a_registered_probe_it_cannot_evaluate
 probe_budget_counts_only_executable_registered_probes
+freshness_expiry_is_not_a_reopen
+a_moved_subject_never_transfers_the_old_pass
+an_explicit_reopen_after_the_observation_wins
+an_observed_failure_keeps_the_opening_verb

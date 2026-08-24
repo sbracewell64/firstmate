@@ -228,6 +228,25 @@ This is a writing rule, not a migration.
 
 **Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `<id>.attempt` and `<id>.lineage` rows and section 7's replacement paragraph; the header of [`bin/fm-attempt.sh`](../bin/fm-attempt.sh); the `--succeed-execution` contract in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-execution-replacement.test.sh`](../tests/fm-execution-replacement.test.sh).
 
+### `stale`
+
+| | |
+|---|---|
+| **Disposition** | QUALIFY |
+| **Supervision sense** | a WORKER that has been quiet too long - the `stale` wake kind, the `stale` crew-state verdict, and the `state/.stale-*` watcher records, owned by [`bin/fm-watch.sh`](../bin/fm-watch.sh) and [`bin/fm-crew-state.sh`](../bin/fm-crew-state.sh) |
+| **Evidence sense** | an OBSERVATION that has aged past its declared freshness bound and may no longer be served as current, owned by the decision-probe result cache in [`bin/fm-commitment-register.sh`](../bin/fm-commitment-register.sh) and projected by the open-decision fold in [`bin/fm-classify-lib.sh`](../bin/fm-classify-lib.sh) |
+
+Ruled 2026-08-24, when the second sense was built under Browser Sol ruling `SOL-FM-SUPERVISOR-HANDOFF-GEN4-FP1-DISPOSITION-20260824`.
+
+NO-CONTACT was not available: both senses reach the same supervision surfaces.
+A wake drain prints `stale` wakes and, in the same turn, the open-decision census carries entries whose evidence aged out, so a bare `stale` in either place is read by the same person in the same minute.
+The two also point opposite ways, which is what makes the confusion costly rather than merely ambiguous: a stale WORKER needs firstmate to act on the worker, while a stale OBSERVATION needs nothing done to the decision at all - it is the instrument, not the subject, that has gone quiet.
+
+Write bare `stale` only in the supervision sense, which keeps it.
+Write `verification-stale` for the evidence sense, always in that qualified form: the census verb is `verification-stale`, the disposition is `CNO_DECISION_VERIFICATION`, and the register's evidence says `VERIFICATION-STALE`.
+
+**Where it bites:** the FRESHNESS IS NOT A REOPEN section of [`bin/fm-classify-lib.sh`](../bin/fm-classify-lib.sh); `probe_not_run_yet` and THE DECISION-PROBE CACHE in [`bin/fm-commitment-register.sh`](../bin/fm-commitment-register.sh); the `stale` wake row of [`AGENTS.md`](../AGENTS.md) section 8.
+
 ## Maintaining this file
 
 Add a row when a word acquires a second live sense in any repository the fleet reads or writes, not when a rename is proposed.

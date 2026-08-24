@@ -49,7 +49,15 @@
 # it replaces the block; `--clear` removes it and returns the entry to derivation.
 # It is here rather than on the status envelope because that field set is closed
 # (bin/fm-status-event-lib.sh) precisely so a worker cannot declare a supervisor's
-# classification of it, and a disposition is exactly that class of claim.
+# classification of it, and a disposition is exactly that class of claim. The
+# vocabulary's derived-only members are refused as recorded values for the same
+# reason, one step further: they are the fold's own answer about verification and
+# nothing may declare them.
+#
+# This script is the VERIFYING caller of that fold - verifying a closure is
+# precisely the question it exists to ask - so it grants a decision-probe budget
+# below and a resolution whose observation aged out is reprobed here rather than
+# reported unverified.
 #
 # `--from-ruling <path>:<line>` records WHICH ruling document answered the hold,
 # and is verified rather than trusted. The captain ruled on 2026-08-06 that a
@@ -375,11 +383,13 @@ EOF
   status_file="$STATE/$origin.status"
   raw_open=$(status_open_decisions "$status_file")
   open=$(origin_open_decisions "$origin")
-  while IFS=$'\t' read -r key _verb _disposition _summary; do
+  while IFS=$'\t' read -r key _verb disposition _summary; do
     [ -n "$key" ] || continue
-    # CNO_DECISION_UNIVERSE reports an instrument defect in-band. It is not a
-    # decision the Captain owes, so it must never require a captain hold.
-    [ "$key" != CNO_DECISION_UNIVERSE ] || continue
+    # The census carries typed instrument facts in band beside the decisions -
+    # a status log that could not be enumerated, a resolution whose criterion
+    # could not be verified now. Neither is a decision the Captain owes, so
+    # neither may require a captain hold. bin/fm-classify-lib.sh owns the split.
+    decision_entry_is_ruling_owed "$key" "$disposition" || continue
     list_has_key "$keys" "$key" \
       || fail "open structured decision $origin/$key has no captain-held inventory entry"
   done <<EOF
@@ -393,9 +403,9 @@ EOF
 
     # Transfer any still-open status decision to its durable backlog owner so the
     # live status fold does not duplicate the same Captain's Call item.
-    while IFS=$'\t' read -r key _verb _disposition _summary; do
+    while IFS=$'\t' read -r key _verb disposition _summary; do
       [ -n "$key" ] || continue
-      [ "$key" != CNO_DECISION_UNIVERSE ] || continue
+      decision_entry_is_ruling_owed "$key" "$disposition" || continue
       list_has_key "$keys" "$key" || continue
       printf 'captain-held [key=%s]: tracked by %s\n' "$key" "$(hold_id "$origin" "$key")" >> "$status_file"
       key_seen=1
@@ -426,9 +436,9 @@ $(printf '%s\n' "$keys" | tr ',' '\n')
 EOF
   fi
   open=$(origin_open_decisions "$origin")
-  while IFS=$'\t' read -r key _verb _disposition _summary; do
+  while IFS=$'\t' read -r key _verb disposition _summary; do
     [ -n "$key" ] || continue
-    [ "$key" != CNO_DECISION_UNIVERSE ] || continue
+    decision_entry_is_ruling_owed "$key" "$disposition" || continue
     list_has_key "$keys" "$key" \
       || fail "open structured decision $origin/$key is outside the reviewed inventory"
     verify_hold_durable "$(hold_id "$origin" "$key")"
@@ -578,6 +588,12 @@ command_disposition() {  # <origin-id> <decision-key> <DISPOSITION>|--clear
   if [ "$value" != --clear ]; then
     decision_disposition_is_known "$value" \
       || fail "disposition must be one of: $FM_DECISION_DISPOSITION_VOCABULARY"
+    # A derived-only member says something about the fold's own VERIFICATION of a
+    # resolution, not about who owes a ruling. Recorded, it would let this command
+    # mark a live captain decision as one nobody owes, and the consumers that skip
+    # those entries would then skip a real decision.
+    ! decision_disposition_is_derived_only "$value" \
+      || fail "$value is derived by the open-decision fold and may not be recorded: it reports that a resolution could not be verified now, not whose decision this is"
   fi
   dir="$DATA/$origin"
   file="$dir/decision-$key.md"

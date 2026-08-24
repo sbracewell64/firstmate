@@ -552,6 +552,65 @@ test_resolve_matches_quoted_blocked_by_edges() {
   pass "resolve matches first/middle/last in quoted blocked_by and rejects a genuinely absent id"
 }
 
+# THE PROPERTY: the decision census carries typed instrument facts in band beside
+# the decisions, and an instrument fact is not a decision the Captain owes. A
+# resolution whose criterion could not be verified now is one of them
+# (bin/fm-classify-lib.sh's FRESHNESS IS NOT A REOPEN): the durable lifecycle
+# resolved it and no later event reopened it, so demanding a captain hold for it
+# would manufacture at this gate exactly the captain-required state the fold
+# refuses to manufacture upstream - and would block a finished task's cleanup on
+# a ruling nobody owes.
+test_unverifiable_resolution_owes_no_captain_hold() {
+  local home id open
+  home=$(make_home verification-stale)
+  id=sample-unverified-fix
+  mkdir -p "$home/data/$id"
+  tasks_in "$home" add "$id" "Fix a sample ruled finding" --kind scout --repo sample --start >/dev/null
+  write_origin_meta "$home" "$id"
+  # A registered probe this home cannot evaluate: write_origin_meta records a
+  # worktree that does not exist, so the criterion is could-not-observe rather
+  # than met or unmet - the state a resolution reaches when its own evidence is
+  # gone.
+  # shellcheck disable=SC2016  # the backticks are the pinned fence, not a substitution
+  printf '# decision\n\n```probe\ntier: executable\nrun: true\n```\n' \
+    > "$home/data/$id/decision-fixed.md"
+
+  # The control first, and it is the opposite failure: while the decision is
+  # genuinely OPEN the same gate must refuse. Without it, the acceptance below
+  # would prove only that this gate never refuses anything.
+  printf 'blocked [key=fixed]: work stopped on the ruled finding\n' > "$home/state/$id.status"
+  if run_decisions "$home" complete "$id" --none > "$home/open.out" 2> "$home/open.err"; then
+    fail "an open captain decision must not pass an empty inventory: $(cat "$home/open.out")"
+  fi
+  assert_grep "no captain-held inventory entry" "$home/open.err" \
+    "the refusal must name the missing hold"
+
+  printf 'resolved [key=fixed]: fix applied\n' >> "$home/state/$id.status"
+  open=$(bash -c '. "$1"; status_open_decisions "$2"' _ \
+    "$ROOT/bin/fm-classify-lib.sh" "$home/state/$id.status")
+  assert_contains "$open" "verification-stale" \
+    "fixture must actually reach the unverifiable-resolution state"
+  assert_contains "$open" "CNO_DECISION_VERIFICATION" \
+    "fixture must carry the verification axis this gate is meant to skip"
+  run_decisions "$home" complete "$id" --none >/dev/null \
+    || fail "an unverifiable resolution demanded a captain hold nobody owes"
+  run_decisions "$home" verify "$id" >/dev/null \
+    || fail "an unverifiable resolution blocked inventory verification"
+
+  # And it may not be RECORDED. A decision file naming it would let this command
+  # mark a live captain decision as one nobody owes, and the gate just exercised
+  # would then skip a real decision.
+  if run_decisions "$home" disposition "$id" fixed CNO_DECISION_VERIFICATION \
+    > "$home/dispo.out" 2> "$home/dispo.err"; then
+    fail "a derived-only disposition was accepted as a recorded one"
+  fi
+  assert_grep "derived by the open-decision fold" "$home/dispo.err" \
+    "the refusal must say why, not just that the value is unacceptable"
+  run_decisions "$home" disposition "$id" fixed BROWSER_SOL >/dev/null \
+    || fail "control: a recordable disposition must still be accepted"
+  pass "an unverifiable resolution owes no captain hold, and its disposition may not be recorded"
+}
+
 test_uninventoried_report_decision_refuses_completion
 
 test_scout_teardown_always_requires_inventory_verification
@@ -562,3 +621,4 @@ test_none_inventory_and_resolved_prose_do_not_create_holds
 test_terminal_single_owner_status_decision_does_not_block_empty_inventory
 test_secondmate_hold_stays_in_authoritative_home
 test_resolve_matches_quoted_blocked_by_edges
+test_unverifiable_resolution_owes_no_captain_hold
