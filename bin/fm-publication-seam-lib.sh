@@ -448,6 +448,13 @@ fm_pub_seam_state_in_force() {  # <state>
 }
 
 FM_PUB_SEAM_LIVE=0
+# The live governing requests that carry THIS EXACT HEAD, whether or not they
+# have ruled on it. Counted apart from FM_PUB_SEAM_LIVE because "some request
+# holds this work" and "this head has been submitted" are different facts, and a
+# reader that conflates them reports a head nobody has ever seen as one under
+# review. The hold decision uses the wider count; anything asking what happened
+# to this candidate uses this one.
+FM_PUB_SEAM_AT_HEAD=0
 FM_PUB_SEAM_GRANTING=0
 FM_PUB_SEAM_GRANTING_ID=
 FM_PUB_SEAM_GRANTING_COMMENT=
@@ -459,6 +466,7 @@ fm_pub_seam_scan_records() {  # <record-dir> <item> <head>
   local f rid raw stored gate state rec_head verdict comment class
 
   FM_PUB_SEAM_LIVE=0
+  FM_PUB_SEAM_AT_HEAD=0
   FM_PUB_SEAM_GRANTING=0
   FM_PUB_SEAM_GRANTING_ID=
   FM_PUB_SEAM_GRANTING_COMMENT=
@@ -513,6 +521,7 @@ fm_pub_seam_scan_records() {  # <record-dir> <item> <head>
       FM_PUB_SEAM_HOLDS="$FM_PUB_SEAM_HOLDS $rid($gate/$state at ${rec_head:--})"
       continue
     fi
+    FM_PUB_SEAM_AT_HEAD=$((FM_PUB_SEAM_AT_HEAD + 1))
     if [ "$state" != ruled ] || [ -z "$verdict" ]; then
       FM_PUB_SEAM_HOLDS="$FM_PUB_SEAM_HOLDS $rid($gate/$state unruled)"
       continue

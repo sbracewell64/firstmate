@@ -1340,6 +1340,35 @@ test_the_projection_answers_reclaimability_from_the_exact_head() {
   pass "a slot is reclaimable only when the remote resolves the custody ref to the exact candidate head"
 }
 
+test_the_projection_reads_review_from_this_head_not_this_work() {
+  local out earlier
+  fixture project-other-head
+  policy
+  # A live request holding this WORK at an EARLIER head. That is evidence that a
+  # different candidate was submitted, and reading it as this one would report a
+  # head nobody has ever seen as under review - which is exactly the shape of the
+  # finding this whole seam was repaired for.
+  earlier=$(git -C "$FX_REPO" rev-parse HEAD~1) || fail "project-other-head: parent"
+  record fm-ob-earlier emitted '' "$earlier"
+  out=$(guard project --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --item "$ITEM") || true
+  printf '%s\n' "$out" | awk '$1=="review-published" && $2=="yes" {exit 1}' \
+    || fail "project-other-head: a request at another head was read as this head being submitted: $out"
+  assert_contains "$out" 'STATE local-only' \
+    "project-other-head: the projection did not stop at local-only: $out"
+
+  # And the same request AT this head is a review, so the control is not simply
+  # a mechanism that always answers no.
+  fixture project-this-head
+  policy
+  record fm-ob-here emitted
+  out=$(guard project --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --item "$ITEM") || true
+  printf '%s\n' "$out" | awk '$1=="review-published" && $2=="yes" {found=1} END {exit !found}' \
+    || fail "project-this-head: a request at this exact head was not read as a review: $out"
+  pass "the projection reads review publication from this exact head rather than from this work"
+}
+
 # --- run -----------------------------------------------------------------------
 
 test_publishes_one_governed_candidate_exactly_once
@@ -1385,5 +1414,6 @@ test_custody_grants_no_publication_and_the_projection_says_so
 test_custody_restart_is_a_typed_no_effect_that_consumes_nothing
 test_custody_consumed_without_a_confirmed_effect_is_reobserved_not_reused
 test_the_projection_answers_reclaimability_from_the_exact_head
+test_the_projection_reads_review_from_this_head_not_this_work
 
 fm_test_contract "${BASH_SOURCE[0]}"
