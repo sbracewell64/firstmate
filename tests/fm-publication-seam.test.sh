@@ -41,6 +41,10 @@
 #   (o) a retained predecessor ref cannot publish while the successor can
 #   (p) the real attestation path reaches the guard, and reports an ungoverned
 #       publication rather than staying silent about it
+#   (q) an outbound request in a state no landed vocabulary declares holds the
+#       publication rather than disappearing from the answer
+#   (r) a governed candidate publishes only when a ruling reviewed THIS head and
+#       the register records its reviewer as qualified and assignment-distinct
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -58,6 +62,65 @@ GATE='EXACT_HEAD_BROWSER_REVIEW_REQUIRED'
 ITEM='fixture-work'
 REF='refs/heads/candidate'
 
+# The role qualification register this suite answers against. The CONTRACT is
+# shared across fixtures because it is the same capability everywhere; the
+# RECORDS are per-fixture, so a case that perturbs the reviewer's qualification
+# perturbs its own and nothing leaks into the next.
+QUAL_CONTRACT='publication-review-fixture'
+QUAL_ADJUDICATOR='publication-adjudicator-fixture'
+QUAL_CONTRACTS="$TMP_ROOT/qualification-contracts"
+QUAL_NO_OVERLAY="$TMP_ROOT/qualification-no-overlay"
+MAKER='maker/binding'
+REVIEWER='reviewer/binding'
+
+mkdir -p "$QUAL_CONTRACTS" || exit 1
+cat > "$QUAL_CONTRACTS/$QUAL_CONTRACT.json" <<JSON
+{
+  "qualification_schema_version": 1,
+  "id": "$QUAL_CONTRACT",
+  "role": "PUBLICATION_REVIEWER",
+  "risk_class": "runtime-job-v1",
+  "contract_version": "1.0.0",
+  "axis": "exact_change_review",
+  "purpose": "A synthetic contract used only to pin publication-time review admissibility.",
+  "grants": "Eligibility to review a candidate at the publication seam.",
+  "does_not_grant": ["anything outside this exact contract"],
+  "executable_predicate": {
+    "kind": "declared_deterministic",
+    "check": "bin/fm-qualification.sh",
+    "expect": "QUALIFIED"
+  },
+  "adjudication": { "required": true, "adjudicator_contract": "$QUAL_ADJUDICATOR",
+                    "independence_dimensions": ["binding"] },
+  "required_freshness_dependencies": ["contract_version"]
+}
+JSON
+# The chain has to terminate somewhere, and it terminates the way the register's
+# own register does: the adjudicating contract requires no adjudication of its
+# own. Without that, qualifying a reviewer needs a qualified adjudicator, which
+# needs a qualified adjudicator.
+cat > "$QUAL_CONTRACTS/$QUAL_ADJUDICATOR.json" <<JSON
+{
+  "qualification_schema_version": 1,
+  "id": "$QUAL_ADJUDICATOR",
+  "role": "PUBLICATION_REVIEW_ADJUDICATOR",
+  "risk_class": "runtime-job-v1",
+  "contract_version": "1.0.0",
+  "axis": "assignment_independence",
+  "purpose": "A synthetic contract used only to terminate the fixture adjudication chain.",
+  "grants": "Eligibility to adjudicate a publication review qualification.",
+  "does_not_grant": ["anything outside this exact contract"],
+  "executable_predicate": {
+    "kind": "declared_deterministic",
+    "check": "bin/fm-qualification.sh",
+    "expect": "QUALIFIED"
+  },
+  "adjudication": { "required": false, "adjudicator_contract": "$QUAL_ADJUDICATOR",
+                    "independence_dimensions": ["binding"] },
+  "required_freshness_dependencies": ["contract_version"]
+}
+JSON
+
 # --- fixture -----------------------------------------------------------------
 #
 # Every path is pinned under this suite's own temp root and asserted non-empty
@@ -66,7 +129,7 @@ REF='refs/heads/candidate'
 # the two bash constructions that silently produce one are named in
 # .agents/skills/firstmate-coding-guidelines/SKILL.md.
 
-FX_HOME='' FX_CONFIG='' FX_DATA='' FX_REPO='' FX_REMOTE=''
+FX_HOME='' FX_CONFIG='' FX_DATA='' FX_REPO='' FX_REMOTE='' FX_QUAL_RECORDS=''
 FX_HEAD='' FX_TREE='' FX_AUTHOR=''
 
 fixture() {  # <name>
@@ -77,7 +140,8 @@ fixture() {  # <name>
   FX_DATA="$FX_HOME/data"
   FX_REPO="$TMP_ROOT/$name/repo"
   FX_REMOTE="$TMP_ROOT/$name/remote.git"
-  mkdir -p "$FX_CONFIG" "$FX_DATA" "$FX_REPO" "$FX_REMOTE" \
+  FX_QUAL_RECORDS="$TMP_ROOT/$name/qualification-records"
+  mkdir -p "$FX_CONFIG" "$FX_DATA" "$FX_REPO" "$FX_REMOTE" "$FX_QUAL_RECORDS" \
     || fail "fixture: could not create $name"
   git init -q --bare "$FX_REMOTE" || fail "fixture: could not create the remote"
   git init -q -b main "$FX_REPO" || fail "fixture: could not create the repo"
@@ -105,19 +169,88 @@ fixture() {  # <name>
 
 # The identity policy, written as the whole file so a case that perturbs one axis
 # perturbs exactly that axis and nothing drifts between cases.
-policy() {  # [<author>] [<committer>] [<generation>] [<role>]
+policy() {  # [<author>] [<committer>] [<generation>] [<role>] [<contract>]
   local author=${1:-$FX_AUTHOR}
   local committer=${2:-$FX_AUTHOR}
   local generation=${3:-pol-1}
   local role=${4:-canonical}
+  local contract=${5-$QUAL_CONTRACT}
   jq -n --arg a "$author" --arg c "$committer" --arg g "$generation" \
         --arg v "$VENUE" --arg r "$REF" --arg i "$ITEM" --arg role "$role" \
+        --arg m "$MAKER" --arg rev "$REVIEWER" --arg k "$contract" \
     '{generation:$g,
       venues:{($v):{identities:{author:$a,committer:$c,delivery_actor:"fixture-actor",
-                                maker:"maker/binding",reviewer:"reviewer/binding",
+                                maker:$m,reviewer:$rev,
                                 ruling:"browser-sol"},
+                    review_contracts:(if $k == "" then [] else [$k] end),
                     work:{($r):{item:$i,role:$role}}}}}' \
     > "$FX_CONFIG/publication-identity.json" || fail "policy: could not write"
+  qualification QUALIFIED
+}
+
+# The reviewer's standing in the role qualification register, which is the landed
+# owner of "was this binding ever observed to do this job?" and is consulted
+# rather than restated. The default is the one a governed venue needs; a case
+# that perturbs it passes its own result.
+qualification() {  # [<result>]
+  local result=${1:-QUALIFIED}
+  # The register refuses a record whose id does not match its filename, so a
+  # perturbed result replaces the record rather than joining it.
+  rm -f "$FX_QUAL_RECORDS"/*.json
+  jq --arg id "reviewer-binding-$result" --arg c "$QUAL_CONTRACT" \
+     --arg m "$REVIEWER" --arg r "$result" \
+     '.id = $id | .contract = $c | .binding.model = $m | .result = $r' \
+    > "$FX_QUAL_RECORDS/reviewer-binding-$result.json" <<'JSON' || fail "qualification: could not write"
+{
+  "qualification_schema_version": 1,
+  "id": "placeholder",
+  "contract": "placeholder",
+  "contract_version": "1.0.0",
+  "role": "PUBLICATION_REVIEWER",
+  "risk_class": "runtime-job-v1",
+  "binding": { "provider": "reviewer", "model": "placeholder", "harness": "pi",
+               "harness_version": "9.9.9", "native_effort": "high" },
+  "result": "placeholder",
+  "result_evidence": "the deterministic oracle graded the candidate from outside it",
+  "measured_context": 120000,
+  "observed_at": "2026-08-13",
+  "adjudication": { "adjudicator_binding": "adjudicator/binding", "adjudicator_harness": "pi",
+                    "adjudicator_result": "QUALIFIED",
+                    "evidence": "the assignment-distinct evaluator graded the retained package" },
+  "freshness_dependencies": [ { "kind": "contract_version", "version": "1.0.0" } ],
+  "known_limitations": ["synthetic fixture material"]
+}
+JSON
+  jq --arg id "adjudicator-binding" --arg c "$QUAL_ADJUDICATOR" \
+     --arg m 'adjudicator/binding' \
+     '.id = $id | .contract = $c | .binding.model = $m | .role = "PUBLICATION_REVIEW_ADJUDICATOR"
+      | .result = "QUALIFIED" | .adjudication = null' \
+    > "$FX_QUAL_RECORDS/adjudicator-binding.json" <<'JSON' || fail "qualification: could not write the adjudicator"
+{
+  "qualification_schema_version": 1,
+  "id": "placeholder",
+  "contract": "placeholder",
+  "contract_version": "1.0.0",
+  "role": "placeholder",
+  "risk_class": "runtime-job-v1",
+  "binding": { "provider": "adjudicator", "model": "placeholder", "harness": "pi",
+               "harness_version": "9.9.9", "native_effort": "high" },
+  "result": "placeholder",
+  "result_evidence": "the deterministic oracle graded the candidate from outside it",
+  "measured_context": 120000,
+  "observed_at": "2026-08-13",
+  "adjudication": null,
+  "freshness_dependencies": [ { "kind": "contract_version", "version": "1.0.0" } ],
+  "known_limitations": ["synthetic fixture material"]
+}
+JSON
+}
+
+# The review itself: a ruling bound to THIS exact head. Separate from policy() on
+# purpose - a governed venue is configuration, and a review is evidence about one
+# candidate. Conflating the two is the defect the publication seam now refuses.
+reviewed() {  # [<head>] [<request-id>]
+  record "${2:-fm-ob-reviewed}" ruled approved "${1:-$FX_HEAD}"
 }
 
 record() {  # <request-id> <state> [<verdict>] [<head>]
@@ -137,6 +270,9 @@ record() {  # <request-id> <state> [<verdict>] [<head>]
 
 guard() {  # <args...>
   ( export FM_HOME="$FX_HOME" FM_CONFIG_OVERRIDE="$FX_CONFIG" FM_DATA_OVERRIDE="$FX_DATA"
+    export FM_QUALIFICATION_CONTRACT_DIR="$QUAL_CONTRACTS"
+    export FM_QUALIFICATION_RECORD_DIR="$FX_QUAL_RECORDS"
+    export FM_QUALIFICATION_OVERLAY_DIR="$QUAL_NO_OVERLAY"
     bash "$GUARD" "$@" ) 2>&1
 }
 
@@ -183,6 +319,7 @@ test_publishes_one_governed_candidate_exactly_once() {
   local before after id out spent bound
   fixture green
   policy
+  reviewed
   before=$(tip) || fail "green: the remote tip could not be observed before"
   [ "$before" = '-' ] || fail "green: the fixture remote already had $REF at $before"
 
@@ -213,6 +350,7 @@ test_the_spent_record_keeps_the_intent_written_before_the_act() {
   local id record events
   fixture intent
   policy
+  reviewed
   grant; id=$GRANT_ID
   spend "$id" > /dev/null || fail "intent: the permitted publication did not complete"
   record="$FX_DATA/landing-authorizations/$id.json"
@@ -240,6 +378,7 @@ test_publish_composes_the_decision_and_the_act() {
   local out rc=0 after
   fixture publish-cmd
   policy
+  reviewed
   out=$(guard publish --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$FX_HEAD" --expected-tip - -- \
     git -C "$FX_REPO" push --quiet origin "$REF:$REF") || rc=$?
@@ -279,6 +418,7 @@ test_a_dry_run_compiles_the_same_verdict_and_writes_nothing() {
   local dry real before after
   fixture dry-run
   policy
+  reviewed
   before=$(states | wc -l | tr -d '[:space:]')
   dry=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$FX_HEAD" --expected-tip -) \
@@ -316,6 +456,7 @@ test_retiring_a_granted_authority_preserves_its_whole_record() {
   local id record before after
   fixture retire
   policy
+  reviewed
   grant; id=$GRANT_ID
   record="$FX_DATA/landing-authorizations/$id.json"
   before=$(jq -S '.grant, .subject, .epoch, .minted, .request_id' "$record") \
@@ -340,6 +481,7 @@ test_a_retired_authority_cannot_be_consumed_and_moves_nothing() {
   local id out rc=0 after fresh
   fixture retire-consume
   policy
+  reviewed
   grant; id=$GRANT_ID
   guard retire "$id" --reason 'superseded before use' > /dev/null \
     || fail "retire-consume: the authority could not be retired"
@@ -364,6 +506,7 @@ test_retiring_is_idempotent_and_records_it_once() {
   local id record first out
   fixture retire-twice
   policy
+  reviewed
   grant; id=$GRANT_ID
   record="$FX_DATA/landing-authorizations/$id.json"
   guard retire "$id" --reason 'first' > /dev/null || fail "retire-twice: the first retirement failed"
@@ -381,6 +524,7 @@ test_retire_refuses_an_authority_that_records_an_act() {
   local id out rc=0
   fixture retire-spent
   policy
+  reviewed
   grant; id=$GRANT_ID
   spend "$id" > /dev/null || fail "retire-spent: the publication did not complete"
   out=$(guard retire "$id" --reason 'tidy up') || rc=$?
@@ -394,6 +538,7 @@ test_retire_refuses_an_authority_whose_effect_is_unobserved() {
   local id out rc=0
   fixture retire-indeterminate
   policy
+  reviewed
   grant; id=$GRANT_ID
   guard consume "$id" --repo "$FX_REPO" --remote origin -- true > /dev/null 2>&1 || true
   out=$(guard retire "$id" --reason 'tidy up') || rc=$?
@@ -426,6 +571,7 @@ test_refuses_once_a_newer_hold_arrives_after_the_authority_was_granted() {
   local id out rc=0 after
   fixture newer-hold
   policy
+  reviewed
   grant; id=$GRANT_ID
   # The hold lands between the grant and the act, which is the window a guard
   # that only asked at commission time would publish straight through.
@@ -536,6 +682,7 @@ test_refuses_two_actionable_candidates_for_one_semantic_work() {
   local out rc=0 rival
   fixture duplicate
   policy
+  reviewed
   grant
   # A second candidate for the SAME declared work at a different head. Which head
   # the work is cannot be settled by whichever one publishes first.
@@ -543,6 +690,12 @@ test_refuses_two_actionable_candidates_for_one_semantic_work() {
   git -C "$FX_REPO" add file.txt || fail "duplicate: add"
   git -C "$FX_REPO" commit -qm rival || fail "duplicate: commit"
   rival=$(git -C "$FX_REPO" rev-parse HEAD) || fail "duplicate: head"
+  # The rival is REVIEWED TOO, and the first review is closed behind it, so the
+  # only thing left standing between the two candidates is the live authority the
+  # first one holds. Without this the rival would refuse for the unmet review it
+  # does not have, and the case would stop being about two candidates at all.
+  record fm-ob-reviewed closed
+  reviewed "$rival" fm-ob-reviewed-rival
   out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$rival" --expected-tip -) || rc=$?
   [ "$rc" -eq 3 ] || fail "duplicate: a second actionable candidate did not refuse (exit $rc): $out"
@@ -557,6 +710,7 @@ test_refuses_a_changed_policy_generation() {
   local id out rc=0 after
   fixture generation
   policy
+  reviewed
   grant; id=$GRANT_ID
   policy "$FX_AUTHOR" "$FX_AUTHOR" pol-2
   out=$(spend "$id") || rc=$?
@@ -574,6 +728,7 @@ test_refuses_a_wrong_expected_remote_tip() {
   local out rc=0
   fixture wrong-tip
   policy
+  reviewed
   out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$FX_HEAD" \
     --expected-tip 1111111111111111111111111111111111111111) || rc=$?
@@ -589,6 +744,7 @@ test_refuses_a_replayed_authority_and_publishes_nothing() {
   local id out rc=0 before after
   fixture replay
   policy
+  reviewed
   grant; id=$GRANT_ID
   spend "$id" > /dev/null || fail "replay: the first publication did not complete"
   before=$(tip) || fail "replay: the remote tip could not be observed"
@@ -606,6 +762,7 @@ test_refuses_unexpected_remote_movement_without_overwriting_it() {
   local id out rc=0 intruder after
   fixture moved
   policy
+  reviewed
   grant; id=$GRANT_ID
   # Somebody else publishes to the same ref between the grant and the act. The
   # authority names a world in which that ref was absent, and this is no longer
@@ -626,6 +783,7 @@ test_reports_no_effect_without_consuming_an_authority() {
   local id out granted
   fixture no-effect
   policy
+  reviewed
   grant; id=$GRANT_ID
   spend "$id" > /dev/null || fail "no-effect: the first publication did not complete"
   out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
@@ -645,6 +803,7 @@ test_retires_an_authority_consumed_without_a_confirmed_effect() {
   local id out rc=0 status after
   fixture unconfirmed
   policy
+  reviewed
   grant; id=$GRANT_ID
   # The act runs and does not move the ref. Its exit status says nothing about
   # whether it had an effect, so the authority must not return to the pool.
@@ -719,6 +878,150 @@ test_reports_an_ungoverned_publication_rather_than_staying_silent() {
   pass "a publication nothing governs is reported as ungoverned rather than passing silently"
 }
 
+# --- (q) an outbound state no landed vocabulary declares is a hold -------------
+
+test_an_undeclared_outbound_state_holds_rather_than_disappearing() {
+  local state out rc after
+  # `quarantined` is the state that actually caused this: it is written by the
+  # outbound owner's quarantine path and is absent from the record vocabulary, so
+  # a live-state test dropped the record and a quarantined request holding this
+  # exact candidate read as no hold at all. The second value is arbitrary on
+  # purpose - the rule under test is "undeclared holds", not one string.
+  for state in quarantined not-a-state-this-fleet-declares; do
+    fixture "undeclared-$state"
+    policy
+    record fm-ob-undeclared "$state"
+    rc=0
+    out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+      --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+    [ "$rc" -eq 3 ] \
+      || fail "undeclared: a request in state '$state' did not refuse the publication (exit $rc): $out"
+    assert_contains "$out" 'FM_PUB_ACTIVE_HOLD' \
+      "undeclared: a request in state '$state' was not reported as a hold: $out"
+    after=$(tip) || fail "undeclared: the remote tip could not be observed"
+    [ "$after" = '-' ] \
+      || fail "undeclared: a refused publication moved the remote to $after"
+  done
+  pass "an outbound request in a state no landed vocabulary declares holds the publication rather than disappearing from it"
+}
+
+# --- (r) the review, and the qualification of whoever performed it ------------
+#
+# THE WRONG-SUBJECT FINDING THIS CLOSES, kept as executed controls rather than as
+# prose. A governed venue reached ALLOW_EXACT while the declared reviewer was
+# QUALIFICATION_REQUIRED and no ruling had ever addressed the candidate's head.
+# What the guard had examined was that the candidate matched a configured
+# identity and target; what its verdict was credited with was that a qualified,
+# assignment-distinct review of this exact head had happened. Each case below
+# removes exactly one limb of that credited claim from the green fixture.
+
+test_refuses_a_governed_candidate_that_no_ruling_has_reviewed() {
+  local out rc=0 after
+  fixture unreviewed
+  policy
+  # No ruling at all. This is the exact shape the finding was raised against: a
+  # governed venue, a matching identity, an absent remote tip, and no review.
+  out=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "unreviewed: a candidate no ruling reviewed did not refuse (exit $rc): $out"
+  assert_not_contains "$out" 'ALLOW_EXACT' \
+    "unreviewed: a probe credited an unreviewed candidate as permitted: $out"
+  assert_contains "$out" 'FM_PUB_NO_EXACT_CANDIDATE_REVIEW' \
+    "unreviewed: the refusal did not name the missing review: $out"
+  after=$(tip) || fail "unreviewed: the remote tip could not be observed"
+  [ "$after" = '-' ] || fail "unreviewed: the remote moved to $after with no review"
+  pass "a governed candidate no ruling has reviewed at its exact head refuses rather than being credited as permitted"
+}
+
+test_refuses_a_review_by_a_reviewer_that_is_not_qualified() {
+  local result out rc after
+  # Every result the register can hold that is NOT a qualification. The rule under
+  # test is "not QUALIFIED refuses", not one spelling of it.
+  for result in QUALIFICATION_REQUIRED QUALIFICATION_STALE FAILED; do
+    fixture "unqualified-$result"
+    policy
+    reviewed
+    qualification "$result"
+    rc=0
+    out=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+      --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+    [ "$rc" -eq 3 ] \
+      || fail "unqualified: a $result reviewer did not refuse (exit $rc): $out"
+    assert_not_contains "$out" 'ALLOW_EXACT' \
+      "unqualified: a probe credited a $result reviewer as permitted: $out"
+    assert_contains "$out" 'FM_PUB_REVIEWER_NOT_QUALIFIED' \
+      "unqualified: the refusal did not name the reviewer's standing: $out"
+    after=$(tip) || fail "unqualified: the remote tip could not be observed"
+    [ "$after" = '-' ] \
+      || fail "unqualified: the remote moved to $after under a $result reviewer"
+  done
+  pass "a ruling by a reviewer the register does not record as qualified refuses, whatever the register records instead"
+}
+
+test_cannot_observe_a_review_whose_reviewer_qualification_is_unreadable() {
+  local out rc=0 after
+  fixture qualification-unobserved
+  policy
+  reviewed
+  qualification COULD_NOT_OBSERVE
+  out=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  # COULD-NOT-OBSERVE PROJECTS AS NON-PASS, which is the sentence the finding
+  # ended on. It is kept apart from the refusal above because an operator told
+  # only "not permitted" would go and argue with a register that never answered.
+  [ "$rc" -eq 4 ] \
+    || fail "qualification-unobserved: an unobserved qualification was not could-not-observe (exit $rc): $out"
+  assert_not_contains "$out" 'ALLOW_EXACT' \
+    "qualification-unobserved: a probe credited an unobserved qualification as permitted: $out"
+  assert_contains "$out" 'FM_PUB_REVIEWER_QUALIFICATION_UNOBSERVED' \
+    "qualification-unobserved: the result did not name what could not be observed: $out"
+  after=$(tip) || fail "qualification-unobserved: the remote tip could not be observed"
+  [ "$after" = '-' ] \
+    || fail "qualification-unobserved: the remote moved to $after on an unobserved qualification"
+  pass "a reviewer whose qualification could not be observed is could-not-observe, never a pass"
+}
+
+test_cannot_observe_a_review_the_policy_names_no_contract_for() {
+  local out rc=0
+  fixture contracts-undeclared
+  # A governed venue that declares no review contracts has not promised a lighter
+  # review; it has left unstated what its reviewer had to be qualified for.
+  policy "$FX_AUTHOR" "$FX_AUTHOR" pol-1 canonical ''
+  reviewed
+  out=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "contracts-undeclared: an unstated review contract was not could-not-observe (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_REVIEW_CONTRACTS_UNDECLARED' \
+    "contracts-undeclared: the result did not name the unstated declaration: $out"
+  pass "a governed venue that declares no review contract is could-not-observe about its reviewer, not silently exempt"
+}
+
+test_one_approval_does_not_cover_for_another_unmet_obligation() {
+  local out rc=0 after
+  fixture one-approval
+  policy
+  reviewed
+  # A SECOND governing request on the same work, emitted and never answered. It
+  # is a live unmet obligation, and an approval given elsewhere is not an answer
+  # to it - otherwise emitting a request would again be the cheapest way to
+  # publish before anyone read it.
+  record fm-ob-second emitted
+  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "one-approval: an unanswered request beside an approval did not refuse (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_ACTIVE_HOLD' \
+    "one-approval: the refusal did not name the unanswered request: $out"
+  assert_contains "$out" 'fm-ob-second' \
+    "one-approval: the refusal did not name WHICH request still holds: $out"
+  after=$(tip) || fail "one-approval: the remote tip could not be observed"
+  [ "$after" = '-' ] \
+    || fail "one-approval: the remote moved to $after with an obligation unmet"
+  pass "an approval bound to this head does not cover for another live request that is still unanswered"
+}
+
 # --- run -----------------------------------------------------------------------
 
 test_publishes_one_governed_candidate_exactly_once
@@ -747,5 +1050,11 @@ test_reports_no_effect_without_consuming_an_authority
 test_retires_an_authority_consumed_without_a_confirmed_effect
 test_refuses_a_retained_predecessor_ref
 test_reports_an_ungoverned_publication_rather_than_staying_silent
+test_an_undeclared_outbound_state_holds_rather_than_disappearing
+test_refuses_a_governed_candidate_that_no_ruling_has_reviewed
+test_refuses_a_review_by_a_reviewer_that_is_not_qualified
+test_cannot_observe_a_review_whose_reviewer_qualification_is_unreadable
+test_cannot_observe_a_review_the_policy_names_no_contract_for
+test_one_approval_does_not_cover_for_another_unmet_obligation
 
 fm_test_contract "${BASH_SOURCE[0]}"
