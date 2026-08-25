@@ -156,6 +156,20 @@ Observed 2026-08-25 by the same method: a full staged copy of the worktree, exac
 | 30 | a custody replication is projected as a review | `not ok - custody-grants-nothing: the projection did not stop at custody` |
 | 31 | reclaimability is read from branch existence rather than the exact head | `not ok - reclaim-other-head: a branch at another head was treated as a backup (exit 0): custody-replicated yes ... at exactly 726b904e` |
 | 32 | an unreachable remote is read as not-reclaimable rather than unobserved | `not ok - reclaim-unreachable: an unreachable remote was not could-not-observe (exit 3): custody-replicated no` |
+| 33 | the protected-ref rule is removed, and the protected ref IS the work's own derived ref | `not ok - custody-protected-own: the custody replication was not refused (exit 0): ALLOW_EXACT fm-auth-2cd69528505fae09738b971492275cfd class=CUSTODY_REPLICATION` |
+| 34 | the custody effect is trusted from the act's exit status instead of the remote | `not ok - custody-unconfirmed: an unconfirmed custody effect was not could-not-observe (exit 0): APPLIED CUSTODY_REPLICATION fm-auth-b2456d9cbe8c892b79be742ce1cae2e1 refs/heads/fm/fixture-work now at -` |
+| 35 | the typed no-effect for a repeated replication is removed | `not ok - custody-restart: a repeated replication did not complete: REFUSE FM_PUB_CUSTODY_REF_OCCUPIED: ... already has refs/heads/fm/fixture-work at aa1ee7ed...` |
+| 36 | review publication is read from this work rather than from this head | `not ok - project-other-head: a request at another head was read as this head being submitted` |
+
+Eighteen controls were added and seventeen of them appear above; the eighteenth is the custody non-vacuity case, which by definition has no red.
+Control 17's reclaimability case carries two rows because it asserts two different wrong answers.
+
+Red 34 needed the run block trimmed to the two custody spend cases before it could be attributed.
+The suite stops at its first failure, and this defect breaks an earlier publication-path control first, so the unmodified run reported that one and never reached the custody case.
+That trim is a change to the harness and not to the subject, and it is recorded because a red read off a suite that stopped earlier is a red about a different control.
+
+Red 35 is the weakest row here and is marked as such: with the typed no-effect removed the restart is refused as an occupied ref rather than permitted, so the row establishes that the typed answer is gone and does not independently establish that a no-effect consumes nothing.
+That second half is asserted directly by the control, which compares the whole authority store across the restart.
 
 Two controls were REWRITTEN after their first red proved they were measuring a different rule, and the rewrite is the point rather than an aside.
 
