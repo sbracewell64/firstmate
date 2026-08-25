@@ -45,6 +45,8 @@
 #       publication rather than disappearing from the answer
 #   (r) a governed candidate publishes only when a ruling reviewed THIS head and
 #       the register records its reviewer as qualified and assignment-distinct
+#   (s) custody replication backs one exact clean candidate up to its own feature
+#       ref, grants nothing, and refuses every way it could become a publication
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -61,6 +63,10 @@ VENUE='github.com/fixture/candidate'
 GATE='EXACT_HEAD_BROWSER_REVIEW_REQUIRED'
 ITEM='fixture-work'
 REF='refs/heads/candidate'
+# The work's OWN feature ref, which is the only ref custody replication may
+# address. Derived from the work exactly as the guard derives it, so a fixture
+# cannot drift from the rule under test.
+CUSTODY_REF="refs/heads/fm/$ITEM"
 
 # The role qualification register this suite answers against. The CONTRACT is
 # shared across fixtures because it is the same capability everywhere; the
@@ -1022,6 +1028,318 @@ test_one_approval_does_not_cover_for_another_unmet_obligation() {
   pass "an approval bound to this head does not cover for another live request that is still unanswered"
 }
 
+# --- (s) custody replication is not publication -------------------------------
+#
+# THE DISTINCTION THESE CONTROLS HOLD OPEN. A candidate needs to survive the
+# machine it was made on, and that need had no answer except publication - which
+# drags the whole review, CI and acceptance lifecycle behind it. Custody
+# replication is the answer: a remote copy of one exact commit on the work's own
+# feature ref, granting nothing. The cases below are the price of that grant
+# being narrow: every one of them is a way the weaker act could quietly become
+# the stronger one, and each is refused rather than reclassified.
+
+custody_tip() {  # -> the remote's tip for the custody ref, or "-"
+  local out
+  out=$(git -C "$FX_REPO" ls-remote "$FX_REMOTE" "$CUSTODY_REF" 2>/dev/null) || return 1
+  [ -n "$out" ] || { printf -- '-\n'; return 0; }
+  printf '%s\n' "$out" | awk 'NF {print $1; exit}'
+}
+
+custody_grant() {  # -> GRANT_ID
+  local out
+  GRANT_ID=
+  out=$(guard prepare --effect custody --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --expected-tip - --item "$ITEM")
+  GRANT_ID=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
+  [ -n "$GRANT_ID" ] || fail "custody-grant: the fixture was expected to be replicable: $out"
+  assert_contains "$out" 'class=CUSTODY_REPLICATION' \
+    "custody-grant: the authority was not typed as custody: $out"
+}
+
+custody_refuses() {  # <label> <expected-token> <prepare-args...>
+  local label=$1 token=$2 out rc=0 before after
+  shift 2
+  # UNCHANGED, not absent. A case that seeds the ref deliberately is still a case
+  # in which the refusal must move nothing, and asserting absence would quietly
+  # skip the assertion there.
+  before=$(custody_tip) || fail "$label: the custody ref could not be observed before"
+  out=$(guard prepare --effect custody --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --item "$ITEM" "$@") || rc=$?
+  [ "$rc" -eq 3 ] || fail "$label: the custody replication was not refused (exit $rc): $out"
+  assert_contains "$out" "$token" "$label: the refusal did not name the rule: $out"
+  assert_not_contains "$out" 'ALLOW_EXACT' "$label: a refused custody replication was permitted: $out"
+  after=$(custody_tip) || fail "$label: the custody ref could not be observed after"
+  [ "$after" = "$before" ] \
+    || fail "$label: a refused custody replication moved the remote from $before to $after"
+}
+
+test_custody_replicates_an_exact_clean_candidate_and_grants_nothing() {
+  local id out after
+  fixture custody-green
+  policy
+  # NO ruling, and NO reviewer qualification beyond the default. Custody claims
+  # neither, so it must not require either - a candidate that cannot be published
+  # yet is exactly the one that most needs to survive this machine.
+  custody_grant; id=$GRANT_ID
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$CUSTODY_REF") \
+    || fail "custody-green: the permitted custody replication did not complete: $out"
+  assert_contains "$out" 'CUSTODY_REPLICATION' \
+    "custody-green: the completed act was not typed as custody: $out"
+  after=$(custody_tip) || fail "custody-green: the custody ref could not be observed"
+  [ "$after" = "$FX_HEAD" ] \
+    || fail "custody-green: the custody ref is at $after rather than $FX_HEAD"
+  [ "$(jq -r '.effect' "$FX_DATA/landing-authorizations/$id.json")" = custody ] \
+    || fail "custody-green: the spent authority does not record itself as custody"
+  pass "an exact clean candidate replicates to its own feature ref under a custody authority"
+}
+
+test_custody_refuses_a_candidate_that_is_not_the_one_here() {
+  local drifted
+  fixture custody-drift
+  policy
+  # The head named is a real commit and is not the one checked out. A clean
+  # worktree says nothing about WHICH head it is clean at.
+  drifted=$(git -C "$FX_REPO" rev-parse HEAD~1) || fail "custody-drift: parent"
+  custody_refuses custody-drift FM_PUB_CUSTODY_CANDIDATE_DRIFT \
+    --ref "$CUSTODY_REF" --head "$drifted" --expected-tip -
+  pass "custody refuses a head that is not the candidate this checkout is sitting on"
+}
+
+test_custody_refuses_an_unclean_worktree() {
+  local file
+  for file in tracked untracked; do
+    fixture "custody-dirty-$file"
+    policy
+    if [ "$file" = tracked ]; then
+      printf 'uncommitted\n' >> "$FX_REPO/file.txt"
+    else
+      printf 'stray\n' > "$FX_REPO/stray.txt"
+    fi
+    # A backup taken from a tree with work in it records a ref carrying the
+    # committed head while the work that mattered stays only on this disk.
+    custody_refuses "custody-dirty-$file" FM_PUB_WORKTREE_NOT_CLEAN \
+      --ref "$CUSTODY_REF" --head "$FX_HEAD" --expected-tip -
+  done
+  pass "custody refuses an unclean worktree, counting untracked files as uncommitted work"
+}
+
+test_custody_refuses_a_ref_that_is_not_this_works_own() {
+  fixture custody-wrong-ref
+  policy
+  custody_refuses custody-wrong-ref FM_PUB_CUSTODY_REF_NOT_PERMITTED \
+    --ref refs/heads/fm/some-other-task --head "$FX_HEAD" --expected-tip -
+  fixture custody-plain-ref
+  policy
+  custody_refuses custody-plain-ref FM_PUB_CUSTODY_REF_NOT_PERMITTED \
+    --ref refs/heads/anything --head "$FX_HEAD" --expected-tip -
+  pass "custody refuses any ref but the one derived from the work, including another task's"
+}
+
+test_custody_refuses_a_protected_ref() {
+  local ref
+  # THE CASE THAT ONLY THIS RULE CATCHES, and the reason it is written this way.
+  # A protected ref like refs/heads/main is ALSO refused by the permitted-ref
+  # rule, because it is not the work's own ref - so a case built on main would
+  # pass with the protection removed entirely and would be evidence about the
+  # wrong check. What only protection catches is a home that protects a ref which
+  # IS derived from the work: then the ref is permitted and must still refuse.
+  fixture custody-protected-own
+  policy
+  jq --arg r "$CUSTODY_REF" '.protected_refs = [$r]' "$FX_CONFIG/publication-identity.json" \
+    > "$FX_CONFIG/p.tmp" && mv "$FX_CONFIG/p.tmp" "$FX_CONFIG/publication-identity.json"
+  custody_refuses custody-protected-own FM_PUB_PROTECTED_REF \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --expected-tip -
+
+  # A glob a home declared, over the same derived ref.
+  fixture custody-protected-glob
+  policy
+  jq '.protected_refs = ["refs/heads/fm/*"]' "$FX_CONFIG/publication-identity.json" \
+    > "$FX_CONFIG/p.tmp" && mv "$FX_CONFIG/p.tmp" "$FX_CONFIG/publication-identity.json"
+  custody_refuses custody-protected-glob FM_PUB_PROTECTED_REF \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --expected-tip -
+
+  # The built-in floor. A home may ADD to the protected set and may not subtract
+  # from it, so these are asserted refused without claiming this rule is the only
+  # thing refusing them.
+  for ref in refs/heads/main refs/heads/master; do
+    fixture "custody-floor-$(printf '%s' "$ref" | tr '/' '-')"
+    policy
+    custody_refuses "custody-floor-$ref" FM_PUB_PROTECTED_REF \
+      --ref "$ref" --head "$FX_HEAD" --expected-tip -
+  done
+  pass "custody refuses a protected ref even when the work's own derived ref is the protected one"
+}
+
+test_custody_refuses_every_force_form() {
+  local id arg out rc after
+  # The plan can be exactly right about its head and its tip and still destroy
+  # history if the push carries a force, so the ACT is checked, not only the
+  # subject. Asked at consume because that is the first point the act is visible.
+  for arg in --force --force-with-lease --mirror --delete -f; do
+    fixture "custody-force-$(printf '%s' "$arg" | tr -d '-')"
+    policy
+    custody_grant; id=$GRANT_ID
+    rc=0
+    out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+      git -C "$FX_REPO" push "$arg" origin "$FX_HEAD:$CUSTODY_REF") || rc=$?
+    [ "$rc" -eq 3 ] || fail "custody-force: '$arg' was not refused (exit $rc): $out"
+    assert_contains "$out" 'FM_PUB_FORCE_REFUSED' \
+      "custody-force: the refusal of '$arg' did not name the rule: $out"
+    after=$(custody_tip) || fail "custody-force: the custody ref could not be observed"
+    [ "$after" = '-' ] || fail "custody-force: '$arg' moved the remote to $after"
+  done
+  pass "custody refuses every forcing form of the act before the remote is touched"
+}
+
+test_custody_refuses_a_ref_another_head_already_occupies() {
+  local other
+  fixture custody-occupied
+  policy
+  # Something else is using this ref. Advancing it would be a publication of a
+  # new head onto an occupied ref, which is exactly what custody is defined not
+  # to be - and the reason custody never needs a force.
+  other=$(git -C "$FX_REPO" rev-parse HEAD~1) || fail "custody-occupied: parent"
+  git -C "$FX_REPO" push -q origin "$other:$CUSTODY_REF" || fail "custody-occupied: seed"
+  # COMPILED AGAINST THE TIP THAT IS ACTUALLY THERE, so this is a caller that
+  # knows the ref is occupied and is asking to advance it. Passing an absent
+  # expected tip instead would be refused by the remote-moved rule, and the case
+  # would be evidence about that rule rather than about this one.
+  custody_refuses custody-occupied FM_PUB_CUSTODY_REF_OCCUPIED \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --expected-tip "$other"
+  pass "custody refuses a ref another head already occupies rather than advancing it"
+}
+
+test_custody_grants_no_publication_and_the_projection_says_so() {
+  local id out before after
+  fixture custody-grants-nothing
+  policy
+  custody_grant; id=$GRANT_ID
+  guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$CUSTODY_REF" > /dev/null \
+    || fail "custody-grants-nothing: the custody replication did not complete"
+
+  # THE PROJECTION, which is the claim under test: the candidate is backed up and
+  # is nothing else. Not reviewed, not qualified to publish, not authorized to
+  # land, not landed.
+  out=$(guard project --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --item "$ITEM") \
+    || fail "custody-grants-nothing: the projection did not report reclaimable: $out"
+  assert_contains "$out" 'STATE custody-replicated' \
+    "custody-grants-nothing: the projection did not stop at custody: $out"
+  printf '%s\n' "$out" | awk '$1=="review-published" && $2!="no" {exit 1}' \
+    || fail "custody-grants-nothing: a custody replication was read as a review: $out"
+  printf '%s\n' "$out" | awk '$1=="publication-qualified" && $2=="yes" {exit 1}' \
+    || fail "custody-grants-nothing: a custody replication was read as publication-qualified: $out"
+  printf '%s\n' "$out" | awk '$1=="landing-authorized" && $2!="no" {exit 1}' \
+    || fail "custody-grants-nothing: a custody replication was read as landing authority: $out"
+  printf '%s\n' "$out" | awk '$1=="landed" && $2!="no" {exit 1}' \
+    || fail "custody-grants-nothing: a custody replication was read as landed: $out"
+
+  # And the publication obligations are STILL unmet afterwards, asked of the
+  # guard rather than inferred from the projection.
+  before=$(custody_tip) || fail "custody-grants-nothing: the custody ref could not be observed"
+  out=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) && \
+    fail "custody-grants-nothing: publication became permitted after a custody replication: $out"
+  assert_not_contains "$out" 'ALLOW_EXACT' \
+    "custody-grants-nothing: a custody replication was credited as publication permission: $out"
+  after=$(custody_tip) || fail "custody-grants-nothing: the custody ref could not be observed"
+  [ "$before" = "$after" ] \
+    || fail "custody-grants-nothing: asking about publication moved the custody ref"
+  pass "a custody replication creates no review, no publication eligibility, no landing authority and no landing"
+}
+
+test_custody_restart_is_a_typed_no_effect_that_consumes_nothing() {
+  local id out states_before states_after
+  fixture custody-restart
+  policy
+  custody_grant; id=$GRANT_ID
+  guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$CUSTODY_REF" > /dev/null \
+    || fail "custody-restart: the first replication did not complete"
+  states_before=$(states)
+
+  # The restart. The backup already exists at exactly this head, so there is
+  # nothing to do - and nothing to spend for having done it.
+  out=$(guard prepare --effect custody --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --expected-tip "$FX_HEAD" --item "$ITEM") \
+    || fail "custody-restart: a repeated replication did not complete: $out"
+  assert_contains "$out" 'NO_EFFECT_ALREADY_EQUAL' \
+    "custody-restart: a repeated replication was not a typed no-effect: $out"
+  states_after=$(states)
+  [ "$states_before" = "$states_after" ] \
+    || fail "custody-restart: a no-effect restart changed the authority store: '$states_before' vs '$states_after'"
+  pass "a repeated custody replication of the same exact head is a typed no-effect that consumes no authority"
+}
+
+test_custody_consumed_without_a_confirmed_effect_is_reobserved_not_reused() {
+  local id out rc=0 fresh
+  fixture custody-unconfirmed
+  policy
+  custody_grant; id=$GRANT_ID
+  # The act runs and does not move the ref. Its exit status says nothing about
+  # whether it had an effect, so the authority must not return to the pool.
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- true) || rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "custody-unconfirmed: an unconfirmed custody effect was not could-not-observe (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT' \
+    "custody-unconfirmed: the result did not name the unconfirmed effect: $out"
+  [ "$(guard status "$id")" = indeterminate ] \
+    || fail "custody-unconfirmed: the record did not stay indeterminate"
+
+  # Recovery REOBSERVES the remote and retires this authority permanently; a
+  # fresh one is a different authority, so the lane is not wedged by the rule.
+  guard reconcile "$id" --observed not-applied --evidence "$CUSTODY_REF absent on the remote" > /dev/null \
+    || fail "custody-unconfirmed: the reconciliation failed"
+  [ "$(guard status "$id")" = void ] \
+    || fail "custody-unconfirmed: the reconciled authority was not retired"
+  custody_grant; fresh=$GRANT_ID
+  [ "$fresh" != "$id" ] \
+    || fail "custody-unconfirmed: recovery reproduced the retired authority $id"
+  pass "a custody authority consumed without a confirmed effect is reobserved and retired, never reused"
+}
+
+test_the_projection_answers_reclaimability_from_the_exact_head() {
+  local out rc other
+  # (i) verified exact-head custody is reclaimable
+  fixture reclaim-exact
+  policy
+  custody_grant
+  guard consume "$GRANT_ID" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$CUSTODY_REF" > /dev/null \
+    || fail "reclaim-exact: the custody replication did not complete"
+  rc=0
+  out=$(guard project --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --item "$ITEM") || rc=$?
+  [ "$rc" -eq 0 ] || fail "reclaim-exact: an exact-head backup was not reclaimable (exit $rc): $out"
+  assert_contains "$out" 'reclaimable            yes' "reclaim-exact: $out"
+
+  # (ii) the branch EXISTS at another head. Existence is not backup.
+  fixture reclaim-other-head
+  policy
+  other=$(git -C "$FX_REPO" rev-parse HEAD~1) || fail "reclaim-other-head: parent"
+  git -C "$FX_REPO" push -q origin "$other:$CUSTODY_REF" || fail "reclaim-other-head: seed"
+  rc=0
+  out=$(guard project --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$CUSTODY_REF" --head "$FX_HEAD" --item "$ITEM") || rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "reclaim-other-head: a branch at another head was treated as a backup (exit $rc): $out"
+  assert_contains "$out" 'reclaimable            no' "reclaim-other-head: $out"
+
+  # (iii) the remote could not be reached. Not reclaimable, and a DIFFERENT
+  # repair from a ref standing at the wrong head.
+  fixture reclaim-unreachable
+  policy
+  rc=0
+  out=$(guard project --repo "$FX_REPO" --remote "$TMP_ROOT/no-such-remote.git" \
+    --venue "$VENUE" --ref "$CUSTODY_REF" --head "$FX_HEAD" --item "$ITEM") || rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "reclaim-unreachable: an unreachable remote was not could-not-observe (exit $rc): $out"
+  assert_contains "$out" 'reclaimable            could-not-observe' "reclaim-unreachable: $out"
+  pass "a slot is reclaimable only when the remote resolves the custody ref to the exact candidate head"
+}
+
 # --- run -----------------------------------------------------------------------
 
 test_publishes_one_governed_candidate_exactly_once
@@ -1056,5 +1374,16 @@ test_refuses_a_review_by_a_reviewer_that_is_not_qualified
 test_cannot_observe_a_review_whose_reviewer_qualification_is_unreadable
 test_cannot_observe_a_review_the_policy_names_no_contract_for
 test_one_approval_does_not_cover_for_another_unmet_obligation
+test_custody_replicates_an_exact_clean_candidate_and_grants_nothing
+test_custody_refuses_a_candidate_that_is_not_the_one_here
+test_custody_refuses_an_unclean_worktree
+test_custody_refuses_a_ref_that_is_not_this_works_own
+test_custody_refuses_a_protected_ref
+test_custody_refuses_every_force_form
+test_custody_refuses_a_ref_another_head_already_occupies
+test_custody_grants_no_publication_and_the_projection_says_so
+test_custody_restart_is_a_typed_no_effect_that_consumes_nothing
+test_custody_consumed_without_a_confirmed_effect_is_reobserved_not_reused
+test_the_projection_answers_reclaimability_from_the_exact_head
 
 fm_test_contract "${BASH_SOURCE[0]}"

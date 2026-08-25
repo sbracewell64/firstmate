@@ -250,11 +250,35 @@ The `FM_PUB_*` tokens, `fm_pub_seam_*` functions and the `publication` effect va
 This is a writing rule, not a migration.
 
 A second collision was ruled with it and needs no row of its own, because one owner carries both senses under one name.
-[`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh) now owns the one-use authority for two effects, `landing` and `publication`, so its file name is narrower than its contents.
+[`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh) now owns the one-use authority for three effects, `landing`, `publication` and `custody`, so its file name is narrower than its contents.
 That is deliberate: a second authorization owner would bring a second store and a second idea of what `spent` means.
 The file keeps its name, its header states the widening, and `effect=` in the identity is what a reader distinguishes them by.
 
 **Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `landing-authorizations/` row and section 7's publication chokepoint paragraph; the headers of [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh); the publish path of [`bin/fm-attest.sh`](../bin/fm-attest.sh); [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
+
+### `custody`
+
+Ruled 2026-08-25, when custody replication was separated from publication and the word met the one the validation pipeline already used.
+
+| | |
+|---|---|
+| **Branch sense** | ownership of a task branch while a no-mistakes run holds it, recovered through axi sync's guarded path when structured status returns `recover_custody`; owned by the no-mistakes pipeline and relayed by [`AGENTS.md`](../AGENTS.md) section 7 |
+| **Replication sense** | durable backup of one exact committed candidate to its own unprotected feature ref, granting nothing; owned by [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh)'s `CUSTODY_REPLICATION` effect class |
+| **Register sense** | the `attempt_custody_accounting` qualification axis, which is about attributing attempts to the worker that spent them; owned by [`qualifications/schema.json`](../qualifications/schema.json) |
+| **Disposition** | QUALIFY |
+
+The two live senses are close enough to be mistaken for each other in the direction that matters.
+Both are about a candidate not being lost, both come up while a lane is mid-flight, and both are settled by a guarded command rather than by hand - so a reader told "custody was recovered" could reasonably think the branch is backed up on a remote when nothing has left the machine, or that a backup exists when only branch ownership returned.
+NO-CONTACT was considered and rejected: AGENTS.md section 7 already carries both, one paragraph apart.
+
+Write `branch custody` for the first sense and `custody replication` for the second.
+The register's axis is always written in full as `attempt_custody_accounting` and is never shortened to `custody`, which keeps it out of the collision entirely.
+Bare `custody` is acceptable only where the surrounding text has already fixed which one is meant, and never in a refusal, a token, or a header sentence that introduces the subject.
+
+Nothing is renamed.
+`FM_PUB_CUSTODY_*` tokens and the `custody` effect value carry the replication sense inside their own file, and the branch sense lives in another repository's vocabulary that this fleet does not own.
+
+**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 7's validate paragraph (branch sense) and its publication chokepoint paragraph (replication sense); [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh)'s custody fold; [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
 
 ## Maintaining this file
 

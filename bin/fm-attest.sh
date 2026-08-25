@@ -1264,7 +1264,7 @@ EOF
   publication_rc=0
   fm_pub_seam_publish "$SCRIPT_DIR/fm-publication-guard.sh" \
     "$publication_repo" "$remote" "$publication_venue" "$notes_ref" \
-    "$publication_head" "$publication_expected_tip" '-' \
+    "$publication_head" "$publication_expected_tip" '-' publication \
     git -C "$publication_repo" push --quiet "$remote" "$notes_ref:$notes_ref" \
     || publication_rc=$?
   case "$publication_rc" in
