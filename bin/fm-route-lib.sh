@@ -698,9 +698,10 @@ fm_route_decision_with_capacity() {  # <decision-json> <capacity-lines>
 # fm_route_decision_with_qualification <decision-json> <qualification-lines>
 # Record the CALLER's role-qualification observations on a decision record and
 # recompute eligibility with them. <qualification-lines> is one
-# "<model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><evidence>" line per
-# candidate, exactly the shape bin/fm-qualification-lib.sh emits and the same
-# merge shape the registry verdicts and the capacity observation already use.
+# "<model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><retry><TAB><applicability><TAB><evidence>"
+# line per candidate, exactly the shape bin/fm-qualification-lib.sh emits and the
+# same merge shape the registry verdicts and the capacity observation already
+# use.
 #
 # This library asks the qualification register nothing, for the same reason it
 # asks the model registry and quota-axi nothing: ROUTE owns which models a route
@@ -727,7 +728,9 @@ fm_route_decision_with_qualification() {  # <decision-json> <qualification-lines
          state: (.[1] // "COULD_NOT_OBSERVE"),
          contracts: (if (((.[2] // "") | length) > 0) then (.[2] / ",") else [] end),
          cost_rank: (((.[3] // "") | tonumber?) // null),
-         evidence: (.[4] // "")} ]') \
+         retry_disposition: (if (((.[4] // "") | length) > 0) then .[4] else "unknown" end),
+         applicability: (if (((.[5] // "") | length) > 0) then .[5] else null end),
+         evidence: (.[6] // "")} ]') \
     || { printf '%s' "$decision"; return 1; }
   printf '%s' "$decision" | jq -c --argjson qual "$merged" '
       def with_qual($row):
@@ -773,6 +776,17 @@ fm_route_decision_with_qualification() {  # <decision-json> <qualification-lines
 # bounded workflow is spent on. `promising` therefore carries exactly the
 # candidates whose ONLY blocker is fixable qualification, ordered cheapest first
 # with an unobservable cost sorting last.
+#
+# MISSING QUALIFICATION IS NOT ENOUGH TO BE PROMISING, and that is the second
+# thing this fold learned. A candidate whose record says the predicate rejected
+# it, under a material predicate that has not changed, is blocked by something
+# qualifying it cannot fix - the invocation would only re-observe a settled
+# failure. It is therefore excluded as `qualification_retry_not_permitted` and
+# joins the escalating bucket, exactly as a preserved FAILED record does. Where
+# the disposition could not be OBSERVED it becomes `qualification_retry_cno`
+# instead and joins the unobservable bucket, because "we cannot tell whether the
+# predicate moved" is a repair to the register and never a captain exception.
+# Reading the second as the first would report a gap as a settled refusal.
 fm_route_zero_route_classification() {  # <decision-json>
   local decision=$1
   command -v jq >/dev/null 2>&1 || return 2
@@ -784,15 +798,19 @@ fm_route_zero_route_classification() {  # <decision-json>
         (if ($c.band_expressible == false) then "band" else empty end),
         (if (($c.capacity.verdict // "could_not_observe") == "exhausted") then "capacity" else empty end),
         (($c.qualification.state // "QUALIFIED") as $s
+         | ($c.qualification.retry_disposition // "permitted") as $rd
          | if $s == "QUALIFIED" then empty
            elif $s == "FAILED" then "qualification_failed"
            elif $s == "COULD_NOT_OBSERVE" then "qualification_cno"
+           elif $rd == "not-permitted" then "qualification_retry_not_permitted"
+           elif $rd == "unknown" then "qualification_retry_cno"
            else "qualification_missing" end) ];
     . as $d
     | [ $d.candidates[]? | . + {blockers: blockers(.)} ] as $rows
     | [ $rows[] | select((.blockers | length) == 0) ] as $eligible
     | [ $rows[] | select(.blockers == ["qualification_missing"]) ] as $promising
-    | [ $rows[] | select(.blockers == ["qualification_cno"]) ] as $unobserved
+    | [ $rows[] | select(.blockers == ["qualification_cno"]
+                         or .blockers == ["qualification_retry_cno"]) ] as $unobserved
     | [ $rows[] | select(((.blockers | length) > 0)
                          and (((.blockers - ["availability","capacity"]) | length) == 0)) ] as $waiting
     | (if ($eligible | length) > 0 then "ELIGIBLE"
@@ -813,15 +831,21 @@ fm_route_zero_route_classification() {  # <decision-json>
                     | {model, position,
                        contracts: (.qualification.contracts // []),
                        state: (.qualification.state // null),
+                       applicability: (.qualification.applicability // null),
+                       retry_disposition: (.qualification.retry_disposition // null),
                        cost_rank: (.qualification.cost_rank // null),
                        evidence: (.qualification.evidence // "")} ]
                   | sort_by([ (.cost_rank // 999999999), .position ]),
        unobserved: [ $unobserved[]
-                     | {model, position, evidence: (.qualification.evidence // "")} ]
+                     | {model, position,
+                        retry_disposition: (.qualification.retry_disposition // null),
+                        evidence: (.qualification.evidence // "")} ]
                    | sort_by(.position),
        excluded: [ $rows[] | select((.blockers | length) > 0)
                    | {model, position, blockers,
                       qualification_state: (.qualification.state // null),
+                      qualification_applicability: (.qualification.applicability // null),
+                      qualification_retry_disposition: (.qualification.retry_disposition // null),
                       qualification_evidence: (.qualification.evidence // "")} ]
                  | sort_by(.position)}' 2>/dev/null
 }
@@ -837,12 +861,27 @@ fm_route_zero_route_classification() {  # <decision-json>
 # an engineering state to resolve, so the wording says so and points at the
 # bounded workflow rather than at the captain.
 fm_route_qualification_refusal() {  # <route> <model> <decision-json>
-  local route=$1 model=$2 decision=$3 state evidence contracts substitutes
+  local route=$1 model=$2 decision=$3 state evidence contracts substitutes retry
   state=$(printf '%s' "$decision" | jq -r '.subject.qualification.state // "QUALIFIED"' 2>/dev/null)
   [ "$state" != QUALIFIED ] || return 0
   evidence=$(printf '%s' "$decision" | jq -r '.subject.qualification.evidence // "no qualification evidence was recorded"' 2>/dev/null)
   contracts=$(printf '%s' "$decision" | jq -r '(.subject.qualification.contracts // []) | join(", ")' 2>/dev/null)
+  retry=$(printf '%s' "$decision" | jq -r '.subject.qualification.retry_disposition // "permitted"' 2>/dev/null)
   substitutes=$(printf '%s' "$decision" | jq -r '[ .candidates[]? | select(.eligible) | .model ] | join(", ")' 2>/dev/null)
+  # A missing-or-stale state whose retry is withheld must NOT be reported as an
+  # engineering state one bounded workflow resolves, because that wording is an
+  # instruction to spend a model call on a binding already known to fail it.
+  if { [ "$state" = QUALIFICATION_REQUIRED ] || [ "$state" = QUALIFICATION_STALE ]; } \
+     && [ "$retry" != permitted ]; then
+    printf '%s: route %s requires the capability contract %s and %s reads %s while another invocation of it is %s - %s. Re-qualifying this binding is not the repair: %s\n' \
+      "$FM_ROUTE_TOKEN_QUALIFICATION" "$route" "$contracts" "$model" "$state" "$retry" "$evidence" \
+      "$( [ "$retry" = not-permitted ] \
+            && printf 'the material predicate it was observed to fail has not changed, so the invocation would only re-observe a settled failure. %s' \
+                 "$( [ -n "$substitutes" ] && printf 'A candidate that already holds the capability is available now, in pool order: %s.' "$substitutes" \
+                      || printf 'No candidate in this pool holds it yet.' )" \
+            || printf 'whether the material predicate it was observed to fail has changed could not be observed, so the repair is to the register rather than to the binding' )"
+    return 1
+  fi
   case "$state" in
     QUALIFICATION_REQUIRED|QUALIFICATION_STALE)
       printf '%s: route %s requires the capability contract %s and %s has no current qualification for it (%s) - %s. Missing or stale qualification is an engineering state, not a captain decision: one bounded qualification workflow resolves it and the evidence is then reused. %s Never lower the floor and never substitute outside this pool\n' \

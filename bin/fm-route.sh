@@ -281,7 +281,10 @@ terminal_report() {  # <decision-json>
           elif .registry_refusal != null then .registry_refusal
           elif ((.qualification.state // "QUALIFIED") != "QUALIFIED")
           then (.qualification.state // "") + " for capability contract "
-               + ((.qualification.contracts // []) | join(", ")) + " - " + (.qualification.evidence // "")
+               + ((.qualification.contracts // []) | join(", "))
+               + (if ((.qualification.retry_disposition // "permitted") != "permitted")
+                  then ", retry " + (.qualification.retry_disposition // "") else "" end)
+               + " - " + (.qualification.evidence // "")
           elif (.capacity.verdict // "") == "exhausted" then "out of capacity - " + .capacity.evidence
           else "eligible"
                + (if (.capacity.verdict // "") == "could_not_observe"
@@ -316,7 +319,7 @@ terminal_report() {  # <decision-json>
       (if .classification == "QUALIFICATION_REQUIRED"
        then "  action: run one bounded qualification workflow (bin/fm-qualification.sh activate --route \(.route)). Missing or stale qualification is an engineering state; it is never a reason to ask for a floor exception."
        elif .classification == "QUALIFICATION_COULD_NOT_OBSERVE"
-       then "  action: repair the qualification observation. Nothing adverse was established about any binding and no negative is recorded."
+       then "  action: repair the register. Either whether a candidate holds the capability, or whether one already observed to fail it may be tried again, could not be read - and no new negative is recorded against any binding either way."
        elif .classification == "AWAITING_AVAILABILITY"
        then "  action: wait. The availability hold or the capacity deferral owns this; a required floor that is currently unavailable is a wait, not a weaker model."
        else "  action: stop and report. Every candidate is excluded by something qualifying it cannot fix, so this is the one classification that escalates."
@@ -516,7 +519,9 @@ case "$CMD" in
          else empty end),
         (if (.excluded | length) > 0
          then "  excluded:",
-              (.excluded[] | "    \(.position). \(.model) · \(.blockers | join("+"))")
+              (.excluded[] | "    \(.position). \(.model) · \(.blockers | join("+"))"
+                             + (if ((.qualification_retry_disposition // "permitted") != "permitted")
+                                then " · \(.qualification_evidence)" else "" end))
          else empty end)'
     fi
     # Exit status is the answer, so a caller that ignores stdout still acts

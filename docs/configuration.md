@@ -747,7 +747,7 @@ The captain ruling of 2026-08-13 separates them: missing qualification is an eng
 - `data/qualifications/records/` is an optional home-private overlay with the same schema, for a binding or an evidence trail a home must not publish into a shared template repo. Its absence is silent; a tracked register that exists and cannot be read is could-not-observe.
 
 A record stores what was OBSERVED and the dependencies that observation rests on.
-It never stores the state a reader acts on: the interpreter computes that on every read, and a record carrying `state`, `verdict`, `score` or any other hand-written status word is refused outright.
+It never stores the state a reader acts on: the interpreter computes that on every read, and a record carrying `state`, `verdict`, `score`, `applicability`, `retry_disposition` or any other hand-written status word is refused outright.
 Five values are distinguished and none may collapse into another.
 
 | state | meaning | effect on eligibility |
@@ -764,6 +764,31 @@ Some dependencies cannot be probed at all: harness semantics, provider-side bind
 What cannot be probed is bounded in time instead, which is the third option between shouting forever and going quietly wrong.
 A `FAILED` record reopens as `QUALIFICATION_REQUIRED` when a declared dependency materially changes, and the adverse record is retained rather than deleted.
 
+### Three axes, not one
+
+The state above answers what was observed. `bin/fm-qualification.sh state --json` returns two further facts computed from the same record, and neither is derivable from the state.
+
+| fact | values | what it answers |
+| --- | --- | --- |
+| `applicability` | `CURRENT`, `STALE`, `COULD_NOT_OBSERVE` | does the observation still apply to the generation in force? |
+| `retry_disposition` | `permitted`, `not-permitted`, `unknown` | may this binding be invoked again? |
+
+They are separate because reading the state as though it answered them was a measured defect.
+Two bindings held `FAILED` records, a new contract generation was proposed, and because the contract's own version is a declared freshness dependency every `FAILED` record then computed `QUALIFICATION_REQUIRED` - the one classification `activate` accepts.
+Installing a contract generation would have turned two bindings that were tried and rejected into automatically activatable ones.
+
+Only an adverse observation withholds a retry.
+A stale pass, a missing record and a could-not-observe all leave the disposition `permitted`, because refusing there would freeze a stale qualification forever and make a first qualification of any tuple impossible.
+For a `FAILED` record the answer comes from the material predicate rather than the contract version: a contract declares `executable_predicate.predicate_generation`, the digest of the oracle program plus the candidate-visible claims package, and a record declares the `predicate_generation` it was graded by along with the `failed_predicates` it was rejected on.
+Equal generations mean the predicate is the one still in force, so the exclusion stands whatever the version now reads.
+Where they differ, the package's `MANIFEST.json` may declare `predicates_unchanged_from`, mapping a base manifest digest to the claim ids this generation carries forward unchanged; a record whose every failed claim is named there keeps its adverse disposition, and one whose failed claim is not named may be re-qualified.
+**The absence of that declaration is the material-change predicate**: a generation that says nothing about a base generation's claims has replaced them.
+Silence about which generation a record was graded by is a different fact and never a permission - it reads `unknown`, which withholds the invocation while pointing the repair at the register rather than at the binding.
+
+A record may also carry an explicit `disposition` block - `retry` (`permitted` or `not-permitted-unchanged-predicate`), `reason` and `authority` - so refusing to re-run a known failed binding stops depending on firstmate remembering to.
+It may only ever make the computed answer stricter; a hand-written `permitted` grants nothing.
+Records written before these fields existed keep their five-value semantics exactly and read `unknown`: nothing already recorded is rewritten or reinterpreted, and what changes is only that a historical adverse observation is no longer read as a permission to re-run the binding.
+
 Unlike the quota gate, this gate fails CLOSED where a floor declares a requirement, and the asymmetry is a property of the input rather than a preference.
 An unobserved quota can only remove a candidate the policy already admitted, so failing to observe it removes nothing; a capability requirement IS the admission, so admitting on unread evidence would route work on no evidence at all.
 
@@ -775,11 +800,13 @@ An unobserved quota can only remove a candidate the policy already admitted, so 
 | classification | action | exit | escalates |
 | --- | --- | --- | --- |
 | `QUALIFICATION_REQUIRED` | activate one bounded workflow for the cheapest promising candidate | 3 | no |
-| `QUALIFICATION_COULD_NOT_OBSERVE` | repair the observation; nothing is recorded against any binding | 3 | no |
+| `QUALIFICATION_COULD_NOT_OBSERVE` | repair the register; nothing new is recorded against any binding | 3 | no |
 | `AWAITING_AVAILABILITY` | wait; the availability hold and capacity deferral own it | 3 | no |
 | `NO_MODEL_CAN_SATISFY_ROUTE` | stop and report | 1 | `CAPTAIN_EXCEPTION_REQUIRED` |
 
-A candidate is promising only when its ONLY blocker is missing or stale qualification: one that also misses a floor axis is not made eligible by qualifying it.
+A candidate is promising only when its ONLY blocker is missing or stale qualification whose retry is permitted: one that also misses a floor axis is not made eligible by qualifying it, and neither is one the register refuses to re-run.
+A candidate whose `retry_disposition` is `not-permitted` is excluded as `qualification_retry_not_permitted` and joins the escalating bucket exactly as a preserved `FAILED` record does; one whose disposition is `unknown` is excluded as `qualification_retry_cno` and joins the unobservable bucket, because a gap in the register is a repair rather than a captain exception.
+`activate` and `bin/fm-spawn.sh` both refuse such a candidate by name, and neither re-derives the disposition - they read the one the interpreter computed.
 Promising candidates are ordered by recorded price ascending and then by pool position, and a candidate whose price cannot be observed sorts LAST rather than first - unmeasured cost is never read as cheap.
 
 `bin/fm-qualification.sh activate --route <id> --blocks <work-id>` creates or reuses ONE bounded workflow for that candidate.

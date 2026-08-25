@@ -63,6 +63,30 @@
 # to close: it is what made "we have no evidence" arrive at the captain as "no
 # model can do this".
 #
+# THREE AXES, NOT ONE, and the state above is only the first of them. A second
+# measured defect came from reading the state as though it also answered the
+# other two: two bindings held FAILED records, a contract generation was bumped,
+# and because a contract version is a declared freshness dependency EVERY FAILED
+# record read QUALIFICATION_REQUIRED - which is the one classification
+# `activate` accepts. A version bump alone turned bindings that had been tried
+# and rejected into automatically activatable ones.
+#
+#   state              what was OBSERVED about this binding. Five values.
+#   applicability      whether that observation still APPLIES, from the declared
+#                      freshness dependencies alone. CURRENT, STALE, or
+#                      COULD_NOT_OBSERVE.
+#   retry_disposition  whether another INVOCATION of this binding is permitted.
+#                      permitted, not-permitted, or unknown.
+#
+# The bump moves the second. It must never move the first, and it moves the
+# third only through an explicit material-change predicate: the contract's
+# declared predicate generation differing from the one the adverse record was
+# graded by, with the new generation's manifest not declaring the failed
+# predicates carried forward unchanged. Absent either declaration the answer is
+# `unknown`, which withholds the retry without ever recording that the binding
+# changed. Only an ADVERSE record can withhold one; a stale pass stays retryable,
+# because refusing there would freeze it forever.
+#
 # ENFORCEMENT SCOPE - the same deliberate asymmetry the model registry and the
 # routed pools use:
 #
@@ -115,6 +139,7 @@ FM_QUAL_TOKEN_REQUIRED=FM_QUALIFICATION_REQUIRED
 FM_QUAL_TOKEN_STALE=FM_QUALIFICATION_STALE
 FM_QUAL_TOKEN_DUPLICATE=FM_QUALIFICATION_ALREADY_ACTIVE
 FM_QUAL_TOKEN_NO_PROMISING=FM_QUALIFICATION_NO_PROMISING_CANDIDATE
+FM_QUAL_TOKEN_RETRY_REFUSED=FM_QUALIFICATION_RETRY_NOT_PERMITTED
 }
 
 # The five-value result vocabulary, spelled once. A synonym is refused rather
@@ -161,7 +186,17 @@ eligible
 score
 reputation
 rank
-verdict'
+verdict
+applicability
+retry_disposition'
+
+# The three values of the SEPARATED retry axis, and the two a record may DECLARE.
+# The declared vocabulary is deliberately narrower: a record may say that a
+# retry is settled or that it is not, and the interpreter alone may say that the
+# answer could not be observed. `not-permitted-unchanged-predicate` spells its own
+# ground in its name so a reader never has to go looking for why.
+FM_QUALIFICATION_DECLARED_DISPOSITIONS='permitted
+not-permitted-unchanged-predicate'
 
 FM_QUALIFICATION_REFUSED_CONTRACT_KEYS='models
 bindings
@@ -430,6 +465,7 @@ fm_qualification_record_problems() {  # <record-file>
     --arg refused_raw "$FM_QUALIFICATION_REFUSED_RECORD_KEYS" \
     --arg probed_raw "$FM_QUALIFICATION_PROBED_KINDS" \
     --arg uncovered_raw "$FM_QUALIFICATION_UNCOVERED_KINDS" \
+    --arg declared_dispositions_raw "$FM_QUALIFICATION_DECLARED_DISPOSITIONS" \
     '
     def lines($s): [$s | split("\n")[] | select(length > 0)];
     . as $r
@@ -437,6 +473,7 @@ fm_qualification_record_problems() {  # <record-file>
     | (lines($refused_raw)) as $refused
     | (lines($probed_raw)) as $probed
     | (lines($uncovered_raw)) as $uncovered
+    | (lines($declared_dispositions_raw)) as $dispositions
     | ($probed + $uncovered) as $kinds
     | [ ($r.freshness_dependencies? // []) | .[]? | .kind ] as $declared
     | [
@@ -499,7 +536,26 @@ fm_qualification_record_problems() {  # <record-file>
         (select(($contract.required_freshness_dependencies? | type) == "array")
          | ($contract.required_freshness_dependencies[] as $k
             | select(($declared | index($k)) == null)
-            | "contract requires freshness dependency \"\($k)\" and this record declares none"))
+            | "contract requires freshness dependency \"\($k)\" and this record declares none")),
+        (select($r | has("predicate_generation"))
+         | select(if ($r.predicate_generation | type) == "string"
+                  then ($r.predicate_generation | test("^[0-9a-f]{64}$") | not) else true end)
+         | "predicate_generation must be the sha256 digest of the material predicate this record was graded by; a version label names a generation without identifying it"),
+        (select($r | has("failed_predicates"))
+         | select(if ($r.failed_predicates | type) == "array"
+                  then (($r.failed_predicates | length) == 0
+                        or any($r.failed_predicates[]; (type != "string") or (length == 0)))
+                  else true end)
+         | "failed_predicates must be a non-empty array of non-empty claim ids naming what the predicate rejected; a later generation can only carry an adverse observation forward for claims it can name"),
+        (select($r | has("disposition"))
+         | select(($r.disposition | type) != "object")
+         | "disposition must be an object carrying retry, reason and authority"),
+        (select(($r.disposition? | type) == "object")
+         | (select(($dispositions | index($r.disposition.retry // "")) == null)
+            | "disposition.retry \"\($r.disposition.retry // "absent")\" is not one of the two declared values; a synonym is refused rather than normalized"),
+           (["reason","authority"][]
+            | select((($r.disposition[.] // "") | type) != "string" or (($r.disposition[.] // "") | length) == 0)
+            | "disposition needs a \(.); a do-not-retry nobody attributed is a preference rather than a durable decision"))
       ] | .[]
     ' "$file" 2>/dev/null || return 2
 }
@@ -606,6 +662,137 @@ fm_qualification_freshness_verdict() {  # <observations-json>
     if any(.[]?; .observation == "changed") then "changed"
     elif any(.[]?; .observation == "could-not-observe") then "could-not-observe"
     else "unchanged" end' 2>/dev/null
+}
+
+# APPLICABILITY is the freshness verdict said in the reader's terms, and nothing
+# more. It is separated from the state so a generation bump can move whether an
+# observation still applies WITHOUT moving what was observed. Three values rather
+# than two, for this fleet's standing reason: a dependency nobody could read
+# leaves applicability unobserved, and narrowing that into either CURRENT or
+# STALE would report a gap as one of the two answers it is not.
+fm_qualification_applicability() {  # <freshness-verdict>
+  case "$1" in
+    changed) printf 'STALE\n' ;;
+    could-not-observe) printf 'COULD_NOT_OBSERVE\n' ;;
+    *) printf 'CURRENT\n' ;;
+  esac
+}
+
+# fm_qualification_retry_disposition <record-json> <contract-json>
+# "<disposition>\x1f<reason>" for a record whose result is FAILED. No other
+# result reaches here: only an ADVERSE observation can withhold another
+# invocation, and a stale or missing one never does.
+#
+# THE LADDER, and why each rung answers the way it does:
+#
+#   record names no predicate generation   -> unknown. Which material predicate
+#       this binding failed was never recorded, so whether it has since changed
+#       cannot be observed. This is every record written before the field
+#       existed, and it is deliberately not `permitted`: the captain's law allows
+#       a retry only through an EXPLICIT material-change predicate, and silence
+#       is not one.
+#   contract declares none                 -> unknown, from the other side.
+#   generations equal                      -> not-permitted. The predicate this
+#       binding was graded by is the one still in force, whatever the contract
+#       VERSION now says. This is the rung that closes the laundering.
+#   generations differ, no carry-forward
+#       declaration for the record's base  -> permitted. THE ABSENCE OF THE
+#       DECLARATION IS THE MATERIAL-CHANGE PREDICATE: a new generation that says
+#       nothing about a base generation's claims has replaced them.
+#   generations differ, and every predicate
+#       this binding failed is declared
+#       unchanged from its base            -> not-permitted, carried over.
+#   generations differ and at least one
+#       failed predicate is not declared   -> permitted. One changed claim it
+#       failed is enough; the binding may now pass.
+#
+# A record may also DECLARE a disposition, which is the durable do-not-retry the
+# deployment ruling asked for so refusing a known failed binding stops depending
+# on firstmate remembering to. It may only ever make the answer STRICTER. A
+# hand-written `permitted` never overrides a computed refusal, for exactly the
+# reason a hand-written state may not answer the question the interpreter
+# computes: a claim anyone can write is one that will eventually be written
+# wrongly, and this is the claim that spends a model call on a binding already
+# known to fail.
+fm_qualification_retry_disposition() {
+  local record=$1 contract=${2:-'{}'}
+  local rec_gen con_gen declared_retry kind base root abs decl failed named
+  local computed reason declared_d declared_reason='' final final_reason
+
+  rec_gen=$(printf '%s' "$record" | jq -r '.predicate_generation // ""' 2>/dev/null) || rec_gen=
+  con_gen=$(printf '%s' "$contract" | jq -r '.executable_predicate.predicate_generation // ""' 2>/dev/null) || con_gen=
+
+  if [ -z "$rec_gen" ]; then
+    computed=unknown
+    reason="the adverse record names no predicate generation, so whether the material predicate it failed has since changed could not be observed; an unobserved change is never a permission to spend another invocation"
+  elif [ -z "$con_gen" ]; then
+    computed=unknown
+    reason="the contract declares no predicate generation in force, so the generation the adverse record was graded by (${rec_gen:0:16}) could not be compared against it"
+  elif [ "$rec_gen" = "$con_gen" ]; then
+    computed=not-permitted
+    reason="the material predicate this binding was graded by is the one still in force (${rec_gen:0:16}), so the adverse observation stands whatever the contract version now reads"
+  else
+    kind=$(printf '%s' "$contract" | jq -r '.executable_predicate.kind // ""' 2>/dev/null) || kind=
+    base=$(printf '%s' "$record" | jq -r '.fixture.manifest_digest // ""' 2>/dev/null) || base=
+    root=$(printf '%s' "$contract" | jq -r '.executable_predicate.root // ""' 2>/dev/null) || root=
+    if [ "$kind" != fixture_oracle ]; then
+      computed=permitted
+      reason="the material predicate moved from ${rec_gen:0:16} to ${con_gen:0:16}, and this predicate kind carries no generation manifest that could declare it unchanged, so re-qualification is lawful"
+    elif [ -z "$base" ]; then
+      computed=unknown
+      reason="the material predicate moved from ${rec_gen:0:16} to ${con_gen:0:16}, and the adverse record names no base manifest, so whether the new generation carried its failed predicates forward could not be observed"
+    elif ! abs=$(fm_qualification_resolve_target "$root"); then
+      computed=unknown
+      reason="the material predicate moved and the package root could not be resolved ($abs), so whether the new generation carried this binding's failed predicates forward could not be observed"
+    elif [ ! -f "$abs/MANIFEST.json" ] || ! decl=$(jq -c --arg b "$base" \
+           '.predicates_unchanged_from[$b] // null' "$abs/MANIFEST.json" 2>/dev/null); then
+      computed=unknown
+      reason="the material predicate moved from ${rec_gen:0:16} to ${con_gen:0:16}, and the generation manifest now in force could not be read, so whether it carried this binding's failed predicates forward could not be observed"
+    elif [ "$decl" = null ]; then
+      computed=permitted
+      reason="the material predicate moved from ${rec_gen:0:16} to ${con_gen:0:16} and the generation now in force declares nothing carried forward unchanged from ${base:0:16}, so the predicate this binding failed materially changed and re-qualification is lawful"
+    elif [ "$(printf '%s' "$decl" | jq -r 'type' 2>/dev/null)" != array ]; then
+      computed=unknown
+      reason="the generation now in force declares a carry-forward from ${base:0:16} that is not a list of claim ids, so whether this binding's failed predicates are among them could not be observed"
+    else
+      failed=$(printf '%s' "$record" | jq -c '.failed_predicates // null' 2>/dev/null) || failed=null
+      named=$(printf '%s' "$failed" | jq -r 'if type == "array" then length else 0 end' 2>/dev/null) || named=0
+      if [ "${named:-0}" -eq 0 ]; then
+        computed=unknown
+        reason="the generation now in force declares predicates carried forward unchanged from ${base:0:16}, and the adverse record names no failed predicate, so whether the claims this binding failed are among them could not be observed"
+      elif [ "$(jq -n --argjson f "$failed" --argjson d "$decl" \
+                 'all($f[]; . as $c | ($d | index($c)) != null)' 2>/dev/null)" = true ]; then
+        computed=not-permitted
+        reason="every predicate this binding failed ($(printf '%s' "$failed" | jq -r 'join(", ")')) is declared unchanged from ${base:0:16} by the generation now in force, so the adverse observation carries over to it"
+      else
+        computed=permitted
+        reason="at least one predicate this binding failed ($(printf '%s' "$failed" | jq -r 'join(", ")')) is not declared unchanged by the generation now in force, so it materially changed and re-qualification is lawful"
+      fi
+    fi
+  fi
+
+  declared_retry=$(printf '%s' "$record" | jq -r '.disposition.retry // ""' 2>/dev/null) || declared_retry=
+  case "$declared_retry" in
+    ''|permitted) declared_d=permitted ;;
+    not-permitted-unchanged-predicate)
+      declared_d=not-permitted
+      declared_reason="the record carries a durable do-not-retry disposition: $(printf '%s' "$record" | jq -r '.disposition.reason // "no reason recorded"' 2>/dev/null) (authority: $(printf '%s' "$record" | jq -r '.disposition.authority // "none recorded"' 2>/dev/null))" ;;
+    *)
+      declared_d=unknown
+      declared_reason="the record's declared retry disposition \"$declared_retry\" is not one of the two registered values, so what it meant could not be read" ;;
+  esac
+
+  # Strictest wins, and only ever in that direction.
+  final=$computed
+  final_reason=$reason
+  if [ "$declared_d" = not-permitted ] && [ "$final" != not-permitted ]; then
+    final=not-permitted
+    final_reason=$declared_reason
+  elif [ "$declared_d" = unknown ] && [ "$final" = permitted ]; then
+    final=unknown
+    final_reason=$declared_reason
+  fi
+  printf '%s\x1f%s\n' "$final" "$final_reason"
 }
 
 # ---------------------------------------------------------------------------
@@ -724,8 +911,13 @@ EOF
     if [ "$(printf '%s' "$near" | jq -r 'length')" != 0 ]; then
       reason="$reason for harness ${harness:-any} at native effort ${effort:-any}; $(printf '%s' "$near" | jq -r '[.[] | .record + " (harness " + .harness + ", effort " + .native_effort + ", " + .result + ")"] | join("; ")') observes a different tuple, which is a different thing and not a stale version of this one"
     fi
+    # No record at all means nothing adverse was ever observed against this
+    # tuple, so nothing withholds a first qualification of it. Applicability is
+    # null rather than CURRENT: there is no observation whose currency to report.
     fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
-      QUALIFICATION_REQUIRED "$reason" '' "$recorded" '[]' "$near"
+      QUALIFICATION_REQUIRED "$reason" '' "$recorded" '[]' "$near" null \
+      "$(fm_qualification_separated '' permitted \
+         "no adverse observation stands against this tuple, so nothing withholds a bounded qualification of it")"
     return 0
   fi
 
@@ -742,6 +934,28 @@ EOF
 
   obs=$(fm_qualification_dependency_observations "$record" "$contract") || obs='[]'
   verdict=$(fm_qualification_freshness_verdict "$obs")
+
+  # The two separated facts, computed from the same record and never from the
+  # state below. Applicability moves with the declared dependencies; the retry
+  # disposition moves only with the material predicate, and only an ADVERSE
+  # observation can withhold one - a stale pass stays retryable or it would be
+  # frozen forever.
+  local applicability retry_disposition='' retry_reason='' separated
+  applicability=$(fm_qualification_applicability "$verdict")
+  if [ "$recorded" = FAILED ]; then
+    IFS=$'\x1f' read -r retry_disposition retry_reason <<EOF3
+$(fm_qualification_retry_disposition "$record" "$contract")
+EOF3
+    # The adverse record is named HERE rather than inside the ladder, so every
+    # branch of it - and every reader downstream, including the route merge that
+    # carries only this sentence - is told which observation is doing the
+    # withholding.
+    retry_reason="record $record_id observed this binding FAILED, and $retry_reason"
+  else
+    retry_disposition=permitted
+    retry_reason="record $record_id records $recorded, which is not an adverse observation, so nothing withholds another qualification of this tuple"
+  fi
+  separated=$(fm_qualification_separated "$applicability" "${retry_disposition:-unknown}" "$retry_reason")
 
   # A contract that requires adjudication is not satisfied by a predicate result
   # alone, however good it was. This is the one place where a self-declared pass
@@ -763,9 +977,13 @@ EOF
       reason="record $record_id records $recorded: $(printf '%s' "$record" | jq -r '.result_evidence')" ;;
     FAILED)
       if [ "$verdict" = changed ]; then
+        # The state reopens because the observation no longer applies. Whether
+        # another invocation is PERMITTED is the separate axis above, and it is
+        # what governs activation - so a contract version bump alone moves this
+        # line without ever making the binding activatable again.
         state=QUALIFICATION_REQUIRED
         excluded='"prior-failed-superseded-by-material-change"'
-        reason="record $record_id excluded this binding, and a declared material dependency has since changed ($(printf '%s' "$obs" | jq -r '[.[] | select(.observation == "changed") | .detail] | join("; ")')), so the exclusion no longer applies and re-qualification is lawful; the FAILED record is retained rather than removed"
+        reason="record $record_id excluded this binding, and a declared material dependency has since changed ($(printf '%s' "$obs" | jq -r '[.[] | select(.observation == "changed") | .detail] | join("; ")')), so the exclusion no longer applies; the FAILED record is retained rather than removed, and whether re-qualification may be spent is the retry disposition (${retry_disposition:-unknown}): $retry_reason"
       else
         state=FAILED
         excluded='"failed"'
@@ -795,19 +1013,40 @@ EOF
   esac
 
   fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
-    "$state" "$reason" "$record_id" "$recorded" "$obs" "$near" "$excluded"
+    "$state" "$reason" "$record_id" "$recorded" "$obs" "$near" "$excluded" "$separated"
+}
+
+# fm_qualification_separated <applicability|""> <retry-disposition> <retry-reason>
+# The two facts the five-value state deliberately does not carry, in the one
+# shape the renderer takes. Built here rather than inline at each call site so a
+# caller cannot emit half of a separated fact.
+fm_qualification_separated() {
+  command -v jq >/dev/null 2>&1 || { printf 'null\n'; return 0; }
+  jq -n -c --arg a "${1:-}" --arg d "${2:-unknown}" --arg r "${3:-}" \
+    '{applicability:(if $a == "" then null else $a end),
+      retry_disposition:$d, retry_reason:$r}'
 }
 
 # The one renderer, so every caller reads the same shape.
+#
+# The separated default is deliberately the SAFE one: an early return that could
+# not read the register reports `unknown`, never `permitted`. Every such return
+# is a path on which whether an adverse observation stands could not be
+# established, and defaulting the other way would let an unreadable register
+# authorize the invocation a readable one refuses.
 fm_qualification_state_record() {
   # <contract> <model> <harness> <effort> <state> <reason> <record-id>
   # <recorded-result> <observations-json> <near-json> [<excluded-json>]
+  # [<separated-json>]
   local contract=$1 model=$2 harness=$3 effort=$4 state=$5 reason=$6
   local record=$7 recorded=$8 obs=${9:-'[]'} near=${10:-'[]'} excluded=${11:-null}
+  local separated=${12:-}
   if ! command -v jq >/dev/null 2>&1; then
     printf '{"schema":"%s","state":"COULD_NOT_OBSERVE"}\n' "$FM_QUALIFICATION_STATE_SCHEMA"
     return 0
   fi
+  [ -n "$separated" ] || separated=$(fm_qualification_separated '' unknown \
+    "the register could not be read for this tuple, so whether an adverse observation withholds another invocation could not be observed")
   jq -n -c \
     --arg schema "$FM_QUALIFICATION_STATE_SCHEMA" \
     --arg contract "$contract" --arg model "$model" \
@@ -816,12 +1055,16 @@ fm_qualification_state_record() {
     --arg record "$record" --arg recorded "$recorded" \
     --argjson obs "${obs:-[]}" --argjson near "${near:-[]}" \
     --argjson excluded "${excluded:-null}" \
+    --argjson separated "$separated" \
     '{schema:$schema, contract:$contract, model:$model,
       harness:(if $harness == "" then null else $harness end),
       native_effort:(if $effort == "" then null else $effort end),
       state:$state, reason:$reason,
       record:(if $record == "" then null else $record end),
       recorded_result:(if $recorded == "" then null else $recorded end),
+      applicability:($separated.applicability // null),
+      retry_disposition:($separated.retry_disposition // "unknown"),
+      retry_reason:($separated.retry_reason // ""),
       dependencies:$obs, near_miss:$near, excluded_by:$excluded}'
 }
 
@@ -997,7 +1240,11 @@ fm_qualification_cost_rank() {  # <model>
 # fm_qualification_route_lines <config-file> <floor-id> <route-id> <harness> <native-effort> <subject-model> <models...>
 # The merge lines bin/fm-route-lib.sh consumes, one per model:
 #
-#   <model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><evidence>
+#   <model><TAB><state><TAB><contracts><TAB><cost-rank><TAB><retry><TAB><applicability><TAB><evidence>
+#
+# Evidence stays LAST because it is the only free-text field; every typed field
+# is positional ahead of it, so adding one never depends on what the prose
+# happens to contain.
 #
 # Prints nothing and exits 1 when the floor declares no capability requirement,
 # which is the inert path. Exits 2 when the declaration itself is malformed, so
@@ -1007,6 +1254,12 @@ fm_qualification_cost_rank() {  # <model>
 # by the same ranking the freshness fold uses: FAILED beats COULD_NOT_OBSERVE
 # beats QUALIFICATION_STALE beats QUALIFICATION_REQUIRED beats QUALIFIED. A
 # candidate qualified as maker and unqualified as reviewer is not half eligible.
+#
+# THE RETRY DISPOSITION FOLDS INDEPENDENTLY, over the same contracts, because it
+# is a separate axis: a candidate whose weakest state comes from one contract may
+# be the one whose retry another contract refuses, and reporting only the
+# disposition that happened to accompany the weakest state would lose that. Same
+# direction as every fold here - the strictest answer wins.
 fm_qualification_route_lines() {
   local file=$1 floor=$2 route=$3 dispatch_harness=$4 dispatch_effort=$5 subject_model=$6
   shift 6
@@ -1014,6 +1267,8 @@ fm_qualification_route_lines() {
   contracts=$(fm_qualification_floor_contracts "$file" "$floor") || rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   local model contract state st worst worst_rank rank evidence names harness effort
+  local retry retry_worst retry_rank retry_worst_rank retry_evidence
+  local applicability applicability_worst
   names=$(printf '%s' "$contracts" | tr '\n' ',' | sed 's/,$//')
   for model in "$@"; do
     [ -n "$model" ] || continue
@@ -1032,6 +1287,10 @@ EOF2
     worst=QUALIFIED
     worst_rank=0
     evidence=
+    retry_worst=permitted
+    retry_worst_rank=0
+    retry_evidence=
+    applicability_worst=
     while IFS= read -r contract; do
       [ -n "$contract" ] || continue
       state=$(fm_qualification_state "$contract" "$model" "$harness" "$effort")
@@ -1048,12 +1307,33 @@ EOF2
         worst_rank=$rank
         worst=$st
         evidence=$(printf '%s' "$state" | jq -r '.reason' 2>/dev/null | tr '\n\t' '  ')
+        applicability_worst=$(printf '%s' "$state" | jq -r '.applicability // ""' 2>/dev/null)
+      fi
+      retry=$(printf '%s' "$state" | jq -r '.retry_disposition // "unknown"' 2>/dev/null)
+      case "$retry" in
+        permitted) retry_rank=0 ;;
+        unknown) retry_rank=1 ;;
+        not-permitted) retry_rank=2 ;;
+        *) retry_rank=1; retry=unknown ;;
+      esac
+      if [ "$retry_rank" -gt "$retry_worst_rank" ]; then
+        retry_worst_rank=$retry_rank
+        retry_worst=$retry
+        # The refusal a reader acts on must name the contract it came from, or a
+        # candidate refused on one of several contracts is refused anonymously.
+        retry_evidence="$contract: $(printf '%s' "$state" | jq -r '.retry_reason // ""' 2>/dev/null | tr '\n\t' '  ')"
       fi
     done <<EOF
 $contracts
 EOF
     [ -n "$evidence" ] || evidence="every declared capability contract ($names) is qualified for this binding"
-    printf '%s\t%s\t%s\t%s\t%s\n' "$model" "$worst" "$names" "$(fm_qualification_cost_rank "$model")" "$evidence"
+    # Both facts reach the reader, because the weakest STATE and the withheld
+    # RETRY can come from different contracts on the same candidate. Replacing
+    # one with the other would report a candidate excluded on contract A with
+    # the reason contract B refuses to re-run it.
+    [ "$retry_worst" = permitted ] || evidence="$evidence · retry $retry_worst - $retry_evidence"
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$model" "$worst" "$names" \
+      "$(fm_qualification_cost_rank "$model")" "$retry_worst" "$applicability_worst" "$evidence"
   done
   return 0
 }

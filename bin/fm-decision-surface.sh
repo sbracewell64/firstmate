@@ -719,7 +719,7 @@ check_route_qualified() {
       ;;
     QUALIFICATION_COULD_NOT_OBSERVE)
       verdict contradicted "route-qualified $TARGET" \
-        "whether any candidate holds the required capability could not be observed · escalation $escalation · repair the observation; nothing adverse was established about any binding"
+        "whether any candidate holds the required capability, or whether a binding already observed to fail it may be tried again, could not be observed · escalation $escalation · repair the register; no new adverse finding was established about any binding"
       ;;
     AWAITING_AVAILABILITY)
       verdict contradicted "route-qualified $TARGET" \

@@ -23,6 +23,13 @@
 #      challenge and exact-change review are separate capabilities that must each
 #      be held; and a contract that names a vendor is refused, because a contract
 #      that names who does the job cannot be re-run against the next candidate.
+#   5. GENERATION CONSERVATION. What was observed, whether it still applies, and
+#      whether another invocation is permitted are three facts. A contract
+#      generation bump moves the second and must never move the first, so a known
+#      exact FAILED binding is not reopened as activatable by a version change
+#      alone. The measured defect was the reverse: every FAILED record read
+#      QUALIFICATION_REQUIRED under a bumped contract, which is the only
+#      classification `activate` accepts.
 #
 # Every check that can be vacuous runs a negative control FIRST and must be
 # observed red there, so a pass on the real register is evidence the check fires.
@@ -67,6 +74,14 @@ printf 'this byte is not a declared dependency of anything\n' > "$UNRELATED"
 
 dep_digest() { sha256sum "$DEP_FILE" | awk '{print $1}'; }
 
+# Two material predicate generations, and the base manifest digest the fixture
+# record carries. They are opaque digests on purpose: nothing here derives one,
+# because deriving it would need fixture-internal knowledge this register
+# deliberately does not have.
+PRED_GEN_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+PRED_GEN_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+BASE_MANIFEST=0000000000000000000000000000000000000000000000000000000000000000
+
 qual() {
   FM_HOME="$HOME_DIR" \
   FM_CONFIG_OVERRIDE="$HOME_DIR/config" \
@@ -79,11 +94,17 @@ qual() {
 }
 
 # write_contract <id> <role> <risk> <axis> <adjudication-required> [adjudicator]
+# CONTRACT_PREDICATE_GENERATION, when set, is the material predicate generation
+# this contract declares in force. Left empty it is absent, which is what every
+# contract shipped before this field existed looks like.
 write_contract() {
   local id=$1 role=$2 risk=$3 axis=$4 adj=$5 adjc=${6:-job-adjudicator}
   local adj_block='{"required": false, "why_not": "the oracle grades the candidate from outside it"}'
   local required_dependencies='["file_digest", "contract_version"]'
+  local generation=''
   [ "$id" != job-adjudicator ] || required_dependencies='["contract_version"]'
+  [ -z "${CONTRACT_PREDICATE_GENERATION:-}" ] \
+    || generation=$(printf ',\n    "predicate_generation": "%s"' "$CONTRACT_PREDICATE_GENERATION")
   [ "$adj" != yes ] || adj_block=$(printf '{"required": true, "adjudicator_contract": "%s", "independence_dimensions": ["binding"]}' "$adjc")
   cat > "$CDIR/$id.json" <<JSON
 {
@@ -105,7 +126,7 @@ write_contract() {
     "integrity": "verify-integrity.sh",
     "setup": "setup.sh job",
     "verify": "verify.sh job",
-    "controls": "run-controls.sh"
+    "controls": "run-controls.sh"$generation
   },
   "adjudication": $adj_block,
   "required_freshness_dependencies": $required_dependencies
@@ -154,7 +175,8 @@ write_record() {
 JSON
 }
 
-reset_register() {
+reset_register() {  # [<contract-predicate-generation>]
+  CONTRACT_PREDICATE_GENERATION=${1:-}
   rm -f "$RDIR"/*.json "$CDIR"/*.json
   write_contract job-maker JOB_MAKER job-risk-v1 maker_qualification yes
   write_contract job-adjudicator JOB_ADJUDICATOR job-evidence-v1 exact_change_review no
@@ -175,6 +197,23 @@ state_rc() {  # <contract> <model>
   local rc=0
   qual state --contract "$1" --model "$2" --json >/dev/null 2>&1 || rc=$?
   printf '%s\n' "$rc"
+}
+
+# The two facts the five-value state deliberately does not carry.
+retry_of() {  # <contract> <model>
+  qual state --contract "$1" --model "$2" --json 2>/dev/null | jq -r '.retry_disposition'
+}
+
+applicability_of() {  # <contract> <model>
+  qual state --contract "$1" --model "$2" --json 2>/dev/null | jq -r '.applicability'
+}
+
+# A contract generation bump, and nothing else: the contract's own declared
+# version moves, which is precisely what installing a new contract generation
+# does to every record that pinned the old one.
+bump_contract_version() {  # <contract-id> <version>
+  local file="$CDIR/$1.json" tmp="$CDIR/.$1.tmp"
+  jq --arg v "$2" '.contract_version = $v' "$file" > "$tmp" && mv "$tmp" "$file"
 }
 
 # --- the five values ---------------------------------------------------------
@@ -280,7 +319,206 @@ test_a_failed_record_reopens_only_on_a_material_change() {
   [ "$(printf '%s' "$out" | jq -r '.excluded_by')" = prior-failed-superseded-by-material-change ] \
     || fail "the superseded exclusion was not carried on the record"
   assert_present "$RDIR/alpha-one-job.json" "the prior FAILED record was removed rather than retained"
+  # The state reopening is not the same fact as retry being permitted, and this
+  # record names no predicate generation - so whether the predicate it failed
+  # actually changed CANNOT BE OBSERVED. That is the honest default, and it is
+  # never `permitted`.
+  [ "$(printf '%s' "$out" | jq -r '.retry_disposition')" = unknown ] \
+    || fail "a record naming no predicate generation reported a retry disposition it could not observe"
   pass "a failed record reopens only on a material change"
+}
+
+# --- generation conservation and retry disposition ---------------------------
+#
+# THE MEASURED DEFECT, spelled as a case. Contract 1.2.0 was proposed while two
+# bindings held FAILED records against 1.1.0. Installing it turned both from
+# refused into automatically activatable, because FAILED is computed only while
+# every declared dependency is unchanged and a contract version IS a declared
+# dependency - so ANY version bump laundered every FAILED into
+# QUALIFICATION_REQUIRED, the one classification `activate` accepts.
+#
+# The repair is not a sixth state. What was OBSERVED, whether that observation
+# still APPLIES, and whether another invocation is PERMITTED are three separate
+# axes, and only the third governs activation.
+
+test_a_contract_generation_bump_alone_does_not_reopen_a_known_failed_binding() {
+  reset_register "$PRED_GEN_A"
+  write_record alpha-one-job \
+    '.result = "FAILED"
+     | .result_evidence = "the oracle rejected this candidate on the target-bound evidence claim"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["reported-success-without-target"]'
+  # Negative control FIRST: before the bump this reads FAILED and CURRENT, so a
+  # later not-permitted is the answer moving rather than a constant.
+  [ "$(state_of job-maker alpha/one)" = FAILED ] || fail "control: the record did not start FAILED"
+  [ "$(applicability_of job-maker alpha/one)" = CURRENT ] \
+    || fail "control: an unchanged record did not read CURRENT applicability"
+
+  bump_contract_version job-maker 1.1.0
+
+  local st
+  st=$(state_of job-maker alpha/one)
+  [ "$st" = QUALIFICATION_REQUIRED ] \
+    || fail "the five-value state changed shape under a bump; it read $st and the separation is supposed to leave it alone"
+  [ "$(applicability_of job-maker alpha/one)" = STALE ] \
+    || fail "applicability was not recomputed separately by the bump"
+  [ "$(retry_of job-maker alpha/one)" = not-permitted ] \
+    || fail "a contract version bump alone made a known failed binding retry-eligible; this is the exact laundering the generation-conservation law forbids"
+  assert_contains "$(qual state --contract job-maker --model alpha/one 2>&1)" \
+    "alpha-one-job" "the refusal did not name the adverse record it rests on"
+  pass "a contract generation bump alone does not reopen a known failed binding"
+}
+
+test_a_materially_changed_predicate_permits_retry() {
+  # The contract now grades by a DIFFERENT material predicate generation, and its
+  # manifest declares nothing carried forward. That absence IS the material
+  # -change predicate the captain's law requires before a retry is lawful.
+  reset_register "$PRED_GEN_B"
+  write_record alpha-one-job \
+    '.result = "FAILED"
+     | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["reported-success-without-target"]'
+  # Control: with the generations equal the same record is refused, so the
+  # permission below comes from the generation differing and not from the field
+  # merely being present.
+  local file="$CDIR/job-maker.json" tmp="$CDIR/.probe.tmp"
+  jq --arg g "$PRED_GEN_A" '.executable_predicate.predicate_generation = $g' "$file" > "$tmp" && mv "$tmp" "$file"
+  bump_contract_version job-maker 1.1.0
+  [ "$(retry_of job-maker alpha/one)" = not-permitted ] \
+    || fail "control: an unchanged predicate generation did not refuse the retry, so this case proves nothing"
+
+  jq --arg g "$PRED_GEN_B" '.executable_predicate.predicate_generation = $g' "$file" > "$tmp" && mv "$tmp" "$file"
+  [ "$(retry_of job-maker alpha/one)" = permitted ] \
+    || fail "a materially changed predicate did not permit re-qualification; the bounded search law allows exactly this"
+  pass "a materially changed predicate permits retry"
+}
+
+test_an_unrecorded_predicate_generation_is_unknown_and_never_permitted() {
+  reset_register "$PRED_GEN_A"
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"'
+  bump_contract_version job-maker 1.1.0
+  local rd
+  rd=$(retry_of job-maker alpha/one)
+  [ "$rd" != permitted ] \
+    || fail "an adverse record naming no predicate generation was read as retry-eligible"
+  [ "$rd" = unknown ] \
+    || fail "an unobservable retry disposition read $rd instead of unknown; could-not-observe is its own value"
+  # And the contract's own silence is the same kind of gap, from the other side.
+  reset_register
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"'
+  bump_contract_version job-maker 1.1.0
+  [ "$(retry_of job-maker alpha/one)" = unknown ] \
+    || fail "a contract declaring no predicate generation still answered whether a retry was permitted"
+  pass "an unrecorded predicate generation is unknown and never permitted"
+}
+
+test_a_generation_manifest_may_carry_a_failed_predicate_forward() {
+  reset_register "$PRED_GEN_B"
+  # The NEW generation declares, against the base manifest the adverse record was
+  # graded under, that the claim this binding failed is unchanged. The adverse
+  # observation therefore carries over even though the generation moved.
+  jq --arg base "$BASE_MANIFEST" \
+    '. + {predicates_unchanged_from: {($base): ["reported-success-without-target"]}}' \
+    <<< '{"package":"job-fixture","version":"2.0.0"}' > "$DEP_FILE"
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["reported-success-without-target"]'
+  bump_contract_version job-maker 1.1.0
+  [ "$(retry_of job-maker alpha/one)" = not-permitted ] \
+    || fail "a declared-unchanged failed predicate did not carry its adverse disposition into the new generation"
+
+  # The control in the other direction: a failed predicate the declaration does
+  # NOT name materially changed, so re-qualification is lawful again.
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["a-claim-the-new-generation-rewrote"]'
+  [ "$(retry_of job-maker alpha/one)" = permitted ] \
+    || fail "a failed predicate the new generation did not declare unchanged stayed refused"
+  pass "a generation manifest may carry a failed predicate forward"
+}
+
+test_a_declared_disposition_may_withhold_a_retry_and_never_grant_one() {
+  # A durable do-not-retry is representable, so refusing to re-run a known failed
+  # binding stops depending on firstmate remembering not to.
+  reset_register "$PRED_GEN_B"
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["a-claim-the-new-generation-rewrote"]'
+  bump_contract_version job-maker 1.1.0
+  [ "$(retry_of job-maker alpha/one)" = permitted ] \
+    || fail "control: the computation did not permit the retry, so the declaration below proves nothing"
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["a-claim-the-new-generation-rewrote"]
+     | .disposition = {"retry": "not-permitted-unchanged-predicate",
+                       "reason": "the ruling settled that this binding is not re-run for this contract",
+                       "authority": "data/runtime-review/ruling-deployment-boundary.md"}'
+  [ "$(retry_of job-maker alpha/one)" = not-permitted ] \
+    || fail "a durable do-not-retry declaration did not withhold the retry"
+
+  # The other direction must NOT work: a hand-written permit cannot reopen a
+  # binding the computation refuses, for the same reason a hand-written state
+  # cannot answer the question the interpreter computes.
+  reset_register "$PRED_GEN_A"
+  write_record alpha-one-job \
+    '.result = "FAILED" | .result_evidence = "the oracle rejected this candidate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["reported-success-without-target"]
+     | .disposition = {"retry": "permitted",
+                       "reason": "a note somebody wrote",
+                       "authority": "nobody in particular"}'
+  bump_contract_version job-maker 1.1.0
+  [ "$(retry_of job-maker alpha/one)" = not-permitted ] \
+    || fail "a hand-written permit laundered a computed refusal, which is exactly what a stored state must never be able to do"
+  pass "a declared disposition may withhold a retry and never grant one"
+}
+
+test_a_qualified_record_still_goes_stale_on_a_bump_and_stays_retryable() {
+  reset_register "$PRED_GEN_A"
+  write_record alpha-one-job '.predicate_generation = "'"$PRED_GEN_A"'"'
+  [ "$(state_of job-maker alpha/one)" = QUALIFIED ] || fail "control: the record did not start QUALIFIED"
+  bump_contract_version job-maker 1.1.0
+  [ "$(state_of job-maker alpha/one)" = QUALIFICATION_STALE ] \
+    || fail "a qualified record did not go stale on a bump exactly as it did before"
+  [ "$(applicability_of job-maker alpha/one)" = STALE ] || fail "the stale pass did not read STALE applicability"
+  # Nothing adverse was ever observed against this binding, so nothing withholds
+  # another invocation. Refusing here would freeze a stale pass forever.
+  [ "$(retry_of job-maker alpha/one)" = permitted ] \
+    || fail "a stale pass was refused a re-qualification; only an adverse observation may withhold one"
+  pass "a qualified record still goes stale on a bump and stays retryable"
+}
+
+test_reading_the_register_never_writes_to_it() {
+  reset_register "$PRED_GEN_A"
+  write_record alpha-one-job \
+    '.result = "FAILED" | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["reported-success-without-target"]'
+  local before after shipped_before shipped_after
+  before=$(find "$RDIR" "$CDIR" -type f -exec sha256sum {} + | sort)
+  shipped_before=$(find "$ROOT/qualifications" -type f -exec sha256sum {} + | sort)
+  # Negative control: the digest fold must be capable of noticing a change, or
+  # the comparison below is satisfied by a constant.
+  bump_contract_version job-maker 1.1.0
+  [ "$(find "$RDIR" "$CDIR" -type f -exec sha256sum {} + | sort)" != "$before" ] \
+    || fail "control: the digest fold did not notice a deliberate change, so it proves nothing"
+  before=$(find "$RDIR" "$CDIR" -type f -exec sha256sum {} + | sort)
+
+  qual state --contract job-maker --model alpha/one --json >/dev/null 2>&1 || true
+  qual records --json >/dev/null 2>&1 || true
+  qual validate >/dev/null 2>&1 || true
+  after=$(find "$RDIR" "$CDIR" -type f -exec sha256sum {} + | sort)
+  shipped_after=$(find "$ROOT/qualifications" -type f -exec sha256sum {} + | sort)
+  [ "$before" = "$after" ] || fail "reading the register rewrote a historical record"
+  [ "$shipped_before" = "$shipped_after" ] || fail "reading the register rewrote the shipped register"
+  pass "reading the register never writes to it"
 }
 
 test_a_predicate_pass_without_adjudication_is_qualification_required() {
@@ -396,7 +634,13 @@ test_record_admissibility_refuses_stored_state_synonyms_and_estimates() {
               'no-limitations:.known_limitations = []' \
               'no-dependencies:.freshness_dependencies = []' \
               'key-claim:.key = ["contract","model","harness","harness_version","native_effort"]' \
-              'score:.score = 7'; do
+              'score:.score = 7' \
+              'stored-retry:.retry_disposition = "permitted"' \
+              'stored-applicability:.applicability = "CURRENT"' \
+              'generation-not-a-digest:.predicate_generation = "v1.5.0"' \
+              'disposition-synonym:.disposition = {"retry":"no","reason":"r","authority":"a"}' \
+              'disposition-unattributed:.disposition = {"retry":"not-permitted-unchanged-predicate"}' \
+              'failed-predicates-not-claims:.failed_predicates = "reported-success-without-target"'; do
     write_record probe "${case#*:}"
     rc=0
     out=$(qual validate "$RDIR/probe.json" 2>&1) || rc=$?
@@ -622,6 +866,13 @@ test_a_changed_declared_dependency_makes_a_pass_stale_and_never_failed
 test_an_unrelated_byte_change_does_not_invalidate_a_record
 test_an_unobservable_dependency_is_could_not_observe_and_not_a_pass
 test_a_failed_record_reopens_only_on_a_material_change
+test_a_contract_generation_bump_alone_does_not_reopen_a_known_failed_binding
+test_a_materially_changed_predicate_permits_retry
+test_an_unrecorded_predicate_generation_is_unknown_and_never_permitted
+test_a_generation_manifest_may_carry_a_failed_predicate_forward
+test_a_declared_disposition_may_withhold_a_retry_and_never_grant_one
+test_a_qualified_record_still_goes_stale_on_a_bump_and_stays_retryable
+test_reading_the_register_never_writes_to_it
 test_a_predicate_pass_without_adjudication_is_qualification_required
 test_an_unqualified_adjudicator_pass_is_not_consumed
 test_a_different_harness_or_effort_is_a_near_miss_not_a_match

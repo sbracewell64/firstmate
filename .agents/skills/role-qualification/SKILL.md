@@ -52,6 +52,22 @@ Reporting any of them to the captain as "this model cannot do the work" is the f
 
 `FAILED` is the only state that excludes, and even that reopens on a directly evidenced material change to the binding, the harness, or the contract - with the adverse record retained rather than deleted.
 
+## The state is not the whole answer
+
+`state --json` returns two more facts, and the state does not imply either.
+`applicability` (`CURRENT` / `STALE` / `COULD_NOT_OBSERVE`) says whether the observation still applies.
+`retry_disposition` (`permitted` / `not-permitted` / `unknown`) says whether the binding may be invoked again, and it is the one that governs activation.
+
+| `retry_disposition` | what it means | what you do |
+|---|---|---|
+| `permitted` | nothing adverse stands, or the material predicate it failed demonstrably changed | qualify it as normal |
+| `not-permitted` | it failed a material predicate that has not changed | do not spend a workflow; the run would only re-observe a settled failure |
+| `unknown` | it failed, and whether that predicate changed could not be observed | repair the register - record the predicate generation - not the binding |
+
+A `QUALIFICATION_REQUIRED` state whose retry is withheld is **not** an invitation to qualify.
+That combination is exactly what a contract generation bump produces over a known failed binding, and treating it as missing evidence is what spends a model call re-observing a failure the register already holds.
+Never state that a binding "just needs qualifying" without reading its disposition; `zero-route` excludes such a candidate rather than offering it, and `activate` refuses it by name.
+
 ## The four zero-route classifications
 
 Only one of them is the captain's.
@@ -59,12 +75,13 @@ Only one of them is the captain's.
 | classification | action | escalates |
 |---|---|---|
 | `QUALIFICATION_REQUIRED` | activate one bounded workflow for the cheapest promising candidate | no |
-| `QUALIFICATION_COULD_NOT_OBSERVE` | repair the observation; record nothing against any binding | no |
+| `QUALIFICATION_COULD_NOT_OBSERVE` | repair the register; record nothing new against any binding | no |
 | `AWAITING_AVAILABILITY` | wait; the availability hold or capacity deferral owns it | no |
 | `NO_MODEL_CAN_SATISFY_ROUTE` | stop and report | **yes** |
 
 A candidate is **promising** only when its ONLY blocker is fixable qualification.
 One that also misses a floor axis is not made eligible by qualifying it, so a bounded workflow spent on it is wasted.
+Neither is one the register refuses to re-run: an excluded row carrying `qualification_retry_not_permitted` is settled and escalates like any other exclusion, while `qualification_retry_cno` is a gap to close in the register and never a captain matter.
 
 ## Running the bounded workflow
 

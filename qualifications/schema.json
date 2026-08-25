@@ -24,11 +24,49 @@
       "result COULD_NOT_OBSERVE -> COULD_NOT_OBSERVE, whatever the dependencies say",
       "result QUALIFICATION_REQUIRED -> QUALIFICATION_REQUIRED",
       "result FAILED with every declared dependency unchanged -> FAILED; the exclusion stands",
-      "result FAILED with a declared dependency materially changed -> QUALIFICATION_REQUIRED, with the prior FAILED record cited rather than removed; the bounded-search law permits re-qualifying a FAILED tuple only on a directly evidenced material change, and this is that change",
+      "result FAILED with a declared dependency materially changed -> QUALIFICATION_REQUIRED, with the prior FAILED record cited rather than removed. This line says the OBSERVATION no longer applies and says NOTHING about whether the binding may be invoked again; `separated_facts` below owns that, and reading this line as a permission is the defect that block was added to close",
       "result QUALIFIED with a declared dependency materially changed -> QUALIFICATION_STALE",
       "result QUALIFIED with a declared dependency unobservable -> COULD_NOT_OBSERVE",
       "result QUALIFIED with every declared dependency observed unchanged -> QUALIFIED"
     ]
+  },
+  "separated_facts": {
+    "_description": "The state above answers what was OBSERVED. Two more facts are computed from the same record and returned beside it, because reading the state as though it also answered them is a measured defect rather than a hypothetical one.",
+    "the_measured_defect": "Two bindings held FAILED records against contract 1.1.0. A 1.2.0 generation was proposed. Because `contract_version` is a declared freshness dependency, EVERY FAILED record then computed QUALIFICATION_REQUIRED - which is the only classification `activate` accepts. Installing a contract generation would therefore have turned two bindings that were tried and rejected into automatically activatable ones. No contract file could fix that: the collapse is in the computation, and the repair is to separate the axes rather than to add a sixth state.",
+    "applicability": {
+      "question": "Does the observation still apply to the generation in force?",
+      "values": {
+        "CURRENT": "every declared freshness dependency is observed unchanged",
+        "STALE": "a declared freshness dependency materially changed",
+        "COULD_NOT_OBSERVE": "a declared freshness dependency could not be read at all"
+      },
+      "computed_from": "the declared freshness dependencies alone, by exactly the fold the state uses. It is null when there is no record, because there is no observation whose currency to report.",
+      "three_values_not_two": "A dependency nobody could read leaves applicability unobserved, and narrowing that into either CURRENT or STALE would report a gap as one of the two answers it is not. Same rule as everywhere else in this fleet."
+    },
+    "retry_disposition": {
+      "question": "Is another invocation of this binding permitted?",
+      "values": {
+        "permitted": "nothing withholds one. Either no adverse observation stands against this tuple at all, or one does and the material predicate it failed has demonstrably changed.",
+        "not-permitted": "an adverse observation stands against this tuple under a material predicate that has not changed. The invocation would only re-observe a settled failure, so it is refused rather than spent.",
+        "unknown": "an adverse observation stands and whether its material predicate changed COULD NOT BE OBSERVED. It withholds the invocation exactly as `not-permitted` does, but the repair is to the REGISTER rather than to the binding, and no new finding is recorded against it."
+      },
+      "only_an_adverse_observation_withholds": "Computed only for a record whose result is FAILED. A stale pass, a missing record and a could-not-observe all leave the disposition `permitted`, because refusing there would freeze a stale qualification forever and would make a first qualification of any tuple impossible.",
+      "computation": [
+        "record carries no predicate_generation -> unknown. Which material predicate this binding failed was never recorded, so whether it has since changed cannot be observed. This is every record written before the field existed.",
+        "contract declares no executable_predicate.predicate_generation -> unknown, from the other side",
+        "the two generations are equal -> not-permitted. The predicate this binding was graded by is the one still in force, whatever the contract VERSION now reads. This is the rung that closes the defect above.",
+        "the generations differ and the predicate kind carries no generation manifest -> permitted",
+        "the generations differ and the generation in force declares no predicates_unchanged_from entry for the record's base manifest -> permitted",
+        "the generations differ, an entry exists, and every claim id in the record's failed_predicates appears in it -> not-permitted; the adverse observation is carried forward for claims the new generation declares unchanged",
+        "the generations differ, an entry exists, and at least one failed claim id is absent from it -> permitted; one changed claim it failed is enough, because the binding may now pass",
+        "the generations differ, an entry exists, and the record names no failed_predicates -> unknown; whether the claims it failed are among the carried-forward ones cannot be evaluated",
+        "a declared `disposition` on the record is then folded in, and may only make the answer STRICTER: not-permitted beats unknown beats permitted"
+      ],
+      "the_declaration_is_the_material_change_predicate": "Absence of a `predicates_unchanged_from` entry means the predicate materially changed, so a retry is permitted. That is the honest default the governing law allows only through an EXPLICIT material-change predicate, and the declaration is that predicate read in the negative: a new generation that says nothing about a base generation's claims has replaced them. Silence about which generation a record was graded by is a different thing entirely and is never a permission - it is `unknown`.",
+      "a_declared_disposition_never_grants": "A record may declare a durable do-not-retry so refusing a known failed binding stops depending on firstmate remembering to. It may only withhold. A hand-written `permitted` never overrides a computed refusal, for exactly the reason `refused_keys` exists: a claim anyone can write is one that will eventually be written wrongly, and this is the claim that spends a model call on a binding already known to fail."
+    },
+    "migration": "A record carrying neither `predicate_generation` nor `disposition` keeps its current five-value state semantics unchanged, and its retry disposition reads `unknown`. Nothing already recorded is rewritten, reinterpreted or invalidated: the historical adverse observation stands exactly as it was, and what changes is only that it is no longer read as a permission to re-run the binding.",
+    "who_refuses_on_it": "bin/fm-route-lib.sh keeps a candidate whose disposition is not `permitted` out of `promising` and reports it under its own blocker; bin/fm-qualification.sh activate refuses to spend a workflow on one; bin/fm-spawn.sh refuses the dispatch by name. Every one of them READS the disposition the interpreter computed and none re-derives it."
   },
   "unrelated_bytes_are_not_a_dependency": {
     "rule": "Freshness is computed ONLY from the dependencies a record declares. Nothing else invalidates it - not the repository head, not an unrelated tracked file, not a vendor or model label, not the passage of time unless the record declares a time bound.",
@@ -100,6 +138,7 @@
       "required_freshness_dependencies": "array of freshness_dependency_kinds keys a record on this contract MUST declare. A record missing one is INADMISSIBLE.",
       "note": "free prose for a reader; never consumed"
     },
+    "predicate_generation_is_declared_on_the_predicate": "`executable_predicate.predicate_generation` is the sha256 digest of the MATERIAL predicate in force: the oracle program plus the candidate-visible claims package, and NOT the contract version and NOT the whole manifest. It is deliberately narrower than either, because a contract version moves for editorial reasons and a manifest digest moves when any packaged byte does, while the question it answers is whether the thing a candidate was graded against actually changed. It is optional: a contract declaring none leaves every adverse record's retry disposition `unknown`, which withholds a re-run rather than authorizing one.",
     "vendor_neutrality": {
       "rule": "A contract names a JOB, never who does it. The keys models, bindings, binding, providers, provider, vendors, vendor, harnesses, harness, and model are REFUSED outright, and no string value anywhere in a contract may equal a model or provider this home's routing config configures.",
       "why": "The ruling's load-bearing sentence is that model names are bindings to capability contracts and not the contracts themselves. A contract that names a vendor is doctrine dressed as a predicate: it stops being re-runnable against the next candidate, which is the entire point of qualifying one.",
@@ -128,6 +167,9 @@
       "fixture": "fixture object: identity, version, manifest_digest. Required in effect by a fixture_oracle predicate.",
       "evidence": "array of paths or URLs POINTING AT retained raw evidence. Never the evidence itself.",
       "supersedes": "id of a record this one replaces for the same tuple. The superseded record is retained, because deleting an adverse observation is how a register launders a failure.",
+      "predicate_generation": "sha256 digest of the MATERIAL predicate this observation was graded by, matching the contract's executable_predicate.predicate_generation at the time. It is what lets a later generation tell an observation it superseded from one it did not. Absent means unrecorded, which the interpreter reads as could-not-observe and never as a permission to re-run the binding.",
+      "failed_predicates": "non-empty array of the claim ids the predicate rejected, for a record whose result is FAILED. A later generation can only carry an adverse observation forward for claims it can NAME, so a record that names none cannot be evaluated against a carry-forward declaration.",
+      "disposition": "durable retry disposition object: `retry` (exactly `permitted` or `not-permitted-unchanged-predicate`), `reason` (one sentence), and `authority` (who settled it). This is the explicit do-not-retry representation, so refusing to re-run a known failed binding stops depending on firstmate remembering to. It may only ever make the computed disposition STRICTER; a declared `permitted` grants nothing.",
       "note": "free prose for a reader; never consumed"
     },
     "refused_keys": [
@@ -143,9 +185,11 @@
       "score",
       "reputation",
       "rank",
-      "verdict"
+      "verdict",
+      "applicability",
+      "retry_disposition"
     ],
-    "refused_keys_why": "A hand-written state must not be able to answer the question the interpreter computes. The interpreter refuses a record carrying any of these outright rather than ignoring them, because an ignored field still reads to a human as the answer. `score` and `rank` are refused for a second reason: scoring a handful of bindings on several axes from a bounded suite manufactures precision the evidence cannot support, and pass-or-fail against a contract is the honest granularity."
+    "refused_keys_why": "A hand-written state must not be able to answer the question the interpreter computes. The interpreter refuses a record carrying any of these outright rather than ignoring them, because an ignored field still reads to a human as the answer. `score` and `rank` are refused for a second reason: scoring a handful of bindings on several axes from a bounded suite manufactures precision the evidence cannot support, and pass-or-fail against a contract is the honest granularity. `applicability` and `retry_disposition` are refused for the FIRST reason and are the two separated facts above: `disposition` is admitted alongside them because it is a declared INPUT that may only withhold, while `retry_disposition` is the computed ANSWER and a record asserting it would be asserting whether it is worth re-running itself."
   },
   "adjudication": {
     "_description": "Declared on a contract, and recorded on a record.",
@@ -177,7 +221,13 @@
         "verify": "package-relative command that grades it and prints the result",
         "controls": "package-relative command that proves the oracle is red-capable"
       },
-      "absent_package_is_could_not_observe": "The package may live in a home's gitignored data/, so a tracked contract can name one this checkout does not have. That is COULD_NOT_OBSERVE - the predicate could not run - and never a pass and never a failure."
+      "absent_package_is_could_not_observe": "The package may live in a home's gitignored data/, so a tracked contract can name one this checkout does not have. That is COULD_NOT_OBSERVE - the predicate could not run - and never a pass and never a failure.",
+      "generation_manifest": {
+        "where": "MANIFEST.json under the declared `root`, which is the same file `manifest_digest` already pins. No second location and no new declaration: the manifest is already the package's identity, so making it the carrier costs a contract nothing.",
+        "predicates_unchanged_from": "OPTIONAL object mapping a BASE manifest digest to the array of claim ids this generation declares materially unchanged from it. A record graded under that base digest whose every failed claim id appears in the array keeps its adverse retry disposition in this generation.",
+        "why_the_absence_is_the_default": "A generation that declares nothing about a base generation's claims has replaced them, so retry is permitted. Requiring an explicit `predicates_changed` list instead would make forgetting to write one silently freeze a binding out forever, which is the failure this register is least able to notice. Forgetting the carry-forward list has the opposite failure - one re-run of a binding that would have failed again - and that one is bounded, visible and cheap.",
+        "reading_it_is_could_not_observe_when_the_package_is_absent": "Same rule as the predicate itself. An absent or unreadable manifest leaves the disposition `unknown`, which withholds the invocation; it is never read as an absent declaration, because those are different facts."
+      }
     },
     "declared_deterministic": {
       "description": "The predicate is a named executable check inside this repository that needs no candidate at all.",
@@ -241,11 +291,12 @@
     "why_this_gate_does_not_fail_open": "The quota gate deliberately fails toward dispatch because an unobserved quota can only ever REMOVE a candidate the policy already admitted. This one is the opposite shape: it is the requirement itself, so failing to observe it would admit a candidate on no evidence, which is the exact substitution the ruling forbids.",
     "zero_route_classification": {
       "_description": "When a route has no eligible candidate, the answer is not one fact. bin/fm-route-lib.sh classifies it deterministically from the per-candidate blocker sets, and only one classification escalates.",
-      "QUALIFICATION_REQUIRED": "At least one candidate is blocked SOLELY by missing or stale qualification. Engineering state: one bounded qualification workflow is activated for the cheapest promising candidate. Escalation NONE.",
-      "QUALIFICATION_COULD_NOT_OBSERVE": "No candidate is fixable by qualifying it, but at least one is blocked solely because its qualification could not be observed. Nonterminal: the repair is to the observation. Escalation NONE, and no negative is recorded against any binding.",
+      "QUALIFICATION_REQUIRED": "At least one candidate is blocked SOLELY by missing or stale qualification WHOSE RETRY IS PERMITTED. Engineering state: one bounded qualification workflow is activated for the cheapest promising candidate. Escalation NONE.",
+      "QUALIFICATION_COULD_NOT_OBSERVE": "No candidate is fixable by qualifying it, but at least one is blocked solely because its qualification, or its retry disposition, could not be observed. Nonterminal: the repair is to the register. Escalation NONE, and no new negative is recorded against any binding.",
       "AWAITING_AVAILABILITY": "Every remaining candidate is blocked only by an availability hold or spent capacity. A wait, owned by the existing availability and capacity-deferral paths. Escalation NONE.",
-      "NO_MODEL_CAN_SATISFY_ROUTE": "Every candidate is excluded by something qualifying it cannot fix: a floor axis it does not meet, a model-registry refusal, or a FAILED qualification whose dependencies have not changed. Escalation CAPTAIN_EXCEPTION_REQUIRED.",
-      "the_one_thing_this_must_never_do": "Missing qualification alone must never produce CAPTAIN_EXCEPTION_REQUIRED. That is the recurrence this whole register exists to close, and tests/fm-route-qualification.test.sh pins it with a mutation control."
+      "NO_MODEL_CAN_SATISFY_ROUTE": "Every candidate is excluded by something qualifying it cannot fix: a floor axis it does not meet, a model-registry refusal, a FAILED qualification whose dependencies have not changed, or a retry the register refuses because the material predicate the binding failed has not changed. Escalation CAPTAIN_EXCEPTION_REQUIRED.",
+      "the_one_thing_this_must_never_do": "Missing qualification alone must never produce CAPTAIN_EXCEPTION_REQUIRED. That is the recurrence this whole register exists to close, and tests/fm-route-qualification.test.sh pins it with a mutation control.",
+      "the_second_thing_this_must_never_do": "A candidate whose retry disposition is not `permitted` must never appear as promising. It is excluded as `qualification_retry_not_permitted`, which joins the escalating bucket exactly as a preserved FAILED record does, or as `qualification_retry_cno`, which joins the unobservable one. Collapsing the second into the first would report a gap in the register as a settled refusal of the binding, and collapsing either into `qualification_missing` is the defect that made a version bump reopen a known failure."
     },
     "cheapest_promising_ordering": "Promising candidates are ordered by recorded price ascending, then by pool position. A candidate whose price cannot be observed sorts LAST rather than first: unmeasured cost must never read as cheap, which is the same rule the model registry already applies to an unclassified provider."
   },

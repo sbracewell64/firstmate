@@ -23,6 +23,13 @@
 #   fm-qualification.sh state --contract <id> --model <name>
 #                            [--harness <name>] [--effort <band>] [--json]
 #       The state for one tuple. Exit status is the answer (below).
+#       --json also carries the two SEPARATED facts the state deliberately does
+#       not answer: `applicability` (CURRENT / STALE / COULD_NOT_OBSERVE) and
+#       `retry_disposition` (permitted / not-permitted / unknown). The exit
+#       status stays the state's, because that is what a caller ignoring stdout
+#       is entitled to act on; a disposition is a reason to READ before spending
+#       an invocation, and callers that spend one - `activate` and the spawn
+#       chokepoint - refuse on it themselves.
 #   fm-qualification.sh validate [<file>...]
 #       Contract and record admissibility. Exit 1 when anything is inadmissible.
 #   fm-qualification.sh reviewer --maker <model> --reviewer <model>
@@ -34,7 +41,9 @@
 #                               [--harness <name>] [--effort <band>] [--json]
 #       Create or reuse ONE bounded qualification workflow for the cheapest
 #       promising candidate on a zero route. Refuses any classification other
-#       than QUALIFICATION_REQUIRED.
+#       than QUALIFICATION_REQUIRED, and refuses a candidate whose retry
+#       disposition is not `permitted` - a binding observed to fail a material
+#       predicate that has not changed is not re-run to re-observe it.
 #   fm-qualification.sh activations [--json]
 #       Every activation record and whether it is still active.
 #   fm-qualification.sh dispatch <activation-id> [--dry-run]
@@ -469,6 +478,15 @@ activation_field() {  # <file> <key>
   awk -F= -v k="$2" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$1"
 }
 
+# The material predicate generation a contract declares in force, or empty when
+# it declares none. Empty is a real answer here and not a failure: a contract
+# written before the field existed declares nothing, and the register reads that
+# as could-not-observe rather than inventing a generation for it.
+contract_predicate_generation() {  # <contract-id>
+  fm_qualification_contract "$1" 2>/dev/null \
+    | jq -r '.executable_predicate.predicate_generation // ""' 2>/dev/null || printf ''
+}
+
 # Is another workflow for this pair already live? Three independent sources, and
 # ANY of them means already-active, and BOTH are derived rather than stored. The
 # first asks the backlog owner, which holds the workflow's only liveness fact; the
@@ -566,6 +584,20 @@ cmd_activate() {
       printf 'fm-qualification: route %s is waiting on availability or capacity, which the existing availability and deferral owners handle; qualification is not what is blocking it\n' "$ROUTE" >&2
       return "$EXIT_REQUIRED" ;;
     *)
+      # A route left with nothing to qualify BECAUSE a known adverse observation
+      # withholds the retry is a different report from one whose candidates
+      # simply miss a floor axis, and it must name the record doing the
+      # withholding - otherwise the operator's only recourse is to guess which
+      # binding is settled and which is merely unqualified.
+      local refused
+      refused=$(printf '%s' "$zero" | jq -r '
+        [ .excluded[]? | select(.blockers == ["qualification_retry_not_permitted"])
+          | .model + ": " + .qualification_evidence ] | join("; ")' 2>/dev/null) || refused=
+      if [ -n "$refused" ]; then
+        printf 'fm-qualification: %s: route %s has no candidate a bounded workflow could qualify. %s. A binding observed to fail a material predicate that has not changed is not re-run to re-observe it; re-qualification becomes lawful only when the predicate itself materially changes\n' \
+          "$FM_QUAL_TOKEN_RETRY_REFUSED" "$ROUTE" "$refused" >&2
+        return "$EXIT_REFUSED"
+      fi
       printf 'fm-qualification: %s: route %s is classified %s, so no candidate can be made eligible by qualifying it\n' \
         "$FM_QUAL_TOKEN_NO_PROMISING" "$ROUTE" "$class" >&2
       return "$EXIT_REFUSED" ;;
@@ -577,6 +609,20 @@ cmd_activate() {
   model=$(printf '%s' "$zero" | jq -r '.promising[0].model // empty')
   contracts=$(printf '%s' "$zero" | jq -r '(.promising[0].contracts // []) | join(",")')
   cost=$(printf '%s' "$zero" | jq -r '.promising[0].cost_rank // "unobserved"')
+
+  # The classification owner already excludes a candidate whose retry is
+  # withheld, so this reads its answer rather than deriving a second one. It is
+  # here because this command is what SPENDS the invocation: the one place a
+  # withheld retry becoming a model call would be irreversible is the one place
+  # worth refusing at twice.
+  local promising_retry
+  promising_retry=$(printf '%s' "$zero" | jq -r '.promising[0].retry_disposition // "permitted"' 2>/dev/null) || promising_retry=
+  if [ -n "$model" ] && [ "${promising_retry:-permitted}" != permitted ]; then
+    printf 'fm-qualification: %s: route %s offered %s as promising while another invocation of it is %s - %s. A candidate whose retry is not permitted is never what a bounded workflow is spent on\n' \
+      "$FM_QUAL_TOKEN_RETRY_REFUSED" "$ROUTE" "$model" "$promising_retry" \
+      "$(printf '%s' "$zero" | jq -r '.promising[0].evidence // ""' 2>/dev/null)" >&2
+    return "$EXIT_REFUSED"
+  fi
   route_entries=$(qualification_route_entries 2>/dev/null) || {
     printf 'fm-qualification: the route owner could not project the configured routes, so no workflow may start\n' >&2
     return "$EXIT_UNOBSERVED"
@@ -723,6 +769,10 @@ EOF2
     printf 'execution_effort=%s\n' "$execution_effort"
     printf 'route=%s\n' "$ROUTE"
     printf 'floor=%s\n' "$(printf '%s' "$zero" | jq -r '.floor // ""')"
+    # The material predicate generation in force when this workflow opened, so an
+    # adverse outcome is attributable to what it was actually graded by rather
+    # than to whatever the contract reads by the time anyone looks.
+    printf 'predicate_generation=%s\n' "$(contract_predicate_generation "$contract")"
     printf 'cost_rank=%s\n' "$cost"
     printf 'blocks=%s\n' "$BLOCKS"
     printf 'attempt_budget=%s\n' "$BUDGET"
@@ -900,6 +950,22 @@ cmd_resolve() {
         QUALIFICATION_REQUIRED|QUALIFICATION_STALE) return "$EXIT_REQUIRED" ;;
         *) return "$EXIT_UNOBSERVED" ;;
       esac
+    fi
+    # An adverse outcome whose retry disposition cannot be observed is an
+    # exclusion that the next contract generation will read as missing evidence
+    # and re-spend a workflow on. This command may not repair it - what the
+    # record says is evidence somebody observed, never what this caller asserts -
+    # so it names the exact generation in force and what is missing from the
+    # record, at the one moment a reader is looking at that record anyway.
+    if [ "$RESULT" = FAILED ] \
+       && [ "$(printf '%s' "$computed" | jq -r '.retry_disposition // "unknown"' 2>/dev/null)" = unknown ]; then
+      local in_force
+      in_force=$(contract_predicate_generation "$contract")
+      printf 'fm-qualification: %s is recorded FAILED for %s against %s, and whether that binding may ever be re-run COULD NOT BE OBSERVED: %s. Record predicate_generation=%s on %s, with the claim ids it failed, or the next contract generation reads this exclusion as missing evidence and spends another workflow re-observing it\n' \
+        "$id" "$model" "$contract" \
+        "$(printf '%s' "$computed" | jq -r '.retry_reason // ""' 2>/dev/null)" \
+        "${in_force:-<the contract declares none; declare one first>}" \
+        "$(printf '%s' "$computed" | jq -r '.record // "the adverse record"' 2>/dev/null)" >&2
     fi
   fi
 

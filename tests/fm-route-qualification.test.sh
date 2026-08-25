@@ -143,8 +143,10 @@ JSON
 }
 
 write_contract() {  # <id> <role> <axis>
-  local adjudication=true
+  local adjudication=true generation=''
   [ "$1" != runtime-job-adjudicator ] || adjudication=false
+  [ -z "${CONTRACT_PREDICATE_GENERATION:-}" ] \
+    || generation=$(printf ',\n    "predicate_generation": "%s"' "$CONTRACT_PREDICATE_GENERATION")
   cat > "$CDIR/$1.json" <<JSON
 {
   "qualification_schema_version": 1,
@@ -159,7 +161,7 @@ write_contract() {  # <id> <role> <axis>
   "executable_predicate": {
     "kind": "declared_deterministic",
     "check": "bin/fm-qualification.sh",
-    "expect": "QUALIFIED"
+    "expect": "QUALIFIED"$generation
   },
   "adjudication": { "required": $adjudication, "adjudicator_contract": "runtime-job-adjudicator",
                     "independence_dimensions": ["binding"] },
@@ -348,7 +350,8 @@ run_spawn() {  # <home> <fakebin> <args...>
     "$SPAWN" "$@" 2>&1
 }
 
-reset_register() {
+reset_register() {  # [<contract-predicate-generation>]
+  CONTRACT_PREDICATE_GENERATION=${1:-}
   rm -f "$CDIR"/*.json "$RDIR"/*.json
   write_contract runtime-job-maker RUNTIME_JOB_MAKER maker_qualification
   write_contract runtime-job-design RUNTIME_JOB_DESIGNER design_challenge
@@ -656,6 +659,130 @@ test_no_model_can_satisfy_route_is_the_only_classification_that_escalates() {
   run_route "$HOME_DIR" zero-route --route R-RUNTIME >/dev/null 2>&1 || rc=$?
   expect_code 1 "$rc" "the escalating classification must be distinguishable by exit status"
   pass "NO_MODEL_CAN_SATISFY_ROUTE is the only classification that escalates"
+}
+
+# The measured defect, at the routing surface. A contract generation bump made a
+# known FAILED binding read QUALIFICATION_REQUIRED - the one classification
+# `activate` accepts - so installing a new generation turned a candidate that had
+# been tried and rejected into one a bounded workflow would be spent on.
+PRED_GEN_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+
+bump_contract_version() {  # <contract-id> <version>
+  local file="$CDIR/$1.json" tmp="$CDIR/.$1.tmp"
+  jq --arg v "$2" '.contract_version = $v' "$file" > "$tmp" && mv "$tmp" "$file"
+}
+
+test_a_generation_bump_never_makes_a_known_failed_binding_promising() {
+  local rec
+  rec=$(make_home retryrefused); read_home "$rec"
+  reset_register "$PRED_GEN_A"
+  # alpha/one was tried and rejected under the predicate generation still in
+  # force. beta/two and delta/four have no record at all, so the route is not
+  # trivially unsatisfiable and the exclusion below is about alpha/one alone.
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha FAILED \
+    '.result_evidence = "the oracle rejected the destructive-safety predicate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["destructive-safety"]'
+  # Negative control: before the bump the excluded row reads qualification_failed,
+  # so the assertions after it are about the bump and not about a constant.
+  local z
+  z=$(zero "$HOME_DIR" R-RUNTIME-WIDE)
+  assert_contains "$z" "qualification_failed" "control: the preserved exclusion was not on the excluded row"
+
+  bump_contract_version runtime-job-maker 1.1.0
+
+  z=$(zero "$HOME_DIR" R-RUNTIME-WIDE)
+  [ "$(printf '%s' "$z" | jq -r '[.promising[].model] | index("alpha/one") // "no"')" = no ] \
+    || fail "a contract generation bump offered a known failed binding as promising, which is the exact defect this closes"
+  [ "$(printf '%s' "$z" | jq -r '[.excluded[] | select(.model == "alpha/one") | .blockers[]] | join(",")')" = qualification_retry_not_permitted ] \
+    || fail "the excluded row did not carry retry-not-permitted as the reason alpha/one cannot be qualified"
+  [ "$(printf '%s' "$z" | jq -r '[.excluded[] | select(.model == "alpha/one") | .qualification_applicability][0]')" = STALE ] \
+    || fail "applicability was not recomputed separately from the adverse observation"
+  assert_contains "$z" "alpha-one-runtime" "the exclusion did not name the adverse record it rests on"
+  # The route is still a qualification state, because two candidates with no
+  # record at all remain promising. Excluding one binding must not escalate.
+  [ "$(printf '%s' "$z" | jq -r '.classification')" = QUALIFICATION_REQUIRED ] \
+    || fail "excluding one settled binding changed the classification of a route two others can still be qualified for"
+  local out
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME-WIDE)
+  assert_not_contains "$out" "alpha/one" "the workflow was spent on the binding whose retry is refused"
+  assert_present "$RDIR/alpha-one-runtime.json" "the adverse record was removed rather than preserved"
+  pass "a generation bump never makes a known failed binding promising"
+}
+
+test_activate_refuses_a_route_whose_only_candidate_may_not_be_retried() {
+  local rec
+  rec=$(make_home retryonly); read_home "$rec"
+  reset_register "$PRED_GEN_A"
+  # R-RUNTIME's pool is alpha/one and gamma/three, and gamma/three cannot meet
+  # the context floor - so alpha/one is the only candidate qualifying could ever
+  # help, and its retry is refused.
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha FAILED \
+    '.result_evidence = "the oracle rejected the destructive-safety predicate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["destructive-safety"]'
+  bump_contract_version runtime-job-maker 1.1.0
+  local z
+  z=$(zero "$HOME_DIR" R-RUNTIME)
+  [ "$(printf '%s' "$z" | jq -r '.classification')" = NO_MODEL_CAN_SATISFY_ROUTE ] \
+    || fail "a route whose only qualifiable candidate may not be retried classified as $(printf '%s' "$z" | jq -r '.classification')"
+  local rc=0 out
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME) || rc=$?
+  expect_code 1 "$rc" "activate did not refuse a route with no candidate it may spend a workflow on"
+  assert_contains "$out" "FM_QUALIFICATION_RETRY_NOT_PERMITTED" \
+    "the refusal was not typed, so a caller cannot tell it from a floor-axis miss"
+  assert_contains "$out" "alpha-one-runtime" "the typed refusal did not name the adverse record"
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "a workflow was activated for a binding whose retry is not permitted"
+  pass "activate refuses a route whose only candidate may not be retried"
+}
+
+test_an_unobservable_retry_disposition_is_a_register_repair_and_not_a_captain_exception() {
+  local rec
+  rec=$(make_home retrycno); read_home "$rec"
+  reset_register "$PRED_GEN_A"
+  # The adverse record names no predicate generation, so whether the predicate it
+  # failed has changed cannot be observed. That is a gap in the register, not a
+  # settled refusal, and the two must not arrive as one answer.
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha FAILED \
+    '.result_evidence = "the oracle rejected the destructive-safety predicate"'
+  bump_contract_version runtime-job-maker 1.1.0
+  local z
+  z=$(zero "$HOME_DIR" R-RUNTIME)
+  [ "$(printf '%s' "$z" | jq -r '.classification')" = QUALIFICATION_COULD_NOT_OBSERVE ] \
+    || fail "an unobservable retry disposition classified as $(printf '%s' "$z" | jq -r '.classification')"
+  [ "$(printf '%s' "$z" | jq -r '.escalation')" = NONE ] \
+    || fail "a gap in the register escalated to the captain"
+  [ "$(printf '%s' "$z" | jq -r '[.excluded[] | select(.model == "alpha/one") | .blockers[]] | join(",")')" = qualification_retry_cno ] \
+    || fail "the unobservable disposition was reported as something other than could-not-observe"
+  local rc=0 out
+  out=$(run_qual "$HOME_DIR" activate --route R-RUNTIME) || rc=$?
+  expect_code 4 "$rc" "an unobservable retry disposition is could-not-observe, not a workflow to spend"
+  assert_absent "$HOME_DIR/state/qualification/$AID_ALPHA.activation" \
+    "a workflow was activated for a binding whose retry disposition could not be read"
+  pass "an unobservable retry disposition is a register repair and not a captain exception"
+}
+
+test_spawn_refuses_a_binding_whose_retry_is_refused_without_calling_it_unqualified() {
+  local rec
+  rec=$(make_home retryspawn); read_home "$rec"
+  reset_register "$PRED_GEN_A"
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha FAILED \
+    '.result_evidence = "the oracle rejected the destructive-safety predicate"
+     | .predicate_generation = "'"$PRED_GEN_A"'"
+     | .failed_predicates = ["destructive-safety"]'
+  bump_contract_version runtime-job-maker 1.1.0
+  mkdir -p "$HOME_DIR/data/runtime-task"
+  printf 'You are a crewmate.\n\n# Definition of done\n' > "$HOME_DIR/data/runtime-task/brief.md"
+  local rc=0 out
+  out=$(run_spawn "$HOME_DIR" "$FAKEBIN" runtime-task "$PROJ_DIR" --scout \
+        --reason-code NOVEL_DECOMPOSITION --route R-RUNTIME --model alpha/one --effort high --harness pi) || rc=$?
+  [ "$rc" -ne 0 ] || fail "the spawn admitted a binding whose retry is refused"
+  assert_contains "$out" "not-permitted" \
+    "the dispatch refusal did not say that another invocation is withheld"
+  assert_not_contains "$out" "one bounded qualification workflow resolves it" \
+    "the refusal told the operator to spend a workflow on a binding already known to fail the predicate"
+  pass "spawn refuses a binding whose retry is refused without calling it merely unqualified"
 }
 
 test_a_wait_on_availability_is_not_a_qualification_state() {
@@ -1376,6 +1503,10 @@ test_the_recurrence_fixture_turns_red_without_the_automatic_transition
 test_a_failed_qualification_excludes_and_the_next_candidate_is_evaluated
 test_an_unobservable_qualification_is_not_a_captain_exception
 test_no_model_can_satisfy_route_is_the_only_classification_that_escalates
+test_a_generation_bump_never_makes_a_known_failed_binding_promising
+test_activate_refuses_a_route_whose_only_candidate_may_not_be_retried
+test_an_unobservable_retry_disposition_is_a_register_repair_and_not_a_captain_exception
+test_spawn_refuses_a_binding_whose_retry_is_refused_without_calling_it_unqualified
 test_a_wait_on_availability_is_not_a_qualification_state
 test_availability_of_one_vendor_is_not_runtime_engineering_availability
 test_a_malformed_capability_requirement_is_refused_by_name
