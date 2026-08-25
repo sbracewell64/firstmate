@@ -1,7 +1,7 @@
 # Verification: the candidate-publication effect and identity guard
 
 Audience: maintainer-verification.
-Subject: `bin/fm-publication-guard.sh` and `bin/fm-publication-seam-lib.sh`, the publication effect subject added to `bin/fm-landing-authorization-lib.sh`, and the seam that consumes them inside `bin/fm-attest.sh`.
+Subject: `bin/fm-publication-guard.sh` and `bin/fm-publication-seam-lib.sh`, the publication and custody effect subjects added to `bin/fm-landing-authorization-lib.sh`, and the seam that consumes them inside `bin/fm-attest.sh`.
 Regression owners: `tests/fm-publication-seam.test.sh` for the guard and its controls, `tests/fm-attest.test.sh` for the wiring into the real publication path.
 
 ## What is claimed
@@ -9,7 +9,7 @@ Regression owners: `tests/fm-publication-seam.test.sh` for the guard and its con
 A candidate reaches the outside world when it is PUSHED, not when it is merged.
 This mechanism asks whether that push is permitted before the remote moves, binds the answer to one exact subject, and exhausts the answer by using it.
 
-Six properties, and one control without which none of them means anything:
+Eleven properties, and one control without which none of them means anything:
 
 1. A governed publication is refused before the remote moves whenever an active hold, an unmet must-close ruling, a placeholder or unmapped identity, a second actionable candidate for the same semantic work, a retained predecessor ref, a stale ruling or policy generation, or a remote tip other than the one planned against applies.
 2. Permission is re-compiled at the moment of use, so an authority granted while eligible refuses once a newer hold, a revoked ruling or a bumped generation arrives.
@@ -17,10 +17,16 @@ Six properties, and one control without which none of them means anything:
 4. An authority is spent exactly once, and a replay refuses and publishes nothing.
 5. An authority consumed before its effect is durably `consumed-without-confirmed-effect`, is never resurrected, and recovery mints a fresh authority for the same unchanged subject rather than reusing it.
 6. A remote already equal to the head is a typed `NO_EFFECT_ALREADY_EQUAL` result that consumes no authority.
-7. Non-vacuity: a governed candidate with a clean identity, no hold, one semantic owner, fresh generations and the exact remote tip publishes exactly once.
+7. A governed candidate publishes only when a ruling is bound to the EXACT head being published and the role qualification register currently records the declared reviewer as qualified and assignment-distinct against the declared maker.
+   Policy governance says a review is REQUIRED and never that one happened; a register answer of could-not-observe is non-PASS and never a pass.
+8. An outbound record in a state no landed vocabulary declares reads as a hold in force, not as an absence of one.
+9. An approval bound to this head does not cover for another live governing request that is still unanswered.
+10. A remote-changing candidate act carries an effect class the GUARD decides: `CUSTODY_REPLICATION` grants nothing beyond a remote copy of one exact commit on the work's own unprotected feature ref, `PUBLICATION_EFFECT` carries every obligation above, and a class the evidence does not support is refused rather than reclassified.
+11. The candidate states `local-only`, `custody-replicated`, `review-published`, `publication-qualified`, `landing-authorized` and `landed` are projected from the durable owners, none implies the next, and a slot is reclaimable only when `ls-remote` resolves the custody ref to the exact candidate head.
+12. Non-vacuity: a governed candidate with a clean identity, no hold, an approving exact-head ruling, a qualified reviewer, one semantic owner, fresh generations and the exact remote tip publishes exactly once; and an exact clean candidate replicates to its own feature ref under a custody authority.
 
-Property 7 is not a courtesy.
-Properties 1 through 6 all pass against a guard that refuses everything, so without 7 the suite would be green and worthless.
+Property 12 is not a courtesy.
+Properties 1 through 11 all pass against a guard that refuses everything, so without 12 the suite would be green and worthless.
 
 ## What is NOT claimed, and where those properties live
 
@@ -41,6 +47,19 @@ Only once a policy exists does an unidentifiable venue become could-not-observe 
 
 **A GitHub email association is never maker proof.**
 The governed identity mapping is what `config/publication-identity.json` states; an identity it does not state refuses, whatever a forge associates.
+
+**Custody replication is not review, CI, acceptance or landing, and nothing here claims it prevents them.**
+A custody push copies one commit to the work's own feature ref.
+Whether a forge or a CI system reacts to a ref appearing is that system's own configuration and is outside this mechanism entirely.
+What is established is narrower and exact: a custody replication grants none of those states, the projection does not advance past `custody-replicated` because of one, and the publication obligations remain unmet afterwards.
+
+**This does not qualify a reviewer, and it does not judge review quality.**
+`bin/fm-qualification.sh` owns whether a binding was ever observed to do a job, and this consumes its verdict through the command it publishes.
+A reviewer the register records as qualified may still review badly; nothing here establishes otherwise.
+
+**The undeclared-state rule is a placeholder for a vocabulary that does not exist yet.**
+`quarantined` is written by the outbound owner's quarantine path and is absent from `FM_OUTBOUND_RECORD_STATES`.
+Until `outbound-quarantined-state-vocabulary-integration` lands, `fm_pub_seam_state_in_force`'s undeclared branch is load-bearing; afterwards it becomes a pass-through to the landed live rule and that branch becomes unreachable.
 
 **Correlation is somebody else's proven work.**
 Whether a ruling answers a given request, an unrelated or ambiguous ruling body, and a request whose identity has moved are owned by `bin/fm-outbound-artifact.sh`.
@@ -69,6 +88,26 @@ bin/fm-test-run.sh tests/fm-attest.test.sh
 
 Controls selected 26, attempted 26, completed 26 for the guard suite; the two wiring cases in the attestation suite were selected 2, attempted 2, completed 2.
 
+### Dated evidence: the review-qualification repair, the undeclared state, and the effect class
+
+Observed 2026-08-25 on Linux from the candidate worktree, with git 2.53.0, jq 1.8.1 and ShellCheck 0.11.0.
+Measured at `af5cfefdae8174ea47b415e0e2cef75bbc13a9a1` tree `485dbaddfe79e1b8d17e205cc4857655e39c7eb7`; the commit adding this record follows it, so that head is the code these numbers were taken from rather than the head of the branch.
+
+```
+bash tests/fm-publication-seam.test.sh
+  -> 44 ok, 0 not ok, FM_TEST_CONTRACT status=pass
+bash tests/fm-attest.test.sh
+  -> 95 ok, 0 not ok
+bash bin/fm-lint.sh
+  -> fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0), exit 0
+bash bin/fm-dead-predicate-check.sh
+  -> ok enrolled=6 scanned=119 unchecked=247 alive=137 could_not_observe=0 marked=0
+bash bin/fm-doc-audience-check.sh
+  -> ok surfaces=92 local_links=403
+```
+
+Controls selected 44, attempted 44, completed 44.
+
 ### Red calibration
 
 Every control was observed failing for its intended reason.
@@ -96,6 +135,41 @@ Each run stages a full copy of the worktree, injects exactly one defect, and run
 | 16 | retirement accepts a spent record | `not ok - retire-spent: a spent authority was retired (exit 0): RETIRED fm-auth-eb8a8d0248ce456bc30678520f7a72b6 is now void (tidy up)` |
 | 17 | retirement is not idempotent | `not ok - retire-twice: repeating the retirement changed the record` |
 | 18 | a retired authority is still spendable | `not ok - retire-consume: a retired authority was accepted (exit 0): APPLIED fm-auth-4f6058d22d127f535eed8530bcc00ea8 refs/heads/candidate now at 52372b62` |
+
+#### Reds 19 to 32: the review-qualification repair, the undeclared state, and the effect class
+
+Observed 2026-08-25 by the same method: a full staged copy of the worktree, exactly one injected defect, the named suite run.
+
+| # | Injected defect | Observed result |
+| - | --------------- | --------------- |
+| 19 | an outbound state no landed vocabulary declares is skipped instead of held | `not ok - undeclared: a request in state 'quarantined' did not refuse the publication (exit 0): ALLOW_EXACT fm-auth-a0e0fbc6439bbe8cd2eccaa669669052` |
+| 20 | the requirement for a ruling at this exact head is removed | `not ok - unreviewed: a candidate no ruling reviewed did not refuse (exit 0): ALLOW_EXACT fm-auth-4a384ce1de9ca62a41c0744e36ea2fde` |
+| 21 | the role qualification register's answer is always taken as yes | `not ok - unqualified: a QUALIFICATION_REQUIRED reviewer did not refuse (exit 0): ALLOW_EXACT fm-auth-93de6afdfa0a6b40891687c5deb76f31` |
+| 22 | a register could-not-observe is read as a pass | `not ok - qualification-unobserved: an unobserved qualification was not could-not-observe (exit 0): ALLOW_EXACT fm-auth-dc7f49abd69dae288a15e91ecb73aed1` |
+| 23 | an undeclared review contract is read as exemption from review | `not ok - contracts-undeclared: an unstated review contract was not could-not-observe (exit 0): ALLOW_EXACT fm-auth-98280fecc0438386ea3c8c294fc27896` |
+| 24 | one approval covers for every other unmet obligation | `not ok - newer-hold: a hold arriving after the grant did not refuse (exit 0): APPLIED fm-auth-282b2ac4b198bf188f85bcfee1f73479 refs/heads/candidate now at f5ec94f3` |
+| 25 | the candidate need not be the head that is checked out | `not ok - custody-drift: the custody replication was not refused (exit 0): ALLOW_EXACT fm-auth-55a112a732b0a12d7ef2e7a8e1e76b1f class=CUSTODY_REPLICATION` |
+| 26 | an unclean worktree is replicated anyway | `not ok - custody-dirty-tracked: the custody replication was not refused (exit 0): ALLOW_EXACT fm-auth-cb4a889c89e301ee9c8f8723353ebab4 class=CUSTODY_REPLICATION` |
+| 27 | custody may address any ref | `not ok - custody-wrong-ref: the custody replication was not refused (exit 0): ALLOW_EXACT fm-auth-de1e0c20bef8f1b772f6601250c053fb class=CUSTODY_REPLICATION` |
+| 28 | the act's forcing arguments are not inspected | `not ok - custody-force: '--force' was not refused (exit 0): To .../custody-force-force/remote.git` |
+| 29 | an occupied custody ref is advanced onto | `not ok - custody-occupied: the custody replication was not refused (exit 0): ALLOW_EXACT fm-auth-92175c27ea24928b603948a07ff44504 class=CUSTODY_REPLICATION` |
+| 30 | a custody replication is projected as a review | `not ok - custody-grants-nothing: the projection did not stop at custody` |
+| 31 | reclaimability is read from branch existence rather than the exact head | `not ok - reclaim-other-head: a branch at another head was treated as a backup (exit 0): custody-replicated yes ... at exactly 726b904e` |
+| 32 | an unreachable remote is read as not-reclaimable rather than unobserved | `not ok - reclaim-unreachable: an unreachable remote was not could-not-observe (exit 3): custody-replicated no` |
+
+Two controls were REWRITTEN after their first red proved they were measuring a different rule, and the rewrite is the point rather than an aside.
+
+A protected-ref case built on `refs/heads/main` went red with protection removed - but it went red naming `FM_PUB_CUSTODY_REF_NOT_PERMITTED`, because `refs/heads/main` is not the work's own ref either.
+That case would have passed with the protection deleted entirely, so it was evidence about the permitted-ref rule wearing the protected-ref rule's name.
+It now protects the work's OWN derived ref, which is the only construction that rule alone catches.
+
+An occupied-ref case compiled against an absent tip went red naming `FM_PUB_REMOTE_TIP_MOVED` for the same reason.
+It now compiles against the tip that is actually there, so the caller is one that knows the ref is occupied and is asking to advance it, and only the occupied rule stands in the way.
+
+Red 24 is worth reading twice for the opposite reason: it is an EXISTING control going red under a rule that was strengthened, not a new control.
+Once an approving ruling exists in the green fixture, the old "any approval is enough" phrasing let a hold arriving after the grant through - so the strengthening was required to keep a guarantee the suite already claimed.
+
+Red 30's perturbation is one line in the projection rather than in the fold, because that is where the claim lives: the fold already refuses to publish, and what property 11 asserts is that the projection does not describe a backup as a review.
 
 Reds 06 and 07 are worth reading twice, because both name a token other than the one the defect removed.
 That is defence in depth showing itself rather than a miscalibrated control: with the explicit generation comparison gone the authority identity still fails to recompute, and with the replay refusal gone the remote is already at the head so the second consume becomes a no-effect.
@@ -144,14 +218,69 @@ Step 2 ran in a scratch home so the operational store was never written, and it 
 Across all three the operational authorization store stayed byte-identical (`sha256 4e1782f3...`, one record) and the remote ref stayed absent.
 That is the property the whole probe exists to demonstrate: asking the question changes nothing.
 
+### The real seam, at the exact candidate head, 2026-08-25
+
+Run from the candidate worktree against `github.com/sbracewell64/firstmate`, the venue this branch would publish to.
+Subject: head `af5cfefdae8174ea47b415e0e2cef75bbc13a9a1`, tree `485dbaddfe79e1b8d17e205cc4857655e39c7eb7`, ref `refs/heads/fm/candidate-publication-effect-guard`, worktree clean.
+Every step used `prepare --dry-run` or the read-only `project`, so nothing was minted and nothing was pushed.
+
+| Step | Asked | Observed result |
+| ---- | ----- | --------------- |
+| A | may this candidate be PUBLISHED? | `REFUSE FM_PUB_ACTIVE_HOLD: 1 live Browser Sol request(s) hold candidate-publication-effect-guard and 0 of them approve publishing af5cfefd...: fm-ob-6267e1c729b9(EXACT_HEAD_BROWSER_REVIEW_REQUIRED/quarantined at cf4c640b...)` |
+| B | the same, with the only hold lifted in a scratch home | `REFUSE FM_PUB_NO_EXACT_CANDIDATE_REVIEW: ... no ruling approves publishing af5cfefd..., so this candidate has no review bound to the exact head it would publish` |
+| C | the same, plus a synthetic approving ruling at this exact head | `REFUSE FM_PUB_REVIEWER_NOT_QUALIFIED: ... openai-codex/gpt-5.6-luna is QUALIFICATION_REQUIRED for contract runtime-change-review ... record luna-max-runtime-change-review-v2-20260823 records QUALIFICATION_REQUIRED` |
+| D | may this candidate be REPLICATED for custody? | `ALLOW_EXACT fm-auth-5be6d231b61e0e398eeeada10ec73ac8 class=CUSTODY_REPLICATION` |
+| E | what state is this candidate in? | `STATE local-only`, with `custody-replicated no`, `review-published no`, `publication-qualified no`, `landing-authorized no`, `landed no`, `reclaimable no` |
+
+Step A is the first finding closed at the real seam.
+Before this work the same probe at the same head returned `ALLOW_EXACT`, because the quarantined request fell out of the live-state test and its hold disappeared from the answer.
+
+Steps B and C are the second finding closed, and they are staged rather than combined because each removes exactly one thing.
+B lifts only the hold, so what stops the publication next is the absence of any ruling bound to this head - which is the state the earlier `ALLOW_EXACT` had been credited as a satisfied review.
+C then supplies an approving ruling at this exact head in the scratch home, which is the only way to reach the reviewer question at all, and the register answers with the real recorded state of the real binding.
+Neither B nor C is evidence that a review happened; both are evidence that the guard now asks.
+
+Step D is what makes the separation non-vacuous, and it is the whole reason this work exists: at the same head, in the same home, under the same hold, publication is refused and custody is permitted.
+A guard that refused both would produce exactly step A and nothing would be learned from it.
+
+Step E reads `review-published no` while a live request names this work, because that request holds an EARLIER head.
+That is the corrected behaviour; the first run of this probe reported `review-published yes` and is what found the defect.
+
+Throughout, the operational authorization store stayed byte-identical (`sha256 4e1782f3...`, one record) and `refs/heads/fm/candidate-publication-effect-guard` stayed absent on the remote, before and after every step.
+Asking the question changes nothing.
+
+## The two effect classes
+
+A remote-changing candidate act is one of exactly two things, and the guard decides which.
+
+`CUSTODY_REPLICATION` is a durable backup of one exact committed candidate to its own unprotected feature ref, `refs/heads/fm/<work-id>` on the work's own venue.
+It grants nothing: no pull request, no review request, no CI implication, no acceptance, no landing authority, no publication-qualified state.
+It demands what publication never asks - a clean worktree including untracked files, the candidate actually checked out at that exact head and tree, an unprotected ref DERIVED from the work rather than chosen by the caller, no force in any form, and a remote ref absent or already equal.
+It is not subject to the review it does not claim, so a candidate under an active publication hold may still be backed up.
+
+`PUBLICATION_EFFECT` is anything that makes the candidate enter the review, CI, publication or landing lifecycle.
+It is the default, and it carries every obligation this record already claimed.
+
+`--effect` names the class a caller WANTS and never settles it.
+The request is verified against observation, and one the evidence does not support is refused rather than quietly reclassified - so a caller cannot discover the class by trying, and custody is strictly weaker in what it grants while being strictly stricter in what it demands.
+There is no argument by which naming a class obtains more permission than the evidence already gives.
+
+The force refusal applies to BOTH classes.
+The guard has already established the remote is at the tip the plan was compiled against, so a fast-forward suffices, and forbidding a force on the weaker act while permitting it on the stronger one would be incoherent.
+
 ## Refreshing this record
 
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
 bin/fm-test-run.sh tests/fm-attest.test.sh
+bin/fm-test-run.sh tests/fm-landing-authorization.test.sh
 bin/fm-dead-predicate-check.sh
 bin/fm-lint.sh
+bin/fm-doc-audience-check.sh
 ```
+
+Judge `bin/fm-lint.sh` by what it PRINTS, not by the exit status of whatever ran it.
+A backgrounded wrapper around it reported success while lint was failing on a `# shellcheck disable` directive that an inserted function had displaced from the function it belonged to, and only the foreground run showed it.
 
 ## A probe must not mint
 
@@ -190,7 +319,10 @@ Replacing either with `void` would turn evidence into a tidier claim than the ev
 Both new files carry `# fail-closed-predicates: enforced`, so every predicate in them must have a call site or say in writing why it does not.
 The repository run went from `enrolled=4 alive=85 could_not_observe=0` to `enrolled=6 alive=123 could_not_observe=0`.
 
-That enrolment is load-bearing rather than decorative, and it caught two real defects during this work.
+The 2026-08-25 pass reads `enrolled=6 scanned=119 unchecked=247 alive=137 could_not_observe=0 marked=0`.
+
+That enrolment is load-bearing rather than decorative, and it caught three real defects across this work.
+The third was this pass's own: generalising the authority identity over its effect left four `fm_auth_publication_*` wrappers with no call site, and they were deleted rather than marked `unused-by-design`, because a wrapper nobody calls is exactly what the control exists to refuse.
 `fm_auth_effect_valid` was defined and never consulted, which is the exact shape the control exists for - a guard that reads as present because the file defines it.
 Separately, a helper named `rec` collided with a common local variable name in six other files, which made those files unreadable to the control and turned 56 resolved predicates into could-not-observe across libraries this change never touched.
 The second is worth keeping in mind when naming anything in an enrolled file: a three-letter helper name is not a local decision.
