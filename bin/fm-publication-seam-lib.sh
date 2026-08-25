@@ -69,6 +69,13 @@ if [ -n "${FM_PUB_SEAM_LIB_SOURCED:-}" ]; then
 fi
 FM_PUB_SEAM_LIB_SOURCED=1
 
+# Where this library lives, captured at source time, so the landed role
+# qualification register can be reached as the COMMAND it publishes rather than
+# by sourcing it. Its exit status is its documented answer, and consuming that
+# interface keeps one owner for "was this binding ever observed to do this job?"
+# instead of a second copy of the computation inside the publication seam.
+FM_PUB_SEAM_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # --- contract constants ------------------------------------------------------
 
 # The publication identity and delivery policy this reads. Home-private and
@@ -138,6 +145,8 @@ FM_PUB_SEAM_TOKEN_PLACEHOLDER=FM_PUB_IDENTITY_PLACEHOLDER
 FM_PUB_SEAM_TOKEN_UNMAPPED=FM_PUB_IDENTITY_UNMAPPED
 FM_PUB_SEAM_TOKEN_NOT_DISTINCT=FM_PUB_IDENTITY_NOT_DISTINCT
 FM_PUB_SEAM_TOKEN_GENERATION=FM_PUB_GENERATION_CHANGED
+FM_PUB_SEAM_TOKEN_NO_REVIEW=FM_PUB_NO_EXACT_CANDIDATE_REVIEW
+FM_PUB_SEAM_TOKEN_REVIEWER_UNQUALIFIED=FM_PUB_REVIEWER_NOT_QUALIFIED
 # could-not-observe: no verdict was reached
 FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND=FM_PUB_CANDIDATE_UNBOUND
 FM_PUB_SEAM_TOKEN_STORE_UNREADABLE=FM_PUB_RECORD_STORE_UNREADABLE
@@ -148,6 +157,8 @@ FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED=FM_PUB_REMOTE_TIP_UNOBSERVED
 FM_PUB_SEAM_TOKEN_AMBIGUOUS=FM_PUB_AMBIGUOUS_AUTHORITY
 FM_PUB_SEAM_TOKEN_VENUE_UNCONFIGURED=FM_PUB_VENUE_UNCONFIGURED
 FM_PUB_SEAM_TOKEN_AUTH_STORE_UNREADABLE=FM_PUB_AUTHORIZATION_STORE_UNREADABLE
+FM_PUB_SEAM_TOKEN_REVIEW_UNDECLARED=FM_PUB_REVIEW_CONTRACTS_UNDECLARED
+FM_PUB_SEAM_TOKEN_REVIEW_UNOBSERVED=FM_PUB_REVIEWER_QUALIFICATION_UNOBSERVED
 }
 
 # --- outputs -----------------------------------------------------------------
@@ -281,6 +292,15 @@ fm_pub_seam_policy_identity() {  # <venue> <axis>
 }
 
 # shellcheck disable=SC2016  # jq program variables, not shell expansions.
+# The capability contracts a governed venue requires its reviewer to hold, one
+# per line. Required as a complete set for the same reason the identity axes are:
+# a governed venue that declares none has not promised a lighter review, it has
+# left unstated what the reviewer had to be qualified for, and an unstated axis
+# at a load-bearing admission is could-not-observe.
+fm_pub_seam_policy_review_contracts() {  # <venue>
+  fm_pub_seam_policy_get --arg v "$1" '(.venues[$v].review_contracts // []) | .[]'
+}
+
 fm_pub_seam_policy_work() {  # <venue> <ref> <field>
   fm_pub_seam_policy_get --arg v "$1" --arg r "$2" --arg f "$3" '.venues[$v].work[$r][$f] // ""'
 }
@@ -351,6 +371,36 @@ fm_pub_seam_observe_commit_identity() {  # <repo-dir> <head> -> 0 observed, 1 no
 # them together with the policy's own governance and one fold is easier to keep
 # correct than two.
 
+# WHICH STATES STOP HOLDING, asked in the direction that survives a vocabulary
+# this file does not own.
+#
+# The landing seam asks the opposite question - which states are LIVE - and that
+# is correct where it stands, because a landing that skips an unrecognised record
+# still has the merge gate in front of it. Publication has nothing in front of
+# it, so the same phrasing fails open here: a state no landed vocabulary declares
+# falls out of the live set, the record is skipped, and a hold nobody retracted
+# disappears from the answer. That is not hypothetical. `quarantined` is written
+# by the outbound owner's quarantine path and is absent from
+# FM_OUTBOUND_RECORD_STATES, and a quarantined request holding this exact
+# candidate read as no hold at all.
+#
+# So the rule is inverted rather than the list extended: a record stops holding
+# only when the landed vocabulary DECLARES its state and the landed live rule
+# says that declared state has concluded. Both owners are reused and neither is
+# copied - the only rule added here is that an undeclared state is in force,
+# which is the direction an unknown must take at a chokepoint with nothing
+# behind it.
+#
+# The unlanded owner that subsumes this is the outbound record vocabulary itself:
+# once `quarantined` is a declared state with a declared disposition, this
+# function becomes a pass-through to the landed live rule and the `undeclared`
+# branch becomes unreachable rather than load-bearing.
+fm_pub_seam_state_in_force() {  # <state>
+  local state=${1:-}
+  printf '%s\n' "$FM_OUTBOUND_RECORD_STATES" | grep -qxF "$state" || return 0
+  fm_landing_seam_state_live "$state"
+}
+
 FM_PUB_SEAM_LIVE=0
 FM_PUB_SEAM_GRANTING=0
 FM_PUB_SEAM_GRANTING_ID=
@@ -406,7 +456,7 @@ fm_pub_seam_scan_records() {  # <record-dir> <item> <head>
     gate=$(printf '%s' "$raw" | jq -r '.identity.gate // ""')
     fm_landing_seam_gate_governs "$gate" || continue
     state=$(printf '%s' "$raw" | jq -r '.state // ""')
-    fm_landing_seam_state_live "$state" || continue
+    fm_pub_seam_state_in_force "$state" || continue
 
     FM_PUB_SEAM_LIVE=$((FM_PUB_SEAM_LIVE + 1))
     rec_head=$(printf '%s' "$raw" | jq -r '.identity.head // ""')
@@ -480,6 +530,87 @@ fm_pub_seam_scan_authorizations() {  # <auth-dir> <item> <venue> <head>
   return 0
 }
 
+# --- the reviewer, and whether it may have performed this review --------------
+#
+# THE DEFECT THIS CLOSES, named as the finding that produced it. A governed
+# venue reached ALLOW_EXACT while the declared reviewer was QUALIFICATION_REQUIRED
+# and no ruling had ever addressed the candidate's head. What the check had
+# actually examined was that the candidate matched a configured identity and
+# target; what its verdict was credited with was that every pre-publication
+# obligation - including a qualified, assignment-distinct review of this exact
+# head - was satisfied. That is the wrong-subject failure on the property axis,
+# and the remedy is to make the credited claim one that was observed.
+#
+# TWO SEPARATE FACTS, and neither substitutes for the other:
+#
+#   the review happened at THIS head  a ruling bound to this exact head, which
+#                                     the record scan already counts. Policy
+#                                     governance is not this: declaring a venue
+#                                     governed says a review is REQUIRED, so
+#                                     reading it as one satisfied is the exact
+#                                     inversion that let an unreviewed head pass.
+#   whoever reviewed MAY HAVE         the role qualification register's own
+#                                     answer for the declared reviewer against
+#                                     the declared maker. Self-review, a stale
+#                                     record and a missing one are all reasons a
+#                                     ruling that exists still establishes
+#                                     nothing about competent independent review.
+#
+# The register is asked as a command, and its exit status is its answer. The
+# mapping is deliberate and each value keeps its own family:
+#
+#   0        qualified and assignment-distinct - proceed
+#   1        a verdict was reached and it is no (FAILED, self-review, a failed
+#            independence dimension)                                   -> REFUSE
+#   3        QUALIFICATION_REQUIRED or QUALIFICATION_STALE. Also a verdict, and
+#            also no: the register looked and this binding is not currently
+#            qualified. The register calls this an engineering state rather than
+#            an escalation, and that is what it stays - but it is not a pass, and
+#            a publication is not the place to resolve it              -> REFUSE
+#   2, 4     the register could not be read, or the observation did not happen.
+#            No verdict was reached, and this is the value the finding named:
+#            could-not-observe must project as non-PASS               -> CNO
+#
+# WHY THIS IS ASKED LAST, after identity and after the rival scan. Every check
+# before it establishes that there is a bindable subject at all - which work this
+# is, who is publishing it, and whether another candidate already claims it. A
+# review question asked before those would answer about a subject that was never
+# settled, which is the same class of error this section exists to close.
+
+FM_PUB_SEAM_REVIEWER_REASON=
+
+fm_pub_seam_reviewer_admissible() {  # <maker> <reviewer> <contract>... -> 0 ok, 3 refused, 4 unobserved
+  local maker=$1 reviewer=$2
+  shift 2
+  local cmd contract out rc=0
+  local args=()
+  FM_PUB_SEAM_REVIEWER_REASON=
+
+  cmd=${FM_PUB_SEAM_QUALIFICATION_CMD:-$FM_PUB_SEAM_BIN_DIR/fm-qualification.sh}
+  if [ ! -r "$cmd" ]; then
+    FM_PUB_SEAM_REVIEWER_REASON="the role qualification register at $cmd could not be read, so whether $reviewer may review $maker work could not be observed"
+    return 4
+  fi
+  for contract in "$@"; do
+    [ -n "$contract" ] || continue
+    args+=(--contract "$contract")
+  done
+  if [ "${#args[@]}" -eq 0 ]; then
+    FM_PUB_SEAM_REVIEWER_REASON="no review contract was named, so what $reviewer had to be qualified for could not be observed"
+    return 4
+  fi
+
+  out=$(bash "$cmd" reviewer --maker "$maker" --reviewer "$reviewer" "${args[@]}" 2>&1) || rc=$?
+  FM_PUB_SEAM_REVIEWER_REASON=$(printf '%s\n' "$out" | awk 'NF {sub(/^refused: /, ""); print; exit}')
+  [ -n "$FM_PUB_SEAM_REVIEWER_REASON" ] \
+    || FM_PUB_SEAM_REVIEWER_REASON="the role qualification register returned $rc and said nothing"
+  case $rc in
+    0) return 0 ;;
+    1|3) return 3 ;;
+    *) return 4 ;;
+  esac
+}
+
 # --- the compiled generation --------------------------------------------------
 #
 # What the verdict RESTED ON, reduced to one value the authorization identity can
@@ -527,6 +658,7 @@ fm_pub_seam_resolve() {  # <record-dir> <auth-dir> <config-dir> <repo-dir> <item
   local item=$5 venue=$6 ref=$7 head=$8 tree=$9 expected=${10} observed=${11}
   local policy_governed=0 declared='' role='' axis value left right
   local policy_generation='' generation='' governed=0
+  local contracts='' reviewer_rc=0
 
   if ! fm_pub_seam_subject_valid "$item" "$venue" "$ref" "$head" "$tree" "$expected" "$observed"; then
     fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
@@ -625,9 +757,16 @@ fm_pub_seam_resolve() {  # <record-dir> <auth-dir> <config-dir> <repo-dir> <item
       "$FM_PUB_SEAM_LIVE live Browser Sol request(s) hold $item while no control venue is configured in this home, so whether their rulings apply could not be observed"
     return $?
   fi
-  if [ "$FM_PUB_SEAM_LIVE" -gt 0 ] && [ "$FM_PUB_SEAM_GRANTING" -eq 0 ]; then
+  # EVERY LIVE REQUEST THAT IS NOT ITSELF THE APPROVAL IS A HOLD. Asking only
+  # whether ANY approval exists let one approving ruling cover for every other
+  # unmet obligation on the same work, so a request that was emitted and never
+  # answered stopped holding the moment a different one approved - and emitting a
+  # request would again be the cheapest way to publish before it was read. The
+  # comparison is against the granting count rather than against zero, which is
+  # also what FM_PUB_SEAM_HOLDS has always accumulated.
+  if [ "$FM_PUB_SEAM_LIVE" -gt "$FM_PUB_SEAM_GRANTING" ]; then
     fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_ACTIVE_HOLD" \
-      "$FM_PUB_SEAM_LIVE live Browser Sol request(s) hold $item and none approves publishing $head:$FM_PUB_SEAM_HOLDS"
+      "$FM_PUB_SEAM_LIVE live Browser Sol request(s) hold $item and $FM_PUB_SEAM_GRANTING of them approve publishing $head:$FM_PUB_SEAM_HOLDS"
     return $?
   fi
   if [ "$FM_PUB_SEAM_GRANTING" -gt 1 ]; then
@@ -706,6 +845,41 @@ fm_pub_seam_resolve() {  # <record-dir> <auth-dir> <config-dir> <repo-dir> <item
       "work $item already has a live publication authority at another head on $venue:$FM_PUB_SEAM_RIVALS - which head this work is cannot be settled by whichever candidate pushes first"
     return $?
   fi
+
+  # A GOVERNED VENUE DECLARES THAT A REVIEW IS REQUIRED, never that one happened.
+  # Reading policy governance as the review itself is what let a candidate whose
+  # head no ruling had ever addressed reach ALLOW_EXACT.
+  if [ "$FM_PUB_SEAM_GRANTING" -eq 0 ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_NO_REVIEW" \
+      "$venue governs work $item and no ruling approves publishing $head, so this candidate has no review bound to the exact head it would publish"
+    return $?
+  fi
+
+  contracts=$(fm_pub_seam_policy_review_contracts "$venue")
+  if [ -z "$contracts" ]; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_REVIEW_UNDECLARED" \
+      "the governed publication policy for $venue declares no review_contracts, so what its reviewer had to be qualified for could not be observed"
+    return $?
+  fi
+  reviewer_rc=0
+  # shellcheck disable=SC2086  # one contract id per line, deliberately split
+  fm_pub_seam_reviewer_admissible \
+    "$(fm_pub_seam_policy_identity "$venue" maker)" \
+    "$(fm_pub_seam_policy_identity "$venue" reviewer)" \
+    $contracts || reviewer_rc=$?
+  case $reviewer_rc in
+    0) ;;
+    3)
+      fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_REVIEWER_UNQUALIFIED" \
+        "the reviewer $venue declares may not review this candidate: $FM_PUB_SEAM_REVIEWER_REASON"
+      return $?
+      ;;
+    *)
+      fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_REVIEW_UNOBSERVED" \
+        "whether the reviewer $venue declares may review this candidate could not be observed: $FM_PUB_SEAM_REVIEWER_REASON"
+      return $?
+      ;;
+  esac
 
   generation=$(fm_pub_seam_generation "$policy_generation" "$FM_PUB_SEAM_GRANTING_ID" \
     "$FM_PUB_SEAM_GRANTING_COMMENT" "$FM_PUB_SEAM_GRANTING_VERDICT" "$venue" "$ref" "$item")
