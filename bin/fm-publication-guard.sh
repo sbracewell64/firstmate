@@ -722,12 +722,14 @@ cmd_project() {
 
   # --- review, from the correlation store ---
   if fm_pub_seam_scan_records "$OUTBOUND_DIR" "$item" "$head"; then
-    if [ "$FM_PUB_SEAM_GRANTING" -gt 0 ]; then
+    # THIS EXACT HEAD, not this work. A request holding the work at some earlier
+    # head is evidence that a DIFFERENT candidate was submitted, and reading it
+    # as this one reports a head nobody has ever seen as under review.
+    if [ "$FM_PUB_SEAM_AT_HEAD" -gt 0 ]; then
       review=yes
-      review_note="$FM_PUB_SEAM_GRANTING live request(s) carry this exact head with an approving ruling"
+      review_note="$FM_PUB_SEAM_AT_HEAD live request(s) carry this exact head ($FM_PUB_SEAM_GRANTING approving)"
     elif [ "$FM_PUB_SEAM_LIVE" -gt 0 ]; then
-      review=yes
-      review_note="$FM_PUB_SEAM_LIVE live request(s) hold this work:$FM_PUB_SEAM_HOLDS"
+      review_note="$FM_PUB_SEAM_LIVE live request(s) hold this work at another head, so THIS head has not been submitted:$FM_PUB_SEAM_HOLDS"
     else
       review_note="no live request carries this work, so it has not been submitted for review"
     fi
