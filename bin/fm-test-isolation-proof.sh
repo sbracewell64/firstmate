@@ -60,11 +60,22 @@
 #   FM_ISOLATION_CANDIDATE_BEGIN <iso8601> <script> worker=<i>
 #   FM_ISOLATION_CANDIDATE_END <iso8601> <script> exit=<code> duration_ms=<n> worker=<i>
 #   FM_ISOLATION_SUMMARY total=<n> failed=<n> concurrency=<n> duration_ms=<n>
+#   FM_ISOLATION_ARTIFACT WRITTEN path=<p> subjects=<n> candidates=<n>
+#   FM_ISOLATION_ARTIFACT WITHHELD path=<p> reason=<r> candidates=<n> failed=<n>
+#   FM_ISOLATION_SEAM PROVEN|REFUSED|COULD-NOT-OBSERVE|NOT-APPLICABLE ...
+#
+# --json writes the artifact only from a run that observed EVERY candidate good.
+# A run with a failed or unmeasured subject withholds it and says so, leaving the
+# previous genuine artifact byte-identical: a proof recording a subset of the
+# candidate universe would become the acceptance evidence that same subset is
+# measured against. See the "Well-founded artifact generation" block below for
+# the ordering and the incident it repairs.
 #
 # Exit status is the aggregate of candidate exits: non-zero if any candidate
-# fails, if isolation checks fail, or if the candidate set is empty. A script
-# that fails only under concurrency must be removed from the candidate set and
-# investigated; this harness never retries a failure into green.
+# fails, if isolation checks fail, if the candidate set is empty, if the artifact
+# was withheld, or if the canonical coverage seam refuses the artifact just
+# written. A script that fails only under concurrency must be removed from the
+# candidate set and investigated; this harness never retries a failure into green.
 set -eu
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -552,10 +563,60 @@ fi
 printf 'FM_ISOLATION_SUMMARY total=%s failed=%s concurrency=%s duration_ms=%s\n' \
   "$TOTAL" "$FAILED" "$JOBS" "$RUN_DURATION"
 
+# ---------------------------------------------------------------------------
+# Well-founded artifact generation.
+#
+# The order below is the whole point, and it is stated once here: every subject
+# is EXECUTED first, every execution must then be observed-good, only then is
+# the artifact written - whole, from those actual results - and only then is the
+# separate canonical coverage seam asked whether the artifact it can now read is
+# good. Nothing earlier in that order consults the artifact this run produces.
+#
+# WHY. A previous version wrote the artifact whatever the run observed. Editing
+# tests/fm-test-run.test.sh - a subject whose own assertions consumed the
+# INSTALLED proof - therefore reached a fixed point: the run recorded that
+# subject failing, replaced a genuine 24-subject proof with a 23-subject one,
+# and the next run failed the same subject again for the same reason. The
+# subject required, as a passing precondition, the current acceptance artifact
+# whose generation required that subject to pass. docs/architecture.md states
+# that law under EVIDENCE_GENERATION_WELL_FOUNDEDNESS; the two repairs are here
+# and at the test/evidence boundary in tests/fm-test-run.test.sh.
+#
+# Withholding is not tolerance and not a retry. A measured FAIL stays FAIL, this
+# run is non-PASS, and the previous genuine artifact stays exactly as it was
+# rather than being replaced by a weaker one.
+# ---------------------------------------------------------------------------
+
+abs_path() {
+  local p=$1 d b
+  d=$(dirname "$p")
+  b=$(basename "$p")
+  d=$(cd "$d" 2>/dev/null && pwd -P) || return 1
+  printf '%s/%s\n' "$d" "$b"
+}
+
 if [ -n "$JSON_PATH" ]; then
   mkdir -p "$(dirname "$JSON_PATH")"
   # Stable record order for the artifact.
   sort -t$'\t' -k1,1 "$RECORDS" -o "$RECORDS"
+
+  # Step 2: every subject execution observed-good, judged by the one owner of
+  # that question in bin/fm-test-isolation-lib.sh so the harness and that
+  # module's regressions cannot answer it differently.
+  CANDIDATE_FILE="$PROOF_ROOT/candidates.txt"
+  printf '%s\n' "${CANDIDATES[@]}" >"$CANDIDATE_FILE"
+  ARTIFACT_REFUSAL=$(fm_isolation_artifact_refusal "$RECORDS" "$CANDIDATE_FILE" "$FAILED" "$AGG_RC") || true
+
+  if [ -n "$ARTIFACT_REFUSAL" ]; then
+    printf 'FM_ISOLATION_ARTIFACT WITHHELD path=%s reason=%s candidates=%s failed=%s\n' \
+      "$JSON_PATH" "$ARTIFACT_REFUSAL" "$TOTAL" "$FAILED"
+    log "the previous artifact at $JSON_PATH is left exactly as it was"
+    log "a measured failure is not cleared by writing a smaller proof; fix the subject and measure again"
+    if [ "$AGG_RC" -ne 0 ]; then
+      exit "$AGG_RC"
+    fi
+    exit 1
+  fi
 
   # The proof-wide material dependencies, captured at proof time: the isolation
   # semantics every worker was built from, and the concurrency this repository
@@ -578,11 +639,51 @@ if [ -n "$JSON_PATH" ]; then
     ''|*[!0-9]*) die "could not read the runner concurrency cap; refusing to record an unbound proof" ;;
   esac
 
+  # Step 3: write it whole. bin/fm-test-isolation-lib.sh renames a completed
+  # document over the destination, so a write that dies partway leaves the
+  # previous genuine artifact byte-identical instead of a truncated one.
   fm_isolation_write_proof "$JSON_PATH" \
     "$RUN_STARTED_ISO" "$RUN_FINISHED_ISO" "$RUN_ID" \
     "$TOTAL" "$FAILED" "$JOBS" "$RUN_DURATION" "$RECORDS" \
-    "$CONTRACT_DIGEST" "$LANES_FILE" "$RUNNER_CAP"
-  log "wrote isolation proof artifact: $JSON_PATH"
+    "$CONTRACT_DIGEST" "$LANES_FILE" "$RUNNER_CAP" \
+    || die "could not write the isolation proof; the previous artifact is unchanged"
+  printf 'FM_ISOLATION_ARTIFACT WRITTEN path=%s subjects=%s candidates=%s\n' \
+    "$JSON_PATH" "$TOTAL" "$TOTAL"
+
+  # Step 4: the separate canonical seam. bin/fm-test-run.sh is the production
+  # consumer of this artifact, it is not one of the subjects above, and it runs
+  # no test - so asking it now closes the loop without re-entering it. It is
+  # asked only about the canonical proof, because that is the only artifact it
+  # reads; any other destination is stated as out of its scope rather than
+  # silently reported as good.
+  SEAM_TARGET=$(abs_path "$JSON_PATH" || true)
+  SEAM_CANONICAL=$(abs_path "$ROOT/docs/fm-test-isolation-proof.json" || true)
+  if [ -n "$SEAM_TARGET" ] && [ "$SEAM_TARGET" = "$SEAM_CANONICAL" ]; then
+    set +e
+    SEAM_OUT=$("$ROOT/bin/fm-test-run.sh" --check-coverage 2>&1)
+    SEAM_RC=$?
+    set -e
+    case "$SEAM_RC" in
+      0)
+        printf 'FM_ISOLATION_SEAM PROVEN consumer=bin/fm-test-run.sh check=--check-coverage\n'
+        ;;
+      1)
+        printf 'FM_ISOLATION_SEAM REFUSED consumer=bin/fm-test-run.sh check=--check-coverage\n'
+        log "the artifact is genuine, but the canonical coverage seam refuses it:"
+        printf '%s\n' "$SEAM_OUT" >&2
+        AGG_RC=1
+        ;;
+      *)
+        printf 'FM_ISOLATION_SEAM COULD-NOT-OBSERVE consumer=bin/fm-test-run.sh check=--check-coverage rc=%s\n' "$SEAM_RC"
+        log "the canonical coverage seam could not judge the artifact just written:"
+        printf '%s\n' "$SEAM_OUT" >&2
+        AGG_RC=1
+        ;;
+    esac
+  else
+    printf 'FM_ISOLATION_SEAM NOT-APPLICABLE reason=artifact-is-not-the-canonical-proof path=%s\n' \
+      "$JSON_PATH"
+  fi
 fi
 
 exit "$AGG_RC"
