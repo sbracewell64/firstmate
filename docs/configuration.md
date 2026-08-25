@@ -234,6 +234,8 @@ It names real people and real delivery actors, so it is home-private and never s
         "reviewer": "reviewer/binding",
         "ruling": "browser-sol"
       },
+      "review_contracts": ["runtime-change-review"],
+      "protected_refs": ["refs/heads/release/*"],
       "work": {
         "refs/heads/some-branch": { "item": "work-id", "role": "canonical" }
       }
@@ -246,6 +248,10 @@ It names real people and real delivery actors, so it is home-private and never s
 A venue named here is governed; a venue absent from the file is not governed by this policy, though a live Browser Sol request may still govern the work.
 All six `identities` axes are required for a governed venue: a policy declaring four of them has not made a weaker promise, it has left two unstated, and an unstated axis is could-not-observe.
 `maker` and `reviewer` must name different parties.
+`review_contracts` names the capability contracts a governed venue requires its `reviewer` to hold, checked against the role qualification register at publication time.
+It is required for a governed venue on the same terms as the identity axes: a venue declaring none has not promised a lighter review, it has left unstated what its reviewer had to be qualified for, and that is could-not-observe.
+A governed venue also requires a ruling bound to the exact head being published; declaring a venue governed says a review is REQUIRED and never that one happened.
+`protected_refs` adds glob patterns to the built-in set of refs custody replication may never address, and a home may add to that set but not subtract from it.
 `work` maps each publishable ref to the semantic work identity it carries and its `role`; only `canonical` is actionable, so a retained predecessor stays readable and stays unable to publish.
 `placeholders` adds identities to the built-in list that is never a governed party whatever a policy says; that list is built in rather than configured because a placeholder a home could switch off is not a floor.
 

@@ -143,7 +143,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-landing-authorization.sh` | Mint a one-use landing authorization from a ruled Browser Sol request and spend it exactly once against the exact head it names |
 | `fm-landing-authorization-lib.sh` | One-use effect-authorization identity, state vocabulary, record store, and the pure mint and spend predicates, for both the landing and candidate-publication effects |
 | `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is Browser-Sol-governed, which request grants its authority, and the spend the merge command runs inside |
-| `fm-publication-guard.sh` | Compile the eligibility verdict for one exact candidate publication, mint the one-use authority it must spend, and run the effect inside that spend |
+| `fm-publication-guard.sh` | Compile the eligibility verdict and effect class for one exact candidate act, mint the one-use authority it must spend, run the effect inside that spend, and project which candidate state the result leaves it in |
 | `fm-publication-seam-lib.sh` | Single owner of whether a remote-changing candidate publication may proceed, and the only wiring FirstMate's own publication paths reach it through |
 | `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |
 | `fm-reflag.sh`           | Reflag a scout task in place as a protected ship task with an explicit delivery mode |

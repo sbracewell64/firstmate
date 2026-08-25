@@ -110,6 +110,43 @@ test <test@example.com>
 Your Name <you@example.com>
 unknown <unknown>'
 
+# THE TWO EFFECT CLASSES A REMOTE-CHANGING CANDIDATE ACT CAN HAVE, and the
+# distinction the whole of this section exists to hold open.
+#
+#   CUSTODY_REPLICATION  durable backup of one exact committed candidate to its
+#                        OWN ordinary unprotected feature ref. It grants nothing:
+#                        no pull request, no review request, no CI implication,
+#                        no acceptance, no landing authorization and no
+#                        publication-qualified state. A remote copy of a commit
+#                        is a copy of a commit.
+#   PUBLICATION_EFFECT   anything that makes the candidate enter the review, CI,
+#                        publication or landing lifecycle. Every obligation this
+#                        file already compiled belongs to this class and none of
+#                        them is relaxed.
+#
+# WHY THE CLASS IS DECIDED HERE AND NEVER BY THE CALLER'S PROSE. A caller may ask
+# for custody; it may not describe its way into it. Asking is a typed request and
+# the request is then VERIFIED against observation - clean worktree, exact head
+# and tree, exact permitted ref, unprotected ref, no force, and a remote ref that
+# is absent or already equal. A request evidence does not support is REFUSED
+# rather than quietly reclassified, so a caller cannot discover the class by
+# trying, and custody is strictly weaker in what it grants while being strictly
+# stricter in what it demands. There is no argument by which naming a class
+# obtains more permission than the evidence already gives.
+# shellcheck disable=SC2034  # contract constants consumed by sourcing callers
+FM_PUB_SEAM_CLASS_CUSTODY=CUSTODY_REPLICATION
+# shellcheck disable=SC2034
+FM_PUB_SEAM_CLASS_PUBLICATION=PUBLICATION_EFFECT
+
+# The refs that are never a custody target, whatever a policy says. Built in for
+# the same reason the placeholder identities are: a floor a home could switch off
+# is not a floor. A home may ADD to this through the policy's protected_refs, and
+# may not subtract from it.
+FM_PUB_SEAM_PROTECTED_REFS='refs/heads/main
+refs/heads/master
+refs/heads/trunk
+refs/heads/HEAD'
+
 # The candidate roles a ref may hold. Only `canonical` is actionable: a retained
 # predecessor stays readable, stays open, and stays unable to publish, which is
 # the forge-actionability defect stated as a rule.
@@ -147,6 +184,13 @@ FM_PUB_SEAM_TOKEN_NOT_DISTINCT=FM_PUB_IDENTITY_NOT_DISTINCT
 FM_PUB_SEAM_TOKEN_GENERATION=FM_PUB_GENERATION_CHANGED
 FM_PUB_SEAM_TOKEN_NO_REVIEW=FM_PUB_NO_EXACT_CANDIDATE_REVIEW
 FM_PUB_SEAM_TOKEN_REVIEWER_UNQUALIFIED=FM_PUB_REVIEWER_NOT_QUALIFIED
+FM_PUB_SEAM_TOKEN_PROTECTED_REF=FM_PUB_PROTECTED_REF
+FM_PUB_SEAM_TOKEN_FORCE=FM_PUB_FORCE_REFUSED
+FM_PUB_SEAM_TOKEN_CUSTODY_REF=FM_PUB_CUSTODY_REF_NOT_PERMITTED
+FM_PUB_SEAM_TOKEN_CUSTODY_OCCUPIED=FM_PUB_CUSTODY_REF_OCCUPIED
+FM_PUB_SEAM_TOKEN_WORKTREE_DIRTY=FM_PUB_WORKTREE_NOT_CLEAN
+FM_PUB_SEAM_TOKEN_CUSTODY_DRIFT=FM_PUB_CUSTODY_CANDIDATE_DRIFT
+FM_PUB_SEAM_TOKEN_CLASS_MISMATCH=FM_PUB_EFFECT_CLASS_MISMATCH
 # could-not-observe: no verdict was reached
 FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND=FM_PUB_CANDIDATE_UNBOUND
 FM_PUB_SEAM_TOKEN_STORE_UNREADABLE=FM_PUB_RECORD_STORE_UNREADABLE
@@ -159,6 +203,7 @@ FM_PUB_SEAM_TOKEN_VENUE_UNCONFIGURED=FM_PUB_VENUE_UNCONFIGURED
 FM_PUB_SEAM_TOKEN_AUTH_STORE_UNREADABLE=FM_PUB_AUTHORIZATION_STORE_UNREADABLE
 FM_PUB_SEAM_TOKEN_REVIEW_UNDECLARED=FM_PUB_REVIEW_CONTRACTS_UNDECLARED
 FM_PUB_SEAM_TOKEN_REVIEW_UNOBSERVED=FM_PUB_REVIEWER_QUALIFICATION_UNOBSERVED
+FM_PUB_SEAM_TOKEN_WORKTREE_UNOBSERVED=FM_PUB_WORKTREE_UNOBSERVED
 }
 
 # --- outputs -----------------------------------------------------------------
@@ -291,16 +336,17 @@ fm_pub_seam_policy_identity() {  # <venue> <axis>
   fm_pub_seam_policy_get --arg v "$1" --arg a "$2" '.venues[$v].identities[$a] // ""'
 }
 
-# shellcheck disable=SC2016  # jq program variables, not shell expansions.
 # The capability contracts a governed venue requires its reviewer to hold, one
 # per line. Required as a complete set for the same reason the identity axes are:
 # a governed venue that declares none has not promised a lighter review, it has
 # left unstated what the reviewer had to be qualified for, and an unstated axis
 # at a load-bearing admission is could-not-observe.
+# shellcheck disable=SC2016  # jq program variables, not shell expansions.
 fm_pub_seam_policy_review_contracts() {  # <venue>
   fm_pub_seam_policy_get --arg v "$1" '(.venues[$v].review_contracts // []) | .[]'
 }
 
+# shellcheck disable=SC2016  # jq program variables, not shell expansions.
 fm_pub_seam_policy_work() {  # <venue> <ref> <field>
   fm_pub_seam_policy_get --arg v "$1" --arg r "$2" --arg f "$3" '.venues[$v].work[$r][$f] // ""'
 }
@@ -609,6 +655,219 @@ fm_pub_seam_reviewer_admissible() {  # <maker> <reviewer> <contract>... -> 0 ok,
     1|3) return 3 ;;
     *) return 4 ;;
   esac
+}
+
+# --- custody replication ------------------------------------------------------
+#
+# The permitted custody ref is DERIVED FROM THE WORK, never accepted from the
+# caller, so custody can only ever address the candidate's own feature branch.
+# A caller that names any other ref is asking for something custody does not
+# cover, and is told so rather than having its ref quietly accepted.
+
+fm_pub_seam_custody_ref() {  # <item>
+  printf 'refs/heads/fm/%s\n' "$1"
+}
+
+# Reads the policy already loaded by fm_pub_seam_policy_read, so it must be
+# called after it: a protected-ref list that was never read would report every
+# ref unprotected, which is the wrong direction for this question.
+fm_pub_seam_ref_protected() {  # <ref>
+  local ref=${1:-} pattern
+  printf '%s\n' "$FM_PUB_SEAM_PROTECTED_REFS" | grep -qxF "$ref" && return 0
+  while IFS= read -r pattern; do
+    [ -n "$pattern" ] || continue
+    # shellcheck disable=SC2254  # the pattern is a glob on purpose
+    case $ref in $pattern) return 0 ;; esac
+  done <<< "$(fm_pub_seam_policy_get '(.protected_refs // []) | .[]')"
+  return 1
+}
+
+# WHETHER THE ACT ITSELF WOULD OVERWRITE. Every check above reasons about the
+# subject; this one reasons about the command, because a plan that is exactly
+# right about its head and its tip still destroys history if the push carries a
+# force. It is applied to BOTH classes: the guard has already established the
+# remote is at the tip the plan was compiled against, so a fast-forward suffices,
+# and a guard that forbade a force on the weaker act while permitting it on the
+# stronger one would be incoherent.
+#
+# A LIST OF WHAT IS FORBIDDEN, unusually, rather than a whitelist - and the
+# reason is that the whitelist here would be a whitelist of every argument every
+# publication command may ever take. So the direction of the error is chosen
+# instead: a short-option cluster is treated as forcing when it carries any of
+# the forcing letters, which refuses a little more than it must and never less.
+fm_pub_seam_command_forces() {  # <command...>
+  local arg
+  for arg in "$@"; do
+    case $arg in
+      --force|--force-with-lease|--force-with-lease=*|--force-if-includes|--mirror|--delete|--prune)
+        return 0 ;;
+      +*:*) return 0 ;;
+      --*) ;;
+      -[!-]*)
+        case $arg in *[fd]*) return 0 ;; esac
+        ;;
+    esac
+  done
+  return 1
+}
+
+# CLEAN INCLUDING UNTRACKED, and three-valued. A backup taken from a tree with
+# uncommitted work in it is a backup of something other than what it says it is:
+# the ref would carry the committed head while the work that mattered stayed only
+# on this disk, which is precisely the loss custody exists to prevent.
+fm_pub_seam_worktree_clean() {  # <repo> -> 0 clean, 1 dirty, 2 unobserved
+  local repo=$1 out rc=0
+  out=$(git --no-optional-locks -C "$repo" status --porcelain --untracked-files=all 2>/dev/null) || rc=$?
+  [ "$rc" -eq 0 ] || return 2
+  [ -z "$out" ] || return 1
+  return 0
+}
+
+# --- custody resolution -------------------------------------------------------
+#
+# A SEPARATE FOLD, because custody's obligations are not a subset of
+# publication's: it demands things publication never asks (a clean worktree, the
+# candidate actually checked out, an unoccupied ref) and it is not subject to the
+# review it does not claim. Expressing it as a flag inside the publication fold
+# would have made every later reader ask which of those branches applied to which
+# class, and the first one to guess wrong would have granted the wrong permission.
+#
+# WHAT CUSTODY DELIBERATELY DOES NOT ASK, said plainly so nothing credits it with
+# more. It does not ask for a ruling, a review, a reviewer qualification, or a
+# distinct delivery identity, because it grants none of the things those govern.
+# A candidate under an active publication hold may still be backed up: the hold
+# says do not publish it, and copying a commit to its own feature ref publishes
+# nothing. That is the whole point of separating the two, and it is why custody
+# is confined to a ref derived from the work rather than one the caller chooses.
+
+fm_pub_seam_resolve_custody() {  # <config-dir> <repo-dir> <item-or-dash> <venue> <ref> <head> <tree> <expected-tip> <observed-tip>
+  local config=$1 repo=$2 item=$3 venue=$4 ref=$5 head=$6 tree=$7 expected=$8 observed=$9
+  local policy_governed=0 policy_generation='' declared='' permitted='' generation=''
+  local actual_head actual_tree clean_rc=0
+
+  if ! fm_pub_seam_subject_valid "$item" "$venue" "$ref" "$head" "$tree" "$expected" "$observed"; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
+      "the custody replication names ref '$ref' at head '$head' (tree '$tree') on venue '$venue', moving from '$expected' with '$observed' observed, which is not an exact candidate effect, so whether it may proceed could not be asked"
+    return $?
+  fi
+
+  # NOTHING TO DO, and therefore nothing to authorize. Asked first for the same
+  # reason publication asks it first: a restart whose backup already exists must
+  # not spend an authority for an act nobody is about to perform.
+  if [ "$observed" = "$head" ]; then
+    fm_pub_seam_set no-effect "$FM_PUB_SEAM_TOKEN_NO_EFFECT" \
+      "$venue already has $ref at $head, so this custody replication moves nothing and consumes no authorization"
+    return $?
+  fi
+
+  fm_pub_seam_policy_read "$config"
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = unreadable ]; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" \
+      "the publication identity policy at $config/$FM_PUB_SEAM_POLICY_FILE could not be read as JSON, and a policy that failed to parse is exactly the one that might have named $ref protected or named this work differently"
+    return $?
+  fi
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = present ]; then
+    policy_generation=$(fm_pub_seam_policy_get '.generation // ""')
+    fm_pub_seam_policy_venue_governed "$venue" && policy_governed=1
+  fi
+
+  if fm_pub_seam_ref_protected "$ref"; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_PROTECTED_REF" \
+      "$ref is a protected ref, and custody replication only ever addresses a candidate's own unprotected feature ref"
+    return $?
+  fi
+
+  # THE POLICY WINS WHERE IT SPEAKS, and the caller's claim is used where it does
+  # not. This is looser than publication's rule on purpose, and it costs nothing:
+  # the permitted ref is DERIVED from whichever item is settled on, so a caller
+  # that names its own work still has to be addressing that work's own ref. What
+  # is refused, exactly as in publication, is the two sources DISAGREEING.
+  declared=''
+  [ "$policy_governed" -eq 1 ] && declared=$(fm_pub_seam_policy_work "$venue" "$ref" item)
+  if [ -n "$declared" ]; then
+    if [ "$item" != '-' ] && [ "$item" != "$declared" ]; then
+      fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_WORK_UNDECLARED" \
+        "this custody replication claims work '$item' while the governed policy declares $ref carries '$declared', so two sources disagree about whose candidate is being backed up"
+      return $?
+    fi
+    item=$declared
+  elif [ "$item" = '-' ]; then
+    # The permitted ref is DERIVED from the work, so a custody act that names no
+    # work has no permitted ref to be checked against. That is could-not-observe
+    # and not an absence of governance: there is nothing here to be ungoverned.
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
+      "this custody replication names no work identity and no policy in this home declares one for $ref on $venue, so which ref would be its own could not be derived"
+    return $?
+  fi
+
+  permitted=$(fm_pub_seam_custody_ref "$item")
+  if [ "$ref" != "$permitted" ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_CUSTODY_REF" \
+      "custody replication of work $item may only address $permitted, and this names $ref"
+    return $?
+  fi
+
+  # ABSENT OR ALREADY EQUAL, and equal was answered above. A ref standing at some
+  # other head is not this candidate's backup slot: advancing it would be a
+  # publication of a new head to a ref something else is using, which is exactly
+  # the act custody is defined not to be.
+  if [ "$observed" != '-' ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_CUSTODY_OCCUPIED" \
+      "$venue already has $ref at $observed, so backing $head up there would advance a ref that is not empty rather than replicate a candidate"
+    return $?
+  fi
+  if [ "$expected" != "$observed" ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_REMOTE_MOVED" \
+      "$venue has $ref at $observed while this custody replication was compiled against $expected, so the remote moved and the planned effect no longer addresses it"
+    return $?
+  fi
+
+  clean_rc=0
+  fm_pub_seam_worktree_clean "$repo" || clean_rc=$?
+  case $clean_rc in
+    0) ;;
+    1)
+      fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_WORKTREE_DIRTY" \
+        "$repo has uncommitted or untracked changes, so $head is not everything this candidate currently is and replicating it would record a backup that is not one"
+      return $?
+      ;;
+    *)
+      fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_WORKTREE_UNOBSERVED" \
+        "whether $repo has uncommitted or untracked changes could not be observed, which is not the same as it having none"
+      return $?
+      ;;
+  esac
+
+  actual_head=$(git --no-optional-locks -C "$repo" rev-parse HEAD 2>/dev/null) || actual_head=''
+  actual_tree=$(git --no-optional-locks -C "$repo" rev-parse 'HEAD^{tree}' 2>/dev/null) || actual_tree=''
+  if [ -z "$actual_head" ] || [ -z "$actual_tree" ]; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_WORKTREE_UNOBSERVED" \
+      "the head and tree $repo is currently on could not be read, so whether $head is the candidate in front of us could not be observed"
+    return $?
+  fi
+  # THE CANDIDATE MUST BE THE ONE IN FRONT OF US. A clean worktree says nothing
+  # about WHICH head it is clean at, so the two are asked together: custody backs
+  # up the candidate this checkout is actually sitting on, not an arbitrary
+  # committed object that happens to be reachable.
+  if [ "$actual_head" != "$head" ] || [ "$actual_tree" != "$tree" ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_CUSTODY_DRIFT" \
+      "$repo is at $actual_head (tree $actual_tree) and this custody replication names $head (tree $tree), so the candidate it would back up is not the candidate that is here"
+    return $?
+  fi
+
+  generation=$(fm_pub_seam_generation "$policy_generation" '' '' '' "$venue" "$ref" "$item")
+  if [ -z "$generation" ]; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" \
+      "the policy generation for $item on $venue could not be compiled, so what this custody replication would rest on could not be observed"
+    return $?
+  fi
+
+  # shellcheck disable=SC2034  # read by the sourcing publication paths
+  FM_PUB_SEAM_ITEM=$item
+  fm_pub_seam_set allow-exact "$FM_PUB_SEAM_TOKEN_ALLOW" \
+    "replicating $ref at $head on $venue into an absent ref is permitted custody for work $item, and grants nothing beyond a remote copy of that commit" \
+    '' "$generation"
+  return $?
 }
 
 # --- the compiled generation --------------------------------------------------
@@ -938,13 +1197,13 @@ fm_pub_seam_token_of() {  # <guard-output>
   esac
 }
 
-fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expected-tip> <item-or-dash> <command...>
-  local guard=$1 repo=$2 remote=$3 venue=$4 ref=$5 head=$6 expected=$7 item=$8
-  shift 8
+fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expected-tip> <item-or-dash> <effect> <command...>
+  local guard=$1 repo=$2 remote=$3 venue=$4 ref=$5 head=$6 expected=$7 item=$8 effect=$9
+  shift 9
   local out rc=0 word id act
   FM_PUB_SEAM_OUTPUT=
 
-  out=$("$guard" prepare --repo "$repo" --remote "$remote" --venue "$venue" \
+  out=$("$guard" prepare --effect "$effect" --repo "$repo" --remote "$remote" --venue "$venue" \
     --ref "$ref" --head "$head" --expected-tip "$expected" --item "$item" 2>&1) || rc=$?
   word=$(printf '%s\n' "$out" | awk 'NF {print $1; exit}')
 

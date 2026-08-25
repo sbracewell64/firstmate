@@ -25,11 +25,39 @@
 # `prepare` prints the closed typed answer such an integration needs, so the
 # semantic decision has one compiler rather than one per caller.
 #
+# THE TWO EFFECT CLASSES, and why the distinction is the guard's and not the
+# caller's. A remote-changing candidate act is one of exactly two things:
+#
+#   CUSTODY_REPLICATION  durable backup of one exact committed candidate to its
+#                        OWN unprotected feature ref, refs/heads/fm/<work-id> on
+#                        the work's own venue. It grants NOTHING: no pull request,
+#                        no review request, no CI implication, no acceptance, no
+#                        landing authorization, no publication-qualified state. It
+#                        demands things publication never asks - a clean worktree
+#                        including untracked files, the candidate actually checked
+#                        out at that exact head and tree, an unprotected ref
+#                        derived from the work rather than chosen by the caller,
+#                        no force in any form, and a remote ref that is absent or
+#                        already equal - and it is not subject to the review it
+#                        does not claim, so a candidate under a publication hold
+#                        may still be backed up.
+#   PUBLICATION_EFFECT   anything that makes the candidate enter the review, CI,
+#                        publication or landing lifecycle. Every obligation this
+#                        guard already compiled belongs here, unchanged.
+#
+# `--effect` names the class a caller wants and never settles it. The guard
+# verifies the request against observation and REFUSES one the evidence does not
+# support rather than quietly reclassifying it, so a caller cannot discover the
+# class by trying, and custody is strictly weaker in what it grants while being
+# strictly stricter in what it demands. Omitting it means PUBLICATION_EFFECT: the
+# stricter class is the default, and every existing caller keeps its obligations.
+#
 # USAGE
 #   fm-publication-guard.sh prepare --repo <dir> --remote <name|url>
 #                                   --venue <host/owner/repo> --ref <refs/...>
 #                                   --head <sha> --expected-tip <sha|->
-#                                   [--tree <sha>] [--item <work-id>] [--dry-run]
+#                                   [--tree <sha>] [--item <work-id>]
+#                                   [--effect custody|publication] [--dry-run]
 #       Compile the eligibility verdict for one exact candidate effect and, when
 #       it is permitted, mint the one-use authority that effect must spend.
 #
@@ -62,7 +90,9 @@
 #   fm-publication-guard.sh publish --repo <dir> --remote <name|url>
 #                                   --venue <host/owner/repo> --ref <refs/...>
 #                                   --head <sha> --expected-tip <sha|->
-#                                   [--item <work-id>] -- <command> [args...]
+#                                   [--item <work-id>]
+#                                   [--effect custody|publication]
+#                                   -- <command> [args...]
 #       prepare and consume composed into the one operation a caller actually
 #       wants: decide, and if permitted perform <command> inside the authority.
 #       This is the entry point for a caller that cannot source shell libraries.
@@ -80,12 +110,31 @@
 #       not to do. An already-retired record is reported and left exactly as it
 #       is, so repeating the command cannot accumulate history.
 #
+#   fm-publication-guard.sh project --repo <dir> --remote <name|url>
+#                                   --venue <host/owner/repo> --ref <refs/...>
+#                                   --head <sha> [--item <work-id>]
+#       READ-ONLY. What state this candidate is actually in, derived from the
+#       durable owners that already hold the evidence, plus the one actionable
+#       answer that state supports: may the slot holding it be reclaimed?
+#
+#       The states are explicit and monotonic and NONE IMPLIES THE NEXT:
+#       local-only, custody-replicated, review-published, publication-qualified,
+#       landing-authorized, landed. Remote custody is not review publication;
+#       review publication is not acceptance; acceptance is not landing
+#       authority; landing authority is not a completed landing. Each limb is
+#       reported with its own three-valued answer so no reader has to infer one
+#       from another, and the exit status answers reclaimability: 0 yes, 3 no,
+#       4 could not be observed. A slot may be reclaimed only when ls-remote
+#       resolves the custody ref to the EXACT candidate head - never because a
+#       branch of that name exists.
+#
 #   fm-publication-guard.sh status <auth-id>
 #   fm-publication-guard.sh list
 #
 # RESULT VOCABULARY, closed. Judge this command by the word it prints, never by
 # the exit status alone.
-#   ALLOW_EXACT <id>              permitted, and this authority is the permission
+#   ALLOW_EXACT <id> class=<c>    permitted, and this authority is the permission
+#                                 for exactly the class named
 #   NO_EFFECT_ALREADY_EQUAL       the remote already equals the head. A typed
 #                                 NO-EFFECT result: nothing moves and no
 #                                 authority is consumed
@@ -167,6 +216,7 @@ observe_tip() {  # <repo> <remote> <ref>
 # present-but-unreadable. Only the second is an absence.
 
 AUTH_RECORD=
+AUTH_EFFECT=
 auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
   local id=$1 path raw effect
   path=$(fm_auth_store_path "$AUTH_DIR" "$id") || return 4
@@ -181,7 +231,8 @@ auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
   # a record this command may act on.
   effect=$(printf '%s' "$raw" | jq -r '.effect // ""')
   fm_auth_effect_valid "$effect" || return 4
-  [ "$effect" = publication ] || return 4
+  case $effect in publication|custody) ;; *) return 4 ;; esac
+  AUTH_EFFECT=$effect
   # LOCATION IS NOT IDENTITY: a record adopted from its filename can be moved
   # into place, so the record must name itself.
   [ "$(printf '%s' "$raw" | jq -r '.authorization_id // ""')" = "$id" ] || return 4
@@ -194,12 +245,29 @@ auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
 # every one of those files ambiguous to the dead-predicate control.
 auth_field() { printf '%s' "$AUTH_RECORD" | jq -r "$1" 2>/dev/null; }
 
+# The effect's class name, which is what a caller reads. The record stores the
+# short effect; the closed result vocabulary names the class.
+effect_class() {  # <effect>
+  case ${1:-} in
+    custody) printf '%s' "$FM_PUB_SEAM_CLASS_CUSTODY" ;;
+    *) printf '%s' "$FM_PUB_SEAM_CLASS_PUBLICATION" ;;
+  esac
+}
+
 # --- shared resolution --------------------------------------------------------
 
-resolve_or_exit() {  # <repo> <item> <venue> <ref> <head> <tree> <expected> <observed>
-  local rc=0
-  fm_pub_seam_resolve "$OUTBOUND_DIR" "$AUTH_DIR" "$CONFIG" "$1" \
-    "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
+# The class selects the fold, and nothing else does. A caller that asked for
+# custody is answered by custody's obligations; one that asked for publication -
+# which is the default, and the stricter class - is answered by publication's.
+resolve_or_exit() {  # <effect> <repo> <item> <venue> <ref> <head> <tree> <expected> <observed>
+  local effect=$1 rc=0
+  shift
+  if [ "$effect" = custody ]; then
+    fm_pub_seam_resolve_custody "$CONFIG" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
+  else
+    fm_pub_seam_resolve "$OUTBOUND_DIR" "$AUTH_DIR" "$CONFIG" "$1" \
+      "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
+  fi
   case $rc in
     0) return 0 ;;
     3) refuse "$FM_PUB_SEAM_TOKEN" "$FM_PUB_SEAM_REASON" ;;
@@ -211,11 +279,13 @@ resolve_or_exit() {  # <repo> <item> <venue> <ref> <head> <tree> <expected> <obs
 
 cmd_prepare() {
   local repo='' remote='' venue='' ref='' head='' tree='' item='-' expected='' dry=0
+  local effect=publication
   local subject epoch=1 id path state f raw now record
 
   while [ $# -gt 0 ]; do
     case $1 in
       --dry-run) dry=1; shift ;;
+      --effect) effect=${2:-}; shift 2 ;;
       --repo) repo=${2:-}; shift 2 ;;
       --remote) remote=${2:-}; shift 2 ;;
       --venue) venue=${2:-}; shift 2 ;;
@@ -230,6 +300,10 @@ cmd_prepare() {
   [ -n "$repo" ] && [ -n "$remote" ] && [ -n "$venue" ] && [ -n "$ref" ] \
     && [ -n "$head" ] && [ -n "$expected" ] \
     || die "prepare requires --repo, --remote, --venue, --ref, --head and --expected-tip"
+  case $effect in
+    publication|custody) ;;
+    *) die "unknown effect class: $effect (custody or publication)" ;;
+  esac
 
   if [ -z "$tree" ]; then
     tree=$(git --no-optional-locks -C "$repo" rev-parse "$head^{tree}" 2>/dev/null) || tree=''
@@ -240,7 +314,7 @@ cmd_prepare() {
   observe_tip "$repo" "$remote" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
-  resolve_or_exit "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$expected" "$OBSERVED_TIP"
+  resolve_or_exit "$effect" "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$expected" "$OBSERVED_TIP"
 
   case $FM_PUB_SEAM_VERDICT in
     no-effect)
@@ -254,9 +328,9 @@ cmd_prepare() {
   esac
 
   item=$FM_PUB_SEAM_ITEM
-  subject=$(fm_auth_publication_subject_digest "$venue" "$ref" "$item" "$head" "$tree" \
+  subject=$(fm_auth_effect_subject_digest "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION") \
-    || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the subject of this publication could not be digested"
+    || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the subject of this $effect could not be digested"
 
   # WHAT HAS ALREADY HAPPENED TO THIS EXACT SUBJECT. A live authority converges;
   # a consumed one whose effect was never confirmed must be reconciled before
@@ -274,6 +348,7 @@ cmd_prepare() {
           "authorization record $f could not be read, and an unreadable one is exactly the one that might already authorize this subject"
       fi
       [ "$(printf '%s' "$raw" | jq -r '.subject // ""')" = "$subject" ] || continue
+      [ "$(printf '%s' "$raw" | jq -r '.effect // ""')" = "$effect" ] || continue
       state=$(printf '%s' "$raw" | jq -r '.state // ""')
       case $state in
         granted)
@@ -300,18 +375,19 @@ cmd_prepare() {
     done
   fi
 
-  id=$(fm_auth_publication_id "$venue" "$ref" "$item" "$head" "$tree" \
+  id=$(fm_auth_effect_id "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be digested"
 
   if [ "$dry" -eq 1 ]; then
-    printf 'ALLOW_EXACT %s generation=%s item=%s\n' "$id" "$FM_PUB_SEAM_GENERATION" "$item"
+    printf 'ALLOW_EXACT %s class=%s generation=%s item=%s\n' \
+      "$id" "$(effect_class "$effect")" "$FM_PUB_SEAM_GENERATION" "$item"
     printf 'fm-publication-guard: dry run, no authority was recorded\n' >&2
     return 0
   fi
 
   now=$(now_iso)
-  record=$(fm_auth_publication_record_new "$id" "$FM_PUB_SEAM_REQUEST" "$venue" "$ref" \
+  record=$(fm_auth_effect_record_new "$effect" "$id" "$FM_PUB_SEAM_REQUEST" "$venue" "$ref" \
     "$item" "$head" "$tree" "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch" "$subject" "$now") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization record could not be constructed"
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
@@ -319,7 +395,8 @@ cmd_prepare() {
       "the authorization record for $id could not be written, so an authority that was granted could not have been recorded"
 
   path=$(fm_auth_store_path "$AUTH_DIR" "$id")
-  printf 'ALLOW_EXACT %s generation=%s item=%s\n' "$id" "$FM_PUB_SEAM_GENERATION" "$item"
+  printf 'ALLOW_EXACT %s class=%s generation=%s item=%s\n' \
+    "$id" "$(effect_class "$effect")" "$FM_PUB_SEAM_GENERATION" "$item"
   printf 'fm-publication-guard: authority recorded at %s\n' "$path" >&2
   return 0
 }
@@ -347,7 +424,7 @@ cmd_prepare() {
 cmd_consume() {
   local id=${1:-}; shift || true
   local repo='' remote='' now rc=0
-  local venue ref item head tree tip generation epoch fresh_id state record
+  local venue ref item head tree tip generation epoch fresh_id state record effect
 
   [ -n "$id" ] || die "consume requires an authorization id"
   while [ $# -gt 0 ]; do
@@ -360,6 +437,15 @@ cmd_consume() {
   done
   [ -n "$repo" ] && [ -n "$remote" ] || die "consume requires --repo and --remote"
   [ $# -gt 0 ] || die "consume requires a command after --"
+
+  # THE COMMAND IS PART OF WHAT IS BEING AUTHORIZED. Every check below reasons
+  # about the subject, and a plan exactly right about its head and its tip still
+  # destroys history if the push carries a force. This is the first point at
+  # which the act itself is visible, so it is asked here and for both classes.
+  if fm_pub_seam_command_forces "$@"; then
+    refuse "$FM_PUB_SEAM_TOKEN_FORCE" \
+      "the act under this authority carries a forcing argument, and no authority this guard grants covers overwriting or removing what a remote already holds"
+  fi
 
   auth_read "$id" || case $? in
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id has been granted, so there is nothing to publish under" ;;
@@ -387,6 +473,7 @@ cmd_consume() {
       ;;
   esac
 
+  effect=$AUTH_EFFECT
   venue=$(auth_field '.grant.venue // ""')
   ref=$(auth_field '.grant.ref // ""')
   item=$(auth_field '.grant.item // ""')
@@ -399,7 +486,7 @@ cmd_consume() {
   observe_tip "$repo" "$remote" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
-  resolve_or_exit "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$tip" "$OBSERVED_TIP"
+  resolve_or_exit "$effect" "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$tip" "$OBSERVED_TIP"
   case $FM_PUB_SEAM_VERDICT in
     no-effect)
       printf 'NO_EFFECT_ALREADY_EQUAL %s\n' "$FM_PUB_SEAM_REASON"
@@ -416,7 +503,7 @@ cmd_consume() {
       "publication authority $id rests on generation $generation and the current ruling and policy generation is $FM_PUB_SEAM_GENERATION, so the permission it carries addresses a world that has since changed"
   fi
 
-  fresh_id=$(fm_auth_publication_id "$venue" "$ref" "$item" "$head" "$tree" \
+  fresh_id=$(fm_auth_effect_id "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be recomputed"
   if [ "$fresh_id" != "$id" ]; then
@@ -462,7 +549,7 @@ cmd_consume() {
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
     || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the outcome record for $id could not be written although the remote confirms the effect"
 
-  printf 'APPLIED %s %s now at %s\n' "$id" "$ref" "$OBSERVED_TIP"
+  printf 'APPLIED %s %s %s now at %s\n' "$(effect_class "$effect")" "$id" "$ref" "$OBSERVED_TIP"
   return 0
 }
 
@@ -476,9 +563,11 @@ cmd_consume() {
 
 cmd_publish() {
   local repo='' remote='' venue='' ref='' head='' expected='' item='-' rc=0
+  local effect=publication
 
   while [ $# -gt 0 ]; do
     case $1 in
+      --effect) effect=${2:-}; shift 2 ;;
       --repo) repo=${2:-}; shift 2 ;;
       --remote) remote=${2:-}; shift 2 ;;
       --venue) venue=${2:-}; shift 2 ;;
@@ -494,8 +583,13 @@ cmd_publish() {
     && [ -n "$head" ] && [ -n "$expected" ] \
     || die "publish requires --repo, --remote, --venue, --ref, --head and --expected-tip"
   [ $# -gt 0 ] || die "publish requires a command after --"
+  case $effect in
+    publication|custody) ;;
+    *) die "unknown effect class: $effect (custody or publication)" ;;
+  esac
 
-  fm_pub_seam_publish "$0" "$repo" "$remote" "$venue" "$ref" "$head" "$expected" "$item" "$@" \
+  fm_pub_seam_publish "$0" "$repo" "$remote" "$venue" "$ref" "$head" "$expected" "$item" \
+    "$effect" "$@" \
     || rc=$?
   [ -z "$FM_PUB_SEAM_OUTPUT" ] || printf '%s\n' "$FM_PUB_SEAM_OUTPUT" >&2
   case $rc in
@@ -510,6 +604,192 @@ cmd_publish() {
     3) refuse "$FM_PUB_SEAM_TOKEN" "$FM_PUB_SEAM_REASON" ;;
     *) cno "$FM_PUB_SEAM_TOKEN" "$FM_PUB_SEAM_REASON" ;;
   esac
+}
+
+# --- project ------------------------------------------------------------------
+#
+# WHAT STATE THIS CANDIDATE IS ACTUALLY IN, derived from the durable owners that
+# already hold the evidence. It reads; it never writes, mints, or moves anything.
+#
+# The states are explicit and monotonic, and NONE OF THEM IMPLIES THE NEXT. That
+# is the entire reason this exists rather than a boolean "is it pushed":
+#
+#   local-only            no remote copy this command could observe
+#   custody-replicated    the candidate's own feature ref on the venue resolves
+#                         to EXACTLY this head. A remote copy of a commit, and
+#                         nothing else: no review, no CI, no acceptance
+#   review-published      a live governing request carries this exact head, so
+#                         the candidate has been submitted for review. Being
+#                         submitted is not being accepted
+#   publication-qualified the publication fold currently answers allow-exact for
+#                         this candidate. Being permitted to publish is not
+#                         having published, and is not landing authority
+#   landing-authorized    a landing authority for this work stands unspent.
+#                         Authority to land is not a landing
+#   landed                a landing authority for this work is spent
+#
+# Each limb is reported on its own with its own three-valued answer, so a reader
+# can see custody-replicated yes beside review-published no and not have to infer
+# either from the other. The headline STATE is the highest limb OBSERVED, and a
+# limb that could not be observed is reported as such rather than folded into no.
+#
+# THE EXIT STATUS ANSWERS THE ACTIONABLE QUESTION, which is reclaimability: may
+# the worktree slot holding this candidate be released? Yes only when the remote
+# ref resolves to the exact candidate head - verified by ls-remote, never by the
+# branch merely existing, because a branch at some other head is evidence that
+# this candidate is NOT backed up rather than that it is.
+#
+#   0  reclaimable
+#   3  not reclaimable
+#   4  could not be observed - which is not reclaimable either, and is a
+#      different repair from a ref standing at the wrong head
+
+PROJECT_STATE=local-only
+project_limb() {  # <name> <verdict> <evidence>
+  printf '%-22s %-18s %s\n' "$1" "$2" "$3"
+  [ "$2" = yes ] || return 0
+  PROJECT_STATE=$1
+}
+
+# The landing authorities standing for this work, which is a different store
+# question from the publication ones: landing binds an item and a pull request,
+# not a ref and a tip.
+LANDING_STATES=
+scan_landing() {  # <item> -> 0 read | 4 unreadable
+  local item=$1 f raw
+  LANDING_STATES=
+  [ -d "$AUTH_DIR" ] || return 0
+  { [ -r "$AUTH_DIR" ] && [ -x "$AUTH_DIR" ]; } || return 4
+  for f in "$AUTH_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    raw=$(cat "$f" 2>/dev/null) || return 4
+    printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 4
+    [ "$(printf '%s' "$raw" | jq -r '.effect // ""')" = landing ] || continue
+    [ "$(printf '%s' "$raw" | jq -r '.grant.item // ""')" = "$item" ] || continue
+    LANDING_STATES="$LANDING_STATES $(printf '%s' "$raw" | jq -r '.state // "?"')"
+  done
+  return 0
+}
+
+cmd_project() {
+  local repo='' remote='' venue='' ref='' head='' item='-' tree=''
+  local permitted custody=no custody_note reclaim=3
+  local review=no review_note qualified=no qualified_note
+  local authorized=no authorized_note landed=no landed_note rc=0
+
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --repo) repo=${2:-}; shift 2 ;;
+      --remote) remote=${2:-}; shift 2 ;;
+      --venue) venue=${2:-}; shift 2 ;;
+      --ref) ref=${2:-}; shift 2 ;;
+      --head) head=${2:-}; shift 2 ;;
+      --item) item=${2:-}; shift 2 ;;
+      *) die "unknown option: $1" ;;
+    esac
+  done
+  [ -n "$repo" ] && [ -n "$remote" ] && [ -n "$venue" ] && [ -n "$ref" ] && [ -n "$head" ] \
+    || die "project requires --repo, --remote, --venue, --ref and --head"
+
+  # The work identity, taken from the policy when it declares one, because every
+  # limb below is keyed on the work rather than on the ref.
+  fm_pub_seam_policy_read "$CONFIG"
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = present ] && fm_pub_seam_policy_venue_governed "$venue"; then
+    permitted=$(fm_pub_seam_policy_work "$venue" "$ref" item)
+    [ -z "$permitted" ] || item=$permitted
+  fi
+  [ "$item" != '-' ] || cno "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
+    "no work identity was given and none is declared for $ref on $venue, so what this candidate is could not be established"
+  tree=$(git --no-optional-locks -C "$repo" rev-parse "$head^{tree}" 2>/dev/null) || tree=''
+
+  # --- custody, and with it reclaimability ---
+  permitted=$(fm_pub_seam_custody_ref "$item")
+  if ! observe_tip "$repo" "$remote" "$ref"; then
+    custody=could-not-observe
+    custody_note="the tip of $ref on $remote could not be observed, which is not the same as it being absent"
+    reclaim=4
+  elif [ "$ref" != "$permitted" ]; then
+    custody_note="$ref is not this work's own custody ref ($permitted), so no custody replication is claimed for it"
+  elif [ "$OBSERVED_TIP" = "$head" ]; then
+    custody=yes
+    custody_note="$venue has $ref at exactly $head"
+    reclaim=0
+  elif [ "$OBSERVED_TIP" = '-' ]; then
+    custody_note="$venue has no $ref, so this candidate exists only here"
+  else
+    custody_note="$venue has $ref at $OBSERVED_TIP rather than $head, so this candidate is not the one backed up there"
+  fi
+
+  # --- review, from the correlation store ---
+  if fm_pub_seam_scan_records "$OUTBOUND_DIR" "$item" "$head"; then
+    if [ "$FM_PUB_SEAM_GRANTING" -gt 0 ]; then
+      review=yes
+      review_note="$FM_PUB_SEAM_GRANTING live request(s) carry this exact head with an approving ruling"
+    elif [ "$FM_PUB_SEAM_LIVE" -gt 0 ]; then
+      review=yes
+      review_note="$FM_PUB_SEAM_LIVE live request(s) hold this work:$FM_PUB_SEAM_HOLDS"
+    else
+      review_note="no live request carries this work, so it has not been submitted for review"
+    fi
+  else
+    review=could-not-observe
+    review_note=$FM_PUB_SEAM_REASON
+  fi
+
+  # --- publication eligibility, from the publication fold itself ---
+  #
+  # Compiled against the tip that is actually there, so this answers "would this
+  # be permitted", not "is the caller's plan still current". Those are different
+  # questions and only the first one belongs in a projection.
+  if [ -z "$tree" ] || [ "$custody" = could-not-observe ]; then
+    qualified=could-not-observe
+    qualified_note="the candidate's tree or the remote tip could not be read, so its publication eligibility could not be compiled"
+  else
+    rc=0
+    fm_pub_seam_resolve "$OUTBOUND_DIR" "$AUTH_DIR" "$CONFIG" "$repo" \
+      "$item" "$venue" "$ref" "$head" "$tree" "$OBSERVED_TIP" "$OBSERVED_TIP" || rc=$?
+    case $rc in
+      0)
+        if [ "$FM_PUB_SEAM_VERDICT" = allow-exact ]; then
+          qualified=yes
+          qualified_note=$FM_PUB_SEAM_REASON
+        else
+          qualified_note="$FM_PUB_SEAM_TOKEN: $FM_PUB_SEAM_REASON"
+        fi
+        ;;
+      3) qualified_note="$FM_PUB_SEAM_TOKEN: $FM_PUB_SEAM_REASON" ;;
+      *) qualified=could-not-observe; qualified_note="$FM_PUB_SEAM_TOKEN: $FM_PUB_SEAM_REASON" ;;
+    esac
+  fi
+
+  # --- landing authority ---
+  if scan_landing "$item"; then
+    case $LANDING_STATES in
+      *spent*) landed=yes; landed_note="a landing authority for $item is spent" ;;
+    esac
+    case $LANDING_STATES in
+      *granted*|*spending*) authorized=yes; authorized_note="a landing authority for $item stands unspent" ;;
+    esac
+    [ "$authorized" = yes ] || authorized_note="no unspent landing authority stands for $item"
+    [ "$landed" = yes ] || landed_note="no landing authority for $item records a completed landing"
+  else
+    authorized=could-not-observe
+    landed=could-not-observe
+    authorized_note="the authorization store at $AUTH_DIR could not be read"
+    landed_note=$authorized_note
+  fi
+
+  # Printed lowest first so PROJECT_STATE ends on the highest limb observed.
+  project_limb custody-replicated "$custody" "$custody_note"
+  project_limb review-published "$review" "$review_note"
+  project_limb publication-qualified "$qualified" "$qualified_note"
+  project_limb landing-authorized "$authorized" "$authorized_note"
+  project_limb landed "$landed" "$landed_note"
+  printf '%-22s %-18s %s\n' reclaimable \
+    "$(case $reclaim in 0) printf yes ;; 3) printf no ;; *) printf could-not-observe ;; esac)" \
+    "$custody_note"
+  printf 'STATE %s item=%s\n' "$PROJECT_STATE" "$item"
+  return "$reclaim"
 }
 
 # --- reconcile ----------------------------------------------------------------
@@ -684,6 +964,7 @@ case $1 in
   prepare) shift; cmd_prepare "$@" ;;
   consume) shift; cmd_consume "$@" ;;
   publish) shift; cmd_publish "$@" ;;
+  project) shift; cmd_project "$@" ;;
   reconcile) shift; cmd_reconcile "$@" ;;
   retire) shift; cmd_retire "$@" ;;
   status) shift; cmd_status "$@" ;;
