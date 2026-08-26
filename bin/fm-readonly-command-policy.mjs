@@ -274,11 +274,14 @@ function decision(command, context, depth = 0) {
       // list stays fail-closed as those CLIs grow.
       if (subIndex < operands.length) {
         const readSet = GUARDED_CLI_READ_SUBCOMMANDS[name];
-        // These CLIs nest a noun before the verb (`gh pr list`) and often take a
-        // bare argument after it (`gh pr view 12`), so neither the first nor the
-        // last bare word is reliably the ACTION. Accept when a read verb appears
-        // anywhere among the bare words that precede the first option; a
-        // mutating verb never does, so this stays fail-closed.
+        // These CLIs nest a noun before the verb and often take a bare argument
+        // after it, so neither the first nor the last bare word is reliably the
+        // ACTION. The two shapes that forces, written out:
+        //   gh pr list  // fm-retrieval-audit: not-a-read - a documentation example in a comment; this line invokes nothing and enumerates no collection
+        //   gh pr view 12  // fm-retrieval-audit: not-a-read - a documentation example in a comment; this line invokes nothing and enumerates no collection
+        // Accept when a read verb appears anywhere among the bare words that
+        // precede the first option; a mutating verb never does, so this stays
+        // fail-closed.
         let sawRead = false;
         for (let i = subIndex; i < operands.length; i += 1) {
           const value = operands[i].value;
