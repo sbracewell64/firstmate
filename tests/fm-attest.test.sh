@@ -451,19 +451,17 @@ required_out() {
   ( cd "$repo" && "$ATTEST" required 2>&1 )
 }
 
-# A workflow that invokes the verifier, which is what a repository declaring
-# this gate looks like. The name is deliberately not the one this repository
-# uses, because the declaration is what the workflow DOES and never what it is
-# called.
+# A repository whose workflow consumes the verifier and whose fixed marker
+# declares that publication belongs there.
 declare_gate() {
   local repo=$1 name=${2:-some-gate.yml}
   mkdir -p "$repo/.github/workflows"
   printf 'jobs:\n  check:\n    steps:\n      - run: bin/fm-attest.sh verify --head 0000\n' \
     > "$repo/.github/workflows/$name"
+  printf 'fm-attest.v1 required\n' > "$repo/.github/no-mistakes-attestation"
 }
 
-# A workflow that declares nothing about this gate, so a repository can carry
-# CI without carrying this one.
+# A workflow unrelated to this gate, with no declaration marker.
 declare_unrelated_workflow() {
   local repo=$1 name=${2:-unrelated.yml}
   mkdir -p "$repo/.github/workflows"
@@ -3157,12 +3155,12 @@ test_required_answers_a_repository_whose_checks_read_an_attestation() {
   declare_gate "$repo"
   out=$(required_out "$repo")
   rc=$?
-  [ "$rc" -eq 0 ] || fail "a repository whose workflow invokes the verifier was not reported as reading one: $out"
-  assert_contains "$out" "some-gate.yml" "the answer did not name the declaration it read"
-  pass "fm-attest.sh: a repository whose CI invokes the verifier reads an attestation"
+  [ "$rc" -eq 0 ] || fail "a repository carrying the exact declaration was not reported as reading an attestation: $out"
+  assert_contains "$out" ".github/no-mistakes-attestation" "the answer did not name the declaration it read"
+  pass "fm-attest.sh: the exact declaration requires an attestation"
 }
 
-test_required_answers_a_launcher_prefixed_invocation() {
+test_required_ignores_a_launcher_prefixed_invocation_without_the_marker() {
   local repo out rc
   repo="$TMP_ROOT/required-launcher-declared"
   new_repo "$repo"
@@ -3171,19 +3169,18 @@ test_required_answers_a_launcher_prefixed_invocation() {
     > "$repo/.github/workflows/some-gate.yml"
   out=$(required_out "$repo")
   rc=$?
-  [ "$rc" -eq 0 ] || fail "a launcher-prefixed verifier invocation was missed (exit $rc): $out"
-  assert_contains "$out" "some-gate.yml" "the launcher-prefixed declaration was not named"
-  pass "fm-attest.sh: a launcher-prefixed verifier invocation declares the gate"
+  [ "$rc" -eq 1 ] || fail "workflow text replaced the absent declaration (exit $rc): $out"
+  pass "fm-attest.sh: launcher-prefixed workflow text is not the declaration"
 }
 
 test_required_answers_the_repository_workflow_fixture() {
   local out rc
   out=$(required_out "$ROOT")
   rc=$?
-  [ "$rc" -eq 0 ] || fail "the repository's real attestation workflow was missed (exit $rc): $out"
-  assert_contains "$out" "no-mistakes-required.yml" \
-    "the real workflow declaration was not named"
-  pass "fm-attest.sh: the real attestation workflow declares the gate"
+  [ "$rc" -eq 0 ] || fail "the repository's real declaration was missed (exit $rc): $out"
+  assert_contains "$out" ".github/no-mistakes-attestation" \
+    "the real declaration was not named"
+  pass "fm-attest.sh: the repository carries the exact declaration"
 }
 
 test_required_answers_a_repository_whose_checks_read_none() {
@@ -3226,39 +3223,70 @@ test_required_ignores_an_invocation_inside_prose() {
   pass "fm-attest.sh: prose mentioning the verifier does not declare the gate"
 }
 
-test_required_reports_an_unreadable_declaration_as_neither() {
+test_required_ignores_a_bare_invocation_without_the_marker() {
   local repo out rc
-  # Absence of detection is not detection of absence. An unreadable workflow
-  # could be the one declaring the gate, so this must not join the case above.
-  repo="$TMP_ROOT/required-unreadable"
+  repo="$TMP_ROOT/required-bare-without-marker"
   new_repo "$repo"
-  declare_unrelated_workflow "$repo"
-  chmod 000 "$repo/.github/workflows/unrelated.yml"
+  mkdir -p "$repo/.github/workflows"
+  printf 'jobs:\n  check:\n    steps:\n      - run: bin/fm-attest.sh verify --head 0000\n' \
+    > "$repo/.github/workflows/some-gate.yml"
   out=$(required_out "$repo")
   rc=$?
-  chmod 644 "$repo/.github/workflows/unrelated.yml"
-  [ "$rc" -eq 2 ] || fail "an unreadable declaration was resolved into an answer (exit $rc): $out"
-  assert_contains "$out" "workflow-unreadable" "the unsearchable declaration did not report its own reason"
-  assert_not_contains "$out" "reads no head-bound attestation" \
-    "a declaration that could not be read was reported as one that is absent"
-  pass "fm-attest.sh: a declaration that could not be read answers neither way"
+  [ "$rc" -eq 1 ] || fail "a bare workflow invocation replaced the absent declaration (exit $rc): $out"
+  pass "fm-attest.sh: bare workflow text is not the declaration"
 }
 
-test_required_is_not_unsaid_by_an_unreadable_sibling() {
+test_required_reports_a_symlink_declaration_as_neither() {
   local repo out rc
-  # The case above plus a readable declaration. One workflow that invokes the
-  # verifier settles the question, so an unreadable neighbour cannot withdraw an
-  # answer already found and stop publication in the repository that needs it.
-  repo="$TMP_ROOT/required-unreadable-sibling"
+  repo="$TMP_ROOT/required-symlink"
   new_repo "$repo"
-  declare_unrelated_workflow "$repo"
-  declare_gate "$repo"
-  chmod 000 "$repo/.github/workflows/unrelated.yml"
+  mkdir -p "$repo/.github"
+  printf 'fm-attest.v1 required\n' > "$repo/target"
+  ln -s ../target "$repo/.github/no-mistakes-attestation"
   out=$(required_out "$repo")
   rc=$?
-  chmod 644 "$repo/.github/workflows/unrelated.yml"
-  [ "$rc" -eq 0 ] || fail "a declared gate was withdrawn by an unreadable neighbour (exit $rc): $out"
-  pass "fm-attest.sh: an unreadable workflow cannot unsay a declaration already read"
+  [ "$rc" -eq 2 ] || fail "a symlink declaration was resolved into an answer (exit $rc): $out"
+  assert_contains "$out" "declaration-not-regular" "the symlink did not report its own reason"
+  assert_not_contains "$out" "reads no head-bound attestation" \
+    "a symlink declaration was reported as absent"
+  pass "fm-attest.sh: a symlink declaration answers neither way"
+}
+
+test_required_reports_wrong_declaration_content_as_neither() {
+  local repo out rc
+  repo="$TMP_ROOT/required-wrong-content"
+  new_repo "$repo"
+  mkdir -p "$repo/.github"
+  printf 'fm-attest.v1 optional\n' > "$repo/.github/no-mistakes-attestation"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "wrong declaration content was resolved into an answer (exit $rc): $out"
+  assert_contains "$out" "declaration-invalid" "wrong declaration content did not report its own reason"
+  pass "fm-attest.sh: wrong declaration content answers neither way"
+}
+
+test_declaration_check_refuses_a_consumer_without_the_marker() {
+  local repo out rc
+  repo="$TMP_ROOT/declaration-invariant-missing"
+  new_repo "$repo"
+  mkdir -p "$repo/.github/workflows"
+  printf 'jobs:\n  check:\n    steps:\n      - run: timeout 30 bin/fm-attest.sh verify --head 0000\n' \
+    > "$repo/.github/workflows/gate.yml"
+  out=$(cd "$repo" && "$ATTEST" declaration-check 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a consumer without the declaration passed the invariant (exit $rc): $out"
+  assert_contains "$out" "declaration-missing" "the invariant did not name the missing declaration"
+  pass "fm-attest.sh: an attestation consumer must carry the declaration"
+}
+
+test_declaration_check_accepts_the_repository_invariant() {
+  local out rc
+  out=$(cd "$ROOT" && "$ATTEST" declaration-check 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the repository failed its attestation declaration invariant (exit $rc): $out"
+  assert_contains "$out" "declaration invariant satisfied" \
+    "the repository invariant did not report its positive verdict"
+  pass "fm-attest.sh: the repository satisfies its declaration invariant"
 }
 
 test_write_only_if_required_publishes_nothing_where_no_check_reads_it() {
@@ -3302,15 +3330,14 @@ test_write_only_if_required_stops_rather_than_guess_at_an_unreadable_declaration
   git init -q --bare "$fork"
   git -C "$repo" remote add origin "$fork"
   install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
-  declare_unrelated_workflow "$repo"
-  chmod 000 "$repo/.github/workflows/unrelated.yml"
+  mkdir -p "$repo/.github"
+  ln -s ../missing "$repo/.github/no-mistakes-attestation"
   out=$(publish_only_if_required_out "$repo")
   rc=$?
-  chmod 644 "$repo/.github/workflows/unrelated.yml"
   # Publishing into a repository that never asked and skipping publication in
   # one that did are both wrong, so a failed read buys neither.
   [ "$rc" -eq 2 ] || fail "an unreadable declaration was resolved into an action (exit $rc): $out"
-  assert_contains "$out" "workflow-unreadable" "the stop did not name its own cause"
+  assert_contains "$out" "declaration-not-regular" "the stop did not name its own cause"
   [ -z "$(published_heads "$fork")" ] || fail "an unreadable declaration still published"
   pass "fm-attest.sh: an unreadable declaration stops publication rather than guessing"
 }
@@ -3455,13 +3482,16 @@ test_recheck_reports_a_refused_rerun_without_claiming_one
 test_write_re_evaluates_the_head_it_published
 test_write_no_recheck_publishes_without_asking_the_forge
 test_required_answers_a_repository_whose_checks_read_an_attestation
-test_required_answers_a_launcher_prefixed_invocation
+test_required_ignores_a_launcher_prefixed_invocation_without_the_marker
 test_required_answers_the_repository_workflow_fixture
 test_required_answers_a_repository_whose_checks_read_none
 test_required_ignores_a_commented_invocation
 test_required_ignores_an_invocation_inside_prose
-test_required_reports_an_unreadable_declaration_as_neither
-test_required_is_not_unsaid_by_an_unreadable_sibling
+test_required_ignores_a_bare_invocation_without_the_marker
+test_required_reports_a_symlink_declaration_as_neither
+test_required_reports_wrong_declaration_content_as_neither
+test_declaration_check_refuses_a_consumer_without_the_marker
+test_declaration_check_accepts_the_repository_invariant
 test_write_only_if_required_publishes_nothing_where_no_check_reads_it
 test_write_only_if_required_stops_rather_than_guess_at_an_unreadable_declaration
 test_write_expect_head_binds_publication_to_the_request_head

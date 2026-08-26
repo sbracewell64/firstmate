@@ -8,6 +8,11 @@ This document owns what that check establishes, what it deliberately does not, a
 
 The check verifies a git note on `refs/notes/no-mistakes`, keyed by the pull request's exact head commit.
 
+A repository declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose complete content is one line: `fm-attest.v1 required`.
+`bin/fm-attest.sh required` reports required only for that exact declaration, not from workflow text.
+An absent declaration reports not-required, while a symlink, directory, unreadable file, or any other content reports could-not-observe with its own reason.
+The repository invariant checks the other direction: any workflow mentioning `fm-attest.sh` requires the exact declaration, but that lint is not the publication gate.
+
 A note is used rather than a commit trailer or a line of pull request prose for three reasons.
 It is keyed by a commit sha, so it can name the commit it covers without changing that commit's sha.
 It never rewrites the branch, so producing one cannot disturb the pipeline's custody of it.
@@ -150,9 +155,9 @@ Measured on this repository on 2026-08-26: of ten open pull requests, four had a
 That is not ten separate mistakes, it is one unowned step, and `data/no-mistakes-attestation-provenance-recurrence-owner/report.md` holds the per-head classification.
 
 `bin/fm-attest.sh required` is the predicate that gave the step an owner.
-It answers, for one checkout, whether this repository's own CI reads a head-bound attestation, deciding it from what the repository declares - a workflow under `.github/workflows` that invokes `bin/fm-attest.sh` - rather than from a name, a remote, or a list of repositories that would drift from the workflow it describes.
+It answers, for one checkout, whether this repository declares that its CI reads a head-bound attestation, deciding it only from the fixed declaration above rather than from workflow text, a name, a remote, or a list of repositories.
 It is three-valued like every other observation here: required, not required, and a declaration it could not read, which is neither.
-An unreadable workflow could be the one declaring the gate, so it can only cloud the negative answer; one workflow that does declare the gate settles the question and cannot be unsaid by an unreadable neighbour.
+A declaration with the wrong type, unreadable bytes, or noncanonical content is could-not-observe rather than absence, so publication never guesses around malformed repository intent.
 
 That predicate is what makes an unconditional publication step correct everywhere, and two owners now run one:
 
