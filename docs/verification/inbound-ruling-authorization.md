@@ -290,7 +290,7 @@ Re-run the red calibration - not just the green suites - after any change to the
 
 Date: 2026-08-26.
 Subject: `bin/fm-landing-authorization.sh` and `bin/fm-landing-authorization-lib.sh`, as consumed by `bin/fm-landing-seam-lib.sh` inside `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`.
-Regression owner: `tests/fm-landing-authorization.test.sh`, controls 16 through 22.
+Regression owner: `tests/fm-landing-authorization.test.sh`, beginning with control 16 and including the ruling-reservation, freshness, post-effect, and real-path controls that follow it.
 The effect-plan contract is stated once in `bin/fm-landing-authorization-lib.sh`'s header.
 This section records only the repeatable evidence for that contract and the required inventory of adjacent authorizers.
 
@@ -302,12 +302,18 @@ Each defect was applied to a fresh copy of `bin/` and `tests/` under a scratch r
 ```sh
 scratch=$(mktemp -d)
 for d in caller-act-performed exec-digest-unchecked plan-field-defaulted \
-         credential-screen-off ruling-reland-allowed act-never-performed; do
+         credential-screen-off ruling-reland-allowed concurrent-siblings \
+         signal-before-act reservation-release-failure orphaned-grant-unreadable \
+         orphaned-grant-no-evidence live-granted-reservation act-never-performed \
+         moved-project-alias post-effect-unconfirmed; do
   mkdir -p "$scratch/$d" && cp -a bin tests "$scratch/$d/"
 done
 # one defect applied per copy, then:
 for d in caller-act-performed exec-digest-unchecked plan-field-defaulted \
-         credential-screen-off ruling-reland-allowed act-never-performed; do
+         credential-screen-off ruling-reland-allowed concurrent-siblings \
+         signal-before-act reservation-release-failure orphaned-grant-unreadable \
+         orphaned-grant-no-evidence live-granted-reservation act-never-performed \
+         moved-project-alias post-effect-unconfirmed; do
   ( cd "$scratch/$d" && bash tests/fm-landing-authorization.test.sh 2>&1 | grep -m1 '^not ok' )
 done
 ```
@@ -342,7 +348,7 @@ not ok - real-path: main is at c97958f8e2c240eda2fdb3fc903d6cc77b2c8647, not the
 
 That refusal is read from the scratch repository's own `git rev-parse`, not from anything this mechanism recorded.
 
-A seventh copy replaced the local fast-forward's act with an inert `git status`.
+A separate copy replaced the local fast-forward's act with an inert `git status`.
 It reds earlier than the post-effect proof, at the assertion, and the wording is worth keeping because it shows the two halves are not independent - an act that changed cannot satisfy an assertion derived from the plan it no longer matches:
 
 ```
@@ -368,7 +374,7 @@ The owner is that project's `internal/pubauth` and `internal/git`; it is stated 
 
 ### The real end-to-end path
 
-Control 22 is the only one that does not stub the effect.
+`test_the_whole_path_lands_one_real_fast_forward_and_proves_it` is the only control that does not stub the effect.
 It creates a scratch git repository under the suite's own temp root, commits a base and a branch commit, writes a ruled correlation record naming that branch head as the reviewed head, mints a `local-fast-forward` plan against that repository, and spends it.
 The act is real `git` advancing a real `refs/heads/main`, and the proof is `git rev-parse main` afterwards, plus the act receipt, plus the authority reporting `spent` and refusing a replay.
 

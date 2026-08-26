@@ -30,11 +30,17 @@
 #      the act
 #  19. credential-bearing mechanism input is refused before the act
 #  20. one approval grants one landing, even when a second plan is presented
-#  21. an act that exits non-zero leaves the authority indeterminate
-#  22. the real path end to end: a ruled correlation record mints a plan, the
+#  21. sibling effect plans serialize on one ruling reservation
+#  22. a pre-act signal releases its ruling reservation
+#  23. a ruling-reservation release failure is observable
+#  24. an orphaned granted reservation is reconciled only from evidence
+#  25. a live granted reservation cannot be reclaimed
+#  26. an act that exits non-zero leaves the authority indeterminate
+#  27. a moved project alias cannot retarget the local act
+#  28. a moved target ref cannot retarget the local act
+#  29. successful exit requires post-effect proof
+#  30. the real path end to end: a ruled correlation record mints a plan, the
 #      spend constructs the act, and a scratch repository proves it happened
-#  23. a project alias moved after mint refuses before either repository lands
-#  24. successful exit is applied only when post-effect observation confirms it
 #
 # CONTROL 1 IS NOT OPTIONAL AND IS NOT DECORATION. Every other control here is a
 # refusal, and a mechanism that refuses everything satisfies all of them at once.
@@ -1036,6 +1042,8 @@ test_one_approval_grants_one_landing_even_under_a_second_plan() {
   pass "one approval grants one landing, even under a second plan"
 }
 
+# --- 21: sibling plans serialize on the ruling -------------------------------
+
 test_concurrent_sibling_plans_share_one_ruling_reservation() {
   local dir first second first_pid second_pid first_rc second_rc combined
   dir=$(new_case concurrent-siblings) || fail "concurrent-siblings: fixture failed"
@@ -1075,6 +1083,8 @@ test_concurrent_sibling_plans_share_one_ruling_reservation() {
   pass "concurrent sibling plans share one ruling reservation"
 }
 
+# --- 22: a pre-act signal releases the ruling reservation -------------------
+
 test_a_pre_act_signal_releases_the_ruling_reservation() {
   local dir id sibling job claim owner reservation out rc
   dir=$(new_case signal-before-act) || fail "signal-before-act: fixture failed"
@@ -1109,6 +1119,8 @@ test_a_pre_act_signal_releases_the_ruling_reservation() {
   pass "a pre-act signal releases the ruling reservation"
 }
 
+# --- 23: a ruling-reservation release failure is observable -----------------
+
 test_a_failed_ruling_reservation_release_is_observable() {
   local dir id job reservation out rc
   dir=$(new_case reservation-release-failure) || fail "reservation-release-failure: fixture failed"
@@ -1141,6 +1153,8 @@ test_a_failed_ruling_reservation_release_is_observable() {
   rmdir "$reservation" || fail "reservation-release-failure: fixture cleanup failed"
   pass "a failed ruling reservation release is observable"
 }
+
+# --- 24: an orphaned granted reservation requires evidence ------------------
 
 test_an_orphaned_granted_reservation_is_reconciled_from_evidence() {
   local dir id sibling out rc reservation
@@ -1185,6 +1199,8 @@ test_an_orphaned_granted_reservation_is_reconciled_from_evidence() {
   pass "an orphaned granted reservation is reconciled from evidence"
 }
 
+# --- 25: a live granted reservation is not reclaimed ------------------------
+
 test_a_live_granted_reservation_is_not_reclaimed() {
   local dir id claim job owner reservation out rc reader
   dir=$(new_case live-granted-reservation) || fail "live-granted-reservation: fixture failed"
@@ -1224,7 +1240,7 @@ test_a_live_granted_reservation_is_not_reclaimed() {
   pass "a live granted reservation is not reclaimed"
 }
 
-# --- 21: a non-zero act is not "no effect" -----------------------------------
+# --- 26: a non-zero act is not "no effect" -----------------------------------
 
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate() {
   local dir id out rc
@@ -1250,7 +1266,7 @@ test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate() {
   pass "an act that exits non-zero leaves the authority indeterminate"
 }
 
-# --- 22: a moved project alias cannot retarget the local act -----------------
+# --- 27: a moved project alias cannot retarget the local act -----------------
 
 test_a_project_alias_moved_after_mint_performs_no_act() {
   local dir original replacement alias head original_before replacement_before id out rc record
@@ -1294,7 +1310,7 @@ test_a_project_alias_moved_after_mint_performs_no_act() {
   pass "a project alias moved after mint performs no act"
 }
 
-# --- 23: a moved target ref cannot silently retarget the local act -----------
+# --- 28: a moved target ref cannot silently retarget the local act -----------
 
 test_a_target_ref_moved_after_mint_performs_no_act() {
   local dir project base middle head record id out rc
@@ -1340,7 +1356,7 @@ test_a_target_ref_moved_after_mint_performs_no_act() {
   pass "a target ref moved after mint performs no act"
 }
 
-# --- 24: successful exit still needs post-effect proof -----------------------
+# --- 29: successful exit still needs post-effect proof -----------------------
 
 test_successful_exit_requires_post_effect_proof() {
   local confirmed unconfirmed id out rc evidence
@@ -1370,7 +1386,7 @@ test_successful_exit_requires_post_effect_proof() {
   pass "successful exit requires post-effect proof"
 }
 
-# --- 24: the real path, end to end -------------------------------------------
+# --- 30: the real path, end to end -------------------------------------------
 #
 # Everything above stubs the effect so it can be counted. This one does not: a
 # ruled correlation record mints a `local-fast-forward` plan, the spend builds the
