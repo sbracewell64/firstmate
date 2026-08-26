@@ -211,6 +211,33 @@ awk '\''
   pass "quoted awk functions are excluded before shell construct classification"
 }
 
+# A TRAP HANDLER NAMED ONLY INSIDE QUOTES is a call site and needs no mark.
+# Stripping quotes before classifying constructs is correct, but it also removes
+# the handler of `trap 'fn args' SIG`, which left a genuinely live function
+# reading dead and invited an `indirect-call:` mark to paper over it. A mark
+# declares a call the control cannot see; this one IS visible in accepted syntax,
+# so the control reads it rather than being told about it.
+test_quoted_trap_handler_is_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-trap 'live_one() { return 0; }' "trap 'live_one INT' INT")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a trap handler named inside quotes read dead without a mark, exit $rc: $out"
+  pass "a trap handler named inside a quoted trap string reads alive without a mark"
+}
+
+# THE ANCHOR, asserted so the rule above cannot quietly become "any quoted first
+# word is a call". The name sits at the head of a quoted string exactly as it
+# would in a trap handler, but the command is not `trap`, so it stays dead. This
+# is what keeps the quoted-handler rule from re-widening what quote stripping
+# deliberately narrowed.
+test_quoted_first_word_outside_trap_is_not_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-first-word 'dead_one() { return 0; }' "printf '%s\\n' 'dead_one INT'")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a quoted first word outside a trap command counted as a call, exit $rc: $out"
+  pass "a quoted first word outside a trap command is not a call site"
+}
+
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
@@ -522,6 +549,8 @@ test_escaped_heredoc_payload_is_not_code
 test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
 test_quoted_awk_function_is_not_shell_syntax
+test_quoted_trap_handler_is_a_call_site
+test_quoted_first_word_outside_trap_is_not_a_call_site
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
 test_multiline_double_quoted_command_shape_is_not_a_call

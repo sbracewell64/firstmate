@@ -23,7 +23,9 @@
 # ACCEPTED SYNTAX. Definitions are unindented `name() {` lines. Calls begin a
 # command after indentation and optional shell control words, follow an unquoted
 # command boundary, occur in a command substitution, begin a canonical one-line
-# function body, name a trap handler, or use an `indirect-call: name` mark. A
+# function body, name a trap handler - written bare as `trap fn SIG` or as the
+# first word of a quoted handler, `trap 'fn args' SIG` - or use an
+# `indirect-call: name` mark. A
 # `printf` command is accepted only as opaque data and never as call evidence.
 # Heredocs and every other function definition or function-name use are UNCHECKED
 # rather than interpreted or skipped.
@@ -135,6 +137,17 @@ function_has_call_site() {  # <function>
     # call detection and would silently discard the one call form that is
     # declared rather than written.
     grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
+    # A TRAP HANDLER WRITTEN AS A QUOTED STRING is the second call form the
+    # stripped text cannot carry, for the same reason and with the same remedy.
+    # `trap fn SIG` survives stripping and the battery below matches it;
+    # `trap 'fn args' SIG` does not, because the handler lives inside the quotes
+    # that stripping removes. Naming a trap handler has always been accepted
+    # syntax, so reading this form from the raw file RESTORES a declared call
+    # form rather than widening the list to excuse a file - the distinction this
+    # control's whitelist exists to hold. The match is anchored to a trap command
+    # AND to the handler's first word, so a name that merely appears somewhere
+    # inside some other quoted string is still not a call site.
+    grep -Eq "^[[:space:]]*trap[[:space:]]+['\"][[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
     if strip_cached "$f" | awk -v fn="$fn" '
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
