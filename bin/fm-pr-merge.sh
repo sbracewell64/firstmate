@@ -111,10 +111,10 @@
 # and bin/fm-landing-authorization.sh owns the authority itself. What this file adds
 # is that the merge command RUNS INSIDE the spend when one governs, so an
 # applicable pull request cannot reach `gh-axi pr merge` without consuming a
-# valid, head-bound, one-use authorization. A pull request no ruling governs
-# lands through exactly the gates above and says so with a reported
-# not-applicable observation, because a silent ungoverned landing is
-# indistinguishable from an authorised one.
+# valid, head-bound, one-use authorization. A pull request proven outside the
+# declared governed domain lands through exactly the gates above and says so
+# with a reported not-applicable observation, because silence is
+# indistinguishable from authorisation.
 #
 # One vocabulary constraint applies to THIS FILE ONLY, and it is not a style
 # preference. A source grep in tests/fm-pr-check-security.test.sh pins a

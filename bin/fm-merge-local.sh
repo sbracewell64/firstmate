@@ -34,8 +34,8 @@
 # applicable candidate cannot reach `git merge --ff-only` without consuming a
 # valid, head-bound, one-use authorization. A candidate PROVEN outside the
 # declared governed landing domain lands through exactly the guards above and says
-# so with a reported not-applicable observation, because a silent ungoverned
-# landing is indistinguishable from an authorised one. A candidate inside that
+# so with a reported not-applicable observation, because silence is
+# indistinguishable from authorisation. A candidate inside that
 # domain with no live review request covering it REFUSES: the seam owns why an
 # absent record is the refusal rather than the permission.
 #

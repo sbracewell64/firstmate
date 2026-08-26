@@ -173,7 +173,7 @@ Regression owner: `tests/fm-landing-seam.test.sh`.
 
 ### What is claimed
 
-A Browser-Sol-governed landing candidate cannot reach either mutation path's merge command without consuming a valid, head-bound, one-use authorization, and a candidate no ruling governs lands through the ordinary gates and says so.
+A candidate inside the declared Browser Sol landing domain cannot reach either mutation path's merge command without a live request covering its exact head and consumption of that request's valid, head-bound, one-use authorization, while a candidate proven outside the domain lands through the ordinary gates and says so.
 
 1. A governed candidate with no approving ruling is refused by the real `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`, and no merge is performed.
 2. A spent authority presented again is refused, and the second attempt performs no merge.
