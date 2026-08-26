@@ -29,14 +29,11 @@
 #
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
-# bin/fm-landing-authorization.sh owns the authority itself. What this file adds
-# is that a governed fast-forward is PERFORMED BY that authority, from the typed
-# effect plan this gate declared when it minted the authorization - the project
-# directory resolved to one exact path, the ref it advances, the exact commit it
-# advances to, ff-only and non-force, and the `git` it runs pinned to a path and a
-# content digest. A candidate no ruling governs lands through exactly the guards
-# above and says so with a reported not-applicable observation, because a silent
-# ungoverned landing is indistinguishable from an authorised one.
+# bin/fm-landing-authorization.sh owns the authority itself, and
+# bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
+# A candidate no ruling governs lands through exactly the guards above and says
+# so with a reported not-applicable observation, because a silent ungoverned
+# landing is indistinguishable from an authorised one.
 #
 # A local-only item under Sol review is governed by a ruling on a PUBLISHED head,
 # because a published head is the only one an outside reviewer could ever have

@@ -19,8 +19,7 @@ Four properties, and one control without which none of them means anything:
 Property 5 is not a courtesy.
 Properties 1 through 4 can all pass while the mechanism performs no landing act, so without 5 the suite would be green and worthless.
 
-Those five bind WHEN a landing may happen.
-Since 2026-08-26 the authority also names WHAT act it permits, and that property, its own red calibration, and its end-to-end proof are in ["The effect plan"](#the-effect-plan-the-authority-names-the-act) below.
+The typed effect-plan contract is owned by `bin/fm-landing-authorization-lib.sh`'s header, and its red calibration and end-to-end proof are recorded in ["Effect-plan verification"](#effect-plan-verification) below.
 
 ## What is NOT claimed, and where those properties live
 
@@ -287,42 +286,13 @@ $ bash tests/fm-merge-local.test.sh | grep -c '^ok'
 Re-run both suites after any change to the seam, either merge gate's merge site, or the authority layer.
 Re-run the red calibration - not just the green suites - after any change to the applicability rule, the governing-gate set, the live-state set, or the act receipt, because those are the four places where this control can go quietly vacuous while staying green.
 
-## The effect plan: the authority names the act
+## Effect-plan verification
 
 Date: 2026-08-26.
 Subject: `bin/fm-landing-authorization.sh` and `bin/fm-landing-authorization-lib.sh`, as consumed by `bin/fm-landing-seam-lib.sh` inside `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`.
 Regression owner: `tests/fm-landing-authorization.test.sh`, controls 16 through 22.
-The effect-plan contract itself is stated once, in `bin/fm-landing-authorization-lib.sh`'s header.
-
-### What this section adds, and what it corrects
-
-Everything above establishes WHEN a landing may happen: one ruling, one exact head, one use, an intent record before the act.
-Until 2026-08-26 it did not establish WHAT act that authority permitted.
-`spend <auth-id> --head <sha> -- <command>...` executed the caller's argv, and the argv was only digested into the record afterwards, so a caller holding a completely valid authorization could substitute another executable, another repository, another ref, or another mode and every check above still passed.
-That is the same defect the publication guard in pull request #133 had already been corrected for three times over, which is what makes it a recurrence rather than a hypothetical.
-
-An authority now carries a typed effect plan, the plan is part of the authorization identity, and the spend builds the act from the plan.
-A caller may assert the act it believes it is authorizing; the assertion is compared element by element and refuses on any difference.
-It can agree or stop the landing; it cannot choose.
-
-### What is claimed
-
-1. The act performed is the one the authority's plan names, whether or not the caller asserts anything.
-2. A caller-asserted executable, venue, target object, mode, or extra argument that differs from the authority-derived act performs zero acts and leaves the authority unspent.
-3. The executable is pinned at mint to an absolute path and a content digest, and a file swapped at that path afterwards refuses at effect time rather than being run.
-4. An effect plan that is incomplete, or that names a kind this contract does not perform, refuses before the act and is could-not-observe rather than a refusal.
-5. Credential-bearing mechanism input is refused before it can reach the effect interface, at the mint and at the act.
-6. One approval grants one landing: a second plan for the same ruling and head is a different authorization id, and neither it nor a further mint can land that approval again.
-7. Non-vacuity: a complete plan with an exact assertion still lands, exactly once.
-
-### What is NOT claimed
-
-The plan binds the act, not its outcome.
-It does not establish that the forge performs the merge it is asked for, nor that the executable at the pinned path does what its name suggests.
-It establishes that the act performed is the one the authority names and no other.
-
-The `pr-merge` plan carries the merge method and `--delete-branch`, which is what `bin/fm-pr-merge.sh` can express.
-A governed merge carrying any other extra argument is refused by that gate rather than performed, so extra `gh-axi` arguments remain available only to an ungoverned merge.
+The effect-plan contract is stated once in `bin/fm-landing-authorization-lib.sh`'s header.
+This section records only the repeatable evidence for that contract and the required inventory of adjacent authorizers.
 
 ### Red calibration
 

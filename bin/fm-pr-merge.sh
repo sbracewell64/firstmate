@@ -107,20 +107,11 @@
 #
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
-# bin/fm-landing-authorization.sh owns the authority itself. What this file adds
-# is that a governed merge is PERFORMED BY that authority, from the typed effect
-# plan this gate declared when it minted the authorization, so an applicable pull
-# request cannot reach `gh-axi pr merge` except as the act the authority names. A
-# pull request no ruling governs lands through exactly the gates above and says so
-# with a reported not-applicable observation, because a silent ungoverned landing
-# is indistinguishable from an authorised one.
-#
-# A governed merge therefore carries only what an effect plan can express: the
-# repository and number from the ruling's own pull request, the merge method, and
-# whether the branch is deleted. Any further extra argument is a mechanism input
-# the authority cannot bind, so a governed merge refuses it rather than performing
-# an act nobody authorised. An ungoverned merge passes extra arguments through
-# unchanged, as it always did.
+# bin/fm-landing-authorization.sh owns the authority itself, and
+# bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
+# A pull request no ruling governs lands through exactly the gates above and says
+# so with a reported not-applicable observation, because a silent ungoverned
+# landing is indistinguishable from an authorised one.
 #
 # One vocabulary constraint applies to THIS FILE ONLY, and it is not a style
 # preference. A source grep in tests/fm-pr-check-security.test.sh pins a

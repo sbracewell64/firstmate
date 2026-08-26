@@ -18,12 +18,8 @@
 # bin/fm-landing-authorization-lib.sh's header for the full boundary and for the
 # fourth-state hazard the spend sequence is shaped around.
 #
-# THE AUTHORITY NAMES THE ACT. A mint declares a typed effect plan and the plan
-# is part of the authorization identity; a spend CONSTRUCTS the act from that
-# plan and performs it. A caller never supplies the command, the executable, the
-# venue, the ref, or the mode. bin/fm-landing-authorization-lib.sh's header is
-# the single owner of that contract, including the two effect kinds and every
-# field each one carries.
+# bin/fm-landing-authorization-lib.sh's header is the single owner of the typed
+# effect-plan contract, including its act vocabulary and caller boundary.
 #
 # USAGE
 #   fm-landing-authorization.sh mint <request-id> --effect pr-merge

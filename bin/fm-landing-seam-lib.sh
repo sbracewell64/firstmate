@@ -382,14 +382,8 @@ fm_landing_seam_mint() {  # <auth-script> <request-id> [<effect-plan-arg>...]
 # act is reached. That is the property that makes the wiring real rather than
 # advisory.
 #
-# THE COMMAND PASSED HERE IS AN ASSERTION, NOT THE ACT. The authority builds the
-# act from its own effect plan; what a chokepoint passes is the act it believes
-# it is authorizing, and the authority refuses before any mutation when the two
-# differ. This file used to hand `spend` the command to run, wrapped in a
-# `bash -c` prologue of its own - which made the SEAM the chooser of the
-# executable and of the argv, the exact freedom the effect plan closes. Both are
-# gone: the wrapper because the receipt is the authority's to write, and the
-# chooser because there is no longer one here.
+# bin/fm-landing-authorization-lib.sh's header owns the distinction between the
+# authority-derived act and the assertion this seam passes to `spend`.
 #
 # WHY A RECEIPT AND NOT AN EXIT STATUS. `spend` exits 0 on two different
 # outcomes: the act ran and the authority is now spent, or the authority was
