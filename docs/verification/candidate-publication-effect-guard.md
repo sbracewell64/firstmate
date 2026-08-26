@@ -289,6 +289,9 @@ The guard has already established the remote is at the tip the plan was compiled
 
 ## Refreshing this record
 
+The 2026-08-26 rerun of the publication-seam suite completed with `FM_TEST_CONTRACT suite=fm-publication-seam.test.sh status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
+This rerun covers the exact rebased candidate after the prior GitHub Actions outage and does not replace the independent review required before landing.
+
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
 bin/fm-test-run.sh tests/fm-attest.test.sh
