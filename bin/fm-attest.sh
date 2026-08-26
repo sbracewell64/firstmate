@@ -8,7 +8,7 @@
 # that a pull_request workflow can read with contents: read.
 #
 # Usage:
-#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required --policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>] [--expect-head <sha>] [--notes-ref <ref>]
+#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required {--policy-meta <file>|--policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>}] [--expect-head <sha>] [--notes-ref <ref>]
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
 #   fm-attest.sh required --policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>
 #   fm-attest.sh declaration-check
@@ -983,19 +983,23 @@ required_observe() {
       required_evidence="The governed venue $required_venue is inconsistent with its recorded repository URL."
       return 0
     fi
-    if ! required_commit=$(git rev-parse --verify --quiet "$required_ref^{commit}" 2>/dev/null); then
-      git fetch --quiet --no-tags --no-write-fetch-head "$required_url" "$required_ref" 2>/dev/null || {
-        required_state=unobservable
-        required_reason=policy-ref-unreadable
-        required_evidence="The policy generation $required_ref at $required_venue could not be read."
-        return 0
-      }
-      required_commit=$(git rev-parse --verify --quiet FETCH_HEAD^{commit} 2>/dev/null) || {
-        required_state=unobservable
-        required_reason=policy-ref-unreadable
-        required_evidence="The policy generation $required_ref at $required_venue did not resolve to a commit."
-        return 0
-      }
+    required_scratch_ref="refs/fm-attest/policy-$$"
+    git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+    if ! git fetch --quiet --no-tags --force "$required_url" "$required_ref:$required_scratch_ref" 2>/dev/null; then
+      git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+      required_state=unobservable
+      required_reason=policy-ref-unreadable
+      required_evidence="The policy generation $required_ref at $required_venue could not be fetched."
+      return 0
+    fi
+    required_commit=$(git rev-parse --verify --quiet "$required_scratch_ref^{commit}" 2>/dev/null) || required_commit=
+    required_fetched_commit=$(git rev-parse --verify --quiet FETCH_HEAD^{commit} 2>/dev/null) || required_fetched_commit=
+    git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+    if [ -z "$required_commit" ] || [ "$required_commit" != "$required_fetched_commit" ]; then
+      required_state=unobservable
+      required_reason=policy-ref-mismatch
+      required_evidence="The fetched policy generation $required_ref at $required_venue did not resolve to one matching commit."
+      return 0
     fi
     required_entry=$(git ls-tree "$required_commit" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
       required_state=unobservable
@@ -1151,6 +1155,7 @@ cmd_write() {
   policy_venue=
   policy_url=
   policy_ref=
+  policy_meta=
   notes_ref=$NOTES_REF_DEFAULT
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1161,6 +1166,7 @@ cmd_write() {
       --policy-venue) [ "$#" -ge 2 ] || die "--policy-venue needs a value"; policy_venue=$2; shift 2 ;;
       --policy-url) [ "$#" -ge 2 ] || die "--policy-url needs a value"; policy_url=$2; shift 2 ;;
       --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_ref=$2; shift 2 ;;
+      --policy-meta) [ "$#" -ge 2 ] || die "--policy-meta needs a value"; policy_meta=$2; shift 2 ;;
       --run)
         [ "$#" -ge 2 ] || die "--run needs a value"
         run_id=$2
@@ -1195,6 +1201,18 @@ cmd_write() {
 
   [ -z "$expect_head" ] || is_full_sha "$expect_head" \
     || die "--expect-head must be a 40-character lowercase sha"
+  if [ -n "$policy_meta" ]; then
+    [ -z "$policy_venue$policy_url$policy_ref" ] \
+      || die "--policy-meta cannot be combined with explicit policy subject arguments"
+    task_base_policy_metadata "$policy_meta" || {
+      policy_venue=
+      policy_url=
+      policy_ref=
+    }
+    [ -z "$TASK_BASE_POLICY_VENUE" ] || policy_venue=$TASK_BASE_POLICY_VENUE
+    [ -z "$TASK_BASE_POLICY_URL" ] || policy_url=$TASK_BASE_POLICY_URL
+    [ -z "$TASK_BASE_POLICY_REF" ] || policy_ref=$TASK_BASE_POLICY_REF
+  fi
 
   git rev-parse --git-dir >/dev/null 2>&1 || fail not-a-git-repository \
     "This directory is not inside a git repository, so there is no head to attest."

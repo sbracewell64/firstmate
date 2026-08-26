@@ -131,17 +131,18 @@ fi
 # resolution reads the local ssh configuration, so it runs only in the one
 # branch that needs it - never for a task with no venue, the unresolved
 # sentinel, or a venue that already matches literally.
-VENUE=$(grep '^contribution_venue=' "$RECORD" | tail -1 | cut -d= -f2- || true)
-VENUE_URL=$(grep '^contribution_venue_url=' "$RECORD" | tail -1 | cut -d= -f2- || true)
-POLICY_REF=$(grep '^contribution_target=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+VENUE_STATUS=0
+VENUE=$(task_base_metadata_field "$RECORD" contribution_venue) || VENUE_STATUS=$?
+VENUE_URL_STATUS=0
+VENUE_URL=$(task_base_metadata_field "$RECORD" contribution_venue_url) || VENUE_URL_STATUS=$?
 PR_VENUE=$(printf '%s/%s' "$HOST" "$PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
-if [ -z "$VENUE" ]; then
+if [ "$VENUE_STATUS" -ne 0 ]; then
   printf 'venue: unchecked (task %s records no contribution venue)\n' "$ID"
 elif [ "$VENUE" = unresolved ]; then
   printf 'venue: unchecked (task %s recorded its contribution venue as unresolved)\n' "$ID"
 elif [ "$VENUE" = "$PR_VENUE" ]; then
   printf 'venue: %s matches the recorded contribution venue\n' "$PR_VENUE"
-elif [ -n "$VENUE_URL" ] \
+elif [ "$VENUE_URL_STATUS" -eq 0 ] && [ -n "$VENUE_URL" ] \
   && VENUE_ALIAS=$(task_base_venue_identity_alias "$VENUE_URL") \
   && [ "$VENUE_ALIAS" = "$PR_VENUE" ]; then
   printf 'venue: %s matches the recorded contribution venue %s, whose host is an ssh alias for it\n' \
@@ -182,7 +183,9 @@ fi
 # bin/fm-teardown.sh reads the head from the forge at teardown rather than from
 # metadata and falls back to its provider-agnostic content check, and
 # bin/fm-review-diff.sh resolves the head from the remote when none is recorded.
-WT=$(grep '^worktree=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+WT_STATUS=0
+WT=$(task_base_metadata_field "$RECORD" worktree) || WT_STATUS=$?
+[ "$WT_STATUS" -eq 0 ] || WT=
 PR_HEAD=
 if [ "$RECONSTRUCTED" = 1 ]; then
   # The rebuild above already asked the forge for this exact pull request.
@@ -304,7 +307,7 @@ else
     cd "$WT" \
       && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
         "$SCRIPT_DIR/fm-attest.sh" write --only-if-required \
-          --policy-venue "$VENUE" --policy-url "$VENUE_URL" --policy-ref "$POLICY_REF" \
+          --policy-meta "$RECORD" \
           --expect-head "$PR_HEAD" 2>&1
   ) || ATTEST_RC=$?
   ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")

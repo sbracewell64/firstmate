@@ -471,26 +471,44 @@ publish_out() {
 # Deliberately the same command as publish_out plus one flag, so a difference in
 # outcome can only be that flag.
 publish_only_if_required_out() {
-  local repo=$1
+  local repo=$1 policy
   shift
   if [ -e "$repo/.github/no-mistakes-attestation" ] || [ -L "$repo/.github/no-mistakes-attestation" ]; then
     git -C "$repo" add .github/no-mistakes-attestation
     git -C "$repo" diff --cached --quiet || git -C "$repo" commit -qm policy
   fi
-  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck --only-if-required \
+  policy=$(policy_remote "$repo" HEAD)
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" \
+      GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
+      GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
+      "$ATTEST" write --no-recheck --only-if-required \
       --policy-venue github.com/fixture/policy --policy-url https://github.com/fixture/policy.git \
-      --policy-ref HEAD "$@" 2>&1 )
+      --policy-ref refs/heads/policy "$@" 2>&1 )
 }
 
 required_out() {
-  local repo=$1
+  local repo=$1 source_ref policy
   shift
+  source_ref=${1:-HEAD}
   if [ -e "$repo/.github/no-mistakes-attestation" ] || [ -L "$repo/.github/no-mistakes-attestation" ]; then
     git -C "$repo" add .github/no-mistakes-attestation
     git -C "$repo" diff --cached --quiet || git -C "$repo" commit -qm policy
   fi
-  ( cd "$repo" && "$ATTEST" required --policy-venue github.com/fixture/policy \
-      --policy-url https://github.com/fixture/policy.git --policy-ref "${1:-HEAD}" 2>&1 )
+  policy=$(policy_remote "$repo" "$source_ref")
+  ( cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
+      GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
+      "$ATTEST" required --policy-venue github.com/fixture/policy \
+      --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/policy 2>&1 )
+}
+
+policy_remote() {
+  local repo=$1 source_ref=$2 key policy
+  key=$(printf '%s' "$repo" | cksum | awk '{ print $1 }')
+  policy="$TMP_ROOT/policy-$key.git"
+  [ -d "$policy" ] || git init -q --bare "$policy"
+  git -C "$repo" push -q --force "$policy" "$source_ref:refs/heads/policy"
+  git --git-dir="$policy" symbolic-ref HEAD refs/heads/policy
+  printf '%s\n' "$policy"
 }
 
 # A repository whose workflow consumes the verifier and whose fixed marker
@@ -3293,7 +3311,7 @@ test_required_reports_a_symlink_declaration_as_neither() {
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 2 ] || fail "a symlink declaration was resolved into an answer (exit $rc): $out"
-  assert_contains "$out" "declaration-not-regular" "the symlink did not report its own reason"
+  assert_contains "$out" "policy-declaration-not-regular" "the symlink did not report its own reason"
   assert_not_contains "$out" "reads no head-bound attestation" \
     "a symlink declaration was reported as absent"
   pass "fm-attest.sh: a symlink declaration answers neither way"
@@ -3308,7 +3326,7 @@ test_required_reports_wrong_declaration_content_as_neither() {
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 2 ] || fail "wrong declaration content was resolved into an answer (exit $rc): $out"
-  assert_contains "$out" "declaration-invalid" "wrong declaration content did not report its own reason"
+  assert_contains "$out" "policy-declaration-invalid" "wrong declaration content did not report its own reason"
   pass "fm-attest.sh: wrong declaration content answers neither way"
 }
 
@@ -3321,19 +3339,44 @@ test_required_reads_a_marker_from_the_repository_default_branch() {
   out=$(required_out "$repo" refs/remotes/origin/main)
   rc=$?
   [ "$rc" -eq 0 ] || fail "a pre-marker candidate did not inherit the repository declaration (exit $rc): $out"
-  assert_contains "$out" "refs/remotes/origin/main" "the governed policy generation was not named"
+  assert_contains "$out" "refs/heads/policy" "the governed policy generation was not named"
   pass "fm-attest.sh: a pre-marker candidate reads the repository declaration"
 }
 
 test_required_reports_an_unresolvable_default_ref_as_neither() {
-  local repo out rc
+  local repo policy out rc
   repo="$TMP_ROOT/required-default-unresolvable"
   new_repo "$repo"
-  out=$(required_out "$repo" refs/heads/missing)
+  policy="$TMP_ROOT/missing-policy.git"
+  git init -q --bare "$policy"
+  out=$(cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
+    "$ATTEST" required --policy-venue github.com/fixture/policy \
+    --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/missing 2>&1)
   rc=$?
   [ "$rc" -eq 2 ] || fail "an unresolvable default ref became an answer (exit $rc): $out"
   assert_contains "$out" "policy-ref-unreadable" "the unresolved policy ref did not report its own reason"
   pass "fm-attest.sh: an unresolvable repository default answers neither way"
+}
+
+test_required_refuses_a_foreign_local_policy_ref() {
+  local repo policy out rc
+  repo="$TMP_ROOT/required-foreign-local-ref"
+  policy="$TMP_ROOT/foreign-policy.git"
+  new_repo "$repo"
+  declare_gate "$repo"
+  git -C "$repo" add .github
+  git -C "$repo" commit -qm foreign-policy
+  git -C "$repo" branch policy
+  git init -q --bare "$policy"
+  out=$(cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
+    "$ATTEST" required --policy-venue github.com/fixture/policy \
+    --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/policy 2>&1)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a foreign local policy ref decided venue policy (exit $rc): $out"
+  assert_contains "$out" "policy-ref-unreadable" "the foreign ref did not report a venue fetch failure"
+  pass "fm-attest.sh: a foreign local ref cannot decide venue policy"
 }
 
 test_required_reports_a_default_branch_symlink_as_neither() {
@@ -3579,6 +3622,7 @@ test_required_reports_a_symlink_declaration_as_neither
 test_required_reports_wrong_declaration_content_as_neither
 test_required_reads_a_marker_from_the_repository_default_branch
 test_required_reports_an_unresolvable_default_ref_as_neither
+test_required_refuses_a_foreign_local_policy_ref
 test_required_reports_a_default_branch_symlink_as_neither
 test_declaration_check_refuses_a_consumer_without_the_marker
 test_declaration_check_accepts_the_repository_invariant
