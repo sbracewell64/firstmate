@@ -120,6 +120,7 @@ FM_ISOLATION_SEAM PROVEN consumer=bin/fm-test-run.sh check=--check-coverage
 - Consumer: `bin/fm-test-run.sh --check-coverage` then exits 0 and reports
   `FM_ISOLATION_FRESHNESS PROVEN subjects=24 proven=24 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=0`
   followed by `FM_TEST_COVERAGE ok total=171 parallel=24 serial=136 serial_shards=8 herdr=11 proven=24`.
+- Rechecked on 2026-08-26 with the same consumer command and the same two result lines above, exit 0.
 - `bin/fm-test-isolation-proof.sh --list` and `--list-proven` are identical, so the artifact enumerates the exact candidate universe and records only subjects that actually passed.
 
 ### The withheld-artifact control
