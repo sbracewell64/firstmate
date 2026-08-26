@@ -1028,9 +1028,11 @@ test_a_project_alias_moved_after_mint_performs_no_act() {
   replacement="$dir/replacement"
   alias="$dir/project"
   git init -q -b main "$original" || fail "moved-project-alias: original repository failed"
-  git -C "$original" commit -q --allow-empty -m base || fail "moved-project-alias: original base failed"
+  git -C "$original" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m base || fail "moved-project-alias: original base failed"
   git -C "$original" checkout -q -b work || fail "moved-project-alias: original branch failed"
-  git -C "$original" commit -q --allow-empty -m work || fail "moved-project-alias: original work failed"
+  git -C "$original" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m work || fail "moved-project-alias: original work failed"
   head=$(git -C "$original" rev-parse HEAD)
   git -C "$original" checkout -q main || fail "moved-project-alias: original checkout failed"
   git clone -q "$original" "$replacement" || fail "moved-project-alias: replacement repository failed"
@@ -1108,10 +1110,12 @@ test_the_whole_path_lands_one_real_fast_forward_and_proves_it() {
   mkdir -p "$dir/home/data/outbound-artifacts" "$dir/fakebin" || fail "real-path: fixture failed"
   project="$dir/project"
   git init -q -b main "$project" || fail "real-path: could not create the scratch repository"
-  git -C "$project" commit -q --allow-empty -m base || fail "real-path: base commit failed"
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m base || fail "real-path: base commit failed"
   before=$(git -C "$project" rev-parse main)
   git -C "$project" checkout -q -b fm/demo-item || fail "real-path: branch failed"
-  git -C "$project" commit -q --allow-empty -m work || fail "real-path: work commit failed"
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m work || fail "real-path: work commit failed"
   head=$(git -C "$project" rev-parse HEAD)
   git -C "$project" checkout -q main || fail "real-path: returning to main failed"
 
