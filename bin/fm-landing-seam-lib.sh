@@ -687,6 +687,7 @@ fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <revi
       fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ] \
         || { FM_LANDING_CANDIDATE_REASON='the live pull request identity could not be read'; return 4; }
       owner=$FM_PR_OWNER repo=$FM_PR_REPO number=$FM_PR_NUMBER
+      # fm-retrieval-audit: complete-source - the shared GraphQL normalizer compares every reviews, commits, and check-context totalCount with the nodes read
       output=$(gh api graphql -f query="$FM_VERIFY_ROLLUP_GRAPHQL" -f owner="$owner" -f repo="$repo" -F number="$number" \
         -q "$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (.head, $FM_LANDING_REVIEW_EVIDENCE_JQ)" 2>/dev/null) \
         || { FM_LANDING_CANDIDATE_REASON='the live pull request candidate and review identities could not be read'; return 4; }
