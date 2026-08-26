@@ -8,7 +8,8 @@
 #   # shellcheck source=bin/fm-landing-seam-lib.sh
 #   . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
 #
-# It needs bin/fm-outbound-artifact-lib.sh for the gate register and
+# It needs bin/fm-outbound-artifact-lib.sh for the gate register,
+# bin/fm-sol-control-config-lib.sh for the control venue schema, and
 # bin/fm-landing-authorization-lib.sh for the head prefilter and the
 # authorization id shape; source both before this one.
 #
@@ -192,31 +193,16 @@ FM_LANDING_SEAM_DOMAIN_STATE=
 FM_LANDING_SEAM_DOMAIN_REPOS=
 
 fm_landing_seam_venue_read() {  # <config-dir>
-  local file=${1:-}/sol-control.json raw repos
+  local file=${1:-}/sol-control.json repos
   FM_LANDING_SEAM_VENUE_STATE=invalid
   FM_LANDING_SEAM_DOMAIN_STATE=
   FM_LANDING_SEAM_DOMAIN_REPOS=
-  if [ ! -e "$file" ]; then
-    FM_LANDING_SEAM_VENUE_STATE=absent
+  fm_sol_control_config_read "$file" || {
+    [ "$FM_SOL_CONTROL_CONFIG_STATE" != absent ] \
+      || FM_LANDING_SEAM_VENUE_STATE=absent
     return 0
-  fi
-  [ -f "$file" ] && [ -r "$file" ] || return 0
-  raw=$(cat "$file" 2>/dev/null) || return 0
-  repos=$(printf '%s' "$raw" | jq -cer '
-    if type == "object"
-      and (keys | sort) == ["issue", "landing_domain", "repo"]
-      and (.repo | type) == "string"
-      and (.repo | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))
-      and (((.issue | type) == "number")
-        or ((.issue | type) == "string" and (.issue | test("^[0-9]+$"))))
-      and (.landing_domain | type) == "object"
-      and (.landing_domain.repos | type) == "array"
-      and all(.landing_domain.repos[];
-        (type == "string") and test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))
-    then [.landing_domain.repos[] | ascii_downcase]
-    else error("invalid sol-control schema")
-    end
-  ' 2>/dev/null) || return 0
+  }
+  repos=$FM_SOL_CONTROL_CONFIG_LANDING_REPOS
   FM_LANDING_SEAM_VENUE_STATE=valid
   if [ "$repos" = '[]' ]; then
     FM_LANDING_SEAM_DOMAIN_STATE=empty

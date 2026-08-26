@@ -126,6 +126,8 @@ PROBE_TIMEOUT="${FM_OUTBOUND_TIMEOUT:-15}"
 
 # shellcheck source=bin/fm-outbound-artifact-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
+# shellcheck source=bin/fm-sol-control-config-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-sol-control-config-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-landed-lib.sh disable=SC1091
@@ -298,13 +300,16 @@ records_all() {
 SOL_REPO=
 SOL_ISSUE=
 read_sol_config() {
-  local file raw
+  local file
   file="$CONFIG/sol-control.json"
-  [ -f "$file" ] || return 1
-  raw=$(cat "$file" 2>/dev/null) || return 1
-  SOL_REPO=$(printf '%s' "$raw" | jq -r '.repo // ""' 2>/dev/null) || return 1
-  SOL_ISSUE=$(printf '%s' "$raw" | jq -r 'if .issue == null then "" else (.issue|tostring) end' 2>/dev/null) || return 1
-  [ -n "$SOL_REPO" ] && [ -n "$SOL_ISSUE" ]
+  if ! fm_sol_control_config_read "$file"; then
+    if [ "$FM_SOL_CONTROL_CONFIG_STATE" = invalid ]; then
+      printf 'FM_LANDING_VENUE_INVALID: config/sol-control.json has an invalid schema.\n' >&2
+    fi
+    return 1
+  fi
+  SOL_REPO=$FM_SOL_CONTROL_CONFIG_REPO
+  SOL_ISSUE=$FM_SOL_CONTROL_CONFIG_ISSUE
 }
 
 # --- the fleet's durable rows ------------------------------------------------
