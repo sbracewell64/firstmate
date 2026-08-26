@@ -373,6 +373,7 @@ Without a current explicit captain instruction that states the concrete merge, t
 Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded, and use `bin/fm-merge-local.sh` for approved local-only landing; never call a lower-level merge command around their guards.
 `bin/fm-pr-merge.sh` re-checks the pull request's current head and refuses a merge it cannot confirm is green, mergeable, and unblocked by review, naming the concrete failing condition and the head whenever GitHub supplies one; treat that refusal as the state to fix, and use its recorded `--allow-unverified <check-name>` override, which waives exactly the one named check and leaves every other refusal in force, only on a current explicit captain instruction for that concrete merge.
 Where a live Browser Sol review request governs the work, both landing paths consume a one-use, head-bound landing authorization derived from that request's ruling, and refuse a candidate no current approving ruling covers; a landing no ruling governs reports that explicitly and proceeds through the ordinary gates, so silence is never how an ungoverned landing looks.
+That authority also names the act it permits, so a governed merge carries only the merge method and `--delete-branch`, and any other extra merge argument is refused rather than performed; `bin/fm-landing-authorization-lib.sh`'s header owns that effect-plan contract.
 After an autonomous merge, give the captain a one-line full-URL or local-main outcome.
 
 ### Validate

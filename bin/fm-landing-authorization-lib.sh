@@ -54,6 +54,62 @@
 # caller intends, and what the forge currently reports - is the property; any two
 # of them is one of its weaker neighbours.
 #
+# THE EFFECT PLAN, which is what makes the authority an authority over an ACT.
+#
+# THIS IS THE ONE PLACE THE EFFECT-PLAN CONTRACT IS STATED. Every other mention
+# of it in this repository is a cross-reference.
+#
+# An earlier shape of this mechanism bound WHEN a landing could happen - one
+# ruling, one exact head, one use - and left WHAT was landed to whatever argv the
+# spending caller handed it. Exact-head, one-use authority over an act nobody
+# named is not authority over that act: a caller holding a valid authorization
+# could substitute another executable, another repository, another ref, or a
+# force mode, and every check above would still pass. So an authority now carries
+# a TYPED, CLOSED EFFECT PLAN, the plan is part of the authorization identity,
+# and the spend CONSTRUCTS the act from the plan rather than receiving one.
+#
+# The plan is a closed object per effect kind. Two kinds exist, and an unknown
+# kind is could-not-observe rather than a pass-through:
+#
+#   pr-merge             venue=github, repo=<owner>/<name>, pr=<number>,
+#                        head=<exact sha>, method=squash|merge|rebase,
+#                        delete_branch=yes|no, force=no,
+#                        exec_name/exec_path/exec_digest
+#   local-fast-forward   venue=local, project=<path as addressed>,
+#                        project_identity=<resolved path>,
+#                        target_ref=refs/heads/<branch>, head=<exact sha>,
+#                        mode=ff-only, force=no,
+#                        exec_name/exec_path/exec_digest
+#
+# Every mutation-significant field is present, every field is a single plain
+# line, and the canonical rendering of those lines in a fixed order is digested
+# into the authorization identity. A plan that changes therefore produces a
+# different authorization, exactly as a moved head does.
+#
+# EXECUTABLE IDENTITY IS RESOLVED AT THE OWNING BOUNDARY, NEVER AT USE. The
+# executable for each kind is a fixed name this file chooses (`gh-axi`, `git`),
+# resolved once at mint to an absolute path and a content digest. The act is
+# invoked by that PATH, so a later `PATH` change cannot retarget it, and the
+# digest is re-read at effect time, so a file swapped at that path refuses rather
+# than running. A caller never names the executable.
+#
+# WHAT A CALLER MAY STILL SUPPLY, and what that supply is worth. A caller may
+# assert the act it believes it is authorizing. The assertion is compared element
+# by element against the act this file derived, and a difference refuses before
+# any mutation. It can only ever agree or stop the landing; it can never choose.
+#
+# FRESHNESS IS RE-OBSERVED, NOT ASSUMED. Everything in the plan that can move
+# between mint and use - the executable's content, the project path's resolution,
+# which branch the project has checked out, whether the plan's head is still a
+# fast-forward of the target ref - is read again at effect time. What could not be
+# read is could-not-observe and stops the act; what was read and disagrees is a
+# refusal. Neither is a retarget.
+#
+# CREDENTIAL-BEARING INPUT IS REFUSED BEFORE THE EFFECT INTERFACE. A mechanism
+# field or asserted argument carrying a token, password, key, or URL userinfo is
+# refused at mint and again at spend, ahead of the comparison that would
+# otherwise have quoted it into a refusal message.
+#
 # WHAT THIS FILE DOES NOT ESTABLISH, stated so no reader credits it with more.
 #
 # It does not re-derive the correlation record's own identity digest, and it does
@@ -63,6 +119,11 @@
 # cannot read as the schema it expects. A correlation record that is internally
 # consistent but forged is out of scope here and in scope there. A ruling edited
 # on the forge after correlation is likewise not detected here.
+#
+# The plan binds the ACT, not the outcome. It does not establish that the forge
+# will perform the merge it is asked for, nor that the executable at the pinned
+# path does what its name suggests; it establishes that the act performed is the
+# one the authority names and no other.
 
 if [ -n "${FM_LANDING_AUTH_LIB_SOURCED:-}" ]; then
   return 0
@@ -146,6 +207,12 @@ FM_AUTH_TOKEN_IN_FLIGHT=FM_AUTH_SPEND_IN_FLIGHT
 FM_AUTH_TOKEN_NO_ACT=FM_AUTH_NO_ACT
 FM_AUTH_TOKEN_BAD_HEAD=FM_AUTH_HEAD_MALFORMED
 FM_AUTH_TOKEN_NO_PR=FM_AUTH_GRANT_HAS_NO_PULL_REQUEST
+# effect-plan refusals: the plan was read and the act it names may not be performed
+FM_AUTH_TOKEN_ACT_MISMATCH=FM_AUTH_ACT_ASSERTION_MISMATCH
+FM_AUTH_TOKEN_CREDENTIAL=FM_AUTH_CREDENTIAL_BEARING_INPUT
+FM_AUTH_TOKEN_PLAN_STALE=FM_AUTH_EFFECT_PLAN_STALE
+FM_AUTH_TOKEN_PLAN_FOREIGN=FM_AUTH_EFFECT_PLAN_FOREIGN
+FM_AUTH_TOKEN_RULING_EXHAUSTED=FM_AUTH_RULING_ALREADY_LANDED
 
 # could-not-observe: no verdict was reached
 FM_AUTH_TOKEN_UNREADABLE=FM_AUTH_CORRELATION_UNREADABLE
@@ -155,6 +222,33 @@ FM_AUTH_TOKEN_HEAD_UNOBSERVED=FM_AUTH_HEAD_UNOBSERVED
 FM_AUTH_TOKEN_INDETERMINATE=FM_AUTH_SPEND_INDETERMINATE
 FM_AUTH_TOKEN_ENUM_UNOBSERVED=FM_AUTH_ENUMERATION_UNOBSERVED
 FM_AUTH_TOKEN_WRITE_UNOBSERVED=FM_AUTH_INTENT_UNRECORDABLE
+FM_AUTH_TOKEN_PLAN_INCOMPLETE=FM_AUTH_EFFECT_PLAN_INCOMPLETE
+FM_AUTH_TOKEN_PLAN_UNSUPPORTED=FM_AUTH_EFFECT_KIND_UNSUPPORTED
+FM_AUTH_TOKEN_EXEC_UNOBSERVED=FM_AUTH_EFFECT_EXECUTABLE_UNOBSERVED
+FM_AUTH_TOKEN_TARGET_UNOBSERVED=FM_AUTH_EFFECT_TARGET_UNOBSERVED
+FM_AUTH_TOKEN_RECEIPT_UNOBSERVED=FM_AUTH_ACT_RECEIPT_UNRECORDABLE
+}
+
+# --- the effect-plan vocabulary ----------------------------------------------
+#
+# Closed sets, named positively. A value outside one of them is unsupported and
+# stops, rather than being carried into an act nobody described.
+
+FM_AUTH_EFFECT_KINDS='pr-merge
+local-fast-forward'
+
+FM_AUTH_MERGE_METHODS='squash
+merge
+rebase'
+
+# The executable each effect kind is performed by, chosen HERE and never by a
+# caller. Resolved to an absolute path and a content digest at mint.
+fm_auth_effect_executable_name() {  # <kind>
+  case ${1:-} in
+    pr-merge) printf 'gh-axi\n' ;;
+    local-fast-forward) printf 'git\n' ;;
+    *) return 1 ;;
+  esac
 }
 
 # The verdicts that authorize a landing, and the ones that decline it.
@@ -202,10 +296,16 @@ fm_auth_digest() {  # reads stdin, prints a lowercase hex digest
 #
 # An absent optional field is the literal "-" rather than empty, so "no pull
 # request" and "pull request omitted" cannot collide into one identity.
+#
+# The effect digest is the other load-bearing member, and it is here for the same
+# reason head is. The act an authority permits is part of what that authority IS,
+# so a plan that differs by one field - another repository, another method,
+# another executable content - is a DIFFERENT authorization with its own id and
+# its own single use, rather than the same one re-pointed.
 
-fm_auth_identity_canonical() {  # <request> <comment> <verdict> <item> <project> <repo> <pr> <head>
-  printf 'schema=%s\nrequest=%s\ncomment=%s\nverdict=%s\nitem=%s\nproject=%s\nrepo=%s\npr=%s\nhead=%s\n' \
-    "$FM_AUTH_SCHEMA" "$1" "$2" "$3" "$4" "${5:--}" "${6:--}" "${7:--}" "$8"
+fm_auth_identity_canonical() {  # <request> <comment> <verdict> <item> <project> <repo> <pr> <head> <effect-digest>
+  printf 'schema=%s\nrequest=%s\ncomment=%s\nverdict=%s\nitem=%s\nproject=%s\nrepo=%s\npr=%s\nhead=%s\neffect=%s\n' \
+    "$FM_AUTH_SCHEMA" "$1" "$2" "$3" "$4" "${5:--}" "${6:--}" "${7:--}" "$8" "${9:--}"
 }
 
 fm_auth_id() {  # <same arguments as fm_auth_identity_canonical> -> id
@@ -301,6 +401,275 @@ fm_auth_pr_locator() {  # <pr-url>
   printf '%s/%s %s\n' "$owner" "$repo" "$number"
 }
 
+# --- mechanism-input hygiene -------------------------------------------------
+#
+# Every plan field and every asserted argument is one plain line. A value
+# carrying a newline could not be rendered into the canonical form without
+# changing what the digest covers, and a value carrying a control character could
+# not be quoted into a refusal without changing what the operator reads, so both
+# are refused rather than escaped.
+
+fm_auth_plain_value() {  # <candidate>
+  local v=${1-}
+  [ -n "$v" ] || return 1
+  [ "$v" = "${v//[[:cntrl:]]/}" ]
+}
+
+# Credential-bearing mechanism input, refused before it can reach the effect
+# interface. Deliberately broad and deliberately not a secret scanner: it screens
+# the small set of shapes a landing mechanism field could carry a credential in,
+# and it refuses rather than redacting, because a value that had to be redacted
+# to be safe was never a mechanism field this owner should be holding.
+fm_auth_credential_bearing() {  # <candidate>
+  printf '%s' "${1-}" | grep -Eqi \
+    -e '(^|[^[:alnum:]])--?(token|password|passwd|secret|api[-_]?key|apikey|credential|netrc|bearer|authorization)([=[:space:]]|$)' \
+    -e '(token|password|passwd|secret|api[-_]?key|apikey|credential|bearer|authorization)[[:space:]]*[=:][^[:space:]]' \
+    -e 'gh[pousr]_[[:alnum:]]{16,}' \
+    -e 'github_pat_[[:alnum:]_]{20,}' \
+    -e '-----BEGIN[[:space:]]' \
+    -e '://[^/@[:space:]]*@'
+}
+
+# --- effect plan -------------------------------------------------------------
+#
+# The plan is read into named values, rendered to its canonical form, and only
+# then turned into an act. Reading, rendering, and constructing are one pass so
+# no consumer can build an act from a plan that was never validated.
+#
+# Every failure sets FM_AUTH_PLAN_DEFECT to the reason and returns non-zero, with
+# the return value naming which of the three answers the caller reached:
+#   1  incomplete or malformed - could-not-observe
+#   2  unsupported effect kind - could-not-observe
+#   3  credential-bearing input - a refusal
+#
+# shellcheck disable=SC2034  # the parsed plan is read by sourcing callers
+{
+FM_AUTH_PLAN_DEFECT=
+FM_AUTH_PLAN_CANONICAL=
+FM_AUTH_PLAN_KIND=
+FM_AUTH_PLAN_VENUE=
+FM_AUTH_PLAN_REPO=
+FM_AUTH_PLAN_PR=
+FM_AUTH_PLAN_HEAD=
+FM_AUTH_PLAN_METHOD=
+FM_AUTH_PLAN_DELETE_BRANCH=
+FM_AUTH_PLAN_PROJECT=
+FM_AUTH_PLAN_PROJECT_IDENTITY=
+FM_AUTH_PLAN_TARGET_REF=
+FM_AUTH_PLAN_MODE=
+FM_AUTH_PLAN_FORCE=
+FM_AUTH_PLAN_EXEC_NAME=
+FM_AUTH_PLAN_EXEC_PATH=
+FM_AUTH_PLAN_EXEC_DIGEST=
+FM_AUTH_ACT=()
+}
+
+fm_auth_plan_reset() {
+  FM_AUTH_PLAN_DEFECT=
+  FM_AUTH_PLAN_CANONICAL=
+  FM_AUTH_PLAN_KIND=
+  FM_AUTH_PLAN_VENUE=
+  FM_AUTH_PLAN_REPO=
+  FM_AUTH_PLAN_PR=
+  FM_AUTH_PLAN_HEAD=
+  FM_AUTH_PLAN_METHOD=
+  FM_AUTH_PLAN_DELETE_BRANCH=
+  FM_AUTH_PLAN_PROJECT=
+  FM_AUTH_PLAN_PROJECT_IDENTITY=
+  FM_AUTH_PLAN_TARGET_REF=
+  FM_AUTH_PLAN_MODE=
+  FM_AUTH_PLAN_FORCE=
+  FM_AUTH_PLAN_EXEC_NAME=
+  FM_AUTH_PLAN_EXEC_PATH=
+  FM_AUTH_PLAN_EXEC_DIGEST=
+  FM_AUTH_ACT=()
+}
+
+# One field, read strictly. An absent, null, or non-string value is a missing
+# field rather than an empty one, because "the plan does not say" and "the plan
+# says nothing" are the same refusal here and neither is a default.
+#
+# The per-field validator is named as an argument and called by name, which is a
+# call form bin/fm-dead-predicate-check.sh cannot resolve on its own. Each one is
+# declared to it here so a live predicate is not reported dead and, worse, so the
+# whole file does not become unreadable to that control:
+#   indirect-call: fm_auth_head_shape_valid
+#   indirect-call: fm_auth_plan_repo_valid
+#   indirect-call: fm_auth_plan_number_valid
+#   indirect-call: fm_auth_plan_absolute_path_valid
+#   indirect-call: fm_auth_plan_exec_name_valid
+#   indirect-call: fm_auth_plan_digest_valid
+#   indirect-call: fm_auth_plan_target_ref_valid
+#   indirect-call: fm_auth_plan_member_of
+#   indirect-call: fm_auth_plan_literal
+FM_AUTH_PLAN_VALUE=
+fm_auth_plan_read() {  # <plan-json> <field> [<validator> [<validator-arg>]]
+  local plan=$1 field=$2 check=${3:-} value
+  FM_AUTH_PLAN_VALUE=
+  value=$(printf '%s' "$plan" | jq -r --arg f "$field" \
+    'if (.[$f] | type) == "string" then .[$f]
+     elif (.[$f] | type) == "boolean" then (if .[$f] then "yes" else "no" end)
+     elif (.[$f] | type) == "number" then (.[$f] | tostring)
+     else "" end' 2>/dev/null) || {
+    FM_AUTH_PLAN_DEFECT="the effect plan could not be read for field '$field'"
+    return 1
+  }
+  if ! fm_auth_plain_value "$value"; then
+    FM_AUTH_PLAN_DEFECT="the effect plan names no usable '$field'"
+    return 1
+  fi
+  if fm_auth_credential_bearing "$value"; then
+    FM_AUTH_PLAN_DEFECT="the effect plan's '$field' carries credential-bearing input"
+    return 3
+  fi
+  if [ -n "$check" ] && ! "$check" "$value" "${4:-}"; then
+    FM_AUTH_PLAN_DEFECT="the effect plan's '$field' is not a value this contract accepts"
+    return 1
+  fi
+  FM_AUTH_PLAN_VALUE=$value
+  return 0
+}
+
+fm_auth_plan_repo_valid() {  # <candidate>
+  printf '%s' "${1:-}" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+}
+
+fm_auth_plan_number_valid() {  # <candidate>
+  printf '%s' "${1:-}" | grep -Eq '^[0-9]+$'
+}
+
+fm_auth_plan_absolute_path_valid() {  # <candidate>
+  case ${1:-} in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  case ${1:-} in
+    *'//'*|*/./*|*/../*|*/..|*/.) return 1 ;;
+  esac
+  return 0
+}
+
+fm_auth_plan_exec_name_valid() {  # <candidate>
+  printf '%s' "${1:-}" | grep -Eq '^[A-Za-z0-9._-]+$'
+}
+
+fm_auth_plan_digest_valid() {  # <candidate>
+  printf '%s' "${1:-}" | grep -Eq '^[0-9a-f]{64}$'
+}
+
+fm_auth_plan_target_ref_valid() {  # <candidate>
+  printf '%s' "${1:-}" | grep -Eq '^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$' || return 1
+  case ${1:-} in
+    *..*|*/.*|*.lock|*//*|*/) return 1 ;;
+  esac
+  return 0
+}
+
+fm_auth_plan_member_of() {  # <candidate> <newline-separated set>
+  printf '%s\n' "${2:-}" | grep -qxF "${1:-}"
+}
+
+fm_auth_plan_literal() {  # <candidate> <required literal>
+  [ "${1:-}" = "${2:-}" ]
+}
+
+# The whole plan, validated and rendered. On success FM_AUTH_PLAN_CANONICAL holds
+# the exact bytes the identity digest covers and FM_AUTH_ACT holds the act.
+fm_auth_plan_parse() {  # <plan-json>
+  local plan=$1 kind
+  fm_auth_plan_reset
+  if ! printf '%s' "$plan" | jq -e 'type == "object"' >/dev/null 2>&1; then
+    FM_AUTH_PLAN_DEFECT='the authority carries no effect plan, so the act it permits is undetermined'
+    return 1
+  fi
+  kind=$(printf '%s' "$plan" | jq -r 'if (.kind | type) == "string" then .kind else "" end' 2>/dev/null) || kind=
+  if ! fm_auth_plan_member_of "$kind" "$FM_AUTH_EFFECT_KINDS"; then
+    FM_AUTH_PLAN_DEFECT="the effect plan declares kind '${kind:--}', which this contract does not perform"
+    return 2
+  fi
+  FM_AUTH_PLAN_KIND=$kind
+
+  fm_auth_plan_read "$plan" executable_name fm_auth_plan_exec_name_valid || return $?
+  FM_AUTH_PLAN_EXEC_NAME=$FM_AUTH_PLAN_VALUE
+  [ "$FM_AUTH_PLAN_EXEC_NAME" = "$(fm_auth_effect_executable_name "$kind")" ] || {
+    FM_AUTH_PLAN_DEFECT="the effect plan performs '$kind' with '$FM_AUTH_PLAN_EXEC_NAME', which is not the executable this contract performs it with"
+    return 1
+  }
+  fm_auth_plan_read "$plan" executable_path fm_auth_plan_absolute_path_valid || return $?
+  FM_AUTH_PLAN_EXEC_PATH=$FM_AUTH_PLAN_VALUE
+  fm_auth_plan_read "$plan" executable_digest fm_auth_plan_digest_valid || return $?
+  FM_AUTH_PLAN_EXEC_DIGEST=$FM_AUTH_PLAN_VALUE
+  fm_auth_plan_read "$plan" force fm_auth_plan_literal no || return $?
+  FM_AUTH_PLAN_FORCE=$FM_AUTH_PLAN_VALUE
+
+  case $kind in
+    pr-merge)
+      fm_auth_plan_read "$plan" venue fm_auth_plan_literal github || return $?
+      FM_AUTH_PLAN_VENUE=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" repo fm_auth_plan_repo_valid || return $?
+      FM_AUTH_PLAN_REPO=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" pr fm_auth_plan_number_valid || return $?
+      FM_AUTH_PLAN_PR=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" head fm_auth_head_shape_valid || return $?
+      FM_AUTH_PLAN_HEAD=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" method fm_auth_plan_member_of "$FM_AUTH_MERGE_METHODS" || return $?
+      FM_AUTH_PLAN_METHOD=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" delete_branch fm_auth_plan_member_of 'yes
+no' || return $?
+      FM_AUTH_PLAN_DELETE_BRANCH=$FM_AUTH_PLAN_VALUE
+      FM_AUTH_PLAN_CANONICAL=$(printf 'effect=%s\nvenue=%s\nrepo=%s\npr=%s\nhead=%s\nmethod=%s\ndelete_branch=%s\nforce=%s\nexec_name=%s\nexec_path=%s\nexec_digest=%s\n' \
+        "$FM_AUTH_PLAN_KIND" "$FM_AUTH_PLAN_VENUE" "$FM_AUTH_PLAN_REPO" \
+        "$FM_AUTH_PLAN_PR" "$FM_AUTH_PLAN_HEAD" "$FM_AUTH_PLAN_METHOD" \
+        "$FM_AUTH_PLAN_DELETE_BRANCH" "$FM_AUTH_PLAN_FORCE" \
+        "$FM_AUTH_PLAN_EXEC_NAME" "$FM_AUTH_PLAN_EXEC_PATH" "$FM_AUTH_PLAN_EXEC_DIGEST")
+      FM_AUTH_ACT=("$FM_AUTH_PLAN_EXEC_PATH" pr merge "$FM_AUTH_PLAN_PR"
+        --repo "$FM_AUTH_PLAN_REPO" "--$FM_AUTH_PLAN_METHOD")
+      if [ "$FM_AUTH_PLAN_DELETE_BRANCH" = yes ]; then
+        FM_AUTH_ACT+=(--delete-branch)
+      fi
+      ;;
+    local-fast-forward)
+      fm_auth_plan_read "$plan" venue fm_auth_plan_literal local || return $?
+      FM_AUTH_PLAN_VENUE=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" project fm_auth_plan_absolute_path_valid || return $?
+      FM_AUTH_PLAN_PROJECT=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" project_identity fm_auth_plan_absolute_path_valid || return $?
+      FM_AUTH_PLAN_PROJECT_IDENTITY=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" target_ref fm_auth_plan_target_ref_valid || return $?
+      FM_AUTH_PLAN_TARGET_REF=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" head fm_auth_head_shape_valid || return $?
+      FM_AUTH_PLAN_HEAD=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" mode fm_auth_plan_literal ff-only || return $?
+      FM_AUTH_PLAN_MODE=$FM_AUTH_PLAN_VALUE
+      FM_AUTH_PLAN_CANONICAL=$(printf 'effect=%s\nvenue=%s\nproject=%s\nproject_identity=%s\ntarget_ref=%s\nhead=%s\nmode=%s\nforce=%s\nexec_name=%s\nexec_path=%s\nexec_digest=%s\n' \
+        "$FM_AUTH_PLAN_KIND" "$FM_AUTH_PLAN_VENUE" "$FM_AUTH_PLAN_PROJECT" \
+        "$FM_AUTH_PLAN_PROJECT_IDENTITY" "$FM_AUTH_PLAN_TARGET_REF" \
+        "$FM_AUTH_PLAN_HEAD" "$FM_AUTH_PLAN_MODE" "$FM_AUTH_PLAN_FORCE" \
+        "$FM_AUTH_PLAN_EXEC_NAME" "$FM_AUTH_PLAN_EXEC_PATH" "$FM_AUTH_PLAN_EXEC_DIGEST")
+      FM_AUTH_ACT=("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT"
+        merge --ff-only --quiet "$FM_AUTH_PLAN_HEAD")
+      ;;
+  esac
+  [ -n "$FM_AUTH_PLAN_CANONICAL" ] || {
+    # shellcheck disable=SC2034  # read by sourcing callers to name the defect
+    FM_AUTH_PLAN_DEFECT='the effect plan could not be rendered to its canonical form'
+    return 1
+  }
+  return 0
+}
+
+# The digest the authorization identity carries, taken from the canonical form a
+# successful parse produced. It reads that global rather than re-parsing, because
+# a parse inside a command substitution would lose the defect it recorded - which
+# is exactly how a refusal ends up naming nothing.
+fm_auth_plan_canonical_digest() {
+  local sum
+  [ -n "$FM_AUTH_PLAN_CANONICAL" ] || return 1
+  sum=$(printf '%s\n' "$FM_AUTH_PLAN_CANONICAL" | fm_auth_digest) || return 1
+  fm_auth_plan_digest_valid "$sum" || return 1
+  printf '%s\n' "$sum"
+}
+
 # --- spend admissibility -----------------------------------------------------
 #
 # The pure half of the spend decision: what the record's own state permits,
@@ -342,12 +711,12 @@ fm_auth_reported_status() {  # <state>
 
 # --- record construction -----------------------------------------------------
 
-fm_auth_record_new() {  # <id> <request> <comment> <verdict> <item> <project> <repo> <pr> <head> <now>
+fm_auth_record_new() {  # <id> <request> <comment> <verdict> <item> <project> <repo> <pr> <head> <now> <effect-json>
   jq -n \
     --arg schema "$FM_AUTH_SCHEMA" \
     --arg id "$1" --arg request "$2" --arg comment "$3" --arg verdict "$4" \
     --arg item "$5" --arg project "$6" --arg repo "$7" --arg pr "$8" \
-    --arg head "$9" --arg now "${10}" \
+    --arg head "$9" --arg now "${10}" --argjson effect "${11}" \
     '{schema:$schema,
       authorization_id:$id,
       request_id:$request,
@@ -355,6 +724,7 @@ fm_auth_record_new() {  # <id> <request> <comment> <verdict> <item> <project> <r
       grant:{item:$item,project:$project,repo:$repo,
              pr:(if $pr == "" or $pr == "-" then null else $pr end),
              head:$head},
+      effect:$effect,
       uses:1,
       state:"granted",
       minted:$now,

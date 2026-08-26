@@ -336,13 +336,23 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
 # naming no pull request whose head could be re-observed - is decided by
 # bin/fm-landing-authorization.sh and relayed verbatim, because a second copy of
 # that decision here is the second control plane both halves exist to avoid.
+#
+# THE EFFECT PLAN PASSES THROUGH, IT IS NOT BUILT HERE. The trailing arguments
+# are the chokepoint's declaration of the act it is asking to have authorized,
+# and this file forwards them verbatim. bin/fm-landing-authorization.sh validates
+# every one of them, derives the venue, target, and head from the ruling rather
+# than from the declaration, and refuses a plan it cannot close. A second copy of
+# that validation here would be the second control plane both halves exist to
+# avoid, and a plan assembled here would make this file an act builder, which it
+# is deliberately not.
 
 FM_LANDING_SEAM_AUTH_ID=
 
-fm_landing_seam_mint() {  # <auth-script> <request-id>
-  local auth=$1 rid=$2 out id rc=0
+fm_landing_seam_mint() {  # <auth-script> <request-id> [<effect-plan-arg>...]
+  local auth=$1 rid=$2; shift 2
+  local out id rc=0
   FM_LANDING_SEAM_AUTH_ID=
-  out=$("$auth" mint "$rid" 2>&1) || rc=$?
+  out=$("$auth" mint "$rid" "$@" 2>&1) || rc=$?
   if [ "$rc" -eq 3 ]; then
     fm_landing_seam_set refused "$FM_LANDING_SEAM_TOKEN_MINT_REFUSED" \
       "the ruling on $rid grants no landing authorization: $out"
@@ -369,29 +379,31 @@ fm_landing_seam_mint() {  # <auth-script> <request-id>
 # THE ACT RUNS INSIDE THE SPEND, not after a check that one would be permitted.
 # A gate that asks "may I land?" and then lands is two operations with a window
 # between them; this is one, and the durable intent record is written before the
-# command is reached. That is the property that makes the wiring real rather than
+# act is reached. That is the property that makes the wiring real rather than
 # advisory.
+#
+# THE COMMAND PASSED HERE IS AN ASSERTION, NOT THE ACT. The authority builds the
+# act from its own effect plan; what a chokepoint passes is the act it believes
+# it is authorizing, and the authority refuses before any mutation when the two
+# differ. This file used to hand `spend` the command to run, wrapped in a
+# `bash -c` prologue of its own - which made the SEAM the chooser of the
+# executable and of the argv, the exact freedom the effect plan closes. Both are
+# gone: the wrapper because the receipt is the authority's to write, and the
+# chooser because there is no longer one here.
 #
 # WHY A RECEIPT AND NOT AN EXIT STATUS. `spend` exits 0 on two different
 # outcomes: the act ran and the authority is now spent, or the authority was
 # ALREADY spent and no act was performed. Reading only the exit status turns the
 # second into a silent success - a merge gate reporting success while merging
 # nothing - which is precisely the double-land this mechanism exists to make
-# impossible. So the act is wrapped in a one-line prologue that records having
-# been entered, and the landing is a success only when that receipt says the act
-# was reached. The receipt is written BEFORE the command for the same reason the
-# intent record is: a receipt written afterwards cannot distinguish an act that
-# never ran from one that ran and could not report.
-#
-# The wrapper's own failure to write the receipt exits 125 rather than running
-# the act, so a landing whose outcome could not have been recorded does not
-# happen at all.
+# impossible. So the authority writes the receipt immediately before the act, and
+# the landing is a success only when that receipt says the act was reached.
 #
 # Returns 0 when the act ran and the authority is spent, 3 when the spend was
 # refused, and 4 for every could-not-observe, including an act that exited
 # non-zero - which is NOT evidence that it had no effect.
 
-fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <command...>
+fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-command...>
   local auth=$1 id=$2 head=$3 receipt=$4; shift 4
   local rc=0
 
@@ -406,10 +418,7 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <command..
     return $?
   fi
 
-  # shellcheck disable=SC2016  # the wrapper's own positional parameters, deliberately unexpanded here
-  "$auth" spend "$id" --head "$head" -- \
-    bash -c 'printf "entered\n" > "$1" || exit 125; shift; exec "$@"' \
-    fm-landing-act "$receipt" "$@" || rc=$?
+  "$auth" spend "$id" --head "$head" --receipt "$receipt" --assert-act -- "$@" || rc=$?
 
   if [ "$rc" -eq 0 ] && [ -s "$receipt" ]; then
     return 0

@@ -19,6 +19,9 @@ Four properties, and one control without which none of them means anything:
 Property 5 is not a courtesy.
 Properties 1 through 4 can all pass while the mechanism performs no landing act, so without 5 the suite would be green and worthless.
 
+Those five bind WHEN a landing may happen.
+Since 2026-08-26 the authority also names WHAT act it permits, and that property, its own red calibration, and its end-to-end proof are in ["The effect plan"](#the-effect-plan-the-authority-names-the-act) below.
+
 ## What is NOT claimed, and where those properties live
 
 This mechanism does not establish that a ruling answers a given request.
@@ -283,6 +286,135 @@ $ bash tests/fm-merge-local.test.sh | grep -c '^ok'
 
 Re-run both suites after any change to the seam, either merge gate's merge site, or the authority layer.
 Re-run the red calibration - not just the green suites - after any change to the applicability rule, the governing-gate set, the live-state set, or the act receipt, because those are the four places where this control can go quietly vacuous while staying green.
+
+## The effect plan: the authority names the act
+
+Date: 2026-08-26.
+Subject: `bin/fm-landing-authorization.sh` and `bin/fm-landing-authorization-lib.sh`, as consumed by `bin/fm-landing-seam-lib.sh` inside `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`.
+Regression owner: `tests/fm-landing-authorization.test.sh`, controls 16 through 22.
+The effect-plan contract itself is stated once, in `bin/fm-landing-authorization-lib.sh`'s header.
+
+### What this section adds, and what it corrects
+
+Everything above establishes WHEN a landing may happen: one ruling, one exact head, one use, an intent record before the act.
+Until 2026-08-26 it did not establish WHAT act that authority permitted.
+`spend <auth-id> --head <sha> -- <command>...` executed the caller's argv, and the argv was only digested into the record afterwards, so a caller holding a completely valid authorization could substitute another executable, another repository, another ref, or another mode and every check above still passed.
+That is the same defect the publication guard in pull request #133 had already been corrected for three times over, which is what makes it a recurrence rather than a hypothetical.
+
+An authority now carries a typed effect plan, the plan is part of the authorization identity, and the spend builds the act from the plan.
+A caller may assert the act it believes it is authorizing; the assertion is compared element by element and refuses on any difference.
+It can agree or stop the landing; it cannot choose.
+
+### What is claimed
+
+1. The act performed is the one the authority's plan names, whether or not the caller asserts anything.
+2. A caller-asserted executable, venue, target object, mode, or extra argument that differs from the authority-derived act performs zero acts and leaves the authority unspent.
+3. The executable is pinned at mint to an absolute path and a content digest, and a file swapped at that path afterwards refuses at effect time rather than being run.
+4. An effect plan that is incomplete, or that names a kind this contract does not perform, refuses before the act and is could-not-observe rather than a refusal.
+5. Credential-bearing mechanism input is refused before it can reach the effect interface, at the mint and at the act.
+6. One approval grants one landing: a second plan for the same ruling and head is a different authorization id, and neither it nor a further mint can land that approval again.
+7. Non-vacuity: a complete plan with an exact assertion still lands, exactly once.
+
+### What is NOT claimed
+
+The plan binds the act, not its outcome.
+It does not establish that the forge performs the merge it is asked for, nor that the executable at the pinned path does what its name suggests.
+It establishes that the act performed is the one the authority names and no other.
+
+The `pr-merge` plan carries the merge method and `--delete-branch`, which is what `bin/fm-pr-merge.sh` can express.
+A governed merge carrying any other extra argument is refused by that gate rather than performed, so extra `gh-axi` arguments remain available only to an ungoverned merge.
+
+### Red calibration
+
+Every control was observed failing for its intended reason.
+Each defect was applied to a fresh copy of `bin/` and `tests/` under a scratch root created with `mktemp -d`, outside this repository, and the copy was run unmodified otherwise.
+
+```sh
+scratch=$(mktemp -d)
+for d in caller-act-performed exec-digest-unchecked plan-field-defaulted \
+         credential-screen-off ruling-reland-allowed act-never-performed; do
+  mkdir -p "$scratch/$d" && cp -a bin tests "$scratch/$d/"
+done
+# one defect applied per copy, then:
+for d in caller-act-performed exec-digest-unchecked plan-field-defaulted \
+         credential-screen-off ruling-reland-allowed act-never-performed; do
+  ( cd "$scratch/$d" && bash tests/fm-landing-authorization.test.sh 2>&1 | grep -m1 '^not ok' )
+done
+```
+
+| Injected defect | Observed failure |
+| --------------- | ---------------- |
+| the caller's asserted argv is performed instead of the plan's act | `not ok - owner-act: a substituted executable must refuse: pr merge 7 --repo owner/demo --squash` |
+| the pinned executable is not re-digested at effect time | `not ok - swapped-exec: a replaced executable must refuse: spent: fm-auth-e1f6eb44e8cffcaee3ad43d6ac96292a landed demo-item at 1111111111111111111111111111111111111111: expected exit 3, got 0` |
+| a missing plan field is defaulted rather than refused | `not ok - plan-incomplete: a missing plan field must be could-not-observe: spent: fm-auth-ba4bf45227ca421e9f11a05ba8f2fca7 landed demo-item at 1111111111111111111111111111111111111111: expected exit 4, got 0` |
+| credential screening always answers "no credential" | `not ok - credential: refusal token (missing: 'FM_AUTH_CREDENTIAL_BEARING_INPUT')` |
+| one-approval-one-landing is checked at the mint but not at the act | `not ok - one-landing: one approval performed 2 landings` |
+| the act is never performed | `not ok - nonvacuity: the act ran 0 times, not once` |
+
+Every defect run exited 1.
+
+The first row is the founding defect stated as a defect: it is the mechanism exactly as it behaved before this change, and the control that catches it is the one that was missing.
+
+The last row reds at the non-vacuity control, which runs first, so it does not by itself show that the end-to-end control has teeth.
+That was measured separately, by running the same defective copy with the test list reduced to the end-to-end control alone:
+
+```
+not ok - real-path: main is at c97958f8e2c240eda2fdb3fc903d6cc77b2c8647, not the authorized 7866e849dd88581ba2d760a315ddd018425dc143
+```
+
+That refusal is read from the scratch repository's own `git rev-parse`, not from anything this mechanism recorded.
+
+A seventh copy replaced the local fast-forward's act with an inert `git status`.
+It reds earlier than the post-effect proof, at the assertion, and the wording is worth keeping because it shows the two halves are not independent - an act that changed cannot satisfy an assertion derived from the plan it no longer matches:
+
+```
+not ok - real-path: spending the authority: FM_AUTH_ACT_ASSERTION_MISMATCH: the caller asserts an act of 7 argument(s); authorization fm-auth-95013bd6b789e6a992ea32c1f646870d derives one of 5 from its effect plan: expected exit 0, got 3
+```
+
+### The adjacent effect authorizers, inventoried
+
+The same invariant applies to every mechanism in this fleet that authorizes an irreversible outward effect.
+Two others exist, and neither is changed by this record; they are inventoried here so a reader is not left assuming the property is fleet-wide.
+
+**FirstMate candidate publication**, `bin/fm-publication-guard.sh`, open for independent review as pull request #133 at head `a5db4d0cb5d11811fa0762a3e11a762815f4464a`.
+It satisfies the invariant on every axis this record covers: it constructs `git push <remote> refs/heads/<branch>:refs/heads/<branch>` from the authority's own fields rather than running a caller command, resolves a trusted `git` from a fixed executable set to a path and a content digest, binds the remote by a credential-free URL digest and remote identity, and re-observes both at consume, refusing on any mismatch.
+Its conformance credit belongs to the exact generation that passes its own review and landing gates, so it is inventoried as conforming and not yet credited.
+
+**no-mistakes `PushStep`**, `internal/pubauth` plus `internal/pipeline/steps/push.go`, at that project's local `main` `0d96d8c`.
+Its effect subject is typed and closed - repository, run, push generation, ref, branch, candidate head and tree, expected and observed remote tips, target kind and credential-free target fingerprint, and effect kind - and `Subject.Equal` compares every field exactly, so an `ALLOW_EXACT` echoing any other subject is refused and the push is built from those fields rather than from a caller command.
+
+One axis of the invariant is open there: the git EXECUTABLE is not part of the authorized subject.
+`internal/git/git.go` invokes `exec.CommandContext(ctx, "git", args...)`, an ambient `PATH` resolution performed at effect time, with no pinned path and no content digest, so a `git` substituted between authorization and effect would be run rather than refused.
+That is the one mechanism-significant field its subject does not carry, and it is exactly the axis both FirstMate mechanisms close.
+The owner is that project's `internal/pubauth` and `internal/git`; it is stated here as a follow-on rather than repaired, because that project is outside this change.
+
+### The real end-to-end path
+
+Control 22 is the only one that does not stub the effect.
+It creates a scratch git repository under the suite's own temp root, commits a base and a branch commit, writes a ruled correlation record naming that branch head as the reviewed head, mints a `local-fast-forward` plan against that repository, and spends it.
+The act is real `git` advancing a real `refs/heads/main`, and the proof is `git rev-parse main` afterwards, plus the act receipt, plus the authority reporting `spent` and refusing a replay.
+
+### Green run
+
+```
+$ bash tests/fm-landing-authorization.test.sh
+...
+ok - the act performed is the authority's own, and an asserted act may only agree
+ok - an executable swapped after authorization refuses at effect time
+ok - an incomplete or unsupported effect plan refuses before the act
+ok - credential-bearing mechanism input is refused before the act
+ok - one approval grants one landing, even under a second plan
+ok - an act that exits non-zero leaves the authority indeterminate
+ok - the whole path lands one real fast-forward and proves it from the repository
+FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
+```
+
+`tests/fm-landing-seam.test.sh` was re-run unchanged on the same tree and stayed green, which is the evidence that the production merge gates still reach the authority after the act moved inside it.
+
+### Refreshing this record
+
+Re-run the red calibration - not just the green suite - after any change to the plan vocabulary, the act construction, the assertion comparison, or the effect-time re-observation.
+Those are the four places where this control can go quietly vacuous while staying green: a plan that stops covering a mutation-significant field, an act rebuilt from something other than the plan, an assertion that stops comparing, and a freshness check that stops looking.
 
 ## The restart window, stated precisely
 
