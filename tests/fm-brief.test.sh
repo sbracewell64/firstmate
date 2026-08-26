@@ -240,7 +240,7 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
       || fail "$id: scaffold for mode $mode failed"
     brief="$home/data/$id/brief.md"
     if [ "$mode" = no-mistakes ]; then
-      assert_grep "bin/fm-attest.sh write --only-if-required" "$brief" \
+      assert_grep 'bin/fm-attest.sh" write --only-if-required' "$brief" \
         "$id: the pipeline contract does not publish the head-bound evidence"
       grep -q 'Run it unconditionally' "$brief" \
         || fail "$id: the publication step is left to the worker to judge"
@@ -250,6 +250,28 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
     fi
   done
   pass "fm-brief.sh: the pipeline contract publishes the evidence its own check reads"
+}
+
+test_no_mistakes_brief_quotes_policy_metadata_paths() {
+  local home id brief root_with_space command args
+  home="$TMP_ROOT/attest path home"
+  root_with_space="$TMP_ROOT/firstmate root"
+  id=brief-attest-space
+  mkdir -p "$root_with_space/bin" "$root_with_space/state" "$home/data"
+  write_registry "$home"
+  args="$TMP_ROOT/attest-space-args"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
+  chmod +x "$root_with_space/bin/fm-attest.sh"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root_with_space" "$ROOT/bin/fm-brief.sh" \
+    "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "brief with a spaced Firstmate root did not scaffold"
+  brief="$home/data/$id/brief.md"
+  command=$(sed -n '/fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
+  FM_TEST_ARGS="$args" bash -c "$command" || fail "the generated publication command did not execute"
+  assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
+    "the generated command split the policy metadata path"
+  pass "fm-brief.sh: policy metadata paths round-trip as one argument"
 }
 
 # A ship task's delivery mode is firstmate's per-task decision, so a missing or
@@ -1068,6 +1090,7 @@ test_crewmate_scaffolds_carry_who_is_speaking
 test_secondmate_charter_keeps_its_own_marker_consequence
 test_ship_modes_generate_clean_briefs
 test_no_mistakes_brief_requires_publishing_the_head_bound_evidence
+test_no_mistakes_brief_quotes_policy_metadata_paths
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply

@@ -3379,6 +3379,43 @@ test_required_refuses_a_foreign_local_policy_ref() {
   pass "fm-attest.sh: a foreign local ref cannot decide venue policy"
 }
 
+test_required_cleans_the_policy_ref_when_fetch_is_interrupted() {
+  local repo policy wrapper real_git fetched out rc refs
+  repo="$TMP_ROOT/required-interrupted-fetch"
+  policy="$TMP_ROOT/required-interrupted-policy.git"
+  wrapper="$TMP_ROOT/required-interrupted-bin"
+  fetched="$TMP_ROOT/required-interrupted-fetched"
+  new_repo "$repo"
+  declare_gate "$repo"
+  git -C "$repo" add .github
+  git -C "$repo" commit -qm policy
+  git init -q --bare "$policy"
+  git -C "$repo" push -q "$policy" HEAD:refs/heads/policy
+  real_git=$(command -v git)
+  mkdir -p "$wrapper"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [ "$1" = fetch ]; then' \
+    '  "$FM_TEST_REAL_GIT" "$@" || exit' \
+    '  : > "$FM_TEST_FETCHED"' \
+    '  sleep 30' \
+    '  exit 0' \
+    'fi' \
+    'exec "$FM_TEST_REAL_GIT" "$@"' > "$wrapper/git"
+  chmod +x "$wrapper/git"
+  out=$(cd "$repo" && fm_run_timed 1 env PATH="$wrapper:$PATH" \
+    FM_TEST_REAL_GIT="$real_git" FM_TEST_FETCHED="$fetched" \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
+    GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
+    "$ATTEST" required --policy-venue github.com/fixture/policy \
+    --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/policy 2>&1)
+  rc=$?
+  [ "$rc" -eq 124 ] || fail "the interrupted policy fetch did not hit its bound (exit $rc): $out"
+  assert_present "$fetched" "the interruption happened before the policy ref was fetched"
+  refs=$(git -C "$repo" for-each-ref --format='%(refname)' refs/fm-attest/policy-)
+  [ -z "$refs" ] || fail "an interrupted policy fetch leaked scratch refs: $refs"
+  pass "fm-attest.sh: an interrupted policy fetch leaves no scratch ref"
+}
+
 test_required_reports_a_default_branch_symlink_as_neither() {
   local repo out rc
   repo="$TMP_ROOT/required-default-symlink"
@@ -3623,6 +3660,7 @@ test_required_reports_wrong_declaration_content_as_neither
 test_required_reads_a_marker_from_the_repository_default_branch
 test_required_reports_an_unresolvable_default_ref_as_neither
 test_required_refuses_a_foreign_local_policy_ref
+test_required_cleans_the_policy_ref_when_fetch_is_interrupted
 test_required_reports_a_default_branch_symlink_as_neither
 test_declaration_check_refuses_a_consumer_without_the_marker
 test_declaration_check_accepts_the_repository_invariant
