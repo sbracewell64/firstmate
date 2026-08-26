@@ -40,6 +40,18 @@
 #      spawn only when the harness also resolves from that file, so the pin is
 #      durable across every respawn while explicit per-spawn harness/model/effort
 #      flags still win.
+#
+# Envelope: this suite must be runnable from ANY worktree, on any branch. No case
+# here may read the git state of the checkout it happens to execute in. The one
+# that did - the secondmate launch guard below - drove bin/fm-guard.sh with FM_ROOT
+# left to default to that checkout, and the guard's worktree-tangle alarm is
+# checked first and never suppressed, so on a feature-branch worktree it fired
+# ahead of the supervision verdict the case names, failed it, and (fail() exits)
+# aborted the remaining thirty-odd cases with it. A case that needs a firstmate
+# PRIMARY checkout therefore constructs its own scratch one - make_primary_checkout
+# for a bare checkout, new_world for a whole primary world - and points
+# FM_ROOT_OVERRIDE at it. The tangle behaviour itself is then measured by its own
+# negative control (C9b) instead of being exercised by accident.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -841,30 +853,83 @@ test_spawn_explicit_harness_uses_explicit_profile_axes() {
   pass "C8 spawn: an explicit --harness still honors explicit model/effort flags"
 }
 
+# A scratch stand-in for the firstmate PRIMARY checkout, so a case that drives a
+# script reading FM_ROOT's git state never reads the checkout this suite is
+# executing in (see the header's envelope note). One commit, so refs/heads/main
+# exists and fm_default_branch resolves; without it fm_primary_tangle_branch is
+# silent for every branch and a tangle assertion would go vacuous. With <branch>
+# the checkout is left on that named feature branch - the tangled state; without
+# it, on its default branch - the healthy one.
+#
+# Takes the path rather than echoing it: fail() inside a command substitution
+# kills only the subshell, so a helper that echoes its fixture path can hand the
+# caller an empty string and keep going, and every git command below is pinned to
+# that path.
+make_primary_checkout() {  # <dir> [feature-branch]
+  local dir=${1:-} branch=${2:-}
+  [ -n "$dir" ] || fail "make_primary_checkout: empty checkout path"
+  mkdir -p "$dir"
+  git -C "$dir" init -q -b main
+  printf 'v1\n' > "$dir/AGENTS.md"
+  git -C "$dir" add -A
+  git -C "$dir" commit -qm c1
+  [ -z "$branch" ] || git -C "$dir" checkout -q -b "$branch"
+}
+
+# Run the launch command a secondmate spawn constructed, with a fake harness
+# binary standing in for the agent and calling bin/fm-guard.sh, and capture the
+# guard's combined output into <outfile>.
+#
+# <primary-checkout> is the scratch checkout the guard treats as the firstmate
+# PRIMARY, and it is REQUIRED rather than defaulted. The launch a secondmate spawn
+# builds clears FM_ROOT_OVERRIDE (a secondmate must not inherit the primary's
+# root), so with nothing set here bin/fm-guard.sh resolves FM_ROOT from its own
+# location - the checkout this suite is running in - and its worktree-tangle alarm
+# reads that checkout's branch.
+#
+# Writes to a file instead of echoing so callers need no command substitution and
+# a fail() below aborts the suite rather than a subshell.
+run_secondmate_launch_guard() {  # <world> <harness> <primary-checkout> <outfile>
+  local world=${1:-} harness=${2:-} primary=${3:-} outfile=${4:-}
+  local sm launchlog fakebin launch
+  [ -n "$world" ] && [ -n "$harness" ] && [ -n "$primary" ] && [ -n "$outfile" ] \
+    || fail "run_secondmate_launch_guard: needs <world> <harness> <primary-checkout> <outfile>"
+  sm="$world/sm"
+  launchlog="$world/launch.log"
+  mkdir -p "$world/home/config"
+  printf '%s\n' "$harness" > "$world/home/config/secondmate-harness"
+  make_seeded_home "$sm" sm
+  spawn_secondmate_capture "$world" sm "$sm" "$launchlog" >/dev/null 2>&1
+  fm_write_meta "$sm/state/task.meta" "window=firstmate:fm-task" "kind=ship"
+  touch "$sm/state/.last-watcher-beat"
+  fakebin="$world/tmux-sm/fakebin"
+  cat > "$fakebin/$harness" <<SH
+#!/usr/bin/env bash
+FM_ROOT_OVERRIDE=$(printf '%q' "$primary") exec "$ROOT/bin/fm-guard.sh"
+SH
+  chmod +x "$fakebin/$harness"
+  launch=$(cat "$launchlog")
+  PATH="$fakebin:$BASE_PATH" CLAUDECODE=1 bash -c "$launch" > "$outfile" 2>&1 || true
+}
+
 test_spawned_secondmate_uses_its_harness_supervision_model() {
-  local harness expected w sm launchlog launch fakebin out
+  local harness w primary outfile out
   for harness in codex claude; do
     w="$TMP_ROOT/spawn-supervision-model-$harness"
-    sm="$w/sm"
-    launchlog="$w/launch.log"
-    mkdir -p "$w/home/config"
-    printf '%s\n' "$harness" > "$w/home/config/secondmate-harness"
-    make_seeded_home "$sm" sm
-    spawn_secondmate_capture "$w" sm "$sm" "$launchlog" >/dev/null 2>&1
-    fm_write_meta "$sm/state/task.meta" "window=firstmate:fm-task" "kind=ship"
-    touch "$sm/state/.last-watcher-beat"
-    fakebin="$w/tmux-sm/fakebin"
-    cat > "$fakebin/$harness" <<SH
-#!/usr/bin/env bash
-"$ROOT/bin/fm-guard.sh"
-SH
-    chmod +x "$fakebin/$harness"
-    launch=$(cat "$launchlog")
-    out=$(PATH="$fakebin:$BASE_PATH" CLAUDECODE=1 bash -c "$launch" 2>&1)
+    primary="$w/primary"
+    outfile="$w/guard.out"
+    mkdir -p "$w"
+    make_primary_checkout "$primary"
+    run_secondmate_launch_guard "$w" "$harness" "$primary" "$outfile"
+    out=$(cat "$outfile")
+    # The supervision verdict is the subject; a tangle alarm here would mean the
+    # scratch primary above stopped taking effect and the guard went back to
+    # reading the executing checkout.
+    assert_not_contains "$out" 'WORKTREE TANGLE' \
+      "$harness secondmate guard read a tangled checkout instead of its scratch primary"
     case "$harness" in
       codex)
-        expected='WATCHER DOWN - SUPERVISION IS OFF'
-        assert_contains "$out" "$expected" \
+        assert_contains "$out" 'WATCHER DOWN - SUPERVISION IS OFF' \
           "Codex secondmate inherited Claude auto-arm despite its persistent watcher model"
         ;;
       claude)
@@ -874,6 +939,31 @@ SH
     esac
   done
   pass "C9 spawn: secondmate launch pins supervision to its own harness"
+}
+
+# Negative control for the isolation C9 relies on. Same launch path, same fresh
+# beacon, but the scratch primary is deliberately left on a feature branch, so the
+# guard's worktree-tangle alarm must fire and name that checkout and branch. Two
+# things go silently wrong without it: C9's "no output" assertion could pass
+# because the guard never ran at all, and the tangle alarm would only ever be
+# exercised by accident - whenever the suite happened to run from a feature-branch
+# worktree, where it broke C9 instead of being measured.
+test_secondmate_launch_guard_reports_a_tangled_primary() {
+  local w primary outfile out
+  w="$TMP_ROOT/spawn-supervision-tangle-control"
+  primary="$w/primary"
+  outfile="$w/guard.out"
+  mkdir -p "$w"
+  make_primary_checkout "$primary" fm/control-feature
+  run_secondmate_launch_guard "$w" claude "$primary" "$outfile"
+  out=$(cat "$outfile")
+  assert_contains "$out" 'WORKTREE TANGLE - PRIMARY CHECKOUT IS ON A FEATURE BRANCH' \
+    "the launch guard did not report a primary checkout stranded on a feature branch"
+  assert_contains "$out" "$primary" \
+    "the tangle alarm did not name the tangled checkout"
+  assert_contains "$out" "fm/control-feature" \
+    "the tangle alarm did not name the feature branch it is stranded on"
+  pass "C9b spawn: the launch guard still reports a primary checkout left on a feature branch"
 }
 
 # The harness fallback chain (secondmate-harness -> crew-harness -> own) still
@@ -2492,6 +2582,7 @@ test_spawn_explicit_effort_overrides_secondmate_harness_token
 test_spawn_explicit_harness_does_not_inherit_secondmate_harness_tokens
 test_spawn_explicit_harness_uses_explicit_profile_axes
 test_spawned_secondmate_uses_its_harness_supervision_model
+test_secondmate_launch_guard_reports_a_tangled_primary
 test_spawn_fallback_chain_and_crew_scout_unaffected
 test_bootstrap_sweep_propagates_and_reconverges
 test_bootstrap_sweep_propagates_when_tracked_current
