@@ -317,9 +317,15 @@ post_effect_observe() {
         POST_EFFECT_EVIDENCE="pr-merge merged=unobserved head=unobserved"
         return 1
       }
-      IFS=$'\t' read -r merged head <<EOF
-$out
-EOF
+      # Split without a here-document. The two fields come out of one tab, and
+      # parameter expansion does that in stock Bash 3.2 exactly as a heredoc
+      # would - while staying a construct bin/fm-dead-predicate-check.sh can
+      # parse, so this file remains readable as a consumer and the library's
+      # call sites stay observable. A response carrying no tab leaves both
+      # fields holding the whole string, which then fails the `true` comparison
+      # and the head-shape check below, so the failure direction is unchanged.
+      merged=${out%%$'\t'*}
+      head=${out#*$'\t'}
       POST_EFFECT_EVIDENCE="pr-merge merged=${merged:-unobserved} head=${head:-unobserved}"
       [ "$merged" = true ] || return 1
       fm_auth_head_shape_valid "$head" || return 1
