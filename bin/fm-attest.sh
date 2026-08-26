@@ -1006,7 +1006,7 @@ required_observe() {
       return 0
     fi
     required_commit=$(git rev-parse --verify --quiet "$required_scratch_ref^{commit}" 2>/dev/null) || required_commit=
-    required_fetched_commit=$(git rev-parse --verify --quiet FETCH_HEAD^{commit} 2>/dev/null) || required_fetched_commit=
+    required_fetched_commit=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}' 2>/dev/null) || required_fetched_commit=
     required_policy_cleanup
     required_policy_clear_traps
     if [ -z "$required_commit" ] || [ "$required_commit" != "$required_fetched_commit" ]; then
@@ -1103,7 +1103,9 @@ required_observe() {
 }
 
 cmd_required() {
-  policy_venue= policy_url= policy_ref=
+  policy_venue=
+  policy_url=
+  policy_ref=
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --policy-venue) [ "$#" -ge 2 ] || die "--policy-venue needs a value"; policy_venue=$2; shift 2 ;;

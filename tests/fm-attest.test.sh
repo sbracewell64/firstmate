@@ -3393,6 +3393,7 @@ test_required_cleans_the_policy_ref_when_fetch_is_interrupted() {
   git -C "$repo" push -q "$policy" HEAD:refs/heads/policy
   real_git=$(command -v git)
   mkdir -p "$wrapper"
+  # shellcheck disable=SC2016 # These fixture lines must preserve literal wrapper expansions.
   printf '%s\n' '#!/usr/bin/env bash' \
     'if [ "$1" = fetch ]; then' \
     '  "$FM_TEST_REAL_GIT" "$@" || exit' \

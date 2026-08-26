@@ -256,10 +256,11 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
   local home id brief root_with_space command args
   home="$TMP_ROOT/attest path home"
   root_with_space="$TMP_ROOT/firstmate root"
-  id=brief-attest-space
+  id='brief-attest-space'
   mkdir -p "$root_with_space/bin" "$root_with_space/state" "$home/data"
   write_registry "$home"
   args="$TMP_ROOT/attest-space-args"
+  # shellcheck disable=SC2016 # This fixture must preserve literal runtime expansions.
   printf '%s\n' '#!/usr/bin/env bash' \
     'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
   chmod +x "$root_with_space/bin/fm-attest.sh"
@@ -267,6 +268,7 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
     "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \
     || fail "brief with a spaced Firstmate root did not scaffold"
   brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
   command=$(sed -n '/fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
   FM_TEST_ARGS="$args" bash -c "$command" || fail "the generated publication command did not execute"
   assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
