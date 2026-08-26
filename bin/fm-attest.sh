@@ -948,6 +948,8 @@ required_evidence=
 required_reason=
 
 required_observe() {
+  required_allow_default=${1:-1}
+  required_remote=${2:-origin}
   required_state=
   required_evidence=
   required_reason=
@@ -962,8 +964,94 @@ required_observe() {
 
   required_file="$required_top/$REQUIRED_DECLARATION"
   if [ ! -e "$required_file" ] && [ ! -L "$required_file" ]; then
-    required_state=not-required
-    required_evidence="it carries no $REQUIRED_DECLARATION"
+    if [ "$required_allow_default" -eq 0 ]; then
+      required_state=not-required
+      required_evidence="it carries no $REQUIRED_DECLARATION"
+      return 0
+    fi
+    required_push_url=$(git remote get-url --push "$required_remote" 2>/dev/null) || {
+      required_state=unobservable
+      required_reason=default-ref-unresolvable
+      required_evidence="The push target remote '$required_remote' could not be resolved, so its default branch declaration is unknown."
+      return 0
+    }
+    required_remote_head=$(git ls-remote --symref "$required_push_url" HEAD 2>/dev/null) || {
+      required_state=unobservable
+      required_reason=default-ref-unresolvable
+      required_evidence="The default branch of the push target remote '$required_remote' could not be resolved."
+      return 0
+    }
+    required_default_ref=$(printf '%s\n' "$required_remote_head" | awk '$1 == "ref:" && $3 == "HEAD" { print $2; exit }')
+    required_default_sha=$(printf '%s\n' "$required_remote_head" | awk '$2 == "HEAD" { print $1; exit }')
+    case "$required_default_ref" in refs/heads/*) ;; *) required_default_ref= ;; esac
+    is_full_sha "$required_default_sha" || required_default_sha=
+    if [ -z "$required_default_ref" ] || [ -z "$required_default_sha" ]; then
+      required_state=unobservable
+      required_reason=default-ref-unresolvable
+      required_evidence="The push target remote '$required_remote' did not advertise a usable HEAD symref."
+      return 0
+    fi
+    if ! git cat-file -e "$required_default_sha^{commit}" 2>/dev/null; then
+      git fetch --quiet --no-tags --no-write-fetch-head "$required_push_url" "$required_default_ref" 2>/dev/null || {
+        required_state=unobservable
+        required_reason=default-ref-unreadable
+        required_evidence="The default branch $required_default_ref of the push target remote '$required_remote' could not be read."
+        return 0
+      }
+    fi
+    git cat-file -e "$required_default_sha^{commit}" 2>/dev/null || {
+      required_state=unobservable
+      required_reason=default-ref-unreadable
+      required_evidence="The advertised default branch commit $required_default_sha could not be read after fetching $required_default_ref."
+      return 0
+    }
+    required_entry=$(git ls-tree "$required_default_sha" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
+      required_state=unobservable
+      required_reason=default-declaration-unreadable
+      required_evidence="$REQUIRED_DECLARATION could not be inspected on $required_default_ref."
+      return 0
+    }
+    if [ -z "$required_entry" ]; then
+      required_state=not-required
+      required_evidence="neither the checkout nor $required_default_ref carries $REQUIRED_DECLARATION"
+      return 0
+    fi
+    required_mode=${required_entry%% *}
+    required_entry_rest=${required_entry#* }
+    required_type=${required_entry_rest%% *}
+    case "$required_mode:$required_type" in 100644:blob | 100755:blob) ;; *)
+      required_state=unobservable
+      required_reason=default-declaration-not-regular
+      required_evidence="$REQUIRED_DECLARATION on $required_default_ref is not a regular-file blob."
+      return 0
+      ;;
+    esac
+    git cat-file -e "$required_default_sha:$REQUIRED_DECLARATION" 2>/dev/null || {
+      required_state=unobservable
+      required_reason=default-declaration-unreadable
+      required_evidence="$REQUIRED_DECLARATION on $required_default_ref could not be read."
+      return 0
+    }
+    required_content=$(git cat-file -p "$required_default_sha:$REQUIRED_DECLARATION" 2>/dev/null) || {
+      required_state=unobservable
+      required_reason=default-declaration-unreadable
+      required_evidence="$REQUIRED_DECLARATION on $required_default_ref could not be read."
+      return 0
+    }
+    required_size=$(git cat-file -s "$required_default_sha:$REQUIRED_DECLARATION" 2>/dev/null) || {
+      required_state=unobservable
+      required_reason=default-declaration-unreadable
+      required_evidence="$REQUIRED_DECLARATION on $required_default_ref could not be measured."
+      return 0
+    }
+    if [ "$required_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_size" != 22 ]; then
+      required_state=unobservable
+      required_reason=default-declaration-invalid
+      required_evidence="$REQUIRED_DECLARATION on $required_default_ref does not contain exactly one '$REQUIRED_DECLARATION_CONTENT' line."
+      return 0
+    fi
+    required_state=required
+    required_evidence="$REQUIRED_DECLARATION on the repository default branch $required_default_ref contains the required declaration"
     return 0
   fi
   if [ -L "$required_file" ]; then
@@ -1012,7 +1100,7 @@ required_observe() {
 
 cmd_required() {
   [ "$#" -eq 0 ] || die "unexpected argument: $1"
-  required_observe
+  required_observe 1 origin
   case "$required_state" in
     required)
       emit "fm-attest: this repository reads a head-bound attestation ($required_evidence)"
@@ -1045,7 +1133,7 @@ cmd_declaration_check() {
     0) ;;
     *) die "could not inspect workflows for attestation consumers" ;;
   esac
-  required_observe
+  required_observe 0 origin
   [ "$required_state" = required ] || {
     report 'repository invariant failed' "${required_reason:-declaration-missing}" \
       "A workflow mentions fm-attest.sh, but $REQUIRED_DECLARATION is not the exact regular declaration."
@@ -1118,7 +1206,7 @@ cmd_write() {
   # publication in one that did are both wrong, and a failed read is not a
   # licence to pick either.
   if [ "$only_if_required" -eq 1 ]; then
-    required_observe
+    required_observe 1 "$remote"
     case "$required_state" in
       required) ;;
       not-required)

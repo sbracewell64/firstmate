@@ -9,8 +9,10 @@ This document owns what that check establishes, what it deliberately does not, a
 The check verifies a git note on `refs/notes/no-mistakes`, keyed by the pull request's exact head commit.
 
 A repository declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose complete content is one line: `fm-attest.v1 required`.
-`bin/fm-attest.sh required` reports required only for that exact declaration, not from workflow text.
-An absent declaration reports not-required, while a symlink, directory, unreadable file, or any other content reports could-not-observe with its own reason.
+`bin/fm-attest.sh required` checks that path in the checkout first and, when it is absent there, checks the same git blob on the push target repository's default branch.
+The default branch is resolved from that remote's advertised `HEAD` symref rather than from a hard-coded branch name, so a candidate head that predates the declaration still receives the repository-level answer.
+An absent declaration in both places reports not-required, while a symlink, submodule, directory, unreadable default ref or file, or any other content reports could-not-observe with its own reason.
+The local could-not-observe reasons are `declaration-not-regular`, `declaration-unreadable`, and `declaration-invalid`; the default-branch reasons are `default-ref-unresolvable`, `default-ref-unreadable`, `default-declaration-not-regular`, `default-declaration-unreadable`, and `default-declaration-invalid`.
 The repository invariant checks the other direction: any workflow mentioning `fm-attest.sh` requires the exact declaration, but that lint is not the publication gate.
 
 A note is used rather than a commit trailer or a line of pull request prose for three reasons.
@@ -155,7 +157,7 @@ Measured on this repository on 2026-08-26: of ten open pull requests, four had a
 That is not ten separate mistakes, it is one unowned step, and `data/no-mistakes-attestation-provenance-recurrence-owner/report.md` holds the per-head classification.
 
 `bin/fm-attest.sh required` is the predicate that gave the step an owner.
-It answers, for one checkout, whether this repository declares that its CI reads a head-bound attestation, deciding it only from the fixed declaration above rather than from workflow text, a name, a remote, or a list of repositories.
+It answers whether the push target repository declares that its CI reads a head-bound attestation, deciding it only from the fixed declaration above in the checkout or that repository's advertised default branch rather than from workflow text, a repository name, or a hard-coded list.
 It is three-valued like every other observation here: required, not required, and a declaration it could not read, which is neither.
 A declaration with the wrong type, unreadable bytes, or noncanonical content is could-not-observe rather than absence, so publication never guesses around malformed repository intent.
 
@@ -175,7 +177,7 @@ A candidate whose pipeline run did not cover the exact head is refused by the sa
 
 The recurrence is closed when this predicate holds and keeps holding:
 
-> For every open pull request at a venue whose CI declares this gate, the exact head under review either carries a published attestation that `bin/fm-attest.sh verify` accepts, or is refused by `bin/fm-attest.sh write` with a reason naming what about that candidate is missing.
+> For every open pull request whose push target repository declares this gate in the checkout or on its advertised default branch, the exact head under review either carries a published attestation that `bin/fm-attest.sh verify` accepts, or is refused by `bin/fm-attest.sh write` with a reason naming what about that candidate is missing.
 
 The second half is what makes it a closing condition rather than a wish.
 A head with no attestation is only acceptable when the owner has said why in its own words - `run-incomplete`, `run-covers-another-head`, `no-run-record` - which are statements about the candidate that a person can act on.

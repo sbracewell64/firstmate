@@ -42,6 +42,36 @@ new_repo() {
   git -C "$repo" commit -qm one
 }
 
+install_default_branch() {
+  local repo=$1
+  local marker=${2:-absent}
+  local source="$repo-default-source"
+  local remote="$repo-default.git"
+  git clone -q "$repo" "$source"
+  git -C "$source" config user.email attest@example.invalid
+  git -C "$source" config user.name "Attest Test"
+  git -C "$source" checkout -qb main
+  case "$marker" in
+    absent) ;;
+    regular)
+      mkdir -p "$source/.github"
+      printf 'fm-attest.v1 required\n' > "$source/.github/no-mistakes-attestation"
+      git -C "$source" add .github
+      git -C "$source" commit -qm declaration
+      ;;
+    symlink)
+      mkdir -p "$source/.github"
+      ln -s ../target "$source/.github/no-mistakes-attestation"
+      git -C "$source" add .github
+      git -C "$source" commit -qm declaration
+      ;;
+    *) fail "unknown default marker fixture: $marker" ;;
+  esac
+  git clone -q --bare "$source" "$remote"
+  git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
+  git -C "$repo" remote add origin "$remote"
+}
+
 add_note() {
   local repo=$1 commit=$2 body=$3
   git -C "$repo" notes --ref="$NOTES_REF" add -f -m "$body" "$commit" >/dev/null 2>&1
@@ -3167,6 +3197,7 @@ test_required_ignores_a_launcher_prefixed_invocation_without_the_marker() {
   mkdir -p "$repo/.github/workflows"
   printf 'jobs:\n  check:\n    steps:\n      - run: bash bin/fm-attest.sh verify --head 0000\n' \
     > "$repo/.github/workflows/some-gate.yml"
+  install_default_branch "$repo" absent
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 1 ] || fail "workflow text replaced the absent declaration (exit $rc): $out"
@@ -3189,6 +3220,7 @@ test_required_answers_a_repository_whose_checks_read_none() {
   repo="$TMP_ROOT/required-undeclared"
   new_repo "$repo"
   declare_unrelated_workflow "$repo"
+  install_default_branch "$repo" absent
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 1 ] || fail "a repository declaring no such gate did not answer 'not required' (exit $rc): $out"
@@ -3204,6 +3236,7 @@ test_required_ignores_a_commented_invocation() {
   mkdir -p "$repo/.github/workflows"
   printf 'jobs:\n  check:\n    steps:\n      # - run: bin/fm-attest.sh verify --head 0000\n      - run: make\n' \
     > "$repo/.github/workflows/some-gate.yml"
+  install_default_branch "$repo" absent
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 1 ] || fail "a commented invocation declared the gate (exit $rc): $out"
@@ -3217,6 +3250,7 @@ test_required_ignores_an_invocation_inside_prose() {
   mkdir -p "$repo/.github/workflows"
   printf 'name: "Documentation mentioning bin/fm-attest.sh for maintainers"\njobs:\n  check:\n    steps:\n      - run: make\n' \
     > "$repo/.github/workflows/some-gate.yml"
+  install_default_branch "$repo" absent
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 1 ] || fail "an invocation token inside prose declared the gate (exit $rc): $out"
@@ -3230,6 +3264,7 @@ test_required_ignores_a_bare_invocation_without_the_marker() {
   mkdir -p "$repo/.github/workflows"
   printf 'jobs:\n  check:\n    steps:\n      - run: bin/fm-attest.sh verify --head 0000\n' \
     > "$repo/.github/workflows/some-gate.yml"
+  install_default_branch "$repo" absent
   out=$(required_out "$repo")
   rc=$?
   [ "$rc" -eq 1 ] || fail "a bare workflow invocation replaced the absent declaration (exit $rc): $out"
@@ -3265,6 +3300,42 @@ test_required_reports_wrong_declaration_content_as_neither() {
   pass "fm-attest.sh: wrong declaration content answers neither way"
 }
 
+test_required_reads_a_marker_from_the_repository_default_branch() {
+  local repo out rc
+  repo="$TMP_ROOT/required-default-marker"
+  new_repo "$repo"
+  install_default_branch "$repo" regular
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a pre-marker candidate did not inherit the repository declaration (exit $rc): $out"
+  assert_contains "$out" "refs/heads/main" "the default-branch declaration was not named"
+  pass "fm-attest.sh: a pre-marker candidate reads the repository declaration"
+}
+
+test_required_reports_an_unresolvable_default_ref_as_neither() {
+  local repo out rc
+  repo="$TMP_ROOT/required-default-unresolvable"
+  new_repo "$repo"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unresolvable default ref became an answer (exit $rc): $out"
+  assert_contains "$out" "default-ref-unresolvable" "the unresolved default ref did not report its own reason"
+  pass "fm-attest.sh: an unresolvable repository default answers neither way"
+}
+
+test_required_reports_a_default_branch_symlink_as_neither() {
+  local repo out rc
+  repo="$TMP_ROOT/required-default-symlink"
+  new_repo "$repo"
+  install_default_branch "$repo" symlink
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a default-branch symlink became an answer (exit $rc): $out"
+  assert_contains "$out" "default-declaration-not-regular" \
+    "the default-branch symlink did not report its own reason"
+  pass "fm-attest.sh: a default-branch symlink answers neither way"
+}
+
 test_declaration_check_refuses_a_consumer_without_the_marker() {
   local repo out rc
   repo="$TMP_ROOT/declaration-invariant-missing"
@@ -3297,6 +3368,8 @@ test_write_only_if_required_publishes_nothing_where_no_check_reads_it() {
   head=$(git -C "$repo" rev-parse HEAD)
   git init -q --bare "$fork"
   git -C "$repo" remote add origin "$fork"
+  git -C "$repo" push -q origin HEAD:refs/heads/main
+  git --git-dir="$fork" symbolic-ref HEAD refs/heads/main
   install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
 
   # The negative control first: without the flag this same fixture publishes, so
@@ -3490,6 +3563,9 @@ test_required_ignores_an_invocation_inside_prose
 test_required_ignores_a_bare_invocation_without_the_marker
 test_required_reports_a_symlink_declaration_as_neither
 test_required_reports_wrong_declaration_content_as_neither
+test_required_reads_a_marker_from_the_repository_default_branch
+test_required_reports_an_unresolvable_default_ref_as_neither
+test_required_reports_a_default_branch_symlink_as_neither
 test_declaration_check_refuses_a_consumer_without_the_marker
 test_declaration_check_accepts_the_repository_invariant
 test_write_only_if_required_publishes_nothing_where_no_check_reads_it
