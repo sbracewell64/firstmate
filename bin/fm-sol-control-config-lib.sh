@@ -10,6 +10,7 @@ FM_SOL_CONTROL_CONFIG_REPO=
 FM_SOL_CONTROL_CONFIG_ISSUE=
 FM_SOL_CONTROL_CONFIG_LANDING_REPOS=
 
+# shellcheck disable=SC2034 # Outputs are consumed by sourcing callers.
 fm_sol_control_config_read() {  # <config-file>
   local file=${1:-} raw parsed
   FM_SOL_CONTROL_CONFIG_STATE=invalid
