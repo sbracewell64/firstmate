@@ -346,6 +346,11 @@ fm_model_price_fold() {  # <catalogue-json> <endpoints-json> <model> <observed-a
       base + ({verdict: $ep.reason, detail: ("endpoint listing: " + $ep.reason)}
               + (if ($ep.endpoint_count? // null) != null
                  then {endpoint_count: $ep.endpoint_count} else {} end))
+    elif ($cat.created == null) or ($ep.created == null)
+         or (($ep.endpoint? // "") == "")
+         or (($ep.endpoint_provider? // "") == "") then
+      base + {verdict: "PRICE_IDENTITY_UNOBSERVED",
+              detail: "the metadata sources did not carry a complete model generation and resolved endpoint identity"}
     elif ($cat.slug != $ep.slug) or ($cat.created != $ep.created) then
       base + {verdict: "IDENTITY_MISMATCH",
               slug: $cat.slug, created: $cat.created,

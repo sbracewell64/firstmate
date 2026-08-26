@@ -221,7 +221,17 @@ if [ "$DRIFT_ONLY" != 1 ]; then
   fi
   while IFS= read -r pkey; do
     [ -n "$pkey" ] || continue
-    price_rec=$(fm_model_price_observe "$REG" "$pkey") || continue
+    price_rec=
+    if price_rec=$(fm_model_price_observe "$REG" "$pkey"); then
+      :
+    else
+      price_rc=$?
+      [ "$price_rc" -eq 1 ] && continue
+      echo "MODEL_PRICE: PRICE_OBSERVATION_FAILED for $pkey (rc=$price_rc)"
+      PRICE_REFUSED="${PRICE_REFUSED}"$'\n'"${pkey}"$'\n'
+      NEEDS_ACTION=1
+      continue
+    fi
     [ -n "$price_rec" ] || continue
     fm_model_price_record_write "$STATE" "$pkey" "$price_rec"
     if ! price_refusal=$(fm_model_price_decision "$price_rec" "$REG" "$pkey"); then

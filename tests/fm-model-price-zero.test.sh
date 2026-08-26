@@ -339,6 +339,45 @@ test_sources_that_disagree_on_identity_refuse() {
   pass "two sources disagreeing on identity refuse"
 }
 
+test_missing_model_generation_refuses() {
+  local dir reg rec
+  dir=$(fixture_dir missing-created) || fail "fixture"
+  printf '{"data":[{"id":"%s","pricing":{"prompt":"0","completion":"0"}}]}\n' "$MODEL_ID" > "$dir/catalogue.json"
+  printf '{"data":{"id":"%s","endpoints":[{"tag":"vx","provider_name":"VendorX","pricing":{"prompt":"0","completion":"0"}}]}}\n' "$MODEL_ID" > "$dir/endpoints-$MODEL_ID.json"
+  reg=$(write_registry "$dir")
+  rec=$(observe "$reg")
+  [ "$(verdict_of "$rec")" = PRICE_IDENTITY_UNOBSERVED ] \
+    || fail "missing generation identity must be ineligible, got: $rec"
+  refuses "$reg" "$rec" || fail "missing generation identity must refuse"
+  pass "both metadata documents must carry a model generation identity"
+}
+
+test_missing_endpoint_identity_refuses() {
+  local dir reg rec
+  dir=$(fixture_dir missing-endpoint) || fail "fixture"
+  write_catalogue "$dir" 0 0
+  printf '{"data":{"id":"%s","created":%s,"endpoints":[{"provider_name":"VendorX","pricing":{"prompt":"0","completion":"0"}}]}}\n' "$MODEL_ID" "$CREATED" > "$dir/endpoints-$MODEL_ID.json"
+  reg=$(write_registry "$dir")
+  rec=$(observe "$reg")
+  [ "$(verdict_of "$rec")" = PRICE_IDENTITY_UNOBSERVED ] \
+    || fail "missing endpoint identity must be ineligible, got: $rec"
+  refuses "$reg" "$rec" || fail "missing endpoint identity must refuse"
+  pass "resolved endpoint identity must be present"
+}
+
+test_missing_endpoint_provider_identity_refuses() {
+  local dir reg rec
+  dir=$(fixture_dir missing-endpoint-provider) || fail "fixture"
+  write_catalogue "$dir" 0 0
+  printf '{"data":{"id":"%s","created":%s,"endpoints":[{"tag":"vx","pricing":{"prompt":"0","completion":"0"}}]}}\n' "$MODEL_ID" "$CREATED" > "$dir/endpoints-$MODEL_ID.json"
+  reg=$(write_registry "$dir")
+  rec=$(observe "$reg")
+  [ "$(verdict_of "$rec")" = PRICE_IDENTITY_UNOBSERVED ] \
+    || fail "missing endpoint provider identity must be ineligible, got: $rec"
+  refuses "$reg" "$rec" || fail "missing endpoint provider identity must refuse"
+  pass "resolved endpoint provider identity must be present"
+}
+
 test_an_identity_that_moved_since_verification_refuses() {
   local dir reg rec out
   dir=$(fixture_dir idmoved) || fail "fixture"
@@ -776,6 +815,28 @@ test_force_probe_does_not_lift_the_live_price_refusal() {
   pass "--force-probe does not lift a refusal the provider itself just issued"
 }
 
+test_verification_fails_closed_when_observation_cannot_execute() {
+  local home out
+  home=$(verify_home verify-observe-failure 0 0 0 0) || fail "fixture"
+  out=$(TMPDIR=/dev/null run_verify "$home" --all --force-probe || true)
+  assert_contains "$out" "PRICE_OBSERVATION_FAILED" "an operational observation failure is reported"
+  assert_contains "$out" "refusing to probe" "an operational observation failure refuses the probe"
+  assert_not_contains "$out" "--force-probe overrides" "--force-probe cannot bypass a fresh observation failure"
+  pass "verification fails closed when live price observation cannot execute"
+}
+
+test_verification_keeps_an_unopted_provider_inert() {
+  local home dir out
+  home=$(verify_home verify-inert 0 0 0 0) || fail "fixture"
+  dir="$TMP_ROOT/fx/vreg-verify-inert"
+  write_registry "$dir" opt_out >/dev/null
+  cp "$dir/models.json" "$home/config/models.json"
+  out=$(run_verify "$home" --all --dry-run || true)
+  assert_not_contains "$out" "PRICE_OBSERVATION_FAILED" "rc 1 remains the inert observation result"
+  assert_contains "$out" "would probe $KEY" "an unopted provider proceeds through the existing verification path"
+  pass "verification keeps rc 1 inert"
+}
+
 test_verification_records_the_observation_it_made() {
   local home rec
   home=$(verify_home verify-record 0 0 0 0) || fail "fixture"
@@ -802,6 +863,9 @@ test_malformed_metadata_refuses
 test_a_model_absent_from_the_metadata_refuses
 test_an_unreadable_price_refuses
 test_sources_that_disagree_on_identity_refuse
+test_missing_model_generation_refuses
+test_missing_endpoint_identity_refuses
+test_missing_endpoint_provider_identity_refuses
 test_an_identity_that_moved_since_verification_refuses
 test_a_slug_that_moved_since_verification_refuses
 test_an_observation_older_than_the_window_refuses
@@ -823,6 +887,8 @@ test_spawn_is_inert_for_a_provider_that_declared_no_metadata_source
 test_spawn_refuses_a_broken_metadata_declaration_rather_than_treating_it_as_absent
 test_verification_refuses_to_probe_a_model_whose_live_price_is_not_zero
 test_force_probe_does_not_lift_the_live_price_refusal
+test_verification_fails_closed_when_observation_cannot_execute
+test_verification_keeps_an_unopted_provider_inert
 test_verification_records_the_observation_it_made
 
 fm_test_contract "$0" || exit 1
