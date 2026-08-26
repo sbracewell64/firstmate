@@ -288,11 +288,12 @@ fm_landing_seam_domain_contains() {  # <repo-path>
 
 # --- resolution --------------------------------------------------------------
 #
-# Sets, always, all four:
+# Sets, always, all five:
 #   FM_LANDING_SEAM_VERDICT   governed | not-applicable | refused | unobserved
 #   FM_LANDING_SEAM_TOKEN     one stable token from the block above
 #   FM_LANDING_SEAM_REASON    one line naming what was observed
-#   FM_LANDING_SEAM_REQUEST   the granting request id, only when governed
+#   FM_LANDING_SEAM_REQUEST   the governing request id, only when governed
+#   FM_LANDING_SEAM_RULING    its raw ruling verdict, only when governed
 #
 # Returns 0 for governed and not-applicable, 3 for refused, 4 for unobserved, so
 # a caller that reads only the status still stops safely on both stopping values.
@@ -301,13 +302,15 @@ FM_LANDING_SEAM_VERDICT=
 FM_LANDING_SEAM_TOKEN=
 FM_LANDING_SEAM_REASON=
 FM_LANDING_SEAM_REQUEST=
+FM_LANDING_SEAM_RULING=
 
-# shellcheck disable=SC2034  # the four outputs are read by the sourcing merge gates
-fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>]
+# shellcheck disable=SC2034  # the five outputs are read by the sourcing merge gates
+fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>] [<ruling>]
   FM_LANDING_SEAM_VERDICT=$1
   FM_LANDING_SEAM_TOKEN=$2
   FM_LANDING_SEAM_REASON=$3
   FM_LANDING_SEAM_REQUEST=${4:-}
+  FM_LANDING_SEAM_RULING=${5:-}
   case $1 in
     governed|not-applicable) return 0 ;;
     refused) return 3 ;;
@@ -330,8 +333,8 @@ fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>]
 # can never be shown to be outside a NON-empty one.
 fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-dash> <repo-or-dash>
   local dir=$1 config=$2 item=$3 head=$4 pr=$5 repo=$6
-  local f rid raw stored gate state rec_head rec_pr
-  local live=0 granting=0 granting_id='' others=''
+  local f rid raw stored gate state rec_head rec_pr ruling
+  local live=0 granting=0 granting_id='' granting_ruling='' others=''
   local venue_state store=present
 
   if ! fm_landing_seam_candidate_valid "$item" "$head"; then
@@ -406,6 +409,8 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     fi
     granting=$((granting + 1))
     granting_id=$rid
+    ruling=$(printf '%s' "$raw" | jq -r '.ruling.verdict // ""')
+    granting_ruling=$ruling
   done
 
   if [ "$live" -gt 0 ]; then
@@ -438,7 +443,7 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
       return $?
     fi
     fm_landing_seam_set governed "$FM_LANDING_SEAM_TOKEN_GOVERNED" \
-      "Browser Sol request $granting_id governs $item at $head" "$granting_id"
+      "Browser Sol request $granting_id governs $item at $head" "$granting_id" "$granting_ruling"
     return $?
   fi
 
@@ -738,12 +743,11 @@ fm_landing_authority_set() {  # <verdict> <token> <reason> [<sources>]
 # could-not-observe, matching the governance resolution above so a caller that
 # reads only the status still stops safely on both stopping values.
 #
-# <seam-verdict> is optional and is whatever fm_landing_seam_resolve already
-# answered for this candidate, or empty when the caller has not asked. It can add
-# a delegation source and can withhold an answer; it can never clear a reserved
-# decision.
-fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict>]
-  local home=$1 task=$2 seam=${3:-}
+# The optional seam inputs are the normalized answer, governing request, and raw
+# ruling verdict already observed for this candidate. They can add a delegation
+# source and withhold an answer; they can never clear a reserved decision.
+fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> <ruling>]]
+  local home=$1 task=$2 seam=${3:-} request=${4:-} ruling=${5:-} ruling_class
   local state meta landing status posture posture_rc commission sources
   local classified rest reserved='' unreadable='' unclassified=''
   # The disposition fold resolves the home it reads from FM_HOME; naming it here
@@ -817,7 +821,34 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict>]
 
   # --- the ruling, when the caller has one ----------------------------------
   case "$seam" in
-    governed) sources="$sources ruling=governed" ;;
+    governed)
+      [ -n "$request" ] || {
+        fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+          "a Browser Sol ruling governs $task but its request identity could not be observed" "$sources ruling=could-not-observe"
+        return $?
+      }
+      [ -n "$ruling" ] || {
+        fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+          "Browser Sol request $request governs $task but carries no readable ruling verdict" "$sources ruling=could-not-observe:$request"
+        return $?
+      }
+      ruling_class=$(fm_auth_verdict_class "$ruling")
+      case "$ruling_class" in
+        authorizing) sources="$sources ruling=authorizing:$request:$ruling" ;;
+        declining)
+          fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+            "the ruling on Browser Sol request $request returned '$ruling', which does not delegate this landing" \
+            "$sources ruling=declining:$request:$ruling"
+          return $?
+          ;;
+        *)
+          fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+            "the ruling on Browser Sol request $request returned '$ruling', which this compile cannot classify" \
+            "$sources ruling=could-not-observe:$request:$ruling"
+          return $?
+          ;;
+      esac
+      ;;
     not-applicable) sources="$sources ruling=not-applicable" ;;
     '') sources="$sources ruling=not-asked" ;;
     *)

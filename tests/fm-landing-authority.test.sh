@@ -52,9 +52,11 @@
 #       value recorded on a live task
 #  (11) the canonical owner is re-read on every resolution, so the posture
 #       survives a restart and a registry edit takes effect without one
-#  (12) an unregistered project keeps the captain default
+#  (12) registry presence controls whether canonical posture or snapshot wins
 #  (13) every disposition in the closed vocabulary is classified, and an
 #       unknown one is named unclassified rather than read as permission
+#  (14) an absent or declining governing ruling stops in the compile, before
+#       any authorization is minted
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -348,6 +350,28 @@ test_one_use_authorization_is_minted_and_spent_through_its_owner() {
   [ "$(merge_count "$dir")" = 1 ] \
     || fail "a second merge was performed under a spent authority: $(merge_count "$dir")"
   pass "the one-use landing authorization is minted and spent through its own owner, with no captain utterance in the fixture"
+}
+
+test_governing_ruling_is_part_of_the_compile() {
+  local dir
+  dir=$(new_pr_case ruling-absent) || fail "fixture failed"
+  write_correlation "$dir" emitted '' "$HEAD_A"
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "a governing request with no ruling passed the compile"
+  grep -F 'carries no readable ruling verdict' "$dir/stderr" >/dev/null \
+    || fail "the compile did not name the absent ruling: $(cat "$dir/stderr")"
+  [ -z "$(auth_states "$dir")" ] \
+    || fail "an authorization was minted before the absent ruling stopped the compile"
+
+  dir=$(new_pr_case ruling-declined) || fail "fixture failed"
+  write_correlation "$dir" ruled REJECT "$HEAD_A"
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "a declining ruling passed the compile"
+  grep -F "does not delegate this landing" "$dir/stderr" >/dev/null \
+    || fail "the compile did not name the declining ruling: $(cat "$dir/stderr")"
+  [ -z "$(auth_states "$dir")" ] \
+    || fail "an authorization was minted before the declining ruling stopped the compile"
+  pass "the governing request and its ruling verdict are compiled before minting"
 }
 
 # --- (2) restart --------------------------------------------------------------
@@ -653,10 +677,10 @@ test_every_disposition_is_classified_by_the_compile() {
 
 # --- (12) the unknown-project default ----------------------------------------
 
-test_an_unregistered_project_keeps_the_captain_default() {
+test_registry_presence_controls_snapshot_fallback() {
   local dir out
   dir=$(new_home unregistered) || fail "fixture failed"
-  write_meta "$dir" "$FM_AUTONOMY_STATE_CAPTAIN"
+  write_meta "$dir" "$FM_AUTONOMY_STATE_SELF"
   printf -- '- some-other-project [no-mistakes +yolo] - not this one (added 2026-08-26)\n' \
     > "$dir/home/data/projects.md"
   printf 'blocked [key=rollout]: pick the rollout order\n' \
@@ -664,12 +688,34 @@ test_an_unregistered_project_keeps_the_captain_default() {
 
   out=$(drain_dispositions "$dir")
   printf '%s' "$out" | grep -F 'CAPTAIN_REQUIRED_AND_BLOCKING' >/dev/null \
-    || fail "an unregistered project did not keep the captain default: $out"
-  pass "a project the registry does not name keeps the captain default"
+    || fail "a registry omission inherited an on task snapshot: $out"
+
+  dir=$(new_home no-registry) || fail "fixture failed"
+  write_meta "$dir" "$FM_AUTONOMY_STATE_SELF"
+  rm "$dir/home/data/projects.md" 2>/dev/null || true
+  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta")
+  [ "$out" = "$FM_AUTONOMY_STATE_SELF" ] \
+    || fail "a home with no registry lost its on task snapshot: $out"
+
+  dir=$(new_home registered-on) || fail "fixture failed"
+  write_meta "$dir" "$FM_AUTONOMY_STATE_CAPTAIN"
+  register_project "$dir"
+  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta")
+  [ "$out" = "$FM_AUTONOMY_STATE_SELF" ] \
+    || fail "a registered +yolo project did not resolve on: $out"
+
+  dir=$(new_home registered-off) || fail "fixture failed"
+  write_meta "$dir" "$FM_AUTONOMY_STATE_SELF"
+  register_project "$dir" no-mistakes
+  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta")
+  [ "$out" = "$FM_AUTONOMY_STATE_CAPTAIN" ] \
+    || fail "a registered off posture inherited an on task snapshot: $out"
+  pass "registry presence controls whether the current posture or task snapshot wins"
 }
 
 test_ordinary_landing_is_eligible_with_no_captain_utterance
 test_one_use_authorization_is_minted_and_spent_through_its_owner
+test_governing_ruling_is_part_of_the_compile
 test_eligibility_survives_a_cold_restart
 test_approval_bound_to_another_head_refuses
 test_missing_check_evidence_refuses
@@ -680,7 +726,7 @@ test_the_compile_reads_the_home_it_was_asked_about
 test_an_unreadable_decision_record_is_never_eligible
 test_effective_posture_follows_the_registry_not_the_task_record
 test_the_posture_is_reread_on_every_resolution
-test_an_unregistered_project_keeps_the_captain_default
+test_registry_presence_controls_snapshot_fallback
 test_every_disposition_is_classified_by_the_compile
 
 fm_test_contract "${BASH_SOURCE[0]}"

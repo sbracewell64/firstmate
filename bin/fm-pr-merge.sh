@@ -610,7 +610,7 @@ record_merge_verification() {
 LANDING_AUTH_ID=
 LANDING_AUTHORIZATION=
 resolve_landing_authority() {  # <head>
-  local head=$1 authority_rc=0
+  local head=$1 authority_rc=0 seam_rc=0
   local plan=()
   # The repository this merge would write, taken from the pull request's own
   # parsed identity rather than from anything the caller supplies separately, so
@@ -620,16 +620,22 @@ resolve_landing_authority() {  # <head>
   # because a home that says nothing about who authorised a landing is
   # indistinguishable from one that never asked. It answers only who may
   # authorize; every refusal above and below still applies unchanged.
-  fm_landing_authority_resolve "$FM_HOME" "$ID" || authority_rc=$?
+  fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
+    "$PR_OWNER/$PR_REPO" || seam_rc=$?
+  fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
+    "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" || authority_rc=$?
   if [ "$authority_rc" -ne 0 ]; then
+    if [ "$seam_rc" -ne 0 ]; then
+      printf 'error: refusing to merge head %s: %s: %s\n' \
+        "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+    fi
     printf 'error: refusing to merge head %s: %s: %s\n' \
       "$head" "$FM_LANDING_AUTHORITY_TOKEN" "$FM_LANDING_AUTHORITY_REASON" >&2
     return 1
   fi
   printf '%s: %s [%s]\n' "$FM_LANDING_AUTHORITY_TOKEN" \
     "$FM_LANDING_AUTHORITY_REASON" "$FM_LANDING_AUTHORITY_SOURCES"
-  if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
-    "$PR_OWNER/$PR_REPO"; then
+  if [ "$seam_rc" -ne 0 ]; then
     printf 'error: refusing to merge head %s: %s: %s\n' \
       "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
     return 1

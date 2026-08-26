@@ -469,15 +469,22 @@ LANDING_REPO=$(landing_repository "$PROJ") || LANDING_REPO=-
 # WHOSE landing this is, compiled by bin/fm-landing-seam-lib.sh from the task's
 # own durable records, and reported either way. It answers only who may
 # authorize this landing; every refusal above still applies unchanged.
+SEAM_RC=0
+fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - \
+  "$LANDING_REPO" || SEAM_RC=$?
 AUTHORITY_RC=0
-fm_landing_authority_resolve "$FM_HOME" "$ID" || AUTHORITY_RC=$?
+fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
+  "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" || AUTHORITY_RC=$?
 if [ "$AUTHORITY_RC" -ne 0 ]; then
+  if [ "$SEAM_RC" -ne 0 ]; then
+    printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+  fi
   printf 'REFUSED: %s: %s\n' "$FM_LANDING_AUTHORITY_TOKEN" "$FM_LANDING_AUTHORITY_REASON" >&2
   exit 1
 fi
 printf '%s: %s [%s]\n' "$FM_LANDING_AUTHORITY_TOKEN" \
   "$FM_LANDING_AUTHORITY_REASON" "$FM_LANDING_AUTHORITY_SOURCES"
-if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - "$LANDING_REPO"; then
+if [ "$SEAM_RC" -ne 0 ]; then
   printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
   exit 1
 fi

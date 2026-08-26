@@ -227,10 +227,9 @@ FM_AUTONOMY_EFFECTIVE_STATE=
 #
 # PRECEDENCE. The canonical owner wins wherever it speaks about the project,
 # because it is where the captain records the standing choice and it is current.
-# Where it is silent - the project is not in the registry, or this home has no
-# registry - the task's own record stands, which is what keeps a home with no
-# registry behaving exactly as it did. Where neither speaks, the captain holds
-# it: the unknown-project default is unchanged.
+# A registry that omits the project has spoken: the conservative `off` it
+# returns outranks the task record. Only a home with no registry is silent, and
+# there the task's own record stands. Where neither speaks, the captain holds it.
 # shellcheck disable=SC2034 # the three globals are read by sourcing callers
 fm_autonomy_state_effective() {  # <meta-file>
   local meta=${1-} name recorded rc=0
@@ -246,7 +245,8 @@ fm_autonomy_state_effective() {  # <meta-file>
       # owner back in exactly the case where the first one is unavailable.
       return 2
     fi
-    if [ "$_FM_AUTONOMY_REG_SOURCE" = registered ]; then
+    if [ "$_FM_AUTONOMY_REG_SOURCE" = registered ] \
+      || [ "$_FM_AUTONOMY_REG_SOURCE" = unregistered ]; then
       fm_autonomy_state_is_known "$_FM_AUTONOMY_REG_YOLO" || return 2
       FM_AUTONOMY_EFFECTIVE_SOURCE=registry
       FM_AUTONOMY_EFFECTIVE_STATE=$_FM_AUTONOMY_REG_YOLO
