@@ -551,6 +551,35 @@ The update is fast-forward only: dirty, diverged, offline, and off-default targe
 Local homes share the guarded fast-forward helper, while remote updates delegate the same safety decision to the configured host through the generic transport.
 The mechanics are owned by the `/updatefirstmate` skill and firstmate's operating manual in [`AGENTS.md`](../AGENTS.md) (self-update).
 
+## Evidence generation is well-founded
+
+EVIDENCE_GENERATION_WELL_FOUNDEDNESS.
+An evidence-bearing verifier, test, or proof generator may not require, as a passing precondition, the same current acceptance artifact whose generation depends on that verifier or test passing.
+Evidence-generation dependencies must be acyclic, or use an explicitly specified staged protocol whose provisional states grant no acceptance authority.
+
+The failure this names is not a flaky retry.
+It is a missing base case: the repair for stale evidence is to measure again, and measuring again is impossible when the measurement's own subject demands the evidence that measurement would produce.
+Repeating the procedure cannot converge, so an operator sees a stable, plausible, wrong verdict and no amount of patience changes it.
+
+Firstmate reached that state once, in the test-isolation proof.
+`tests/fm-test-run.test.sh` was both a proof subject and an assertion that the installed `docs/fm-test-isolation-proof.json` already classified this repository current.
+Editing that file made the proof stale, the stale proof failed that subject, the run then published a proof one subject short, and the smaller proof failed the same subject again for a second reason.
+Two full passes reached the same fixed point.
+`docs/fm-test-isolation-proof.md` owns that incident's evidence and the repaired procedure.
+
+Two rules follow, and both are load-bearing wherever this shape appears.
+
+A subject may depend on a PRIOR genuine artifact - one that already exists, as a committed input - but never on the artifact the current run is producing.
+That distinction is what makes the dependency well-founded by induction on runs rather than circular within one.
+
+A generator may publish only from a run that observed its whole candidate universe good, and must leave the previous genuine artifact byte-identical otherwise.
+Publishing a partial measurement is what turns a single failure into a fixed point, because the smaller artifact becomes the acceptance evidence the same universe is next measured against.
+Withholding is not tolerance: a measured failure stays a failure and the run is non-PASS.
+
+Nothing here is a framework.
+The rule is enforced by the owners that already exist - the generator decides what it may publish, and the test/evidence boundary decides what a subject may consult - and a new occurrence is repaired in those two places, not by adding a fixed-point runner or a second verifier layer.
+Sibling shapes worth checking when adding one: a generator whose own regression suite is inside the set it generates, a catalog validator enrolled in the catalog, an attestation writer that reads the current attestation, a qualification register whose fixtures depend on current membership, and a manifest writer inside the universe its manifest certifies.
+
 ## Restart-proof
 
 Fleet state lives in each task's session-provider backend (tmux by hard default, herdr or cmux when selected or auto-detected, zellij/orca when explicitly selected), no-mistakes run records, status event logs, local markdown under `data/` including `data/captain.md`, `data/captain-shared.md`, and `data/learnings.md`, and persistent secondmate homes.

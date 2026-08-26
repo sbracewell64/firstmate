@@ -356,8 +356,27 @@ test_exclude_family() {
   pass "exclude-family drops the named primary family after selection"
 }
 
-test_portable_shard_union_and_coverage_guard() {
-  local s1 s2 proven serial herdr all_count union_count overlap out first
+# --- lane composition, and where the canonical proof's own seam is tested -----
+#
+# WHAT THIS SUITE MAY DEPEND ON. This script is itself a proof subject, so its
+# passing is a precondition of generating docs/fm-test-isolation-proof.json. It
+# may therefore read that artifact - a prior genuine proof, which is an input
+# that exists before this run - but it may NOT require that artifact to be
+# CURRENT for its own bytes. Requiring that made re-measurement impossible:
+# editing this file made the installed proof stale, the stale proof failed this
+# file, and a run that failed this file could not produce a proof that would
+# clear it. docs/architecture.md states the law under
+# EVIDENCE_GENERATION_WELL_FOUNDEDNESS.
+#
+# So bin/fm-test-run.sh --check-coverage - the one thing that consults proof
+# FRESHNESS - is not exercised here. Its cases live in
+# tests/fm-test-isolation-proof.test.sh, which is deliberately excluded from the
+# candidate set (bin/fm-test-isolation-proof.sh exclusion_reason) and so is not
+# a subject of the proof whose consumption it asserts. That is the same owner
+# that already holds the freshness fixtures and the proven-set seam, and it is
+# where the real-seam assertion belongs.
+test_portable_shard_union_and_lane_partition() {
+  local s1 s2 proven serial herdr all_count union_count overlap first
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
   proven=$("$RUNNER" --list --proven-isolated)
@@ -376,8 +395,6 @@ test_portable_shard_union_and_coverage_guard() {
     && fail "portable lanes must not include real-herdr-gated smoke"
   printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "herdr family must include smoke"
-  out=$("$RUNNER" --check-coverage)
-  assert_contains "$out" "FM_TEST_COVERAGE ok" "coverage guard success marker"
   all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
@@ -389,7 +406,7 @@ test_portable_shard_union_and_coverage_guard() {
   first=$(printf '%s\n' "$s1" | head -n 1)
   [ "$first" = "tests/fm-x-mode.test.sh" ] \
     || fail "shard 1 must start with the longest proven script, got $first"
-  pass "portable shard union, disjointness, and coverage guard hold"
+  pass "portable shard union, disjointness, and the four-lane partition hold"
 }
 
 test_portable_serial_shards_partition_the_serial_lane() {
@@ -1241,105 +1258,19 @@ test_ci_matrix_runs_every_composed_serial_shard() {
 }
 
 
-# --- the coverage guard as the isolation proof's refusing consumer ----------
+# --- where the coverage guard's own cases went ------------------------------
 #
-# The proof document had no mandatory consumer at all: fourteen of its
-# twenty-four subjects had been edited since it was taken, and nothing in the
-# repository could notice. This is the end-to-end version of that repair - the
-# guard CI actually runs, refusing on a subject that moved.
+# bin/fm-test-run.sh --check-coverage judges docs/fm-test-isolation-proof.json
+# against this code, so any case that watches it refuse needs a baseline in
+# which the installed proof is CURRENT. This script is one of that proof's
+# subjects, and a subject may not require the current acceptance artifact its
+# own passing produces (docs/architecture.md,
+# EVIDENCE_GENERATION_WELL_FOUNDEDNESS).
 #
-# It runs against a disposable copy of this repository, because the mutation is
-# the point of the case and must never land on a real subject.
-#
-# Each guard invocation below is captured in a `|| rc=$?` list rather than a bare
-# assignment followed by `rc=$?`. An earlier case in this suite leaves errexit
-# on, and a bare assignment would end the whole suite silently on exactly the
-# refusal these cases exist to observe.
-
-# Echoes a disposable copy of everything the coverage guard reads.
-mk_guard_repo() {
-  local repo
-  repo=$(fm_test_tmproot fm-coverage-guard)
-  [ -n "$repo" ] && [ -d "$repo" ] || return 1
-  mkdir -p "$repo/docs" "$repo/.github/workflows" || return 1
-  cp -R "$ROOT/bin" "$repo/bin" || return 1
-  cp -R "$ROOT/tests" "$repo/tests" || return 1
-  cp "$ROOT/docs/fm-test-isolation-proof.json" "$repo/docs/" || return 1
-  cp "$ROOT/.github/workflows/ci.yml" "$repo/.github/workflows/" || return 1
-  printf '%s\n' "$repo"
-}
-
-test_coverage_guard_refuses_a_proven_subject_that_moved() {
-  local repo subject out rc
-
-  repo=$(mk_guard_repo) || fail "could not build a disposable guard repository"
-  [ -n "$repo" ] && [ -d "$repo" ] || fail "guard repository path is empty"
-  subject=$("$repo/bin/fm-test-isolation-proof.sh" --list-proven | head -n 1)
-  [ -n "$subject" ] || fail "the proof named no proven subject to mutate"
-  [ -f "$repo/$subject" ] || fail "proven subject missing from the copy: $subject"
-
-  # Non-vacuity: the untouched copy passes, so a later refusal is about the
-  # mutation and not about the copy being broken.
-  rc=0
-  out=$("$repo/bin/fm-test-run.sh" --check-coverage 2>&1) || rc=$?
-  [ "$rc" -eq 0 ] || fail "an untouched copy must pass the coverage guard, got rc=$rc"$'\n'"$out"
-  assert_contains "$out" "FM_TEST_COVERAGE ok" "the untouched copy reports the guard marker"
-  assert_contains "$out" "FM_ISOLATION_FRESHNESS PROVEN" \
-    "the guard reports the freshness verdict it consulted"
-
-  # Watched red: one hunk appended to a proven subject.
-  printf '\n# a hunk recorded in no proof\n' >>"$repo/$subject"
-  rc=0
-  out=$("$repo/bin/fm-test-run.sh" --check-coverage 2>&1) || rc=$?
-  [ "$rc" -eq 1 ] || fail "a moved proven subject must refuse with 1, got rc=$rc"$'\n'"$out"
-  assert_contains "$out" "FM_ISOLATION_SUBJECT STALE path=$subject reason=subject-bytes-changed" \
-    "the refusal names the subject that moved"
-  assert_contains "$out" "re-measure" "the refusal states how to clear it"
-  assert_not_contains "$out" "FM_TEST_COVERAGE ok" "a stale proof must not report the guard as ok"
-
-  pass "the coverage guard refuses a proven subject whose bytes moved"
-}
-
-test_coverage_guard_refuses_a_lane_wider_than_the_proof() {
-  local repo out rc workflow
-
-  repo=$(mk_guard_repo) || fail "could not build a disposable guard repository"
-  [ -n "$repo" ] && [ -d "$repo" ] || fail "guard repository path is empty"
-  workflow="$repo/.github/workflows/ci.yml"
-
-  # Watched red: a parallel lane starts running the proven set wider than it was
-  # ever measured at.
-  sed 's|--lane portable-parallel-1|--lane portable-parallel-1 --jobs 16|' \
-    "$workflow" >"$workflow.new" || fail "could not rewrite the fixture workflow"
-  mv "$workflow.new" "$workflow"
-  rc=0
-  out=$("$repo/bin/fm-test-run.sh" --check-coverage 2>&1) || rc=$?
-  [ "$rc" -eq 1 ] || fail "a lane above the proof must refuse with 1, got rc=$rc"$'\n'"$out"
-  assert_contains "$out" "name=concurrency reason=exceeds-proof" \
-    "the refusal names the concurrency dependency"
-  assert_contains "$out" "observed_max=16" "the refusal states the concurrency it observed"
-  pass "the coverage guard refuses a CI lane wider than the proof"
-}
-
-test_coverage_guard_reports_an_unreadable_proof_as_could_not_observe() {
-  local repo out rc
-
-  repo=$(mk_guard_repo) || fail "could not build a disposable guard repository"
-  [ -n "$repo" ] && [ -d "$repo" ] || fail "guard repository path is empty"
-
-  # An absent artifact leaves the proven set unknown. The failure that matters
-  # is the one this replaced: an unreadable proof used to collapse to an empty
-  # proven set, and the guard then reported a true shard-partition mismatch
-  # about the wrong subject while the real fault went unnamed.
-  rm -f "$repo/docs/fm-test-isolation-proof.json"
-  rc=0
-  out=$("$repo/bin/fm-test-run.sh" --check-coverage 2>&1) || rc=$?
-  [ "$rc" -eq 3 ] || fail "an unreadable proof must return 3, got rc=$rc"$'\n'"$out"
-  assert_contains "$out" "COULD NOT BE OBSERVED" "the guard states it could not observe the set"
-  assert_not_contains "$out" "portable shards must equal the proven-isolated set" \
-    "an unreadable proof must not be reported as a shard-partition mismatch"
-  pass "an unreadable proof is could-not-observe, not an empty proven set"
-}
+# The guard-repository cases therefore live in
+# tests/fm-test-isolation-proof.test.sh, which is excluded from the candidate
+# set and already owns the proof artifact's contract, its freshness fixtures,
+# and the runner's consumption of it.
 
 test_list_all_exact_suite_coverage
 test_family_selection
@@ -1352,7 +1283,7 @@ test_aggregate_exit_behavior
 test_gate_skip_accounting
 test_fail_on_gate_skip_token
 test_exclude_family
-test_portable_shard_union_and_coverage_guard
+test_portable_shard_union_and_lane_partition
 test_portable_serial_shards_partition_the_serial_lane
 test_portable_serial_shard_lane_refusals
 test_jobs_requires_proven_isolated
@@ -1364,6 +1295,3 @@ test_serial_budget_control_reports_could_not_observe
 test_serial_budget_control_checks_the_partition_it_measured
 test_serial_budget_control_refuses_a_foreign_timeout_literal
 test_ci_matrix_runs_every_composed_serial_shard
-test_coverage_guard_refuses_a_proven_subject_that_moved
-test_coverage_guard_refuses_a_lane_wider_than_the_proof
-test_coverage_guard_reports_an_unreadable_proof_as_could_not_observe
