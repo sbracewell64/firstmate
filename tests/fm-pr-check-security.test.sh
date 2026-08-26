@@ -550,6 +550,7 @@ test_invalid_entrypoints_have_zero_side_effects() {
 # something to read. Nothing here is pushed anywhere.
 make_worktree_repo() {
   local dir=$1
+  local remote="$dir/default.git"
   rm -rf "$dir/wt"
   mkdir -p "$dir/wt"
   git -C "$dir/wt" init -q -b fm/task-a .
@@ -558,6 +559,10 @@ make_worktree_repo() {
   printf 'one\n' > "$dir/wt/a.txt"
   git -C "$dir/wt" add a.txt
   git -C "$dir/wt" commit -qm one
+  git init -q --bare "$remote"
+  git -C "$dir/wt" remote add origin "$remote"
+  git -C "$dir/wt" push -q origin HEAD:refs/heads/main
+  git --git-dir="$remote" symbolic-ref HEAD refs/heads/main
 }
 
 declare_attestation_gate() {
