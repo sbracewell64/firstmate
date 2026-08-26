@@ -207,6 +207,7 @@ fm_nm_census() {  # <dir> <timeout_secs> <limit>
     printf 'a temporary file for the run listing could not be created, so which runs exist could not be observed\n'
     return 2
   }
+  # fm-retrieval-audit: complete-source - the truncation footer is the only completeness signal this source emits, and the check below turns its presence into COULD-NOT-OBSERVE, so a bounded listing never returns as a census and no caller can reach an absence through it.
   out=$(fm_nm_run_bounded "$dir" "$timeout_secs" runs --limit "$limit" 2>"$errfile") || rc=$?
   err=$(cat "$errfile" 2>/dev/null)
   rm -f "$errfile"
