@@ -1485,37 +1485,66 @@ SH
 
 # --- run ---------------------------------------------------------------------
 
-test_a_fresh_authorization_is_minted_and_spent_exactly_once
-test_a_second_spend_is_refused_and_performs_no_act
-test_a_head_other_than_the_approved_one_is_refused
-test_a_moved_forge_head_is_refused_even_when_the_caller_states_the_approved_head
-test_a_restart_inside_the_spend_window_leaves_a_determinable_state
-test_an_authorization_for_a_superseded_request_is_refused
-test_minting_requires_a_ruled_request_and_an_authorizing_verdict
-test_minting_the_same_ruling_twice_grants_one_authorization
-test_a_correlation_record_filed_under_another_id_is_refused
-test_an_unobservable_head_stops_the_spend_without_destroying_the_authorization
-test_a_spend_already_in_flight_is_refused
-test_concurrent_spends_revalidate_after_claiming
-test_concurrent_mints_cannot_replace_a_spent_record
-test_a_partial_enumeration_is_could_not_observe_rather_than_a_short_list
-test_reconciliation_cannot_reclaim_a_live_spenders_authorization
-test_malformed_authorization_ids_cannot_address_the_store
-test_malformed_or_misbound_authorization_records_are_unreadable
-test_the_act_is_the_authoritys_own_and_an_assertion_may_only_agree
-test_an_executable_swapped_after_authorization_refuses_at_effect_time
-test_an_incomplete_or_unsupported_effect_plan_refuses_before_the_act
-test_credential_bearing_input_is_refused_before_the_act
-test_one_approval_grants_one_landing_even_under_a_second_plan
-test_concurrent_sibling_plans_share_one_ruling_reservation
-test_a_pre_act_signal_releases_the_ruling_reservation
-test_a_failed_ruling_reservation_release_is_observable
-test_an_orphaned_granted_reservation_is_reconciled_from_evidence
-test_a_live_granted_reservation_is_not_reclaimed
-test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate
-test_a_project_alias_moved_after_mint_performs_no_act
-test_a_target_ref_moved_after_mint_performs_no_act
-test_successful_exit_requires_post_effect_proof
-test_the_whole_path_lands_one_real_fast_forward_and_proves_it
+run_test_batch() {  # <test-function>...
+  local test job output
+  local -a jobs=() outputs=()
+  for test in "$@"; do
+    output="$TMP_ROOT/run-$test.out"
+    ( "$test" ) > "$output" 2>&1 &
+    job=$!
+    fm_test_reap "$job"
+    jobs+=("$job")
+    outputs+=("$output")
+  done
+  for test in "$@"; do
+    job=${jobs[0]}
+    output=${outputs[0]}
+    jobs=("${jobs[@]:1}")
+    outputs=("${outputs[@]:1}")
+    if ! wait "$job"; then
+      cat "$output" >&2
+      fail "$test failed"
+    fi
+    cat "$output"
+    FM_TEST_PASSED_TESTS="${FM_TEST_PASSED_TESTS:-}${test}"$'\n'
+  done
+}
+
+run_test_batch \
+  test_a_fresh_authorization_is_minted_and_spent_exactly_once \
+  test_a_second_spend_is_refused_and_performs_no_act \
+  test_a_head_other_than_the_approved_one_is_refused \
+  test_a_moved_forge_head_is_refused_even_when_the_caller_states_the_approved_head \
+  test_a_restart_inside_the_spend_window_leaves_a_determinable_state \
+  test_an_authorization_for_a_superseded_request_is_refused \
+  test_minting_requires_a_ruled_request_and_an_authorizing_verdict \
+  test_minting_the_same_ruling_twice_grants_one_authorization
+run_test_batch \
+  test_a_correlation_record_filed_under_another_id_is_refused \
+  test_an_unobservable_head_stops_the_spend_without_destroying_the_authorization \
+  test_a_spend_already_in_flight_is_refused \
+  test_concurrent_spends_revalidate_after_claiming \
+  test_concurrent_mints_cannot_replace_a_spent_record \
+  test_a_partial_enumeration_is_could_not_observe_rather_than_a_short_list \
+  test_reconciliation_cannot_reclaim_a_live_spenders_authorization \
+  test_malformed_authorization_ids_cannot_address_the_store
+run_test_batch \
+  test_malformed_or_misbound_authorization_records_are_unreadable \
+  test_the_act_is_the_authoritys_own_and_an_assertion_may_only_agree \
+  test_an_executable_swapped_after_authorization_refuses_at_effect_time \
+  test_an_incomplete_or_unsupported_effect_plan_refuses_before_the_act \
+  test_credential_bearing_input_is_refused_before_the_act \
+  test_one_approval_grants_one_landing_even_under_a_second_plan \
+  test_concurrent_sibling_plans_share_one_ruling_reservation \
+  test_a_pre_act_signal_releases_the_ruling_reservation
+run_test_batch \
+  test_a_failed_ruling_reservation_release_is_observable \
+  test_an_orphaned_granted_reservation_is_reconciled_from_evidence \
+  test_a_live_granted_reservation_is_not_reclaimed \
+  test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate \
+  test_a_project_alias_moved_after_mint_performs_no_act \
+  test_a_target_ref_moved_after_mint_performs_no_act \
+  test_successful_exit_requires_post_effect_proof \
+  test_the_whole_path_lands_one_real_fast_forward_and_proves_it
 
 fm_test_contract "$0"
