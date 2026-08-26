@@ -242,7 +242,11 @@ fm_model_price_epoch() {  # <iso>
 fm_model_price_fetch() {  # <url> <outfile>
   local url=${1:-} out=${2:-}
   [ -n "$url" ] && [ -n "$out" ] || return 1
-  command -v curl >/dev/null 2>&1 || return 1
+  command -v curl >/dev/null 2>&1 || return 1  # fm-retrieval-audit: not-a-read - a tool-presence probe; nothing is retrieved here
+  # A failure here is normalized into UNREACHABLE by the caller and folded into a
+  # REFUSAL, never into an absence, so this read cannot produce a negative
+  # conclusion about anything - only a missing observation that refuses.
+  # fm-retrieval-audit: not-a-collection - fetches ONE named document at one URL, so there is no extent to enumerate and no page that could be missing
   curl -q -sS --no-netrc --fail \
     --max-time "$FM_MODEL_PRICE_FETCH_TIMEOUT" \
     -H 'Accept: application/json' \
