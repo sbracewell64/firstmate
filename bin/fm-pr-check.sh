@@ -24,9 +24,10 @@
 # is resolved before anything is called a contradiction.
 #
 # Once the watch is armed, this is also the fleet's publication chokepoint for
-# the head-bound no-mistakes attestation. Where the task's local copy declares a
-# CI gate that reads one, bin/fm-attest.sh is delegated to publish the evidence
-# its own pipeline run produced and to have that head's verdict re-derived;
+# the head-bound no-mistakes attestation. Where the governed contribution venue
+# declares at the task's recorded policy generation that its CI reads one,
+# bin/fm-attest.sh is delegated to publish the evidence its own pipeline run
+# produced and to have that head's verdict re-derived;
 # where no such gate is declared, nothing is touched. It reports one
 # three-valued `attestation:` line and never changes this script's exit status,
 # because a provenance answer must not undo an armed watch.
