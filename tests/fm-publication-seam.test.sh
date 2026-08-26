@@ -325,6 +325,15 @@ states() {  # -> "<id> <state>" per recorded authority
   done
 }
 
+claim_fixture() {
+  local id=$1 pid=$2 identity=$3 group=$4 dir
+  dir="$FX_DATA/landing-authorizations/.$id.claim"
+  mkdir "$dir" || fail "claim-fixture: mkdir"
+  printf '%s\n' "$pid" > "$dir/owner-pid" || fail "claim-fixture: pid"
+  printf '%s\n' "$identity" > "$dir/owner-identity" || fail "claim-fixture: identity"
+  printf '%s\n' "$group" > "$dir/owner-group" || fail "claim-fixture: group"
+}
+
 # --- (a) the green case, which every red below is one perturbation away from ---
 
 test_publishes_one_governed_candidate_exactly_once() {
@@ -618,6 +627,93 @@ test_concurrent_consumers_execute_exactly_one_push() {
   [ "$successes" -eq 1 ] && [ "$refusals" -eq 1 ] && [ "$count" -eq 1 ] \
     || fail "concurrent-consume: rc=$first_rc,$second_rc pushes=$count first=$(cat "$FX_DATA/first.out") second=$(cat "$FX_DATA/second.out")"
   pass "two concurrent consumers execute one push and refuse the other"
+}
+
+test_reclaims_a_dead_owner_before_spending_a_granted_authority() {
+  local id out
+  fixture dead-claim
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999991 dead-owner 99999991
+  out=$(spend "$id") || fail "dead-claim: a provably dead claim was not reclaimed: $out"
+  assert_contains "$out" 'APPLIED' "dead-claim: $out"
+  [ "$(tip)" = "$FX_HEAD" ] || fail "dead-claim: the publication did not execute"
+  pass "a dead owner's claim beside a granted authority is reclaimed"
+}
+
+test_does_not_reclaim_a_live_owner() {
+  local id out rc=0 identity group
+  fixture live-claim
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  identity=$(bash -c '. "$1"; fm_pid_identity "$2"' \
+    _ "$ROOT/bin/fm-wake-lib.sh" "$$") || fail "live-claim: identity"
+  group=$(ps -o pgid= -p "$$" | tr -d '[:space:]') || fail "live-claim: group"
+  claim_fixture "$id" "$$" "$identity" "$group"
+  out=$(spend "$id") || rc=$?
+  [ "$rc" -eq 3 ] || fail "live-claim: live owner exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_IN_FLIGHT' "live-claim: $out"
+  [ "$(tip)" = '-' ] || fail "live-claim: the publication executed"
+  pass "a live owner's claim stays in flight"
+}
+
+test_reclaims_a_reused_owner_pid_with_a_different_identity() {
+  local id out group
+  fixture reused-pid-claim
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  group=$(ps -o pgid= -p "$$" | tr -d '[:space:]') || fail "reused-pid-claim: group"
+  claim_fixture "$id" "$$" stale-process-identity "$group"
+  out=$(spend "$id") || fail "reused-pid-claim: a reused pid was not reclaimed: $out"
+  assert_contains "$out" 'APPLIED' "reused-pid-claim: $out"
+  [ "$(tip)" = "$FX_HEAD" ] || fail "reused-pid-claim: the publication did not execute"
+  pass "a reused owner pid with a different identity is dead"
+}
+
+test_refuses_to_reclaim_an_unreadable_owner_record() {
+  local id out rc=0 dir
+  fixture unreadable-claim
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  dir="$FX_DATA/landing-authorizations/.$id.claim"
+  mkdir "$dir" || fail "unreadable-claim: mkdir"
+  printf '%s\n' 99999992 > "$dir/owner-pid" || fail "unreadable-claim: pid"
+  out=$(spend "$id") || rc=$?
+  [ "$rc" -eq 4 ] || fail "unreadable-claim: unreadable owner exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_CLAIM_OWNER_UNOBSERVED' "unreadable-claim: $out"
+  [ "$(tip)" = '-' ] || fail "unreadable-claim: the publication executed"
+  pass "an unreadable claim owner is could-not-observe"
+}
+
+test_concurrent_dead_claim_reclaimers_execute_exactly_one_push() {
+  local id first second first_rc=0 second_rc=0 count successes
+  fixture concurrent-dead-claim
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999993 dead-owner 99999993
+  printf '%s\n' '#!/usr/bin/env bash' "printf x >> '$FX_DATA/push-count'" 'sleep 1' 'exit 0' \
+    > "$FX_REMOTE/hooks/pre-receive" || fail "concurrent-dead-claim: hook"
+  chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "concurrent-dead-claim: chmod"
+  spend "$id" > "$FX_DATA/first.out" 2>&1 &
+  first=$!
+  fm_test_reap "$first"
+  spend "$id" > "$FX_DATA/second.out" 2>&1 &
+  second=$!
+  fm_test_reap "$second"
+  wait "$first" || first_rc=$?
+  wait "$second" || second_rc=$?
+  successes=0
+  [ "$first_rc" -eq 0 ] && successes=$(( successes + 1 ))
+  [ "$second_rc" -eq 0 ] && successes=$(( successes + 1 ))
+  count=$(wc -c < "$FX_DATA/push-count" | tr -d '[:space:]')
+  [ "$successes" -eq 1 ] && [ "$count" -eq 1 ] \
+    || fail "concurrent-dead-claim: rc=$first_rc,$second_rc pushes=$count first=$(cat "$FX_DATA/first.out") second=$(cat "$FX_DATA/second.out")"
+  pass "two dead-claim reclaimers execute exactly one publication"
 }
 
 test_a_refusal_relays_its_reason_rather_than_its_shape() {
@@ -1717,6 +1813,11 @@ test_authority_binds_the_remote_name_and_push_destination
 test_remote_credentials_are_never_persisted_or_emitted
 test_push_output_is_sanitized_bounded_and_recorded
 test_concurrent_consumers_execute_exactly_one_push
+test_reclaims_a_dead_owner_before_spending_a_granted_authority
+test_does_not_reclaim_a_live_owner
+test_reclaims_a_reused_owner_pid_with_a_different_identity
+test_refuses_to_reclaim_an_unreadable_owner_record
+test_concurrent_dead_claim_reclaimers_execute_exactly_one_push
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
 test_refuses_once_a_newer_hold_arrives_after_the_authority_was_granted

@@ -180,6 +180,7 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-publication-seam-lib.sh"
 
 CLAIM=
+CLAIM_OWNER_STATE=
 
 usage() { sed -n '2,/^set -u$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
@@ -187,6 +188,89 @@ die() { printf '%s\n' "$1" >&2; exit "${2:-2}"; }
 refuse() { printf 'REFUSE %s: %s\n' "$1" "$2" >&2; exit 3; }
 cno() { printf 'CNO %s: %s\n' "$1" "$2" >&2; exit 4; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+
+publication_claim_owner_state() {
+  local id=$1 allow_marker=${2:-0} dir pid identity group current entry name
+  dir=$(auth_claim_path "$id") || { CLAIM_OWNER_STATE=unobserved; return 1; }
+  for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
+    [ -e "$entry" ] || continue
+    name=${entry##*/}
+    case $name in
+      owner-pid|owner-identity|owner-group) ;;
+      reclaiming) [ "$allow_marker" -eq 1 ] \
+        || { CLAIM_OWNER_STATE=unobserved; return 1; } ;;
+      *) CLAIM_OWNER_STATE=unobserved; return 1 ;;
+    esac
+  done
+  if ! pid=$(cat "$dir/owner-pid" 2>/dev/null) \
+    || ! identity=$(cat "$dir/owner-identity" 2>/dev/null) \
+    || ! group=$(cat "$dir/owner-group" 2>/dev/null); then
+    CLAIM_OWNER_STATE=unobserved
+    return 1
+  fi
+  case $pid in ''|*[!0-9]*) CLAIM_OWNER_STATE=unobserved; return 1 ;; esac
+  [ -n "$identity" ] && [ -n "$group" ] \
+    || { CLAIM_OWNER_STATE=unobserved; return 1; }
+  if ! ps -p "$pid" >/dev/null 2>&1; then
+    CLAIM_OWNER_STATE=dead
+    return 0
+  fi
+  current=$(fm_pid_identity "$pid" 2>/dev/null) \
+    || { CLAIM_OWNER_STATE=unobserved; return 1; }
+  if [ "$current" = "$identity" ]; then
+    CLAIM_OWNER_STATE=live
+    return 1
+  fi
+  CLAIM_OWNER_STATE=dead
+  return 0
+}
+
+publication_claim_reclaim_dead() {
+  local id=$1 dir marker before after state before_pid before_identity before_group
+  local after_pid after_identity after_group
+  publication_claim_owner_state "$id" || return 1
+  dir=$(auth_claim_path "$id") || { CLAIM_OWNER_STATE=unobserved; return 1; }
+  if before_pid=$(cat "$dir/owner-pid" 2>/dev/null) \
+    && before_identity=$(cat "$dir/owner-identity" 2>/dev/null) \
+    && before_group=$(cat "$dir/owner-group" 2>/dev/null); then
+    :
+  else
+    CLAIM_OWNER_STATE=unobserved
+    return 1
+  fi
+  before=$(printf '%s\n%s\n%s\n' "$before_pid" "$before_identity" "$before_group")
+  marker="$dir/reclaiming"
+  mkdir "$marker" 2>/dev/null || { CLAIM_OWNER_STATE=raced; return 1; }
+  auth_read "$id" || { CLAIM_OWNER_STATE=unobserved; rmdir "$marker" 2>/dev/null; return 1; }
+  state=$(auth_field '.state // ""')
+  if [ "$state" != granted ]; then
+    CLAIM_OWNER_STATE=unobserved
+    rmdir "$marker" 2>/dev/null
+    return 1
+  fi
+  if after_pid=$(cat "$dir/owner-pid" 2>/dev/null) \
+    && after_identity=$(cat "$dir/owner-identity" 2>/dev/null) \
+    && after_group=$(cat "$dir/owner-group" 2>/dev/null); then
+    :
+  else
+    CLAIM_OWNER_STATE=unobserved
+    rmdir "$marker" 2>/dev/null
+    return 1
+  fi
+  after=$(printf '%s\n%s\n%s\n' "$after_pid" "$after_identity" "$after_group")
+  if [ "$after" != "$before" ] || ! publication_claim_owner_state "$id" 1; then
+    [ "$CLAIM_OWNER_STATE" = live ] || CLAIM_OWNER_STATE=unobserved
+    rmdir "$marker" 2>/dev/null
+    return 1
+  fi
+  rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group" \
+    || { CLAIM_OWNER_STATE=unobserved; rmdir "$marker" 2>/dev/null; return 1; }
+  if ! rmdir "$marker" 2>/dev/null || ! rmdir "$dir" 2>/dev/null; then
+    CLAIM_OWNER_STATE=unobserved
+    return 1
+  fi
+  claim_acquire "$id" serial
+}
 
 # --- the remote tip, OBSERVED -------------------------------------------------
 #
@@ -562,11 +646,19 @@ cmd_consume() {
 
   if ! claim_acquire "$id" serial; then
     auth_read "$id" || true
-    if [ "$(auth_field '.state // ""')" = spending ]; then
+    state=$(auth_field '.state // ""')
+    if [ "$state" = spending ]; then
       cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
         "a publication under $id began and recorded no outcome, so whether its effect happened is unknown"
     fi
-    refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
+    if [ "$state" = granted ] && publication_claim_reclaim_dead "$id"; then
+      :
+    elif [ "$CLAIM_OWNER_STATE" = live ] || [ "$CLAIM_OWNER_STATE" = raced ]; then
+      refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
+    else
+      cno FM_PUB_CLAIM_OWNER_UNOBSERVED \
+        "the owner of the claim on $id could not be observed, so the claim was not reclaimed"
+    fi
   fi
 
   auth_read "$id" || cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
