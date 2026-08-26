@@ -232,7 +232,7 @@ The suite counts the same way. A merge is observed by counting the `pr merge` in
 
 ### Red calibration
 
-Date: 2026-08-22.
+Date: 2026-08-26.
 Every control was observed failing for its intended reason, and the defect that made it fail is tracked rather than described.
 
 The catalogue lives in [`tests/landing-seam-red-matrix.py`](../../tests/landing-seam-red-matrix.py), so every row below is replayable by somebody who did not run it:
@@ -254,34 +254,36 @@ Those rows measured the same controls through a scratch harness that no longer e
 
 | # | Injected defect | Controls reddened |
 | - | --------------- | ----------------- |
-| D00 `bc7aa0672cc7` | none - the staging control, which must be GREEN. | **0 - the staging control must redden nothing** |
-| D01 `bab55ff9f495` | LA-1's successor as found: an absent correlation is read as not-applicable instead of consulting the declared governed landing domain. | 13 of 31 |
-| D02 `18f80c33c2d0` | An undeclared landing domain is read as an empty one. | 1 of 31 |
-| D03 `30d2c3dc1ecb` | A malformed landing domain declaration is read as an empty one. | 1 of 31 |
-| D04 `a016a9170f15` | The DECLARATION side of the comparison becomes case-sensitive, so a domain entry written in another case stops matching the repository it names. | 1 of 31 |
-| D05 `da8e36fde83a` | A candidate whose repository could not be established is read as being outside the domain rather than as could-not-observe. | 1 of 31 |
-| D06 `f684654bac6c` | An explicitly empty landing domain refuses instead of landing, which is the non-vacuity direction: it proves the empty-domain landings are real. | 2 of 31 |
-| D07 `fc353b43745c` | The pull-request gate stops telling the seam which repository it writes. | 8 of 31 |
-| D08 `86789d762c6e` | The local gate stops telling the seam which repository it writes. | 2 of 31 |
-| D09 `4f19104f240f` | The pull-request merge site ignores the seam's answer and always merges. | 4 of 31 |
-| D10 `ca0dc3e0eb73` | The local merge site lands outside the spend. | 3 of 31 |
-| D11 `1f5b2331419c` | The spend's exit status is read without the act receipt, so a spent authority reports success while merging nothing. | 2 of 31 |
-| D12 `4284e4467e3e` | The CANDIDATE side of the comparison becomes case-sensitive, so the domain is shed by how somebody typed a pull request url. | 1 of 31 |
-| D13 `02f7c6863e69` | A home with no control venue is refused instead of landing, which is the non-vacuity direction for the shipped default. | 1 of 31 |
-| D14 `f3835901e03c` | An emitted-but-unruled request stops counting as live, so a review that was asked for and never answered no longer governs. | 2 of 31 |
-| D15 `87d0e31e9065` | A head no live request approved falls through as ungoverned instead of refusing, which makes moving the head the cheapest way to shed a ruling. | 1 of 31 |
-| D16 `4e7c7bc7851a` | Two live requests claiming one head resolve to the last one seen instead of refusing, so the authority a landing consumes is picked on no evidence. | 1 of 31 |
-| D17 `1fec72e37649` | A declining or unclassifiable ruling is treated as authorizing. | 2 of 31 |
-| D18 `07cb85e2f74b` | An unreadable correlation record is skipped instead of refusing, so the one record that might have governed reads as an absence of rulings. | 1 of 31 |
-| D19 `95f060504a7f` | Live governance with no configured control venue reads as ungoverned rather than as the configuration contradiction it is. | 1 of 31 |
-| D20 `676650357657` | The pull-request gate stops enforcing its own check rollup, so a valid landing authority is all that stands between a red head and the forge. The seam must COMPOSE with the pre-existing guards, never replace them. | 1 of 31 |
-| D21 `f53230cb9bec` | The forge's re-observed head is accepted whenever it differs from the approved one, so a pull request that moved after approval still lands. | 1 of 31 |
+| D00 `df9c51b07a01` | none - the staging control, which must be GREEN. | **0 - the staging control must redden nothing** |
+| D01 `4b993112b994` | LA-1's successor as found: an absent correlation is read as not-applicable instead of consulting the declared governed landing domain. | 11 of 35 |
+| D02 `c7a228c28800` | An undeclared landing domain is read as an empty one. | 6 of 35 |
+| D03 `c7a228c28800` | A malformed landing domain declaration is read as an empty one. | 6 of 35 |
+| D04 `2d3170df636c` | The DECLARATION side of the comparison becomes case-sensitive, so a domain entry written in another case stops matching the repository it names. | 1 of 35 |
+| D05 `e84d57787ac5` | A candidate whose repository could not be established is read as being outside the domain rather than as could-not-observe. | 1 of 35 |
+| D06 `cf1f5c9f3cf5` | An explicitly empty landing domain refuses instead of landing, which is the non-vacuity direction: it proves the empty-domain landings are real. | 2 of 35 |
+| D07 `082674016cf4` | The pull-request gate stops telling the seam which repository it writes. | 8 of 35 |
+| D08 `eafd357748dc` | The local gate stops telling the seam which repository it writes. | 2 of 35 |
+| D09 `5fefad22ee9a` | The pull-request merge site ignores the seam's answer and always merges. | 4 of 35 |
+| D10 `c142fdad824e` | The local merge site lands outside the spend. | 3 of 35 |
+| D11 `5137f240c272` | The spend's exit status is read without the act receipt, so a spent authority reports success while merging nothing. | 2 of 35 |
+| D12 `21c64a645b14` | The CANDIDATE side of the comparison becomes case-sensitive, so the domain is shed by how somebody typed a pull request url. | 1 of 35 |
+| D13 `cd51daafebb3` | A home with no control venue is refused instead of landing, which is the non-vacuity direction for the shipped default. | 1 of 35 |
+| D14 `f198824150cf` | An emitted-but-unruled request stops counting as live, so a review that was asked for and never answered no longer governs. | 2 of 35 |
+| D15 `f592e90696e8` | A head no live request approved falls through as ungoverned instead of refusing, which makes moving the head the cheapest way to shed a ruling. | 1 of 35 |
+| D16 `2fa647caea92` | Two live requests claiming one head resolve to the last one seen instead of refusing, so the authority a landing consumes is picked on no evidence. | 1 of 35 |
+| D17 `0ce0b970c426` | A declining or unclassifiable ruling is treated as authorizing. | 2 of 35 |
+| D18 `12e7cdc22c64` | An unreadable correlation record is skipped instead of refusing, so the one record that might have governed reads as an absence of rulings. | 1 of 35 |
+| D19 `c8e95de75bd3` | Live governance with no configured control venue reads as ungoverned rather than as the configuration contradiction it is. | 1 of 35 |
+| D20 `a56c7e950064` | The pull-request gate stops enforcing its own check rollup, so a valid landing authority is all that stands between a red head and the forge. The seam must COMPOSE with the pre-existing guards, never replace them. | 1 of 35 |
+| D21 `0eb539dc0665` | The forge's re-observed head is accepted whenever it differs from the approved one, so a pull request that moved after approval still lands. | 1 of 35 |
+| D22 `c7a228c28800` | Invalid venue configuration is treated as absent and permits landing. | 6 of 35 |
+| D23 `e33868e6b0a4` | Repository schema validation accepts paths with extra components. | 1 of 35 |
 
 Every declared control has at least one red witness, and the run reports that count rather than leaving it to be inferred:
 
 ```
 $ tests/landing-seam-red-matrix.py matrix
-controls declared: 31
+controls declared: 35
 ...
 every defect was witnessed by a control, and the staging control is green
 CONTROLS WITH NO RED WITNESS: 0
@@ -308,10 +310,14 @@ CONTROLS WITH NO RED WITNESS: 0
 | `test_pr_merge_refuses_an_in_domain_closed_request` | D01, D07 |
 | `test_pr_merge_refuses_an_in_domain_nongoverning_gate` | D01, D07 |
 | `test_pr_merge_refuses_an_unreadable_correlation_record` | D18 |
-| `test_pr_merge_refuses_an_unreadable_landing_domain` | D01, D03 |
+| `test_pr_merge_refuses_an_unreadable_landing_domain` | D02, D03, D22 |
+| `test_pr_merge_refuses_invalid_venue_field_types` | D02, D03, D22 |
 | `test_pr_merge_refuses_live_governance_with_no_configured_venue` | D19 |
+| `test_pr_merge_refuses_malformed_venue_configuration` | D02, D03, D22 |
+| `test_pr_merge_refuses_multi_segment_domain_repositories` | D02, D03, D22, D23 |
 | `test_pr_merge_refuses_two_requests_claiming_the_same_head` | D16 |
-| `test_pr_merge_refuses_when_the_landing_domain_is_undeclared` | D01, D02 |
+| `test_pr_merge_refuses_venue_configuration_missing_repo` | D02, D03, D22 |
+| `test_pr_merge_refuses_when_the_landing_domain_is_undeclared` | D02, D03, D22 |
 | `test_pr_merge_reobserves_the_head_at_the_moment_of_use` | D09, D21 |
 | `test_merge_local_lands_a_candidate_proven_outside_the_domain` | D01, D08 |
 | `test_merge_local_lands_a_governed_candidate_under_a_valid_ruling` | D10 |
