@@ -339,6 +339,22 @@ task_base_remote_safe_url() {  # <url>
   esac
 }
 
+task_base_remote_url_has_userinfo() {  # <url>
+  local url=${1-} rest authority
+  case $url in
+    https://*|http://*|ssh://*|git://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      case $authority in *@*) return 0 ;; esac
+      ;;
+    *:*)
+      rest=${url%%:*}
+      case $rest in *@*) return 0 ;; esac
+      ;;
+  esac
+  return 1
+}
+
 # The venue a contribution target names, set into TASK_BASE_VENUE_URL (the
 # remote URL) and TASK_BASE_VENUE (its comparable forge identity, empty when the
 # URL names no forge).

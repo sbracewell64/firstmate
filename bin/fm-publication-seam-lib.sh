@@ -76,6 +76,77 @@ FM_PUB_SEAM_LIB_SOURCED=1
 # instead of a second copy of the computation inside the publication seam.
 FM_PUB_SEAM_BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+FM_PUB_SEAM_WITHHELD_LINE='<withheld in full: a URL here is not provably credential-free>'
+
+fm_pub_seam_credential_safe_stream() {
+  awk -v withheld_line="$FM_PUB_SEAM_WITHHELD_LINE" '
+    BEGIN {
+      quote = sprintf("%c", 39)
+      lead = "\"([{<" quote
+      trail = "\")]}>,.;:" quote
+    }
+    function is_safe(t) {
+      return t ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?(\/[^@?#]*)?$/
+    }
+    function without_userinfo(t,   mark, scheme, rest, host, tail) {
+      mark = index(t, "://")
+      if (mark == 0) return ""
+      scheme = substr(t, 1, mark + 2)
+      rest = substr(t, mark + 3)
+      host = rest
+      if (index(host, "/") > 0) host = substr(host, 1, index(host, "/") - 1)
+      tail = substr(rest, length(host) + 1)
+      if (index(host, "@") == 0) return ""
+      sub(/^.*@/, "", host)
+      return scheme host tail
+    }
+    function is_safe_scp(t) {
+      return t ~ /^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\]):[^@?#]*$/
+    }
+    function without_scp_user(t,   at) {
+      if (t !~ /^[A-Za-z0-9._~-]+@/) return ""
+      at = index(t, "@")
+      return substr(t, at + 1)
+    }
+    function render(t,   rebuilt) {
+      if (is_safe(t)) return t
+      rebuilt = without_userinfo(t)
+      if (rebuilt != "" && is_safe(rebuilt)) return rebuilt
+      rebuilt = without_scp_user(t)
+      if (rebuilt != "" && is_safe_scp(rebuilt)) return rebuilt
+      withheld_seen = 1
+      return ""
+    }
+    function token(x,   pre, post, core, c) {
+      if (index(x, "://") == 0 && index(x, "@") == 0) return x
+      core = x
+      pre = ""
+      post = ""
+      while (length(core) > 0) {
+        c = substr(core, 1, 1)
+        if (index(lead, c) == 0) break
+        pre = pre c
+        core = substr(core, 2)
+      }
+      while (length(core) > 0) {
+        c = substr(core, length(core), 1)
+        if (index(trail, c) == 0) break
+        post = c post
+        core = substr(core, 1, length(core) - 1)
+      }
+      return pre render(core) post
+    }
+    {
+      withheld_seen = 0
+      n = split($0, words, / /)
+      out = ""
+      for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") token(words[i])
+      if (withheld_seen) print withheld_line
+      else print out
+    }
+  '
+}
+
 # --- contract constants ------------------------------------------------------
 
 # The publication identity and delivery policy this reads. Home-private and

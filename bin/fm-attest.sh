@@ -210,10 +210,8 @@ CAPABILITIES="write verify recheck reconcile show"
 # contributor blocked by a ruleset or a quota with nothing to act on. So text is
 # made safe to print rather than withheld wholesale.
 #
-# This comment is the single owner of that mechanism. Keep the shapes, the guards
-# and their reasons here; docs/no-mistakes-attestation.md carries the short
-# safety rationale and points at this file rather than restating it, so the two
-# cannot drift apart the way a second copy did.
+# This comment owns the safety rationale; bin/fm-publication-seam-lib.sh owns the
+# shared implementation used by both attestation and the publication guard.
 #
 # One function does it for everything this prints, git's output, the pipeline
 # tool's two streams and the push target alike, and that is enforced by where it
@@ -272,75 +270,8 @@ CAPABILITIES="write verify recheck reconcile show"
 # recoverable and a silent one is not. A line with no URL-shaped word is
 # untouched, so the server's own rejection reason still reaches the person who
 # has to act on it.
-WITHHELD_LINE='<withheld in full: a URL here is not provably credential-free>'
-
 credential_safe_stream() {
-  awk -v withheld_line="$WITHHELD_LINE" '
-    BEGIN {
-      quote = sprintf("%c", 39)
-      lead = "\"([{<" quote
-      trail = "\")]}>,.;:" quote
-    }
-    function is_safe(t) {
-      return t ~ /^[A-Za-z][A-Za-z0-9+.-]*:\/\/([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\])(:[0-9]+)?(\/[^@?#]*)?$/
-    }
-    function without_userinfo(t,   mark, scheme, rest, host, tail) {
-      mark = index(t, "://")
-      if (mark == 0) return ""
-      scheme = substr(t, 1, mark + 2)
-      rest = substr(t, mark + 3)
-      host = rest
-      if (index(host, "/") > 0) host = substr(host, 1, index(host, "/") - 1)
-      tail = substr(rest, length(host) + 1)
-      if (index(host, "@") == 0) return ""
-      sub(/^.*@/, "", host)
-      return scheme host tail
-    }
-    function is_safe_scp(t) {
-      return t ~ /^([A-Za-z0-9._-]+|\[[0-9A-Fa-f:.]+\]):[^@?#]*$/
-    }
-    function without_scp_user(t,   at) {
-      if (t !~ /^[A-Za-z0-9._~-]+@/) return ""
-      at = index(t, "@")
-      return substr(t, at + 1)
-    }
-    function render(t,   rebuilt) {
-      if (is_safe(t)) return t
-      rebuilt = without_userinfo(t)
-      if (rebuilt != "" && is_safe(rebuilt)) return rebuilt
-      rebuilt = without_scp_user(t)
-      if (rebuilt != "" && is_safe_scp(rebuilt)) return rebuilt
-      withheld_seen = 1
-      return ""
-    }
-    function token(x,   pre, post, core, c) {
-      if (index(x, "://") == 0 && index(x, "@") == 0) return x
-      core = x
-      pre = ""
-      post = ""
-      while (length(core) > 0) {
-        c = substr(core, 1, 1)
-        if (index(lead, c) == 0) break
-        pre = pre c
-        core = substr(core, 2)
-      }
-      while (length(core) > 0) {
-        c = substr(core, length(core), 1)
-        if (index(trail, c) == 0) break
-        post = c post
-        core = substr(core, 1, length(core) - 1)
-      }
-      return pre render(core) post
-    }
-    {
-      withheld_seen = 0
-      n = split($0, words, / /)
-      out = ""
-      for (i = 1; i <= n; i++) out = out (i > 1 ? " " : "") token(words[i])
-      if (withheld_seen) print withheld_line
-      else print out
-    }
-  '
+  fm_pub_seam_credential_safe_stream
 }
 
 # The one place this script constructs a line and writes it. Callers hand it

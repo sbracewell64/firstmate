@@ -219,12 +219,14 @@ RESOLVED_REMOTE_URL=
 RESOLVED_REMOTE_SAFE_URL=
 RESOLVED_REMOTE_URL_DIGEST=
 RESOLVED_REMOTE_IDENTITY=
+RESOLVED_REMOTE_CANONICAL=
 resolve_remote() {  # <repo> <remote-name-or-url>
   local repo=$1 remote=$2 url safe_url digest identity
   RESOLVED_REMOTE_URL=
   RESOLVED_REMOTE_SAFE_URL=
   RESOLVED_REMOTE_URL_DIGEST=
   RESOLVED_REMOTE_IDENTITY=
+  RESOLVED_REMOTE_CANONICAL=
   url=$(fm_pub_seam_git --no-optional-locks -C "$repo" remote get-url --push "$remote" 2>/dev/null) || {
     case $remote in
       /*|./*|../*|file://*|https://*|http://*|ssh://*|git://*|*:*/*) url=$remote ;;
@@ -232,6 +234,7 @@ resolve_remote() {  # <repo> <remote-name-or-url>
     esac
   }
   [ -n "$url" ] || return 1
+  task_base_remote_url_has_userinfo "$url" && return 2
   safe_url=$(task_base_remote_safe_url "$url" 2>/dev/null) || return 1
   [ -n "$safe_url" ] || return 1
   digest=$(printf '%s' "$safe_url" | fm_auth_digest) || return 1
@@ -245,6 +248,17 @@ resolve_remote() {  # <repo> <remote-name-or-url>
   RESOLVED_REMOTE_SAFE_URL=$safe_url
   RESOLVED_REMOTE_URL_DIGEST=$digest
   RESOLVED_REMOTE_IDENTITY=$identity
+  RESOLVED_REMOTE_CANONICAL=$safe_url
+}
+
+resolve_remote_or_exit() {  # <repo> <remote-name-or-url> <phase>
+  local repo=$1 remote=$2 phase=$3 rc=0
+  resolve_remote "$repo" "$remote" || rc=$?
+  case $rc in
+    0) return 0 ;;
+    2) refuse FM_PUB_REMOTE_CREDENTIALS "$phase remote contains userinfo and is not admissible at the publication seam" ;;
+    *) cno FM_PUB_REMOTE_UNRESOLVED "$phase push destination could not be resolved" ;;
+  esac
 }
 
 # --- record access ------------------------------------------------------------
@@ -348,12 +362,12 @@ cmd_prepare() {
       "the tree of $head could not be read from $repo, so what this publication would carry could not be observed"
   fi
 
-  resolve_remote "$repo" "$remote" || cno FM_PUB_REMOTE_UNRESOLVED \
-    "the push destination named by remote '$remote' could not be resolved, so no publication authority was granted"
+  resolve_remote_or_exit "$repo" "$remote" "the prepare-time"
   push_url=$RESOLVED_REMOTE_URL
   safe_url=$RESOLVED_REMOTE_SAFE_URL
   url_digest=$RESOLVED_REMOTE_URL_DIGEST
   remote_identity=$RESOLVED_REMOTE_IDENTITY
+  remote=$RESOLVED_REMOTE_CANONICAL
 
   observe_tip "$repo" "$push_url" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
@@ -468,8 +482,8 @@ cmd_consume() {
   local repo='' remote='' now rc=0
   local venue ref item head tree tip generation epoch fresh_id state record effect applicability
   local recorded_remote recorded_safe_url recorded_url_digest recorded_remote_identity
-  local observed_safe_url observed_url_digest observed_remote_identity act_url
-  local trusted_git trusted_git_digest
+  local observed_safe_url observed_url_digest observed_remote_identity observed_remote act_url
+  local trusted_git trusted_git_digest push_output push_rc_path
 
   [ -n "$id" ] || die "consume requires an authorization id"
   while [ $# -gt 0 ]; do
@@ -523,20 +537,20 @@ cmd_consume() {
   generation=$(auth_field '.grant.generation // ""')
   epoch=$(auth_field '.epoch // 1')
 
-  resolve_remote "$repo" "$remote" || cno FM_PUB_REMOTE_UNRESOLVED \
-    "the consume-time push destination named by remote '$remote' could not be resolved"
+  resolve_remote_or_exit "$repo" "$remote" "the consume-time"
   act_url=$RESOLVED_REMOTE_URL
+  observed_remote=$RESOLVED_REMOTE_CANONICAL
   observed_safe_url=$RESOLVED_REMOTE_SAFE_URL
   observed_url_digest=$RESOLVED_REMOTE_URL_DIGEST
   observed_remote_identity=$RESOLVED_REMOTE_IDENTITY
-  if [ "$remote" != "$recorded_remote" ] || [ "$observed_safe_url" != "$recorded_safe_url" ] \
+  if [ "$observed_remote" != "$recorded_remote" ] || [ "$observed_safe_url" != "$recorded_safe_url" ] \
     || [ "$observed_url_digest" != "$recorded_url_digest" ] \
     || [ "$observed_remote_identity" != "$recorded_remote_identity" ]; then
     refuse FM_PUB_REMOTE_MISMATCH \
-      "publication authority $id records remote '$recorded_remote' with URL digest '$recorded_url_digest', while consume observed '$remote' with URL digest '$observed_url_digest'"
+      "publication authority $id records URL digest '$recorded_url_digest', while consume observed URL digest '$observed_url_digest'"
   fi
 
-  if ! fm_pub_seam_command_matches "$repo" "$recorded_remote" "$head" "$ref" "$@"; then
+  if ! fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" "$@"; then
     refuse FM_PUB_COMMAND_MISMATCH \
       "the act under publication authority $id is not the exact git push of $head to $ref on $remote from $repo"
   fi
@@ -609,15 +623,32 @@ cmd_consume() {
   # point of writing it first.
   AUTH_RECORD=$record
 
-  "$trusted_git" -C "$repo" push "$act_url" "$head:$ref" >/dev/null 2>&1 || rc=$?
+  push_rc_path="$AUTH_DIR/.$id.push-rc.$$"
+  push_output=$(
+    { "$trusted_git" -C "$repo" push "$act_url" "$head:$ref"; printf '%s\n' "$?" > "$push_rc_path"; } 2>&1 \
+      | fm_pub_seam_credential_safe_stream \
+      | LC_ALL=C awk 'BEGIN { cap=65536 } { line=$0 ORS; if (length(out) < cap) out=out substr(line,1,cap-length(out)) } END { printf "%s", out }'
+  )
+  if [ -r "$push_rc_path" ]; then
+    rc=$(cat "$push_rc_path")
+    rm -f "$push_rc_path"
+  else
+    rc=1
+  fi
+  record=$(printf '%s' "$AUTH_RECORD" | jq --arg output "$push_output" --argjson exit_code "$rc" \
+    '.spend.output=$output | .spend.exit_code=$exit_code') \
+    || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the push response for $id could not be recorded"
+  fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
+    || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the push response for $id could not be written"
+  AUTH_RECORD=$record
 
   if ! observe_tip "$repo" "$act_url" "$ref"; then
     cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
-      "the publication under $id ran (exit $rc) and the resulting tip of $ref could not be observed, which does not establish that it had no effect; reconcile it with reconcile $id"
+      "the publication under $id ran (exit $rc) and the resulting tip of $ref could not be observed, which does not establish that it had no effect; push response: ${push_output:-none}; reconcile it with reconcile $id"
   fi
   if [ "$OBSERVED_TIP" != "$head" ]; then
     cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
-      "the publication under $id ran (exit $rc) and $ref on $remote is at $OBSERVED_TIP rather than $head, so its effect is not confirmed; reconcile it with reconcile $id"
+      "the publication under $id ran (exit $rc) and $ref is at $OBSERVED_TIP rather than $head, so its effect is not confirmed; push response: ${push_output:-none}; reconcile it with reconcile $id"
   fi
 
   now=$(now_iso)

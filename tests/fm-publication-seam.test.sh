@@ -497,95 +497,80 @@ test_authority_binds_the_remote_name_and_push_destination() {
   pass "publication authorities bind remote names and resolved push destinations"
 }
 
-start_publication_http_server() {  # <root> <port-file>
-  local root=$1 port_file=$2 pid i
-  python3 - "$root" "$port_file" > "$root/server.out" 2> "$root/server.err" <<'PY' &
-import functools
-import http.server
-import sys
-
-root, port_file = sys.argv[1:]
-handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=root)
-server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler)
-with open(port_file, "w", encoding="utf-8") as stream:
-    stream.write(str(server.server_address[1]))
-server.serve_forever()
-PY
-  pid=$!
-  fm_test_reap "$pid"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    [ -s "$port_file" ] && break
-    sleep 0.1
-  done
-  [ -s "$port_file" ] || fail "remote-credentials: HTTP server did not start"
-}
-
 test_remote_credentials_are_never_persisted_or_emitted() {
-  local root port_file port secret other_secret url other_url out rc=0 id record safe digest
+  local secret url out rc=0 named_id direct_id
   fixture remote-credentials
   policy
   reviewed
-  root="$TMP_ROOT/remote-credentials/http"
-  port_file="$root/port"
-  mkdir -p "$root" || fail "remote-credentials: mkdir"
-  git init -q --bare "$root/repo.git" || fail "remote-credentials: init"
-  git --git-dir="$root/repo.git" update-server-info || fail "remote-credentials: update-server-info"
-  start_publication_http_server "$root" "$port_file"
-  port=$(cat "$port_file")
   secret='publication-secret-alpha'
-  other_secret='publication-secret-beta'
-  url="http://fixture:$secret@127.0.0.1:$port/repo.git"
-  other_url="http://fixture:$other_secret@127.0.0.1:$port/other.git"
+  url="https://fixture:$secret@example.invalid/repo"
+  out=$(guard prepare --repo "$FX_REPO" --remote "$url" --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 3 ] || fail "remote-credentials: direct credential URL exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_REMOTE_CREDENTIALS' "remote-credentials: $out"
+  assert_not_contains "$out" "$secret" "remote-credentials: direct credential emitted: $out"
+
   git -C "$FX_REPO" remote set-url --push origin "$url" || fail "remote-credentials: set-url"
-  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
-    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || fail "remote-credentials: prepare: $out"
-  id=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
-  [ -n "$id" ] || fail "remote-credentials: no authority: $out"
-  record="$FX_DATA/landing-authorizations/$id.json"
-  ! rg -F "$secret" "$record" >/dev/null || fail "remote-credentials: credential persisted"
-  safe=$(jq -r '.grant.remote.safe_url // ""' "$record")
-  digest=$(jq -r '.grant.remote.url_digest // ""' "$record")
-  [ "$safe" = "http://127.0.0.1:$port/repo" ] || fail "remote-credentials: unsafe URL recorded: $safe"
-  [ "$digest" = "$(printf '%s' "$safe" | sha256sum | awk '{print $1}')" ] \
-    || fail "remote-credentials: safe URL digest does not match"
-
-  rc=0
-  out=$(spend "$id") || rc=$?
-  [ "$rc" -eq 4 ] || fail "remote-credentials: matching remote did not reach the act (exit $rc): $out"
-  assert_contains "$out" 'FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT' "remote-credentials: $out"
-  assert_not_contains "$out" "$secret" "remote-credentials: credential emitted: $out"
-
-  fixture remote-credential-mismatch
-  policy
-  reviewed
-  git -C "$FX_REPO" remote set-url --push origin "$url" || fail "remote-credential-mismatch: set-url"
-  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
-    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || fail "remote-credential-mismatch: prepare: $out"
-  id=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
-  git -C "$FX_REPO" remote set-url --push origin "$other_url" || fail "remote-credential-mismatch: repoint"
-  rc=0
-  out=$(spend "$id") || rc=$?
-  [ "$rc" -eq 3 ] || fail "remote-credential-mismatch: mismatch exited $rc: $out"
-  assert_contains "$out" 'FM_PUB_REMOTE_MISMATCH' "remote-credential-mismatch: $out"
-  assert_not_contains "$out" "$secret" "remote-credential-mismatch: first credential emitted: $out"
-  assert_not_contains "$out" "$other_secret" "remote-credential-mismatch: second credential emitted: $out"
-
-  fixture remote-unparseable
-  policy
-  reviewed
-  secret='publication-secret-unparseable'
-  git -C "$FX_REPO" remote set-url --push origin "ext::printf $secret" \
-    || fail "remote-unparseable: set-url"
   rc=0
   out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
-  [ "$rc" -eq 4 ] || fail "remote-unparseable: URL was accepted (exit $rc): $out"
-  assert_contains "$out" 'FM_PUB_REMOTE_UNRESOLVED' "remote-unparseable: $out"
-  assert_not_contains "$out" "$secret" "remote-unparseable: credential emitted: $out"
+  [ "$rc" -eq 3 ] || fail "remote-credentials: configured credential URL exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_REMOTE_CREDENTIALS' "remote-credentials: $out"
+  assert_not_contains "$out" "$secret" "remote-credentials: configured credential emitted: $out"
   [ ! -d "$FX_DATA/landing-authorizations" ] \
     || ! rg -F "$secret" "$FX_DATA/landing-authorizations" >/dev/null \
-    || fail "remote-unparseable: raw URL persisted"
-  pass "publication remote credentials are neither persisted nor emitted"
+    || fail "remote-credentials: raw URL persisted"
+
+  git -C "$FX_REPO" remote set-url --push origin "$FX_REMOTE" || fail "remote-credentials: restore"
+  out=$(guard prepare --dry-run --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || fail "remote-credentials: clean name: $out"
+  named_id=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
+  out=$(guard prepare --dry-run --repo "$FX_REPO" --remote "$FX_REMOTE" --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || fail "remote-credentials: clean URL: $out"
+  direct_id=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
+  [ -n "$named_id" ] && [ "$named_id" = "$direct_id" ] \
+    || fail "remote-credentials: clean name and URL identities differ: $named_id $direct_id"
+
+  git -C "$FX_REPO" remote set-url --push origin 'ext::unparseable publication remote' \
+    || fail "remote-credentials: unparseable set-url"
+  rc=0
+  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 4 ] || fail "remote-credentials: unparseable URL exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_REMOTE_UNRESOLVED' "remote-credentials: $out"
+  pass "publication remotes refuse credentials and bind one canonical identity"
+}
+
+test_push_output_is_sanitized_bounded_and_recorded() {
+  local id out rc=0 record response secret
+  fixture push-output-rejection
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  secret='server-output-secret'
+  printf '%s\n' '#!/usr/bin/env bash' \
+    "printf '%s\\n' 'policy rejected https://fixture:$secret@example.invalid/repo' >&2" \
+    'exit 1' > "$FX_REMOTE/hooks/pre-receive" || fail "push-output-rejection: hook"
+  chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "push-output-rejection: chmod"
+  out=$(spend "$id") || rc=$?
+  [ "$rc" -eq 4 ] || fail "push-output-rejection: exit $rc: $out"
+  assert_contains "$out" 'policy rejected https://example.invalid/repo' "push-output-rejection: $out"
+  assert_not_contains "$out" "$secret" "push-output-rejection: secret emitted: $out"
+  record="$FX_DATA/landing-authorizations/$id.json"
+  response=$(jq -r '.spend.output // ""' "$record")
+  assert_contains "$response" 'policy rejected https://example.invalid/repo' "push-output-rejection: $response"
+  assert_not_contains "$response" "$secret" "push-output-rejection: secret recorded: $response"
+  [ "$(printf '%s' "$response" | wc -c | tr -d '[:space:]')" -le 65536 ] \
+    || fail "push-output-rejection: response exceeded its bound"
+
+  fixture push-output-success
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  spend "$id" > /dev/null || fail "push-output-success: push failed"
+  response=$(jq -r '.spend.output // ""' "$FX_DATA/landing-authorizations/$id.json")
+  [ -n "$response" ] || fail "push-output-success: server response was not retained"
+  pass "push responses are sanitized, bounded and recorded on failure and success"
 }
 
 test_concurrent_consumers_execute_exactly_one_push() {
@@ -1647,6 +1632,7 @@ test_refuses_commands_other_than_the_constructed_push
 test_uses_the_fixed_trusted_git_instead_of_caller_resolution
 test_authority_binds_the_remote_name_and_push_destination
 test_remote_credentials_are_never_persisted_or_emitted
+test_push_output_is_sanitized_bounded_and_recorded
 test_concurrent_consumers_execute_exactly_one_push
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
