@@ -289,8 +289,9 @@ The guard has already established the remote is at the tip the plan was compiled
 
 ## Refreshing this record
 
-The 2026-08-26 rerun of the publication-seam suite completed with `FM_TEST_CONTRACT suite=fm-publication-seam.test.sh status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
-This rerun covers the exact rebased candidate after the prior GitHub Actions outage and does not replace the independent review required before landing.
+The 2026-08-26 rerun at candidate `28955ba1789394780734aae928322b15fcbb9865` completed the publication-seam and dead-predicate suites with `FM_TEST_CONTRACT status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0` for each.
+The publication-seam run includes the canonical-command positive control paired with the force-axis refusal, and the dead-predicate run includes the quoted trap-handler positive and non-trap negative controls.
+This evidence does not replace the independent review required before landing.
 
 ```
 bin/fm-test-run.sh tests/fm-publication-seam.test.sh
@@ -341,7 +342,7 @@ Replacing either with `void` would turn evidence into a tidier claim than the ev
 Both new files carry `# fail-closed-predicates: enforced`, so every predicate in them must have a call site or say in writing why it does not.
 The repository run went from `enrolled=4 alive=85 could_not_observe=0` to `enrolled=6 alive=123 could_not_observe=0`.
 
-The 2026-08-25 pass reads `enrolled=6 scanned=119 unchecked=247 alive=137 could_not_observe=0 marked=0`.
+The 2026-08-26 pass at candidate `28955ba1789394780734aae928322b15fcbb9865` reads `enrolled=6 scanned=124 unchecked=242 alive=150 could_not_observe=0 marked=0`.
 
 That enrolment is load-bearing rather than decorative, and it caught three real defects across this work.
 The third was this pass's own: generalising the authority identity over its effect left four `fm_auth_publication_*` wrappers with no call site, and they were deleted rather than marked `unused-by-design`, because a wrapper nobody calls is exactly what the control exists to refuse.
