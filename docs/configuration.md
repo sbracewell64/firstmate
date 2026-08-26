@@ -631,6 +631,10 @@ That catches a bad model at config-edit time, before any worker is launched agai
       "cost_posture": "<subscription-flat|api-key|self-hosted>",
       "credential_env": "<ENV VAR NAME ONLY, never a value>",
       "catalogue_sources": ["<path to a harness price catalogue>"],
+      "price_metadata": {
+        "catalogue_url": "<public model listing this provider publishes>",
+        "endpoints_url_template": "<public per-model endpoint listing, containing {model_id}>"
+      },
       "status": "<active|blocked|dropped>",
       "status_reason": "<required when status is not active>",
       "pipeline_providers": ["<vendor name another system records for this pool>"]
@@ -664,12 +668,16 @@ That catches a bad model at config-edit time, before any worker is launched agai
       "<provider>/<model-id>": {
         "price_at_verification": { "input": 0, "output": 0 },
         "verified_at": "<ISO8601>",
+        "price_observed_at": "<ISO8601>",
+        "identity_at_verification": { "slug": "<exact provider slug>", "created": 0 },
         "sources": ["<source kind>"],
         "hard_ceiling": "<provider-side mechanism that refuses rather than bills>"
       }
     }
   },
-  "observation": { "levels": { "<O1|O2|O3|O4>": { "probe_max_age_days": 0 } } },
+  "observation": {
+    "levels": { "<O1|O2|O3|O4>": { "probe_max_age_days": 0, "price_max_age_seconds": 0 } }
+  },
   "promotion": {
     "enabled": false,
     "requires_instrument": "<named evidence instrument>",
@@ -701,6 +709,36 @@ Evidence `sources` accept `probe`, `provider-entitlement`, `provider-doc`, `harn
 An allowlist entry must carry at least one genuinely price-bearing source - `provider-doc` or `harness-static-catalogue` - or it **fails validation**.
 A `harness-fetched-cache` price is refreshed by the provider underneath you and cannot establish one, and a `probe` deliberately does not count either: it proves the account gets an answer, not what that answer costs.
 An allowlist entry must also record `verified_at` and a `price_at_verification` that is zero in every field.
+
+### Live price observation
+
+Every field above records what the price **was** when someone wrote it down, and `catalogue_sources` compares that against another local file that ages at the same rate.
+A repricing that lands after both were written is therefore invisible to all of it, and the allowlist keeps saying zero, correctly, about a price that no longer exists.
+`price_metadata` closes that by naming where to ask the provider itself, and `bin/fm-model-price-lib.sh` owns the resulting decision.
+
+Declaring it is an opt-in, per provider.
+A provider without `price_metadata` is untouched: nothing is fetched and nothing refuses, so a home that never opted in behaves exactly as it did before this existed.
+A provider with it fails closed, and only an exactly-zero price on every axis admits a dispatch.
+
+Two documents are named because they answer different questions.
+`catalogue_url` supplies the advertised model-level price, the exact slug, and the metadata generation, and cannot say which endpoint will serve a request.
+`endpoints_url_template` supplies the resolved endpoint, its provider identity, and its own price, which is the only source that can say what a dispatch actually pays; `{model_id}` in it is replaced with the model's `model_id`.
+Declaring only one of the two **fails validation**, because a model-level price would then have to be credited with answering what the resolved endpoint costs.
+
+The observation is checked at two points: `bin/fm-model-verify.sh` refreshes it for every routed model of an opted-in provider and refuses to probe one whose price is no longer zero, and `bin/fm-spawn.sh` re-observes the resolved endpoint immediately before launch.
+An advertised price that is not zero, a price that is zero on one axis only, a resolved endpoint that is priced while the model advertises zero, an endpoint listing that names anything other than exactly one endpoint, an unreachable or malformed document, an absent model, an unreadable price, an identity that has moved, and an observation that has aged out **all refuse**.
+An unknown price is never a free one.
+
+Once a provider declares `price_metadata`, each of its allowlisted models must also record `price_observed_at` and `identity_at_verification`, or the registry **fails validation**.
+Those are what the live check compares against, so a half-declared opt-in is refused at config-edit time rather than turning into a silent pass at dispatch.
+`identity_at_verification` matters as much as the price: "zero" is true of many models and a slug can be reused for a new generation, so the pair records which exact thing was free and makes a later identity change refusable instead of merely unnoticed.
+
+`observation.levels.O1.price_max_age_seconds` bounds how old an observation may be.
+It is a ceiling a home may lower and never raise: the policy's O1 level re-verifies before the first dispatch of each day, so one day is the widest any observation is trusted, and a larger declared value is clamped to it.
+
+A dispatch admitted this way records what it was admitted against in `state/<id>.meta` as `price_slug=`, `price_metadata_created=`, `price_endpoint=`, `price_endpoint_provider=`, `price_observed_at=`, `price_prompt=`, `price_completion=`, and `price_verdict=`.
+An absent block means the provider declared no metadata source, not that a check was skipped.
+`state/model-price.json` holds the last observation per model, volatile and separate from `state/model-health.json` because cost and reachability are independent axes.
 
 `limits.concurrency` caps how many workers may run on a model at once, and `limits.shared_quota_pool` makes siblings that draw on one free-tier pool count against the same cap, so several workers cannot collectively breach one quota.
 `shared_quota_pool` is also the credential pool `bin/fm-independence-lib.sh` compares when deriving whether a checker was billed to the maker's own account, which is the fact a harness name cannot answer.

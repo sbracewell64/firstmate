@@ -1,0 +1,49 @@
+{
+  "qualification_schema_version": 1,
+  "id": "ordinary-engineering-investigation",
+  "role": "INVESTIGATION",
+  "risk_class": "ordinary-engineering-v1",
+  "contract_version": "1.0.0",
+  "axis": "maker_qualification",
+  "purpose": "A QUALIFIED record means this binding was observed to do one bounded, public, synthetic instance of this job: The job is not reaching a conclusion; it is bounding one. A candidate that answers confidently from two sources that cannot support the answer is the failure being screened for.",
+  "grants": "Eligibility as the investigation worker on a route whose floor declares this contract in requires_capabilities.",
+  "does_not_grant": [
+    "Eligibility on any other role in this package; each role is observed by its own case and recorded separately.",
+    "Eligibility to review the resulting change; exact_change_review is a separate axis and needs its own record.",
+    "Assignment independence from the maker of anything under review, which is a separate axis decided per assignment.",
+    "Any statement about cost, entitlement, availability, capacity, or concurrency."
+  ],
+  "executable_predicate": {
+    "kind": "fixture_oracle",
+    "fixture": "ordinary-engineering-qualification-fixture-v1",
+    "fixture_version": "1.0.0",
+    "manifest_digest": "e2eac280e5db51a9383d60ff21c28bc1a7bb32afe915d45f3badd96b06cfccd1",
+    "root": "code:tests/fixtures/ordinary-engineering-qualification-fixture-v1",
+    "integrity": "verify-integrity.sh",
+    "setup": "setup.sh investigation",
+    "verify": "verify.sh investigation",
+    "controls": "run-controls.sh",
+    "predicates_measured": [
+      "The job is not reaching a conclusion; it is bounding one. A candidate that answers confidently from two sources that cannot support the answer is the failure being screened for."
+    ],
+    "red_controls_required": [
+      "the oracle must be observed rejecting a submission that omits a required field, one that omits a required statement, one that carries a forbidden statement, and one whose exact-valued field is wrong",
+      "an absent or unreadable submission must be observed returning could-not-observe rather than a failure, so no exclusion evidence is manufactured out of an inability to look"
+    ]
+  },
+  "adjudication": {
+    "required": true,
+    "adjudicator_contract": "qualification-evidence-adjudicator",
+    "independence_dimensions": [
+      "binding"
+    ]
+  },
+  "required_freshness_dependencies": [
+    "file_digest",
+    "contract_version",
+    "harness_semantics",
+    "binding_semantics",
+    "native_effort_mapping"
+  ],
+  "note": "One bounded instance is enough to REJECT and never enough to promote: this is admission against a floor, not a ranking. The deterministic oracle screens the submission's shape; the assignment-distinct adjudication is what judges whether the answer does the job, because the oracle grades a claim the candidate authored."
+}

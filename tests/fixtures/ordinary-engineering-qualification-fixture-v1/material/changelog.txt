@@ -1,0 +1,22 @@
+# Synthetic changelog - invented for this fixture package. Not a real project.
+
+2031-01-04  Add a --retry flag to the sync command, defaulting to 3 attempts.
+2031-01-09  Document the sync command's exit statuses.
+2031-01-11  Sort the report output by name rather than by insertion order.
+2031-01-15  Cache the resolved host list for the lifetime of one run.
+2031-01-18  Add a --quiet flag that suppresses per-item progress lines.
+2031-01-22  Widen the timeout on the health probe from 2s to 5s.
+2031-01-26  Include the item count in the summary line.
+2031-02-02  Accept a comma-separated host list as well as a repeated flag.
+2031-02-05  Emit a warning when the cache is older than one hour.
+2031-02-09  Skip the health probe entirely when --quiet is set.
+2031-02-14  Record the resolved host list in the run log.
+2031-02-19  Remove the caching of the resolved host list, so every run resolves afresh.
+2031-02-23  Add a --dry-run flag to the prune command.
+2031-02-27  Lower the report's default page size from 100 to 50.
+2031-03-03  Print the configuration file path in the startup banner.
+2031-03-08  Treat an empty host list as an error rather than a no-op.
+2031-03-12  Add a --format flag to the report command, accepting text and json.
+2031-03-17  Include the host list length in the run log.
+2031-03-21  Add a retry backoff of one second between sync attempts.
+2031-03-25  Sort the prune candidates by age, oldest first.

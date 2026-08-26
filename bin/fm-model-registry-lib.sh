@@ -246,7 +246,14 @@ fm_model_registry_validate() {
     def obslevels: ["O1","O2","O3","O4"];
     def entries($o): (($o // {}) | to_entries);
 
-    if type != "object" then "top-level value must be an object"
+    # Bind the root before the chain. Several checks below need to reach a
+    # DIFFERENT part of the document than the one they are iterating (an
+    # allowlist entry has to ask what provider its model belongs to), and inside
+    # a `map`/`select` the input has already rebound to the element. Reaching for
+    # `.providers` there would silently index the element instead, which fails the
+    # whole query - and a swallowed failure in a validator reads as "valid".
+    . as $root
+    | if type != "object" then "top-level value must be an object"
     elif (.schema? // null) == null then "missing schema; expected \"" + $schema + "\""
     elif .schema != $schema then "unsupported schema \"" + (.schema | tostring) + "\"; this build understands \"" + $schema + "\""
 
@@ -267,6 +274,19 @@ fm_model_registry_validate() {
     # because "no mapping" and "broken mapping" need different repairs.
     elif (entries(.providers) | map(select((.value | has("pipeline_providers")) and ((.value.pipeline_providers | type) != "array" or ((.value.pipeline_providers | map(select(type != "string")) | length) > 0)))) | length) > 0 then
       "pipeline_providers must be an array of strings: " + (entries(.providers) | map(select((.value | has("pipeline_providers")) and ((.value.pipeline_providers | type) != "array" or ((.value.pipeline_providers | map(select(type != "string")) | length) > 0)))) | map(.key) | join(", "))
+
+    # --- price_metadata: the opt-in to a LIVE price observation ------------
+    # Declaring it is what buys the guarantee in bin/fm-model-price-lib.sh, so a
+    # declaration that cannot be used must refuse here rather than turn into a
+    # could-not-observe at dispatch. Both URLs are required together: with only
+    # one, the fold has a single source and would have to credit a model-level
+    # price with answering what the resolved endpoint costs.
+    elif (entries(.providers) | map(select((.value | has("price_metadata")) and ((.value.price_metadata | type) != "object"))) | length) > 0 then
+      "price_metadata must be an object: " + (entries(.providers) | map(select((.value | has("price_metadata")) and ((.value.price_metadata | type) != "object"))) | map(.key) | join(", "))
+    elif (entries(.providers) | map(select(((.value.price_metadata? | type) == "object") and ((((.value.price_metadata.catalogue_url? // "") | tostring | length) == 0) or (((.value.price_metadata.endpoints_url_template? // "") | tostring | length) == 0)))) | length) > 0 then
+      "price_metadata needs both catalogue_url and endpoints_url_template; one source alone cannot say what the resolved endpoint costs: " + (entries(.providers) | map(select(((.value.price_metadata? | type) == "object") and ((((.value.price_metadata.catalogue_url? // "") | tostring | length) == 0) or (((.value.price_metadata.endpoints_url_template? // "") | tostring | length) == 0)))) | map(.key) | join(", "))
+    elif (entries(.providers) | map(select(((.value.price_metadata?.endpoints_url_template? // "") | tostring) as $t | ($t | length) > 0 and (($t | test("\\{model_id\\}")) | not))) | length) > 0 then
+      "price_metadata.endpoints_url_template must contain the {model_id} placeholder, or every model resolves to one endpoint document: " + (entries(.providers) | map(select(((.value.price_metadata?.endpoints_url_template? // "") | tostring) as $t | ($t | length) > 0 and (($t | test("\\{model_id\\}")) | not))) | map(.key) | join(", "))
 
     # --- models ------------------------------------------------------------
     elif has("models") and (.models | type) != "object" then "models must be an object"
@@ -302,6 +322,45 @@ fm_model_registry_validate() {
       "allowlist entry needs price_at_verification: " + (entries(.zero_budget?.allowlist) | map(select((.value.price_at_verification? | type) != "object")) | map(.key) | join(", "))
     elif (entries(.zero_budget?.allowlist) | map(select([.value.price_at_verification[]?] | any(. != 0))) | length) > 0 then
       "allowlist entry is not priced at zero: " + (entries(.zero_budget?.allowlist) | map(select([.value.price_at_verification[]?] | any(. != 0))) | map(.key) | join(", "))
+
+    # An opt-in that is only half written is the dangerous state, so it is
+    # refused HERE rather than discovered at dispatch. A provider declaring
+    # price_metadata has asked for the price of each of its models to be
+    # re-observed against
+    # a recorded identity; an allowlisted model of that provider carrying no
+    # recorded identity or no observation time gives the live check nothing to
+    # compare against, and "nothing to compare against" is exactly the silent
+    # pass this whole mechanism exists to refuse.
+    elif ([ entries($root.zero_budget?.allowlist)[]
+            | .key as $k | .value as $v
+            | select([ entries($root.providers)[]
+                       | select((.value.price_metadata? // null) != null) | .key ]
+                     | index((($root.models[$k]?.provider?) // ($k | split("/")[0]))))
+            | select((((($v.price_observed_at? // "") | tostring) | length) == 0)
+                     or (((($v.identity_at_verification?.slug? // "") | tostring) | length) == 0)
+                     or (($v.identity_at_verification?.created? // null) == null))
+            | $k ] | length) > 0 then
+      "its provider declares price_metadata, so this allowlist entry also needs price_observed_at and identity_at_verification{slug,created} for the live check to compare against: "
+      + ([ entries($root.zero_budget?.allowlist)[]
+           | .key as $k | .value as $v
+           | select([ entries($root.providers)[]
+                      | select((.value.price_metadata? // null) != null) | .key ]
+                    | index((($root.models[$k]?.provider?) // ($k | split("/")[0]))))
+           | select((((($v.price_observed_at? // "") | tostring) | length) == 0)
+                    or (((($v.identity_at_verification?.slug? // "") | tostring) | length) == 0)
+                    or (($v.identity_at_verification?.created? // null) == null))
+           | $k ] | join(", "))
+
+    # --- observation windows ----------------------------------------------
+    # A window that cannot be read as a positive whole number would otherwise
+    # make bin/fm-model-price-lib.sh refuse every dispatch with a freshness
+    # complaint, which sends an operator looking at the provider rather than at
+    # the one typo that caused it.
+    elif ((.observation?.levels?.O1?.price_max_age_seconds? // null) != null)
+         and ((((.observation.levels.O1.price_max_age_seconds | type) != "number")
+               or (.observation.levels.O1.price_max_age_seconds <= 0)
+               or ((.observation.levels.O1.price_max_age_seconds | floor) != .observation.levels.O1.price_max_age_seconds))) then
+      "observation.levels.O1.price_max_age_seconds must be a positive whole number of seconds"
 
     # --- promotion authority ceiling --------------------------------------
     elif has("promotion") and (.promotion | type) != "object" then "promotion must be an object"

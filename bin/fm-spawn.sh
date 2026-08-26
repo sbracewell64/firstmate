@@ -334,6 +334,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-model-registry-lib.sh
 . "$SCRIPT_DIR/fm-model-registry-lib.sh"
+# shellcheck source=bin/fm-model-price-lib.sh
+. "$SCRIPT_DIR/fm-model-price-lib.sh"
 # shellcheck source=bin/fm-trace-context-lib.sh
 . "$SCRIPT_DIR/fm-trace-context-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh
@@ -1919,6 +1921,46 @@ if ! CONC_REFUSAL=$(fm_model_concurrency_decision "$MODEL"); then
   exit 1
 fi
 
+# THE SECOND PRICE CHECK, against the provider rather than against a local file.
+#
+# Everything above this line reads config/models.json, and that file records what
+# the price WAS when someone last wrote it down. That is the right evidence for a
+# routing decision and the wrong evidence for a spend decision, because the thing
+# that makes an allowlisted name safe is its price and the price lives somewhere
+# the fleet does not control. A model can sit on the allowlist, priced at zero,
+# correctly, for as long as it takes the provider to change its mind.
+#
+# So the resolved endpoint is re-observed HERE, immediately before launch and
+# after every other gate has passed, and anything but an exactly-zero answer
+# refuses. Placing it last is deliberate on both sides: nothing has been mutated
+# yet, so a refusal leaves nothing to clean up, and no cheaper gate is skipped to
+# reach it.
+#
+# THE THREE OUTCOMES ARE NOT TWO. rc 1 means this provider declared no metadata
+# source, so nothing was observed and the recorded-price rules above stand alone -
+# inert, exactly as an absent registry is inert, which is what keeps this
+# additive for every home that has not opted in. rc 2 means the declaration
+# exists and could not be used, which is a broken safety file and refuses. A
+# record that comes back and is not ZERO refuses. An unknown price is never a
+# free one.
+PRICE_RECORD=
+PRICE_OBSERVE_RC=0
+PRICE_RECORD=$(fm_model_price_observe "$(fm_model_registry_path)" "$MODEL") || PRICE_OBSERVE_RC=$?
+case "$PRICE_OBSERVE_RC" in
+  0)
+    if ! PRICE_REFUSAL=$(fm_model_price_decision \
+          "$PRICE_RECORD" "$(fm_model_registry_path)" "$MODEL"); then
+      echo "error: $PRICE_REFUSAL" >&2
+      exit 1
+    fi
+    ;;
+  1) PRICE_RECORD= ;;
+  *)
+    echo "error: the live price declaration for $MODEL in $(fm_model_registry_path) could not be read; refusing rather than dispatching an unpriced model" >&2
+    exit 1
+    ;;
+esac
+
 secondmate_registry_value() {
   secondmate_registry_field "$DATA/secondmates.md" "$1" "$2"
 }
@@ -3293,6 +3335,19 @@ fi
   # exact recurrence this closes.
   [ -z "$CAPACITY_VERDICT" ] || echo "capacity_observed=$CAPACITY_VERDICT"
   [ -z "$CAPACITY_EVIDENCE" ] || echo "capacity_evidence=$(printf '%s' "$CAPACITY_EVIDENCE" | tr '\n' ' ')"
+  # The price this dispatch was admitted against, bound to the exact identity it
+  # was observed on: the slug, the metadata generation, the resolved endpoint and
+  # its provider, the observation time, and the two prices themselves. Written
+  # only where the provider declared a metadata source, so an absent block says
+  # this home enforces no live price check on that provider rather than that a
+  # check was skipped - the same reading as the capacity pair above.
+  #
+  # Recording the IDENTITY beside the price is what makes the record worth
+  # keeping. A price alone cannot be re-checked later: "zero" is true of many
+  # models, and a slug can be reused for a different generation. The pair says
+  # which exact thing was zero, so a subsequent identity change is detectable
+  # rather than merely unnoticed.
+  [ -z "${PRICE_RECORD:-}" ] || fm_model_price_meta_lines "$PRICE_RECORD"
   # The role qualification this dispatch was admitted against. Written only where
   # a floor declared a capability contract, so an absent pair says the home
   # declared no requirement rather than that a requirement went unchecked.

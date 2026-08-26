@@ -26,18 +26,27 @@
 # zero-budget rule spending is never implied, only explicitly flagged, and the
 # flag is --force-probe.
 #
-# WHY BOTH CHECKS, FOREVER. The two things that decay are not properties of the
+# WHY THESE CHECKS, FOREVER. The two things that decay are not properties of the
 # model - they are properties of the ACCOUNT and of the provider's price list, and
 # both change without warning. A model can be perfectly stable while its
 # entitlement is revoked and its price is raised. So observation never reaches
-# zero: at the maintenance floor these two checks still run.
+# zero: at the maintenance floor these checks still run.
 #   1. The entitlement probe catches a routed model this account cannot actually
 #      use. That failure has happened here: a model was configured from a
 #      plausible name, never probed, and every dispatch to that tier failed at
 #      launch until an investigation found it.
-#   2. The price-drift check is the ONLY thing that can catch a repricing,
-#      because a name-based allowlist is structurally blind to it. It is a local
-#      file read and costs nothing.
+#   2. The price-drift check compares the recorded price against a catalogue file
+#      already on disk. It is a local file read and costs nothing.
+#   3. The metadata refresh asks the PROVIDER what the price is now, for a
+#      provider that declared where to ask. It exists because check 2 compares
+#      two local copies, and the catalogue file it reads ages exactly like the
+#      allowlist entry it is checking - so a repricing that landed after both
+#      were written is invisible to it. This one costs no tokens either: these
+#      are public metadata documents.
+# Checks 2 and 3 are not two answers to one question. Check 2 asks whether this
+# home's own records agree with each other; check 3 asks whether they agree with
+# the provider. bin/fm-model-price-lib.sh owns the second question entirely, and
+# is the only thing here that reaches the network for a price.
 #
 # STDIN IS ALWAYS CLOSED ON A PROBE. `pi -p` can hang indefinitely with stdin
 # open. A wedged probe inside the session-start path would present to supervision
@@ -67,6 +76,8 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
 # shellcheck source=bin/fm-model-registry-lib.sh
 . "$SCRIPT_DIR/fm-model-registry-lib.sh"
+# shellcheck source=bin/fm-model-price-lib.sh
+. "$SCRIPT_DIR/fm-model-price-lib.sh"
 
 ALL=0
 ONE=
@@ -173,6 +184,58 @@ else
   DUE=$(select_due) || exit 2
 fi
 
+NEEDS_ACTION=0
+
+# ---------------------------------------------------------------------------
+# Metadata refresh: what does the provider say the price is RIGHT NOW?
+# ---------------------------------------------------------------------------
+# This runs BEFORE the cost gate below, and the ordering is the whole point.
+# The model-onboarding policy establishes cost class before entitlement because
+# the instrument that catches an entitlement error is itself a billable act; a
+# recorded price is what that gate reads, and a recorded price is a local file
+# the provider never sees. So for a provider that has opted in, the price is
+# re-observed from the provider first, and a model whose freshly observed price
+# is not exactly zero is not probed at all.
+#
+# It sweeps every ROUTED model of an opted-in provider rather than only the ones
+# due for a probe, because the two decay on different clocks. Probe evidence
+# ages against an observation level; a price changes when the provider decides
+# to change it, which is why the maintenance floor keeps a price check running
+# at every session start forever. It costs no tokens - these are public metadata
+# documents - so nothing is saved by gating it behind the probe interval.
+#
+# --drift-only stays local-only by contract, so it skips this.
+PRICE_REFUSED=
+if [ "$DRIFT_ONLY" != 1 ]; then
+  if [ -n "$ONE" ]; then
+    PRICE_KEYS=$ONE
+  else
+    PRICE_KEYS=$(jq -r '
+      def approved: ["approved-primary","approved-fallback","approved-specialist"];
+      . as $r
+      | ($r.models // {}) | to_entries[]
+      | .key as $k | .value as $e
+      | select(approved | index($e.status? // ""))
+      | select((($r.providers[($e.provider? // ($k | split("/")[0]))]?.price_metadata?) // null) != null)
+      | $k' "$REG" 2>/dev/null || true)
+  fi
+  while IFS= read -r pkey; do
+    [ -n "$pkey" ] || continue
+    price_rec=$(fm_model_price_observe "$REG" "$pkey") || continue
+    [ -n "$price_rec" ] || continue
+    fm_model_price_record_write "$STATE" "$pkey" "$price_rec"
+    if ! price_refusal=$(fm_model_price_decision "$price_rec" "$REG" "$pkey"); then
+      echo "MODEL_PRICE: $price_refusal"
+      # Delimited on BOTH sides so the membership test below cannot match a key
+      # that merely ends with another one.
+      PRICE_REFUSED="${PRICE_REFUSED}"$'\n'"${pkey}"$'\n'
+      NEEDS_ACTION=1
+    fi
+  done <<EOF
+$PRICE_KEYS
+EOF
+fi
+
 # ---------------------------------------------------------------------------
 # Cost gate: no live request without a zero-budget verdict
 # ---------------------------------------------------------------------------
@@ -183,11 +246,22 @@ fi
 # refused model is skipped entirely: no request is issued and its prior health
 # record is left untouched. --force-probe is the only override, and it announces
 # itself so an authorized billable probe is never invisible in the output.
-NEEDS_ACTION=0
 if [ "$DRIFT_ONLY" != 1 ] && [ -n "$DUE" ]; then
   ALLOWED=
   while IFS=$'\t' read -r key harness provider model_id; do
     [ -n "$key" ] || continue
+    # A model whose FRESHLY observed price is not exactly zero is refused here
+    # even though the recorded allowlist still admits it, and --force-probe does
+    # not lift this one. The recorded price is the weaker evidence of the two by
+    # construction - it is a copy - so when the provider has just contradicted it
+    # the provider wins, and probing anyway would be spending real money on the
+    # strength of a stale local file.
+    case "$PRICE_REFUSED" in
+      *$'\n'"$key"$'\n'*)
+        echo "MODEL_VERIFY: refusing to probe $key - its freshly observed price is not exactly zero (see the MODEL_PRICE line above)"
+        continue
+        ;;
+    esac
     if reason=$(fm_model_zero_budget_decision "$key"); then
       ALLOWED="${ALLOWED}${key}"$'\t'"${harness}"$'\t'"${provider}"$'\t'"${model_id}"$'\n'
     elif [ "$FORCE_PROBE" = 1 ]; then

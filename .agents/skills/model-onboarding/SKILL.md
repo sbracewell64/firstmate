@@ -49,6 +49,12 @@ It proves the account gets an answer; it says nothing about what that answer cos
 So an allowlist entry needs a genuinely price-bearing source - `provider-doc` or `harness-static-catalogue` - and the validator refuses one whose price rests on a cache plus a probe.
 Treating "it responded" as "it is free" is the shape of the billing incident, not a defence against it.
 
+Both of those sources are still copies, and every local check compares one copy against another.
+Where a provider publishes its prices, the registry may name that document so the price is re-observed from the provider itself - at verification, and again at the resolved endpoint immediately before each dispatch.
+That is the only check that sees a repricing which landed after both local copies were written, and it refuses on anything but an exact zero, including every could-not-observe.
+`docs/configuration.md` "Live price observation" owns the fields; `bin/fm-model-price-lib.sh` owns the decision.
+It is opt-in per provider and inert without one, so an absent declaration means unchecked rather than free.
+
 ## The admission gate
 
 Eight ordered stages, fail-closed. Refusal at stage N forbids stage N+1 from running.
@@ -258,4 +264,7 @@ Acting on an alarm:
 - `MODEL_VERIFY: ... failed locally` - a configuration error on this machine, not a provider fact.
 - `MODEL_PRICE: ... no longer zero` - suspend the route immediately, then re-verify the cost class at G1.
 - `MODEL_PRICE: ... price drifted` - re-verify G1 and update `price_at_verification`.
+- `MODEL_PRICE: zero-cost check refuses ...` - the PROVIDER has just contradicted the recorded price, so it wins and the model is already refused at dispatch.
+  Read the bracketed verdict: an observed charge is a G1 re-verification, and a could-not-observe is a repair to the observation.
+  Neither is an outage, and `--force-probe` does not lift it.
 - `MODEL_REGISTRY: ...` - the dispatch config and the registry disagree. Fix the config; do not weaken the check.
