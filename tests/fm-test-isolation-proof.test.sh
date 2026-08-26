@@ -93,11 +93,15 @@ test_list_exclusions_documents_reasons() {
 }
 
 test_family_map_labels_this_contract() {
-  local fam
+  local candidates fam
+  candidates=$("$PROOF" --list)
+  if printf '%s\n' "$candidates" | grep -Fxq 'tests/fm-test-isolation-proof.test.sh'; then
+    fail "fm-test-isolation-proof.test.sh must stay outside the proof candidate universe"
+  fi
   fam=$("$RUNNER" --list --family pure-contract-unit)
   printf '%s\n' "$fam" | grep -Fq 'tests/fm-test-isolation-proof.test.sh' \
     || fail "fm-test-isolation-proof.test.sh must map to pure-contract-unit"
-  pass "isolation-proof contract test is family-mapped"
+  pass "isolation-proof contract test is excluded from its proof and family-mapped"
 }
 
 test_parallel_shards_consume_the_proven_set() {
