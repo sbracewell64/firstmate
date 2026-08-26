@@ -1,5 +1,49 @@
 #!/usr/bin/env bash
 # Focused rendering, lifecycle, persistence, and interactive TUI checks for /calm.
+#
+# TypeScript-loader envelope. The tracked Calm extensions are TypeScript, and the
+# cases below that drive them outside a real Pi TUI must load a .ts module with
+# plain `node`. Whether that is possible is a fact about the HOST, not about the
+# product: Pi itself always loads these files through the loader it ships, so a
+# Node that cannot load .ts proves nothing about Calm. Reporting that through
+# fail() would publish a machine fact as a product regression - and, because
+# fail() exits, would take every later case in this suite down with it.
+#
+# fm_calm_ts_probe therefore establishes the envelope explicitly before any case
+# runs, by loading a throwaway .ts fixture shaped like the tracked extensions (an
+# ESM package, type annotations on the entry, and a relative "./lib/<name>.ts"
+# specifier) through each candidate loader in order:
+#
+#   1. plain node                      - native type stripping, Node >= 22.6 built
+#                                        with TypeScript support compiled in
+#   2. node --experimental-strip-types - the same stripping behind its flag
+#   3. node --import <jiti-register>   - jiti, the loader the INSTALLED Pi package
+#                                        ships and uses for every extension it
+#                                        loads (dist/core/extensions/loader.js
+#                                        calls createJiti from jiti/static). This
+#                                        candidate registers that same package
+#                                        through its published jiti/register
+#                                        subpath as a Node module hook, so the
+#                                        .ts source is transformed by the loader
+#                                        Pi would have used
+#
+# docs/calm-mode-feasibility.md owns the recorded per-host evidence.
+#
+# The first candidate that loads the fixture wins and its node arguments are used
+# verbatim by every .ts case. Loader 3 hands back a CJS-interop namespace rather
+# than an ES module namespace, so the probe also OBSERVES which shape it got and
+# exports FM_CALM_TS_INTEROP; the importTs helper inside each case reads that
+# rather than guessing from the shape it is handed.
+#
+# When no candidate loads the fixture, the .ts cases report a typed
+# could-not-observe naming the refusing probe and the Node version, and the cases
+# that do not need a loader - the real-Pi tmux end-to-end cases, which let Pi do
+# its own loading - still run.
+#
+# The rendered-export-DOM segment of the interactive end-to-end case has its own
+# envelope for the same reason: it needs a real headless browser, a host without
+# one has shown nothing about that boundary, and it reports the same third value
+# while the rest of that case runs to its own verdict.
 set -u
 
 # shellcheck source=tests/lib.sh
@@ -17,6 +61,133 @@ PI_OPERATIONAL_INPUT="$ROOT/.pi/extensions/lib/fm-operational-input.ts"
 PI_PACKAGE_DIR=${FM_PI_PACKAGE_DIR:-"$(npm root -g 2>/dev/null)/@earendil-works/pi-coding-agent"}
 TMUX_SOCKET="fm-calm-$$"
 TMUX_SESSION="fm-calm-e2e"
+
+# --- TypeScript-loader envelope ---------------------------------------------
+# Resolved once by fm_calm_ts_probe; the suite header explains why. Until that
+# probe has run and succeeded the envelope is unsatisfied and every .ts case
+# reports could-not-observe, so a probe that never ran can never read as a pass.
+FM_CALM_TS_NODE_ARGS=()
+FM_CALM_TS_LOADER=
+FM_CALM_TS_EVIDENCE="ts_loader_probe=never_ran"
+FM_CALM_TS_SATISFIED=
+FM_CALM_TS_FIXTURE=
+
+# Try one candidate loader against the probe fixture. Returns 0 only when that
+# fixture both LOADED and EXECUTED, and records which namespace shape came back
+# so no later case has to guess one from the object it is handed.
+fm_calm_ts_try_loader() {  # <label> [node-arg...]
+  local label=$1 shape
+  shift
+  shape=$(cd "$FM_CALM_TS_FIXTURE" \
+    && FM_CALM_TS_PROBE_ENTRY="$FM_CALM_TS_FIXTURE/probe.ts" \
+      node "$@" --input-type=module 2>/dev/null <<'JS'
+import { pathToFileURL } from "node:url";
+
+const namespace = await import(
+  `${pathToFileURL(process.env.FM_CALM_TS_PROBE_ENTRY).href}?probe=${Date.now()}`
+);
+const nested = namespace.default;
+let shape;
+let entry;
+if (typeof nested === "function" && namespace.probeNamed === 7) {
+  shape = "module";
+  entry = nested;
+} else if (nested && typeof nested.default === "function" && nested.probeNamed === 7) {
+  shape = "interop";
+  entry = nested.default;
+} else {
+  throw new Error("probe namespace matched neither the module nor the interop shape");
+}
+if (entry() !== 7) {
+  throw new Error("probe entry loaded but did not execute");
+}
+process.stdout.write(shape);
+JS
+  ) || shape=
+  [ "$shape" = module ] || [ "$shape" = interop ] || return 1
+  FM_CALM_TS_NODE_ARGS=("$@")
+  FM_CALM_TS_LOADER="$label"
+  FM_CALM_TS_SATISFIED=1
+  if [ "$shape" = interop ]; then
+    export FM_CALM_TS_INTEROP=1
+  else
+    export FM_CALM_TS_INTEROP=0
+  fi
+  return 0
+}
+
+# Establish the envelope: load a throwaway .ts fixture shaped like the tracked
+# extensions through each candidate loader in turn and keep the first that works.
+fm_calm_ts_probe() {  # [<fixture-root>] [<pi-package-dir>]
+  local fixture_root=${1:-"$TMP_ROOT/ts-loader-probe"}
+  local pi_package=${2:-"$PI_PACKAGE_DIR"}
+  local node_version tried jiti_shim=
+  # Clear first, so a probe that refuses can never leave an earlier probe's
+  # answer standing: the envelope has to be re-established, not inherited.
+  FM_CALM_TS_NODE_ARGS=()
+  FM_CALM_TS_LOADER=
+  FM_CALM_TS_SATISFIED=
+  export FM_CALM_TS_INTEROP=0
+  if ! command -v node >/dev/null 2>&1; then
+    FM_CALM_TS_EVIDENCE="node=absent"
+    return 1
+  fi
+  node_version=$(node --version 2>/dev/null) || node_version=unreadable
+
+  FM_CALM_TS_FIXTURE="$fixture_root"
+  mkdir -p "$FM_CALM_TS_FIXTURE/lib" "$FM_CALM_TS_FIXTURE/node_modules"
+  printf '%s\n' '{"type":"module"}' >"$FM_CALM_TS_FIXTURE/package.json"
+  printf '%s\n' 'export const probeValue: number = 7;' \
+    >"$FM_CALM_TS_FIXTURE/lib/probe-lib.ts"
+  printf '%s\n' \
+    'import { probeValue } from "./lib/probe-lib.ts";' \
+    'export const probeNamed: number = probeValue;' \
+    'export default function probeEntry(): number {' \
+    '  return probeValue;' \
+    '}' \
+    >"$FM_CALM_TS_FIXTURE/probe.ts"
+
+  tried="node, node --experimental-strip-types"
+  if [ -d "$pi_package/node_modules/jiti" ]; then
+    # jiti resolves its own subpath exports relative to the importing file, so
+    # the shim - never the case's working directory - is what must see jiti.
+    jiti_shim="$FM_CALM_TS_FIXTURE/jiti-register-shim.mjs"
+    ln -sfn "$pi_package/node_modules/jiti" "$FM_CALM_TS_FIXTURE/node_modules/jiti"
+    printf '%s\n' 'import "jiti/register";' >"$jiti_shim"
+    tried="$tried, node --import jiti/register"
+  else
+    tried="$tried, (jiti unavailable: no installed Pi package at $pi_package)"
+  fi
+
+  if fm_calm_ts_try_loader "node" \
+    || fm_calm_ts_try_loader "node --experimental-strip-types" \
+      --experimental-strip-types \
+    || { [ -n "$jiti_shim" ] \
+      && fm_calm_ts_try_loader "node --import jiti/register (shipped by Pi)" \
+        --import "$jiti_shim"; }
+  then
+    FM_CALM_TS_EVIDENCE="node=$node_version loader=[$FM_CALM_TS_LOADER] namespace_interop=$FM_CALM_TS_INTEROP"
+    return 0
+  fi
+
+  FM_CALM_TS_EVIDENCE="node=$node_version no_candidate_loaded_a_typescript_module tried=[$tried]"
+  return 1
+}
+
+fm_calm_ts_probe || true
+
+# Report one .ts case as could-not-observe and name why. Callers `return` right
+# after it, so the loader-independent cases in this suite keep running.
+fm_calm_ts_unavailable() {  # <label>
+  env_could_not_observe "$1" "$FM_CALM_TS_EVIDENCE" \
+    TEST_ENVIRONMENT_TYPESCRIPT_LOADER_ABSENT
+}
+
+# Every case below that drives a tracked .ts extension outside a real Pi runs
+# node through this, so one probed envelope decides all of them.
+fm_calm_ts_node() {  # [node-arg...]
+  node ${FM_CALM_TS_NODE_ARGS[@]+"${FM_CALM_TS_NODE_ARGS[@]}"} "$@"
+}
 # Verified against Pi 0.81.1 and 0.82.0 (docs/calm-mode-feasibility.md). This is
 # known-good evidence, not a support ceiling: the fixtures below run against whatever
 # Pi is actually installed, and record_pi_version_evidence never rejects a newer
@@ -71,45 +242,51 @@ find_chrome() {
   return 1
 }
 
-test_home_resolution() {
-  local fixture out status version
-  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-    echo "skip: node or npm not found for Pi calm home-resolution test"
-    return 0
-  fi
-  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
-    echo "skip: installed @earendil-works/pi-coding-agent package not found"
-    return 0
-  fi
-  version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
-  record_pi_version_evidence "$version" "Pi calm compatibility assumptions"
+HOME_RESOLUTION_CLAIM="Pi calm resolves its persistent home independently of Pi's launch directory"
 
-  fixture="$TMP_ROOT/home-resolution"
+# Build a home-resolution fixture around <extension-source>: an ESM project whose
+# .pi/extensions tree carries that extension plus the tracked libs it imports,
+# with the installed Pi package linked in the way Pi provides it, an override
+# home, and a launch directory that is deliberately not the extension's home.
+fm_calm_home_resolution_fixture() {  # <fixture-root> <extension-source>
+  local fixture=$1 extension=$2
   mkdir -p \
     "$fixture/project/.pi/extensions/lib" \
     "$fixture/project/node_modules/@earendil-works" \
     "$fixture/override" \
     "$fixture/launch-cwd"
-  cp "$EXT" "$fixture/project/.pi/extensions/fm-calm.ts"
+  cp "$extension" "$fixture/project/.pi/extensions/fm-calm.ts"
   cp "$ASSISTANT_LAYOUT" "$fixture/project/.pi/extensions/lib/fm-calm-assistant-layout.ts"
   cp "$OPERATIONAL_USER_LAYOUT" "$fixture/project/.pi/extensions/lib/fm-calm-operational-user-layout.ts"
   cp "$VISIBILITY" "$fixture/project/.pi/extensions/lib/fm-calm-visibility.ts"
   cp "$WORKING_SHIP" "$fixture/project/.pi/extensions/lib/fm-calm-working-ship.ts"
   cp "$PI_OPERATIONAL_INPUT" "$fixture/project/.pi/extensions/lib/fm-operational-input.ts"
-  ln -s "$PI_PACKAGE_DIR" "$fixture/project/node_modules/@earendil-works/pi-coding-agent"
-  ln -s "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$fixture/project/node_modules/@earendil-works/pi-tui"
-  ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$fixture/project/node_modules/typebox"
+  ln -sfn "$PI_PACKAGE_DIR" "$fixture/project/node_modules/@earendil-works/pi-coding-agent"
+  ln -sfn "$PI_PACKAGE_DIR/node_modules/@earendil-works/pi-tui" "$fixture/project/node_modules/@earendil-works/pi-tui"
+  ln -sfn "$PI_PACKAGE_DIR/node_modules/typebox" "$fixture/project/node_modules/typebox"
   printf '%s\n' '{"type":"module"}' >"$fixture/project/package.json"
+}
 
-  out=$(cd "$fixture/launch-cwd" && \
-    EXT="$fixture/project/.pi/extensions/fm-calm.ts" \
-    OVERRIDE_HOME="$fixture/override" \
-    EXTENSION_HOME="$fixture/project" \
-    node --input-type=module 2>&1 <<'JS'
+# The home-resolution assertions, written to a file so the real case and its
+# negative control below provably run the SAME body against different extensions.
+# A control that re-stated these assertions would only prove its own copy fails.
+fm_calm_home_resolution_body() {  # <path>
+  cat >"$1" <<'JS'
 import { existsSync, readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const extension = await import(`${pathToFileURL(process.env.EXT).href}?home=${Date.now()}`);
+// The suite's probed loader decides this, so the body never guesses a namespace
+// shape from the object it is handed: a CJS-interop loader nests the module
+// under `default`, a native ESM loader does not.
+const tsInterop = process.env.FM_CALM_TS_INTEROP === "1";
+async function importTs(url) {
+  const namespace = await import(url);
+  return tsInterop ? namespace.default : namespace;
+}
+
+const extension = await importTs(
+  `${pathToFileURL(process.env.EXT).href}?home=${Date.now()}`,
+);
 
 function registerCalm() {
   const handlers = new Map();
@@ -174,11 +351,115 @@ if (existsSync(`${process.cwd()}/config/calm`)) {
   throw new Error("Calm wrote its preference under Pi's launch directory");
 }
 JS
-)
+}
+
+test_home_resolution() {
+  local fixture body out status version
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "skip: node or npm not found for Pi calm home-resolution test"
+    return 0
+  fi
+  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
+    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+    return 0
+  fi
+  if [ -z "$FM_CALM_TS_SATISFIED" ]; then
+    fm_calm_ts_unavailable "$HOME_RESOLUTION_CLAIM"
+    return 0
+  fi
+  version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
+  record_pi_version_evidence "$version" "Pi calm compatibility assumptions"
+
+  fixture="$TMP_ROOT/home-resolution"
+  fm_calm_home_resolution_fixture "$fixture" "$EXT"
+  body="$fixture/home-resolution-body.mjs"
+  fm_calm_home_resolution_body "$body"
+
+  out=$(cd "$fixture/launch-cwd" && \
+    EXT="$fixture/project/.pi/extensions/fm-calm.ts" \
+    OVERRIDE_HOME="$fixture/override" \
+    EXTENSION_HOME="$fixture/project" \
+    fm_calm_ts_node "$body" 2>&1)
   status=$?
   [ "$status" -eq 0 ] || fail "Pi calm home resolution failed: $out"
   [ -z "$out" ] || fail "Pi calm home-resolution test printed output: $out"
-  pass "Pi calm resolves its persistent home independently of Pi's launch directory"
+  pass "$HOME_RESOLUTION_CLAIM"
+}
+
+# Negative control for the case above. Absence of a failure is only evidence
+# when a failure would have been seen, and every assertion in that body sits
+# behind a loader: a loader that silently declined to execute the extension
+# would leave the same quiet, green-looking case. This runs the SAME body
+# against a stub extension carrying exactly the defect the last assertion
+# forbids - a Calm that persists its choice under Pi's launch directory as well
+# as its real home - and requires that the body observes it and fails.
+test_home_resolution_negative_control() {
+  local fixture body stub out status
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "skip: node or npm not found for Pi calm home-resolution negative control"
+    return 0
+  fi
+  if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
+    echo "skip: installed @earendil-works/pi-coding-agent package not found"
+    return 0
+  fi
+  if [ -z "$FM_CALM_TS_SATISFIED" ]; then
+    fm_calm_ts_unavailable \
+      "a genuine calm home-resolution defect still fails the home-resolution body"
+    return 0
+  fi
+
+  fixture="$TMP_ROOT/home-resolution-control"
+  stub="$TMP_ROOT/home-resolution-control-extension.ts"
+  cat >"$stub" <<'TS'
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+function firstmateHome(): string {
+  const override = process.env.FM_ROOT_OVERRIDE;
+  if (override) return override;
+  return resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
+
+function persistCalm(root: string): void {
+  mkdirSync(`${root}/config`, { recursive: true });
+  writeFileSync(`${root}/config/calm`, "on\n");
+}
+
+export default function calmStub(pi: {
+  on: (event: string, handler: () => void) => void;
+  registerCommand: (name: string, command: { handler: () => Promise<void> }) => void;
+}): void {
+  pi.on("session_start", () => {});
+  pi.registerCommand("calm", {
+    handler: async (): Promise<void> => {
+      persistCalm(firstmateHome());
+      // The injected defect: also persist under Pi's launch directory.
+      persistCalm(process.cwd());
+    },
+  });
+}
+TS
+  fm_calm_home_resolution_fixture "$fixture" "$stub"
+  body="$fixture/home-resolution-body.mjs"
+  fm_calm_home_resolution_body "$body"
+
+  out=$(cd "$fixture/launch-cwd" && \
+    EXT="$fixture/project/.pi/extensions/fm-calm.ts" \
+    OVERRIDE_HOME="$fixture/override" \
+    EXTENSION_HOME="$fixture/project" \
+    fm_calm_ts_node "$body" 2>&1)
+  status=$?
+  [ "$status" -ne 0 ] \
+    || fail "home-resolution negative control passed: the body accepted a Calm that writes under Pi's launch directory"
+  case $out in
+    *"Calm wrote its preference under Pi's launch directory"*) ;;
+    *)
+      fail "home-resolution negative control failed for the wrong reason, so the launch-directory assertion is still unproven: $out"
+      ;;
+  esac
+  pass "a genuine calm home-resolution defect still fails the home-resolution body, so its absence in the case above is observed rather than assumed"
 }
 
 test_pi_compat_no_upper_bound() {
@@ -193,6 +474,57 @@ test_pi_compat_no_upper_bound() {
   pass "Pi calm compatibility evidence never rejects a Pi version for being newer than 0.82.0, and still fails closed on a missing or malformed version"
 }
 
+# The envelope's own regression. It pins the two things the .ts cases above rely
+# on: that a case which could not look reports on a channel no pass/fail consumer
+# reads as either, and that a probe with no candidate left refuses and says why
+# rather than leaving the envelope quietly satisfied.
+test_ts_loader_envelope_is_three_valued() {
+  local reported control_root control_pi control
+  reported=$(fm_calm_ts_unavailable "sample claim")
+  case $reported in
+    "cno - sample claim: TEST_ENVIRONMENT_TYPESCRIPT_LOADER_ABSENT "*) ;;
+    *) fail "an unavailable loader did not report a typed could-not-observe: $reported" ;;
+  esac
+  case $reported in
+    "ok - "* | "not ok - "*)
+      fail "a could-not-observe reported on the pass/fail channel, where a consumer reads it as one of them: $reported"
+      ;;
+  esac
+
+  # Re-probe with the shipped-loader candidate removed. This runs in a subshell
+  # so the suite's own resolved envelope is untouched.
+  control_root="$TMP_ROOT/envelope-refusal-control"
+  control_pi="$control_root/pi-package"
+  mkdir -p "$control_pi"
+  printf '%s\n' '{"name":"@earendil-works/pi-coding-agent","version":"0.0.0-control"}' \
+    >"$control_pi/package.json"
+  control=$(
+    if fm_calm_ts_probe "$control_root/probe" "$control_pi"; then
+      printf 'SATISFIED %s' "$FM_CALM_TS_EVIDENCE"
+    else
+      printf 'REFUSED %s satisfied=[%s]' "$FM_CALM_TS_EVIDENCE" "$FM_CALM_TS_SATISFIED"
+    fi
+  )
+  case $control in
+    SATISFIED*)
+      # This host loads .ts without the shipped loader, so the refusal this
+      # control exists to observe cannot be produced here. That is a third
+      # value, not a pass: reporting it as one would credit the refusal path
+      # with evidence from a run that never reached it.
+      env_could_not_observe \
+        "a probe with no candidate loader left refuses and records why" \
+        "host_loads_typescript_without_the_shipped_loader ${control#SATISFIED }" \
+        TEST_ENVIRONMENT_REFUSAL_UNREACHABLE
+      ;;
+    "REFUSED node="*no_candidate_loaded_a_typescript_module*tried=[*"satisfied=[]")
+      ;;
+    *)
+      fail "the loader probe did not refuse cleanly with its evidence when no candidate was available: $control"
+      ;;
+  esac
+  pass "the TypeScript-loader envelope reports could-not-observe on its own channel and refuses with evidence instead of resolving to a loader it never proved"
+}
+
 test_pi_compat_degraded_adapter() {
   local fixture out status
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -201,6 +533,11 @@ test_pi_compat_degraded_adapter() {
   fi
   if [ ! -f "$PI_PACKAGE_DIR/package.json" ]; then
     echo "skip: installed @earendil-works/pi-coding-agent package not found"
+    return 0
+  fi
+  if [ -z "$FM_CALM_TS_SATISFIED" ]; then
+    fm_calm_ts_unavailable \
+      "a missing collapsed-thinking presentation API degrades only that Calm adapter with a clear skip reason, while the rest of Calm still registers"
     return 0
   fi
 
@@ -222,8 +559,16 @@ test_pi_compat_degraded_adapter() {
   out=$(cd "$fixture/project" && \
     EXT="$fixture/project/.pi/extensions/fm-calm.ts" \
     PI_PACKAGE_DIR="$PI_PACKAGE_DIR" \
-    node --input-type=module 2>&1 <<'JS'
+    fm_calm_ts_node --input-type=module 2>&1 <<'JS'
 import { pathToFileURL } from "node:url";
+
+// The suite's probed loader decides this, so no body guesses a namespace shape
+// from the object it is handed; see this file's header.
+const tsInterop = process.env.FM_CALM_TS_INTEROP === "1";
+async function importTs(url) {
+  const namespace = await import(url);
+  return tsInterop ? namespace.default : namespace;
+}
 
 const packageRoot = process.env.PI_PACKAGE_DIR;
 const { AssistantMessageComponent } = await import(
@@ -257,7 +602,7 @@ const pi = {
 
 let threw = false;
 try {
-  const extension = await import(`${pathToFileURL(process.env.EXT).href}?degraded=${Date.now()}`);
+  const extension = await importTs(`${pathToFileURL(process.env.EXT).href}?degraded=${Date.now()}`);
   extension.default(pi);
 } catch {
   threw = true;
@@ -303,6 +648,11 @@ test_pi_compat_missing_adapter_exports() {
     echo "skip: node not found for Pi calm missing-adapter-export test"
     return 0
   fi
+  if [ -z "$FM_CALM_TS_SATISFIED" ]; then
+    fm_calm_ts_unavailable \
+      "missing Pi presentation class exports reach the independent adapter degradation path"
+    return 0
+  fi
 
   fixture="$TMP_ROOT/missing-adapter-exports"
   mkdir -p \
@@ -322,9 +672,17 @@ test_pi_compat_missing_adapter_exports() {
     'export class UserMessageComponent {}' \
     >"$fixture/project/node_modules/@earendil-works/pi-coding-agent/index.js"
 
-  out=$(cd "$fixture/project" && node --input-type=module 2>&1 <<'JS'
-const assistant = await import("./.pi/extensions/lib/fm-calm-assistant-layout.ts");
-const operational = await import("./.pi/extensions/lib/fm-calm-operational-user-layout.ts");
+  out=$(cd "$fixture/project" && fm_calm_ts_node --input-type=module 2>&1 <<'JS'
+// The suite's probed loader decides this, so no body guesses a namespace shape
+// from the object it is handed; see this file's header.
+const tsInterop = process.env.FM_CALM_TS_INTEROP === "1";
+async function importTs(url) {
+  const namespace = await import(url);
+  return tsInterop ? namespace.default : namespace;
+}
+
+const assistant = await importTs("./.pi/extensions/lib/fm-calm-assistant-layout.ts");
+const operational = await importTs("./.pi/extensions/lib/fm-calm-operational-user-layout.ts");
 
 for (const [name, install, expected] of [
   ["collapsed-thinking", assistant.installCalmAssistantLayout, "AssistantMessageComponent"],
@@ -360,6 +718,11 @@ test_rendering_and_session_lifecycle() {
     echo "skip: installed @earendil-works/pi-coding-agent package not found"
     return 0
   fi
+  if [ -z "$FM_CALM_TS_SATISFIED" ]; then
+    fm_calm_ts_unavailable \
+      "Pi calm centralizes transcript visibility, preserves execution/export data, keeps Pi's stock working row visible while no run is active, and persists its choice across session starts"
+    return 0
+  fi
   version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
   record_pi_version_evidence "$version" "Pi calm compatibility assumptions"
 
@@ -383,9 +746,17 @@ exec "$FM_OPERATIONAL_INPUT_OWNER" "$@"
 SH
   chmod +x "$fixture/operational-input-probe.sh"
 
-  out=$(cd "$fixture" && EXT="$fixture/fm-calm.ts" WATCH_EXT="$fixture/fm-primary-pi-watch.ts" FM_HOME="$fixture/home" FM_OPERATIONAL_INPUT_SCRIPT="$fixture/operational-input-probe.sh" FM_OPERATIONAL_INPUT_OWNER="$OPERATIONAL_INPUT" FM_OPERATIONAL_INPUT_CALLS="$fixture/operational-input-calls" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" node --input-type=module 2>&1 <<'JS'
+  out=$(cd "$fixture" && EXT="$fixture/fm-calm.ts" WATCH_EXT="$fixture/fm-primary-pi-watch.ts" FM_HOME="$fixture/home" FM_OPERATIONAL_INPUT_SCRIPT="$fixture/operational-input-probe.sh" FM_OPERATIONAL_INPUT_OWNER="$OPERATIONAL_INPUT" FM_OPERATIONAL_INPUT_CALLS="$fixture/operational-input-calls" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" fm_calm_ts_node --input-type=module 2>&1 <<'JS'
 import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+
+// The suite's probed loader decides this, so no body guesses a namespace shape
+// from the object it is handed; see this file's header.
+const tsInterop = process.env.FM_CALM_TS_INTEROP === "1";
+async function importTs(url) {
+  const namespace = await import(url);
+  return tsInterop ? namespace.default : namespace;
+}
 
 const packageRoot = process.env.PI_PACKAGE_DIR;
 const [{ AssistantMessageComponent }, { CustomEntryComponent }, { ToolExecutionComponent }, { UserMessageComponent }, { InteractiveMode }, { initTheme, theme }, { Text, getKeybindings, setCapabilities }, { createToolHtmlRenderer }] = await Promise.all([
@@ -432,10 +803,10 @@ const pi = {
     tools.push(tool);
   },
 };
-const extension = await import(`${pathToFileURL(process.env.EXT).href}?test=${Date.now()}`);
+const extension = await importTs(`${pathToFileURL(process.env.EXT).href}?test=${Date.now()}`);
 extension.default(pi);
-const visibility = await import(`${pathToFileURL(`${process.cwd()}/lib/fm-calm-visibility.ts`).href}?policy=${Date.now()}`);
-const operationalInput = await import(`${pathToFileURL(`${process.cwd()}/lib/fm-operational-input.ts`).href}?input=${Date.now()}`);
+const visibility = await importTs(`${pathToFileURL(`${process.cwd()}/lib/fm-calm-visibility.ts`).href}?policy=${Date.now()}`);
+const operationalInput = await importTs(`${pathToFileURL(`${process.cwd()}/lib/fm-operational-input.ts`).href}?input=${Date.now()}`);
 
 const names = tools.map((tool) => tool.name);
 const expectedNames = ["read", "bash", "edit", "write", "grep", "find", "ls"];
@@ -565,7 +936,7 @@ const watchPi = {
   registerCommand() {},
   registerEntryRenderer() {},
 };
-const watchExtension = await import(`${pathToFileURL(process.env.WATCH_EXT).href}?test=${Date.now()}`);
+const watchExtension = await importTs(`${pathToFileURL(process.env.WATCH_EXT).href}?test=${Date.now()}`);
 watchExtension.default(watchPi);
 const watchTool = tools.find((tool) => tool.name === "fm_watch_arm_pi");
 if (!watchTool) throw new Error("Firstmate watcher extension did not register fm_watch_arm_pi");
@@ -1611,6 +1982,10 @@ test_working_ship_geometry_and_lifecycle() {
     echo "skip: installed @earendil-works/pi-coding-agent package not found"
     return 0
   fi
+  if [ -z "$FM_CALM_TS_SATISFIED" ]; then
+    fm_calm_ts_unavailable "Pi Calm working ship geometry and widget lifecycle"
+    return 0
+  fi
   version=$(node -p "require('$PI_PACKAGE_DIR/package.json').version")
   record_pi_version_evidence "$version" "Pi Calm working-ship assumptions"
 
@@ -1627,8 +2002,16 @@ test_working_ship_geometry_and_lifecycle() {
   ln -s "$PI_PACKAGE_DIR/node_modules/typebox" "$fixture/node_modules/typebox"
   printf '%s\n' '{"type":"module"}' >"$fixture/package.json"
 
-  out=$(cd "$fixture" && EXT="$fixture/fm-calm.ts" FM_HOME="$fixture/home" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" node --input-type=module 2>&1 <<'JS'
+  out=$(cd "$fixture" && EXT="$fixture/fm-calm.ts" FM_HOME="$fixture/home" PI_PACKAGE_DIR="$PI_PACKAGE_DIR" fm_calm_ts_node --input-type=module 2>&1 <<'JS'
 import { pathToFileURL } from "node:url";
+
+// The suite's probed loader decides this, so no body guesses a namespace shape
+// from the object it is handed; see this file's header.
+const tsInterop = process.env.FM_CALM_TS_INTEROP === "1";
+async function importTs(url) {
+  const namespace = await import(url);
+  return tsInterop ? namespace.default : namespace;
+}
 
 const packageRoot = process.env.PI_PACKAGE_DIR;
 const [{ initTheme, theme }, { visibleWidth, setCapabilities }] = await Promise.all([
@@ -1638,7 +2021,7 @@ const [{ initTheme, theme }, { visibleWidth, setCapabilities }] = await Promise.
 initTheme("dark");
 setCapabilities({ images: null, trueColor: true, hyperlinks: false });
 
-const ship = await import(
+const ship = await importTs(
   `${pathToFileURL(`${process.cwd()}/lib/fm-calm-working-ship.ts`).href}?ship=${Date.now()}`
 );
 const {
@@ -2190,7 +2573,7 @@ const pi = {
   sendUserMessage: (...args) => sessionWrites.push(["sendUserMessage", ...args]),
   setSessionName: (...args) => sessionWrites.push(["setSessionName", ...args]),
 };
-const extension = await import(`${pathToFileURL(process.env.EXT).href}?ship=${Date.now()}`);
+const extension = await importTs(`${pathToFileURL(process.env.EXT).href}?ship=${Date.now()}`);
 extension.default(pi);
 check(!!calmCommand, "Calm command was not registered");
 for (const event of ["session_start", "agent_start", "agent_settled", "session_shutdown"]) {
@@ -2879,27 +3262,36 @@ if (!serialized.includes("firstmate-synthetic-input") || !serialized.includes("/
 const synthetic = entries.find((entry) => entry.type === "custom_message" && entry.customType === "firstmate-synthetic-input");
 if (!synthetic || synthetic.display) process.exit(1);
 JS
-  chrome=$(find_chrome) || fail "Chrome or Chromium is required for rendered export DOM assertions"
-  "$chrome" \
-    --headless=new \
-    --disable-gpu \
-    --no-sandbox \
-    --user-data-dir="$TMP_ROOT/chrome-profile" \
-    --virtual-time-budget=2000 \
-    --dump-dom \
-    "file://$export_file" >"$export_dom" 2>/dev/null &
-  chrome_pid=$!
-  chrome_wait=0
-  while kill -0 "$chrome_pid" 2>/dev/null && [ "$chrome_wait" -lt 100 ]; do
-    grep -Fq '</html>' "$export_dom" 2>/dev/null && break
-    sleep 0.1
-    chrome_wait=$((chrome_wait + 1))
-  done
-  kill "$chrome_pid" 2>/dev/null || true
-  wait "$chrome_pid" 2>/dev/null || true
-  grep -Fq '</html>' "$export_dom" 2>/dev/null \
-    || fail "could not render calm-mode HTML export DOM"
-  node - "$export_dom" <<'JS' || fail "rendered export DOM violated the Calm conversation boundary"
+  # The rendered-export-DOM assertions below need a real headless browser. A host
+  # without one has not shown that boundary to be broken - it has shown nothing
+  # about it - so this reports the third value and lets the rest of the case,
+  # which needs no browser, run to its own verdict.
+  if ! chrome=$(find_chrome); then
+    env_could_not_observe \
+      "the rendered calm-mode export DOM keeps the Calm conversation boundary" \
+      "chrome=absent searched=[FM_CHROME_BIN, google-chrome, google-chrome-stable, chromium, chromium-browser, macOS Google Chrome.app]" \
+      TEST_ENVIRONMENT_BROWSER_ABSENT
+  else
+    "$chrome" \
+      --headless=new \
+      --disable-gpu \
+      --no-sandbox \
+      --user-data-dir="$TMP_ROOT/chrome-profile" \
+      --virtual-time-budget=2000 \
+      --dump-dom \
+      "file://$export_file" >"$export_dom" 2>/dev/null &
+    chrome_pid=$!
+    chrome_wait=0
+    while kill -0 "$chrome_pid" 2>/dev/null && [ "$chrome_wait" -lt 100 ]; do
+      grep -Fq '</html>' "$export_dom" 2>/dev/null && break
+      sleep 0.1
+      chrome_wait=$((chrome_wait + 1))
+    done
+    kill "$chrome_pid" 2>/dev/null || true
+    wait "$chrome_pid" 2>/dev/null || true
+    grep -Fq '</html>' "$export_dom" 2>/dev/null \
+      || fail "could not render calm-mode HTML export DOM"
+    node - "$export_dom" <<'JS' || fail "rendered export DOM violated the Calm conversation boundary"
 const dom = require("node:fs").readFileSync(process.argv[2], "utf8");
 const messages = dom.match(/<div id="messages">([\s\S]*?)<\/main>/)?.[1];
 const tree = dom.match(/<div[^>]*id="tree-container"[^>]*>([\s\S]*?)<div[^>]*id="tree-status"/)?.[1];
@@ -2913,6 +3305,7 @@ for (const current of ["CURRENT_WATCHER_E2E", "CURRENT_TURN_END_E2E", "CURRENT_A
 }
 if (!tree.includes("firstmate-synthetic-input") || !tree.includes("/tmp/probe.status")) process.exit(1);
 JS
+  fi
 
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" -l "/calm"
   tmux -L "$TMUX_SOCKET" send-keys -t "$TMUX_SESSION" M-s
@@ -3274,7 +3667,9 @@ JS
 }
 
 test_home_resolution
+test_home_resolution_negative_control
 test_pi_compat_no_upper_bound
+test_ts_loader_envelope_is_three_valued
 test_pi_compat_degraded_adapter
 test_pi_compat_missing_adapter_exports
 test_rendering_and_session_lifecycle

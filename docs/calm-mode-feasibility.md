@@ -265,6 +265,66 @@ FM_PI_LIVE_E2E=1 tests/fm-pi-primary-live-e2e.test.sh
 tests/fm-pi-primary-types.test.sh
 ```
 
+## Host envelope for the regression suite
+
+The tracked Calm extensions are TypeScript.
+Pi always loads them through the loader it ships, so the cases in `tests/fm-calm-pi-extension.test.sh` that drive those extensions outside a real Pi TUI depend on the HOST being able to load a `.ts` module with plain `node`.
+Whether it can is a fact about the machine, not about Calm, and reporting it as a failing case would publish a host fact as a product regression.
+
+The suite therefore establishes that envelope before any case runs, by loading a throwaway `.ts` fixture shaped like the tracked extensions - an ESM package, type annotations on the entry, and a relative `./lib/<name>.ts` specifier - through each candidate loader in order, and keeping the first that both loads and executes it:
+
+1. plain `node`, which strips types natively on a Node built with TypeScript support compiled in.
+2. `node --experimental-strip-types`, the same stripping behind its flag.
+3. `node --import <shim>` where the shim is `import "jiti/register"` resolved against the jiti that the INSTALLED Pi package ships, which is the loader Pi itself uses for every extension (`dist/core/extensions/loader.js` calls `createJiti` from `jiti/static`).
+
+Candidate 3 hands back a CJS-interop namespace rather than an ES module namespace, so the probe also records which shape it observed and the cases read that recorded shape instead of guessing one from the object they are handed.
+
+When no candidate loads the fixture, the affected cases report a typed could-not-observe on the `cno - ` channel naming the refusing probe and the Node version, never a product failure and never a silent pass, and every case that does not need the loader - including the real-Pi tmux end-to-end cases, which let Pi do its own loading - still runs.
+The rendered-export-DOM segment of the interactive end-to-end case carries the same envelope against an absent headless browser.
+
+`test_home_resolution_negative_control` is what keeps the satisfied path honest: it runs the same home-resolution assertion body against a stub extension carrying exactly the defect the real body forbids - a Calm that persists its choice under Pi's launch directory as well as its own home - and requires that the body observes it and fails.
+Without it, a loader that silently declined to execute the extension would leave the same quiet, green-looking case.
+
+## 2026-08-26 host envelope verification record
+
+Verified on Node v22.22.1 against the installed Pi 0.81.1 package.
+This Node is built without TypeScript support, so candidates 1 and 2 both refuse and the suite runs on candidate 3.
+The probe's own fixture reproduces each refusal directly: `probe.ts` is an ESM `.ts` module with a type annotation and a relative `./lib/probe-lib.ts` import.
+
+```text
+$ node --version
+v22.22.1
+
+$ node ./probe.ts
+TypeError [ERR_UNKNOWN_FILE_EXTENSION]: Unknown file extension ".ts" for /tmp/.../probe.ts
+
+$ node --experimental-strip-types ./probe.ts
+Error [ERR_NO_TYPESCRIPT]: Node.js is not compiled with TypeScript support
+
+$ tests/fm-calm-pi-extension.test.sh
+ok - Pi calm resolves its persistent home independently of Pi's launch directory
+ok - a genuine calm home-resolution defect still fails the home-resolution body, so its absence in the case above is observed rather than assumed
+ok - Pi calm compatibility evidence never rejects a Pi version for being newer than 0.82.0, and still fails closed on a missing or malformed version
+ok - a missing collapsed-thinking presentation API degrades only that Calm adapter with a clear skip reason, while the rest of Calm still registers
+ok - missing Pi presentation class exports reach the independent adapter degradation path
+ok - Pi calm centralizes transcript visibility, preserves execution/export data, keeps Pi's stock working row visible while no run is active, and persists its choice across session starts
+ok - Pi operational follow-up E2E processes exact user-role notifications once while Calm hides current and adjacent rows, Calm off and absent render them, and restart preserves semantics
+ok - Pi Calm native /skill:ahoy geometry keeps every collapsed thinking and tool block at zero height while preserving expansion, history, restart, and Calm-off rendering
+ok - Pi Calm working ship moves on a slow independent cadence over faster fixed-cell blue water, ...
+cno - the rendered calm-mode export DOM keeps the Calm conversation boundary: TEST_ENVIRONMENT_BROWSER_ABSENT chrome=absent searched=[FM_CHROME_BIN, google-chrome, google-chrome-stable, chromium, chromium-browser, macOS Google Chrome.app]
+ok - Pi calm native E2E replaces the stock working row with a moving, resize-clamped working ship ...
+```
+
+The refusing direction was verified by pointing `FM_PI_PACKAGE_DIR` at a directory holding only a `package.json`, which removes candidate 3 as well:
+
+```text
+$ FM_PI_PACKAGE_DIR=<pi-package-json-only> tests/fm-calm-pi-extension.test.sh
+cno - Pi calm resolves its persistent home independently of Pi's launch directory: TEST_ENVIRONMENT_TYPESCRIPT_LOADER_ABSENT node=v22.22.1 no_candidate_loaded_a_typescript_module tried=[node, node --experimental-strip-types, (jiti unavailable: no installed Pi package at <pi-package-json-only>)]
+ok - Pi calm compatibility evidence never rejects a Pi version for being newer than 0.82.0, and still fails closed on a missing or malformed version
+```
+
+The loader-independent case still passes, and no case reports either a failure or a pass it did not observe.
+
 ## 2026-07-23 verification record
 
 The deterministic provider preserves the complete real Pi TUI rendering path without using credentials.
