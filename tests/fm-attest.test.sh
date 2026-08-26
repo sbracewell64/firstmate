@@ -3391,7 +3391,7 @@ superseded_out() {
 }
 
 test_required_reports_a_superseded_policy_generation_as_neither() {
-  local repo policy out rc
+  local repo policy current out rc
   # Topology case T7. A declaration absent from a generation the venue has
   # moved past is a fact about that generation's age, not about the venue, and
   # reporting it as not-required is the ruling's forbidden reinterpretation of
@@ -3400,11 +3400,14 @@ test_required_reports_a_superseded_policy_generation_as_neither() {
   repo="$TMP_ROOT/required-superseded-generation"
   new_repo "$repo"
   policy=$(install_superseded_policy_venue "$repo" current)
+  current=$(git --git-dir="$policy" rev-parse HEAD)
   out=$(superseded_out "$repo" "$policy" refs/heads/old)
   rc=$?
   [ "$rc" -eq 2 ] || fail "a superseded policy generation became an answer (exit $rc): $out"
   assert_contains "$out" "policy-generation-stale" \
     "the superseded generation did not report its own reason"
+  assert_contains "$out" "$current" \
+    "the superseded-generation refusal did not name the venue's current generation"
   assert_not_contains "$out" "reads no head-bound attestation" \
     "a superseded generation was reported as a venue that declares nothing"
   pass "fm-attest.sh: a superseded policy generation answers neither way"
