@@ -317,7 +317,7 @@ SECOND_DELAYED_SIDE_EFFECT="$TMP_ROOT/second-delayed-side-effect"
 FM_REMOTE_JOB_QUEUE_TIMEOUT=5
 FM_REMOTE_JOB_TIMEOUT=3
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-delay-job.sh 1.8 "$FIRST_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-delay-job.sh 2.2 "$FIRST_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
 FIRST_JOB_ID=$FM_REMOTE_JOB_ID
 FIRST_JOB_DIR="$STATE_ROOT/jobs/$FIRST_JOB_ID"
 for _ in $(seq 1 100); do
@@ -327,7 +327,7 @@ done
 [ "$(fm_remote_job_read_state "$FIRST_JOB_DIR" 2>/dev/null || true)" = running ] \
   || fail "the first delayed job did not begin running"
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
-  fm-delay-job.sh 1.8 "$SECOND_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
+  fm-delay-job.sh 1 "$SECOND_DELAYED_SIDE_EFFECT" < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 fm_remote_job_wait "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
@@ -358,11 +358,18 @@ kill -0 "$WORKER_PID" 2>/dev/null && fail "the worker did not finish its TERM sh
 HOME="$ACCOUNT_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=1 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" >> "$TMP_ROOT/worker.out" 2>> "$TMP_ROOT/worker.err" &
+REPLACEMENT_WORKER_PID=$!
+fm_test_reap "$REPLACEMENT_WORKER_PID"
 for _ in $(seq 1 100); do
-  [ -f "$STATE_ROOT/worker.ready" ] && break
+  READY_WORKER_PID=$(cat "$STATE_ROOT/worker.ready" 2>/dev/null || true)
+  CURRENT_WORKER_PID=$(cat "$STATE_ROOT/worker.pid" 2>/dev/null || true)
+  [ -n "$CURRENT_WORKER_PID" ] && [ "$CURRENT_WORKER_PID" != "$WORKER_PID" ] && \
+    [ "$READY_WORKER_PID" = "$CURRENT_WORKER_PID" ] && break
   sleep 0.05
 done
-assert_present "$STATE_ROOT/worker.ready" "the replacement worker did not become ready"
+[ -n "$CURRENT_WORKER_PID" ] && [ "$CURRENT_WORKER_PID" != "$WORKER_PID" ] && \
+  [ "$READY_WORKER_PID" = "$CURRENT_WORKER_PID" ] \
+  || fail "the replacement worker did not become ready"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 [ "$FM_REMOTE_JOB_EXIT" -eq 125 ] || fail "the interrupted job did not publish an unknown-completion result"
 sleep 3
