@@ -442,7 +442,8 @@ publish_out() {
 # outcome can only be that flag.
 publish_only_if_required_out() {
   local repo=$1
-  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck --only-if-required 2>&1 )
+  shift
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck --only-if-required "$@" 2>&1 )
 }
 
 required_out() {
@@ -3175,6 +3176,32 @@ test_required_answers_a_repository_whose_checks_read_none() {
   pass "fm-attest.sh: a repository with CI but no such gate reads no attestation"
 }
 
+test_required_ignores_a_commented_invocation() {
+  local repo out rc
+  repo="$TMP_ROOT/required-comment-only"
+  new_repo "$repo"
+  mkdir -p "$repo/.github/workflows"
+  printf 'jobs:\n  check:\n    steps:\n      # - run: bin/fm-attest.sh verify --head 0000\n      - run: make\n' \
+    > "$repo/.github/workflows/some-gate.yml"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a commented invocation declared the gate (exit $rc): $out"
+  pass "fm-attest.sh: a commented invocation does not declare the gate"
+}
+
+test_required_ignores_an_invocation_inside_prose() {
+  local repo out rc
+  repo="$TMP_ROOT/required-prose-only"
+  new_repo "$repo"
+  mkdir -p "$repo/.github/workflows"
+  printf 'name: "Documentation mentioning bin/fm-attest.sh for maintainers"\njobs:\n  check:\n    steps:\n      - run: make\n' \
+    > "$repo/.github/workflows/some-gate.yml"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "an invocation token inside prose declared the gate (exit $rc): $out"
+  pass "fm-attest.sh: prose mentioning the verifier does not declare the gate"
+}
+
 test_required_reports_an_unreadable_declaration_as_neither() {
   local repo out rc
   # Absence of detection is not detection of absence. An unreadable workflow
@@ -3262,6 +3289,34 @@ test_write_only_if_required_stops_rather_than_guess_at_an_unreadable_declaration
   assert_contains "$out" "workflow-unreadable" "the stop did not name its own cause"
   [ -z "$(published_heads "$fork")" ] || fail "an unreadable declaration still published"
   pass "fm-attest.sh: an unreadable declaration stops publication rather than guessing"
+}
+
+test_write_expect_head_binds_publication_to_the_request_head() {
+  local repo fork head other out rc
+  repo="$TMP_ROOT/write-expect-head"
+  fork="$TMP_ROOT/write-expect-head-fork.git"
+  new_repo "$repo"
+  declare_gate "$repo"
+  git -C "$repo" add .github
+  git -C "$repo" commit -qm gate
+  head=$(git -C "$repo" rev-parse HEAD)
+  other=0123456789abcdef0123456789abcdef01234567
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+
+  out=$(publish_only_if_required_out "$repo" --expect-head "$other")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "publication for a different request head was not refused (exit $rc): $out"
+  assert_contains "$out" "expected-head-mismatch" "the mismatch did not report its own reason"
+  [ -z "$(published_heads "$fork")" ] || fail "a mismatch recorded or published evidence"
+
+  out=$(publish_only_if_required_out "$repo" --expect-head "$head")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "publication for the matching request head failed: $out"
+  assert_contains "$(published_heads "$fork")" "$head" \
+    "the matching request head was not published"
+  pass "fm-attest.sh: publication is bound to the request's exact head"
 }
 
 test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
@@ -3377,10 +3432,13 @@ test_write_re_evaluates_the_head_it_published
 test_write_no_recheck_publishes_without_asking_the_forge
 test_required_answers_a_repository_whose_checks_read_an_attestation
 test_required_answers_a_repository_whose_checks_read_none
+test_required_ignores_a_commented_invocation
+test_required_ignores_an_invocation_inside_prose
 test_required_reports_an_unreadable_declaration_as_neither
 test_required_is_not_unsaid_by_an_unreadable_sibling
 test_write_only_if_required_publishes_nothing_where_no_check_reads_it
 test_write_only_if_required_stops_rather_than_guess_at_an_unreadable_declaration
+test_write_expect_head_binds_publication_to_the_request_head
 test_check_step_no_longer_sends_a_contributor_to_edit_the_request
 test_reconcile_converges_on_an_attestation_published_during_the_window
 test_reconcile_refuses_a_head_no_attestation_arrives_for

@@ -275,17 +275,11 @@ printf 'armed: state/%s.check.sh\n' "$ID"
 # as it would be anywhere else. The gate is not weakened by publishing evidence
 # it would have accepted anyway.
 #
-# `required` is asked first and separately, because it is a read of files and
-# costs nothing, while the publication that follows talks to a forge. A
-# repository that reads no attestation is left completely alone: this is the
-# predicate that lets the step be unconditional here without touching a project
-# that never asked for it.
-#
 # Three-valued, and never fatal. Arming the watch has already succeeded above
 # and a provenance answer must not be able to undo it, so every outcome is
-# reported and none changes this script's exit status. The bound below is on
-# this whole delegation, because a forge that will not answer must not hold a
-# supervision turn.
+# reported and none changes this script's exit status. The bound below covers
+# both the declaration predicate and publication, because neither an unreadable
+# checkout nor a forge that will not answer may hold a supervision turn.
 FM_PR_ATTEST_BOUND=180
 # shellcheck source=bin/fm-timeout-lib.sh
 . "$SCRIPT_DIR/fm-timeout-lib.sh"
@@ -301,42 +295,33 @@ fm_pr_attest_reason() {
 
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
   printf 'attestation: could-not-observe (task %s has no reachable local copy, so whether this head needs published evidence is unknown)\n' "$ID"
+elif [ -z "$PR_HEAD" ]; then
+  printf 'attestation: could-not-observe (the forge supplied no request head to bind publication to)\n'
 else
   ATTEST_RC=0
-  ATTEST_OUT=$( (cd "$WT" && "$SCRIPT_DIR/fm-attest.sh" required) 2>&1 ) || ATTEST_RC=$?
+  ATTEST_OUT=$(
+    cd "$WT" \
+      && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
+        "$SCRIPT_DIR/fm-attest.sh" write --only-if-required --expect-head "$PR_HEAD" 2>&1
+  ) || ATTEST_RC=$?
+  ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
   case "$ATTEST_RC" in
-    1) printf 'attestation: not-required (this repository reads no head-bound attestation)\n' ;;
     0)
-      ATTEST_RC=0
-      ATTEST_OUT=$(
-        cd "$WT" \
-          && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
-            "$SCRIPT_DIR/fm-attest.sh" write 2>&1
-      ) || ATTEST_RC=$?
-      ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
-      case "$ATTEST_RC" in
-        0)
-          # What actually happened - recorded, published, re-run requested, or
-          # a run that had already passed - is the owner's to say, so its own
-          # words are shown rather than summarised into a claim about which.
-          printf 'attestation: published for task %s\n' "$ID"
-          printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
-          ;;
-        1)
-          printf 'attestation: refused (%s)\n' "${ATTEST_REASON:-unstated}"
-          printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
-          ;;
-        124)
-          printf 'attestation: could-not-observe (publication did not finish within %ss)\n' "$FM_PR_ATTEST_BOUND"
-          ;;
-        *)
-          printf 'attestation: could-not-observe (%s)\n' "${ATTEST_REASON:-unstated}"
-          printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
-          ;;
-      esac
+      if printf '%s\n' "$ATTEST_OUT" | grep -q '^fm-attest: nothing published -'; then
+        printf 'attestation: not-required (this repository reads no head-bound attestation)\n'
+      else
+        printf 'attestation: published for task %s\n' "$ID"
+        printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+      fi
+      ;;
+    1)
+      printf 'attestation: refused (%s)\n' "${ATTEST_REASON:-unstated}"
+      printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+      ;;
+    124)
+      printf 'attestation: could-not-observe (attestation handling did not finish within %ss)\n' "$FM_PR_ATTEST_BOUND"
       ;;
     *)
-      ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
       printf 'attestation: could-not-observe (%s)\n' "${ATTEST_REASON:-unstated}"
       printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
       ;;
