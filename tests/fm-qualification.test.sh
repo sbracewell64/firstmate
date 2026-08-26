@@ -536,6 +536,107 @@ test_design_challenge_and_change_review_are_separate_capabilities() {
   pass "design challenge and change review are separate capabilities"
 }
 
+test_exact_artifact_inspection_and_exact_change_review_never_substitute() {
+  reset_register
+  write_contract job-artifact JOB_ARTIFACT_INSPECTOR job-risk-v1 exact_artifact_inspection no
+  write_contract job-change JOB_CHANGE_REVIEWER job-risk-v1 exact_change_review no
+  # The read-only axis has to be one the register actually declares, or every
+  # assertion below is about an axis no contract could lawfully carry.
+  qual validate "$CDIR/job-artifact.json" >/dev/null 2>&1 \
+    || fail "a contract on the read-only exact-artifact axis was refused by the register"
+
+  write_record gamma-artifact \
+    '.contract = "job-artifact" | .role = "JOB_ARTIFACT_INSPECTOR" | .binding.provider = "gamma"
+     | .binding.model = "gamma/three" | .adjudication.adjudicator_binding = "alpha/one"'
+  qual reviewer --maker alpha/one --reviewer gamma/three --contract job-artifact >/dev/null 2>&1 \
+    || fail "control: the binding qualified for the exact-artifact contract was refused for it"
+  local rc=0 out
+  out=$(qual reviewer --maker alpha/one --reviewer gamma/three --contract job-change 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an exact-artifact inspection record was consumed as exact-change review"
+  assert_contains "$out" "job-change" "the refusal did not name the contract that is missing"
+  [ "$(state_of job-change gamma/three)" = QUALIFICATION_REQUIRED ] \
+    || fail "a post-mutation diff-review requirement read as met by a read-only artifact inspection"
+
+  # The other direction, on a SECOND binding, so neither record can be credited to
+  # the tuple the other one observed.
+  write_record delta-change \
+    '.contract = "job-change" | .role = "JOB_CHANGE_REVIEWER" | .binding.provider = "delta"
+     | .binding.model = "delta/four" | .adjudication.adjudicator_binding = "alpha/one"'
+  qual reviewer --maker alpha/one --reviewer delta/four --contract job-change >/dev/null 2>&1 \
+    || fail "control: the binding qualified for the exact-change contract was refused for it"
+  rc=0
+  out=$(qual reviewer --maker alpha/one --reviewer delta/four --contract job-artifact 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "an exact-change review record was consumed as exact-artifact inspection"
+  assert_contains "$out" "job-artifact" "the refusal did not name the contract that is missing"
+  [ "$(state_of job-artifact delta/four)" = QUALIFICATION_REQUIRED ] \
+    || fail "a read-only inspection requirement read as met by a post-mutation diff review"
+  pass "exact-artifact inspection and exact-change review never substitute for each other"
+}
+
+test_an_undeclared_axis_is_refused_by_name_and_both_review_axes_are_admitted() {
+  reset_register
+  local case rc out axis
+  # A near miss is the interesting refusal: an axis whose NAME reads like the
+  # declared one is the shape a contract acquires when someone widens an axis by
+  # writing a slightly different word rather than registering a new one.
+  for case in 'invented:reads_minds' \
+              'near-miss:exact_artifact_review' \
+              'plural:exact_artifact_inspections'; do
+    axis=${case#*:}
+    jq --arg a "$axis" '.axis = $a | .id = "probe"' "$CDIR/job-maker.json" > "$CDIR/probe.json"
+    rc=0
+    out=$(qual validate "$CDIR/probe.json" 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "the ${case%%:*} axis \"$axis\" was admitted"
+    assert_contains "$out" "$axis" "the refusal did not name the axis it refused"
+    rm -f "$CDIR/probe.json"
+  done
+  for axis in exact_change_review exact_artifact_inspection; do
+    jq --arg a "$axis" '.axis = $a | .id = "probe"' "$CDIR/job-maker.json" > "$CDIR/probe.json"
+    qual validate "$CDIR/probe.json" >/dev/null 2>&1 \
+      || fail "the declared axis $axis was refused, so the refusals above prove nothing"
+    rm -f "$CDIR/probe.json"
+  done
+  pass "an undeclared axis is refused by name and both review axes are admitted"
+}
+
+test_a_contract_may_not_take_a_result_word_as_its_instrument_success_token() {
+  reset_register
+  local rc=0 out word
+  # Control first: an instrument-scoped terminal token is admitted, so the
+  # refusals below are about the WORD and not about the field carrying one.
+  jq '.id = "probe" | .executable_predicate.controls = "run-controls.sh RED_CONTROLS_EFFECTIVE"' \
+    "$CDIR/job-maker.json" > "$CDIR/probe.json"
+  qual validate "$CDIR/probe.json" >/dev/null 2>&1 \
+    || fail "control: an instrument-scoped success token was refused"
+  for word in QUALIFIED FAILED COULD_NOT_OBSERVE; do
+    jq --arg w "$word" '.id = "probe" | .executable_predicate.controls = $w' \
+      "$CDIR/job-maker.json" > "$CDIR/probe.json"
+    rc=0
+    out=$(qual validate "$CDIR/probe.json" 2>&1) || rc=$?
+    [ "$rc" -ne 0 ] || fail "a control runner was allowed to report its own pass as the result word $word"
+    assert_contains "$out" "$word" "the refusal did not name the token it refused"
+    assert_contains "$out" "success vocabulary" "the refusal did not say why an instrument may not emit one"
+  done
+  # The same rule on the other field that carries a bare token: a deterministic
+  # predicate's declared stdout pass word.
+  jq '.id = "probe"
+      | .executable_predicate = {"kind":"declared_deterministic",
+                                 "check":"bin/fm-qualification.sh","expect":"PREDICATE_PASS"}' \
+    "$CDIR/job-maker.json" > "$CDIR/probe.json"
+  qual validate "$CDIR/probe.json" >/dev/null 2>&1 \
+    || fail "control: a deterministic predicate with an instrument-scoped pass token was refused"
+  jq '.id = "probe"
+      | .executable_predicate = {"kind":"declared_deterministic",
+                                 "check":"bin/fm-qualification.sh","expect":"QUALIFIED"}' \
+    "$CDIR/job-maker.json" > "$CDIR/probe.json"
+  rc=0
+  out=$(qual validate "$CDIR/probe.json" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a deterministic predicate took QUALIFIED as its own stdout pass token"
+  assert_contains "$out" "executable_predicate.expect" "the refusal did not name the field it refused"
+  rm -f "$CDIR/probe.json"
+  pass "a contract may not take a result word as its instrument success token"
+}
+
 test_an_unqualified_reviewer_is_refused_without_being_recorded_as_failed() {
   reset_register
   write_contract job-reviewer JOB_REVIEWER job-risk-v1 exact_change_review no
@@ -575,15 +676,16 @@ test_the_shipped_sol_high_record_is_the_first_real_record_and_is_not_a_pass() {
   pass "the shipped Sol High record is the first real record and is not a pass"
 }
 
-test_every_shipped_contract_declares_exactly_one_of_the_nine_axes() {
+test_every_shipped_contract_declares_exactly_one_declared_axis() {
   local axes bad
   axes=$(FM_HOME="$ROOT" "$QUAL" contracts --json 2>/dev/null | jq -r '.[].axis')
   [ -n "$axes" ] || fail "the shipped contract register listed nothing"
   bad=$(printf '%s\n' "$axes" | grep -vxF -e maker_qualification -e design_challenge \
-        -e exact_change_review -e assignment_independence -e provider_account_pool_identity \
+        -e exact_change_review -e exact_artifact_inspection -e assignment_independence \
+        -e provider_account_pool_identity \
         -e availability -e cost -e entitlement -e attempt_custody_accounting || true)
-  [ -z "$bad" ] || fail "a shipped contract declares an axis outside the nine: $bad"
-  pass "every shipped contract declares exactly one of the nine axes"
+  [ -z "$bad" ] || fail "a shipped contract declares an axis the schema does not declare: $bad"
+  pass "every shipped contract declares exactly one declared axis"
 }
 
 test_a_qualified_pass_may_not_be_asserted_past_the_register() {
@@ -638,8 +740,11 @@ test_contract_admissibility_refuses_a_missing_predicate_field_and_an_unknown_axi
 test_a_maker_may_never_review_its_own_candidate
 test_a_record_naming_itself_as_its_own_adjudicator_is_inadmissible
 test_design_challenge_and_change_review_are_separate_capabilities
+test_exact_artifact_inspection_and_exact_change_review_never_substitute
+test_an_undeclared_axis_is_refused_by_name_and_both_review_axes_are_admitted
+test_a_contract_may_not_take_a_result_word_as_its_instrument_success_token
 test_an_unqualified_reviewer_is_refused_without_being_recorded_as_failed
 test_the_shipped_register_is_admissible
 test_the_shipped_sol_high_record_is_the_first_real_record_and_is_not_a_pass
-test_every_shipped_contract_declares_exactly_one_of_the_nine_axes
+test_every_shipped_contract_declares_exactly_one_declared_axis
 test_a_qualified_pass_may_not_be_asserted_past_the_register

@@ -742,7 +742,7 @@ The captain ruling of 2026-08-13 separates them: missing qualification is an eng
 `qualifications/schema.json` is the single owner of the field contract, the five-value vocabulary, the state computation and every closed vocabulary in it.
 `bin/fm-qualification-lib.sh` owns the decision, `bin/fm-qualification.sh --help` owns the mechanics, and [`role-qualification`](../.agents/skills/role-qualification/SKILL.md) owns what firstmate does with each answer.
 
-- `qualifications/contracts/<id>.json` is one capability contract: the reusable role and risk version, exactly one of the nine axes the schema declares, and an executable predicate. A contract names a JOB and never who does it - the validator refuses a vendor-bearing key and refuses any value equal to a model or provider this home's routing config configures, because a contract naming a vendor cannot be re-run against the next candidate.
+- `qualifications/contracts/<id>.json` is one capability contract: the reusable role and risk version, exactly one of the ten axes the schema declares, and an executable predicate. A contract names a JOB and never who does it - the validator refuses a vendor-bearing key and refuses any value equal to a model or provider this home's routing config configures, because a contract naming a vendor cannot be re-run against the next candidate.
 - `qualifications/records/<id>.json` is one observation of one binding against one contract, keyed by contract, fully qualified model, harness and native effort; provider is implied by the required fully qualified model and remains recorded as binding evidence. Harness version is recorded context rather than a key axis because its semantics cannot be probed on read, so that drift is bounded only by the declared `harness_semantics` dependency and its required `time_bound`; a later harness-version observation supersedes the earlier record for the same binding.
 - `data/qualifications/records/` is an optional home-private overlay with the same schema, for a binding or an evidence trail a home must not publish into a shared template repo. Its absence is silent; a tracked register that exists and cannot be read is could-not-observe.
 
@@ -766,6 +766,15 @@ A `FAILED` record reopens as `QUALIFICATION_REQUIRED` when a declared dependency
 
 Unlike the quota gate, this gate fails CLOSED where a floor declares a requirement, and the asymmetry is a property of the input rather than a preference.
 An unobserved quota can only remove a candidate the policy already admitted, so failing to observe it removes nothing; a capability requirement IS the admission, so admitting on unread evidence would route work on no evidence at all.
+
+Two of the ten axes are easy to read as one and are deliberately not: `exact_change_review` is review of a diff AFTER a mutation, while `exact_artifact_inspection` is read-only assessment of an exact identified artifact or state package with no mutation and no diff to reason from.
+Neither may stand in for the other in either direction, and `requires_capabilities` matches by contract id rather than by axis, so a record on one contract never satisfies a floor that names another.
+An axis that has to be widened to fit a job needs a new axis registered in the schema, not a note in a contract reinterpreting an existing one.
+
+The five result words are the interpreter's alone.
+An instrument, self-test, integrity check or control runner must never emit `QUALIFIED`, `FAILED`, `QUALIFICATION_REQUIRED`, `QUALIFICATION_STALE` or `COULD_NOT_OBSERVE` as its own local success vocabulary, because a reader scanning that output cannot tell an instrument reporting on itself from an admitting qualification result; an instrument-scoped term that cannot be mistaken for qualification, admission or acceptance authority is the repair.
+`bin/fm-qualification.sh validate` enforces the statically declarable half: a contract whose `executable_predicate` carries one of those words as a bare token value is refused by name.
+It cannot enforce the other half, and that limit is worth knowing rather than assuming away - `validate` never runs a predicate, so what a fixture package actually PRINTS is beyond its reach and is owned by the controls that package itself ships.
 
 ### Zero-route classification and the bounded workflow
 

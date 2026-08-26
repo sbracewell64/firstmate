@@ -10,6 +10,7 @@
   },
   "result_vocabulary": {
     "_rule": "These five values are the whole vocabulary and no synonym is accepted. An unregistered word - inconclusive, unknown, pass, fail, true, false - makes a record INADMISSIBLE rather than being normalized, because the measured failure this register was built from was exactly a candidate emitting synonyms and an evaluator being tempted to read them charitably.",
+    "_only_the_interpreter_may_emit_these_words": "An instrument, self-test, integrity check or control runner MUST NOT emit one of these five words as its own local success vocabulary. Only the qualification interpreter - bin/fm-qualification-lib.sh computing a state, or a record recording the result it observed - may put one of them in front of a reader. A control runner that prints QUALIFIED to mean its own red controls fired has manufactured a second live sense of the word inside the very evidence the first sense is computed from, and a reader who scans that output cannot tell an instrument congratulating itself from an admitting qualification result. Instrument-scoped terms are the repair: name what the instrument observed about itself, in a word that cannot be mistaken for qualification, admission or acceptance authority. ENFORCED at contract admission by bin/fm-qualification.sh validate, which refuses a contract whose executable_predicate declares one of these words as a bare token; tests/fm-qualification.test.sh drives it red first. NOT enforced against what a fixture package actually PRINTS at run time: validate never runs a predicate, so that half is owned by the package's own controls and recorded as a known limitation in docs/configuration.md.",
     "QUALIFIED": "The contract's executable predicate ran against this binding, returned its own pass, and the required assignment-distinct adjudication returned a pass. This is the only value that admits a candidate.",
     "FAILED": "The predicate ran and rejected this binding. Observed-bad, and preserved as exclusion evidence; a later record never deletes it.",
     "QUALIFICATION_REQUIRED": "No applicable observation exists yet for this exact tuple, or one exists but does not carry the required adjudication. Missing evidence, NOT incapability, and never FAILED.",
@@ -35,7 +36,7 @@
     "why": "A register that goes stale on every commit is a register nobody can rely on, and the reflex repair is to stop checking it. The ruling names this explicitly: unrelated repository bytes do not invalidate qualification."
   },
   "axes": {
-    "_rule": "Nine independent axes. No axis may be read as another, and a contract declares exactly one. A capability that would grant a second axis is INADMISSIBLE rather than accepted with a note, because the collapse is the failure: an available model reading as a qualified one, or a qualified maker reading as an independent reviewer.",
+    "_rule": "Ten independent axes. No axis may be read as another, and a contract declares exactly one. A capability that would grant a second axis is INADMISSIBLE rather than accepted with a note, because the collapse is the failure: an available model reading as a qualified one, or a qualified maker reading as an independent reviewer. Broadening an axis in a contract's own note is the same collapse written more quietly: an axis whose meaning has to be widened to fit the job needs a NEW axis registered here, not a local reinterpretation of an existing one.",
     "maker_qualification": {
       "question": "Was this binding observed to DO the job?",
       "owner": "qualifications/contracts/*.json with axis maker_qualification, interpreted by bin/fm-qualification-lib.sh"
@@ -49,6 +50,11 @@
       "question": "Was this binding observed to review the EXACT CHANGE after it is made?",
       "owner": "qualifications/contracts/*.json with axis exact_change_review",
       "separate_because": "Same reason as above, from the other side. One reviewer may perform both only when it holds a QUALIFIED record for each and assignment independence still holds."
+    },
+    "exact_artifact_inspection": {
+      "question": "Was this binding observed to inspect/assess the exact identified artifact or state package named by the contract, without deriving authority from change/diff semantics?",
+      "owner": "qualifications/contracts/*.json with axis exact_artifact_inspection",
+      "separate_because": "exact_change_review is review of a DIFF AFTER A MUTATION and takes its authority from what changed; this axis reads an artifact that is simply there, with no mutation, no before-state and no diff to reason from. Neither may be read as the other in either direction: a binding observed to grade a package has never been observed to catch what a change broke, and a binding observed to review a diff has never been observed to assess a package on its own terms. It is equally not maker_qualification, because inspecting the artifact is not doing the job the artifact is evidence of, and a binding that produced one has still never been observed to inspect one."
     },
     "assignment_independence": {
       "question": "Is the checker independent of the maker on THIS assignment?",
@@ -183,7 +189,7 @@
       "description": "The predicate is a named executable check inside this repository that needs no candidate at all.",
       "args": {
         "check": "path to the executable, resolved only under the tracked code root",
-        "expect": "the exact stdout token that means pass"
+        "expect": "the exact stdout token that means pass. It may not be one of the result_vocabulary words, for the reason result_vocabulary._only_the_interpreter_may_emit_these_words states."
       }
     }
   },

@@ -228,6 +228,31 @@ This is a writing rule, not a migration.
 
 **Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `<id>.attempt` and `<id>.lineage` rows and section 7's replacement paragraph; the header of [`bin/fm-attempt.sh`](../bin/fm-attempt.sh); the `--succeed-execution` contract in [`bin/fm-spawn.sh`](../bin/fm-spawn.sh); [`tests/fm-execution-replacement.test.sh`](../tests/fm-execution-replacement.test.sh).
 
+### `QUALIFIED`
+
+Ruled 2026-08-25 by the canonical Browser Sol ruling that found the second sense, not by the CFVC-16 census.
+
+| | |
+|---|---|
+| **Disposition** | DISSOLVED BY RENAME |
+| **Register sense** | the one admitting value of the role qualification result vocabulary - the predicate ran, returned its own pass, and the required assignment-distinct adjudication agreed - owned by [`qualifications/schema.json`](../qualifications/schema.json) and computed only by [`bin/fm-qualification-lib.sh`](../bin/fm-qualification-lib.sh) |
+| **Instrument sense (retired)** | the terminal token the home-private `readonly-inspection-fixture-v1` 1.0.0 control runner printed to report that its own red controls had fired, renamed to `RED_CONTROLS_EFFECTIVE` in 1.0.1 |
+
+NO RENAME and QUALIFY were both unavailable, and the measurement says why.
+The two senses did not merely resemble each other: the instrument sense was emitted inside the evidence package the register sense is computed FROM, so a reader scanning that output could not tell an instrument reporting on itself from an admitting qualification result about a binding.
+A qualifier would not have helped either, because the collision was in a machine-emitted terminal token rather than in prose a contributor writes.
+
+The instrument sense is retired, not qualified: 1.0.0 printed `"result":"QUALIFIED"` and 1.0.1 prints `"result":"RED_CONTROLS_EFFECTIVE"`, and the same package now refuses every one of the five register words as an instrument token.
+Nothing in the register sense is renamed, and nothing outside the qualification interpreter may adopt the word.
+The general law is stated once at the register's own owner: an instrument, self-test, integrity check or control runner must not take any of `QUALIFIED`, `FAILED`, `QUALIFICATION_REQUIRED`, `QUALIFICATION_STALE` or `COULD_NOT_OBSERVE` as its own local success vocabulary.
+
+**Retirement of the obsolete name.**
+The instrument sense retires with `readonly-inspection-fixture-v1` 1.0.0 itself.
+That generation is a sealed, already-observed package, so it is retained unchanged as historical evidence and is never edited to carry the new token; the name is dead the moment no live contract generation names 1.0.0 as its `manifest_digest`-bound package.
+Until then, read a `QUALIFIED` in 1.0.0 control output as the instrument sense and never as a qualification result.
+
+**Where it bites:** the `result_vocabulary` block of [`qualifications/schema.json`](../qualifications/schema.json); the contract-admission refusal in [`bin/fm-qualification-lib.sh`](../bin/fm-qualification-lib.sh); the "Role qualification register" section of [`configuration.md`](configuration.md); [`tests/fm-qualification.test.sh`](../tests/fm-qualification.test.sh).
+
 ## Maintaining this file
 
 Add a row when a word acquires a second live sense in any repository the fleet reads or writes, not when a rename is proposed.

@@ -88,6 +88,8 @@ write_config() {  # <home>
                    "requires_capabilities": ["runtime-job-design", "runtime-job-change"] },
     "F-QUAL":    { "effort_floor": "high", "context_ceiling": 140000, "tool_loop": "verified-agentic",
                    "requires_capabilities": ["runtime-job-adjudicator"] },
+    "F-ARTIFACT": { "effort_floor": "high", "context_ceiling": 140000, "tool_loop": "verified-agentic",
+                   "requires_capabilities": ["runtime-job-artifact"] },
     "F-BROKEN":  { "effort_floor": "high", "context_ceiling": 140000, "tool_loop": "verified-agentic",
                    "requires_capabilities": "runtime-job-maker" }
   },
@@ -111,6 +113,9 @@ write_config() {  # <home>
       "use": { "harness": "pi", "model": "beta/two", "effort": "high" },
       "pool": ["beta/two"] },
     { "when": "qualification adjudication", "route": "R-QUAL", "floor": "F-QUAL",
+      "use": { "harness": "pi", "model": "beta/two", "effort": "high" },
+      "pool": ["beta/two"] },
+    { "when": "read-only artifact inspection", "route": "R-ARTIFACT", "floor": "F-ARTIFACT",
       "use": { "harness": "pi", "model": "beta/two", "effort": "high" },
       "pool": ["beta/two"] },
     { "when": "a floor whose requirement cannot be interpreted", "route": "R-BROKEN", "floor": "F-BROKEN",
@@ -159,7 +164,7 @@ write_contract() {  # <id> <role> <axis>
   "executable_predicate": {
     "kind": "declared_deterministic",
     "check": "bin/fm-qualification.sh",
-    "expect": "QUALIFIED"
+    "expect": "PREDICATE_PASS"
   },
   "adjudication": { "required": $adjudication, "adjudicator_contract": "runtime-job-adjudicator",
                     "independence_dimensions": ["binding"] },
@@ -353,6 +358,7 @@ reset_register() {
   write_contract runtime-job-maker RUNTIME_JOB_MAKER maker_qualification
   write_contract runtime-job-design RUNTIME_JOB_DESIGNER design_challenge
   write_contract runtime-job-change RUNTIME_JOB_CHANGE_REVIEWER exact_change_review
+  write_contract runtime-job-artifact RUNTIME_JOB_ARTIFACT_INSPECTOR exact_artifact_inspection
   write_contract runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR exact_change_review
   write_record zeta-nine-adjudicator runtime-job-adjudicator RUNTIME_JOB_ADJUDICATOR zeta/nine zeta QUALIFIED \
     '.adjudication.adjudicator_binding = "beta/two"'
@@ -1310,6 +1316,44 @@ test_a_route_requiring_two_capabilities_needs_both_records() {
   pass "a route requiring two capabilities needs both records"
 }
 
+test_a_capability_requirement_is_matched_by_contract_id_and_never_by_axis() {
+  local rec
+  rec=$(make_home axiscrossing); read_home "$rec"
+  reset_register
+  # A route may not require a contract the register itself would refuse, so the
+  # read-only inspection contract's admissibility is the precondition of the case
+  # rather than an aside.
+  run_qual "$HOME_DIR" validate "$CDIR/runtime-job-artifact.json" >/dev/null 2>&1 \
+    || fail "the read-only inspection contract this route requires is not admissible in the register"
+
+  # beta/two holds the POST-MUTATION diff-review capability and nothing else.
+  write_record beta-two-change runtime-job-change RUNTIME_JOB_CHANGE_REVIEWER beta/two beta QUALIFIED
+  local rc=0 out z
+  z=$(zero "$HOME_DIR" R-ARTIFACT)
+  [ "$(printf '%s' "$z" | jq -r '.classification')" = QUALIFICATION_REQUIRED ] \
+    || fail "a read-only inspection route was satisfied by a diff-review record"
+  run_route "$HOME_DIR" eligible --route R-ARTIFACT >/dev/null 2>&1 || rc=$?
+  expect_code 3 "$rc" "an exact-change review record made a candidate eligible for exact-artifact inspection"
+  write_record beta-two-artifact runtime-job-artifact RUNTIME_JOB_ARTIFACT_INSPECTOR beta/two beta QUALIFIED
+  rc=0
+  out=$(run_route "$HOME_DIR" eligible --route R-ARTIFACT) || rc=$?
+  expect_code 0 "$rc" "the candidate holding the exact-artifact contract was still ineligible"
+  assert_contains "$out" "beta/two" "the qualified inspector was not offered"
+
+  # The other direction: holding the read-only inspection contract does not supply
+  # the exact-change review a review route separately requires.
+  write_record beta-two-design runtime-job-design RUNTIME_JOB_DESIGNER beta/two beta QUALIFIED
+  rm -f "$RDIR/beta-two-change.json"
+  rc=0
+  run_route "$HOME_DIR" eligible --route R-REVIEW >/dev/null 2>&1 || rc=$?
+  expect_code 3 "$rc" "an exact-artifact inspection record was consumed as the missing exact-change review"
+  write_record beta-two-change runtime-job-change RUNTIME_JOB_CHANGE_REVIEWER beta/two beta QUALIFIED
+  rc=0
+  run_route "$HOME_DIR" eligible --route R-REVIEW >/dev/null 2>&1 || rc=$?
+  expect_code 0 "$rc" "the candidate holding both required contracts was still ineligible"
+  pass "a capability requirement is matched by contract id and never by axis"
+}
+
 # --- 7. the spawn chokepoint -------------------------------------------------
 
 test_spawn_refuses_an_unqualified_binding_and_records_the_workflow() {
@@ -1405,6 +1449,7 @@ test_failed_advancement_error_remains_observable_and_nonterminal
 test_the_workflow_bound_never_touches_the_blocked_work_accounting
 test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded
 test_a_route_requiring_two_capabilities_needs_both_records
+test_a_capability_requirement_is_matched_by_contract_id_and_never_by_axis
 test_spawn_refuses_an_unqualified_binding_and_records_the_workflow
 test_spawn_admits_a_qualified_binding_and_records_what_it_was_checked_against
 test_spawn_is_untouched_where_no_floor_declares_a_capability

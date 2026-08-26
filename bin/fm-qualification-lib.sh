@@ -127,10 +127,11 @@ QUALIFICATION_REQUIRED
 QUALIFICATION_STALE
 COULD_NOT_OBSERVE'
 
-# The nine axes, spelled once. A contract declares exactly one.
+# The ten axes, spelled once. A contract declares exactly one.
 FM_QUALIFICATION_AXES='maker_qualification
 design_challenge
 exact_change_review
+exact_artifact_inspection
 assignment_independence
 provider_account_pool_identity
 availability
@@ -344,6 +345,7 @@ fm_qualification_contract_problems() {  # <contract-file> [<routed-names-file>]
     --arg base "$(basename "${file%.json}")" \
     --argjson names "$names_json" \
     --arg axes_raw "$FM_QUALIFICATION_AXES" \
+    --arg results_raw "$FM_QUALIFICATION_RESULTS" \
     --arg refused_raw "$FM_QUALIFICATION_REFUSED_CONTRACT_KEYS" \
     --arg depkinds_raw "$FM_QUALIFICATION_PROBED_KINDS
 $FM_QUALIFICATION_UNCOVERED_KINDS" \
@@ -351,6 +353,7 @@ $FM_QUALIFICATION_UNCOVERED_KINDS" \
     def lines($s): [$s | split("\n")[] | select(length > 0)];
     . as $c
     | (lines($axes_raw)) as $axes
+    | (lines($results_raw)) as $results
     | (lines($refused_raw)) as $refused
     | (lines($depkinds_raw)) as $depkinds
     | [
@@ -364,7 +367,22 @@ $FM_QUALIFICATION_UNCOVERED_KINDS" \
                 or (any($c.does_not_grant[]?; (type != "string") or (length == 0))))
          | "does_not_grant must be a non-empty array of non-empty strings"),
         (select(($axes | index($c.axis)) == null)
-         | "axis \"\($c.axis // "absent")\" is not one of the nine declared axes"),
+         | "axis \"\($c.axis // "absent")\" is not one of the ten declared axes"),
+        # THE INSTRUMENT VOCABULARY LAW, at the only layer that can enforce it
+        # statically. A predicate field whose WHOLE value is a result word is a
+        # token, not prose, and a token is what a reader mistakes for a verdict the
+        # interpreter produced. Only the qualification owner may put one of those
+        # five words in front of a reader; an instrument that reports its own pass
+        # needs an instrument-scoped term. What a fixture package PRINTS at run time
+        # is out of reach here, because validate never runs a predicate - that half
+        # stays with the controls the package itself ships.
+        ( ($c.executable_predicate? // {})
+          | select(type == "object")
+          | . as $ep
+          | [ paths(type == "string") ][] as $p
+          | ($ep | getpath($p)) as $v
+          | select(($results | index($v)) != null)
+          | "executable_predicate.\($p | map(tostring) | join(".")) is exactly \"\($v)\", a qualification result word; an instrument, self-test or control may not take one as its own local success vocabulary, because only the qualification interpreter may emit one" ),
         ($refused[] as $k | select($c | has($k)) | "refused vendor-bearing key: \($k)"),
         (select(($c.executable_predicate | type) != "object")
          | "executable_predicate must be an object naming a predicate this repository can run"),
