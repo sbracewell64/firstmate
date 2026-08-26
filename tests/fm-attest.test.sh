@@ -473,12 +473,24 @@ publish_out() {
 publish_only_if_required_out() {
   local repo=$1
   shift
-  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck --only-if-required "$@" 2>&1 )
+  if [ -e "$repo/.github/no-mistakes-attestation" ] || [ -L "$repo/.github/no-mistakes-attestation" ]; then
+    git -C "$repo" add .github/no-mistakes-attestation
+    git -C "$repo" diff --cached --quiet || git -C "$repo" commit -qm policy
+  fi
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck --only-if-required \
+      --policy-venue github.com/fixture/policy --policy-url https://github.com/fixture/policy.git \
+      --policy-ref HEAD "$@" 2>&1 )
 }
 
 required_out() {
   local repo=$1
-  ( cd "$repo" && "$ATTEST" required 2>&1 )
+  shift
+  if [ -e "$repo/.github/no-mistakes-attestation" ] || [ -L "$repo/.github/no-mistakes-attestation" ]; then
+    git -C "$repo" add .github/no-mistakes-attestation
+    git -C "$repo" diff --cached --quiet || git -C "$repo" commit -qm policy
+  fi
+  ( cd "$repo" && "$ATTEST" required --policy-venue github.com/fixture/policy \
+      --policy-url https://github.com/fixture/policy.git --policy-ref "${1:-HEAD}" 2>&1 )
 }
 
 # A repository whose workflow consumes the verifier and whose fixed marker
@@ -3305,10 +3317,11 @@ test_required_reads_a_marker_from_the_repository_default_branch() {
   repo="$TMP_ROOT/required-default-marker"
   new_repo "$repo"
   install_default_branch "$repo" regular
-  out=$(required_out "$repo")
+  git -C "$repo" fetch -q origin main:refs/remotes/origin/main
+  out=$(required_out "$repo" refs/remotes/origin/main)
   rc=$?
   [ "$rc" -eq 0 ] || fail "a pre-marker candidate did not inherit the repository declaration (exit $rc): $out"
-  assert_contains "$out" "refs/heads/main" "the default-branch declaration was not named"
+  assert_contains "$out" "refs/remotes/origin/main" "the governed policy generation was not named"
   pass "fm-attest.sh: a pre-marker candidate reads the repository declaration"
 }
 
@@ -3316,10 +3329,10 @@ test_required_reports_an_unresolvable_default_ref_as_neither() {
   local repo out rc
   repo="$TMP_ROOT/required-default-unresolvable"
   new_repo "$repo"
-  out=$(required_out "$repo")
+  out=$(required_out "$repo" refs/heads/missing)
   rc=$?
   [ "$rc" -eq 2 ] || fail "an unresolvable default ref became an answer (exit $rc): $out"
-  assert_contains "$out" "default-ref-unresolvable" "the unresolved default ref did not report its own reason"
+  assert_contains "$out" "policy-ref-unreadable" "the unresolved policy ref did not report its own reason"
   pass "fm-attest.sh: an unresolvable repository default answers neither way"
 }
 
@@ -3328,10 +3341,11 @@ test_required_reports_a_default_branch_symlink_as_neither() {
   repo="$TMP_ROOT/required-default-symlink"
   new_repo "$repo"
   install_default_branch "$repo" symlink
-  out=$(required_out "$repo")
+  git -C "$repo" fetch -q origin main:refs/remotes/origin/main
+  out=$(required_out "$repo" refs/remotes/origin/main)
   rc=$?
   [ "$rc" -eq 2 ] || fail "a default-branch symlink became an answer (exit $rc): $out"
-  assert_contains "$out" "default-declaration-not-regular" \
+  assert_contains "$out" "policy-declaration-not-regular" \
     "the default-branch symlink did not report its own reason"
   pass "fm-attest.sh: a default-branch symlink answers neither way"
 }

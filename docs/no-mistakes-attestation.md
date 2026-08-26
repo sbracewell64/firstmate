@@ -157,13 +157,15 @@ Measured on this repository on 2026-08-26: of ten open pull requests, four had a
 That is not ten separate mistakes, it is one unowned step, and `data/no-mistakes-attestation-provenance-recurrence-owner/report.md` holds the per-head classification.
 
 `bin/fm-attest.sh required` is the predicate that gave the step an owner.
-It answers whether the push target repository declares that its CI reads a head-bound attestation, deciding it only from the fixed declaration above in the checkout or that repository's advertised default branch rather than from workflow text, a repository name, or a hard-coded list.
+It answers whether the governed contribution venue declares that its CI reads a head-bound attestation at the contribution target recorded by `bin/fm-task-base-lib.sh`.
+The venue identity, its repository URL, and that policy generation are explicit inputs, and inconsistent or missing inputs are could-not-observe rather than an invitation to infer policy from the candidate repository.
+The fixed declaration is read as a git blob from that venue generation, while notes remain candidate-bound evidence published to the candidate push repository.
 It is three-valued like every other observation here: required, not required, and a declaration it could not read, which is neither.
 A declaration with the wrong type, unreadable bytes, or noncanonical content is could-not-observe rather than absence, so publication never guesses around malformed repository intent.
 
 That predicate is what makes an unconditional publication step correct everywhere, and two owners now run one:
 
-- The worker that ran the pipeline publishes at the moment its run reaches CI-ready, from the worktree holding the run record, with `bin/fm-attest.sh write --only-if-required`.
+- The worker that ran the pipeline publishes at the moment its run reaches CI-ready, from the worktree holding the run record, with `bin/fm-attest.sh write --only-if-required` and the task's recorded contribution venue, venue URL, and contribution target.
   `bin/fm-brief.sh` puts that call in the `no-mistakes` delivery contract, which is the document a worker executes; the two modes that run no pipeline have no evidence to publish and are told nothing.
   The flag makes the call safe to run in any project: where no check reads the result, nothing is recorded, nothing is pushed, and the pipeline tool is never even consulted.
 - `bin/fm-pr-check.sh` publishes at the fleet's own chokepoint, after the merge watch is armed, which is the first point at which the fleet holds the task's local copy, the request, and the request's head together.
@@ -177,7 +179,7 @@ A candidate whose pipeline run did not cover the exact head is refused by the sa
 
 The recurrence is closed when this predicate holds and keeps holding:
 
-> For every open pull request whose push target repository declares this gate in the checkout or on its advertised default branch, the exact head under review either carries a published attestation that `bin/fm-attest.sh verify` accepts, or is refused by `bin/fm-attest.sh write` with a reason naming what about that candidate is missing.
+> For every open pull request whose governed contribution venue declares this gate at the task's recorded policy generation, the exact candidate head under review either carries a published attestation that `bin/fm-attest.sh verify` accepts from the candidate repository, or is refused by `bin/fm-attest.sh write` with a reason naming what about that candidate is missing.
 
 The second half is what makes it a closing condition rather than a wish.
 A head with no attestation is only acceptable when the owner has said why in its own words - `run-incomplete`, `run-covers-another-head`, `no-run-record` - which are statements about the candidate that a person can act on.

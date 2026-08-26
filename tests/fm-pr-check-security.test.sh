@@ -576,8 +576,10 @@ declare_attestation_gate() {
 test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone() {
   local dir out rc
   dir=$(make_case provenance-not-required)
-  write_task_meta "$dir"
   make_worktree_repo "$dir"
+  write_task_meta "$dir"
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
+    "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
   set +e
   FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
     run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
@@ -600,9 +602,13 @@ test_provenance_chokepoint_reports_a_refused_publication_as_a_verdict() {
   # which is a verdict about this candidate rather than a failure to look, and
   # it must reach the operator instead of being swallowed.
   dir=$(make_case provenance-refused)
-  write_task_meta "$dir"
   make_worktree_repo "$dir"
   declare_attestation_gate "$dir"
+  git -C "$dir/wt" add .github
+  git -C "$dir/wt" commit -qm policy
+  write_task_meta "$dir"
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
+    "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
   cat > "$dir/fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 case "$*" in

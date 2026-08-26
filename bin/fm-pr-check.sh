@@ -133,6 +133,7 @@ fi
 # sentinel, or a venue that already matches literally.
 VENUE=$(grep '^contribution_venue=' "$RECORD" | tail -1 | cut -d= -f2- || true)
 VENUE_URL=$(grep '^contribution_venue_url=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+POLICY_REF=$(grep '^contribution_target=' "$RECORD" | tail -1 | cut -d= -f2- || true)
 PR_VENUE=$(printf '%s/%s' "$HOST" "$PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
 if [ -z "$VENUE" ]; then
   printf 'venue: unchecked (task %s records no contribution venue)\n' "$ID"
@@ -302,7 +303,9 @@ else
   ATTEST_OUT=$(
     cd "$WT" \
       && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
-        "$SCRIPT_DIR/fm-attest.sh" write --only-if-required --expect-head "$PR_HEAD" 2>&1
+        "$SCRIPT_DIR/fm-attest.sh" write --only-if-required \
+          --policy-venue "$VENUE" --policy-url "$VENUE_URL" --policy-ref "$POLICY_REF" \
+          --expect-head "$PR_HEAD" 2>&1
   ) || ATTEST_RC=$?
   ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
   case "$ATTEST_RC" in

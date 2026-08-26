@@ -8,9 +8,9 @@
 # that a pull_request workflow can read with contents: read.
 #
 # Usage:
-#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required] [--expect-head <sha>] [--notes-ref <ref>]
+#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required --policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>] [--expect-head <sha>] [--notes-ref <ref>]
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
-#   fm-attest.sh required
+#   fm-attest.sh required --policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>
 #   fm-attest.sh declaration-check
 #   fm-attest.sh show [--commit <rev>] [--notes-ref <ref>]
 #   fm-attest.sh verify --head <sha> [--notes-ref <ref>]
@@ -82,6 +82,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
 # shellcheck source=bin/fm-publication-seam-lib.sh
 . "$SCRIPT_DIR/fm-publication-seam-lib.sh"
+# shellcheck source=bin/fm-task-base-lib.sh
+. "$SCRIPT_DIR/fm-task-base-lib.sh"
 
 # Every call to the pipeline is bounded, so a tool blocked on a lock or on a
 # network read refuses with its own reason instead of hanging at a terminal.
@@ -948,8 +950,10 @@ required_evidence=
 required_reason=
 
 required_observe() {
-  required_allow_default=${1:-1}
-  required_remote=${2:-origin}
+  required_allow_checkout=${1:-0}
+  required_venue=${2-}
+  required_url=${3-}
+  required_ref=${4-}
   required_state=
   required_evidence=
   required_reason=
@@ -963,57 +967,45 @@ required_observe() {
   }
 
   required_file="$required_top/$REQUIRED_DECLARATION"
-  if [ ! -e "$required_file" ] && [ ! -L "$required_file" ]; then
-    if [ "$required_allow_default" -eq 0 ]; then
-      required_state=not-required
-      required_evidence="it carries no $REQUIRED_DECLARATION"
+  if [ "$required_allow_checkout" -eq 0 ]; then
+    if [ -z "$required_venue" ] || [ -z "$required_url" ] || [ -z "$required_ref" ] \
+      || [ "$required_venue" = unresolved ] || [ "$required_ref" = unresolved ]; then
+      required_state=unobservable
+      required_reason=policy-subject-missing
+      required_evidence="The governed contribution venue and policy generation were not supplied unambiguously."
       return 0
     fi
-    required_push_url=$(git remote get-url --push "$required_remote" 2>/dev/null) || {
+    required_url_identity=$(task_base_venue_identity "$required_url" 2>/dev/null || true)
+    required_url_alias=$(task_base_venue_identity_alias "$required_url" 2>/dev/null || true)
+    if [ "$required_venue" != "$required_url_identity" ] && [ "$required_venue" != "$required_url_alias" ]; then
       required_state=unobservable
-      required_reason=default-ref-unresolvable
-      required_evidence="The push target remote '$required_remote' could not be resolved, so its default branch declaration is unknown."
-      return 0
-    }
-    required_remote_head=$(git ls-remote --symref "$required_push_url" HEAD 2>/dev/null) || {
-      required_state=unobservable
-      required_reason=default-ref-unresolvable
-      required_evidence="The default branch of the push target remote '$required_remote' could not be resolved."
-      return 0
-    }
-    required_default_ref=$(printf '%s\n' "$required_remote_head" | awk '$1 == "ref:" && $3 == "HEAD" { print $2; exit }')
-    required_default_sha=$(printf '%s\n' "$required_remote_head" | awk '$2 == "HEAD" { print $1; exit }')
-    case "$required_default_ref" in refs/heads/*) ;; *) required_default_ref= ;; esac
-    is_full_sha "$required_default_sha" || required_default_sha=
-    if [ -z "$required_default_ref" ] || [ -z "$required_default_sha" ]; then
-      required_state=unobservable
-      required_reason=default-ref-unresolvable
-      required_evidence="The push target remote '$required_remote' did not advertise a usable HEAD symref."
+      required_reason=policy-subject-mismatch
+      required_evidence="The governed venue $required_venue is inconsistent with its recorded repository URL."
       return 0
     fi
-    if ! git cat-file -e "$required_default_sha^{commit}" 2>/dev/null; then
-      git fetch --quiet --no-tags --no-write-fetch-head "$required_push_url" "$required_default_ref" 2>/dev/null || {
+    if ! required_commit=$(git rev-parse --verify --quiet "$required_ref^{commit}" 2>/dev/null); then
+      git fetch --quiet --no-tags --no-write-fetch-head "$required_url" "$required_ref" 2>/dev/null || {
         required_state=unobservable
-        required_reason=default-ref-unreadable
-        required_evidence="The default branch $required_default_ref of the push target remote '$required_remote' could not be read."
+        required_reason=policy-ref-unreadable
+        required_evidence="The policy generation $required_ref at $required_venue could not be read."
+        return 0
+      }
+      required_commit=$(git rev-parse --verify --quiet FETCH_HEAD^{commit} 2>/dev/null) || {
+        required_state=unobservable
+        required_reason=policy-ref-unreadable
+        required_evidence="The policy generation $required_ref at $required_venue did not resolve to a commit."
         return 0
       }
     fi
-    git cat-file -e "$required_default_sha^{commit}" 2>/dev/null || {
+    required_entry=$(git ls-tree "$required_commit" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
       required_state=unobservable
-      required_reason=default-ref-unreadable
-      required_evidence="The advertised default branch commit $required_default_sha could not be read after fetching $required_default_ref."
-      return 0
-    }
-    required_entry=$(git ls-tree "$required_default_sha" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
-      required_state=unobservable
-      required_reason=default-declaration-unreadable
-      required_evidence="$REQUIRED_DECLARATION could not be inspected on $required_default_ref."
+      required_reason=policy-declaration-unreadable
+      required_evidence="$REQUIRED_DECLARATION could not be inspected at $required_venue generation $required_ref."
       return 0
     }
     if [ -z "$required_entry" ]; then
       required_state=not-required
-      required_evidence="neither the checkout nor $required_default_ref carries $REQUIRED_DECLARATION"
+      required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION"
       return 0
     fi
     required_mode=${required_entry%% *}
@@ -1021,37 +1013,31 @@ required_observe() {
     required_type=${required_entry_rest%% *}
     case "$required_mode:$required_type" in 100644:blob | 100755:blob) ;; *)
       required_state=unobservable
-      required_reason=default-declaration-not-regular
-      required_evidence="$REQUIRED_DECLARATION on $required_default_ref is not a regular-file blob."
+      required_reason=policy-declaration-not-regular
+      required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref is not a regular-file blob."
       return 0
       ;;
     esac
-    git cat-file -e "$required_default_sha:$REQUIRED_DECLARATION" 2>/dev/null || {
+    required_content=$(git cat-file -p "$required_commit:$REQUIRED_DECLARATION" 2>/dev/null) || {
       required_state=unobservable
-      required_reason=default-declaration-unreadable
-      required_evidence="$REQUIRED_DECLARATION on $required_default_ref could not be read."
+      required_reason=policy-declaration-unreadable
+      required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref could not be read."
       return 0
     }
-    required_content=$(git cat-file -p "$required_default_sha:$REQUIRED_DECLARATION" 2>/dev/null) || {
-      required_state=unobservable
-      required_reason=default-declaration-unreadable
-      required_evidence="$REQUIRED_DECLARATION on $required_default_ref could not be read."
-      return 0
-    }
-    required_size=$(git cat-file -s "$required_default_sha:$REQUIRED_DECLARATION" 2>/dev/null) || {
-      required_state=unobservable
-      required_reason=default-declaration-unreadable
-      required_evidence="$REQUIRED_DECLARATION on $required_default_ref could not be measured."
-      return 0
-    }
+    required_size=$(git cat-file -s "$required_commit:$REQUIRED_DECLARATION" 2>/dev/null) || required_size=
     if [ "$required_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_size" != 22 ]; then
       required_state=unobservable
-      required_reason=default-declaration-invalid
-      required_evidence="$REQUIRED_DECLARATION on $required_default_ref does not contain exactly one '$REQUIRED_DECLARATION_CONTENT' line."
+      required_reason=policy-declaration-invalid
+      required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref does not contain exactly one '$REQUIRED_DECLARATION_CONTENT' line."
       return 0
     fi
     required_state=required
-    required_evidence="$REQUIRED_DECLARATION on the repository default branch $required_default_ref contains the required declaration"
+    required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref carries the required declaration"
+    return 0
+  fi
+  if [ ! -e "$required_file" ] && [ ! -L "$required_file" ]; then
+    required_state=not-required
+    required_evidence="it carries no $REQUIRED_DECLARATION"
     return 0
   fi
   if [ -L "$required_file" ]; then
@@ -1099,8 +1085,16 @@ required_observe() {
 }
 
 cmd_required() {
-  [ "$#" -eq 0 ] || die "unexpected argument: $1"
-  required_observe 1 origin
+  policy_venue= policy_url= policy_ref=
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --policy-venue) [ "$#" -ge 2 ] || die "--policy-venue needs a value"; policy_venue=$2; shift 2 ;;
+      --policy-url) [ "$#" -ge 2 ] || die "--policy-url needs a value"; policy_url=$2; shift 2 ;;
+      --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_ref=$2; shift 2 ;;
+      *) die "unexpected argument: $1" ;;
+    esac
+  done
+  required_observe 0 "$policy_venue" "$policy_url" "$policy_ref"
   case "$required_state" in
     required)
       emit "fm-attest: this repository reads a head-bound attestation ($required_evidence)"
@@ -1133,7 +1127,7 @@ cmd_declaration_check() {
     0) ;;
     *) die "could not inspect workflows for attestation consumers" ;;
   esac
-  required_observe 0 origin
+  required_observe 1 '' '' ''
   [ "$required_state" = required ] || {
     report 'repository invariant failed' "${required_reason:-declaration-missing}" \
       "A workflow mentions fm-attest.sh, but $REQUIRED_DECLARATION is not the exact regular declaration."
@@ -1154,6 +1148,9 @@ cmd_write() {
   publication_expected_tip=
   recheck=1
   only_if_required=0
+  policy_venue=
+  policy_url=
+  policy_ref=
   notes_ref=$NOTES_REF_DEFAULT
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1161,6 +1158,9 @@ cmd_write() {
         only_if_required=1
         shift
         ;;
+      --policy-venue) [ "$#" -ge 2 ] || die "--policy-venue needs a value"; policy_venue=$2; shift 2 ;;
+      --policy-url) [ "$#" -ge 2 ] || die "--policy-url needs a value"; policy_url=$2; shift 2 ;;
+      --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_ref=$2; shift 2 ;;
       --run)
         [ "$#" -ge 2 ] || die "--run needs a value"
         run_id=$2
@@ -1206,7 +1206,7 @@ cmd_write() {
   # publication in one that did are both wrong, and a failed read is not a
   # licence to pick either.
   if [ "$only_if_required" -eq 1 ]; then
-    required_observe 1 "$remote"
+    required_observe 0 "$policy_venue" "$policy_url" "$policy_ref"
     case "$required_state" in
       required) ;;
       not-required)
