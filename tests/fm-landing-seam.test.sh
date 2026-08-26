@@ -132,6 +132,10 @@ configure_venue_with_raw_domain() {  # <dir> <json>
     "$2" > "$1/home/config/sol-control.json"
 }
 
+configure_raw_venue() {  # <dir> <contents>
+  printf '%s\n' "$2" > "$1/home/config/sol-control.json"
+}
+
 # <dir> <state> <verdict> <head> [<gate>] [<item>] [<request-id>]
 write_correlation() {
   local dir=$1 state=$2 verdict=$3 head=$4
@@ -358,6 +362,44 @@ test_pr_merge_refuses_an_unreadable_landing_domain() {
   [ "$merges" -eq 0 ] || fail "domain-unreadable: the forge was asked to merge $merges times under an unreadable domain declaration"
   assert_output_has "$dir" FM_LANDING_DOMAIN_UNREADABLE domain-unreadable
   pass "a malformed landing domain declaration refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_malformed_venue_configuration() {
+  local dir merges
+  dir=$(new_pr_case venue-malformed)
+  configure_raw_venue "$dir" '{not-json'
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "venue-malformed: malformed venue configuration must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "venue-malformed: the forge was asked to merge $merges times under malformed configuration"
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID venue-malformed
+  pass "malformed sol-control configuration refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_venue_configuration_missing_repo() {
+  local dir merges
+  dir=$(new_pr_case venue-missing-repo)
+  configure_raw_venue "$dir" '{"issue":2,"landing_domain":{"repos":[]}}'
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "venue-missing-repo: incomplete venue configuration must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "venue-missing-repo: the forge was asked to merge $merges times under incomplete configuration"
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID venue-missing-repo
+  pass "sol-control configuration missing repo refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_multi_segment_domain_repositories() {
+  local dir merges repo
+  for repo in github.com/owner/repo owner/repo/extra; do
+    dir=$(new_pr_case "domain-shape-${repo//\//-}")
+    configure_venue "$dir" "[\"$repo\"]"
+    run_pr_merge "$dir"
+    [ "$RC" -ne 0 ] || fail "domain-shape: $repo must be rejected as malformed, got exit 0"
+    merges=$(merge_count "$dir")
+    [ "$merges" -eq 0 ] || fail "domain-shape: the forge was asked to merge $merges times with malformed repository $repo"
+    assert_output_has "$dir" FM_LANDING_DOMAIN_UNREADABLE domain-shape
+  done
+  pass "multi-segment landing-domain repositories refuse fm-pr-merge (merges executed: 0)"
 }
 
 test_pr_merge_lands_when_the_landing_domain_is_declared_empty() {
@@ -864,6 +906,9 @@ FM_CONTROLS=(
   test_pr_merge_refuses_an_in_domain_candidate_with_no_correlation
   test_pr_merge_refuses_when_the_landing_domain_is_undeclared
   test_pr_merge_refuses_an_unreadable_landing_domain
+  test_pr_merge_refuses_malformed_venue_configuration
+  test_pr_merge_refuses_venue_configuration_missing_repo
+  test_pr_merge_refuses_multi_segment_domain_repositories
   test_pr_merge_lands_when_the_landing_domain_is_declared_empty
   test_pr_merge_matches_the_landing_domain_case_insensitively
   test_pr_merge_matches_a_mixed_case_candidate_against_the_domain

@@ -146,6 +146,7 @@ FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED=FM_LANDING_VENUE_UNCONFIGURED
 FM_LANDING_SEAM_TOKEN_CANDIDATE_UNBOUND=FM_LANDING_CANDIDATE_UNBOUND
 FM_LANDING_SEAM_TOKEN_DOMAIN_UNDECLARED=FM_LANDING_DOMAIN_UNDECLARED
 FM_LANDING_SEAM_TOKEN_DOMAIN_UNREADABLE=FM_LANDING_DOMAIN_UNREADABLE
+FM_LANDING_SEAM_TOKEN_VENUE_INVALID=FM_LANDING_VENUE_INVALID
 FM_LANDING_SEAM_TOKEN_CANDIDATE_REPO_UNOBSERVED=FM_LANDING_CANDIDATE_REPOSITORY_UNOBSERVED
 FM_LANDING_SEAM_TOKEN_MINT_UNOBSERVED=FM_LANDING_AUTHORIZATION_UNOBSERVED
 FM_LANDING_SEAM_TOKEN_SPEND_UNOBSERVED=FM_LANDING_SPEND_UNOBSERVED
@@ -186,14 +187,23 @@ fm_landing_seam_candidate_valid() {  # <item> <head>
 
 # --- the venue ---------------------------------------------------------------
 
-fm_landing_seam_venue_configured() {  # <config-dir>
+FM_LANDING_SEAM_VENUE_STATE=
+
+fm_landing_seam_venue_read() {  # <config-dir>
   local file=${1:-}/sol-control.json raw repo issue
-  [ -f "$file" ] || return 1
-  raw=$(cat "$file" 2>/dev/null) || return 1
-  printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 1
-  repo=$(printf '%s' "$raw" | jq -r '.repo // ""' 2>/dev/null) || return 1
-  issue=$(printf '%s' "$raw" | jq -r 'if .issue == null then "" else (.issue|tostring) end' 2>/dev/null) || return 1
-  [ -n "$repo" ] && [ -n "$issue" ]
+  FM_LANDING_SEAM_VENUE_STATE=invalid
+  if [ ! -e "$file" ]; then
+    FM_LANDING_SEAM_VENUE_STATE=absent
+    return 0
+  fi
+  [ -f "$file" ] && [ -r "$file" ] || return 0
+  raw=$(cat "$file" 2>/dev/null) || return 0
+  printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 0
+  repo=$(printf '%s' "$raw" | jq -r '.repo // ""' 2>/dev/null) || return 0
+  issue=$(printf '%s' "$raw" | jq -r 'if .issue == null then "" else (.issue|tostring) end' 2>/dev/null) || return 0
+  [ -n "$repo" ] && [ -n "$issue" ] || return 0
+  FM_LANDING_SEAM_VENUE_STATE=valid
+  return 0
 }
 
 # --- the governed landing domain ---------------------------------------------
@@ -263,7 +273,7 @@ fm_landing_seam_domain_read() {  # <config-dir>
         elif ($d | has("repos") | not) then error("shape")
         elif ($d.repos | type) != "array" then error("shape")
         elif ([$d.repos[] | select(type != "string")] | length) > 0 then error("shape")
-        elif ([$d.repos[] | select(test("^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$") | not)] | length) > 0 then error("shape")
+        elif ([$d.repos[] | select(test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$") | not)] | length) > 0 then error("shape")
         else ($d.repos[] | ascii_downcase)
         end' 2>/dev/null) || return 0
   if [ -z "$repos" ]; then
@@ -328,7 +338,7 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
   local dir=$1 config=$2 item=$3 head=$4 pr=$5 repo=$6
   local f rid raw stored gate state rec_head rec_pr
   local live=0 granting=0 granting_id='' others=''
-  local venue=0 store=present
+  local venue_state store=present
 
   if ! fm_landing_seam_candidate_valid "$item" "$head"; then
     fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_CANDIDATE_UNBOUND" \
@@ -336,7 +346,8 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     return $?
   fi
 
-  fm_landing_seam_venue_configured "$config" && venue=1
+  fm_landing_seam_venue_read "$config"
+  venue_state=$FM_LANDING_SEAM_VENUE_STATE
 
   if [ ! -d "$dir" ]; then
     # A store that does not exist has never held a correlation record, which is a
@@ -412,9 +423,14 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     # Governed, and the venue is missing. This home holds live Sol requests and no
     # venue to resolve them against, which is a contradiction in its own
     # configuration rather than an answer about this candidate.
-    if [ "$venue" -eq 0 ]; then
+    if [ "$venue_state" = absent ]; then
       fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED" \
         "$live live Browser Sol request(s) govern $item while no control venue is configured in this home, so whether their rulings apply could not be observed"
+      return $?
+    fi
+    if [ "$venue_state" = invalid ]; then
+      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_VENUE_INVALID" \
+        "config/sol-control.json is present but unreadable, malformed, or missing repo or issue, so the Browser Sol control venue could not be observed"
       return $?
     fi
     if [ "$granting" -eq 0 ]; then
@@ -438,9 +454,15 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
   # A home with no control venue has placed nothing under Browser Sol control, so
   # there is no governed landing domain for a candidate to be inside. That is the
   # shipped default and the complete answer for every home that never opted in.
-  if [ "$venue" -eq 0 ]; then
+  if [ "$venue_state" = absent ]; then
     fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
       "no Browser Sol control venue is configured in this home, so no landing is inside a governed domain and no ruling governs $item at $head"
+    return $?
+  fi
+
+  if [ "$venue_state" = invalid ]; then
+    fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_VENUE_INVALID" \
+      "config/sol-control.json is present but unreadable, malformed, or missing repo or issue, so the Browser Sol control venue and its landing domain could not be observed"
     return $?
   fi
 
