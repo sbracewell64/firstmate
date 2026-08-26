@@ -1082,6 +1082,82 @@ test_spawn_records_the_fork_venue_for_a_retargeted_task() {
   pass "fm-spawn: a task retargeted onto the fork trunk records the fork venue"
 }
 
+test_policy_role_is_recorded_rather_than_inferred_from_the_target() {
+  local meta dir
+  # The policy ROLE and the contribution target are separate axes even where
+  # they resolve to the same commit. What distinguishes them is not their values
+  # but whether anything RECORDED the relationship, so each recorded state has
+  # to produce a different role rather than the same one by coincidence.
+  dir="$TMP_ROOT/policy-role"
+  mkdir -p "$dir"
+  meta="$dir/task.meta"
+
+  # Nothing recorded: a generation is still carried, but no ref role is.
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=aaaa\n' > "$meta"
+  task_base_policy_metadata "$meta" || fail "an ordinary metadata file was unreadable"
+  [ "$TASK_BASE_POLICY_ROLE" = unrecorded ] \
+    || fail "an unrecorded policy ref did not report the unrecorded role (got '$TASK_BASE_POLICY_ROLE')"
+  [ -z "$TASK_BASE_POLICY_REF" ] \
+    || fail "a policy ref was produced where nothing recorded one ('$TASK_BASE_POLICY_REF')"
+  [ "$TASK_BASE_POLICY_GENERATION" = aaaa ] \
+    || fail "the generation was not carried when the ref role was unrecorded"
+  [ "$TASK_BASE_POLICY_TARGET" = aaaa ] \
+    || fail "the contribution target was not kept as its own axis"
+
+  # A named ref recorded outright, with its own resolved generation.
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=aaaa\npolicy_ref=refs/heads/main\npolicy_generation=bbbb\n' > "$meta"
+  task_base_policy_metadata "$meta" || fail "a recorded policy ref was unreadable"
+  [ "$TASK_BASE_POLICY_ROLE" = recorded ] \
+    || fail "a named policy ref did not report the recorded role (got '$TASK_BASE_POLICY_ROLE')"
+  [ "$TASK_BASE_POLICY_REF" = refs/heads/main ] || fail "the recorded policy ref was not carried"
+  [ "$TASK_BASE_POLICY_GENERATION" = bbbb ] \
+    || fail "the recorded generation was overridden by the contribution target"
+  [ "$TASK_BASE_POLICY_TARGET" = aaaa ] \
+    || fail "the contribution target was collapsed into the policy generation"
+
+  # The equivalence the ruling allows, recorded as its own statement. It must be
+  # reachable ONLY by recording it, which the unrecorded case above pins from
+  # the other side.
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=aaaa\npolicy_ref=contribution-target\n' > "$meta"
+  task_base_policy_metadata "$meta" || fail "a recorded equivalence was unreadable"
+  [ "$TASK_BASE_POLICY_ROLE" = target-equivalence ] \
+    || fail "a recorded equivalence did not report its own role (got '$TASK_BASE_POLICY_ROLE')"
+  [ "$TASK_BASE_POLICY_REF" = aaaa ] \
+    || fail "the recorded equivalence did not make the target the policy ref"
+
+  # An ambiguous field is a read failure, not a recorded state.
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=aaaa\npolicy_ref=refs/heads/main\npolicy_ref=refs/heads/other\n' > "$meta"
+  task_base_policy_metadata "$meta" \
+    && fail "two different policy refs for one task were read as a recorded state"
+  pass "fm-task-base-lib.sh: the policy role is recorded, never inferred from the target"
+}
+
+test_policy_ref_is_placed_at_the_venue_rather_than_in_this_checkout() {
+  local got bad
+  # A contribution target is read from a ref this CHECKOUT names, and the venue
+  # serves none of those spellings. Recording `origin/main` as the ref that owns
+  # policy would record a name the venue cannot resolve, and the effect-boundary
+  # re-resolution would then refuse every task.
+  got=$(task_base_policy_ref_for origin/main) || fail "a fork-layout ref yielded no policy ref"
+  [ "$got" = refs/heads/main ] || fail "origin/main -> '$got', want refs/heads/main"
+  got=$(task_base_policy_ref_for upstream/main) || fail "an upstream ref yielded no policy ref"
+  [ "$got" = refs/heads/main ] || fail "upstream/main -> '$got', want refs/heads/main"
+  got=$(task_base_policy_ref_for main) || fail "a bare local branch yielded no policy ref"
+  [ "$got" = refs/heads/main ] || fail "main -> '$got', want refs/heads/main"
+  # An already-qualified ref is passed through rather than re-qualified.
+  got=$(task_base_policy_ref_for refs/heads/release) || fail "a qualified ref yielded nothing"
+  [ "$got" = refs/heads/release ] || fail "refs/heads/release -> '$got'"
+  # Refuses rather than guessing. An unresolved base has no policy ref, and
+  # producing one anyway is how a guessed ref reaches the effect boundary.
+  for bad in '' unresolved '-oops' 'has space'; do
+    task_base_policy_ref_for "$bad" >/dev/null \
+      && fail "'$bad' was turned into a policy ref"
+  done
+  pass "fm-task-base-lib.sh: a policy ref is placed at the venue or refused"
+}
+
+test_policy_role_is_recorded_rather_than_inferred_from_the_target
+test_policy_ref_is_placed_at_the_venue_rather_than_in_this_checkout
 test_resolves_two_distinct_references_on_a_fork
 test_coincident_when_there_is_no_distinct_upstream
 test_credential_bearing_remote_refused_query

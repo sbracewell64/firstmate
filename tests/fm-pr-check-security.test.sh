@@ -578,7 +578,7 @@ test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone() {
   dir=$(make_case provenance-not-required)
   make_worktree_repo "$dir"
   write_task_meta "$dir"
-  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\npolicy_ref=refs/heads/main\n' \
     "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
   git -C "$dir/wt" config url."$dir/default.git".insteadOf https://github.com/o/r.git
   set +e
@@ -608,8 +608,14 @@ test_provenance_chokepoint_reports_a_refused_publication_as_a_verdict() {
   git -C "$dir/wt" add .github
   git -C "$dir/wt" commit -qm policy
   write_task_meta "$dir"
-  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\npolicy_ref=refs/heads/main\n' \
     "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
+  # The declaration reaches the ref recorded as owning policy. A venue whose
+  # policy ref does not reach the generation under test is a different case,
+  # covered by its own red in tests/fm-attest.test.sh; leaving it that way here
+  # would make this test refuse for that reason and never reach the pipeline
+  # verdict it is actually about.
+  git -C "$dir/wt" push -q origin HEAD:refs/heads/main
   git -C "$dir/wt" push -q origin HEAD:refs/heads/policy
   git -C "$dir/wt" config url."$dir/default.git".insteadOf https://github.com/o/r.git
   cat > "$dir/fakebin/no-mistakes" <<'SH'
@@ -662,7 +668,7 @@ test_provenance_policy_metadata_is_three_valued() {
   dir=$(make_case provenance-policy-conflict)
   make_worktree_repo "$dir"
   write_task_meta "$dir"
-  printf 'contribution_venue=github.com/o/r\ncontribution_venue=github.com/foreign/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue=github.com/foreign/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\npolicy_ref=refs/heads/main\n' \
     "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
   FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
     run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr" \
@@ -674,7 +680,7 @@ test_provenance_policy_metadata_is_three_valued() {
   dir=$(make_case provenance-policy-identical)
   make_worktree_repo "$dir"
   write_task_meta "$dir"
-  printf 'contribution_venue=github.com/o/r\ncontribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\ncontribution_target=%s\n' \
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\ncontribution_target=%s\npolicy_ref=refs/heads/main\n' \
     "$(git -C "$dir/wt" rev-parse HEAD)" "$(git -C "$dir/wt" rev-parse HEAD)" \
     >> "$dir/home/state/task-a.meta"
   git -C "$dir/wt" config url."$dir/default.git".insteadOf https://github.com/o/r.git
