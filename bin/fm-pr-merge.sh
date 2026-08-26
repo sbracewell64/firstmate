@@ -118,15 +118,11 @@
 # refuses on its own terms, so no posture and no ruling can waive one.
 #
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
-# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints -
-# including which repositories are inside the declared governed landing domain -
-# and bin/fm-landing-authorization.sh owns the authority itself, while
+# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
+# bin/fm-landing-authorization.sh owns the authority itself, and
 # bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
-# What this file adds is that the merge command RUNS INSIDE the spend when one
-# governs, so an applicable pull request cannot reach `gh-axi pr merge` without
-# consuming a valid, head-bound, one-use authorization. A pull request proven
-# outside the declared governed domain lands through exactly the gates above and
-# says so with a reported not-applicable observation, because a silent ungoverned
+# A pull request no ruling governs lands through exactly the gates above and says
+# so with a reported not-applicable observation, because a silent ungoverned
 # landing is indistinguishable from an authorised one.
 #
 # One vocabulary constraint applies to THIS FILE ONLY, and it is not a style
@@ -153,9 +149,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
@@ -168,8 +162,6 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 # owners rather than restate them.
 # shellcheck source=bin/fm-outbound-artifact-lib.sh
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
-# shellcheck source=bin/fm-sol-control-config-lib.sh
-. "$SCRIPT_DIR/fm-sol-control-config-lib.sh"
 # shellcheck source=bin/fm-landing-authorization-lib.sh
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
@@ -319,16 +311,7 @@ fi
 # waiver arithmetic, and the wording of its own refusals.
 PR_VERIFY_GRAPHQL=$FM_VERIFY_ROLLUP_GRAPHQL
 # shellcheck disable=SC2016
-PR_VERIFY_REVIEW_EVIDENCE='(. as $v
-  | (([$v.pr_author] + $v.commit_makers) | map(select(length > 0) | ascii_downcase) | unique) as $makers
-  | ($v.approved_reviews | map(select((.head | ascii_downcase) == ($v.head | ascii_downcase)))) as $approvals
-  | "review_evidence=" +
-      (if ($v.commits_reported == null or $v.commits_reported != $v.commits_read) then "commits-unread"
-       elif ($v.reviews_reported == null or $v.reviews_reported != $v.reviews_read) then "reviews-unread"
-       elif ($v.maker_identities_complete | not) then "maker-identities-unread"
-       elif any($approvals[]; . as $a | ($a.login | length) > 0 and (($makers | index($a.login | ascii_downcase)) == null)) then "github-approved"
-       elif ($approvals | length) > 0 then "maker-associated-approval"
-       else "none" end))'
+PR_VERIFY_REVIEW_EVIDENCE='"review_evidence=" + ('"$FM_LANDING_REVIEW_EVIDENCE_JQ"')'
 PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (($FM_VERIFY_ROLLUP_COUNTS), $PR_VERIFY_REVIEW_EVIDENCE)"
 
 # Three further lines, asked for only when a check is waived, so a merge with no
@@ -355,23 +338,6 @@ fi
 
 VERIFIED_HEAD=
 VERIFIED_REVIEW=
-
-pipeline_review_evidence() {  # <head>
-  local head=$1 project branch maker_harness maker_model independence recorded_heads
-  project=$(grep '^project=' "$RECORD" | tail -1 | cut -d= -f2- || true)
-  [ -n "$project" ] && [ -d "$project" ] || return 1
-  branch="fm/$ID"
-  maker_harness=$(grep '^harness=' "$RECORD" | tail -1 | cut -d= -f2- || true)
-  maker_model=$(grep '^model=' "$RECORD" | tail -1 | cut -d= -f2- || true)
-  independence=$(fm_independence_dimensions "$project" "$branch" "$maker_harness" "$maker_model" "$head")
-  if [ "$(fm_independence_overall "$independence")" = PASS ]; then
-    VERIFIED_REVIEW=independent
-    return 0
-  fi
-  recorded_heads=$(fm_independence_recorded_heads "$project" "$branch" || true)
-  VERIFIED_REVIEW="pipeline gaps:$(fm_independence_gaps "$independence" | paste -sd, -)${recorded_heads:+ stale-head=$recorded_heads expected=$head}"
-  return 1
-}
 
 # An empty rollup has more than one cause, and the two common ones need
 # different work from the captain: a repository with no CI configured for this
@@ -583,7 +549,6 @@ verify_current_head() {
   fi
   VERIFIED_HEAD=$head
   VERIFIED_REVIEW=$review_evidence
-  [ "$VERIFIED_REVIEW" = github-approved ] || pipeline_review_evidence "$head" || true
 }
 
 MERGE_META_TMP=
@@ -631,7 +596,7 @@ record_merge_verification() {
   MERGE_META_TMP=
 }
 
-# --- the ruling-derived landing authority -------------------------------------
+# --- the compiled landing authority ------------------------------------------
 #
 # Resolved from the durable correlation store, never from anything the caller
 # asserts, and reported either way. `not-applicable` is printed to stdout as an
@@ -647,18 +612,15 @@ LANDING_AUTHORIZATION=
 resolve_landing_authority() {  # <head>
   local head=$1 authority_rc=0 seam_rc=0
   local plan=()
-  # The repository this merge would write, taken from the pull request's own
-  # parsed identity rather than from anything the caller supplies separately, so
-  # the domain is asked about the repository the merge command actually addresses.
   # WHOSE landing this is, before anything is minted. Compiled from the task's
   # own durable records by bin/fm-landing-seam-lib.sh and reported either way,
   # because a home that says nothing about who authorised a landing is
   # indistinguishable from one that never asked. It answers only who may
   # authorize; every refusal above and below still applies unchanged.
-  fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
-    "$PR_OWNER/$PR_REPO" || seam_rc=$?
+  fm_landing_candidate_resolve "$FM_HOME" "$ID" pr-snapshot "$RECORD" "$head" "$VERIFIED_REVIEW" || seam_rc=$?
+  head=$FM_LANDING_CANDIDATE_HEAD
   fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
-    "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$VERIFIED_REVIEW" || authority_rc=$?
+    "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || authority_rc=$?
   if [ "$authority_rc" -ne 0 ]; then
     if [ "$seam_rc" -ne 0 ]; then
       printf 'error: refusing to merge head %s: %s: %s\n' \

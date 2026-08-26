@@ -235,7 +235,11 @@ write_meta() {  # <dir> [<yolo>]
     "project=$dir/home/projects/$PROJECT_NAME" \
     "role=ship" \
     "mode=no-mistakes" \
-    "yolo=$yolo"
+    "harness=claude" \
+    "model=opus" \
+    "yolo=$yolo" \
+    "pr=$PR_URL" \
+    "pr_head=$HEAD_A"
 }
 
 # A decision the fleet has TYPED as the captain's, written the way
@@ -283,7 +287,9 @@ run_pr_merge() {  # <dir> [args...]
 run_surface_check() {  # <dir>
   local dir=$1
   set +e
-  SURFACE_OUT=$(FM_HOME="$dir/home" "$SURFACE" check landing-authority "$TASK_ID" 2>&1)
+  SURFACE_OUT=$(FM_HOME="$dir/home" FM_TEST_ROLLUP_FIXTURE="$dir/rollup.json" \
+    FM_PIPELINE_STATE_DB="${FM_PIPELINE_STATE_DB:-}" PATH="$dir/fakebin:$PATH" \
+    "$SURFACE" check landing-authority "$TASK_ID" 2>&1)
   SURFACE_RC=$?
   set -e
 }
@@ -295,8 +301,11 @@ run_surface_check_cold() {  # <dir>
   set +e
   SURFACE_OUT=$(env -i \
     HOME="$dir/cold-home" \
-    PATH="/usr/local/bin:/usr/bin:/bin" \
+    PATH="$dir/fakebin:/usr/local/bin:/usr/bin:/bin" \
     FM_HOME="$dir/home" \
+    FM_TEST_ROLLUP_FIXTURE="$dir/rollup.json" \
+    FM_TEST_FORGE_HEAD="$dir/forge_head" \
+    FM_TEST_GH_LOG="$dir/gh.log" \
     /usr/bin/env bash "$SURFACE" check landing-authority "$TASK_ID" 2>&1)
   SURFACE_RC=$?
   set -e
@@ -479,7 +488,6 @@ test_independent_pipeline_review_allows_null_github_decision() {
   write_rollup "$dir" "$HEAD_A" 0 ''
   project="$dir/home/projects/$PROJECT_NAME"
   mkdir -p "$project"
-  printf 'harness=claude\nmodel=opus\n' >> "$dir/home/state/$TASK_ID.meta"
   fm_test_model_registry "$dir/home/config/models.json"
   fm_test_pipeline_db "$dir/pipeline.sqlite" "$project" \
     "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$HEAD_A" || fail "pipeline fixture failed"
@@ -494,6 +502,10 @@ test_independent_pipeline_review_allows_null_github_decision() {
 test_approved_review_allows_an_ungoverned_landing() {
   local dir
   dir=$(new_pr_case approved-review) || fail "fixture failed"
+
+  run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 0 ] \
+    || fail "the surface disagreed with the GitHub-reviewed landing: $SURFACE_OUT"
 
   run_pr_merge "$dir"
   [ "$RC" -eq 0 ] || fail "an ungoverned landing with approved review evidence refused: $(cat "$dir/stderr")"
@@ -514,6 +526,19 @@ test_decision_surface_never_delegates_an_unreviewed_candidate() {
   printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
     || fail "the decision surface did not name its review-evidence refusal: $SURFACE_OUT"
   pass "the decision surface does not bypass missing review evidence"
+}
+
+test_decision_surface_uses_live_pr_head() {
+  local dir
+  dir=$(new_pr_case surface-live-head) || fail "fixture failed"
+  sed -i "s/^pr_head=.*/pr_head=$HEAD_B/" "$dir/home/state/$TASK_ID.meta"
+
+  run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 3 ] \
+    || fail "the surface compiled a stale recorded PR candidate (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F "live head=$HEAD_A differs from stale recorded head=$HEAD_B" >/dev/null \
+    || fail "the surface refusal did not name the live and stale heads: $SURFACE_OUT"
+  pass "the decision surface refuses stale recorded PR heads against the live head"
 }
 
 # --- (5) a decision the fleet typed as the captain's --------------------------
@@ -590,6 +615,10 @@ test_local_only_landing_is_delegated_on_the_same_terms() {
   fm_test_model_registry "$dir/home/config/models.json"
   fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
     "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$(git -C "$proj" rev-parse "fm/$TASK_ID")" || return 1
+
+  FM_PIPELINE_STATE_DB="$dir/pipeline.sqlite" run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 0 ] \
+    || fail "the surface disagreed with the reviewed local-only candidate: $SURFACE_OUT"
 
   before=$(git -C "$proj" rev-parse HEAD)
   set +e
@@ -874,6 +903,7 @@ test_maker_associated_approval_requires_the_captain
 test_independent_pipeline_review_allows_null_github_decision
 test_approved_review_allows_an_ungoverned_landing
 test_decision_surface_never_delegates_an_unreviewed_candidate
+test_decision_surface_uses_live_pr_head
 test_a_captain_reserved_decision_requires_the_captain
 test_standing_posture_cannot_waive_an_engineering_gate
 test_local_only_landing_is_delegated_on_the_same_terms

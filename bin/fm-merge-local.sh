@@ -43,14 +43,9 @@
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
 # bin/fm-landing-authorization.sh owns the authority itself, and
 # bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
-# What this file adds is that the fast-forward RUNS INSIDE the spend when one
-# governs, so an applicable candidate cannot reach `git merge --ff-only` without
-# consuming a valid, head-bound, one-use authorization. A candidate PROVEN
-# outside the declared governed landing domain lands through exactly the guards
-# above and says so with a reported not-applicable observation, because a silent
-# ungoverned landing is indistinguishable from an authorised one. A candidate
-# inside that domain with no live review request covering it REFUSES: the seam
-# owns why an absent record is the refusal rather than the permission.
+# A candidate no ruling governs lands through exactly the guards above and says
+# so with a reported not-applicable observation, because a silent ungoverned
+# landing is indistinguishable from an authorised one.
 #
 # A local-only item under Sol review is governed by a ruling on a PUBLISHED head,
 # because a published head is the only one an outside reviewer could ever have
@@ -65,26 +60,17 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # The landing seam needs the outbound gate register and the authorization
 # layer's own identity predicates; both are sourced here so it can consult its
 # owners rather than restate them.
 # shellcheck source=bin/fm-outbound-artifact-lib.sh
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
-# shellcheck source=bin/fm-sol-control-config-lib.sh
-. "$SCRIPT_DIR/fm-sol-control-config-lib.sh"
 # shellcheck source=bin/fm-landing-authorization-lib.sh
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
 . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
-# The seam asks which repository this landing writes, and bin/fm-task-base-lib.sh
-# already owns reducing a git remote url to a forge identity. Sourced rather than
-# restated, because a second url parser on the landing path is a second answer.
-# shellcheck source=bin/fm-task-base-lib.sh
-. "$SCRIPT_DIR/fm-task-base-lib.sh"
 # shellcheck source=bin/fm-independence-lib.sh
 . "$SCRIPT_DIR/fm-independence-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
@@ -432,7 +418,7 @@ if [ "${#COLLISIONS[@]}" -gt 0 ]; then
 fi
 guard_tmp_cleanup
 
-# --- the ruling-derived landing authority -------------------------------------
+# --- the compiled landing authority ------------------------------------------
 #
 # The head is read from the branch this fast-forward would land, never asserted
 # by the caller, and the answer is reported either way: `not-applicable` is an
@@ -442,51 +428,15 @@ LANDING_HEAD=$(git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH^{co
   echo "error: the head of $BRANCH in $PROJ could not be read, so whether a ruling governs this landing could not be asked" >&2
   exit 1
 }
-# The repository this fast-forward would land into, as the venue's own
-# `owner/name` path, read from the clone's own push remote rather than from the
-# task record: the declared domain must be asked about the repository the merge
-# command actually writes.
-#
-# Three-valued on purpose. A path when the remote resolves, and "-" when it does
-# not - which covers both an unreadable remote configuration and a clone naming no
-# remote at all. Neither is positive proof that this landing is outside a declared
-# domain, and a clone whose remote was removed is exactly the shape a bypass would
-# take, so both are handed to the seam as could-not-observe rather than as an
-# answer. A home that declares an empty domain is unaffected either way, because an
-# empty domain contains nothing whatever this landing turns out to write.
-landing_repository() {  # <dir>
-  local dir=$1 url identity
-  url=$(git --no-optional-locks -C "$dir" remote get-url --push origin 2>/dev/null) || return 1
-  [ -n "$url" ] || return 1
-  identity=$(task_base_venue_identity "$url") || return 1
-  # host/owner/name -> owner/name. The host is addressing rather than identity,
-  # and the seam compares the repository path for exactly that reason.
-  case $identity in
-    */*/*) printf '%s\n' "${identity#*/}" ;;
-    *) return 1 ;;
-  esac
-}
-LANDING_REPO=$(landing_repository "$PROJ") || LANDING_REPO=-
-
 # WHOSE landing this is, compiled by bin/fm-landing-seam-lib.sh from the task's
 # own durable records, and reported either way. It answers only who may
 # authorize this landing; every refusal above still applies unchanged.
 SEAM_RC=0
-fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - \
-  "$LANDING_REPO" || SEAM_RC=$?
+fm_landing_candidate_resolve "$FM_HOME" "$ID" local "$META" || SEAM_RC=$?
+LANDING_HEAD=$FM_LANDING_CANDIDATE_HEAD
 AUTHORITY_RC=0
-REVIEW_EVIDENCE=
-MAKER_HARNESS=$(grep '^harness=' "$META" | cut -d= -f2- || true)
-MAKER_MODEL=$(grep '^model=' "$META" | cut -d= -f2- || true)
-INDEPENDENCE=$(fm_independence_dimensions "$PROJ" "$BRANCH" "$MAKER_HARNESS" "$MAKER_MODEL" "$LANDING_HEAD")
-if [ "$(fm_independence_overall "$INDEPENDENCE")" = PASS ]; then
-  REVIEW_EVIDENCE=independent
-else
-  RECORDED_REVIEW_HEADS=$(fm_independence_recorded_heads "$PROJ" "$BRANCH" || true)
-  REVIEW_EVIDENCE="pipeline gaps:$(fm_independence_gaps "$INDEPENDENCE" | paste -sd, -)${RECORDED_REVIEW_HEADS:+ stale-head=$RECORDED_REVIEW_HEADS expected=$LANDING_HEAD}"
-fi
 fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
-  "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$REVIEW_EVIDENCE" || AUTHORITY_RC=$?
+  "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || AUTHORITY_RC=$?
 if [ "$AUTHORITY_RC" -ne 0 ]; then
   if [ "$SEAM_RC" -ne 0 ]; then
     printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2

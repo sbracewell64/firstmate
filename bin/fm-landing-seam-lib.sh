@@ -105,6 +105,22 @@ _FM_LANDING_SEAM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/nu
 # is; nothing here restates either.
 # shellcheck source=bin/fm-classify-lib.sh
 . "$_FM_LANDING_SEAM_LIB_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-verify-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-verify-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-independence-lib.sh"
+
+FM_LANDING_REVIEW_EVIDENCE_JQ='(. as $v
+  | (([$v.pr_author] + $v.commit_makers) | map(select(length > 0) | ascii_downcase) | unique) as $makers
+  | ($v.approved_reviews | map(select((.head | ascii_downcase) == ($v.head | ascii_downcase)))) as $approvals
+  | if ($v.commits_reported == null or $v.commits_reported != $v.commits_read) then "commits-unread"
+    elif ($v.reviews_reported == null or $v.reviews_reported != $v.reviews_read) then "reviews-unread"
+    elif ($v.maker_identities_complete | not) then "maker-identities-unread"
+    elif any($approvals[]; . as $a | ($a.login | length) > 0 and (($makers | index($a.login | ascii_downcase)) == null)) then "github-approved"
+    elif ($approvals | length) > 0 then "maker-associated-approval"
+    else "none" end)'
 
 # --- contract constants ------------------------------------------------------
 
@@ -643,6 +659,66 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
 # authorize the landing, never whether the landing is sound, and a posture that
 # waived an engineering gate would be the failure this compile is meant to make
 # impossible to reach for.
+
+FM_LANDING_CANDIDATE_HEAD=
+FM_LANDING_CANDIDATE_REVIEW=
+FM_LANDING_CANDIDATE_REASON=
+
+fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <review>]
+  local home=$1 task=$2 route=$3 record=$4 head=${5:-} review=${6:-}
+  local project branch maker_harness maker_model independence recorded_heads recorded_head url output owner repo number seam_rc=0
+  local outbound=${FM_OUTBOUND_DIR:-${FM_DATA_OVERRIDE:-$home/data}/outbound-artifacts}
+  local config=${FM_CONFIG_OVERRIDE:-$home/config}
+  FM_LANDING_CANDIDATE_HEAD=
+  FM_LANDING_CANDIDATE_REVIEW=
+  FM_LANDING_CANDIDATE_REASON=
+  project=$(grep '^project=' "$record" | tail -1 | cut -d= -f2- || true)
+  url=$(grep '^pr=' "$record" | tail -1 | cut -d= -f2- || true)
+  branch="fm/$task"
+  maker_harness=$(grep '^harness=' "$record" | tail -1 | cut -d= -f2- || true)
+  maker_model=$(grep '^model=' "$record" | tail -1 | cut -d= -f2- || true)
+  case "$route" in
+    local)
+      [ -n "$project" ] && [ -d "$project" ] || { FM_LANDING_CANDIDATE_REASON='the local project could not be read'; return 4; }
+      head=$(git -C "$project" rev-parse --verify --quiet "refs/heads/$branch^{commit}") \
+        || { FM_LANDING_CANDIDATE_REASON="the live head of $branch could not be read"; return 4; }
+      ;;
+    pr-live)
+      fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ] \
+        || { FM_LANDING_CANDIDATE_REASON='the live pull request identity could not be read'; return 4; }
+      owner=$FM_PR_OWNER repo=$FM_PR_REPO number=$FM_PR_NUMBER
+      output=$(gh api graphql -f query="$FM_VERIFY_ROLLUP_GRAPHQL" -f owner="$owner" -f repo="$repo" -F number="$number" \
+        -q "$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (.head, $FM_LANDING_REVIEW_EVIDENCE_JQ)" 2>/dev/null) \
+        || { FM_LANDING_CANDIDATE_REASON='the live pull request candidate and review identities could not be read'; return 4; }
+      head=${output%%$'\n'*}
+      review=${output#*$'\n'}
+      recorded_head=$(grep '^pr_head=' "$record" | tail -1 | cut -d= -f2- || true)
+      if fm_pr_head_valid "$recorded_head" && [ "$recorded_head" != "$head" ]; then
+        FM_LANDING_CANDIDATE_HEAD=$head
+        FM_LANDING_CANDIDATE_REVIEW=$review
+        FM_LANDING_CANDIDATE_REASON="live head=$head differs from stale recorded head=$recorded_head"
+        return 4
+      fi
+      ;;
+    pr-snapshot) ;;
+    *) FM_LANDING_CANDIDATE_REASON="the landing route '$route' is not classified"; return 4 ;;
+  esac
+  fm_pr_head_valid "$head" || { FM_LANDING_CANDIDATE_REASON='the live landing head could not be established'; return 4; }
+  if [ "$review" != github-approved ] && [ -n "$project" ] && [ -d "$project" ]; then
+    independence=$(fm_independence_dimensions "$project" "$branch" "$maker_harness" "$maker_model" "$head")
+    if [ "$(fm_independence_overall "$independence")" = PASS ]; then
+      review=independent
+    else
+      recorded_heads=$(fm_independence_recorded_heads "$project" "$branch" || true)
+      review="pipeline gaps:$(fm_independence_gaps "$independence" | paste -sd, -)${recorded_heads:+ stale-head=$recorded_heads expected=$head}"
+    fi
+  fi
+  FM_LANDING_CANDIDATE_HEAD=$head
+  FM_LANDING_CANDIDATE_REVIEW=$review
+  FM_LANDING_CANDIDATE_REASON="candidate head=$head review=${review:-could-not-observe}"
+  fm_landing_seam_resolve "$outbound" "$config" "$task" "$head" "${url:--}" || seam_rc=$?
+  return "$seam_rc"
+}
 
 # Reported observations and refusals, kept apart the same way the governance
 # tokens above are.

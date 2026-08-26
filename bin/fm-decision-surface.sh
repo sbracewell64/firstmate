@@ -783,47 +783,32 @@ check_route_qualified() {
 # read - and unevaluable means the fact may not be asserted at all, in either
 # direction.
 check_landing_authority() {
-  local rc=0 seam_rc=0 record head='' pr='' project='' branch maker_harness='' maker_model=''
-  local review='' independence candidate
+  local rc=0 seam_rc=0 record route mode
   record=$(fm_pr_identity_record_path "$STATE" "$TARGET" 2>/dev/null || true)
   if [ -n "$record" ]; then
-    head=$(grep '^pr_head=' "$record" | tail -1 | cut -d= -f2- || true)
-    pr=$(grep '^pr=' "$record" | tail -1 | cut -d= -f2- || true)
-    project=$(grep '^project=' "$record" | tail -1 | cut -d= -f2- || true)
-    maker_harness=$(grep '^harness=' "$record" | tail -1 | cut -d= -f2- || true)
-    maker_model=$(grep '^model=' "$record" | tail -1 | cut -d= -f2- || true)
-  fi
-  if [ -z "$head" ] && [ -d "$OUTBOUND_DIR" ]; then
-    candidate=$(jq -rs --arg item "$TARGET" '
-      [ .[] | select(.identity.item == $item) | [.identity.head, (.identity.pr // "")] ] | unique
-      | if length == 1 then .[0] | @tsv else empty end
-    ' "$OUTBOUND_DIR"/*.json 2>/dev/null || true)
-    if [ -n "$candidate" ]; then
-      head=${candidate%%$'\t'*}
-      pr=${candidate#*$'\t'}
+    mode=$(grep '^mode=' "$record" | tail -1 | cut -d= -f2- || true)
+    [ "$mode" = local-only ] && route=local || route=pr-live
+    fm_landing_candidate_resolve "$FM_HOME" "$TARGET" "$route" "$record" || seam_rc=$?
+    if [ -n "$FM_LANDING_CANDIDATE_HEAD" ]; then
+      fm_landing_authority_resolve "$FM_HOME" "$TARGET" "$FM_LANDING_SEAM_VERDICT" \
+        "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || rc=$?
+      [ "$seam_rc" -eq 0 ] || [ "$rc" -ne 0 ] || rc=4
+    else
+      fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
+        "$TARGET candidate could not be observed: $FM_LANDING_CANDIDATE_REASON" "candidate=live"
+      rc=3
     fi
-  fi
-  if fm_pr_head_valid "$head"; then
-    fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$TARGET" "$head" "${pr:--}" || seam_rc=$?
-    if [ -n "$project" ] && [ -d "$project" ]; then
-      branch="fm/$TARGET"
-      independence=$(fm_independence_dimensions "$project" "$branch" "$maker_harness" "$maker_model" "$head")
-      [ "$(fm_independence_overall "$independence")" = PASS ] && review=independent
-    fi
-    fm_landing_authority_resolve "$FM_HOME" "$TARGET" "$FM_LANDING_SEAM_VERDICT" \
-      "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$review" || rc=$?
-    [ "$seam_rc" -eq 0 ] || [ "$rc" -ne 0 ] || rc=4
   else
-    fm_landing_authority_resolve "$FM_HOME" "$TARGET" "" "" "" "$review" || rc=$?
+    fm_landing_authority_resolve "$FM_HOME" "$TARGET" "" || rc=$?
   fi
   case "$rc" in
     0)
       verdict not-contradicted "landing-authority $TARGET" \
-        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · every test, review, head-binding and authorization gate still applies at the merge gate itself"
+        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · $FM_LANDING_CANDIDATE_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · every test, review, head-binding and authorization gate still applies at the merge gate itself"
       ;;
     3)
       verdict contradicted "landing-authority $TARGET" \
-        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · rule that decision before landing"
+        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · $FM_LANDING_CANDIDATE_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · rule that decision before landing"
       ;;
     *)
       verdict unevaluable "landing-authority $TARGET" \
