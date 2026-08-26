@@ -1327,7 +1327,7 @@ cmd_status() {  # <auth-id>
 cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   local id=$1; shift
   local observed='' evidence=''
-  local rec state rc now rid head reservation
+  local rec state initial_state rc now rid head reservation holder
   while [ $# -gt 0 ]; do
     case $1 in
       --observed) observed=${2:-}; shift 2 || die "--observed needs a value" 2 ;;
@@ -1345,7 +1345,40 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   # everywhere else.
   [ -n "$evidence" ] || die "reconcile needs --evidence naming what was observed" 2
 
-  if ! claim_acquire "$id"; then
+  auth_read "$id"; rc=$?
+  case $rc in
+    3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
+    4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be read" ;;
+    5) plan_defect_stop "$id" ;;
+  esac
+  rec=$AUTH_RECORD
+  initial_state=$(printf '%s' "$rec" | jq -r '.state // ""')
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  head=$(printf '%s' "$rec" | jq -r '.grant.head')
+  reservation=$(ruling_reservation_path "$rid" "$head") \
+    || unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "the ruling reservation identity for $id could not be derived"
+
+  if [ "$initial_state" = granted ]; then
+    holder=$(cat "$reservation/holder-id" 2>/dev/null) \
+      || refuse "$FM_AUTH_TOKEN_VOID" \
+        "authorization $id is granted and has no held ruling reservation to reconcile"
+    [ "$holder" = "$id" ] \
+      || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "the ruling reservation at $reservation names $holder rather than $id"
+    CLAIM_OWNER_STATE=$(claim_owner_state "$id")
+    case $CLAIM_OWNER_STATE in
+      live)
+        unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "the spender process group for $id still exists" ;;
+      gone) ;;
+      *)
+        unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "the spender process group for $id could not be observed as gone" ;;
+    esac
+    claim_reclaim_gone "$id" \
+      || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "the spender process group for $id could not be reclaimed after it was observed gone"
+  elif ! claim_acquire "$id"; then
     if ! claim_reclaim_gone "$id"; then
       if [ "$CLAIM_OWNER_STATE" = live ]; then
         unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
@@ -1358,27 +1391,39 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
 
   auth_read "$id"; rc=$?
   case $rc in
+    0) ;;
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be read" ;;
     5) plan_defect_stop "$id" ;;
   esac
   rec=$AUTH_RECORD
   state=$(printf '%s' "$rec" | jq -r '.state // ""')
-  [ "$state" = spending ] \
-    || refuse "$FM_AUTH_TOKEN_VOID" \
-      "authorization $id is $state; only an indeterminate spend needs reconciling"
+  case $state in
+    spending) ;;
+    granted)
+      [ "$initial_state" = granted ] \
+        || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "authorization $id changed to granted while reconciliation acquired its claim" ;;
+    *)
+      refuse "$FM_AUTH_TOKEN_VOID" \
+        "authorization $id is $state; only an indeterminate spend needs reconciling" ;;
+  esac
 
   now=$(now_iso)
-  rid=$(printf '%s' "$rec" | jq -r '.request_id')
-  head=$(printf '%s' "$rec" | jq -r '.grant.head')
-  reservation=$(ruling_reservation_path "$rid" "$head") \
-    || unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "the ruling reservation identity for $id could not be derived"
   RULING_RESERVATION=$reservation
   if [ "$observed" = applied ]; then
-    rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
-      '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
-       | .spend.evidence = $e | .updated = $n
-       | .history += [{at:$n, event:"reconciled", detail:("applied: " + $e)}]')
+    if [ "$state" = granted ]; then
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" --arg h "$head" \
+        '.state = "spent"
+         | .spend = {started:$n, act_digest:"", observed_head:$h, outcome:"applied", finished:$n, evidence:$e}
+         | .updated = $n
+         | .history += [{at:$n, event:"reconciled", detail:("applied from reserved grant: " + $e)}]')
+    else
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
+        '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
+         | .spend.evidence = $e | .updated = $n
+         | .history += [{at:$n, event:"reconciled", detail:("applied: " + $e)}]')
+    fi
   else
     rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
       '.state = "granted" | .spend = null | .updated = $n

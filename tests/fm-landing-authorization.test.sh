@@ -189,6 +189,32 @@ ruling_reservation() {  # <dir>
   return 1
 }
 
+ORPHAN_RESERVATION=
+orphan_granted_reservation() {  # <dir> <auth-id>
+  local dir=$1 id=$2 claim job owner reservation
+  claim="$dir/home/data/landing-authorizations/.$id.claim"
+  mkfifo "$dir/orphan-receipt" || return 1
+  run_auth "$dir" spend "$id" --head "$HEAD_A" --receipt "$dir/orphan-receipt" \
+    > "$dir/orphan-spend.out" 2>&1 &
+  job=$!
+  fm_test_reap "$job"
+  for _ in $(seq 1 300); do
+    reservation=$(ruling_reservation "$dir" 2>/dev/null) \
+      && [ -s "$claim/owner-pid" ] \
+      && [ "$(jq -r '.state' "$dir/home/data/landing-authorizations/$id.json")" = granted ] \
+      && break
+    sleep 0.01
+  done
+  [ -n "${reservation:-}" ] || return 1
+  owner=$(cat "$claim/owner-pid") || return 1
+  kill -KILL "$owner" || return 1
+  wait "$job" 2>/dev/null || true
+  rm -f "$dir/orphan-receipt"
+  [ -d "$reservation" ] || return 1
+  [ "$(act_count "$dir")" = 0 ] || return 1
+  ORPHAN_RESERVATION=$reservation
+}
+
 # The act the authority derives for the shared fixture's plan, as a caller would
 # assert it. Written out here rather than read back from the record, because an
 # assertion built from the thing it asserts proves nothing.
@@ -1116,6 +1142,88 @@ test_a_failed_ruling_reservation_release_is_observable() {
   pass "a failed ruling reservation release is observable"
 }
 
+test_an_orphaned_granted_reservation_is_reconciled_from_evidence() {
+  local dir id sibling out rc reservation
+  dir=$(new_case orphaned-grant) || fail "orphaned-grant: fixture failed"
+  id=$(mint_id "$dir")
+  sibling=$(mint_plan "$dir" fm-ob-abcdef123456 --delete-branch | awk '{print $1}')
+  orphan_granted_reservation "$dir" "$id" \
+    || fail "orphaned-grant: could not create the crash state"
+  reservation=$ORPHAN_RESERVATION
+
+  out=$(run_auth "$dir" reconcile "$id" --observed not-applied 2>&1); rc=$?
+  expect_code 2 "$rc" "orphaned-grant: reconciliation without evidence settled the reservation: $out"
+  [ -d "$reservation" ] || fail "orphaned-grant: evidence-free reconciliation released the reservation"
+  out=$(run_auth "$dir" spend "$sibling" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 4 "$rc" "orphaned-grant: a sibling passed the unsettled reservation: $out"
+  [ "$(act_count "$dir")" = 0 ] || fail "orphaned-grant: an unsettled sibling performed an act"
+
+  out=$(run_auth "$dir" reconcile "$id" --observed not-applied \
+    --evidence 'pr 7 has no merge commit' 2>&1); rc=$?
+  expect_code 0 "$rc" "orphaned-grant: evidence did not settle the absent effect: $out"
+  [ ! -e "$reservation" ] || fail "orphaned-grant: not-applied settlement kept the reservation"
+  out=$(run_auth "$dir" spend "$sibling" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 0 "$rc" "orphaned-grant: the ruling was not landable after settlement: $out"
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "orphaned-grant: the recovered ruling performed $(act_count "$dir") acts"
+
+  dir=$(new_case orphaned-grant-applied) || fail "orphaned-grant-applied: fixture failed"
+  id=$(mint_id "$dir")
+  sibling=$(mint_plan "$dir" fm-ob-abcdef123456 --delete-branch | awk '{print $1}')
+  orphan_granted_reservation "$dir" "$id" \
+    || fail "orphaned-grant-applied: could not create the crash state"
+  reservation=$ORPHAN_RESERVATION
+  out=$(run_auth "$dir" reconcile "$id" --observed applied \
+    --evidence 'pr 7 shows the approved merge' 2>&1); rc=$?
+  expect_code 0 "$rc" "orphaned-grant-applied: evidence did not settle the applied effect: $out"
+  [ -d "$reservation" ] || fail "orphaned-grant-applied: applied settlement released the reservation"
+  [ "$(run_auth "$dir" status "$id" 2>&1)" = spent ] \
+    || fail "orphaned-grant-applied: applied settlement did not exhaust the authorization"
+  out=$(run_auth "$dir" spend "$sibling" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 3 "$rc" "orphaned-grant-applied: a sibling passed the applied settlement: $out"
+  [ "$(act_count "$dir")" = 0 ] || fail "orphaned-grant-applied: a second act ran"
+  pass "an orphaned granted reservation is reconciled from evidence"
+}
+
+test_a_live_granted_reservation_is_not_reclaimed() {
+  local dir id claim job owner reservation out rc reader
+  dir=$(new_case live-granted-reservation) || fail "live-granted-reservation: fixture failed"
+  id=$(mint_id "$dir")
+  claim="$dir/home/data/landing-authorizations/.$id.claim"
+  mkfifo "$dir/live-receipt" || fail "live-granted-reservation: receipt fifo failed"
+  run_auth "$dir" spend "$id" --head "$HEAD_A" --receipt "$dir/live-receipt" \
+    > "$dir/live-granted-spend.out" 2>&1 &
+  job=$!
+  fm_test_reap "$job"
+  for _ in $(seq 1 300); do
+    reservation=$(ruling_reservation "$dir" 2>/dev/null) \
+      && [ -s "$claim/owner-pid" ] \
+      && [ "$(jq -r '.state' "$dir/home/data/landing-authorizations/$id.json")" = granted ] \
+      && break
+    sleep 0.01
+  done
+  [ -n "${reservation:-}" ] || fail "live-granted-reservation: no reservation appeared"
+  owner=$(cat "$claim/owner-pid") || fail "live-granted-reservation: claim owner was unreadable"
+  kill -0 "$owner" || fail "live-granted-reservation: holder was not live"
+
+  out=$(run_auth "$dir" reconcile "$id" --observed not-applied \
+    --evidence 'forge has not yet reported applied' 2>&1); rc=$?
+  expect_code 4 "$rc" "live-granted-reservation: reconciliation reclaimed a live holder: $out"
+  assert_contains "$out" "still exists" "live-granted-reservation: liveness refusal"
+  [ -d "$reservation" ] || fail "live-granted-reservation: reconciliation released the live reservation"
+
+  (cat "$dir/live-receipt" >/dev/null; cat "$dir/live-receipt" >/dev/null) &
+  reader=$!
+  fm_test_reap "$reader"
+  wait "$job" || fail "live-granted-reservation: holder did not complete normally"
+  wait "$reader" || fail "live-granted-reservation: receipt reader failed"
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "live-granted-reservation: holder performed $(act_count "$dir") acts"
+  [ "$(run_auth "$dir" status "$id" 2>&1)" = spent ] \
+    || fail "live-granted-reservation: holder did not record success"
+  pass "a live granted reservation is not reclaimed"
+}
+
 # --- 21: a non-zero act is not "no effect" -----------------------------------
 
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate() {
@@ -1386,6 +1494,8 @@ test_one_approval_grants_one_landing_even_under_a_second_plan
 test_concurrent_sibling_plans_share_one_ruling_reservation
 test_a_pre_act_signal_releases_the_ruling_reservation
 test_a_failed_ruling_reservation_release_is_observable
+test_an_orphaned_granted_reservation_is_reconciled_from_evidence
+test_a_live_granted_reservation_is_not_reclaimed
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate
 test_a_project_alias_moved_after_mint_performs_no_act
 test_a_target_ref_moved_after_mint_performs_no_act

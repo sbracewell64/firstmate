@@ -322,6 +322,9 @@ done
 | sibling effect plans claim only their distinct authorization ids | `not ok - concurrent-siblings: concurrent plans entered 2 acts` |
 | a pre-act signal clears traps before releasing the ruling reservation | `not ok - signal-before-act: signal orphaned ...ruling-reservation` |
 | an indeterminate release failure is discarded | `not ok - reservation-release-failure: token (missing: 'FM_AUTH_INTENT_UNRECORDABLE')` |
+| a granted record with an orphaned reservation is not reconcilable | `not ok - orphaned-grant: evidence did not settle the absent effect: FM_AUTH_AUTHORIZATION_VOID: authorization ... is granted; only an indeterminate spend needs reconciling` |
+| an orphaned granted reservation settles without evidence | `not ok - orphaned-grant: evidence-free reconciliation released the reservation` |
+| a live granted reservation is reclaimed | `not ok - live-granted-reservation: reconciliation reclaimed a live holder` |
 | the act is never performed | `not ok - nonvacuity: the act ran 0 times, not once` |
 | the local act is addressed at the mutable project alias instead of the pinned identity | `not ok - moved-project-alias: the replacement repository was retargeted` |
 | a zero-exit act is recorded applied without post-effect observation | `not ok - post-effect: unconfirmed success must be indeterminate: spent: fm-auth-...: expected exit 4, got 0` |
@@ -382,6 +385,8 @@ ok - one approval grants one landing, even under a second plan
 ok - concurrent sibling plans share one ruling reservation
 ok - a pre-act signal releases the ruling reservation
 ok - a failed ruling reservation release is observable
+ok - an orphaned granted reservation is reconciled from evidence
+ok - a live granted reservation is not reclaimed
 ok - an act that exits non-zero leaves the authority indeterminate
 ok - a project alias moved after mint performs no act
 ok - successful exit requires post-effect proof
