@@ -161,6 +161,8 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-verify-lib.sh
 . "$SCRIPT_DIR/fm-verify-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$SCRIPT_DIR/fm-independence-lib.sh"
 # The landing seam needs the outbound gate register and the authorization
 # layer's own identity predicates; both are sourced here so it can consult its
 # owners rather than restate them.
@@ -317,7 +319,17 @@ fi
 # waiver arithmetic, and the wording of its own refusals.
 PR_VERIFY_GRAPHQL=$FM_VERIFY_ROLLUP_GRAPHQL
 # shellcheck disable=SC2016
-PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | ($FM_VERIFY_ROLLUP_COUNTS)"
+PR_VERIFY_REVIEW_EVIDENCE='(. as $v
+  | (([$v.pr_author] + $v.commit_makers) | map(select(length > 0) | ascii_downcase) | unique) as $makers
+  | ($v.approved_reviews | map(select((.head | ascii_downcase) == ($v.head | ascii_downcase)))) as $approvals
+  | "review_evidence=" +
+      (if ($v.commits_reported == null or $v.commits_reported != $v.commits_read) then "commits-unread"
+       elif ($v.reviews_reported == null or $v.reviews_reported != $v.reviews_read) then "reviews-unread"
+       elif ($v.maker_identities_complete | not) then "maker-identities-unread"
+       elif any($approvals[]; . as $a | ($a.login | length) > 0 and (($makers | index($a.login | ascii_downcase)) == null)) then "github-approved"
+       elif ($approvals | length) > 0 then "maker-associated-approval"
+       else "none" end))'
+PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (($FM_VERIFY_ROLLUP_COUNTS), $PR_VERIFY_REVIEW_EVIDENCE)"
 
 # Three further lines, asked for only when a check is waived, so a merge with no
 # override sends byte-identical query text and reads back the same lines it
@@ -338,11 +350,28 @@ if [ -n "$WAIVED_CHECK" ]; then
     exit 1
   }
   PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (($FM_VERIFY_ROLLUP_COUNTS),
-$PR_VERIFY_WAIVED_LINES)"
+$PR_VERIFY_WAIVED_LINES, $PR_VERIFY_REVIEW_EVIDENCE)"
 fi
 
 VERIFIED_HEAD=
 VERIFIED_REVIEW=
+
+pipeline_review_evidence() {  # <head>
+  local head=$1 project branch maker_harness maker_model independence recorded_heads
+  project=$(grep '^project=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+  [ -n "$project" ] && [ -d "$project" ] || return 1
+  branch="fm/$ID"
+  maker_harness=$(grep '^harness=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+  maker_model=$(grep '^model=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+  independence=$(fm_independence_dimensions "$project" "$branch" "$maker_harness" "$maker_model" "$head")
+  if [ "$(fm_independence_overall "$independence")" = PASS ]; then
+    VERIFIED_REVIEW=independent
+    return 0
+  fi
+  recorded_heads=$(fm_independence_recorded_heads "$project" "$branch" || true)
+  VERIFIED_REVIEW="pipeline gaps:$(fm_independence_gaps "$independence" | paste -sd, -)${recorded_heads:+ stale-head=$recorded_heads expected=$head}"
+  return 1
+}
 
 # An empty rollup has more than one cause, and the two common ones need
 # different work from the captain: a repository with no CI configured for this
@@ -383,7 +412,7 @@ refuse_unreadable_rollup() {
 
 verify_current_head() {
   local output line joined remaining eff_failing eff_unrun rc
-  local head='' mergeable='' review='' checks='' failing='' unrun='' undecidable=''
+  local head='' mergeable='' review='' checks='' failing='' unrun='' undecidable='' review_evidence=''
   local rollup_head='' members='' reported=''
   local waived='' waived_failing='' waived_unrun=''
   local -a reasons=()
@@ -415,6 +444,9 @@ verify_current_head() {
   checks=$FM_VERIFY_ROLLUP_CHECKS
   failing=$FM_VERIFY_ROLLUP_FAILING
   undecidable=$FM_VERIFY_ROLLUP_UNDECIDABLE
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in review_evidence=*) review_evidence=${line#review_evidence=} ;; esac
+  done <<< "$output"
   # This gate reports one bucket for every current attempt that reached no
   # verdict, whether or not another may still arrive, so the library's two are
   # added back here. They are published separately because a consumer can merge
@@ -550,10 +582,8 @@ verify_current_head() {
     fi
   fi
   VERIFIED_HEAD=$head
-  case "$review" in
-    APPROVED) VERIFIED_REVIEW=approved ;;
-    *) VERIFIED_REVIEW= ;;
-  esac
+  VERIFIED_REVIEW=$review_evidence
+  [ "$VERIFIED_REVIEW" = github-approved ] || pipeline_review_evidence "$head" || true
 }
 
 MERGE_META_TMP=

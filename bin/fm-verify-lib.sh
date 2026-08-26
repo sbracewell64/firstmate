@@ -240,7 +240,9 @@ FM_VERIFY_ROLLUP_GRAPHQL='query($owner:String!,$repo:String!,$number:Int!){
       headRefOid
       mergeable
       reviewDecision
-      commits(last:1){nodes{commit{oid
+      author{login}
+      reviews(last:100){totalCount nodes{state author{login} commit{oid}}}
+      commits(last:100){totalCount nodes{commit{oid author{user{login}} committer{user{login}}
         statusCheckRollup{contexts(last:100){totalCount nodes{
           __typename
           ... on CheckRun{databaseId name status conclusion startedAt checkSuite{workflowRun{workflow{name}}}}
@@ -301,7 +303,7 @@ FM_VERIFY_ROLLUP_REDUCE='($members | to_entries | map(
 # source cannot say. reported is the source's own count of members, or null when
 # the source does not supply one.
 FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL='.data.repository.pullRequest as $pr
-  | ($pr.commits.nodes[0].commit // {}) as $commit
+  | ($pr.commits.nodes[-1].commit // {}) as $commit
   | ($commit.statusCheckRollup.contexts // {}) as $contexts
   | (($contexts.nodes // []) | map(. + {
       _workflow: (.checkSuite.workflowRun.workflow.name),
@@ -316,6 +318,14 @@ FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL='.data.repository.pullRequest as $pr
                else "mismatch" end),
      mergeable: ($pr.mergeable // ""),
      review: ($pr.reviewDecision // ""),
+     pr_author: ($pr.author.login // ""),
+     commit_makers: (($pr.commits.nodes // []) | map(.commit.author.user.login // empty, .commit.committer.user.login // empty) | unique),
+     maker_identities_complete: ((($pr.author.login // "") | length) > 0 and (($pr.commits.nodes // []) | all(((.commit.author.user.login // "") | length) > 0 and ((.commit.committer.user.login // "") | length) > 0))),
+     commits_read: (($pr.commits.nodes // []) | length),
+     commits_reported: $pr.commits.totalCount,
+     approved_reviews: (($pr.reviews.nodes // []) | map(select(.state == "APPROVED") | {login:(.author.login // ""), head:(.commit.oid // "")})),
+     reviews_read: (($pr.reviews.nodes // []) | length),
+     reviews_reported: $pr.reviews.totalCount,
      members: ($members | length),
      reported: $contexts.totalCount,
      checks: $checks}'

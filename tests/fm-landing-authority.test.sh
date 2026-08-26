@@ -186,14 +186,18 @@ SH
 
 # A rollup fixture in the API's own shape, so the merge gate's real query runs
 # against it and the real fold in bin/fm-verify-lib.sh produces the label.
-write_rollup() {  # <dir> <head> [<failing-count>] [<review-decision>]
-  local dir=$1 head=$2 failing=${3:-0} review=${4-APPROVED} ok=2
-  jq -n --arg head "$head" --arg review "$review" --argjson ok "$ok" --argjson failing "$failing" \
+write_rollup() {  # <dir> <head> [<failing-count>] [<review-decision>] [<reviewer>] [<maker>]
+  local dir=$1 head=$2 failing=${3:-0} review=${4-APPROVED} reviewer=${5:-reviewer} maker=${6:-maker} ok=2
+  jq -n --arg head "$head" --arg review "$review" --arg reviewer "$reviewer" --arg maker "$maker" \
+    --argjson ok "$ok" --argjson failing "$failing" \
     '{data:{repository:{pullRequest:{
         headRefOid:$head,
         mergeable:"MERGEABLE",
         reviewDecision:(if $review == "" then null else $review end),
-        commits:{nodes:[{commit:{oid:$head,statusCheckRollup:{contexts:{
+        author:{login:$maker},
+        reviews:{totalCount:(if $review == "APPROVED" then 1 else 0 end),
+                 nodes:(if $review == "APPROVED" then [{state:"APPROVED",author:{login:$reviewer},commit:{oid:$head}}] else [] end)},
+        commits:{totalCount:1,nodes:[{commit:{oid:$head,author:{user:{login:$maker}},committer:{user:{login:$maker}},statusCheckRollup:{contexts:{
           totalCount:($ok + $failing),
           nodes:(
             [range($ok) | {__typename:"CheckRun",name:"ok",conclusion:"SUCCESS",
@@ -214,7 +218,8 @@ write_empty_rollup() {  # <dir> <head>
         headRefOid:$head,
         mergeable:"MERGEABLE",
         reviewDecision:null,
-        commits:{nodes:[{commit:{oid:$head,statusCheckRollup:{contexts:{
+        author:{login:"maker"}, reviews:{totalCount:0,nodes:[]},
+        commits:{totalCount:1,nodes:[{commit:{oid:$head,author:{user:{login:"maker"}},committer:{user:{login:"maker"}},statusCheckRollup:{contexts:{
           totalCount:0, nodes:[]}}}}]}}}}}' \
     > "$dir/rollup.json"
 }
@@ -267,6 +272,7 @@ run_pr_merge() {  # <dir> [args...]
     FM_TEST_GH_LOG="$dir/gh.log" \
     FM_TEST_ROLLUP_FIXTURE="$dir/rollup.json" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
+    FM_PIPELINE_STATE_DB="${FM_PIPELINE_STATE_DB:-}" \
     PATH="$dir/fakebin:$PATH" \
       "$PR_MERGE" "$TASK_ID" "$PR_URL" "$@" ) > "$dir/stdout" 2> "$dir/stderr"
   RC=$?
@@ -455,16 +461,59 @@ test_changes_requested_refuses() {
   pass "changes requested still refuses"
 }
 
+test_maker_associated_approval_requires_the_captain() {
+  local dir
+  dir=$(new_pr_case maker-review) || fail "fixture failed"
+  write_rollup "$dir" "$HEAD_A" 0 APPROVED maker maker
+
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "a maker-associated approval authorized its own landing"
+  grep -F 'maker-associated-approval' "$dir/stderr" >/dev/null \
+    || fail "the compile did not name the maker-associated approval: $(cat "$dir/stderr")"
+  pass "a maker-associated approval compiles to CAPTAIN_REQUIRED"
+}
+
+test_independent_pipeline_review_allows_null_github_decision() {
+  local dir project
+  dir=$(new_pr_case pipeline-review) || fail "fixture failed"
+  write_rollup "$dir" "$HEAD_A" 0 ''
+  project="$dir/home/projects/$PROJECT_NAME"
+  mkdir -p "$project"
+  printf 'harness=claude\nmodel=opus\n' >> "$dir/home/state/$TASK_ID.meta"
+  fm_test_model_registry "$dir/home/config/models.json"
+  fm_test_pipeline_db "$dir/pipeline.sqlite" "$project" \
+    "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$HEAD_A" || fail "pipeline fixture failed"
+
+  FM_PIPELINE_STATE_DB="$dir/pipeline.sqlite" run_pr_merge "$dir"
+  [ "$RC" -eq 0 ] || fail "exact-head independent pipeline evidence did not authorize landing: $(cat "$dir/stderr")"
+  grep -F 'review=independent' "$dir/stdout" >/dev/null \
+    || fail "the compiler did not report independent pipeline evidence: $(cat "$dir/stdout")"
+  pass "exact-head independent pipeline evidence permits a null GitHub decision"
+}
+
 test_approved_review_allows_an_ungoverned_landing() {
   local dir
   dir=$(new_pr_case approved-review) || fail "fixture failed"
 
   run_pr_merge "$dir"
   [ "$RC" -eq 0 ] || fail "an ungoverned landing with approved review evidence refused: $(cat "$dir/stderr")"
-  grep -F 'review=approved' "$dir/stdout" >/dev/null \
+  grep -F 'review=github-approved' "$dir/stdout" >/dev/null \
     || fail "the compile did not report its review evidence: $(cat "$dir/stdout")"
   [ "$(merge_count "$dir")" = 1 ] || fail "the reviewed landing did not merge exactly once"
   pass "approved review evidence permits an ungoverned delegated landing"
+}
+
+test_decision_surface_never_delegates_an_unreviewed_candidate() {
+  local dir
+  dir=$(new_pr_case surface-unreviewed) || fail "fixture failed"
+  write_rollup "$dir" "$HEAD_A" 0 ''
+
+  run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 3 ] \
+    || fail "the decision surface delegated a candidate with no review evidence (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
+    || fail "the decision surface did not name its review-evidence refusal: $SURFACE_OUT"
+  pass "the decision surface does not bypass missing review evidence"
 }
 
 # --- (5) a decision the fleet typed as the captain's --------------------------
@@ -540,7 +589,7 @@ test_local_only_landing_is_delegated_on_the_same_terms() {
   register_project "$dir" "local-only +yolo"
   fm_test_model_registry "$dir/home/config/models.json"
   fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
-    "fm/$TASK_ID|openai|gpt-5.6-sol" || return 1
+    "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$(git -C "$proj" rev-parse "fm/$TASK_ID")" || return 1
 
   before=$(git -C "$proj" rev-parse HEAD)
   set +e
@@ -584,7 +633,7 @@ make_override_case() {  # <name>
   register_project "$dir" "local-only +yolo"
   fm_test_model_registry "$dir/home/config/models.json"
   fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
-    "fm/$TASK_ID|openai|gpt-5.6-sol" || return 1
+    "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$(git -C "$proj" rev-parse "fm/$TASK_ID")" || return 1
   printf '%s\n' "$dir"
 }
 
@@ -619,6 +668,23 @@ test_the_compile_reads_the_home_it_was_asked_about() {
     || fail "a decision recorded under the addressed home's data directory was not seen"
   [ "$before" = "$after" ] || fail "the local landing moved despite a reserved decision"
   pass "the compile reads the records of the home it was addressed to, through the state and data overrides"
+}
+
+test_local_pipeline_review_is_bound_to_the_landing_head() {
+  local dir proj landing_head stale_head
+  dir=$(make_override_case stale-local-review) || fail "fixture failed"
+  proj="$dir/home/projects/$PROJECT_NAME"
+  landing_head=$(git -C "$proj" rev-parse "fm/$TASK_ID")
+  stale_head=$HEAD_B
+  rm -f "$dir/pipeline.sqlite"
+  fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
+    "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$stale_head" || fail "pipeline fixture failed"
+
+  run_merge_local_by_override "$dir"
+  [ "$RC" -ne 0 ] || fail "review evidence for another head authorized the local landing"
+  grep -F "stale-head=$stale_head expected=$landing_head" "$dir/stderr" >/dev/null \
+    || fail "the refusal did not name the stale and landing heads: $(cat "$dir/stderr")"
+  pass "local independent review evidence is bound to the exact landing head"
 }
 
 # --- (9) could-not-observe ----------------------------------------------------
@@ -780,6 +846,22 @@ test_effective_posture_memo_is_scoped_to_the_addressed_home() {
   pass "effective posture lookup and memoization are scoped to the addressed home"
 }
 
+test_decision_disposition_honours_its_explicit_home() {
+  local ambient target got
+  ambient=$(new_home disposition-ambient) || fail "fixture failed"
+  target=$(new_home disposition-target) || fail "fixture failed"
+  write_meta "$ambient" "$FM_AUTONOMY_STATE_CAPTAIN"
+  write_meta "$target" "$FM_AUTONOMY_STATE_CAPTAIN"
+  register_project "$ambient" no-mistakes
+  register_project "$target"
+  . "$ROOT/bin/fm-classify-lib.sh"
+
+  got=$(FM_HOME="$ambient/home" decision_disposition "$TASK_ID" rollout blocked "$target/home")
+  [ "$got" = SELF_HANDLE ] \
+    || fail "decision_disposition read the ambient home instead of its explicit home: $got"
+  pass "decision disposition honours its explicit home"
+}
+
 test_ordinary_landing_is_eligible_with_no_captain_utterance
 test_one_use_authorization_is_minted_and_spent_through_its_owner
 test_governing_ruling_is_part_of_the_compile
@@ -788,16 +870,21 @@ test_approval_bound_to_another_head_refuses
 test_missing_check_evidence_refuses
 test_missing_review_evidence_requires_the_captain
 test_changes_requested_refuses
+test_maker_associated_approval_requires_the_captain
+test_independent_pipeline_review_allows_null_github_decision
 test_approved_review_allows_an_ungoverned_landing
+test_decision_surface_never_delegates_an_unreviewed_candidate
 test_a_captain_reserved_decision_requires_the_captain
 test_standing_posture_cannot_waive_an_engineering_gate
 test_local_only_landing_is_delegated_on_the_same_terms
 test_the_compile_reads_the_home_it_was_asked_about
+test_local_pipeline_review_is_bound_to_the_landing_head
 test_an_unreadable_decision_record_is_never_eligible
 test_effective_posture_follows_the_registry_not_the_task_record
 test_the_posture_is_reread_on_every_resolution
 test_registry_presence_controls_snapshot_fallback
 test_effective_posture_memo_is_scoped_to_the_addressed_home
+test_decision_disposition_honours_its_explicit_home
 test_every_disposition_is_classified_by_the_compile
 
 fm_test_contract "${BASH_SOURCE[0]}"

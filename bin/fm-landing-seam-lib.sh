@@ -852,7 +852,7 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
     not-applicable)
       sources="$sources ruling=not-applicable review=${review:-could-not-observe}"
       case "$review" in
-        approved|independent) ;;
+        github-approved|independent) ;;
         *)
           fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
             "$task has no governing Browser Sol ruling and assignment-distinct review evidence could not be observed (${review:-no review record})" "$sources"
@@ -860,7 +860,12 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
           ;;
       esac
       ;;
-    '') sources="$sources ruling=not-asked" ;;
+    '')
+      sources="$sources ruling=not-asked review=${review:-could-not-observe}"
+      fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
+        "$task has no resolved landing seam and assignment-distinct review evidence could not be observed (${review:-no review record})" "$sources"
+      return $?
+      ;;
     *)
       fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
         "the governance resolution for $task answered '$seam', so the authority this landing would consume could not be established" \

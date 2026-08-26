@@ -106,12 +106,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
+STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
+DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
+OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # bin/fm-pr-lib.sh owns fm_task_id_path_safe, this fleet's one predicate for
 # "may this task id be used to build a path?". Sourced rather than restated so a
 # target this surface forwards is held to the same rule everywhere else applies.
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-outbound-artifact-lib.sh
+. "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
+# shellcheck source=bin/fm-landing-authorization-lib.sh
+. "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$SCRIPT_DIR/fm-independence-lib.sh"
 
 # The landing-authority compile. Sourced rather than shelled out to, because it
 # is a library with no command of its own and this surface is its firstmate-facing
@@ -774,8 +783,39 @@ check_route_qualified() {
 # read - and unevaluable means the fact may not be asserted at all, in either
 # direction.
 check_landing_authority() {
-  local rc=0
-  fm_landing_authority_resolve "$FM_HOME" "$TARGET" || rc=$?
+  local rc=0 seam_rc=0 record head='' pr='' project='' branch maker_harness='' maker_model=''
+  local review='' independence candidate
+  record=$(fm_pr_identity_record_path "$STATE" "$TARGET" 2>/dev/null || true)
+  if [ -n "$record" ]; then
+    head=$(grep '^pr_head=' "$record" | tail -1 | cut -d= -f2- || true)
+    pr=$(grep '^pr=' "$record" | tail -1 | cut -d= -f2- || true)
+    project=$(grep '^project=' "$record" | tail -1 | cut -d= -f2- || true)
+    maker_harness=$(grep '^harness=' "$record" | tail -1 | cut -d= -f2- || true)
+    maker_model=$(grep '^model=' "$record" | tail -1 | cut -d= -f2- || true)
+  fi
+  if [ -z "$head" ] && [ -d "$OUTBOUND_DIR" ]; then
+    candidate=$(jq -rs --arg item "$TARGET" '
+      [ .[] | select(.identity.item == $item) | [.identity.head, (.identity.pr // "")] ] | unique
+      | if length == 1 then .[0] | @tsv else empty end
+    ' "$OUTBOUND_DIR"/*.json 2>/dev/null || true)
+    if [ -n "$candidate" ]; then
+      head=${candidate%%$'\t'*}
+      pr=${candidate#*$'\t'}
+    fi
+  fi
+  if fm_pr_head_valid "$head"; then
+    fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$TARGET" "$head" "${pr:--}" || seam_rc=$?
+    if [ -n "$project" ] && [ -d "$project" ]; then
+      branch="fm/$TARGET"
+      independence=$(fm_independence_dimensions "$project" "$branch" "$maker_harness" "$maker_model" "$head")
+      [ "$(fm_independence_overall "$independence")" = PASS ] && review=independent
+    fi
+    fm_landing_authority_resolve "$FM_HOME" "$TARGET" "$FM_LANDING_SEAM_VERDICT" \
+      "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$review" || rc=$?
+    [ "$seam_rc" -eq 0 ] || [ "$rc" -ne 0 ] || rc=4
+  else
+    fm_landing_authority_resolve "$FM_HOME" "$TARGET" "" "" "" "$review" || rc=$?
+  fi
   case "$rc" in
     0)
       verdict not-contradicted "landing-authority $TARGET" \

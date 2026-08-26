@@ -478,11 +478,12 @@ AUTHORITY_RC=0
 REVIEW_EVIDENCE=
 MAKER_HARNESS=$(grep '^harness=' "$META" | cut -d= -f2- || true)
 MAKER_MODEL=$(grep '^model=' "$META" | cut -d= -f2- || true)
-INDEPENDENCE=$(fm_independence_dimensions "$PROJ" "$BRANCH" "$MAKER_HARNESS" "$MAKER_MODEL")
+INDEPENDENCE=$(fm_independence_dimensions "$PROJ" "$BRANCH" "$MAKER_HARNESS" "$MAKER_MODEL" "$LANDING_HEAD")
 if [ "$(fm_independence_overall "$INDEPENDENCE")" = PASS ]; then
   REVIEW_EVIDENCE=independent
 else
-  REVIEW_EVIDENCE="pipeline gaps:$(fm_independence_gaps "$INDEPENDENCE" | paste -sd, -)"
+  RECORDED_REVIEW_HEADS=$(fm_independence_recorded_heads "$PROJ" "$BRANCH" || true)
+  REVIEW_EVIDENCE="pipeline gaps:$(fm_independence_gaps "$INDEPENDENCE" | paste -sd, -)${RECORDED_REVIEW_HEADS:+ stale-head=$RECORDED_REVIEW_HEADS expected=$LANDING_HEAD}"
 fi
 fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
   "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$REVIEW_EVIDENCE" || AUTHORITY_RC=$?
