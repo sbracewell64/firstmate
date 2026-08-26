@@ -151,19 +151,13 @@ When `no-mistakes` publishes this note itself, the helper becomes redundant and 
 
 ## Who publishes, and when
 
-Producing the evidence and publishing it are two steps, and only the first had an owner.
-The pipeline produced it; `bin/fm-attest.sh write` publishes it; and for a long time nothing invoked that command, so it ran only when a person or an agent remembered a line of prose.
-Measured on this repository on 2026-08-26: of ten open pull requests, four had a pipeline run that completed `review`, `test`, `lint` and `push` for their exact head and carried no published attestation for that head or for any commit on their branch, and their checks had been red for 4, 8, 13 and 31 days.
-That is not ten separate mistakes, it is one unowned step, and `data/no-mistakes-attestation-provenance-recurrence-owner/report.md` holds the per-head classification.
+Producing the evidence and publishing it are two steps with separate mechanism owners, but publication at the delivery boundary had no caller.
+The pipeline produced the evidence and `bin/fm-attest.sh write` could publish it, but for a long time nothing invoked that command except a person or an agent remembering a line of prose.
 
 `bin/fm-attest.sh required` is the predicate that gave the step an owner.
-It answers whether the governed contribution venue declares that its CI reads a head-bound attestation at the contribution target recorded by `bin/fm-task-base-lib.sh`.
-The venue identity, its repository URL, and that policy generation are explicit inputs, and inconsistent or missing inputs are could-not-observe rather than an invitation to infer policy from the candidate repository.
-The fixed declaration is read as a git blob from that venue generation, while notes remain candidate-bound evidence published to the candidate push repository.
-It is three-valued like every other observation here: required, not required, and a declaration it could not read, which is neither.
-A declaration with the wrong type, unreadable bytes, or noncanonical content is could-not-observe rather than absence, so publication never guesses around malformed repository intent.
+It applies the declaration contract under "What the check reads," so publication never infers policy from a repository name or guesses around malformed repository intent.
 
-That predicate is what makes an unconditional publication step correct everywhere, and two owners now run one:
+That predicate is what makes an unconditional publication step correct everywhere, and two call sites now invoke it:
 
 - The worker that ran the pipeline publishes at the moment its run reaches CI-ready, from the worktree holding the run record, with `bin/fm-attest.sh write --only-if-required` and the task's recorded contribution venue, venue URL, and contribution target.
   `bin/fm-brief.sh` puts that call in the `no-mistakes` delivery contract, which is the document a worker executes; the two modes that run no pipeline have no evidence to publish and are told nothing.
@@ -185,7 +179,7 @@ The second half is what makes it a closing condition rather than a wish.
 A head with no attestation is only acceptable when the owner has said why in its own words - `run-incomplete`, `run-covers-another-head`, `no-run-record` - which are statements about the candidate that a person can act on.
 A head with no attestation and no such refusal on record is the unowned step returning, and it is exactly what the two call sites above make impossible to reach silently.
 
-`bin/fm-attest.sh verify --head <sha>` against a fetched `refs/notes/no-mistakes` is how the first half is measured for one head, and the classification in the report named above is how it was measured for all of them.
+`bin/fm-attest.sh verify --head <sha>` against a fetched `refs/notes/no-mistakes` is how the first half is measured for one head.
 
 ## The bounded window before a verdict
 
