@@ -1,6 +1,6 @@
 {
   "concurrency": 4,
-  "finished_at": "2026-08-19T07:24:50Z",
+  "finished_at": "2026-08-26T06:02:19Z",
   "fm_test_run_jobs_enabled": false,
   "isolation_contract": {
     "digest": "sha256:d995377e1f35ff66cb2271ba1ce0958a671cb7e1051354e13202bd0872d4bb5e"
@@ -22,12 +22,12 @@
     "runner_jobs_max": 4
   },
   "production_sharding_enabled": false,
-  "run_id": "fm-isolation-1787123991027-2733060",
+  "run_id": "fm-isolation-1787723788644-3476481",
   "schema_version": 2,
   "scripts": [
     {
       "digest": "sha256:49ab87eb6d004e9a8467ff42bd3c9b0eafabb541780ff12e1fa036a82eeea818",
-      "duration_ms": 57530,
+      "duration_ms": 65948,
       "exit": 0,
       "fixtures": [
         {
@@ -47,7 +47,7 @@
     },
     {
       "digest": "sha256:e74f87206503083790182934bdc8666fb44590c68cb4db3ac31d72fec0253f02",
-      "duration_ms": 17734,
+      "duration_ms": 20642,
       "exit": 0,
       "fixtures": [
         {
@@ -71,7 +71,7 @@
     },
     {
       "digest": "sha256:57fa5399f9fe03a245cb89b6cc0fba6210596f0368fa72d7233f92777a27efd3",
-      "duration_ms": 1968,
+      "duration_ms": 2468,
       "exit": 0,
       "fixtures": [
         {
@@ -89,7 +89,7 @@
     },
     {
       "digest": "sha256:2d3b856ac3b19b3b10fa776cc9df4e5c2ae4b901cdeb03439980845dd92bbed2",
-      "duration_ms": 28737,
+      "duration_ms": 32422,
       "exit": 0,
       "fixtures": [
         {
@@ -107,7 +107,7 @@
     },
     {
       "digest": "sha256:de5cacd07394e22e4285448d62abe006bdc7096cdbaf3183cf171cbee3ee8b23",
-      "duration_ms": 1583,
+      "duration_ms": 2109,
       "exit": 0,
       "fixtures": [
         {
@@ -126,7 +126,7 @@
     },
     {
       "digest": "sha256:a2ff98851bc17949c7a5f8561e1e68c9163d9c631eb291a501d7aa2ba2405633",
-      "duration_ms": 114,
+      "duration_ms": 147,
       "exit": 0,
       "fixtures": [
         {
@@ -143,7 +143,7 @@
     },
     {
       "digest": "sha256:cdd394e5e90e67fa9c4549bc527c6ba70463657a500b8ed978d9e02393a67677",
-      "duration_ms": 41016,
+      "duration_ms": 47564,
       "exit": 0,
       "fixtures": [
         {
@@ -160,7 +160,7 @@
     },
     {
       "digest": "sha256:03b27851706ef7b469289caf8ec27371880cea9e9109543da429bb50e2480675",
-      "duration_ms": 42606,
+      "duration_ms": 50716,
       "exit": 0,
       "fixtures": [
         {
@@ -178,7 +178,7 @@
     },
     {
       "digest": "sha256:c747ae60035b65430f5083ac887e1d4485b4becea68b1b020e73d891ebe9de11",
-      "duration_ms": 227,
+      "duration_ms": 286,
       "exit": 0,
       "fixtures": [
         {
@@ -195,7 +195,7 @@
     },
     {
       "digest": "sha256:ee3b9c776f8c844bd30ad78ef8fb66f90fcc033bb0d4809a690927f9e38980b4",
-      "duration_ms": 6532,
+      "duration_ms": 8096,
       "exit": 0,
       "fixtures": [
         {
@@ -212,7 +212,7 @@
     },
     {
       "digest": "sha256:6cee889411c9bf492faf27a75b4bf2deed77210591e06b6e158f950fb94ab167",
-      "duration_ms": 7120,
+      "duration_ms": 7768,
       "exit": 0,
       "fixtures": [
         {
@@ -230,7 +230,7 @@
     },
     {
       "digest": "sha256:7cb6667b8636591af9bc9a041f4b56eddbe490d23b85d4214b01e98018bda3be",
-      "duration_ms": 1145,
+      "duration_ms": 1313,
       "exit": 0,
       "fixtures": [
         {
@@ -247,7 +247,7 @@
     },
     {
       "digest": "sha256:e735e9ed1506d39ce4b374588153031c1c9bf2f0935bfeefdf92e7f1f8ee95f3",
-      "duration_ms": 81,
+      "duration_ms": 108,
       "exit": 0,
       "fixtures": [],
       "path": "tests/fm-pi-primary-types.test.sh",
@@ -259,7 +259,7 @@
     },
     {
       "digest": "sha256:452e9b57fd0087df75508cec4e66b3a69b0027a674d0e619fb9894e38e2f5dc0",
-      "duration_ms": 19612,
+      "duration_ms": 23459,
       "exit": 0,
       "fixtures": [
         {
@@ -276,7 +276,7 @@
     },
     {
       "digest": "sha256:c618c4e83fada59483f45ca5311d213d2489887786e1c20511b972a063149948",
-      "duration_ms": 950,
+      "duration_ms": 1103,
       "exit": 0,
       "fixtures": [
         {
@@ -293,7 +293,7 @@
     },
     {
       "digest": "sha256:d1c2cda97878035fb755cf002ee6b35e1868a0de5f31acb9dbcaf0fc66577ef5",
-      "duration_ms": 1428,
+      "duration_ms": 1688,
       "exit": 0,
       "fixtures": [
         {
@@ -312,7 +312,7 @@
     },
     {
       "digest": "sha256:4330258558495c012190128c6308226cf052c336d0ff8cb0231cfcaf7528bcf0",
-      "duration_ms": 681,
+      "duration_ms": 821,
       "exit": 0,
       "fixtures": [
         {
@@ -330,7 +330,7 @@
     },
     {
       "digest": "sha256:0cdbb1d55f8022c95758b97a83d95351faf9eee4391a7387fbd313d01d51bd66",
-      "duration_ms": 827,
+      "duration_ms": 1049,
       "exit": 0,
       "fixtures": [
         {
@@ -348,7 +348,7 @@
     },
     {
       "digest": "sha256:a9293dc6b821e91d1d47f51c6b2adb532784aa3e8a3d44ba7c76b9117f696b23",
-      "duration_ms": 1363,
+      "duration_ms": 2055,
       "exit": 0,
       "fixtures": [
         {
@@ -365,7 +365,7 @@
     },
     {
       "digest": "sha256:4061d5face721164258f5aebe5e6271081e901ab6a512e0f47fab7bccf941e99",
-      "duration_ms": 268,
+      "duration_ms": 330,
       "exit": 0,
       "fixtures": [
         {
@@ -382,7 +382,7 @@
     },
     {
       "digest": "sha256:b8c562151ab89c8420f4d794892a6e48d08785fa74faf1494cb7d38900228d16",
-      "duration_ms": 179268,
+      "duration_ms": 209630,
       "exit": 0,
       "fixtures": [
         {
@@ -399,7 +399,7 @@
     },
     {
       "digest": "sha256:72751d894273fcde160c6783c5bde2301c9de24ff72fa63710a531c6171f6bd7",
-      "duration_ms": 1421,
+      "duration_ms": 1632,
       "exit": 0,
       "fixtures": [
         {
@@ -417,7 +417,7 @@
     },
     {
       "digest": "sha256:1c53ed596e088343fd51d10e766d0935ce6ab0415f7816809e12b258d9f16e6d",
-      "duration_ms": 107,
+      "duration_ms": 136,
       "exit": 0,
       "fixtures": [
         {
@@ -434,7 +434,7 @@
     },
     {
       "digest": "sha256:d905c60ec14a27ef553e64210f544d70875b2177983e6e6c3852110b004cf258",
-      "duration_ms": 39746,
+      "duration_ms": 50931,
       "exit": 0,
       "fixtures": [
         {
@@ -452,9 +452,9 @@
       "worker": 24
     }
   ],
-  "started_at": "2026-08-19T07:19:51Z",
+  "started_at": "2026-08-26T05:56:28Z",
   "summary": {
-    "duration_ms": 299923,
+    "duration_ms": 350816,
     "failed": 0,
     "total": 24
   }
