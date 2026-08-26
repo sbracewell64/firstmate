@@ -128,6 +128,15 @@ SH
   fm_fake_exit0 "$fakebin" gh-axi gh
   fm_fake_treehouse "$fakebin"
   fm_fake_exit0 "$fakebin" kimi
+  # These cases dispatch --mode no-mistakes, and a spawn in that mode now takes a
+  # complete run census before it allocates anything, so the pipeline is a tool
+  # this fixture has to supply. BASE_PATH here is deliberately hermetic and does
+  # not carry the host's ~/.local/bin, so without this stub `no-mistakes` is
+  # unreachable and every case refuses as could-not-observe long before it
+  # reaches anything about Kimi. `runs` prints nothing and exits 0: the pipeline
+  # answered, and no run owns this candidate - which is the population these
+  # launch and delivery cases are about.
+  fm_fake_exit0 "$fakebin" no-mistakes
   ln -s "$JQ_BIN" "$fakebin/jq"
   printf '%s\n' "$fakebin"
 }
