@@ -75,10 +75,12 @@ test_attached_arm_reports_the_delivered_wake() {
   # queue, prints its one reason line to its own stdout, and exits.
   printf 'done: fixture finished\n' > "$state/demo.status"
   wait_for_exit "$SEED_PID" 120
+  wait_for_exit_expired "seed watcher exit for the delivered wake" && return
   grep -q '^signal:' "$out" || fail "seed watcher did not surface the signal wake: $(cat "$out")"
 
   wait_for_exit "$ARM_PID" 120
   status=$?
+  wait_for_exit_expired "attached arm exit for the delivered wake" && return
   grep -q 'demo.status' "$state/.wake-queue" \
     || fail "the wake was not durably recorded, so this case proves nothing"
   ! grep -qF 'watcher: FAILED' "$armout" \
@@ -105,6 +107,7 @@ test_attached_arm_reports_the_delivered_wake_after_drain() {
 
   printf 'done: fixture finished\n' > "$state/demo.status"
   wait_for_exit "$SEED_PID" 120
+  wait_for_exit_expired "seed watcher exit before the handling turn drains" && return
   # The handling turn consumes the records before the attached arm closes: the
   # queue is empty again, while the watcher's identity-bound terminal record
   # still proves which cycle delivered the reason.
@@ -113,6 +116,7 @@ test_attached_arm_reports_the_delivered_wake_after_drain() {
 
   wait_for_exit "$ARM_PID" 200
   status=$?
+  wait_for_exit_expired "attached arm exit after the handling turn drained" && return
   ! grep -qF 'watcher: FAILED' "$armout" \
     || fail "attached arm reported an already-handled wake as a failed cycle: $(cat "$armout")"
   grep -q '^signal:' "$armout" \
@@ -139,9 +143,10 @@ test_attached_arm_still_fails_on_a_wake_it_did_not_deliver() {
   wait "$SEED_PID" 2>/dev/null || true
   wait_for_exit "$ARM_PID" 120
   status=$?
+  wait_for_exit_expired "attached arm exit for a cycle that delivered nothing" && return
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" \
     || fail "a cycle that delivered nothing must still fail loudly: $(cat "$armout")"
-  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] \
+  [ "$status" -ne 0 ] \
     || fail "arm did not exit nonzero for a cycle that delivered nothing (status $status)"
   pass "watch-arm: a cycle that delivered no wake of its own still fails loudly"
 }

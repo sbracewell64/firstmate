@@ -183,34 +183,139 @@ test_guard_warnings() {
   pass "guard banner leads when down with pending wakes (repair-after-drain) and stays silent when live and fresh"
 }
 
-test_lock_single_winner_under_concurrency() {
-  local dir state lockdir marker i pids pid wins
-  dir=$(make_case lock-concurrency)
+# --- lock contention fixture -------------------------------------------------
+#
+# One launcher for the three contention cases below, which differ only in how
+# the winner holds the lock and in how many locks there are.
+#
+# Every contender records its verdict - win or lose - and, on a win, records at
+# that same instant whether any EARLIER winner is still a live process. That
+# second reading is the one that matters. fm_lock_try_acquire guarantees at most
+# one LIVE holder, never one winner over all time: reclaiming a lock whose
+# recorded pid is dead is its documented contract, asserted directly by
+# test_lock_steals_dead_pid_lock below. Counting winners is only the same
+# measurement while the first winner is still alive.
+#
+# hold=barrier is what makes those two numbers the same. The winner holds until
+# every contender has recorded a verdict, so "these acquire attempts overlapped"
+# becomes a fact the fixture ESTABLISHES rather than one it infers from a
+# wall-clock sleep and a hope about launch speed. No resource envelope is needed
+# for the assertion itself: the fixture is calibrated by construction.
+#
+# hold=sleep:<n> is the pre-repair shape. It survives only as the watched red in
+# test_lock_verdict_does_not_follow_the_fixture_hold_window, where a launch skew
+# wider than <n> makes it report two winners for a lock that never admitted two.
+#
+# fm_test_reap stays in the launch loop. Its per-contender cost is what used to
+# push the last contender past the fixed hold, but a background process a case
+# does not register leaks on every path that is not its happy one. The repair is
+# to stop depending on launch speed, not to stop reaping.
+#
+# Sets LOCK_CONTEND_WINS, LOCK_CONTEND_COEXIST (live holders seen at a win),
+# LOCK_CONTEND_VERDICTS, LOCK_CONTEND_EXPECTED, LOCK_CONTEND_LEDGER, and
+# LOCK_CONTEND_CLASS (observed | resource_timeout).
+
+# Barrier envelope: the bound that keeps a contender which died without deciding
+# from wedging the winner forever. It is deliberately far wider than any launch
+# skew ever measured (the widest was ~3.5 s at loadavg 49), because it is a
+# safety stop on this harness and not a deadline the lock is asked to meet.
+# Spending it means the fixture could not establish overlap, which is
+# could-not-observe - never a verdict about the lock.
+LOCK_CONTEND_BARRIER_POLLS=1200
+
+lock_contend() {  # <dir> <label> <lockdir> <n> <hold> <lockmode> [skew]
+  local dir=$1 label=$2 lockdir=$3 n=$4 hold=$5 lockmode=$6 skew=${7:-0}
+  local state ledger release pids pid i decided
   state="$dir/state"
-  lockdir="$state/.contend.lock"
-  marker="$dir/wins"
-  : > "$marker"
+  ledger="$dir/$label.ledger.tsv"
+  release="$dir/$label.release"
+  : > "$ledger"
+  LOCK_CONTEND_LEDGER=$ledger
+  LOCK_CONTEND_EXPECTED=$n
+  LOCK_CONTEND_CLASS=observed
   pids=
   i=1
-  while [ "$i" -le 40 ]; do
+  while [ "$i" -le "$n" ]; do
     FM_STATE_OVERRIDE="$state" bash -c '
-      . "$1"
-      if fm_lock_try_acquire "$2"; then
-        printf "%s\n" "$$" >> "$3"
-        # Stay alive so the held lock names a live pid for the whole window;
-        # otherwise a late contender could legitimately reclaim a dead-pid lock.
-        sleep 1
+      lib=$1; lockdir=$2; ledger=$3; hold=$4; release=$5; idx=$6; skew=$7; lockmode=$8
+      [ "$skew" = 0 ] || sleep "$(awk -v i="$idx" -v s="$skew" "BEGIN { print (i - 1) * s }")"
+      if [ "$lockmode" = split ]; then lockdir="$lockdir.$idx"; fi
+      . "$lib"
+      me=${BASHPID:-$$}
+      ts=${EPOCHREALTIME:-$SECONDS}
+      if fm_lock_try_acquire "$lockdir"; then
+        # Published BEFORE the coexistence scan, so a second winner - if the
+        # lock ever admitted one - is guaranteed to see this one and count it.
+        printf "%s\twin\t%s\t%s\n" "$ts" "$me" "$idx" >> "$ledger"
+        coexist=0
+        for w in $(awk -F"\t" -v m="$me" "\$2 == \"win\" && \$3 != m { print \$3 }" "$ledger"); do
+          kill -0 "$w" 2>/dev/null && coexist=$((coexist + 1))
+        done
+        printf "%s\tcoexist\t%s\t%s\n" "${EPOCHREALTIME:-$SECONDS}" "$me" "$coexist" >> "$ledger"
+        case "$hold" in
+          barrier) while [ ! -e "$release" ]; do sleep 0.05; done ;;
+          sleep:*) sleep "${hold#sleep:}" ;;
+        esac
+      else
+        printf "%s\tlose\t%s\t%s\n" "$ts" "$me" "$idx" >> "$ledger"
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$ledger" "$hold" "$release" "$i" "$skew" "$lockmode" &
     pids="$pids $!"
     fm_test_reap "$!"
     i=$((i + 1))
   done
+
+  decided=0
+  if [ "$hold" = barrier ]; then
+    i=0
+    while [ "$i" -lt "$LOCK_CONTEND_BARRIER_POLLS" ]; do
+      decided=$(awk -F'\t' '$2 == "win" || $2 == "lose" { c++ } END { print c + 0 }' "$ledger")
+      [ "$decided" -ge "$n" ] && break
+      sleep 0.1
+      i=$((i + 1))
+    done
+    # Sticky: a straggler that decides after this release contended against a
+    # holder that may already be gone, so the overlap was never established even
+    # if the tally below comes out complete.
+    [ "$decided" -ge "$n" ] || LOCK_CONTEND_CLASS=resource_timeout
+    # Released on every path, including the spent envelope, so the winner is
+    # never left spinning against a sentinel that will not arrive.
+    : > "$release"
+  fi
   for pid in $pids; do
     wait "$pid" 2>/dev/null || true
   done
-  wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
-  [ "$wins" -eq 1 ] || fail "expected exactly one lock winner under concurrency, got $wins"
+
+  LOCK_CONTEND_WINS=$(awk -F'\t' '$2 == "win" { c++ } END { print c + 0 }' "$ledger")
+  LOCK_CONTEND_VERDICTS=$(awk -F'\t' '$2 == "win" || $2 == "lose" { c++ } END { print c + 0 }' "$ledger")
+  LOCK_CONTEND_COEXIST=$(awk -F'\t' '$2 == "coexist" { c += $4 } END { print c + 0 }' "$ledger")
+  # A contender that never reached a verdict at all is could-not-observe for the
+  # same reason: this run did not put the number of attempts it claims to.
+  if [ "$LOCK_CONTEND_VERDICTS" -lt "$n" ]; then
+    LOCK_CONTEND_CLASS=resource_timeout
+  fi
+}
+
+# Mirror of wake-helpers.sh's wait_for_exit_expired, for the barrier's own
+# envelope: false, with a typed could-not-observe line, when the last
+# lock_contend did not get every contender to decide. Callers end the case with
+# `|| return` rather than asserting on a contention that never happened.
+lock_contend_observed() {  # <label>
+  [ "${LOCK_CONTEND_CLASS:-}" != observed ] || return 0
+  printf 'cno - %s: TEST_ENVIRONMENT_RESOURCE_TIMEOUT %s of %s contenders recorded a verdict within the barrier envelope (ledger %s)\n' \
+    "$1" "$LOCK_CONTEND_VERDICTS" "$LOCK_CONTEND_EXPECTED" "$LOCK_CONTEND_LEDGER"
+  return 1
+}
+
+test_lock_single_winner_under_concurrency() {
+  local dir
+  dir=$(make_case lock-concurrency)
+  lock_contend "$dir" concurrency "$dir/state/.contend.lock" 40 barrier shared
+  lock_contend_observed "concurrent fm_lock_try_acquire" || return
+  [ "$LOCK_CONTEND_COEXIST" -eq 0 ] \
+    || fail "the lock admitted two simultaneously live holders under concurrency (coexistence $LOCK_CONTEND_COEXIST)"
+  [ "$LOCK_CONTEND_WINS" -eq 1 ] \
+    || fail "expected exactly one lock winner under concurrency, got $LOCK_CONTEND_WINS"
   pass "concurrent fm_lock_try_acquire yields exactly one winner"
 }
 
@@ -234,35 +339,74 @@ test_lock_steals_dead_pid_lock() {
 }
 
 test_lock_stale_steal_single_winner_under_concurrency() {
-  local dir state lockdir dead marker i pids pid wins
+  local dir lockdir dead
   dir=$(make_case lock-stale-concurrency)
-  state="$dir/state"
-  lockdir="$state/.contend.lock"
-  marker="$dir/wins"
+  lockdir="$dir/state/.contend.lock"
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
-  : > "$marker"
-  pids=
-  i=1
-  while [ "$i" -le 40 ]; do
-    FM_STATE_OVERRIDE="$state" bash -c '
-      . "$1"
-      if fm_lock_try_acquire "$2"; then
-        printf "%s\n" "${BASHPID:-$$}" >> "$3"
-        sleep 1
-      fi
-    ' _ "$LIB" "$lockdir" "$marker" &
-    pids="$pids $!"
-    fm_test_reap "$!"
-    i=$((i + 1))
-  done
-  for pid in $pids; do
-    wait "$pid" 2>/dev/null || true
-  done
-  wins=$(awk 'NF { c++ } END { print c + 0 }' "$marker")
-  [ "$wins" -eq 1 ] || fail "expected exactly one stale-lock stealer, got $wins"
+  lock_contend "$dir" stale-concurrency "$lockdir" 40 barrier shared
+  lock_contend_observed "concurrent stale-lock steal" || return
+  [ "$LOCK_CONTEND_COEXIST" -eq 0 ] \
+    || fail "the stale-lock steal admitted two simultaneously live holders (coexistence $LOCK_CONTEND_COEXIST)"
+  [ "$LOCK_CONTEND_WINS" -eq 1 ] \
+    || fail "expected exactly one stale-lock stealer, got $LOCK_CONTEND_WINS"
   pass "concurrent stale-lock steal yields exactly one winner"
+}
+
+test_lock_verdict_does_not_follow_the_fixture_hold_window() {
+  # The repair's own regression, run in the order the verification discipline
+  # requires: prove the detectors can go red, reproduce the pre-repair fixture's
+  # misreport, then show the repaired fixture surviving those same conditions.
+  #
+  # Deterministic and load-free. Two contenders; the second starts a fixed skew
+  # after the first, and that skew is twice the pre-repair hold. No CPU pressure
+  # is applied and none is needed: the old verdict was only ever a function of
+  # launch skew measured against that hold window, and saturating the box was
+  # just the slow way of widening the skew.
+  local dir state hold skew
+  dir=$(make_case lock-hold-window)
+  state="$dir/state"
+  hold=1
+  skew=2
+
+  # (1) Negative control. Two contenders, one lock EACH, so both really do hold
+  # at the same time. Both detectors must go red here before a clean reading
+  # from either is trusted below - a coexistence count of zero is a success
+  # reported by absence, and absence proves nothing until the check is watched
+  # failing.
+  lock_contend "$dir" negctl "$state/negctl.lock" 2 barrier split
+  lock_contend_observed "lock contention negative control" || return
+  [ "$LOCK_CONTEND_WINS" -eq 2 ] \
+    || fail "negative control: two independent locks did not both admit a winner (got $LOCK_CONTEND_WINS)"
+  [ "$LOCK_CONTEND_COEXIST" -ge 1 ] \
+    || fail "negative control: the live-coexistence detector stayed silent while two holders were provably alive at once"
+  pass "the lock contention detectors go red on two provably coexisting holders"
+
+  # (2) Watched red: the pre-repair fixture, unchanged, against the real lock.
+  # It reports TWO winners - and the coexistence reading taken at each win is
+  # what proves that is a fixture artifact rather than a lock defect. The second
+  # contender arrives after the first's fixed hold has already elapsed and
+  # reclaims a lock whose recorded pid is dead, which is exactly the documented
+  # behaviour test_lock_steals_dead_pid_lock asserts on purpose.
+  lock_contend "$dir" oldshape "$state/oldshape.lock" 2 "sleep:$hold" shared "$skew"
+  lock_contend_observed "pre-repair wall-clock hold" || return
+  [ "$LOCK_CONTEND_WINS" -eq 2 ] \
+    || fail "the pre-repair ${hold}s hold did not misreport under a ${skew}s launch skew (got $LOCK_CONTEND_WINS winners); this control must go red or the reading below proves nothing"
+  [ "$LOCK_CONTEND_COEXIST" -eq 0 ] \
+    || fail "the lock admitted two simultaneously live holders (coexistence $LOCK_CONTEND_COEXIST): that is a product defect, not the fixture defect this case is about"
+  pass "the pre-repair wall-clock hold misreports a sequential reclaim as two concurrent winners"
+
+  # (3) The repair under exactly those conditions. The winner holds until both
+  # contenders have recorded a verdict, so the second contends against a LIVE
+  # holder however late the launcher gets round to starting it.
+  lock_contend "$dir" barrier "$state/barrier.lock" 2 barrier shared "$skew"
+  lock_contend_observed "barrier hold under the same launch skew" || return
+  [ "$LOCK_CONTEND_COEXIST" -eq 0 ] \
+    || fail "the lock admitted two simultaneously live holders under the barrier hold (coexistence $LOCK_CONTEND_COEXIST)"
+  [ "$LOCK_CONTEND_WINS" -eq 1 ] \
+    || fail "the barrier hold did not hold the verdict to one winner under a ${skew}s launch skew (got $LOCK_CONTEND_WINS)"
+  pass "the barrier hold keeps the verdict a function of the lock rather than of launch skew"
 }
 
 test_lock_live_steal_mutex_is_not_reclaimed() {
@@ -497,7 +641,8 @@ test_watch_restart_attaches_to_healthy_peer() {
   wait "$peer" 2>/dev/null || true
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "restart arm did not fail after its attached peer ended without a successor (status $status)"
+  wait_for_exit_expired "restart arm exit after its attached peer ended" && return
+  [ "$status" -ne 0 ] || fail "restart arm did not fail after its attached peer ended without a successor (status $status)"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$out" || fail "restart arm did not surface the attached cycle end"
   pass "watch restart attaches to a verified healthy peer and later surfaces a successor gap"
 }
@@ -568,6 +713,7 @@ SH
       kill -TERM "$fixture" 2>/dev/null || true
       wait_for_exit "$fixture" 80
       status=$?
+      wait_for_exit_expired "signalled fixture exit status" && return
       [ "$status" -eq 143 ] || fail "a signalled suite must exit 128+TERM after tearing down, got $status"
     else
       FM_REAPER_LIB="$ROOT/tests/lib.sh" FM_REAPER_MODE="$mode" \
@@ -613,7 +759,7 @@ test_watcher_self_evicts_on_lock_takeover() {
   # Simulate a second watcher taking over the singleton lock. $$ (the test
   # runner) is a live pid that is not the watcher.
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
-  wait_for_exit "$pid" 60 || fail "watcher did not self-evict after lock takeover"
+  wait_for_clean_exit "$pid" 60 "watcher did not self-evict after lock takeover" || return
   lock_pid=$(cat "$state/.watch.lock/pid" 2>/dev/null || true)
   [ "$lock_pid" = "$$" ] || fail "self-evicting watcher clobbered the new holder's lock (got '$lock_pid')"
   pass "watcher self-evicts when the lock pid no longer names it"
@@ -644,7 +790,8 @@ test_arm_self_eviction_is_loud_without_successor() {
   printf '%s\n' "$$" > "$state/.watch.lock/pid"
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "self-evicted arm did not fail nonzero (status $status)"
+  wait_for_exit_expired "self-evicted arm exit status" && return
+  [ "$status" -ne 0 ] || fail "self-evicted arm did not fail nonzero (status $status)"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "self-evicted arm omitted the typed cycle-end failure"
   grep -q "reason=unexpected-clean-exit" "$state/.watch-cycle-exits.log" || fail "self-evicted cycle was not classified in the lifecycle ledger"
   pass "arm turns clean self-eviction without a successor into a typed failure"
@@ -689,7 +836,8 @@ test_arm_attaches_and_waits_for_live_fresh_watcher() {
   wait "$wpid" 2>/dev/null || true
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "attached arm did not fail after seed died (status $status)"
+  wait_for_exit_expired "attached arm exit after the seed watcher died" && return
+  [ "$status" -ne 0 ] || fail "attached arm did not fail after seed died (status $status)"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "attached arm did not emit the typed cycle-end failure"
   pass "arm attaches to a live fresh watcher and fails loudly when that cycle has no successor"
 }
@@ -724,6 +872,7 @@ test_attached_arm_signal_is_recorded_in_cycle_ledger() {
   kill -TERM "$armpid" 2>/dev/null || fail "could not signal the attached arm"
   wait_for_exit "$armpid" 80
   status=$?
+  wait_for_exit_expired "attached arm TERM exit status" && return
   [ "$status" -eq 143 ] || fail "attached arm did not exit with TERM status (got $status)"
   grep -q "arm_pid=$armpid.*watcher_pid=$wpid.*origin=attached.*exit_code=143.*signal=TERM.*reason=arm-interrupted" "$state/.watch-cycle-exits.log" \
     || fail "attached arm signal was not recorded in the lifecycle ledger"
@@ -798,6 +947,12 @@ test_arm_hup_cleans_child_and_temp_output() {
   kill -HUP "$armpid" 2>/dev/null || fail "could not send HUP to arm"
   wait_for_exit "$armpid" 80
   status=$?
+  # The arm's HUP latency is bounded below by its watcher child's in-flight
+  # `sleep "$FM_POLL"`, a value this fixture sets and the product never promised,
+  # so a spent budget here is a reading about the machine. It is reported as
+  # could-not-observe; only a status the harness actually SAW and that is not
+  # 128+HUP is a product failure.
+  wait_for_exit_expired "arm HUP exit status" && return
   [ "$status" -eq 129 ] || fail "arm did not exit with HUP status (got $status)"
   i=0
   while [ "$i" -lt 80 ] && is_live_non_zombie "$lock_pid"; do
@@ -883,7 +1038,8 @@ test_arm_waits_for_peer_beacon_after_child_stands_down() {
   wait "$peer" 2>/dev/null || true
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "attached arm did not fail after peer died (status $status): $(cat "$armout")"
+  wait_for_exit_expired "attached arm exit after the peer watcher died" && return
+  [ "$status" -ne 0 ] || fail "attached arm did not fail after peer died (status $status): $(cat "$armout")"
   grep -qF 'watcher: FAILED - cycle ended without an actionable reason' "$armout" || fail "peer-attached arm did not emit the typed cycle-end failure"
   pass "arm attaches to a peer watcher after child stands down and surfaces a missing successor"
 }
@@ -909,7 +1065,7 @@ test_arm_fails_loud_when_no_fresh_watcher_confirmable() {
   fm_test_reap "$armpid"
   wait_for_exit "$armpid" 120
   status=$?
-  [ "$status" -ne 124 ] || fail "arm never returned for an unconfirmable watcher"
+  wait_for_exit_expired "arm exit for an unconfirmable watcher" && return
   [ "$status" -ne 0 ] || fail "arm exited zero when no fresh watcher could be confirmed"
   grep -F 'watcher: FAILED' "$armout" >/dev/null || fail "arm did not print a typed FAILED line"
   ! grep -qE 'watcher: (healthy|attached)' "$armout" || fail "arm reported attached/healthy off a stale beacon"
@@ -1018,7 +1174,8 @@ test_stopped_watcher_is_live_but_stale_then_exit_is_classified() {
   kill -TERM "$watcher_pid" 2>/dev/null || true
   wait_for_exit "$armpid" 80
   status=$?
-  [ "$status" -ne 0 ] && [ "$status" -ne 124 ] || fail "terminated stopped-watcher cycle did not surface nonzero (status $status)"
+  wait_for_exit_expired "terminated stopped-watcher cycle exit status" && return
+  [ "$status" -ne 0 ] || fail "terminated stopped-watcher cycle did not surface nonzero (status $status)"
   grep -Eq 'reason=(nonzero-exit|signal-exit)' "$state/.watch-cycle-exits.log" \
     || fail "terminated watcher exit was not classified in the lifecycle ledger"
   pass "SIGSTOP distinguishes live PID from stale beacon and termination records the exit class"
@@ -1157,6 +1314,7 @@ test_guard_warnings
 test_lock_single_winner_under_concurrency
 test_lock_steals_dead_pid_lock
 test_lock_stale_steal_single_winner_under_concurrency
+test_lock_verdict_does_not_follow_the_fixture_hold_window
 test_lock_live_steal_mutex_is_not_reclaimed
 test_lock_does_not_steal_live_lock
 test_lock_empty_pid_uses_minimum_grace

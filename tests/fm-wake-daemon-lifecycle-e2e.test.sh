@@ -43,22 +43,22 @@ TMP_ROOT=$(fm_test_tmproot fm-wake-daemon-e2e)
 # state/.afk present (which the daemon owns) to keep the watcher one-shot; the
 # always-on standalone triage is covered by fm-watch-triage.test.sh. fakebin
 # shadows tmux. Echoes nothing; the caller reads $out.
-run_watcher_once() {
-  local state=$1 fakebin=$2 out=$3
+run_watcher_once() {  # <state> <fakebin> <out> <label>
+  local state=$1 fakebin=$2 out=$3 label=$4
   mkdir -p "$state"
   date '+%s' > "$state/.afk"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 50
+  wait_for_clean_exit "$!" 50 "$label" "$out"
 }
 
-run_watcher_present_once() {
-  local state=$1 fakebin=$2 out=$3
+run_watcher_present_once() {  # <state> <fakebin> <out> <label>
+  local state=$1 fakebin=$2 out=$3 label=$4
   mkdir -p "$state"
   rm -f "$state/.afk"
   PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=1 FM_SIGNAL_GRACE=1 \
     FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 "$WATCH" > "$out" &
-  wait_for_exit "$!" 50
+  wait_for_clean_exit "$!" 50 "$label" "$out"
 }
 
 # --- Phase 1: routine self-handled, queued; terminal caught after restart ---
@@ -73,7 +73,7 @@ test_routine_then_terminal_after_restart() {
 
   # A routine status fires a signal; the watcher queues it and exits.
   printf 'working: building\n' > "$status_file"
-  run_watcher_once "$state" "$fakebin" "$out" || fail "watcher did not exit for the routine signal"
+  run_watcher_once "$state" "$fakebin" "$out" "watcher did not exit for the routine signal" || return
   grep -F "signal: $status_file" "$out" >/dev/null || fail "watcher did not report the routine signal"
 
   # Drain it and route through the daemon: a routine status self-handles.
@@ -87,7 +87,7 @@ test_routine_then_terminal_after_restart() {
   # down; the next watcher run must catch it up (losslessness across restart).
   printf 'done: PR https://example.test/pr/900\n' >> "$status_file"
   : > "$out"
-  run_watcher_once "$state" "$fakebin" "$out" || fail "restarted watcher did not exit for the terminal signal"
+  run_watcher_once "$state" "$fakebin" "$out" "restarted watcher did not exit for the terminal signal" || return
   grep -F "signal: $status_file" "$out" >/dev/null || fail "terminal signal written while watcher down was not caught on restart"
 
   # Drain and route the terminal: exactly ONE digest is buffered.
@@ -152,7 +152,7 @@ SH
   printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" > "$status_file"
 
   run_watcher_present_once "$state" "$fakebin" "$dir/present.out" \
-    || fail "present-mode watcher did not surface the typed PR-ready event"
+    "present-mode watcher did not surface the typed PR-ready event" || return
   grep -F "signal: $status_file" "$dir/present.out" >/dev/null \
     || fail "present-mode watcher did not report the typed PR-ready event"
   [ ! -e "$state/task-pr-e2e.check.sh" ] \
@@ -171,7 +171,7 @@ SH
 
   printf '%s\n' "fm-status-event.v1 verb=done phase=ready evidence=$url summary=checks green" >> "$status_file"
   run_watcher_once "$state" "$fakebin" "$dir/away.out" \
-    || fail "away-mode watcher did not surface the replayed typed PR-ready event"
+    "away-mode watcher did not surface the replayed typed PR-ready event" || return
   grep -F "signal: $status_file" "$dir/away.out" >/dev/null \
     || fail "away-mode watcher did not report the replayed typed PR-ready event"
 
@@ -188,7 +188,7 @@ SH
   rm -f "$state/.last-check"
   export FM_TEST_GH_STATE=MERGED
   run_watcher_once "$state" "$fakebin" "$dir/merged.out" \
-    || fail "merge poll did not complete in away mode"
+    "merge poll did not complete in away mode" || return
   unset FM_TEST_GH_STATE
   case "$(cat "$dir/merged.out")" in
     check:*task-pr-e2e.check.sh:*merged*) ;;
