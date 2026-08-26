@@ -440,6 +440,8 @@ test_uses_the_fixed_trusted_git_instead_of_caller_resolution() {
   printf '%s\n' '#!/usr/bin/env bash' "printf invoked > '$marker'" > "$FX_HOME/fakebin/git" \
     || fail "trusted-git: fake"
   chmod +x "$FX_HOME/fakebin/git" || fail "trusted-git: chmod"
+  # This function is intentionally never invoked because its non-invocation is the assertion.
+  # shellcheck disable=SC2329
   git() { printf invoked > "$marker"; }
   export -f git
   PATH="$FX_HOME/fakebin:$PATH" spend "$id" > /dev/null \
