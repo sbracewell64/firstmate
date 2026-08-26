@@ -126,8 +126,8 @@ JOBS=1
 # higher concurrency first, never the other way round.
 JOBS_MAX=4
 
-# Declared serial-lane budget, and the shard count and drift bounds derived from
-# it. This block is the one owner of every number the recurrence control checks;
+# Declared serial-lane budget, and the associated shard count and drift bounds.
+# This block is the one owner of every number the recurrence control checks;
 # docs/fm-test-portable-shards.md owns how to re-derive them.
 #
 # BASIS (2026-08-26). Measured on this repo's own PR CI run 32998443526, whose
