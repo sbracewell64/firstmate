@@ -197,7 +197,7 @@ while IFS= read -r file; do
     continue
   fi
   case "$file" in
-    docs/*|data/*|assets/*|tests/*|commitments/*|loopspecs/*|capabilities/*|LICENSE|*.md|*.txt|.gitignore|.gitattributes)
+    docs/*|data/*|assets/*|tests/*|commitments/*|loopspecs/*|capabilities/*|LICENSE|*.md|*.txt|.gitignore|.gitattributes|.github/no-mistakes-attestation)
       OUT_OF_SCOPE="${OUT_OF_SCOPE}${OUT_OF_SCOPE:+
 }$file\tfile is maintained prose, inert data, a static asset, or a test fixture"
       ;;
