@@ -56,7 +56,7 @@ An absent attestation and a rejected one need different repairs, and neither may
 A **refusal** exits 1 and prints `not attested (<reason>)`.
 The evidence was examined and found absent, unbound or invalid, so this is a verdict.
 `verify` refuses with the seven reasons above.
-`write` refuses with `no-run-record`, `run-record-unreadable`, `run-record-unparsed`, `run-record-no-head`, `run-covers-another-branch`, `run-head-unavailable`, `run-covers-another-head` or `run-incomplete`.
+`write` refuses with `no-run-record`, `run-record-unreadable`, `run-record-unparsed`, `run-record-no-head`, `run-covers-another-branch`, `run-head-unavailable`, `run-covers-another-head`, `expected-head-mismatch` or `run-incomplete`.
 
 A **failure** exits 2 and prints `cannot attest (<reason>)`.
 No verdict was reached, so it says nothing about the evidence either way: `not-a-git-repository`, `pipeline-tool-missing`, `head-unresolvable`, `head-detached`, `scratch-file-unavailable`, `push-target-unreadable`, `push-target-unfetchable`, `attestation-not-reconciled`, `attestation-not-recorded`, `attestation-not-published`, or `commit-unknown` for `show`.
