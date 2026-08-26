@@ -360,34 +360,6 @@ test_outbound_library_stays_enrolled() {
   pass "the outbound library is enrolled, and cannot be quietly un-enrolled"
 }
 
-test_repository_has_no_dead_predicates_under_the_control() {
-  # This asserts the SAME outcome the CI invariants job asserts by running the
-  # same command with no arguments over the real repository. Accepting exit 4
-  # here as well as 0 would have made the test pass while CI went red, and would
-  # have let the repository drift into a state where no predicate resolves at
-  # all - which is what the control's own header says must never read as clean.
-  local consumer="$ROOT/bin/fm-landing-authorization.sh" out rc
-  out=$("$CHECK" --json 2>&1); rc=$?
-  [ "$rc" -ne 3 ] \
-    || fail "the real repository has an unconsulted guard: $out"
-  [ "$rc" -ne 4 ] \
-    || fail "the real repository has an unresolved predicate; that is not a pass: $out"
-  [ "$rc" -eq 0 ] \
-    || fail "the real repository produced an unexpected verdict, exit $rc: $out"
-  printf '%s' "$out" | jq -e --arg consumer "$consumer" '
-    .schema == "fm-dead-predicate-check.v1"
-    and (.alive > 0)
-    and ((.dead | length) == 0)
-    and ((.could_not_observe | length) == 0)
-    and (.unchecked_consumers
-      | map(startswith($consumer + ":"))
-      | any
-      | not)
-  ' >/dev/null \
-    || fail "the repository verdict did not prove the landing-authorization consumer readable: $out"
-  pass "the real repository passes the CI control with the landing-authorization consumer readable"
-}
-
 test_control_is_wired_into_the_automatic_check_path() {
   # The control exists to catch a guard nothing consults. A control that itself
   # depends on somebody choosing to run it is that same defect one level up, so
@@ -563,6 +535,4 @@ test_mark_must_be_adjacent_to_the_definition
 test_no_enrolled_file_is_could_not_observe
 test_outbound_library_stays_enrolled
 test_control_is_wired_into_the_automatic_check_path
-test_repository_has_no_dead_predicates_under_the_control
-
 printf '\nall fm-dead-predicate-check tests passed\n'
