@@ -98,6 +98,9 @@ The two worth naming here because they are the ones that get conflated in conver
 - **A reachable binding is not a qualified one.** One vendor answering says nothing about whether any binding was observed to do this job.
 - **An unreachable binding does not make a route unsatisfiable.** If another binding satisfies the same predicates, the route is satisfiable and saying otherwise is a claim the route owner contradicts.
 
+A `COULD_NOT_OBSERVE` carrying `FM_QUALIFICATION_CONTRACT_DIR_REFUSED` is not about any binding at all: this home's `config/qualification-contract-dir` names a contract generation the register cannot read, so nothing was looked for.
+Repair that binding instead of activating a workflow, which would spend a bounded run recording nothing; `docs/configuration.md` "Role qualification register" owns the knob.
+
 ## What never happens
 
 - Missing or stale qualification never produces `CAPTAIN_EXCEPTION_REQUIRED`.
