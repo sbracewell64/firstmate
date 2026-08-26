@@ -620,7 +620,7 @@ tests/fm-commitment-register.test.sh 23684
 tests/fm-conflict-marker-check.test.sh 275
 tests/fm-context-statusline.test.sh 585
 tests/fm-daemon.test.sh 31350
-tests/fm-dead-predicate-check.test.sh 90099
+tests/fm-dead-predicate-check.test.sh 90465
 tests/fm-decision-surface.test.sh 7860
 tests/fm-documentation-audiences.test.sh 749
 tests/fm-exact-head-green-one-owner.test.sh 2075
