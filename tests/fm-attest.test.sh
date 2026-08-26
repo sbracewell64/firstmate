@@ -3361,6 +3361,18 @@ install_superseded_policy_venue() {
       git -C "$repo" add b.txt
       git -C "$repo" commit -qm advance
       ;;
+    symlink)
+      mkdir -p "$repo/.github"
+      ln -s ../target "$repo/.github/no-mistakes-attestation"
+      git -C "$repo" add .github
+      git -C "$repo" commit -qm declaration
+      ;;
+    invalid)
+      mkdir -p "$repo/.github"
+      printf 'fm-attest.v1 optional\n' > "$repo/.github/no-mistakes-attestation"
+      git -C "$repo" add .github
+      git -C "$repo" commit -qm declaration
+      ;;
     *) fail "unknown superseded fixture: $marker" ;;
   esac
   git init -q --bare "$policy"
@@ -3416,6 +3428,36 @@ test_required_still_answers_not_required_when_the_venue_never_declared() {
   assert_not_contains "$out" "policy-generation-stale" \
     "an absence both generations agree on was reported as superseded"
   pass "fm-attest.sh: a generation the venue never declared at still answers not-required"
+}
+
+test_required_reports_a_current_generation_symlink_as_unobservable() {
+  local repo policy out rc
+  repo="$TMP_ROOT/required-current-generation-symlink"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" symlink)
+  out=$(superseded_out "$repo" "$policy" refs/heads/old)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a current-generation symlink became an answer (exit $rc): $out"
+  assert_contains "$out" "policy-generation-currency-unobservable" \
+    "the current-generation symlink did not report unobservable currency"
+  assert_not_contains "$out" "policy-generation-stale" \
+    "the current-generation symlink was credited as a declaration"
+  pass "fm-attest.sh: a current-generation symlink leaves currency unobservable"
+}
+
+test_required_reports_current_generation_wrong_content_as_unobservable() {
+  local repo policy out rc
+  repo="$TMP_ROOT/required-current-generation-invalid"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" invalid)
+  out=$(superseded_out "$repo" "$policy" refs/heads/old)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "current-generation wrong content became an answer (exit $rc): $out"
+  assert_contains "$out" "policy-generation-currency-unobservable" \
+    "current-generation wrong content did not report unobservable currency"
+  assert_not_contains "$out" "policy-generation-stale" \
+    "current-generation wrong content was credited as a declaration"
+  pass "fm-attest.sh: invalid current-generation content leaves currency unobservable"
 }
 
 test_required_reports_an_unresolvable_default_ref_as_neither() {
@@ -3736,6 +3778,8 @@ test_required_reports_wrong_declaration_content_as_neither
 test_required_reads_a_marker_from_the_repository_default_branch
 test_required_reports_a_superseded_policy_generation_as_neither
 test_required_still_answers_not_required_when_the_venue_never_declared
+test_required_reports_a_current_generation_symlink_as_unobservable
+test_required_reports_current_generation_wrong_content_as_unobservable
 test_required_reports_an_unresolvable_default_ref_as_neither
 test_required_refuses_a_foreign_local_policy_ref
 test_required_cleans_the_policy_ref_when_fetch_is_interrupted

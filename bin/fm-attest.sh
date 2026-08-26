@@ -959,6 +959,42 @@ required_policy_clear_traps() {
   trap - EXIT HUP INT TERM
 }
 
+required_declaration_observe() {
+  required_declaration_commit=$1
+  required_declaration_state=unobservable
+  required_declaration_fault=
+  required_declaration_entry=$(git ls-tree "$required_declaration_commit" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
+    required_declaration_fault=unreadable
+    return 0
+  }
+  if [ -z "$required_declaration_entry" ]; then
+    required_declaration_state=absent
+    return 0
+  fi
+  required_declaration_mode=${required_declaration_entry%% *}
+  required_declaration_entry_rest=${required_declaration_entry#* }
+  required_declaration_type=${required_declaration_entry_rest%% *}
+  case "$required_declaration_mode:$required_declaration_type" in 100644:blob | 100755:blob) ;; *)
+    required_declaration_fault=not-regular
+    return 0
+    ;;
+  esac
+  required_declaration_content=$(git cat-file -p "$required_declaration_commit:$REQUIRED_DECLARATION" 2>/dev/null) || {
+    required_declaration_fault=unreadable
+    return 0
+  }
+  required_declaration_size=$(git cat-file -s "$required_declaration_commit:$REQUIRED_DECLARATION" 2>/dev/null) || {
+    required_declaration_fault=unreadable
+    return 0
+  }
+  if [ "$required_declaration_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_declaration_size" != 22 ]; then
+    required_declaration_fault=invalid
+    return 0
+  fi
+  required_declaration_state=present
+  return 0
+}
+
 # Whether the venue's CURRENT generation carries the declaration, so that an
 # absence read from a supplied generation can be told apart from a superseded
 # one. Sets required_currency to present, absent, or unobservable, plus
@@ -1001,15 +1037,11 @@ required_currency_observe() {
     return 0
   fi
 
-  required_current_entry=$(git ls-tree "$required_current" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
-    required_currency_detail="$REQUIRED_DECLARATION could not be inspected at the venue's current generation."
-    return 0
-  }
-  if [ -n "$required_current_entry" ]; then
-    required_currency=present
-  else
-    required_currency=absent
-  fi
+  required_declaration_observe "$required_current"
+  case "$required_declaration_state" in
+    present | absent) required_currency=$required_declaration_state ;;
+    *) required_currency_detail="$REQUIRED_DECLARATION at the venue's current generation is ${required_declaration_fault:-unreadable}." ;;
+  esac
   return 0
 }
 
@@ -1069,13 +1101,8 @@ required_observe() {
       required_evidence="The fetched policy generation $required_ref at $required_venue did not resolve to one matching commit."
       return 0
     fi
-    required_entry=$(git ls-tree "$required_commit" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
-      required_state=unobservable
-      required_reason=policy-declaration-unreadable
-      required_evidence="$REQUIRED_DECLARATION could not be inspected at $required_venue generation $required_ref."
-      return 0
-    }
-    if [ -z "$required_entry" ]; then
+    required_declaration_observe "$required_commit"
+    if [ "$required_declaration_state" = absent ]; then
       # An absent declaration is only a fact about the VENUE when the
       # generation it was read from is the venue's current one. Read from a
       # superseded generation it is a fact about the AGE of that generation,
@@ -1107,29 +1134,27 @@ required_observe() {
       required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, and neither does its current generation"
       return 0
     fi
-    required_mode=${required_entry%% *}
-    required_entry_rest=${required_entry#* }
-    required_type=${required_entry_rest%% *}
-    case "$required_mode:$required_type" in 100644:blob | 100755:blob) ;; *)
+    case "$required_declaration_state:$required_declaration_fault" in
+      present:) ;;
+      unobservable:not-regular)
       required_state=unobservable
       required_reason=policy-declaration-not-regular
       required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref is not a regular-file blob."
       return 0
       ;;
-    esac
-    required_content=$(git cat-file -p "$required_commit:$REQUIRED_DECLARATION" 2>/dev/null) || {
-      required_state=unobservable
-      required_reason=policy-declaration-unreadable
-      required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref could not be read."
-      return 0
-    }
-    required_size=$(git cat-file -s "$required_commit:$REQUIRED_DECLARATION" 2>/dev/null) || required_size=
-    if [ "$required_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_size" != 22 ]; then
+      unobservable:invalid)
       required_state=unobservable
       required_reason=policy-declaration-invalid
       required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref does not contain exactly one '$REQUIRED_DECLARATION_CONTENT' line."
       return 0
-    fi
+      ;;
+      unobservable:unreadable | *)
+        required_state=unobservable
+        required_reason=policy-declaration-unreadable
+        required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref could not be read."
+        return 0
+        ;;
+    esac
     required_state=required
     required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref carries the required declaration"
     return 0
