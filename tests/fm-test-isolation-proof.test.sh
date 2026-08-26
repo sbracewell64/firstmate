@@ -722,6 +722,173 @@ test_a_failed_write_leaves_the_previous_artifact_intact() {
   pass "a write that does not complete leaves the last genuine artifact intact"
 }
 
+# --- causal classification binding ------------------------------------------
+#
+# A diagnostic classification that changes workflow eligibility must bind to the
+# failure mechanism it names, at the boundary that can attribute it, and not to a
+# symptom that several different mechanisms produce. The cases below pin the
+# three bindings this owner supplies to whatever consumes them. They do not
+# classify anything themselves: this script owns the isolation proof, not the
+# custody decision that reads it.
+
+test_freshness_separates_a_subject_edit_from_a_dependency_change() {
+  local root saved
+  root=$(mk_freshness_fixture) || fail "could not build the freshness fixture"
+  [ -n "$root" ] && [ -d "$root" ] || fail "freshness fixture root is empty"
+  remeasure_freshness_fixture "$root" || fail "could not measure the fixture subject"
+
+  # A proof that is current for its own tree is not any kind of stale, and says
+  # so on both axes. A consumer must be able to tell this state apart from the
+  # two below without guessing.
+  freshness_verdict "$root" 4
+  [ "$FRESHNESS_RC" -eq 0 ] || fail "a current proof must be PROVEN, got rc=$FRESHNESS_RC"$'\n'"$FRESHNESS_OUT"
+  assert_not_contains "$FRESHNESS_OUT" "FM_ISOLATION_SUBJECT STALE" \
+    "a current proof names no stale subject"
+  assert_not_contains "$FRESHNESS_OUT" "FM_ISOLATION_DEPENDENCY STALE" \
+    "a current proof names no stale dependency"
+
+  # Mechanism one: a subject moved. The subject axis carries it.
+  printf '\necho "a hunk this proof never saw"\n' >>"$root/tests/mini.test.sh"
+  freshness_verdict "$root" 4
+  [ "$FRESHNESS_RC" -eq 1 ] || fail "a moved subject must refuse with 1, got rc=$FRESHNESS_RC"$'\n'"$FRESHNESS_OUT"
+  assert_contains "$FRESHNESS_OUT" \
+    "FM_ISOLATION_SUBJECT STALE path=tests/mini.test.sh reason=subject-bytes-changed" \
+    "a moved subject is reported on the subject axis"
+  remeasure_freshness_fixture "$root" || fail "could not re-measure the moved subject"
+
+  # Mechanism two: nothing about any subject moved, only the semantics every
+  # worker is built from. The proof is equally stale and the whole run equally
+  # refuses, but no subject changed its bytes - so a reader that keys on the
+  # staleness alone cannot tell these two apart, and one that keys on the
+  # mechanism can.
+  saved=$FM_ISOLATION_CLEARED_ENV
+  FM_ISOLATION_CLEARED_ENV='FM_HOME'
+  freshness_verdict "$root" 4
+  FM_ISOLATION_CLEARED_ENV=$saved
+  [ "$FRESHNESS_RC" -eq 1 ] || fail "changed semantics must refuse with 1, got rc=$FRESHNESS_RC"$'\n'"$FRESHNESS_OUT"
+  assert_contains "$FRESHNESS_OUT" \
+    "FM_ISOLATION_DEPENDENCY STALE name=isolation-contract reason=contract-changed" \
+    "a changed contract is reported on the dependency axis"
+  assert_not_contains "$FRESHNESS_OUT" "reason=subject-bytes-changed" \
+    "a dependency change must not be reported as a subject edit"
+
+  # Non-vacuity: restoring the contract restores the verdict, so the contrast
+  # above is the mutation and not a permanent difference in the fixture.
+  freshness_verdict "$root" 4
+  [ "$FRESHNESS_RC" -eq 0 ] || fail "restored semantics must return to PROVEN, got rc=$FRESHNESS_RC"$'\n'"$FRESHNESS_OUT"
+  pass "a subject edit and a dependency change are separately reported"
+}
+
+# Echoes a repository root the real harness can run end to end: this repo's bin/,
+# one trivial isolated stub at every candidate path, and the workflow the lane
+# concurrency is read from. It exists so the destination rule below is exercised
+# through the real script rather than a re-implementation of it.
+mk_seam_fixture() {
+  local root path
+  root=$(fm_test_tmproot fm-isolation-seam)
+  [ -n "$root" ] && [ -d "$root" ] || return 1
+  mkdir -p "$root/tests" "$root/docs" "$root/.github/workflows" "$root/elsewhere" || return 1
+  cp -R "$ROOT/bin" "$root/bin" || return 1
+  cp "$ROOT/.github/workflows/ci.yml" "$root/.github/workflows/ci.yml" || return 1
+  cat >"$root/tests/lib.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+fm_test_tmproot() { mktemp -d "${TMPDIR:-/tmp}/$1.XXXXXX"; }
+FIXTURE
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    cat >"$root/$path" <<'FIXTURE'
+#!/usr/bin/env bash
+set -u
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+d=$(fm_test_tmproot stub)
+[ -d "$d" ] || exit 1
+echo "ok"
+FIXTURE
+    chmod +x "$root/$path" || return 1
+  done < <("$PROOF" --list)
+  printf '%s\n' "$root"
+}
+
+test_only_the_canonical_destination_carries_a_seam_verdict() {
+  local root out rc
+
+  # An alternate output path can measure, but it cannot attribute: the consumer
+  # this seam asks reads the canonical proof and nothing else. A run that wrote
+  # somewhere else must say the question was out of scope rather than report a
+  # verdict nobody asked the consumer for.
+  root=$(mk_seam_fixture) || fail "could not build the seam fixture"
+  [ -n "$root" ] && [ -d "$root" ] || fail "seam fixture root is empty"
+
+  rc=0
+  out=$("$root/bin/fm-test-isolation-proof.sh" --jobs 4 \
+    --json "$root/elsewhere/proof.json" 2>&1) || rc=$?
+  assert_contains "$out" "FM_ISOLATION_ARTIFACT WRITTEN" \
+    "the alternate-destination run must still have measured and written"
+  assert_contains "$out" \
+    "FM_ISOLATION_SEAM NOT-APPLICABLE reason=artifact-is-not-the-canonical-proof" \
+    "an alternate destination states that the seam does not apply"
+  assert_not_contains "$out" "FM_ISOLATION_SEAM PROVEN" \
+    "an alternate destination must never report the canonical seam proven"
+
+  # The same fixture, the same subjects, the only difference being where the
+  # artifact landed. Here the consumer is actually asked, so a verdict from its
+  # three-valued vocabulary comes back. Which verdict depends on the fixture and
+  # is not asserted; that it was asked at all is the binding.
+  rc=0
+  out=$("$root/bin/fm-test-isolation-proof.sh" --jobs 4 \
+    --json "$root/docs/fm-test-isolation-proof.json" 2>&1) || rc=$?
+  assert_contains "$out" "FM_ISOLATION_ARTIFACT WRITTEN" \
+    "the canonical-destination run must also have measured and written"
+  assert_contains "$out" "FM_ISOLATION_SEAM " "the canonical destination asks the consumer"
+  assert_not_contains "$out" "FM_ISOLATION_SEAM NOT-APPLICABLE" \
+    "the canonical destination must not declare its own seam out of scope"
+  pass "only a canonical destination produces a seam verdict"
+}
+
+test_a_measured_failure_is_not_masked_by_a_stale_proof() {
+  local root out rc before after
+  root=$(mk_seam_fixture) || fail "could not build the seam fixture"
+  [ -n "$root" ] && [ -d "$root" ] || fail "seam fixture root is empty"
+
+  # Establish a genuine canonical artifact to put at risk.
+  "$root/bin/fm-test-isolation-proof.sh" --jobs 4 \
+    --json "$root/docs/fm-test-isolation-proof.json" >/dev/null 2>&1 || true
+  before=$(fm_isolation_digest_file "$root/docs/fm-test-isolation-proof.json") \
+    || fail "could not digest the genuine artifact"
+
+  # Now both conditions at once: one subject's bytes move, which is what makes
+  # the installed proof stale, AND a different subject genuinely regresses. The
+  # staleness is the condition a custody classification is interested in; the
+  # regression is an ordinary failure. The failure must survive the coincidence.
+  printf '\n# bytes this proof never saw\n' >>"$root/tests/fm-brief.test.sh"
+  cat >"$root/tests/fm-crew-state.test.sh" <<'FIXTURE'
+#!/usr/bin/env bash
+set -u
+. "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+d=$(fm_test_tmproot stub)
+[ -d "$d" ] || exit 1
+exit 1
+FIXTURE
+  chmod +x "$root/tests/fm-crew-state.test.sh"
+
+  rc=0
+  out=$("$root/bin/fm-test-isolation-proof.sh" --jobs 4 \
+    --json "$root/docs/fm-test-isolation-proof.json" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a run holding a failed subject must not exit 0"$'\n'"$out"
+  assert_contains "$out" "FM_ISOLATION_ARTIFACT WITHHELD" \
+    "a failed subject withholds the artifact even while the proof is stale"
+  assert_contains "$out" "reason=subject-not-observed-good" \
+    "the refusal names the regression rather than the staleness"
+  assert_not_contains "$out" "FM_ISOLATION_ARTIFACT WRITTEN" \
+    "nothing is published from a run that measured a failure"
+
+  after=$(fm_isolation_digest_file "$root/docs/fm-test-isolation-proof.json") \
+    || fail "could not digest the artifact after the withheld run"
+  [ "$before" = "$after" ] \
+    || fail "the withheld run replaced the previous genuine artifact"
+  pass "a real regression stays a failure when the proof is also stale"
+}
+
 test_list_candidates_nonempty_and_stable
 test_candidates_exclude_serial_classes
 test_extra_hermetic_candidates_present
@@ -744,3 +911,6 @@ test_canonical_coverage_seam_consumes_the_installed_proof
 test_a_complete_passing_run_may_replace_the_evidence
 test_a_run_that_did_not_observe_every_candidate_may_not
 test_a_failed_write_leaves_the_previous_artifact_intact
+test_freshness_separates_a_subject_edit_from_a_dependency_change
+test_only_the_canonical_destination_carries_a_seam_verdict
+test_a_measured_failure_is_not_masked_by_a_stale_proof
