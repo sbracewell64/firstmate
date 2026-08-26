@@ -560,5 +560,14 @@ Use `/stow` before an intentional reset when the conversation may hold durable k
 
 ## Development notes
 
+### A test result is three-valued
+
+A behavior test can observe its contract holding, observe it broken, or fail to observe it at all - a bounded wait whose envelope was spent because the host was saturated, a fixture that could not establish the condition it was about to measure.
+The third value is a real result, not a missing one, and it belongs in neither of the other two: reporting it as a failure makes a fact about the machine indistinguishable from a candidate-caused regression, and reporting it as a pass claims a property nothing looked at.
+Two owners carry it, and no third copy of the rule exists.
+[`tests/lib.sh`](../tests/lib.sh) owns the case-level result: `env_could_not_observe` emits a `cno - ` line carrying a typed class and the evidence a later attribution needs, alongside `pass` and `fail`, and unlike `fail` it does not exit the suite, so the cases after it still run.
+[`bin/fm-test-run.sh`](../bin/fm-test-run.sh) owns the aggregation: a third bucket counted apart from `failed`, carried on `FM_TEST_END`, `FM_TEST_SUMMARY`, the per-family totals and the timing artifact, and a run exit status of `3` where nothing failed but something could not be observed.
+A deadline the product missed with its environment contract satisfied remains an ordinary failure; each script's header owns the exact line shapes and the full exit-status contract.
+
 The current watcher reliability work combines always-on bash triage with a durable queue for actionable wakes, a race-proof singleton lock, duplicate self-eviction, drain-time liveness assertion, and a self-verifying tracked-child arm wrapper.
 The presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) provides walk-away supervision via the `/afk` skill while reusing the same shared wake classifier as the always-on watcher.

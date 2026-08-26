@@ -65,15 +65,44 @@
 # Per-script machine-parseable markers (stdout):
 #   FM_TEST_BEGIN <iso8601> <script> family=<family> expected_gate_skip=<class>
 #   FM_TEST_END <iso8601> <script> exit=<code> duration_ms=<n> gate_skip=<true|false>
+#     environment=<none|TEST_ENVIRONMENT_*|COULD_NOT_OBSERVE>
 #
 # After all scripts (stdout):
-#   FM_TEST_SUMMARY total=<n> failed=<n> skipped_gate=<n> duration_ms=<n>
+#   FM_TEST_SUMMARY total=<n> failed=<n> could_not_observe=<n> skipped_gate=<n>
+#     duration_ms=<n>
 #   FM_TEST_SUMMARY_FAMILY family=<name> count=<n> duration_ms=<n> failed=<n>
+#     could_not_observe=<n>
 #   FM_TEST_SLOWEST rank=<k> script=<path> duration_ms=<n>
 #
-# Exit status is non-zero if any selected script exits non-zero or a configured
-# --fail-on-gate-skip token appears. Other gate skips (first meaningful line
-# matching ^skip:) remain successful and are counted as skipped_gate.
+# THE THIRD RESULT, AND WHY AGGREGATION HAS THREE BUCKETS
+#
+# A test result has three values, never two. A script can be observed to hold
+# its contract, observed to break it, or it can fail to get a look at all - a
+# bounded wait whose envelope was spent because the box was saturated, a fixture
+# that could not establish the condition it was about to measure. Mapping every
+# script to pass-or-fail reported that third case as a candidate-caused
+# regression, and because tests/lib.sh's fail() exits the suite, it also erased
+# every case after it.
+#
+# So a script emits `cno - <label>: <class> <evidence>` through tests/lib.sh's
+# env_could_not_observe - anywhere in its output, not only as a first line -
+# and this runner counts it in its own bucket. The buckets are exclusive and
+# decided in one order: a genuine failure, then a gate skip, then a typed
+# environment result. `environment=` is recorded on FM_TEST_END whatever the
+# bucket, so an expiry stays attributable even when an assertion failed beside
+# it. tests/lib.sh owns the line and the evidence it must carry.
+#
+# Exit status:
+#   0  every selected script was observed, and observed green
+#   1  at least one selected script exited non-zero, or a configured
+#      --fail-on-gate-skip token appeared. A genuine failure dominates: a
+#      deadline the product missed with its environment contract satisfied is
+#      still a FAIL
+#   3  no script failed, and at least one reported a typed environment result:
+#      could-not-observe, which is never a pass and never a candidate regression
+#
+# Gate skips (first meaningful line matching ^skip:) remain successful and are
+# counted as skipped_gate.
 #
 # Family labels, the changed-file map, and production portable-shard composition
 # live in this script only (one owner). The proven-isolated set is owned by
@@ -919,6 +948,7 @@ inputs = [Path(p) for p in sys.argv[2:]]
 lanes = []
 all_scripts = []
 failed = 0
+could_not_observe = 0
 skipped = 0
 total = 0
 wall_ms = 0
@@ -936,6 +966,7 @@ for path in inputs:
     lanes.append(lane)
     total += int(summary.get("total") or 0)
     failed += int(summary.get("failed") or 0)
+    could_not_observe += int(summary.get("could_not_observe") or 0)
     skipped += int(summary.get("skipped_gate") or 0)
     wall_ms = max(wall_ms, int(summary.get("duration_ms") or 0))
     for s in doc.get("scripts") or []:
@@ -952,6 +983,7 @@ agg = {
         "lanes": len(lanes),
         "total": total,
         "failed": failed,
+        "could_not_observe": could_not_observe,
         "skipped_gate": skipped,
         "critical_path_duration_ms": wall_ms,
     },
@@ -960,7 +992,7 @@ agg = {
 }
 out.parent.mkdir(parents=True, exist_ok=True)
 out.write_text(json.dumps(agg, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-print(f"FM_TEST_AGGREGATE lanes={len(lanes)} total={total} failed={failed} skipped_gate={skipped} critical_path_duration_ms={wall_ms}")
+print(f"FM_TEST_AGGREGATE lanes={len(lanes)} total={total} failed={failed} could_not_observe={could_not_observe} skipped_gate={skipped} critical_path_duration_ms={wall_ms}")
 PY
 }
 
@@ -1549,6 +1581,28 @@ detect_gate_skip() {
   esac
 }
 
+# The third test result. Echoes the typed class of the first environment/resource
+# line a script emitted through tests/lib.sh's env_could_not_observe, or nothing.
+#
+# Unlike detect_gate_skip's first-line rule, this is matched ANYWHERE in the
+# output, and that is the whole point: a gate skip is decided before the suite
+# runs, while a resource envelope is spent in case 3 of 40 with 37 cases still
+# to go. Requiring the first line would have left exactly the case this bucket
+# exists for with nowhere to land.
+#
+# `cno - ` is the channel and the class refines it. The class is read from
+# wherever it appears in the line rather than from a fixed position, so a
+# producer that orders its label and its class differently is still counted
+# rather than silently dropped; a line carrying no TEST_ENVIRONMENT_* class at
+# all is the generic could-not-observe, never a pass.
+detect_environment_result() {
+  local file=$1 line class
+  line=$(grep -m1 '^cno - ' "$file" 2>/dev/null || true)
+  [ -n "$line" ] || return 1
+  class=$(printf '%s\n' "$line" | grep -o 'TEST_ENVIRONMENT_[A-Z_]*' | head -n 1 || true)
+  printf '%s\n' "${class:-COULD_NOT_OBSERVE}"
+}
+
 # True when any output line contains "skip: <token>" (token may contain spaces).
 detect_gate_skip_token() {
   local file=$1 token=$2
@@ -1581,20 +1635,21 @@ write_json_artifact() {
   local run_id=$4
   local total=$5
   local failed=$6
-  local skipped=$7
-  local duration=$8
-  local selection=$9
-  local records_file=${10}
-  local families_file=${11}
+  local could_not_observe=$7
+  local skipped=$8
+  local duration=$9
+  local selection=${10}
+  local records_file=${11}
+  local families_file=${12}
 
   if ! command -v python3 >/dev/null 2>&1; then
     die "--json requires python3 to emit a valid timing artifact"
   fi
 
-  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
+  python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$could_not_observe" "$skipped" "$duration" "$selection" "$records_file" "$families_file" <<'PY'
 import json, sys
 
-out, started, finished, run_id, total, failed, skipped, duration, selection, records_file, families_file = sys.argv[1:]
+out, started, finished, run_id, total, failed, could_not_observe, skipped, duration, selection, records_file, families_file = sys.argv[1:]
 
 scripts = []
 with open(records_file, encoding="utf-8") as fh:
@@ -1602,7 +1657,7 @@ with open(records_file, encoding="utf-8") as fh:
         line = line.rstrip("\n")
         if not line:
             continue
-        path, family, expected, exit_s, dur_s, gate = line.split("\t")
+        path, family, expected, exit_s, dur_s, gate, environment = line.split("\t")
         scripts.append({
             "path": path,
             "family": family,
@@ -1610,6 +1665,7 @@ with open(records_file, encoding="utf-8") as fh:
             "duration_ms": int(dur_s),
             "exit": int(exit_s),
             "gate_skip": gate == "true",
+            "environment": None if environment == "none" else environment,
         })
 
 families = []
@@ -1618,12 +1674,13 @@ with open(families_file, encoding="utf-8") as fh:
         line = line.rstrip("\n")
         if not line:
             continue
-        name, count_s, dur_s, failed_s = line.split("\t")
+        name, count_s, dur_s, failed_s, cno_s = line.split("\t")
         families.append({
             "name": name,
             "count": int(count_s),
             "duration_ms": int(dur_s),
             "failed": int(failed_s),
+            "could_not_observe": int(cno_s),
         })
 
 doc = {
@@ -1634,6 +1691,7 @@ doc = {
     "summary": {
         "total": int(total),
         "failed": int(failed),
+        "could_not_observe": int(could_not_observe),
         "skipped_gate": int(skipped),
         "duration_ms": int(duration),
     },
@@ -1895,7 +1953,7 @@ fi
 
 if [ "${#SCRIPTS[@]}" -eq 0 ]; then
   log "nothing to run"
-  printf 'FM_TEST_SUMMARY total=0 failed=0 skipped_gate=0 duration_ms=0\n'
+  printf 'FM_TEST_SUMMARY total=0 failed=0 could_not_observe=0 skipped_gate=0 duration_ms=0\n'
   if [ -n "$JSON_PATH" ]; then
     empty_rec=$(mktemp)
     empty_fam=$(mktemp)
@@ -1903,7 +1961,7 @@ if [ "${#SCRIPTS[@]}" -eq 0 ]; then
     : >"$empty_fam"
     started=$(now_iso)
     mkdir -p "$(dirname "$JSON_PATH")"
-    write_json_artifact "$JSON_PATH" "$started" "$started" "empty" 0 0 0 0 "$SELECTION_DESC" "$empty_rec" "$empty_fam"
+    write_json_artifact "$JSON_PATH" "$started" "$started" "empty" 0 0 0 0 0 "$SELECTION_DESC" "$empty_rec" "$empty_fam"
     rm -f "$empty_rec" "$empty_fam"
   fi
   exit 0
@@ -1936,13 +1994,14 @@ RUN_ID="fm-test-run-${RUN_STARTED_MS}-$$"
 TOTAL=0
 FAILED=0
 SKIPPED_GATE=0
+COULD_NOT_OBSERVE=0
 AGG_RC=0
 
 # Family accumulators as TSV lines updated in-memory via temp files.
-# family -> count, duration_ms, failed
+# family -> count, duration_ms, failed, could_not_observe
 family_bump() {
-  local fam=$1 dur=$2 failed_delta=$3
-  local line name count duration failed_count rest
+  local fam=$1 dur=$2 failed_delta=$3 cno_delta=$4
+  local line name count duration failed_count cno_count rest
   local found=0
   local tmp="$RUN_TMP/families.new"
   : >"$tmp"
@@ -1953,25 +2012,29 @@ family_bump() {
       count=${rest%%$'\t'*}
       rest=${rest#*$'\t'}
       duration=${rest%%$'\t'*}
-      failed_count=${rest#*$'\t'}
+      rest=${rest#*$'\t'}
+      failed_count=${rest%%$'\t'*}
+      cno_count=${rest#*$'\t'}
       if [ "$name" = "$fam" ]; then
         count=$((count + 1))
         duration=$((duration + dur))
         failed_count=$((failed_count + failed_delta))
+        cno_count=$((cno_count + cno_delta))
         found=1
       fi
-      printf '%s\t%s\t%s\t%s\n' "$name" "$count" "$duration" "$failed_count" >>"$tmp"
+      printf '%s\t%s\t%s\t%s\t%s\n' \
+        "$name" "$count" "$duration" "$failed_count" "$cno_count" >>"$tmp"
     done <"$FAMILIES_TSV"
   fi
   if [ "$found" -eq 0 ]; then
-    printf '%s\t%s\t%s\t%s\n' "$fam" 1 "$dur" "$failed_delta" >>"$tmp"
+    printf '%s\t%s\t%s\t%s\t%s\n' "$fam" 1 "$dur" "$failed_delta" "$cno_delta" >>"$tmp"
   fi
   mv "$tmp" "$FAMILIES_TSV"
 }
 
 record_script_result() {
   local script=$1 rc=$2 duration=$3 out=$4 end_iso=$5
-  local base family expected gate_skip fail_delta
+  local base family expected gate_skip fail_delta cno_delta env_class
   base=$(basename "$script")
   family=$(family_for_basename "$base")
   expected=$(expected_gate_skip_for_family "$family")
@@ -1987,19 +2050,38 @@ record_script_result() {
     SKIPPED_GATE=$((SKIPPED_GATE + 1))
   fi
 
-  printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s\n' \
-    "$end_iso" "$script" "$rc" "$duration" "$gate_skip"
+  # Recorded whatever else the script did, including when it failed, so an
+  # expiry stays attributable instead of being erased by the failure beside it.
+  env_class=$(detect_environment_result "$out" || true)
+  [ -n "$env_class" ] || env_class=none
 
+  printf 'FM_TEST_END %s %s exit=%s duration_ms=%s gate_skip=%s environment=%s\n' \
+    "$end_iso" "$script" "$rc" "$duration" "$gate_skip" "$env_class"
+
+  # Exclusive buckets, decided in this order.
+  #
+  # A genuine FAIL dominates: the contract forbids flattening a resource expiry
+  # into a candidate-caused regression, not the reverse, and a script that also
+  # failed an assertion has been observed to be wrong. Its class is still on the
+  # END line above, which is where the attribution lives.
+  #
+  # A gate skip never ran the body, so it stays a gate skip rather than counting
+  # twice.
   fail_delta=0
+  cno_delta=0
   if [ "$rc" -ne 0 ]; then
     FAILED=$((FAILED + 1))
     fail_delta=1
-    AGG_RC=1
+  elif [ "$gate_skip" = true ]; then
+    :
+  elif [ "$env_class" != none ]; then
+    COULD_NOT_OBSERVE=$((COULD_NOT_OBSERVE + 1))
+    cno_delta=1
   fi
 
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' \
-    "$script" "$family" "$expected" "$rc" "$duration" "$gate_skip" >>"$RECORDS"
-  family_bump "$family" "$duration" "$fail_delta"
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    "$script" "$family" "$expected" "$rc" "$duration" "$gate_skip" "$env_class" >>"$RECORDS"
+  family_bump "$family" "$duration" "$fail_delta" "$cno_delta"
   TOTAL=$((TOTAL + 1))
 }
 
@@ -2154,21 +2236,21 @@ if [ "$RUN_DURATION" -lt 0 ]; then
   RUN_DURATION=0
 fi
 
-printf 'FM_TEST_SUMMARY total=%s failed=%s skipped_gate=%s duration_ms=%s\n' \
-  "$TOTAL" "$FAILED" "$SKIPPED_GATE" "$RUN_DURATION"
+printf 'FM_TEST_SUMMARY total=%s failed=%s could_not_observe=%s skipped_gate=%s duration_ms=%s\n' \
+  "$TOTAL" "$FAILED" "$COULD_NOT_OBSERVE" "$SKIPPED_GATE" "$RUN_DURATION"
 
 if [ -s "$FAMILIES_TSV" ]; then
   # Stable family summary order by name.
-  sort -t$'\t' -k1,1 "$FAMILIES_TSV" | while IFS=$'\t' read -r name count duration failed_count; do
-    printf 'FM_TEST_SUMMARY_FAMILY family=%s count=%s duration_ms=%s failed=%s\n' \
-      "$name" "$count" "$duration" "$failed_count"
+  sort -t$'\t' -k1,1 "$FAMILIES_TSV" | while IFS=$'\t' read -r name count duration failed_count cno_count; do
+    printf 'FM_TEST_SUMMARY_FAMILY family=%s count=%s duration_ms=%s failed=%s could_not_observe=%s\n' \
+      "$name" "$count" "$duration" "$failed_count" "$cno_count"
   done
 fi
 
 # Slowest scripts (top 15) from records.
 if [ -s "$RECORDS" ]; then
   rank=1
-  sort -t$'\t' -k5,5nr "$RECORDS" | head -n 15 | while IFS=$'\t' read -r path _family _expected _rc duration _gate; do
+  sort -t$'\t' -k5,5nr "$RECORDS" | head -n 15 | while IFS=$'\t' read -r path _family _expected _rc duration _gate _env; do
     printf 'FM_TEST_SLOWEST rank=%s script=%s duration_ms=%s\n' \
       "$rank" "$path" "$duration"
     rank=$((rank + 1))
@@ -2185,9 +2267,20 @@ if [ -n "$JSON_PATH" ]; then
   fi
   write_json_artifact "$JSON_PATH" \
     "$RUN_STARTED_ISO" "$RUN_FINISHED_ISO" "$RUN_ID" \
-    "$TOTAL" "$FAILED" "$SKIPPED_GATE" "$RUN_DURATION" \
+    "$TOTAL" "$FAILED" "$COULD_NOT_OBSERVE" "$SKIPPED_GATE" "$RUN_DURATION" \
     "$SELECTION_DESC" "$RECORDS" "$FAMILIES_TSV"
   log "wrote timing artifact: $JSON_PATH"
+fi
+
+# Three-valued, computed once from the buckets rather than latched per script,
+# so ordering cannot decide it. A genuine FAIL dominates a could-not-observe;
+# a could-not-observe never collapses into either neighbour.
+if [ "$FAILED" -gt 0 ]; then
+  AGG_RC=1
+elif [ "$COULD_NOT_OBSERVE" -gt 0 ]; then
+  AGG_RC=3
+else
+  AGG_RC=0
 fi
 
 exit "$AGG_RC"

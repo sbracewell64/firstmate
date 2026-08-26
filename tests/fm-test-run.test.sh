@@ -196,13 +196,13 @@ test_empty_selection_emits_summary() {
   printf 'documentation only\n' >"$repo/README.md"
   out=$(cd "$repo" && bin/fm-test-run.sh --changed --base HEAD --json "$tmp/artifacts/timing.json" 2>"$tmp/err") \
     || fail "empty valid changed selection must pass"
-  [ "$out" = "FM_TEST_SUMMARY total=0 failed=0 skipped_gate=0 duration_ms=0" ] \
+  [ "$out" = "FM_TEST_SUMMARY total=0 failed=0 could_not_observe=0 skipped_gate=0 duration_ms=0" ] \
     || fail "empty selection summary is missing or non-deterministic: $out"
   json="$tmp/artifacts/timing.json"
   python3 -c '
 import json, sys
 doc = json.load(open(sys.argv[1]))
-assert doc["summary"] == {"duration_ms": 0, "failed": 0, "skipped_gate": 0, "total": 0}
+assert doc["summary"] == {"could_not_observe": 0, "duration_ms": 0, "failed": 0, "skipped_gate": 0, "total": 0}
 assert doc["scripts"] == []
 assert doc["families"] == []
 ' "$json" || { rm -rf "$tmp"; fail "empty selection JSON summary is wrong"; }
@@ -230,7 +230,7 @@ SH
   [ "$end_n" -eq 1 ] || fail "expected one FM_TEST_END, got $end_n"
   grep -Eq '^FM_TEST_BEGIN .+ family=unclassified expected_gate_skip=none$' "$out" \
     || fail "BEGIN line missing family/expected_gate_skip: $(grep '^FM_TEST_BEGIN' "$out")"
-  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false$' "$out" \
+  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false environment=none$' "$out" \
     || fail "END line missing exit/duration/gate_skip: $(grep '^FM_TEST_END' "$out")"
   summary=$(grep '^FM_TEST_SUMMARY ' "$out" || true)
   assert_contains "$summary" "total=1" "summary total"
@@ -303,9 +303,9 @@ SH
   chmod +x "$skip_f"
   "$RUNNER" --json "$json" "$skip_f" >"$out" 2>"$tmp/err.txt" \
     || fail "gate-skip fixture must exit 0 from the runner"
-  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true$' "$out" \
+  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true environment=none$' "$out" \
     || fail "END must mark gate_skip=true: $(grep '^FM_TEST_END' "$out")"
-  grep -q 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=1' "$out" \
+  grep -q 'FM_TEST_SUMMARY total=1 failed=0 could_not_observe=0 skipped_gate=1' "$out" \
     || fail "summary must count skipped_gate=1: $(grep FM_TEST_SUMMARY "$out")"
   python3 -c '
 import json, sys
@@ -316,6 +316,180 @@ assert doc["summary"]["failed"] == 0
 ' "$json" || { rm -rf "$tmp"; fail "JSON gate_skip accounting is wrong"; }
   rm -rf "$tmp"
   pass "gate-skip accounting is honest and non-failing"
+}
+
+# --- the third aggregation bucket -------------------------------------------
+#
+# Fixtures for the typed environment channel. env_fixture writes a suite that
+# reports one case, then a typed could-not-observe, then a further case, so the
+# assertions can tell "counted in its own bucket" apart from "the suite stopped
+# there". The literal line is what tests/lib.sh's env_could_not_observe emits;
+# these fixtures write it directly rather than sourcing the library, so the
+# runner is exercised against the wire format and not against a helper it shares.
+env_fixture() {  # <path> [trailing-exit]
+  cat >"$1" <<'SH'
+#!/usr/bin/env bash
+echo "ok - the case before the wait"
+echo "cno - watcher exit: TEST_ENVIRONMENT_RESOURCE_TIMEOUT pid=4321 budget=80 polls elapsed=31s subject_state=S loadavg=88.4"
+echo "ok - the case after the wait"
+SH
+  printf 'exit %s\n' "${2:-0}" >>"$1"
+  chmod +x "$1"
+}
+
+test_typed_environment_result_is_its_own_bucket() {
+  local tmp env_f out json rc summary
+  tmp=$(fm_test_tmproot fm-test-run-env)
+  mkdir -p "$tmp"
+  env_f="$tmp/env.test.sh"
+  out="$tmp/out.txt"
+  json="$tmp/timing.json"
+  env_fixture "$env_f"
+  set +e
+  "$RUNNER" --json "$json" "$env_f" >"$out" 2>"$tmp/err.txt"
+  rc=$?
+  set -e
+
+  # The whole point: the case that could not observe did not take the rest of
+  # the suite with it.
+  assert_grep 'ok - the case after the wait' "$out" \
+    "a typed environment result must not stop the suite"
+
+  # Neither a pass nor a candidate regression. 3 is this repo's could-not-observe
+  # exit, the same value --check-coverage and --check-budget already use.
+  expect_code 3 "$rc" "a run whose only non-ok lines are typed environment results"
+
+  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=false environment=TEST_ENVIRONMENT_RESOURCE_TIMEOUT$' "$out" \
+    || fail "END must carry the typed class: $(grep '^FM_TEST_END' "$out")"
+  summary=$(grep '^FM_TEST_SUMMARY ' "$out" || true)
+  assert_contains "$summary" "total=1 failed=0 could_not_observe=1 skipped_gate=0" \
+    "summary must count the script in the third bucket and not in failed"
+  assert_grep 'FM_TEST_SUMMARY_FAMILY family=unclassified count=1' "$out" \
+    "family summary missing"
+  grep -q 'FM_TEST_SUMMARY_FAMILY .* could_not_observe=1' "$out" \
+    || fail "family summary must carry could_not_observe: $(grep FM_TEST_SUMMARY_FAMILY "$out")"
+
+  python3 -c '
+import json, sys
+doc = json.load(open(sys.argv[1]))
+assert doc["summary"]["could_not_observe"] == 1, doc["summary"]
+assert doc["summary"]["failed"] == 0, doc["summary"]
+assert doc["scripts"][0]["environment"] == "TEST_ENVIRONMENT_RESOURCE_TIMEOUT", doc["scripts"][0]
+assert doc["families"][0]["could_not_observe"] == 1, doc["families"]
+' "$json" || fail "JSON must carry the third bucket and the per-script class"
+
+  # The two owners have to agree on the wire, not merely each be self-consistent.
+  # This fixture reports through the real tests/lib.sh helper rather than a
+  # literal, so a change to either side that breaks the join fails here.
+  local live_f
+  live_f="$tmp/live.test.sh"
+  cat >"$live_f" <<SH
+#!/usr/bin/env bash
+. "$ROOT/tests/lib.sh"
+env_could_not_observe "watcher exit" "budget=80 polls elapsed=31s"
+pass "the case after the wait"
+SH
+  chmod +x "$live_f"
+  set +e
+  "$RUNNER" "$live_f" >"$tmp/live.txt" 2>&1
+  rc=$?
+  set -e
+  expect_code 3 "$rc" "a fixture reporting through tests/lib.sh's own helper"
+  assert_contains "$(grep '^FM_TEST_SUMMARY ' "$tmp/live.txt" || true)" \
+    "failed=0 could_not_observe=1" \
+    "the runner did not recognise the line its own helper emits"
+  pass "a typed environment result is counted in its own bucket, not as a failure"
+}
+
+test_genuine_failure_still_fails_beside_an_environment_result() {
+  local tmp env_f fail_f both_f out rc summary
+  tmp=$(fm_test_tmproot fm-test-run-env-fail)
+  mkdir -p "$tmp"
+  env_f="$tmp/env.test.sh"
+  both_f="$tmp/both.test.sh"
+  fail_f="$tmp/fail.test.sh"
+  out="$tmp/out.txt"
+  env_fixture "$env_f"
+  # Same suite, but a real assertion failed too. A genuine FAIL dominates: the
+  # script is FAILED, and the class is still recorded so the expiry stays
+  # attributable rather than being erased by the failure beside it.
+  env_fixture "$both_f" 1
+  cat >"$fail_f" <<'SH'
+#!/usr/bin/env bash
+echo "not ok - a real assertion failed"
+exit 1
+SH
+  chmod +x "$fail_f"
+
+  set +e
+  "$RUNNER" "$both_f" >"$out" 2>"$tmp/err.txt"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a script that also failed an assertion"
+  summary=$(grep '^FM_TEST_SUMMARY ' "$out" || true)
+  assert_contains "$summary" "total=1 failed=1 could_not_observe=0" \
+    "a failed script must not also be counted as could-not-observe"
+  grep -Eq '^FM_TEST_END .+ exit=1 .* environment=TEST_ENVIRONMENT_RESOURCE_TIMEOUT$' "$out" \
+    || fail "a failed script must still record its environment class: $(grep '^FM_TEST_END' "$out")"
+
+  # Mixed run: the genuine failure decides the run's status, and the environment
+  # result is still reported rather than being folded into it.
+  set +e
+  "$RUNNER" "$env_f" "$fail_f" >"$tmp/out2.txt" 2>"$tmp/err2.txt"
+  rc=$?
+  set -e
+  expect_code 1 "$rc" "a run containing a genuine failure"
+  summary=$(grep '^FM_TEST_SUMMARY ' "$tmp/out2.txt" || true)
+  assert_contains "$summary" "total=2 failed=1 could_not_observe=1" \
+    "a genuine failure must not absorb the environment result's bucket"
+  pass "a genuine failure still fails the script and the run"
+}
+
+test_environment_bucket_exit_status_contract() {
+  local tmp ok_f env_f skip_f rc
+  tmp=$(fm_test_tmproot fm-test-run-env-exit)
+  mkdir -p "$tmp"
+  ok_f="$tmp/ok.test.sh"
+  env_f="$tmp/env.test.sh"
+  skip_f="$tmp/skip.test.sh"
+  cat >"$ok_f" <<'SH'
+#!/usr/bin/env bash
+echo "ok - observed"
+exit 0
+SH
+  chmod +x "$ok_f"
+  env_fixture "$env_f"
+  # A gate skip never ran the body, so it stays a gate skip: the buckets are
+  # exclusive, and a skipped script must not also inflate could_not_observe.
+  cat >"$skip_f" <<'SH'
+#!/usr/bin/env bash
+echo "skip: herdr not found"
+echo "cno - unreached: TEST_ENVIRONMENT_RESOURCE_TIMEOUT never ran"
+exit 0
+SH
+  chmod +x "$skip_f"
+
+  set +e
+  "$RUNNER" "$ok_f" >"$tmp/green.txt" 2>&1
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "an all-observed run"
+
+  set +e
+  "$RUNNER" "$ok_f" "$env_f" >"$tmp/cno.txt" 2>&1
+  rc=$?
+  set -e
+  expect_code 3 "$rc" "a run with no failure and one environment result"
+
+  set +e
+  "$RUNNER" "$skip_f" >"$tmp/skip.txt" 2>&1
+  rc=$?
+  set -e
+  expect_code 0 "$rc" "a gate-skipped script"
+  assert_contains "$(grep '^FM_TEST_SUMMARY ' "$tmp/skip.txt" || true)" \
+    "failed=0 could_not_observe=0 skipped_gate=1" \
+    "a gate skip must stay a gate skip and not double-count"
+  pass "exit status is 0 observed, 3 could-not-observe, 1 failed"
 }
 
 test_fail_on_gate_skip_token() {
@@ -626,9 +800,9 @@ SH
 
   "$runner" --jobs 2 "$d" >"$tmp/out6" 2>"$tmp/err6" \
     || { rm -rf "$tmp"; fail "ordinary parallel stderr gate skip must remain successful"; }
-  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true$' "$tmp/out6" \
+  grep -Eq '^FM_TEST_END .+ exit=0 duration_ms=[0-9]+ gate_skip=true environment=none$' "$tmp/out6" \
     || { rm -rf "$tmp"; fail "parallel stderr gate skip was not recorded"; }
-  grep -q 'FM_TEST_SUMMARY total=1 failed=0 skipped_gate=1' "$tmp/out6" \
+  grep -q 'FM_TEST_SUMMARY total=1 failed=0 could_not_observe=0 skipped_gate=1' "$tmp/out6" \
     || { rm -rf "$tmp"; fail "parallel stderr skip summary wrong: $(grep FM_TEST_SUMMARY "$tmp/out6")"; }
 
   rm -rf "$tmp"
@@ -644,7 +818,7 @@ test_aggregate_json() {
   "selection": "lane=portable-parallel-1",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:01:00Z",
-  "summary": {"total": 1, "failed": 0, "skipped_gate": 0, "duration_ms": 1000},
+  "summary": {"total": 1, "failed": 0, "could_not_observe": 0, "skipped_gate": 0, "duration_ms": 1000},
   "scripts": [{"path": "tests/a.test.sh", "family": "pure-contract-unit", "duration_ms": 1000, "exit": 0, "gate_skip": false}]
 }
 JSON
@@ -654,24 +828,27 @@ JSON
   "selection": "lane=portable-serial",
   "started_at": "2026-07-22T00:00:00Z",
   "finished_at": "2026-07-22T00:02:00Z",
-  "summary": {"total": 2, "failed": 1, "skipped_gate": 0, "duration_ms": 2000},
+  "summary": {"total": 3, "failed": 1, "could_not_observe": 1, "skipped_gate": 0, "duration_ms": 2000},
   "scripts": [
     {"path": "tests/b.test.sh", "family": "afk", "duration_ms": 1500, "exit": 1, "gate_skip": false},
-    {"path": "tests/c.test.sh", "family": "afk", "duration_ms": 500, "exit": 0, "gate_skip": false}
+    {"path": "tests/c.test.sh", "family": "afk", "duration_ms": 500, "exit": 0, "gate_skip": false},
+    {"path": "tests/d.test.sh", "family": "afk", "duration_ms": 400, "exit": 0, "gate_skip": false, "environment": "TEST_ENVIRONMENT_RESOURCE_TIMEOUT"}
   ]
 }
 JSON
   out=$("$RUNNER" --aggregate-json "$tmp/out.json" "$tmp/a.json" "$tmp/b.json")
-  assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=3 failed=1" "aggregate summary line"
+  assert_contains "$out" "FM_TEST_AGGREGATE lanes=2 total=4 failed=1 could_not_observe=1" \
+    "aggregate summary line must carry the third bucket"
   python3 -c '
 import json,sys
 doc=json.load(open(sys.argv[1]))
 assert doc["kind"]=="aggregate"
 assert doc["summary"]["lanes"]==2
-assert doc["summary"]["total"]==3
+assert doc["summary"]["total"]==4
 assert doc["summary"]["failed"]==1
+assert doc["summary"]["could_not_observe"]==1
 assert doc["summary"]["critical_path_duration_ms"]==2000
-assert len(doc["scripts"])==3
+assert len(doc["scripts"])==4
 ' "$tmp/out.json" || { rm -rf "$tmp"; fail "aggregate JSON shape wrong"; }
   rm -rf "$tmp"
   pass "aggregate-json merges lane timing artifacts"
@@ -1350,6 +1527,9 @@ test_empty_selection_emits_summary
 test_timing_markers_and_json
 test_aggregate_exit_behavior
 test_gate_skip_accounting
+test_typed_environment_result_is_its_own_bucket
+test_genuine_failure_still_fails_beside_an_environment_result
+test_environment_bucket_exit_status_contract
 test_fail_on_gate_skip_token
 test_exclude_family
 test_portable_shard_union_and_coverage_guard

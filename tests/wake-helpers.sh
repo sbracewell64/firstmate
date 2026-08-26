@@ -369,19 +369,97 @@ SH
   printf '%s\n' "$dir"
 }
 
+# --- bounded waits and the test-environment resource envelope ----------------
+#
+# wait_for_exit's budget is a RESOURCE ENVELOPE on this harness, not a deadline
+# the product promised. No call site derives its budget from a stated exit
+# latency, because neither bin/fm-watch.sh nor bin/fm-watch-arm.sh states one -
+# the numbers here are round harness constants a test picked. Exhausting one is
+# therefore a fact about the machine, and reporting it through the same numeric
+# channel as the subject's exit status made a slow-but-correct subject
+# indistinguishable from a wrong one - a could-not-observe laundered into an
+# observed-bad.
+#
+# So every call classifies, three values and never two:
+#   WAIT_FOR_EXIT_CLASS     exited | resource_timeout
+#   WAIT_FOR_EXIT_STATUS    the status observed. On an expiry this is what the
+#                           subject returned AFTER the harness stopped it, which
+#                           is the harness's own signal and not the product's
+#                           answer - never assert on it.
+#   WAIT_FOR_EXIT_EVIDENCE  elapsed wall seconds, the configured budget, the
+#                           state the subject was in, and a load reading. All of
+#                           it is captured BEFORE the kill, because the kill is
+#                           precisely what used to destroy the evidence an
+#                           expiry would have to be attributed with.
+#
+# The budget stays an iteration count rather than becoming a wall-clock deadline:
+# converting it would silently redefine every one of this helper's call sites at
+# once. The elapsed reading is what lets the two be told apart afterwards, since
+# an iteration count buys a different amount of wall time on a busy box than on
+# an idle one, and only a preserved elapsed time makes that visible in a report.
+#
+# Callers branch through wait_for_exit_expired below. The literal 124 return is
+# kept on purpose: it is still nonzero, so a call site that was never converted
+# keeps failing loudly instead of silently passing.
 wait_for_exit() {
-  local pid=$1 limit=${2:-50} i=0
+  local pid=$1 limit=${2:-50} i=0 started elapsed observed load
+  WAIT_FOR_EXIT_CLASS=exited
+  WAIT_FOR_EXIT_STATUS=
+  WAIT_FOR_EXIT_EVIDENCE=
+  started=$SECONDS
   while [ "$i" -lt "$limit" ]; do
     if ! is_live_non_zombie "$pid"; then
       wait "$pid"
-      return "$?"
+      WAIT_FOR_EXIT_STATUS=$?
+      return "$WAIT_FOR_EXIT_STATUS"
     fi
     sleep 0.1
     i=$((i + 1))
   done
+  # The loop polls before each sleep, never after the last one, so a subject
+  # that exited during the final 100 ms would be killed and reported as an
+  # expiry. Re-read once: it costs nothing and is not a wider budget.
+  if ! is_live_non_zombie "$pid"; then
+    wait "$pid"
+    WAIT_FOR_EXIT_STATUS=$?
+    return "$WAIT_FOR_EXIT_STATUS"
+  fi
+  elapsed=$((SECONDS - started))
+  [ "$elapsed" -ge 0 ] || elapsed=0
+  observed=$(ps -p "$pid" -o stat= 2>/dev/null || true)
+  # An unanswerable ps is itself could-not-observe, so say so rather than
+  # letting an empty string read as a state.
+  [ -n "$observed" ] || observed=unreadable
+  load=$(cut -d' ' -f1-3 /proc/loadavg 2>/dev/null || true)
+  [ -n "$load" ] || load=unreadable
+  WAIT_FOR_EXIT_CLASS=resource_timeout
   kill "$pid" 2>/dev/null || true
-  wait "$pid" 2>/dev/null || true
+  # Guarded, because a killed subject exits non-zero by construction and this
+  # helper must not depend on whether its caller runs under `set -e`.
+  WAIT_FOR_EXIT_STATUS=0
+  wait "$pid" 2>/dev/null || WAIT_FOR_EXIT_STATUS=$?
+  WAIT_FOR_EXIT_EVIDENCE=$(printf \
+    'pid=%s budget=%s polls elapsed=%ss subject_state=%s loadavg=%s status_after_harness_stop=%s' \
+    "$pid" "$limit" "$elapsed" "$observed" "$load" "$WAIT_FOR_EXIT_STATUS")
   return 124
+}
+
+# True when the LAST wait_for_exit spent its envelope instead of observing the
+# subject, reporting that through tests/lib.sh's third result channel rather
+# than as a product verdict. It deliberately does not print "not ok": a spent
+# envelope is a fact about the machine, and a suite that goes red for it cannot
+# discriminate a candidate from its own baseline on a busy box. It does not
+# print "ok" either - the case that calls it must end without claiming the
+# property it never got to observe:
+#
+#   wait_for_exit "$pid" 80
+#   status=$?
+#   wait_for_exit_expired "arm HUP exit" && return
+#   [ "$status" -eq 129 ] || fail "..."
+wait_for_exit_expired() {  # <label>
+  [ "${WAIT_FOR_EXIT_CLASS:-}" = resource_timeout ] || return 1
+  env_could_not_observe "$1" "${WAIT_FOR_EXIT_EVIDENCE:-no evidence preserved}"
+  return 0
 }
 
 is_live_non_zombie() {

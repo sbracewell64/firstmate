@@ -5,8 +5,10 @@
 #   # shellcheck source=tests/lib.sh
 #   . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 #
-# It provides the boilerplate every test file used to re-roll: ok/not-ok
-# reporters, a self-cleaning temp root, a reaper for background processes,
+# It provides the boilerplate every test file used to re-roll: the three test
+# result reporters (pass, fail, and env_could_not_observe - see their block
+# below for why a third one exists), a self-cleaning temp root, a reaper for
+# background processes,
 # fakebin/PATH-shim helpers, deterministic git identity and fixture builders,
 # state/<id>.meta writers, and the common string/exit-code/file assertions.
 # It deliberately does NOT bundle the
@@ -88,6 +90,47 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 fail() {
   printf 'not ok - %s\n' "$1" >&2
   exit 1
+}
+
+# The third test result. An observation has three values, never two: `pass` says
+# the property was observed to hold and `fail` says it was observed not to hold,
+# and neither can say the case never got to look - a bounded wait that spent its
+# envelope on a saturated box, a fixture that could not establish the overlap it
+# was about to measure, a required process that was never reachable. Reporting
+# that through fail() makes a fact about the machine indistinguishable from a
+# candidate-caused regression, and takes the rest of the suite with it, because
+# fail() exits.
+#
+# env_could_not_observe emits its own channel and RETURNS:
+#
+#   cno - <label>: <class> <evidence>
+#
+# The `cno - ` prefix matches neither `^ok ` nor `^not ok `, so every consumer
+# that knows only those two lines stays correct by construction: it sees neither
+# a pass nor a failure. bin/fm-test-run.sh is the consumer that does know this
+# line, and counts the script into its own could_not_observe bucket rather than
+# into failed - `environment=` on FM_TEST_END, `could_not_observe=` in
+# FM_TEST_SUMMARY, and exit 3 for a run whose only non-ok lines are these.
+#
+# <class> defaults to TEST_ENVIRONMENT_RESOURCE_TIMEOUT, the shape that motivated
+# the channel; pass a third argument for another TEST_ENVIRONMENT_* class or for
+# a plain COULD_NOT_OBSERVE. <evidence> is what later attribution needs and what
+# a kill or a cleanup would otherwise destroy: elapsed wall time, the configured
+# budget, the subject's observed state, a load reading. Capture it BEFORE tearing
+# the subject down.
+#
+# It does not end the case, because only the case knows what it may still
+# assert. The caller ends there itself:
+#
+#   wait_for_exit "$pid" 80
+#   status=$?
+#   wait_for_exit_expired "arm HUP exit" && return
+#   [ "$status" -eq 129 ] || fail "..."
+#
+# fail() is unchanged and still owns a genuine assertion failure. A deadline the
+# product missed with its environment contract satisfied is a FAIL, not this.
+env_could_not_observe() {  # <label> <evidence> [class]
+  printf 'cno - %s: %s %s\n' "$1" "${3:-TEST_ENVIRONMENT_RESOURCE_TIMEOUT}" "$2"
 }
 
 # The snapshot and Bearings suites opt into this identity ledger so their

@@ -121,6 +121,7 @@ tmp=$(mktemp -d) && printf 'done: smoke\n' > "$tmp/smoke.status" && FM_STATE_OVE
 
 `bin/fm-test-run.sh` is the single owner of behavior-suite selection, portable CI lane composition, optional local `--jobs` for the proven-isolated set only, per-script timing markers, family totals, the coverage and serial-budget guards, and the optional JSON timing artifact.
 Its header and `--help` own the flags, family labels, lanes, and changed-file map; this section only documents the entry points.
+A test outcome is three-valued rather than pass-or-fail: a case that could not observe its subject at all reports that through `env_could_not_observe` in [`tests/lib.sh`](tests/lib.sh) without ending the suite, and the runner counts it in its own bucket and exits `3` when nothing failed but something could not be observed (see [`docs/architecture.md`](docs/architecture.md) "A test result is three-valued").
 `bin/fm-test-isolation-proof.sh` remains the single owner of the concurrent isolation proof and the candidate set it measures, and `docs/fm-test-isolation-proof.json` is the single owner of the proven set that CI lanes consume.
 Editing a proven-isolated test makes its proof stale and `--check-coverage` refuses until it is measured again; see [`docs/fm-test-isolation-proof.md`](docs/fm-test-isolation-proof.md).
 Portable shard balance evidence lives in `docs/fm-test-portable-shards.md`.
