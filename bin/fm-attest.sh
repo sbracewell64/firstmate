@@ -8,7 +8,7 @@
 # that a pull_request workflow can read with contents: read.
 #
 # Usage:
-#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required] [--notes-ref <ref>]
+#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required] [--expect-head <sha>] [--notes-ref <ref>]
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
 #   fm-attest.sh required
 #   fm-attest.sh show [--commit <rev>] [--notes-ref <ref>]
@@ -995,7 +995,9 @@ required_observe() {
     # match" is absence of detection standing in for detection of absence,
     # which is the one substitution this whole component exists to refuse.
     required_grep_rc=0
-    grep -q 'fm-attest\.sh' "$required_file" 2>/dev/null || required_grep_rc=$?
+    grep -Eq "(^[[:space:]]*|^[[:space:]]*[^#[:space:]].*(run:[[:space:]]*|[;&|][[:space:]]*))((\\.\\.?/|/)?([[:alnum:]_.-]+/)*)?fm-attest\\.sh([[:space:]]|\$|[\"'])" \
+      "$required_file" 2>/dev/null \
+      || required_grep_rc=$?
     case "$required_grep_rc" in
       0)
         required_state=required
@@ -1048,6 +1050,7 @@ cmd_required() {
 
 cmd_write() {
   run_id=
+  expect_head=
   remote=origin
   push=1
   publication_expected_tip=
@@ -1063,6 +1066,11 @@ cmd_write() {
       --run)
         [ "$#" -ge 2 ] || die "--run needs a value"
         run_id=$2
+        shift 2
+        ;;
+      --expect-head)
+        [ "$#" -ge 2 ] || die "--expect-head needs a value"
+        expect_head=$2
         shift 2
         ;;
       --remote)
@@ -1086,6 +1094,9 @@ cmd_write() {
       *) die "unexpected argument: $1" ;;
     esac
   done
+
+  [ -z "$expect_head" ] || is_full_sha "$expect_head" \
+    || die "--expect-head must be a 40-character lowercase sha"
 
   git rev-parse --git-dir >/dev/null 2>&1 || fail not-a-git-repository \
     "This directory is not inside a git repository, so there is no head to attest."
@@ -1227,6 +1238,11 @@ EOF
     "The pipeline run validated $attest_head, but HEAD is $head, which that run does not cover." \
     "HEAD is neither that commit nor an ancestor of it, so this branch carries work the run never saw, or its tip was rewritten." \
     "Validate this branch again and attest the head that run pushes."
+  [ -z "$expect_head" ] || [ "$attest_head" = "$expect_head" ] \
+    || refuse expected-head-mismatch \
+      "The pipeline run validated $attest_head, but the request head is $expect_head." \
+      "Nothing was recorded or published for another head." \
+      "Validate the request's exact head and attest again."
 
   missing=
   for gate in $REQUIRED_GATES; do
