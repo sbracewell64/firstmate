@@ -155,15 +155,16 @@ _FM_AUTONOMY_REG_SOURCE=
 # setting _FM_AUTONOMY_REG_YOLO and _FM_AUTONOMY_REG_SOURCE; 1 when it could not
 # be asked at all, which is could-not-observe about the posture rather than a
 # posture of `off`.
-_fm_autonomy_registry_posture() {  # <project-name>
-  local name=${1-} entry line out yolo source
-  [ -n "$name" ] || return 1
+_fm_autonomy_registry_posture() {  # <home> <project-name>
+  local home=${1-} name=${2-} key entry line out yolo source
+  [ -n "$home" ] && [ -n "$name" ] || return 1
+  key="$home|$name"
   _FM_AUTONOMY_REG_YOLO=
   _FM_AUTONOMY_REG_SOURCE=
   # The memo is matched by exact field, never by pattern: a project name is
   # operator-supplied text and would otherwise be read as a regular expression.
   while IFS=$'\t' read -r entry yolo source; do
-    [ "$entry" = "$name" ] || continue
+    [ "$entry" = "$key" ] || continue
     _FM_AUTONOMY_REG_YOLO=$yolo
     _FM_AUTONOMY_REG_SOURCE=$source
     return 0
@@ -175,7 +176,7 @@ EOF
   # caller resolving a posture for one home sets it as a shell variable, and a
   # shell variable is invisible to a child process. Without this the canonical
   # owner would be read out of whichever home the environment happened to name.
-  out=$(FM_HOME="${FM_HOME:-}" "$FM_AUTONOMY_PROJECT_MODE_BIN" --with-source "$name" 2>/dev/null) || return 1
+  out=$(FM_HOME="$home" "$FM_AUTONOMY_PROJECT_MODE_BIN" --with-source "$name" 2>/dev/null) || return 1
   line=$(printf '%s\n' "$out" | awk 'NF {print; exit}')
   yolo=$(printf '%s' "$line" | awk '{print $2}')
   source=$(printf '%s' "$line" | awk '{print $3}')
@@ -183,7 +184,7 @@ EOF
     registered|unregistered|no-registry) ;;
     *) return 1 ;;
   esac
-  _FM_AUTONOMY_REGISTRY_MEMO="${_FM_AUTONOMY_REGISTRY_MEMO}${name}"$'\t'"${yolo}"$'\t'"${source}"$'\n'
+  _FM_AUTONOMY_REGISTRY_MEMO="${_FM_AUTONOMY_REGISTRY_MEMO}${key}"$'\t'"${yolo}"$'\t'"${source}"$'\n'
   _FM_AUTONOMY_REG_YOLO=$yolo
   _FM_AUTONOMY_REG_SOURCE=$source
   return 0
@@ -231,15 +232,15 @@ FM_AUTONOMY_EFFECTIVE_STATE=
 # returns outranks the task record. Only a home with no registry is silent, and
 # there the task's own record stands. Where neither speaks, the captain holds it.
 # shellcheck disable=SC2034 # the three globals are read by sourcing callers
-fm_autonomy_state_effective() {  # <meta-file>
-  local meta=${1-} name recorded rc=0
+fm_autonomy_state_effective() {  # <meta-file> <home>
+  local meta=${1-} home=${2-} name recorded rc=0
   FM_AUTONOMY_EFFECTIVE_SOURCE=none
   FM_AUTONOMY_EFFECTIVE_PROJECT=
   FM_AUTONOMY_EFFECTIVE_STATE=
-  [ -n "$meta" ] && [ -r "$meta" ] || return 2
+  [ -n "$meta" ] && [ -r "$meta" ] && [ -n "$home" ] || return 2
   if name=$(fm_autonomy_meta_project "$meta"); then
     FM_AUTONOMY_EFFECTIVE_PROJECT=$name
-    if ! _fm_autonomy_registry_posture "$name"; then
+    if ! _fm_autonomy_registry_posture "$home" "$name"; then
       # The canonical owner could not be asked. That is could-not-observe about
       # the posture, and narrowing it into the snapshot would put the second
       # owner back in exactly the case where the first one is unavailable.

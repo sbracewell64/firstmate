@@ -186,13 +186,13 @@ SH
 
 # A rollup fixture in the API's own shape, so the merge gate's real query runs
 # against it and the real fold in bin/fm-verify-lib.sh produces the label.
-write_rollup() {  # <dir> <head> [<failing-count>]
-  local dir=$1 head=$2 failing=${3:-0} ok=2
-  jq -n --arg head "$head" --argjson ok "$ok" --argjson failing "$failing" \
+write_rollup() {  # <dir> <head> [<failing-count>] [<review-decision>]
+  local dir=$1 head=$2 failing=${3:-0} review=${4-APPROVED} ok=2
+  jq -n --arg head "$head" --arg review "$review" --argjson ok "$ok" --argjson failing "$failing" \
     '{data:{repository:{pullRequest:{
         headRefOid:$head,
         mergeable:"MERGEABLE",
-        reviewDecision:null,
+        reviewDecision:(if $review == "" then null else $review end),
         commits:{nodes:[{commit:{oid:$head,statusCheckRollup:{contexts:{
           totalCount:($ok + $failing),
           nodes:(
@@ -429,6 +429,44 @@ test_missing_check_evidence_refuses() {
   pass "required check evidence that is absent refuses, and is never read as eligible"
 }
 
+test_missing_review_evidence_requires_the_captain() {
+  local dir
+  dir=$(new_pr_case no-review) || fail "fixture failed"
+  write_rollup "$dir" "$HEAD_A" 0 ''
+
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "a landing with no reviewer evidence was permitted"
+  grep -F 'assignment-distinct review evidence could not be observed' "$dir/stderr" >/dev/null \
+    || fail "the compile did not name the missing review evidence: $(cat "$dir/stderr")"
+  [ "$(merge_count "$dir")" = 0 ] || fail "a merge ran without review evidence"
+  pass "missing review evidence compiles to CAPTAIN_REQUIRED"
+}
+
+test_changes_requested_refuses() {
+  local dir
+  dir=$(new_pr_case changes-requested) || fail "fixture failed"
+  write_rollup "$dir" "$HEAD_A" 0 CHANGES_REQUESTED
+
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "a landing with changes requested was permitted"
+  grep -F 'a review requests changes' "$dir/stderr" >/dev/null \
+    || fail "the refusal did not name the blocking review: $(cat "$dir/stderr")"
+  [ "$(merge_count "$dir")" = 0 ] || fail "a merge ran with changes requested"
+  pass "changes requested still refuses"
+}
+
+test_approved_review_allows_an_ungoverned_landing() {
+  local dir
+  dir=$(new_pr_case approved-review) || fail "fixture failed"
+
+  run_pr_merge "$dir"
+  [ "$RC" -eq 0 ] || fail "an ungoverned landing with approved review evidence refused: $(cat "$dir/stderr")"
+  grep -F 'review=approved' "$dir/stdout" >/dev/null \
+    || fail "the compile did not report its review evidence: $(cat "$dir/stdout")"
+  [ "$(merge_count "$dir")" = 1 ] || fail "the reviewed landing did not merge exactly once"
+  pass "approved review evidence permits an ungoverned delegated landing"
+}
+
 # --- (5) a decision the fleet typed as the captain's --------------------------
 
 test_a_captain_reserved_decision_requires_the_captain() {
@@ -496,12 +534,18 @@ test_local_only_landing_is_delegated_on_the_same_terms() {
     "project=$proj" \
     "role=ship" \
     "mode=local-only" \
+    "harness=claude" \
+    "model=opus" \
     "yolo=$FM_AUTONOMY_STATE_CAPTAIN"
   register_project "$dir" "local-only +yolo"
+  fm_test_model_registry "$dir/home/config/models.json"
+  fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
+    "fm/$TASK_ID|openai|gpt-5.6-sol" || return 1
 
   before=$(git -C "$proj" rev-parse HEAD)
   set +e
-  ( FM_HOME="$dir/home" "$MERGE_LOCAL" "$TASK_ID" ) > "$dir/stdout" 2> "$dir/stderr"
+  ( FM_HOME="$dir/home" FM_PIPELINE_STATE_DB="$dir/pipeline.sqlite" \
+      "$MERGE_LOCAL" "$TASK_ID" ) > "$dir/stdout" 2> "$dir/stderr"
   RC=$?
   set -e
   [ "$RC" -eq 0 ] || fail "the local-only landing refused (rc=$RC): $(cat "$dir/stderr")"
@@ -534,8 +578,13 @@ make_override_case() {  # <name>
     "project=$proj" \
     "role=ship" \
     "mode=local-only" \
+    "harness=claude" \
+    "model=opus" \
     "yolo=$FM_AUTONOMY_STATE_CAPTAIN"
   register_project "$dir" "local-only +yolo"
+  fm_test_model_registry "$dir/home/config/models.json"
+  fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
+    "fm/$TASK_ID|openai|gpt-5.6-sol" || return 1
   printf '%s\n' "$dir"
 }
 
@@ -546,6 +595,7 @@ run_merge_local_by_override() {  # <dir>
     FM_STATE_OVERRIDE="$dir/home/state" \
     FM_DATA_OVERRIDE="$dir/home/data" \
     FM_CONFIG_OVERRIDE="$dir/home/config" \
+    FM_PIPELINE_STATE_DB="$dir/pipeline.sqlite" \
       "$MERGE_LOCAL" "$TASK_ID" ) > "$dir/stdout" 2> "$dir/stderr"
   RC=$?
   set -e
@@ -693,24 +743,41 @@ test_registry_presence_controls_snapshot_fallback() {
   dir=$(new_home no-registry) || fail "fixture failed"
   write_meta "$dir" "$FM_AUTONOMY_STATE_SELF"
   rm "$dir/home/data/projects.md" 2>/dev/null || true
-  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta")
+  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta" "$dir/home")
   [ "$out" = "$FM_AUTONOMY_STATE_SELF" ] \
     || fail "a home with no registry lost its on task snapshot: $out"
 
   dir=$(new_home registered-on) || fail "fixture failed"
   write_meta "$dir" "$FM_AUTONOMY_STATE_CAPTAIN"
   register_project "$dir"
-  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta")
+  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta" "$dir/home")
   [ "$out" = "$FM_AUTONOMY_STATE_SELF" ] \
     || fail "a registered +yolo project did not resolve on: $out"
 
   dir=$(new_home registered-off) || fail "fixture failed"
   write_meta "$dir" "$FM_AUTONOMY_STATE_SELF"
   register_project "$dir" no-mistakes
-  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta")
+  out=$(FM_HOME="$dir/home" fm_autonomy_state_effective "$dir/home/state/$TASK_ID.meta" "$dir/home")
   [ "$out" = "$FM_AUTONOMY_STATE_CAPTAIN" ] \
     || fail "a registered off posture inherited an on task snapshot: $out"
   pass "registry presence controls whether the current posture or task snapshot wins"
+}
+
+test_effective_posture_memo_is_scoped_to_the_addressed_home() {
+  local on off got
+  on=$(new_home memo-home-on) || fail "fixture failed"
+  off=$(new_home memo-home-off) || fail "fixture failed"
+  write_meta "$on" "$FM_AUTONOMY_STATE_CAPTAIN"
+  write_meta "$off" "$FM_AUTONOMY_STATE_SELF"
+  register_project "$on"
+  register_project "$off" no-mistakes
+
+  got=$(fm_autonomy_state_effective "$on/home/state/$TASK_ID.meta" "$on/home")
+  [ "$got" = "$FM_AUTONOMY_STATE_SELF" ] || fail "the on home did not resolve on: $got"
+  got=$(fm_autonomy_state_effective "$off/home/state/$TASK_ID.meta" "$off/home")
+  [ "$got" = "$FM_AUTONOMY_STATE_CAPTAIN" ] \
+    || fail "the memo leaked the first home's posture into the second home: $got"
+  pass "effective posture lookup and memoization are scoped to the addressed home"
 }
 
 test_ordinary_landing_is_eligible_with_no_captain_utterance
@@ -719,6 +786,9 @@ test_governing_ruling_is_part_of_the_compile
 test_eligibility_survives_a_cold_restart
 test_approval_bound_to_another_head_refuses
 test_missing_check_evidence_refuses
+test_missing_review_evidence_requires_the_captain
+test_changes_requested_refuses
+test_approved_review_allows_an_ungoverned_landing
 test_a_captain_reserved_decision_requires_the_captain
 test_standing_posture_cannot_waive_an_engineering_gate
 test_local_only_landing_is_delegated_on_the_same_terms
@@ -727,6 +797,7 @@ test_an_unreadable_decision_record_is_never_eligible
 test_effective_posture_follows_the_registry_not_the_task_record
 test_the_posture_is_reread_on_every_resolution
 test_registry_presence_controls_snapshot_fallback
+test_effective_posture_memo_is_scoped_to_the_addressed_home
 test_every_disposition_is_classified_by_the_compile
 
 fm_test_contract "${BASH_SOURCE[0]}"

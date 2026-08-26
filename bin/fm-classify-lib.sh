@@ -829,7 +829,7 @@ decision_disposition() {  # <task-id> <key> <verb> [home]
   # ABSENT posture is a different fact and NOT could-not-observe: a scout
   # records none by design, nothing granted standing authority, and the captain
   # holds the decision. That case falls through to the verb.
-  autonomy=$(fm_autonomy_state_effective "$meta"); autonomy_rc=$?
+  autonomy=$(fm_autonomy_state_effective "$meta" "${FM_HOME:-}"); autonomy_rc=$?
   case "$autonomy_rc" in
     0)
       # A member, so the comparison boundary answers 0 or 1 and never 2.

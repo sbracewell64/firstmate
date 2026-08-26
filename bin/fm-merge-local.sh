@@ -85,6 +85,8 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 # restated, because a second url parser on the landing path is a second answer.
 # shellcheck source=bin/fm-task-base-lib.sh
 . "$SCRIPT_DIR/fm-task-base-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$SCRIPT_DIR/fm-independence-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=${1:?usage: fm-merge-local.sh <task-id>}
 META="$STATE/$ID.meta"
@@ -473,8 +475,17 @@ SEAM_RC=0
 fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - \
   "$LANDING_REPO" || SEAM_RC=$?
 AUTHORITY_RC=0
+REVIEW_EVIDENCE=
+MAKER_HARNESS=$(grep '^harness=' "$META" | cut -d= -f2- || true)
+MAKER_MODEL=$(grep '^model=' "$META" | cut -d= -f2- || true)
+INDEPENDENCE=$(fm_independence_dimensions "$PROJ" "$BRANCH" "$MAKER_HARNESS" "$MAKER_MODEL")
+if [ "$(fm_independence_overall "$INDEPENDENCE")" = PASS ]; then
+  REVIEW_EVIDENCE=independent
+else
+  REVIEW_EVIDENCE="pipeline gaps:$(fm_independence_gaps "$INDEPENDENCE" | paste -sd, -)"
+fi
 fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
-  "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" || AUTHORITY_RC=$?
+  "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$REVIEW_EVIDENCE" || AUTHORITY_RC=$?
 if [ "$AUTHORITY_RC" -ne 0 ]; then
   if [ "$SEAM_RC" -ne 0 ]; then
     printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2

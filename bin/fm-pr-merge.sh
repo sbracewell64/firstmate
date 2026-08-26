@@ -342,6 +342,7 @@ $PR_VERIFY_WAIVED_LINES)"
 fi
 
 VERIFIED_HEAD=
+VERIFIED_REVIEW=
 
 # An empty rollup has more than one cause, and the two common ones need
 # different work from the captain: a repository with no CI configured for this
@@ -549,6 +550,10 @@ verify_current_head() {
     fi
   fi
   VERIFIED_HEAD=$head
+  case "$review" in
+    APPROVED) VERIFIED_REVIEW=approved ;;
+    *) VERIFIED_REVIEW= ;;
+  esac
 }
 
 MERGE_META_TMP=
@@ -623,7 +628,7 @@ resolve_landing_authority() {  # <head>
   fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
     "$PR_OWNER/$PR_REPO" || seam_rc=$?
   fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
-    "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" || authority_rc=$?
+    "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$VERIFIED_REVIEW" || authority_rc=$?
   if [ "$authority_rc" -ne 0 ]; then
     if [ "$seam_rc" -ne 0 ]; then
       printf 'error: refusing to merge head %s: %s: %s\n' \

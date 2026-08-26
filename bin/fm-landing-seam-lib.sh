@@ -631,8 +631,8 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
 #                 decision the captain reserved.
 #
 # THERE IS NO INPUT FOR AN UTTERANCE, which is the property this file exists to
-# have. `CAPTAIN_REQUIRED` is reachable from a typed reserved decision and from
-# nothing else: not from the act being a merge, not from the project, not from a
+# have. `CAPTAIN_REQUIRED` is reachable from a typed reserved decision or absent
+# assignment-distinct review evidence: not from the act being a merge, not from the project, not from a
 # local-only landing, not from a posture that used to be off, and not from the
 # absence of a sentence.
 #
@@ -746,8 +746,8 @@ fm_landing_authority_set() {  # <verdict> <token> <reason> [<sources>]
 # The optional seam inputs are the normalized answer, governing request, and raw
 # ruling verdict already observed for this candidate. They can add a delegation
 # source and withhold an answer; they can never clear a reserved decision.
-fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> <ruling>]]
-  local home=$1 task=$2 seam=${3:-} request=${4:-} ruling=${5:-} ruling_class
+fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> <ruling> <review-evidence>]]
+  local home=$1 task=$2 seam=${3:-} request=${4:-} ruling=${5:-} review=${6:-} ruling_class
   local state meta landing status posture posture_rc commission sources
   local classified rest reserved='' unreadable='' unclassified=''
   # The disposition fold resolves the home it reads from FM_HOME; naming it here
@@ -787,7 +787,7 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
     # Called in THIS shell, not in a command substitution: the resolution also
     # publishes where its answer came from, and a subshell would discard that.
     posture_rc=0
-    fm_autonomy_state_effective "$meta" >/dev/null || posture_rc=$?
+    fm_autonomy_state_effective "$meta" "$home" >/dev/null || posture_rc=$?
     posture=$FM_AUTONOMY_EFFECTIVE_STATE
     case "$posture_rc" in
       0) sources="$sources posture=$posture:$FM_AUTONOMY_EFFECTIVE_SOURCE${FM_AUTONOMY_EFFECTIVE_PROJECT:+:$FM_AUTONOMY_EFFECTIVE_PROJECT}" ;;
@@ -849,7 +849,17 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
           ;;
       esac
       ;;
-    not-applicable) sources="$sources ruling=not-applicable" ;;
+    not-applicable)
+      sources="$sources ruling=not-applicable review=${review:-could-not-observe}"
+      case "$review" in
+        approved|independent) ;;
+        *)
+          fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
+            "$task has no governing Browser Sol ruling and assignment-distinct review evidence could not be observed (${review:-no review record})" "$sources"
+          return $?
+          ;;
+      esac
+      ;;
     '') sources="$sources ruling=not-asked" ;;
     *)
       fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
