@@ -9,12 +9,12 @@ Regression owners: `tests/fm-publication-seam.test.sh` for the guard and its con
 A candidate reaches the outside world when it is PUSHED, not when it is merged.
 This mechanism asks whether that push is permitted before the remote moves, binds the answer to one exact subject, and exhausts the answer by using it.
 
-Eleven properties, and one control without which none of them means anything:
+Sixteen properties, and one control without which none of them means anything:
 
 1. A governed publication is refused before the remote moves whenever an active hold, an unmet must-close ruling, a placeholder or unmapped identity, a second actionable candidate for the same semantic work, a retained predecessor ref, a stale ruling or policy generation, or a remote tip other than the one planned against applies.
 2. Permission is re-compiled at the moment of use, so an authority granted while eligible refuses once a newer hold, a revoked ruling or a bumped generation arrives.
 3. A remote that moved under a granted authority refuses without overwriting what moved it.
-4. An authority is spent exactly once, and a replay refuses and publishes nothing.
+4. An authority is spent exactly once through the authorization store's atomic compare-and-claim mechanism, so concurrent consumers execute one push and every replay refuses and publishes nothing.
 5. An authority consumed before its effect is durably `consumed-without-confirmed-effect`, is never resurrected, and recovery mints a fresh authority for the same unchanged subject rather than reusing it.
 6. A remote already equal to the head is a typed `NO_EFFECT_ALREADY_EQUAL` result that consumes no authority.
 7. A governed candidate publishes only when a ruling is bound to the EXACT head being published and the role qualification register currently records the declared reviewer as qualified and assignment-distinct against the declared maker.
@@ -23,10 +23,15 @@ Eleven properties, and one control without which none of them means anything:
 9. An approval bound to this head does not cover for another live governing request that is still unanswered.
 10. A remote-changing candidate act carries an effect class the GUARD decides: `CUSTODY_REPLICATION` grants nothing beyond a remote copy of one exact commit on the work's own unprotected feature ref, `PUBLICATION_EFFECT` carries every obligation above, and a class the evidence does not support is refused rather than reclassified.
 11. The candidate states `local-only`, `custody-replicated`, `review-published`, `publication-qualified`, `landing-authorized` and `landed` are projected from the durable owners, none implies the next, and a slot is reclaimable only when `ls-remote` resolves the custody ref to the exact candidate head.
-12. Non-vacuity: a governed candidate with a clean identity, no hold, an approving exact-head ruling, a qualified reviewer, one semantic owner, fresh generations and the exact remote tip publishes exactly once; and an exact clean candidate replicates to its own feature ref under a custody authority.
+12. Consume accepts only the constructed single-ref, non-forcing `git -C <repo> push <remote> <head>:<ref>` token sequence bound by the authority; wrappers, extra refspecs, alternate sources and other argument shapes refuse before the act.
+13. Every observation and act resolves Git from the fixed trusted executable set rather than from caller functions or `PATH`, and the spend record identifies the selected executable by absolute path and content digest.
+14. An authority binds the canonical remote name, credential-free push URL, URL digest and venue identity at grant time and enforces all four again at consume time; a credential-bearing remote is refused rather than accepted after stripping its userinfo.
+15. Push output and exit status are captured in the spend record and included in an unconfirmed-effect refusal only after the shared default-deny credential scrubber has removed or withheld every unsafe line.
+16. An ungoverned act still passes the same command validation, atomic one-use spend and post-effect remote confirmation, then returns the distinct `FM_PUB_NOT_APPLICABLE` classification that callers relay verbatim.
+17. Non-vacuity: a governed candidate with a clean identity, no hold, an approving exact-head ruling, a qualified reviewer, one semantic owner, fresh generations and the exact remote tip publishes exactly once; and an exact clean candidate replicates to its own feature ref under a custody authority.
 
-Property 12 is not a courtesy.
-Properties 1 through 11 all pass against a guard that refuses everything, so without 12 the suite would be green and worthless.
+Property 17 is not a courtesy.
+Properties 1 through 16 all pass against a guard that refuses everything, so without 17 the suite would be green and worthless.
 
 ## What is NOT claimed, and where those properties live
 
