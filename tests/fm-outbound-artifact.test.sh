@@ -868,6 +868,10 @@ test_invalid_sol_control_schema_refuses_emission() {
       || fail "sol schema $label: invalid configuration omitted FM_LANDING_VENUE_INVALID: $out"
     [ ! -s "$dir/forge/post_log" ] \
       || fail "sol schema $label: invalid configuration emitted a request"
+    out=$(run_ob "$dir" poll 2>&1); rc=$?
+    [ "$rc" -eq 4 ] || fail "sol schema $label: poll returned $rc: $out"
+    printf '%s\n' "$out" | grep -qF FM_LANDING_VENUE_INVALID \
+      || fail "sol schema $label: poll omitted FM_LANDING_VENUE_INVALID: $out"
   done <<'EOF'
 repo-object|{"repo":{},"issue":2,"landing_domain":{"repos":[]}}
 issue-boolean|{"repo":"owner/control","issue":true,"landing_domain":{"repos":[]}}
@@ -876,6 +880,16 @@ domain-non-string|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[7
 unknown-key|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[]},"extra":true}
 EOF
   pass "invalid sol-control schemas refuse outbound emission"
+}
+
+test_poll_without_sol_control_is_a_noop() {
+  local dir out rc
+  dir=$(new_case poll-no-venue)
+  rm -f "$dir/home/config/sol-control.json"
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "poll absent venue: expected no-op, got $rc: $out"
+  [ -z "$out" ] || fail "poll absent venue: expected no output, got: $out"
+  pass "poll treats an absent sol-control venue as an intentional no-op"
 }
 
 test_request_present_is_green() {
@@ -2227,6 +2241,7 @@ test_every_declared_token_has_an_emit_site() {
 
 test_no_request_is_red
 test_invalid_sol_control_schema_refuses_emission
+test_poll_without_sol_control_is_a_noop
 test_branch_inventory_finds_an_unannotated_unsubmitted_branch
 test_branch_inventory_dedupes_only_complete_identity
 test_branch_inventory_dedupes_duplicate_refs_before_probing

@@ -1509,7 +1509,10 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
 
 cmd_poll() {
   local comments row body rid marker_count comment rc failed=0 poll_record poll_state out
-  read_sol_config || return 0
+  if ! read_sol_config; then
+    [ "$FM_SOL_CONTROL_CONFIG_STATE" = absent ] && return 0
+    return 4
+  fi
   probe_budget || die "the ruling poll probe budget is exhausted" 4
   # fm-retrieval-audit: complete-source - --paginate traverses every issue-comment page before absence is concluded.
   comments=$(obs gh api "repos/$SOL_REPO/issues/$SOL_ISSUE/comments" --paginate \
