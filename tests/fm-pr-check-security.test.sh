@@ -689,17 +689,18 @@ test_rejected_metacharacter_bytes_are_inert() {
     [ "$rc" -ne 0 ] || fail "rejected metacharacter byte was accepted"
     [ ! -e "$dir/home/state/task-a.check.sh" ] || fail "rejected input left a runnable task check"
     [ ! -e "$dir/home/state/task-a.pr-poll" ] || fail "rejected input left a sidecar"
-    fm_pr_poll_prepare "$dir/home/state" safe-check github https://github.com/o/r/pull/99 github.com o/r 99 "$POLL" \
-      || fail "could not prepare bounded watcher poll"
-    fm_pr_poll_publish_prepared || fail "could not publish bounded watcher poll"
-
-    set +e
-    FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
-    rc=$?
-    set -e
-    [ "$rc" -eq 0 ] || fail "bounded watcher did not complete through the authenticated poll"
-    rm -f "$dir/home/state/.last-check"
   done
+
+  fm_pr_poll_prepare "$dir/home/state" safe-check github https://github.com/o/r/pull/99 github.com o/r 99 "$POLL" \
+    || fail "could not prepare bounded watcher poll"
+  fm_pr_poll_publish_prepared || fail "could not publish bounded watcher poll"
+  set +e
+  FM_TEST_GH_STATE=MERGED run_watcher_bounded "$dir/home" "$dir/fakebin" > "$dir/watch.out" 2> "$dir/watch.err"
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] \
+    || fail "bounded watcher did not complete through the authenticated poll: $(cat "$dir/watch.err")"
+  rm -f "$dir/home/state/.last-check"
 
   FM_TEST_GH_STATE=OPEN run_check_entry "$dir" task-a https://github.com/o/r/pull/1 >/dev/null 2>/dev/null \
     || fail "could not seed a prior valid static poll"
