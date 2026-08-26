@@ -533,6 +533,115 @@ test_invalid_entrypoints_have_zero_side_effects() {
   pass "PR and teardown entrypoints reject invalid arguments before every side effect"
 }
 
+# ---------------------------------------------------------------------------
+# The provenance chokepoint. Arming a watch is where the fleet first holds the
+# task's local copy, the request and its head at once, which is why publishing
+# the head-bound attestation happens here. Publication used to have no owner at
+# all, so a candidate whose pipeline had completed every required step for its
+# exact commit still reached the boundary with no evidence whenever nobody
+# published by hand.
+#
+# Three properties are under test and they are separable. It reports a
+# three-valued answer rather than being silent; it never changes what arming
+# did; and it leaves a repository that reads no attestation completely alone.
+# ---------------------------------------------------------------------------
+
+# A task local copy that is a real repository, so the chokepoint's predicate has
+# something to read. Nothing here is pushed anywhere.
+make_worktree_repo() {
+  local dir=$1
+  rm -rf "$dir/wt"
+  mkdir -p "$dir/wt"
+  git -C "$dir/wt" init -q -b fm/task-a .
+  git -C "$dir/wt" config user.email prcheck@example.invalid
+  git -C "$dir/wt" config user.name "PR Check Test"
+  printf 'one\n' > "$dir/wt/a.txt"
+  git -C "$dir/wt" add a.txt
+  git -C "$dir/wt" commit -qm one
+}
+
+declare_attestation_gate() {
+  local dir=$1
+  mkdir -p "$dir/wt/.github/workflows"
+  printf 'jobs:\n  check:\n    steps:\n      - run: bin/fm-attest.sh verify --head 0000\n' \
+    > "$dir/wt/.github/workflows/gate.yml"
+}
+
+test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone() {
+  local dir out rc
+  dir=$(make_case provenance-not-required)
+  write_task_meta "$dir"
+  make_worktree_repo "$dir"
+  set +e
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  out=$(cat "$dir/stdout")
+  [ "$rc" -eq 0 ] || fail "arming failed where no attestation is read: $(cat "$dir/stderr")"
+  assert_contains "$out" "armed: state/task-a.check.sh" "the watch was not armed"
+  assert_contains "$out" "attestation: not-required" \
+    "a repository that reads no attestation was not reported as such"
+  git -C "$dir/wt" rev-parse --verify --quiet refs/notes/no-mistakes >/dev/null 2>&1 \
+    && fail "a repository that reads no attestation had one recorded in it"
+  pass "fm-pr-check.sh: a repository whose checks read no attestation is left untouched"
+}
+
+test_provenance_chokepoint_reports_a_refused_publication_as_a_verdict() {
+  local dir out rc
+  # The case above plus the declaration, so the difference in outcome is that
+  # one file. The pipeline here reports a repository it was never set up in,
+  # which is a verdict about this candidate rather than a failure to look, and
+  # it must reach the operator instead of being swallowed.
+  dir=$(make_case provenance-refused)
+  write_task_meta "$dir"
+  make_worktree_repo "$dir"
+  declare_attestation_gate "$dir"
+  cat > "$dir/fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+case "$*" in
+  "--version") echo "no-mistakes version v1.40.3 (d873960) 2026-07-22T01:41:41Z" ;;
+  "axi status") echo "error: repo not initialized" ;;
+esac
+SH
+  chmod +x "$dir/fakebin/no-mistakes"
+  set +e
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  out=$(cat "$dir/stdout")
+  [ "$rc" -eq 0 ] || fail "a refused publication changed what arming did: $(cat "$dir/stderr")"
+  assert_contains "$out" "armed: state/task-a.check.sh" "a refused publication un-armed the watch"
+  assert_contains "$out" "attestation: refused (run-record-unreadable)" \
+    "a refused publication was not reported with its own reason"
+  assert_not_contains "$out" "attestation: not-required" \
+    "a declared gate was reported as no gate at all"
+  git -C "$dir/wt" rev-parse --verify --quiet refs/notes/no-mistakes >/dev/null 2>&1 \
+    && fail "a refused publication still recorded an attestation"
+  pass "fm-pr-check.sh: a publication the owner refused is reported and never suppressed"
+}
+
+test_provenance_chokepoint_reports_an_unreachable_local_copy_as_neither() {
+  local dir out rc
+  dir=$(make_case provenance-no-worktree)
+  write_task_meta "$dir"
+  rm -rf "$dir/wt"
+  set +e
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
+  rc=$?
+  set -e
+  out=$(cat "$dir/stdout")
+  [ "$rc" -eq 0 ] || fail "an unreachable local copy changed what arming did: $(cat "$dir/stderr")"
+  assert_contains "$out" "armed: state/task-a.check.sh" "an unreachable local copy un-armed the watch"
+  assert_contains "$out" "attestation: could-not-observe" \
+    "an unreachable local copy was not reported as could-not-observe"
+  assert_not_contains "$out" "attestation: not-required" \
+    "a local copy that could not be read was reported as a repository that reads none"
+  pass "fm-pr-check.sh: a local copy it cannot read answers neither published nor not-required"
+}
+
 test_valid_recording_and_merge_derivation() {
   local dir expected sidecar count rc
   dir=$(make_case valid-recording)
@@ -3856,6 +3965,9 @@ test_retirement_queue_failure_and_receipt_tampering
 test_gitlab_merged_poll_retires
 test_invalid_entrypoints_have_zero_side_effects
 test_valid_recording_and_merge_derivation
+test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone
+test_provenance_chokepoint_reports_a_refused_publication_as_a_verdict
+test_provenance_chokepoint_reports_an_unreachable_local_copy_as_neither
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_static_poll_conflict_contract

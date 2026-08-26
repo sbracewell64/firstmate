@@ -22,6 +22,14 @@
 # the absence of a record is never read as agreement. A recorded venue addressed
 # through an SSH host alias is the same venue spelled differently, so the alias
 # is resolved before anything is called a contradiction.
+#
+# Once the watch is armed, this is also the fleet's publication chokepoint for
+# the head-bound no-mistakes attestation. Where the task's local copy declares a
+# CI gate that reads one, bin/fm-attest.sh is delegated to publish the evidence
+# its own pipeline run produced and to have that head's verdict re-derived;
+# where no such gate is declared, nothing is touched. It reports one
+# three-valued `attestation:` line and never changes this script's exit status,
+# because a provenance answer must not undo an armed watch.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -245,3 +253,92 @@ fm_pr_poll_publish_prepared || {
   exit 1
 }
 printf 'armed: state/%s.check.sh\n' "$ID"
+
+# PROVENANCE CHOKEPOINT - publish the head-bound evidence the delivery boundary
+# itself demands, at the one moment a validated candidate is known to exist.
+#
+# Where a repository's CI reads a head-bound attestation, the evidence is
+# produced by the pipeline and published by bin/fm-attest.sh. Publication had no
+# owner: nothing in this repository invoked it, so it happened only when someone
+# remembered a line of prose. Every lane where nobody did left a candidate whose
+# pipeline had completed review, test, lint and push for that exact commit
+# sitting red at the boundary, indistinguishable from one that was never
+# validated at all, and the repair needed a person. This is the step that closes
+# it, and it runs here because this is the first point at which the fleet holds
+# all three of the task's local copy, the request, and the request's exact head.
+#
+# It DELEGATES rather than deciding. bin/fm-attest.sh remains the only thing
+# that reads the pipeline's run record, binds a note to the head that run
+# validated, publishes it, and asks GitHub to re-derive the verdict; nothing
+# here manufactures, transfers, relabels or infers an attestation, and a
+# candidate whose run never covered this head is refused by that owner exactly
+# as it would be anywhere else. The gate is not weakened by publishing evidence
+# it would have accepted anyway.
+#
+# `required` is asked first and separately, because it is a read of files and
+# costs nothing, while the publication that follows talks to a forge. A
+# repository that reads no attestation is left completely alone: this is the
+# predicate that lets the step be unconditional here without touching a project
+# that never asked for it.
+#
+# Three-valued, and never fatal. Arming the watch has already succeeded above
+# and a provenance answer must not be able to undo it, so every outcome is
+# reported and none changes this script's exit status. The bound below is on
+# this whole delegation, because a forge that will not answer must not hold a
+# supervision turn.
+FM_PR_ATTEST_BOUND=180
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
+# The reason token from bin/fm-attest.sh's own error model, which carries one
+# machine-readable reason per distinct condition. Reading that token is why the
+# outcome below can be reported without a second opinion about what happened.
+fm_pr_attest_reason() {
+  printf '%s\n' "$1" \
+    | sed -n 's/^fm-attest: [^(]*(\([a-z0-9-]*\)).*$/\1/p' \
+    | tail -1
+}
+
+if [ -z "$WT" ] || [ ! -d "$WT" ]; then
+  printf 'attestation: could-not-observe (task %s has no reachable local copy, so whether this head needs published evidence is unknown)\n' "$ID"
+else
+  ATTEST_RC=0
+  ATTEST_OUT=$( (cd "$WT" && "$SCRIPT_DIR/fm-attest.sh" required) 2>&1 ) || ATTEST_RC=$?
+  case "$ATTEST_RC" in
+    1) printf 'attestation: not-required (this repository reads no head-bound attestation)\n' ;;
+    0)
+      ATTEST_RC=0
+      ATTEST_OUT=$(
+        cd "$WT" \
+          && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
+            "$SCRIPT_DIR/fm-attest.sh" write 2>&1
+      ) || ATTEST_RC=$?
+      ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
+      case "$ATTEST_RC" in
+        0)
+          # What actually happened - recorded, published, re-run requested, or
+          # a run that had already passed - is the owner's to say, so its own
+          # words are shown rather than summarised into a claim about which.
+          printf 'attestation: published for task %s\n' "$ID"
+          printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+          ;;
+        1)
+          printf 'attestation: refused (%s)\n' "${ATTEST_REASON:-unstated}"
+          printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+          ;;
+        124)
+          printf 'attestation: could-not-observe (publication did not finish within %ss)\n' "$FM_PR_ATTEST_BOUND"
+          ;;
+        *)
+          printf 'attestation: could-not-observe (%s)\n' "${ATTEST_REASON:-unstated}"
+          printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+          ;;
+      esac
+      ;;
+    *)
+      ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
+      printf 'attestation: could-not-observe (%s)\n' "${ATTEST_REASON:-unstated}"
+      printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+      ;;
+  esac
+fi

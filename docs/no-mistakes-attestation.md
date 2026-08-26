@@ -142,6 +142,42 @@ Every call to the tool is time-bounded, so one blocked on a lock or a network re
 
 When `no-mistakes` publishes this note itself, the helper becomes redundant and nothing about the check changes: the note format is the contract, and which program writes it is not.
 
+## Who publishes, and when
+
+Producing the evidence and publishing it are two steps, and only the first had an owner.
+The pipeline produced it; `bin/fm-attest.sh write` publishes it; and for a long time nothing invoked that command, so it ran only when a person or an agent remembered a line of prose.
+Measured on this repository on 2026-08-26: of ten open pull requests, four had a pipeline run that completed `review`, `test`, `lint` and `push` for their exact head and carried no published attestation for that head or for any commit on their branch, and their checks had been red for 4, 8, 13 and 31 days.
+That is not ten separate mistakes, it is one unowned step, and `data/no-mistakes-attestation-provenance-recurrence-owner/report.md` holds the per-head classification.
+
+`bin/fm-attest.sh required` is the predicate that gave the step an owner.
+It answers, for one checkout, whether this repository's own CI reads a head-bound attestation, deciding it from what the repository declares - a workflow under `.github/workflows` that invokes `bin/fm-attest.sh` - rather than from a name, a remote, or a list of repositories that would drift from the workflow it describes.
+It is three-valued like every other observation here: required, not required, and a declaration it could not read, which is neither.
+An unreadable workflow could be the one declaring the gate, so it can only cloud the negative answer; one workflow that does declare the gate settles the question and cannot be unsaid by an unreadable neighbour.
+
+That predicate is what makes an unconditional publication step correct everywhere, and two owners now run one:
+
+- The worker that ran the pipeline publishes at the moment its run reaches CI-ready, from the worktree holding the run record, with `bin/fm-attest.sh write --only-if-required`.
+  `bin/fm-brief.sh` puts that call in the `no-mistakes` delivery contract, which is the document a worker executes; the two modes that run no pipeline have no evidence to publish and are told nothing.
+  The flag makes the call safe to run in any project: where no check reads the result, nothing is recorded, nothing is pushed, and the pipeline tool is never even consulted.
+- `bin/fm-pr-check.sh` publishes at the fleet's own chokepoint, after the merge watch is armed, which is the first point at which the fleet holds the task's local copy, the request, and the request's head together.
+  It delegates rather than deciding: `bin/fm-attest.sh` remains the only thing that reads a run record, binds a note to the head that run validated, publishes it, and asks for the verdict to be re-derived.
+  It reports one three-valued `attestation:` line - published, refused with the owner's own reason, not required, or could-not-observe - and never changes its own exit status, because a provenance answer must not undo an armed watch.
+
+Neither of them can manufacture, transfer, relabel or infer an attestation, because neither writes one.
+A candidate whose pipeline run did not cover the exact head is refused by the same owner, with the same reason, from either call site, and the gate accepts nothing it would not have accepted before.
+
+### The closing condition
+
+The recurrence is closed when this predicate holds and keeps holding:
+
+> For every open pull request at a venue whose CI declares this gate, the exact head under review either carries a published attestation that `bin/fm-attest.sh verify` accepts, or is refused by `bin/fm-attest.sh write` with a reason naming what about that candidate is missing.
+
+The second half is what makes it a closing condition rather than a wish.
+A head with no attestation is only acceptable when the owner has said why in its own words - `run-incomplete`, `run-covers-another-head`, `no-run-record` - which are statements about the candidate that a person can act on.
+A head with no attestation and no such refusal on record is the unowned step returning, and it is exactly what the two call sites above make impossible to reach silently.
+
+`bin/fm-attest.sh verify --head <sha>` against a fetched `refs/notes/no-mistakes` is how the first half is measured for one head, and the classification in the report named above is how it was measured for all of them.
+
 ## The bounded window before a verdict
 
 The note can only exist after the push it attests, and that push is what starts this check, so the check's first look at a genuinely pipeline-raised head can be a near miss rather than anything about the change.

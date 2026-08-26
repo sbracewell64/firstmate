@@ -415,7 +415,7 @@ The worker reports the PR when CI first becomes green rather than waiting for me
 ### PR ready, landing, and teardown
 
 For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports `done: PR <url> checks green` after CI is green, while `direct-PR` reports `done: PR <url>` after opening the PR.
-Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's live meta or released-task landing record and arms the watcher's PR poll.
+Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's live meta or released-task landing record, arms the watcher's PR poll, and then publishes the head-bound no-mistakes attestation through its own owner where the project's checks read one, reporting one three-valued `attestation:` line that never changes what arming did (`bin/fm-attest.sh`; docs/no-mistakes-attestation.md).
 A pipeline's push-time rebase can still silently drop content it already validated, and nothing gates that: `bin/fm-rebase-equivalence.sh` is a diagnostic you invoke deliberately, never a check in the delivery path, so run it when a PR's content matters and read `docs/verification/rebase-equivalence.md` for what it does and does not establish.
 Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
 A captain instruction to merge is explicit authority; `yolo` is the only standing routine authority.
