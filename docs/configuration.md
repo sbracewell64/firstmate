@@ -201,7 +201,7 @@ Inside that domain a landing needs a live review request covering its exact head
 `{"repos": []}` declares that no landing in this home is governed, which is the way to keep a control venue for review correspondence without placing any landing under it.
 
 Omitting `landing_domain` entirely is NOT the same as declaring it empty.
-A home that configured Sol control and never said what it governs cannot answer whether a candidate is inside the domain, so both landing paths report `FM_LANDING_DOMAIN_UNDECLARED` and refuse rather than reading the silence as permission.
+A home that configured Sol control and never said what it governs has an invalid venue configuration, so both landing paths report `FM_LANDING_VENUE_INVALID` and refuse rather than reading the silence as permission.
 A home with no `config/sol-control.json` at all has placed nothing under Sol control and is unaffected, which is the shipped default.
 
 An absent or incomplete file does not make a waiting item clear.
