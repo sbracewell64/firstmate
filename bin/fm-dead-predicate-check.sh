@@ -300,7 +300,7 @@ file_parse_refusal() {  # <file>
   local f=$1 hit strip_rc
   hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
           grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
-        } | head -1)
+        } | sed -n '1p')
   if [ -z "$hit" ]; then
     strip_cached "$f" >/dev/null
     strip_rc=$?
@@ -352,7 +352,7 @@ fi
 for f in "${FILES[@]}"; do
   [ -r "$f" ] || die "target is unreadable: $f" 4
   grep -qxF "$ENROL_MARKER" "$f" 2>/dev/null || die "target is not enrolled: $f" 4
-  unsupported=$({ grep -nF '<<' "$f" | grep -vF '<<<'; grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"; } | head -1)
+  unsupported=$({ grep -nF '<<' "$f" | grep -vF '<<<'; grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"; } | sed -n '1p')
   [ -z "$unsupported" ] \
     || die "UNCHECKED $f:${unsupported%%:*} unsupported construct: ${unsupported#*:}" 4
 done
