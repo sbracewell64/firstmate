@@ -17,7 +17,7 @@
     "kind": "fixture_oracle",
     "fixture": "ordinary-engineering-qualification-fixture-v1",
     "fixture_version": "1.0.0",
-    "manifest_digest": "e2eac280e5db51a9383d60ff21c28bc1a7bb32afe915d45f3badd96b06cfccd1",
+    "manifest_digest": "b558c9a1829c6c519018e90b0408a1463f7e640a570f0da9db1a64fd727ebf51",
     "root": "code:tests/fixtures/ordinary-engineering-qualification-fixture-v1",
     "integrity": "verify-integrity.sh",
     "setup": "setup.sh semantic-review",

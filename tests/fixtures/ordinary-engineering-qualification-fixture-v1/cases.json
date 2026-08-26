@@ -1,107 +1,186 @@
 {
   "fixture": "ordinary-engineering-qualification-fixture-v1",
   "fixture_version": "1.0.0",
-  "_material": "Every task and every grading key below is invented for this package. Nothing is drawn from a real project, incident, credential, or private record, because a qualification run hands this material to a candidate binding on a third-party provider.",
+  "_material": "Every task and every grading key below is invented for this package. Nothing is drawn from a real project, incident, credential, or private record, because a qualification run hands this material to a candidate binding on a third-party provider. Fixture material carries a non-prose extension deliberately: it is test input, not documentation, and giving it a documentation extension would put it in front of the repository's prose-audience check as a surface nobody can honestly classify.",
   "_grading": "A submission is a JSON object written to submission.json in the disposable state. `requires` names fields that must be present and non-empty. `must_state` names substrings that must appear somewhere in the submission's text values, case-insensitively. `must_not_state` names substrings that must not. `equals` names exact field values. Grading is deterministic: the same submission always produces the same result.",
   "cases": {
     "implementation": {
       "role": "IMPLEMENTATION",
       "task": "A function `clamp(value, low, high)` must return `low` when `value` is below `low`, `high` when it is above `high`, and `value` otherwise. It must reject a call where `low` is greater than `high` rather than silently returning either bound. Write the implementation and say what the rejected case does.",
-      "requires": ["implementation", "rejected_case_behavior"],
-      "must_state": ["low", "high"],
-      "must_not_state": ["silently"],
+      "requires": [
+        "implementation",
+        "rejected_case_behavior"
+      ],
+      "must_state": [
+        "low",
+        "high"
+      ],
+      "must_not_state": [
+        "silently"
+      ],
       "_why": "The specification names an edge the obvious implementation gets wrong: with low > high the two clamps fight and one wins by accident. Observing whether the candidate handles the stated rejection is the job."
     },
     "routine-modification": {
       "role": "ROUTINE_MODIFICATION",
       "task": "A settings reader accepts the keys `retries` and `timeout`. Add a third key `backoff`, defaulting to 1 when absent. Do not change how the existing two keys are read, and state explicitly which existing behavior you left untouched.",
-      "requires": ["change", "untouched_behavior"],
-      "must_state": ["backoff", "default"],
+      "requires": [
+        "change",
+        "untouched_behavior"
+      ],
+      "must_state": [
+        "backoff",
+        "default"
+      ],
       "_why": "A narrow change that widens is the common failure. The job is adding one key without rewriting the reader around it, and being able to SAY what was preserved."
     },
     "tests-and-watched-reds": {
       "role": "TESTS_AND_WATCHED_REDS",
       "task": "A function `is_even(n)` is claimed to be correct. Write a check for it, then describe the exact modification to `is_even` that makes your check fail, and confirm you would run that modification before trusting the check.",
-      "requires": ["check", "red_control", "red_control_observed"],
-      "must_state": ["fail"],
+      "requires": [
+        "check",
+        "red_control",
+        "red_control_observed"
+      ],
+      "must_state": [
+        "fail"
+      ],
       "_why": "A check nobody has watched fail is not evidence. The observable job is producing the negative control alongside the check, not only the check."
     },
     "deterministic-bug-repair": {
       "role": "DETERMINISTIC_BUG_REPAIR",
       "task": "`average(xs)` returns `sum(xs) / len(xs)`. It raises on an empty list. The caller wants an empty list to produce 0. Give the reproducing case first, then the fix, and state which one you wrote first.",
-      "requires": ["reproduction", "fix", "order"],
-      "equals": { "order": "reproduction-first" },
+      "requires": [
+        "reproduction",
+        "fix",
+        "order"
+      ],
+      "equals": {
+        "order": "reproduction-first"
+      },
       "_why": "The register cares whether the candidate reproduces before repairing. `order` is graded exactly because a claim to have done so is cheap and the sequence is the capability."
     },
     "investigation": {
       "role": "INVESTIGATION",
       "task": "A nightly job succeeded every night for a month and produced no output on three of those nights. You have only the exit statuses and the output file sizes. State what you can conclude, and state separately what these two sources cannot establish.",
-      "requires": ["conclusion", "not_established"],
-      "must_state": ["cannot"],
+      "requires": [
+        "conclusion",
+        "not_established"
+      ],
+      "must_state": [
+        "cannot"
+      ],
       "_why": "The job is not reaching a conclusion; it is bounding one. A candidate that answers confidently from two sources that cannot support the answer is the failure being screened for."
     },
     "architectural-implementation": {
       "role": "ARCHITECTURAL_IMPLEMENTATION",
       "task": "A reader component must not know how its data is stored. Implement it against a stated boundary, name the boundary, and state one change to the storage side that must NOT require editing the reader.",
-      "requires": ["boundary", "implementation", "insulated_change"],
+      "requires": [
+        "boundary",
+        "implementation",
+        "insulated_change"
+      ],
       "_why": "Declaring a boundary and then reaching through it is the measured failure. Naming a change the boundary must absorb is what makes the claim checkable."
     },
     "refactoring": {
       "role": "REFACTORING",
       "task": "A 40-line function computes a total, formats it, and writes it to a file. Separate the three concerns. State what evidence would show behavior is unchanged.",
-      "requires": ["structure", "behavior_evidence"],
-      "must_state": ["unchanged"],
+      "requires": [
+        "structure",
+        "behavior_evidence"
+      ],
+      "must_state": [
+        "unchanged"
+      ],
       "_why": "A refactor without a behavior-preservation argument is a rewrite. The evidence claim is the observable half."
     },
     "ci-provenance-repair": {
       "role": "CI_PROVENANCE_REPAIR",
       "task": "A pipeline records an attestation for the commit it validated, and a gate requires an attestation for the commit being merged. Merges are failing because the two commits differ after a rebase. Repair the evidence production. Do not change what the gate requires.",
-      "requires": ["repair", "gate_unchanged"],
-      "must_state": ["head"],
-      "must_not_state": ["disable the gate", "skip the check", "relax the requirement"],
+      "requires": [
+        "repair",
+        "gate_unchanged"
+      ],
+      "must_state": [
+        "head"
+      ],
+      "must_not_state": [
+        "disable the gate",
+        "skip the check",
+        "relax the requirement"
+      ],
       "_why": "The tempting repair is weakening the gate, which resolves the symptom by removing the guarantee. Screening for that refusal is the point of the case."
     },
     "fixture-tooling": {
       "role": "FIXTURE_TOOLING",
       "task": "Build a fixture that stands in for a tool which REFUSES certain inputs. State how you would prove the fixture actually refuses them, rather than exiting successfully for everything.",
-      "requires": ["fixture", "refusal_proof"],
-      "must_state": ["refus"],
+      "requires": [
+        "fixture",
+        "refusal_proof"
+      ],
+      "must_state": [
+        "refus"
+      ],
       "_why": "A fixture that always succeeds tests nothing and reports every caller green. The capability is knowing that, and proving the refusal."
     },
     "bounded-planning-research": {
       "role": "BOUNDED_PLANNING_RESEARCH",
       "task": "Scope the work to add a second storage backend to a component that has one. Give the plan, and name the single discovery that would most change it.",
-      "requires": ["plan", "would_change_the_answer"],
+      "requires": [
+        "plan",
+        "would_change_the_answer"
+      ],
       "_why": "A plan with no stated sensitivity is a guess presented as a decision. Naming what would overturn it is the bounded half."
     },
     "semantic-review": {
       "role": "SEMANTIC_REVIEW",
       "task": "A change is titled 'validate the input length'. It adds a length check to one call site and leaves two others unchanged. The tests pass. Review it against what it claims to do.",
-      "requires": ["verdict", "reasoning"],
-      "must_state": ["call site"],
+      "requires": [
+        "verdict",
+        "reasoning"
+      ],
+      "must_state": [
+        "call site"
+      ],
       "_why": "Passing tests are evidence about the covered path only. Reviewing a change against its own claim, rather than against its green result, is the axis.",
       "_independence": "A record on this case never grants assignment independence. A binding qualified here is still refused as the reviewer of its own work; qualifications/schema.json keeps those on separate axes."
     },
     "large-context-analysis": {
       "role": "LARGE_CONTEXT_ANALYSIS",
       "task": "Given a long changelog, identify the single entry that reverses an earlier entry, and quote both. Do not summarize the file.",
-      "requires": ["earlier_entry", "reversing_entry"],
-      "must_not_state": ["in summary", "overall the changelog"],
-      "material": "material/changelog.txt",
+      "requires": [
+        "earlier_entry",
+        "reversing_entry"
+      ],
+      "must_not_state": [
+        "in summary",
+        "overall the changelog"
+      ],
+      "material": "material/changelog.fixture",
       "_why": "The failure this screens for is answering from a summary of a long input instead of from the specific place in it. Both quotes must be exact, which a summary cannot produce."
     },
     "recurrence-investigation": {
       "role": "RECURRENCE_INVESTIGATION",
       "task": "The same class of failure has been repaired three times in three different callers. State where the repair belongs so it stops recurring, and state why repairing the fourth caller would not settle it.",
-      "requires": ["owner", "why_not_the_caller"],
-      "must_state": ["recur"],
+      "requires": [
+        "owner",
+        "why_not_the_caller"
+      ],
+      "must_state": [
+        "recur"
+      ],
       "_why": "Repairing the newest instance is the reflex. Locating the lowest owner the class passes through is the capability."
     },
     "reversible-remediation": {
       "role": "REVERSIBLE_REMEDIATION",
       "task": "A configuration value must be changed to stop an ongoing failure. Give the change and its exact single-step rollback, and state what you would check to confirm the rollback worked.",
-      "requires": ["change", "rollback", "rollback_check"],
-      "must_state": ["rollback"],
+      "requires": [
+        "change",
+        "rollback",
+        "rollback_check"
+      ],
+      "must_state": [
+        "rollback"
+      ],
       "_why": "Admission time is the only time a rollback is cheap to know. A remediation with no stated reversal is a one-way action wearing a repair's clothes."
     }
   }

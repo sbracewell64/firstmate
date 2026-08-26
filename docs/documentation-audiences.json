@@ -167,15 +167,15 @@
       "audience": "agent-runtime"
     },
     {
+      "path": ".agents/skills/loopspec/SKILL.md",
+      "audience": "agent-runtime"
+    },
+    {
       "path": ".agents/skills/model-onboarding/SKILL.md",
       "audience": "agent-runtime"
     },
     {
       "path": ".agents/skills/process-event-sources/SKILL.md",
-      "audience": "agent-runtime"
-    },
-    {
-      "path": ".agents/skills/loopspec/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -211,11 +211,11 @@
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/wrong-subject/SKILL.md",
+      "path": ".agents/skills/updatefirstmate/SKILL.md",
       "audience": "agent-runtime"
     },
     {
-      "path": ".agents/skills/updatefirstmate/SKILL.md",
+      "path": ".agents/skills/wrong-subject/SKILL.md",
       "audience": "agent-runtime"
     },
     {
@@ -391,11 +391,11 @@
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/verification/inbound-ruling-authorization.md",
+      "path": "docs/verification/execution-attempt-replacement.md",
       "audience": "maintainer-verification"
     },
     {
-      "path": "docs/verification/execution-attempt-replacement.md",
+      "path": "docs/verification/inbound-ruling-authorization.md",
       "audience": "maintainer-verification"
     },
     {
@@ -459,11 +459,11 @@
       "audience": "operator-current"
     },
     {
-      "path": "docs/windows-launcher.md",
+      "path": "docs/wedge-alarm.md",
       "audience": "operator-current"
     },
     {
-      "path": "docs/wedge-alarm.md",
+      "path": "docs/windows-launcher.md",
       "audience": "operator-current"
     },
     {
@@ -473,6 +473,10 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "tests/fixtures/ordinary-engineering-qualification-fixture-v1/README.md",
+      "audience": "maintainer-architecture"
     }
   ]
 }
