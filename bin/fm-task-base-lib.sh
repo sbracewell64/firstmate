@@ -70,6 +70,32 @@
 TASK_BASE_SLOT='' TASK_BASE_SLOT_REF='' TASK_BASE_CONTRIB='' TASK_BASE_CONTRIB_REF='' TASK_BASE_STATE='' TASK_BASE_ERROR=''
 # shellcheck disable=SC2034 # Same: consumed by fm-spawn.sh (records them) and tests.
 TASK_BASE_VENUE='' TASK_BASE_VENUE_URL=''
+TASK_BASE_POLICY_VENUE='' TASK_BASE_POLICY_URL='' TASK_BASE_POLICY_REF=''
+
+task_base_metadata_field() {  # <meta-file> <key>
+  local file=${1-} key=${2-}
+  [ -f "$file" ] && [ ! -L "$file" ] && [ -n "$key" ] || return 1
+  awk -F= -v key="$key" '
+    $1 == key { value=substr($0, length(key) + 2); seen[value]=1 }
+    END {
+      for (value in seen) { count++; only=value }
+      if (count == 0 || (count == 1 && only == "")) exit 1
+      if (count != 1) exit 2
+      print only
+    }
+  ' "$file"
+}
+
+task_base_policy_metadata() {  # <meta-file>
+  local file=${1-}
+  TASK_BASE_POLICY_VENUE=
+  TASK_BASE_POLICY_URL=
+  TASK_BASE_POLICY_REF=
+  TASK_BASE_POLICY_VENUE=$(task_base_metadata_field "$file" contribution_venue) || return 2
+  TASK_BASE_POLICY_URL=$(task_base_metadata_field "$file" contribution_venue_url) || return 2
+  TASK_BASE_POLICY_REF=$(task_base_metadata_field "$file" contribution_target) || return 2
+  return 0
+}
 
 # shellcheck source=bin/fm-landed-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-landed-lib.sh"

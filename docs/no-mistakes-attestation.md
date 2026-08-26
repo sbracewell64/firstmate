@@ -8,11 +8,11 @@ This document owns what that check establishes, what it deliberately does not, a
 
 The check verifies a git note on `refs/notes/no-mistakes`, keyed by the pull request's exact head commit.
 
-A repository declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose complete content is one line: `fm-attest.v1 required`.
-`bin/fm-attest.sh required` checks that path in the checkout first and, when it is absent there, checks the same git blob on the push target repository's default branch.
-The default branch is resolved from that remote's advertised `HEAD` symref rather than from a hard-coded branch name, so a candidate head that predates the declaration still receives the repository-level answer.
-An absent declaration in both places reports not-required, while a symlink, submodule, directory, unreadable default ref or file, or any other content reports could-not-observe with its own reason.
-The local could-not-observe reasons are `declaration-not-regular`, `declaration-unreadable`, and `declaration-invalid`; the default-branch reasons are `default-ref-unresolvable`, `default-ref-unreadable`, `default-declaration-not-regular`, `default-declaration-unreadable`, and `default-declaration-invalid`.
+A contribution venue declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose complete content is one line: `fm-attest.v1 required`.
+`bin/fm-attest.sh required` takes the governed venue identity, its repository URL, and the policy generation recorded by `bin/fm-task-base-lib.sh` as explicit inputs.
+It fetches that generation from the governed venue into a private scratch ref and reads the declaration blob only from the fetched commit, while publication remains bound to the candidate repository and exact head.
+An absent declaration reports not-required, while a missing or inconsistent subject, an unreadable or mismatched policy ref, a non-regular declaration, unreadable bytes, or any other content reports could-not-observe with its own reason.
+The could-not-observe reasons are `policy-subject-missing`, `policy-subject-mismatch`, `policy-ref-unreadable`, `policy-ref-mismatch`, `policy-declaration-not-regular`, `policy-declaration-unreadable`, and `policy-declaration-invalid`.
 The repository invariant checks the other direction: any workflow mentioning `fm-attest.sh` requires the exact declaration, but that lint is not the publication gate.
 
 A note is used rather than a commit trailer or a line of pull request prose for three reasons.

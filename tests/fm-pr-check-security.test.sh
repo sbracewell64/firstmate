@@ -580,6 +580,7 @@ test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone() {
   write_task_meta "$dir"
   printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
     "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
+  git -C "$dir/wt" config url."$dir/default.git".insteadOf https://github.com/o/r.git
   set +e
   FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
     run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr"
@@ -609,6 +610,8 @@ test_provenance_chokepoint_reports_a_refused_publication_as_a_verdict() {
   write_task_meta "$dir"
   printf 'contribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
     "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
+  git -C "$dir/wt" push -q origin HEAD:refs/heads/policy
+  git -C "$dir/wt" config url."$dir/default.git".insteadOf https://github.com/o/r.git
   cat > "$dir/fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -652,6 +655,44 @@ test_provenance_chokepoint_reports_an_unreachable_local_copy_as_neither() {
   assert_not_contains "$out" "attestation: not-required" \
     "a local copy that could not be read was reported as a repository that reads none"
   pass "fm-pr-check.sh: a local copy it cannot read answers neither published nor not-required"
+}
+
+test_provenance_policy_metadata_is_three_valued() {
+  local dir out
+  dir=$(make_case provenance-policy-conflict)
+  make_worktree_repo "$dir"
+  write_task_meta "$dir"
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue=github.com/foreign/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\n' \
+    "$(git -C "$dir/wt" rev-parse HEAD)" >> "$dir/home/state/task-a.meta"
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "conflicting policy metadata changed watch arming: $(cat "$dir/stderr")"
+  out=$(cat "$dir/stdout")
+  assert_contains "$out" "attestation: could-not-observe (policy-subject-missing)" \
+    "conflicting policy metadata was collapsed to one value"
+
+  dir=$(make_case provenance-policy-identical)
+  make_worktree_repo "$dir"
+  write_task_meta "$dir"
+  printf 'contribution_venue=github.com/o/r\ncontribution_venue=github.com/o/r\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_venue_url=https://github.com/o/r.git\ncontribution_target=%s\ncontribution_target=%s\n' \
+    "$(git -C "$dir/wt" rev-parse HEAD)" "$(git -C "$dir/wt" rev-parse HEAD)" \
+    >> "$dir/home/state/task-a.meta"
+  git -C "$dir/wt" config url."$dir/default.git".insteadOf https://github.com/o/r.git
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "identical policy metadata changed watch arming: $(cat "$dir/stderr")"
+  assert_contains "$(cat "$dir/stdout")" "attestation: not-required" \
+    "identical duplicate policy metadata was treated as ambiguous"
+
+  dir=$(make_case provenance-policy-absent)
+  make_worktree_repo "$dir"
+  write_task_meta "$dir"
+  FM_TEST_GH_HEAD=0123456789abcdef0123456789abcdef01234567 \
+    run_check_entry "$dir" task-a https://github.com/o/r/pull/1 > "$dir/stdout" 2> "$dir/stderr" \
+    || fail "absent policy metadata changed watch arming: $(cat "$dir/stderr")"
+  assert_contains "$(cat "$dir/stdout")" "attestation: could-not-observe (policy-subject-missing)" \
+    "absent policy metadata was resolved as not-required"
+  pass "fm-pr-check.sh: policy metadata distinguishes conflict, identity, and absence"
 }
 
 test_valid_recording_and_merge_derivation() {
@@ -3980,6 +4021,7 @@ test_valid_recording_and_merge_derivation
 test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone
 test_provenance_chokepoint_reports_a_refused_publication_as_a_verdict
 test_provenance_chokepoint_reports_an_unreachable_local_copy_as_neither
+test_provenance_policy_metadata_is_three_valued
 test_rejected_metacharacter_bytes_are_inert
 test_static_poll_contract
 test_static_poll_conflict_contract
