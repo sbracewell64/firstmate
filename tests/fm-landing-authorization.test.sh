@@ -33,6 +33,8 @@
 #  21. an act that exits non-zero leaves the authority indeterminate
 #  22. the real path end to end: a ruled correlation record mints a plan, the
 #      spend constructs the act, and a scratch repository proves it happened
+#  23. a project alias moved after mint refuses before either repository lands
+#  24. successful exit is applied only when post-effect observation confirms it
 #
 # CONTROL 1 IS NOT OPTIONAL AND IS NOT DECORATION. Every other control here is a
 # refusal, and a mechanism that refuses everything satisfies all of them at once.
@@ -107,6 +109,12 @@ new_case() {  # <name> [<request-id>] [<state>] [<verdict>] [<head>]
 #!/usr/bin/env bash
 head_file="$FM_TEST_FORGE_HEAD"
 value=$(cat "$head_file" 2>/dev/null)
+if [[ " $* " == *" [.merged, .head.sha] "* ]]; then
+  merged=$(cat "$FM_TEST_FORGE_MERGED" 2>/dev/null) || exit 1
+  [ "$merged" != FAIL ] || exit 1
+  printf '%s\t%s\n' "$merged" "$value"
+  exit 0
+fi
 case $value in
   FAIL) exit 1 ;;
   STDOUT_ERROR) printf '%s\n' '{"message":"Not Found","status":"404"}'; exit 0 ;;
@@ -129,6 +137,7 @@ exec '$real_perl' "\$@"
 SH
   chmod +x "$dir/fakebin/perl" || return 1
   act_stub "$dir" || return 1
+  printf '%s\n' true > "$dir/forge_merged"
   printf '%s\n' "$dir"
 }
 
@@ -186,6 +195,7 @@ run_auth() {  # <dir> <args...>
     PATH="$dir/fakebin:$PATH" \
     FM_HOME="$dir/home" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
+    FM_TEST_FORGE_MERGED="$dir/forge_merged" \
     "$AUTH" "$@" )
 }
 
@@ -1009,7 +1019,79 @@ test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate() {
   pass "an act that exits non-zero leaves the authority indeterminate"
 }
 
-# --- 22: the real path, end to end -------------------------------------------
+# --- 22: a moved project alias cannot retarget the local act -----------------
+
+test_a_project_alias_moved_after_mint_performs_no_act() {
+  local dir original replacement alias head original_before replacement_before id out rc record
+  dir=$(new_case moved-project-alias) || fail "moved-project-alias: fixture failed"
+  original="$dir/original"
+  replacement="$dir/replacement"
+  alias="$dir/project"
+  git init -q -b main "$original" || fail "moved-project-alias: original repository failed"
+  git -C "$original" commit -q --allow-empty -m base || fail "moved-project-alias: original base failed"
+  git -C "$original" checkout -q -b work || fail "moved-project-alias: original branch failed"
+  git -C "$original" commit -q --allow-empty -m work || fail "moved-project-alias: original work failed"
+  head=$(git -C "$original" rev-parse HEAD)
+  git -C "$original" checkout -q main || fail "moved-project-alias: original checkout failed"
+  git clone -q "$original" "$replacement" || fail "moved-project-alias: replacement repository failed"
+  git -C "$replacement" checkout -q main || fail "moved-project-alias: replacement checkout failed"
+  original_before=$(git -C "$original" rev-parse main)
+  replacement_before=$(git -C "$replacement" rev-parse main)
+  ln -s "$original" "$alias" || fail "moved-project-alias: alias creation failed"
+  record=$(corr_path "$dir")
+  jq --arg head "$head" '.identity.head = $head' "$record" > "$record.next" \
+    || fail "moved-project-alias: correlation update failed"
+  mv "$record.next" "$record"
+  printf '%s\n' "$head" > "$dir/forge_head"
+
+  out=$(run_auth "$dir" mint fm-ob-abcdef123456 --effect local-fast-forward \
+    --project "$alias" --target-branch main --assert-head "$head" 2>&1); rc=$?
+  expect_code 0 "$rc" "moved-project-alias: mint failed: $out"
+  id=$(printf '%s' "$out" | awk '{print $1}')
+  rm "$alias"
+  ln -s "$replacement" "$alias" || fail "moved-project-alias: alias repoint failed"
+
+  out=$(run_auth "$dir" spend "$id" --head "$head" 2>&1); rc=$?
+  expect_code 3 "$rc" "moved-project-alias: a repointed alias must refuse: $out"
+  assert_contains "$out" "FM_AUTH_EFFECT_PLAN_STALE" "moved-project-alias: refusal token"
+  [ "$(git -C "$original" rev-parse main)" = "$original_before" ] \
+    || fail "moved-project-alias: the pinned repository landed despite refusal"
+  [ "$(git -C "$replacement" rev-parse main)" = "$replacement_before" ] \
+    || fail "moved-project-alias: the replacement repository was retargeted"
+  pass "a project alias moved after mint performs no act"
+}
+
+# --- 23: successful exit still needs post-effect proof -----------------------
+
+test_successful_exit_requires_post_effect_proof() {
+  local confirmed unconfirmed id out rc evidence
+  confirmed=$(new_case post-effect-confirmed) || fail "post-effect: confirmed fixture failed"
+  id=$(mint_id "$confirmed")
+  out=$(run_auth "$confirmed" spend "$id" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 0 "$rc" "post-effect: confirmed spend failed: $out"
+  [ "$(act_count "$confirmed")" = 1 ] || fail "post-effect: confirmed act did not run once"
+  evidence=$(jq -r '.spend.evidence // ""' \
+    "$confirmed/home/data/landing-authorizations/$id.json")
+  [ "$evidence" = "pr-merge merged=true head=$HEAD_A" ] \
+    || fail "post-effect: confirmed evidence was '$evidence'"
+
+  unconfirmed=$(new_case post-effect-unconfirmed) || fail "post-effect: unconfirmed fixture failed"
+  id=$(mint_id "$unconfirmed")
+  printf '%s\n' FAIL > "$unconfirmed/forge_merged"
+  out=$(run_auth "$unconfirmed" spend "$id" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 4 "$rc" "post-effect: unconfirmed success must be indeterminate: $out"
+  assert_contains "$out" "FM_AUTH_SPEND_INDETERMINATE" "post-effect: indeterminate token"
+  [ "$(act_count "$unconfirmed")" = 1 ] || fail "post-effect: unconfirmed act did not run once"
+  [ "$(run_auth "$unconfirmed" status "$id" 2>&1)" = indeterminate ] \
+    || fail "post-effect: unconfirmed act was recorded as applied"
+  evidence=$(jq -r '.spend.evidence // ""' \
+    "$unconfirmed/home/data/landing-authorizations/$id.json")
+  [ "$evidence" = "pr-merge merged=unobserved head=unobserved" ] \
+    || fail "post-effect: unconfirmed evidence was '$evidence'"
+  pass "successful exit requires post-effect proof"
+}
+
+# --- 24: the real path, end to end -------------------------------------------
 #
 # Everything above stubs the effect so it can be counted. This one does not: a
 # ruled correlation record mints a `local-fast-forward` plan, the spend builds the
@@ -1038,6 +1120,9 @@ test_the_whole_path_lands_one_real_fast_forward_and_proves_it() {
   printf '%s\n' "$head" > "$dir/forge_head"
   cat > "$dir/fakebin/gh" <<'SH'
 #!/usr/bin/env bash
+if [[ " $* " == *" [.merged, .head.sha] "* ]]; then
+  printf 'true\t'
+fi
 cat "$FM_TEST_FORGE_HEAD"
 SH
   chmod +x "$dir/fakebin/gh"
@@ -1126,6 +1211,8 @@ test_an_incomplete_or_unsupported_effect_plan_refuses_before_the_act
 test_credential_bearing_input_is_refused_before_the_act
 test_one_approval_grants_one_landing_even_under_a_second_plan
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate
+test_a_project_alias_moved_after_mint_performs_no_act
+test_successful_exit_requires_post_effect_proof
 test_the_whole_path_lands_one_real_fast_forward_and_proves_it
 
 fm_test_contract "$0"

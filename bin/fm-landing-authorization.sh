@@ -196,7 +196,7 @@ auth_read() {  # <auth-id>
        (.spend.observed_head | type == "string") and
        (.spend.outcome == null or .spend.outcome == "failed") and
        ((.spend.finished == null) or (.spend.finished | type == "string" and length > 0)) and
-       (.spend.evidence == null)
+       ((.spend.evidence == null) or (.spend.evidence | type == "string" and length > 0))
      else
        (.void_reason == null) and (.spend | type == "object") and
        (.spend.started | type == "string" and length > 0) and
@@ -298,6 +298,41 @@ observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
   out=$(gh api "repos/$1/pulls/$2" --jq '.head.sha' 2>/dev/null) || return 1
   fm_auth_head_shape_valid "$out" || return 1
   printf '%s\n' "$out"
+}
+
+POST_EFFECT_EVIDENCE=
+post_effect_observe() {
+  local out merged head
+  POST_EFFECT_EVIDENCE=
+  case $FM_AUTH_PLAN_KIND in
+    local-fast-forward)
+      out=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT_IDENTITY" \
+        rev-parse --verify --quiet "$FM_AUTH_PLAN_TARGET_REF^{commit}" 2>/dev/null) || {
+        POST_EFFECT_EVIDENCE="local-fast-forward target_ref=$FM_AUTH_PLAN_TARGET_REF head=unobserved"
+        return 1
+      }
+      POST_EFFECT_EVIDENCE="local-fast-forward target_ref=$FM_AUTH_PLAN_TARGET_REF head=$out"
+      [ "$out" = "$FM_AUTH_PLAN_HEAD" ]
+      ;;
+    pr-merge)
+      out=$(gh api "repos/$FM_AUTH_PLAN_REPO/pulls/$FM_AUTH_PLAN_PR" \
+        --jq '[.merged, .head.sha] | @tsv' 2>/dev/null) || {
+        POST_EFFECT_EVIDENCE="pr-merge merged=unobserved head=unobserved"
+        return 1
+      }
+      IFS=$'\t' read -r merged head <<EOF
+$out
+EOF
+      POST_EFFECT_EVIDENCE="pr-merge merged=${merged:-unobserved} head=${head:-unobserved}"
+      [ "$merged" = true ] || return 1
+      fm_auth_head_shape_valid "$head" || return 1
+      [ "$head" = "$FM_AUTH_PLAN_HEAD" ]
+      ;;
+    *)
+      POST_EFFECT_EVIDENCE="effect=$FM_AUTH_PLAN_KIND observation=unsupported"
+      return 1
+      ;;
+  esac
 }
 
 # --- claim -------------------------------------------------------------------
@@ -849,7 +884,7 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
   local want_head='' receipt='' asserted=0
   local rec state admit outcome_state recorded
   local rid corr_state corr_comment pr locator owner number observed
-  local grant_head act_digest now rc plan
+  local grant_head act_digest now rc plan proof_rc
   local -a assertion=()
 
   while [ $# -gt 0 ]; do
@@ -1070,10 +1105,21 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
   # rather than returning to the pool for a blind retry.
   now=$(now_iso)
   if [ "$rc" -eq 0 ]; then
-    outcome_state=spent
-    rec=$(printf '%s' "$rec" | jq --arg n "$now" \
-      '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
-       | .updated = $n | .history += [{at:$n, event:"spent", detail:"applied"}]')
+    proof_rc=0
+    post_effect_observe || proof_rc=$?
+    if [ "$proof_rc" -eq 0 ]; then
+      outcome_state=spent
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$POST_EFFECT_EVIDENCE" \
+        '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
+         | .spend.evidence = $e | .updated = $n
+         | .history += [{at:$n, event:"spent", detail:"applied"}]')
+    else
+      outcome_state=spending
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$POST_EFFECT_EVIDENCE" \
+        '.state = "spending" | .spend.outcome = null | .spend.finished = $n
+         | .spend.evidence = $e | .updated = $n
+         | .history += [{at:$n, event:"effect-unconfirmed", detail:$e}]')
+    fi
   else
     outcome_state=spending
     rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg c "$rc" \
@@ -1090,6 +1136,10 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
     printf 'spent: %s landed %s at %s\n' "$id" \
       "$(printf '%s' "$rec" | jq -r '.grant.item')" "$grant_head"
     return 0
+  fi
+  if [ "$rc" -eq 0 ]; then
+    unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+      "the act under $id exited successfully, but post-effect observation did not confirm it; reconcile it from the recorded evidence: $POST_EFFECT_EVIDENCE"
   fi
   unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
     "the act under $id exited $rc, which does not establish that it had no effect; reconcile it from an observation"

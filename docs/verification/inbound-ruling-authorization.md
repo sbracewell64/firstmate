@@ -350,6 +350,8 @@ done
 | credential screening always answers "no credential" | `not ok - credential: refusal token (missing: 'FM_AUTH_CREDENTIAL_BEARING_INPUT')` |
 | one-approval-one-landing is checked at the mint but not at the act | `not ok - one-landing: one approval performed 2 landings` |
 | the act is never performed | `not ok - nonvacuity: the act ran 0 times, not once` |
+| the local act is addressed at the mutable project alias instead of the pinned identity | `not ok - moved-project-alias: the replacement repository was retargeted` |
+| a zero-exit act is recorded applied without post-effect observation | `not ok - post-effect: unconfirmed success must be indeterminate: spent: fm-auth-...: expected exit 4, got 0` |
 
 Every defect run exited 1.
 
@@ -405,6 +407,8 @@ ok - an incomplete or unsupported effect plan refuses before the act
 ok - credential-bearing mechanism input is refused before the act
 ok - one approval grants one landing, even under a second plan
 ok - an act that exits non-zero leaves the authority indeterminate
+ok - a project alias moved after mint performs no act
+ok - successful exit requires post-effect proof
 ok - the whole path lands one real fast-forward and proves it from the repository
 FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 ```

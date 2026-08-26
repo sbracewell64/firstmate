@@ -426,6 +426,10 @@ fi
 printf '%s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON"
 
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
+PROJECT_IDENTITY=$(cd "$PROJ" 2>/dev/null && pwd -P) || {
+  echo "REFUSED: the project identity for $PROJ could not be resolved" >&2
+  exit 1
+}
 # An UNGOVERNED fast-forward is performed here, exactly as it always was, behind
 # this file's own guards.
 #
@@ -437,7 +441,7 @@ before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
 # --quiet rather than a stdout redirection, because the act is an argv and a
 # redirection is not part of one. It leaves this command's own reporting exactly
 # as it was: silent on success, and its stderr on failure.
-merge_command=(git -C "$PROJ" merge --ff-only --quiet "$LANDING_HEAD")
+merge_command=(git -C "$PROJECT_IDENTITY" merge --ff-only --quiet "$LANDING_HEAD")
 
 case "$FM_LANDING_SEAM_VERDICT" in
   not-applicable)

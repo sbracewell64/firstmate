@@ -105,6 +105,17 @@
 # read is could-not-observe and stops the act; what was read and disagrees is a
 # refusal. Neither is a retarget.
 #
+# A local fast-forward is addressed at the pinned project identity after the
+# mutable project alias is re-observed, but `git merge` still advances whichever
+# branch is checked out. The target ref is verified immediately before the act,
+# and the remaining checked-out-branch race is accepted rather than closed.
+#
+# A pull-request plan binds the exact head in the authority and checks it before
+# the act, but does not send that head to the forge as a merge precondition.
+# `gh-axi` builds its `gh` arguments from a fixed allowlist that drops
+# `--match-head-commit`, and the residual window is owned by decision
+# `pipeline-reports-green-on-absent-ci-decision-merge-atomic-binding`.
+#
 # CREDENTIAL-BEARING INPUT IS REFUSED BEFORE THE EFFECT INTERFACE. A mechanism
 # field or asserted argument carrying a token, password, key, or URL userinfo is
 # refused at mint and again at spend, ahead of the comparison that would
@@ -646,7 +657,7 @@ no' || return $?
         "$FM_AUTH_PLAN_PROJECT_IDENTITY" "$FM_AUTH_PLAN_TARGET_REF" \
         "$FM_AUTH_PLAN_HEAD" "$FM_AUTH_PLAN_MODE" "$FM_AUTH_PLAN_FORCE" \
         "$FM_AUTH_PLAN_EXEC_NAME" "$FM_AUTH_PLAN_EXEC_PATH" "$FM_AUTH_PLAN_EXEC_DIGEST")
-      FM_AUTH_ACT=("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT"
+      FM_AUTH_ACT=("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT_IDENTITY"
         merge --ff-only --quiet "$FM_AUTH_PLAN_HEAD")
       ;;
   esac
