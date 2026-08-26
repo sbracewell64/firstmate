@@ -1451,6 +1451,76 @@ test_custody_refuses_every_force_form() {
   pass "custody refuses every forcing form of the act before the remote is touched"
 }
 
+# THE FORCE AXIS, PINNED TO THE COMPONENT THAT ACTUALLY HOLDS IT.
+#
+# A blacklist of forbidden flags was defined in the seam library and never
+# called, and the control that reported it dead was right on both counts: it was
+# dead AND it was redundant. The axis is enforced by fm_pub_seam_command_matches,
+# a WHITELIST admitting exactly one push shape, which refuses strictly more than
+# the blacklist could - including forcing spellings no list was ever updated for,
+# such as --force-if-includes. Deleting the blacklist was correct; deleting it
+# without pinning the whitelist would have left the property with no regression
+# test at all. This is that test, and it is a unit test of the predicate because
+# the predicate is where the guarantee lives: the custody case above proves the
+# axis end to end for one class, while this proves the rule itself, which both
+# classes reach through the same consume-time call.
+#
+# THE POSITIVE CONTROL IS LOAD-BEARING rather than decorative. A whitelist that
+# refused everything would satisfy every refusal below while breaking publication
+# outright, so the canonical shape must be ACCEPTED in the same run for the
+# refusals to carry any meaning. It is asserted first, and its failure abandons
+# the case rather than reporting a green built on a vacuous check.
+test_the_command_whitelist_holds_the_force_axis() {
+  local out rc=0
+  out=$(
+    set -u
+    # shellcheck source=bin/fm-publication-seam-lib.sh
+    . "$ROOT/bin/fm-publication-seam-lib.sh" || { printf 'the seam library could not be sourced\n'; exit 2; }
+    repo=/repo; remote=origin; head=abc123def456; ref=refs/heads/fm/candidate
+    status=0
+    if ! fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+      git -C "$repo" push "$remote" "$head:$ref"; then
+      printf 'the canonical push shape was refused, so every refusal here proves nothing\n'
+      exit 1
+    fi
+    for flag in --force --force-with-lease --force-if-includes --prune --delete; do
+      if fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+        git -C "$repo" push "$remote" "$head:$ref" "$flag"; then
+        printf 'accepted a forcing act carrying %s\n' "$flag"
+        status=1
+      fi
+    done
+    if fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+      git -C "$repo" push "$remote" --mirror; then
+      printf 'accepted a mirror push\n'
+      status=1
+    fi
+    if fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+      git -C "$repo" push "$remote" "+$head:$ref"; then
+      printf 'accepted a + forced refspec\n'
+      status=1
+    fi
+    if fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+      git -C "$repo" push "$remote" "$head:$ref" -fd; then
+      printf 'accepted a short-option cluster carrying forcing letters\n'
+      status=1
+    fi
+    if fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+      git -C "$repo" push "$remote" "$head:$ref" "$head:refs/heads/other"; then
+      printf 'accepted a second ref in the same act\n'
+      status=1
+    fi
+    if fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" \
+      sh -c "git -C $repo push $remote $head:$ref"; then
+      printf 'accepted a wrapper that hides the act\n'
+      status=1
+    fi
+    exit "$status"
+  ) || rc=$?
+  [ "$rc" -eq 0 ] || fail "the command whitelist did not hold the force axis: $out"
+  pass "the command whitelist accepts the canonical act and refuses every forcing form"
+}
+
 test_custody_refuses_a_ref_another_head_already_occupies() {
   local other
   fixture custody-occupied
@@ -1677,6 +1747,7 @@ test_custody_refuses_an_unclean_worktree
 test_custody_refuses_a_ref_that_is_not_this_works_own
 test_custody_refuses_a_protected_ref
 test_custody_refuses_every_force_form
+test_the_command_whitelist_holds_the_force_axis
 test_custody_refuses_a_ref_another_head_already_occupies
 test_custody_grants_no_publication_and_the_projection_says_so
 test_custody_restart_is_a_typed_no_effect_that_consumes_nothing
