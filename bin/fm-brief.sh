@@ -664,8 +664,8 @@ Two firstmate-specific rules layer on top of that guidance:
 - Avoid \`--yes\`: it would silently bypass firstmate's authority check and any required captain escalation.
 
 When the pipeline reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), publish the head-bound evidence for the commit it pushed, in this worktree, with one call:
-   \`$FM_ROOT/bin/fm-attest.sh write --only-if-required\`
-Run it unconditionally. It asks the repository whether its own checks read that evidence and does nothing at all where they do not, so it is correct in every project and there is no condition for you to judge.
+   \`$FM_ROOT/bin/fm-attest.sh write --only-if-required --policy-venue "\$(sed -n 's/^contribution_venue=//p' $FM_ROOT/state/$ID.meta | tail -1)" --policy-url "\$(sed -n 's/^contribution_venue_url=//p' $FM_ROOT/state/$ID.meta | tail -1)" --policy-ref "\$(sed -n 's/^contribution_target=//p' $FM_ROOT/state/$ID.meta | tail -1)"\`
+Run it unconditionally. It asks whether the recorded contribution venue's policy generation reads that evidence and does nothing at all where it does not, so it is correct for fork and same-repository contributions and there is no condition for you to judge.
 Where they do, this is the step that makes a validated candidate's evidence exist: the pipeline produced it, and nothing else publishes it. It reads the pipeline's own run record, refuses unless that run validated this exact commit, and then has the verdict re-derived for that commit, so a check still red from before the evidence existed turns green with no new commit.
 Judge it by the result it prints, three-valued as always. Published or nothing-to-publish, carry on. A refusal is a verdict about this candidate - report it verbatim rather than adding a commit, because a new commit is a new head and needs its own evidence. Anything else is could-not-observe: report what it said and do not treat it as published.
 Then append \`done: PR {url} checks green\` and stop. You are finished.
