@@ -500,7 +500,7 @@ test_authority_binds_the_remote_name_and_push_destination() {
 }
 
 test_remote_credentials_are_never_persisted_or_emitted() {
-  local secret url out rc=0 named_id direct_id
+  local secret url out rc=0 named_id direct_id suffix
   fixture remote-credentials
   policy
   reviewed
@@ -512,6 +512,17 @@ test_remote_credentials_are_never_persisted_or_emitted() {
   assert_contains "$out" 'FM_PUB_REMOTE_CREDENTIALS' "remote-credentials: $out"
   assert_not_contains "$out" "$secret" "remote-credentials: direct credential emitted: $out"
 
+  for suffix in "?access_token=$secret" "#$secret"; do
+    rc=0
+    url="https://example.invalid/repo.git$suffix"
+    out=$(guard prepare --repo "$FX_REPO" --remote "$url" --venue "$VENUE" \
+      --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+    [ "$rc" -eq 3 ] || fail "remote-credentials: decorated URL exited $rc: $out"
+    assert_contains "$out" 'FM_PUB_REMOTE_CREDENTIALS' "remote-credentials: $out"
+    assert_not_contains "$out" "$secret" "remote-credentials: decorated credential emitted: $out"
+  done
+
+  url="https://fixture:$secret@example.invalid/repo"
   git -C "$FX_REPO" remote set-url --push origin "$url" || fail "remote-credentials: set-url"
   rc=0
   out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \

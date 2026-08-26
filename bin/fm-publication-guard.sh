@@ -234,7 +234,7 @@ resolve_remote() {  # <repo> <remote-name-or-url>
     esac
   }
   [ -n "$url" ] || return 1
-  task_base_remote_url_has_userinfo "$url" && return 2
+  task_base_remote_url_is_credential_bearing "$url" && return 2
   safe_url=$(task_base_remote_safe_url "$url" 2>/dev/null) || return 1
   [ -n "$safe_url" ] || return 1
   digest=$(printf '%s' "$safe_url" | fm_auth_digest) || return 1
@@ -256,7 +256,7 @@ resolve_remote_or_exit() {  # <repo> <remote-name-or-url> <phase>
   resolve_remote "$repo" "$remote" || rc=$?
   case $rc in
     0) return 0 ;;
-    2) refuse FM_PUB_REMOTE_CREDENTIALS "$phase remote contains userinfo and is not admissible at the publication seam" ;;
+    2) refuse FM_PUB_REMOTE_CREDENTIALS "$phase remote is credential-bearing and is not admissible at the publication seam" ;;
     *) cno FM_PUB_REMOTE_UNRESOLVED "$phase push destination could not be resolved" ;;
   esac
 }

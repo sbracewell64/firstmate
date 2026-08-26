@@ -305,7 +305,8 @@ task_base_venue_identity_alias() {  # <url>
 task_base_remote_safe_url() {  # <url>
   local url=${1-} base scheme rest authority path host
   case $url in ''|*[[:space:]]*|*[[:cntrl:]]*) return 1 ;; esac
-  base=${url%%[?#]*}
+  task_base_remote_url_is_credential_bearing "$url" && return 1
+  base=$url
   [ -n "$base" ] || return 1
   case $base in
     file:///*)
@@ -339,8 +340,9 @@ task_base_remote_safe_url() {  # <url>
   esac
 }
 
-task_base_remote_url_has_userinfo() {  # <url>
+task_base_remote_url_is_credential_bearing() {  # <url>
   local url=${1-} rest authority
+  case $url in *\?*|*\#*) return 0 ;; esac
   case $url in
     https://*|http://*|ssh://*|git://*)
       rest=${url#*://}
