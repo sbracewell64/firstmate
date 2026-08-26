@@ -692,6 +692,30 @@ fm_landing_authority_disposition_reserves() {  # <disposition>
   return 3
 }
 
+# Split the open-decision fold arriving on stdin into the three lists the compile
+# acts on, printed as one TAB-separated line: reserved, unreadable, unclassified.
+#
+# It reads a PIPE rather than a heredoc on purpose. This file declares
+# fail-closed predicates, and bin/fm-dead-predicate-check.sh cannot parse a
+# heredoc-fed loop: a construct it cannot read makes every predicate in this file
+# could-not-observe, which is exactly the blindness the marker at the bottom
+# promises this file does not have.
+fm_landing_authority_classify() {
+  local key verb disposition note rc
+  local reserved='' unreadable='' unclassified=''
+  while IFS=$'\t' read -r key verb disposition note; do
+    [ -n "$key" ] || continue
+    rc=0
+    fm_landing_authority_disposition_reserves "$disposition" || rc=$?
+    case "$rc" in
+      0) reserved="$reserved $key($disposition/$verb)" ;;
+      2) unreadable="$unreadable $key($disposition)" ;;
+      3) unclassified="$unclassified $key(${disposition:-empty})" ;;
+    esac
+  done
+  printf '%s\t%s\t%s\n' "$reserved" "$unreadable" "$unclassified"
+}
+
 FM_LANDING_AUTHORITY_VERDICT=
 FM_LANDING_AUTHORITY_TOKEN=
 FM_LANDING_AUTHORITY_REASON=
@@ -721,7 +745,7 @@ fm_landing_authority_set() {  # <verdict> <token> <reason> [<sources>]
 fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict>]
   local home=$1 task=$2 seam=${3:-}
   local state meta landing status posture posture_rc commission sources
-  local key verb disposition note reserves reserved='' unreadable='' unclassified=''
+  local classified rest reserved='' unreadable='' unclassified=''
   # The disposition fold resolves the home it reads from FM_HOME; naming it here
   # keeps this answer about the home the caller asked about. The state directory
   # comes through the same override every bin/ script honors, so a caller whose
@@ -781,18 +805,11 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict>]
   # could-not-observe, and the fold says so in band with CNO_DECISION_UNIVERSE.
   status="$state/$task.status"
   if [ -e "$status" ] || [ -L "$status" ]; then
-    while IFS=$'\t' read -r key verb disposition note; do
-      [ -n "$key" ] || continue
-      fm_landing_authority_disposition_reserves "$disposition"
-      reserves=$?
-      case "$reserves" in
-        0) reserved="$reserved $key($disposition/$verb)" ;;
-        2) unreadable="$unreadable $key($disposition)" ;;
-        3) unclassified="$unclassified $key(${disposition:-empty})" ;;
-      esac
-    done <<EOF
-$(status_open_decisions "$status")
-EOF
+    classified=$(status_open_decisions "$status" | fm_landing_authority_classify)
+    reserved=${classified%%$'\t'*}
+    rest=${classified#*$'\t'}
+    unreadable=${rest%%$'\t'*}
+    unclassified=${rest#*$'\t'}
     sources="$sources decisions=folded"
   else
     sources="$sources decisions=none-recorded"
