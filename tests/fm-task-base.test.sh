@@ -478,6 +478,7 @@ case "$*" in
 esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
+  send-keys) fm-fake-deliver "$*"; exit 0 ;;
 esac
 exit 0
 SH
@@ -511,6 +512,10 @@ test_spawn_records_both_references_and_places_the_slot_at_the_fleet_trunk() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode no-mistakes --slot-base "$slot" --contribution-target "$contrib" >/dev/null \
     || fail "e2e: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch: a
+  # spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.' \
+    || fail "e2e: could not fill the scaffolded brief"
 
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
@@ -552,6 +557,9 @@ test_scout_gets_a_read_base_and_no_contribution_target() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --scout --slot-base "$slot" >/dev/null \
     || fail "scout: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   assert_grep "Base contract: slot=$slot contribution=n/a" "$home/data/$id/brief.md" \
     "scout: the brief must record the commit its report cites against"
 
@@ -595,6 +603,9 @@ test_spawn_refuses_a_brief_that_names_a_different_pair() {
     --slot-base "$(git -C "$repo" rev-parse main)" \
     --contribution-target "$(git -C "$repo" rev-parse main~1)" >/dev/null \
     || fail "mismatch: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -621,6 +632,9 @@ test_local_only_spawn_uses_the_local_trunk_as_its_contribution_target() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode local-only --slot-base "$slot" --contribution-target "$slot" >/dev/null \
     || fail "local-only: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -651,6 +665,9 @@ test_ship_without_a_required_base_contract_is_refused() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode no-mistakes >/dev/null \
     || fail "missing-contract: legacy brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
     FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 PATH="$fakebin:$PATH" \
@@ -670,6 +687,9 @@ test_ship_without_a_required_base_contract_is_refused() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode no-mistakes --slot-base "$slot" --contribution-target "$contrib" >/dev/null \
     || fail "missing-contract: positive-control brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
     FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
@@ -693,6 +713,9 @@ test_scout_refuses_a_mismatched_base_contract() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --scout --slot-base "$wrong_slot" >/dev/null \
     || fail "scout-mismatch: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
     FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 PATH="$fakebin:$PATH" \
@@ -721,6 +744,9 @@ test_batch_forwards_explicit_base_overrides() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode no-mistakes --slot-base "$slot" --contribution-target "$contrib" >/dev/null \
     || fail "batch-overrides: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" \
     FM_DATA_OVERRIDE="$home/data" FM_PROJECTS_OVERRIDE="$home/projects" \
     FM_CONFIG_OVERRIDE="$home/config" FM_SPAWN_NO_GUARD=1 TMUX="fake,1,0" \
@@ -1007,6 +1033,9 @@ test_spawn_records_the_venue_its_contribution_target_names() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode no-mistakes --slot-base "$slot" --contribution-target "$contrib" >/dev/null \
     || fail "venue-spawn: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
@@ -1040,6 +1069,9 @@ test_spawn_records_the_fork_venue_for_a_retargeted_task() {
   FM_HOME="$home" FM_DATA_OVERRIDE="$home/data" FM_STATE_OVERRIDE="$home/state" \
     "$BRIEF" "$id" fixture --mode no-mistakes --slot-base "$slot" --contribution-target "$slot" >/dev/null \
     || fail "venue-retarget: brief scaffold failed"
+  # Fill the placeholder, as firstmate does between scaffolding and dispatch:
+  # a spawn refuses an unfilled scaffold before it allocates anything.
+  fm_test_fill_brief_task "$home/data/$id/brief.md" 'Exercise the base-contract spawn path end to end.'
   out=$(FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \

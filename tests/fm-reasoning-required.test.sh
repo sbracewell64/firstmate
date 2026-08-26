@@ -325,6 +325,7 @@ case "$1" in
   display-message) printf '%s\n' "$FM_FAKE_PANE_PATH" ;;
   new-window|new-session) printf 'fm-fake:1\n' ;;
   list-panes|list-windows) printf 'fm-fake:1\n' ;;
+  send-keys) fm-fake-deliver "$*" ;;
   *) : ;;
 esac
 exit 0

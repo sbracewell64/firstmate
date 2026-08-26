@@ -36,6 +36,7 @@ case "${1:-}" in
         prev=$a
       done
     fi
+    fm-fake-deliver "$*"
     exit 0
     ;;
 esac
@@ -95,6 +96,7 @@ run_spawn() {
     FM_SPAWN_NO_GUARD=1 FM_FAKE_PANE_PATH="$wt" TMUX="fake,1,0" \
     CLAUDE_CONFIG_DIR="${FM_TEST_CLAUDE_CONFIG_DIR:-}" \
     FM_FAKE_LAUNCH_LOG="$launchlog" GROK_HOME="$home/grok-home" PATH="$fakebin:$PATH" \
+    FM_FAKE_DELIVER_ID="$1" \
     "$SPAWN" "$@" 2>&1
 }
 

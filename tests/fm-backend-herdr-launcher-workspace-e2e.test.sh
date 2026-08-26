@@ -130,16 +130,26 @@ spawn_from_launcher() {
   for a in "$@"; do
     [ "$a" = --secondmate ] && reason=() && break
   done
+  # The raw-launch escape hatch installs no adapter wiring and no turn-end hook,
+  # so a bare `sh -c` can never produce the first-turn evidence fm-spawn's
+  # delivery gate looks for. A TASK stub therefore reports like a started worker,
+  # the same contract every other stub satisfies. A --secondmate spawn is exempt
+  # from that gate (its busy contract is never armed), so it stays as it was and
+  # writes nothing into the parent's status log.
+  local launch="sh -c 'echo launcher-ws-ok'"
+  if [ "${#reason[@]}" -ne 0 ]; then
+    launch="sh -c 'echo launcher-ws-ok; echo fm-status-event.v1 verb=working phase=setup summary=stub worker started >> $home/state/$id.status'"
+  fi
   if [ -n "$pane" ]; then
     env HERDR_ENV=1 HERDR_PANE_ID="$pane" HERDR_SESSION="$HERDR_LAB_SESSION" \
       HERDR_SOCKET_PATH="$LAB_SOCKET" \
       FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-      "$ROOT/bin/fm-spawn.sh" "$id" "$proj" "sh -c 'echo launcher-ws-ok'" --backend herdr ${reason[@]+"${reason[@]}"} "$@" \
+      "$ROOT/bin/fm-spawn.sh" "$id" "$proj" "$launch" --backend herdr ${reason[@]+"${reason[@]}"} "$@" \
       >"$SPAWN_OUT" 2>"$SPAWN_ERR"
   else
     env -u HERDR_ENV -u HERDR_PANE_ID -u HERDR_SOCKET_PATH HERDR_SESSION="$HERDR_LAB_SESSION" \
       FM_SPAWN_NO_GUARD=1 FM_HOME="$home" FM_ROOT_OVERRIDE="$ROOT" \
-      "$ROOT/bin/fm-spawn.sh" "$id" "$proj" "sh -c 'echo launcher-ws-ok'" --backend herdr ${reason[@]+"${reason[@]}"} "$@" \
+      "$ROOT/bin/fm-spawn.sh" "$id" "$proj" "$launch" --backend herdr ${reason[@]+"${reason[@]}"} "$@" \
       >"$SPAWN_OUT" 2>"$SPAWN_ERR"
   fi
   SPAWN_RC=$?
@@ -285,7 +295,7 @@ cat > "$TMP_ROOT/spawn-in-pane.sh" <<SPAWN
 #!/usr/bin/env bash
 set -u
 FM_SPAWN_NO_GUARD=1 FM_HOME="$PRIMARY_HOME" FM_ROOT_OVERRIDE="$ROOT" \\
-  "$ROOT/bin/fm-spawn.sh" dupC "$PROJ" "sh -c 'echo launcher-ws-ok'" --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --backend herdr \\
+  "$ROOT/bin/fm-spawn.sh" dupC "$PROJ" "sh -c 'echo launcher-ws-ok; echo fm-status-event.v1 verb=working phase=setup summary=stub worker started >> '"$PRIMARY_HOME"'/state/dupC.status'" --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --backend herdr \\
   > "$TMP_ROOT/dupC.out" 2> "$TMP_ROOT/dupC.err"
 echo \$? > "$TMP_ROOT/dupC.rc"
 SPAWN

@@ -186,7 +186,7 @@ assert_refused_before_allocation() {
 
 test_empty_brief_is_refused_before_allocation() {
   local rec id out status
-  id=brief-empty
+  id='brief-empty'
   rec=$(make_case empty "$id"); read_case "$rec"
   : > "$HOME_DIR/data/$id/brief.md"
 
@@ -201,7 +201,7 @@ test_empty_brief_is_refused_before_allocation() {
 
 test_missing_brief_is_refused() {
   local rec id out status
-  id=brief-missing
+  id='brief-missing'
   rec=$(make_case missing "$id"); read_case "$rec"
   # deliberately no brief written
 
@@ -215,7 +215,7 @@ test_missing_brief_is_refused() {
 
 test_too_short_brief_is_refused() {
   local rec id out status
-  id=brief-short
+  id='brief-short'
   rec=$(make_case short "$id"); read_case "$rec"
   printf 'do it\n' > "$HOME_DIR/data/$id/brief.md"
 
@@ -231,7 +231,7 @@ test_too_short_brief_is_refused() {
 # instructions it cannot act on, so it is refused on the same gate.
 test_placeholder_brief_is_refused_before_allocation() {
   local rec id out status
-  id=brief-placeholder
+  id='brief-placeholder'
   rec=$(make_case placeholder "$id"); read_case "$rec"
   cat > "$HOME_DIR/data/$id/brief.md" <<'EOF'
 You are a crewmate: an autonomous worker agent managed by firstmate.
@@ -255,7 +255,7 @@ EOF
 # quotes the token - the scaffold's own safety-gate paragraph does exactly that.
 test_filled_brief_quoting_the_token_is_not_refused() {
   local rec id out
-  id=brief-quotes-token
+  id='brief-quotes-token'
   rec=$(make_case quotes "$id"); read_case "$rec"
   cat > "$HOME_DIR/data/$id/brief.md" <<'EOF'
 You are a crewmate: an autonomous worker agent managed by firstmate.
@@ -273,7 +273,7 @@ EOF
 
 test_oversized_brief_is_refused_and_names_the_envelope() {
   local rec id out status envelope
-  id=brief-oversized
+  id='brief-oversized'
   rec=$(make_case oversized "$id"); read_case "$rec"
   # The real, unoverridden envelope: the kernel's per-ARGUMENT limit
   # MAX_ARG_STRLEN = 32 * PAGE_SIZE, which getconf ARG_MAX does not report.
@@ -295,7 +295,7 @@ test_oversized_brief_is_refused_and_names_the_envelope() {
 # The envelope is a declared, overridable bound rather than a magic number.
 test_envelope_bound_is_declared_and_overridable() {
   local rec id out
-  id=brief-envelope-override
+  id='brief-envelope-override'
   rec=$(make_case envelope "$id"); read_case "$rec"
   awk 'BEGIN { for (i = 0; i < 400; i++) printf "b" }' > "$HOME_DIR/data/$id/brief.md"
 
@@ -311,7 +311,7 @@ test_envelope_bound_is_declared_and_overridable() {
 
 test_delivery_unconfirmed_when_stub_never_consumes_the_prompt() {
   local rec id out status
-  id=delivery-unconfirmed
+  id='delivery-unconfirmed'
   rec=$(make_case unconfirmed "$id"); read_case "$rec"
   printf 'A real brief with enough content to carry a task.\n' > "$HOME_DIR/data/$id/brief.md"
 
@@ -337,7 +337,7 @@ test_delivery_unconfirmed_when_stub_never_consumes_the_prompt() {
 
 test_delivery_confirmed_when_stub_reports_its_first_turn() {
   local rec id out status
-  id=delivery-confirmed
+  id='delivery-confirmed'
   rec=$(make_case confirmed "$id"); read_case "$rec"
   printf 'A real brief with enough content to carry a task.\n' > "$HOME_DIR/data/$id/brief.md"
 
@@ -359,7 +359,7 @@ test_delivery_confirmed_when_stub_reports_its_first_turn() {
 # would be fooled.
 test_spawn_seed_busy_record_is_not_delivery_evidence() {
   local rec id out
-  id=delivery-seed-trap
+  id='delivery-seed-trap'
   rec=$(make_case seedtrap "$id"); read_case "$rec"
   printf 'claude\n' > "$HOME_DIR/config/crew-harness"
   printf 'A real brief with enough content to carry a task.\n' > "$HOME_DIR/data/$id/brief.md"
@@ -384,7 +384,7 @@ test_spawn_seed_busy_record_is_not_delivery_evidence() {
 # seq=1 is not evidence; this proves seq>1 is.
 test_delivery_confirmed_by_busy_record_advancing_past_the_seed() {
   local rec id out status seq
-  id=delivery-busy-record
+  id='delivery-busy-record'
   rec=$(make_case busyrec "$id"); read_case "$rec"
   printf 'claude\n' > "$HOME_DIR/config/crew-harness"
   printf 'A real brief with enough content to carry a task.\n' > "$HOME_DIR/data/$id/brief.md"
@@ -406,7 +406,7 @@ test_delivery_confirmed_by_busy_record_advancing_past_the_seed() {
 # still caught.
 test_delivery_wait_polls_until_evidence_arrives() {
   local rec id out status writer_pid
-  id=delivery-late
+  id='delivery-late'
   rec=$(make_case late "$id"); read_case "$rec"
   printf 'A real brief with enough content to carry a task.\n' > "$HOME_DIR/data/$id/brief.md"
 

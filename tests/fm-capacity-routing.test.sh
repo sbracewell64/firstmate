@@ -153,6 +153,8 @@ make_dispatch_home() {  # <name> [routed|unrouted]
   rec=$(make_refusal_home "$name" "$shape"); read_home_record "$rec"
   OK_BIN="$TMP_ROOT/$name/okbin"
   mkdir -p "$OK_BIN"
+  # Hand-made rather than via fm_fakebin, so install the stub worker helper.
+  fm_fake_deliver_install "$OK_BIN"
   cat > "$OK_BIN/tmux" <<'SH'
 #!/usr/bin/env bash
 case "$*" in
@@ -161,6 +163,7 @@ esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
+  send-keys) fm-fake-deliver "$*"; exit 0 ;;
 esac
 exit 0
 SH

@@ -26,6 +26,48 @@ test_resumes_onto_an_expressive_recovered_pool_member() {
   pass "resumes onto a recovered pool member that can express the route effort band"
 }
 
+# A resumed dispatch whose delivery could not be OBSERVED must not be treated as
+# a refusal. bin/fm-spawn.sh exits 3 for could-not-observe, and the substitution
+# path below fires on any non-zero exit that is not a capacity deferral - so
+# without this the retry would put a SECOND worker onto a lane that already holds
+# a slot, published metadata, and a dispatched execution. The stub session
+# provider here reports no first turn, which is exactly that condition.
+test_unconfirmed_delivery_never_substitutes_another_model() {
+  local out meta
+  make_dispatch_home unconfirmed-no-substitute
+  write_brief "$HOME_DIR" subtask no-mistakes
+  out=$(run_spawn "$HOME_DIR" "$OK_BIN" "$(quota_record vendorq=0 altq=0)" \
+    subtask "$OK_REPO" --mode no-mistakes --yolo off \
+    --reason-code NL_RULE_CLASSIFICATION --harness codex \
+    --route R-PAIR --model vendor/large --effort medium)
+  assert_contains "$out" "FM_SPAWN_CAPACITY_DEFERRED" "both spent candidates must first create a wait"
+
+  # FM_FAKE_DELIVER_OFF: the stub launches but reports nothing, so fm-spawn
+  # returns could-not-observe rather than success.
+  out=$(FM_FAKE_PANE_PATH="$OK_WT" TMUX="fake,1,0" PATH="$OK_BIN:$PATH" \
+    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' FM_FAKE_DELIVER_OFF=1 \
+    run_retry "$HOME_DIR" "$(quota_record vendorq=0 altq=95)" tick --id subtask --force)
+
+  meta="$HOME_DIR/state/subtask.meta"
+  assert_present "$meta" "the resumed lane's metadata must survive an unobserved delivery"
+  # The lane it actually launched, and nothing after it.
+  assert_grep "model=alt/large" "$meta" "the resume did not launch the recovered substitute at all"
+  assert_not_contains "$out" "resumed onto" \
+    "an unobserved delivery was announced as a completed resume"
+  assert_contains "$out" "delivery could not be observed" \
+    "the unobserved resume was not disclosed"
+  assert_contains "$out" "do not re-dispatch it" \
+    "the unobserved resume did not warn against a second dispatch"
+  assert_grep "spawn-delivery-unconfirmed" "$HOME_DIR/state/subtask.status" \
+    "the unobserved resume left no supervisor-visible record"
+  # The capacity wait is over: the dispatch was admitted and launched, so a
+  # record left behind would re-fire the resume against a live lane.
+  assert_absent "$HOME_DIR/state/subtask.capacity" \
+    "the deferral record outlived the resume that ended it"
+
+  pass "an unobserved delivery stops the resume instead of substituting a second worker onto the lane"
+}
+
 # NEGATIVE CONTROL: the resume asks the ROUTE OWNER, and only for the candidates
 # that FOLLOW the failed model in its own pool.
 #
@@ -208,6 +250,10 @@ case "$*" in
   *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
   *vendor/large*) exit 1 ;;
 esac
+# The substitute that DOES launch has to look like a started worker, or
+# fm-spawn reports could-not-observe and the resume never announces itself.
+# Ordered after the vendor/large refusal above, which must still fail.
+case "${1:-}" in send-keys) fm-fake-deliver "$*" ;; esac
 exit 0
 SH
   chmod +x "$OK_BIN/tmux"
@@ -706,6 +752,7 @@ test_spent_deferral_bound_cannot_be_raised_in_place
 test_bootstrap_reports_the_two_capacity_stops_separately
 test_same_band_substitution_is_required
 test_unrecordable_bound_leaves_no_active_wait
+test_unconfirmed_delivery_never_substitutes_another_model
 test_non_capacity_refusal_consults_route_owner_for_substitute
 test_non_capacity_refusal_without_substitute_keeps_waiting
 test_moved_capacity_picture_resets_stagnation

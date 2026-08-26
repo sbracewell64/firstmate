@@ -280,6 +280,14 @@
 # A secondmate spawn is exempt and says so: its busy contract is deliberately
 # never armed and its charter is idle by default, so it has no first turn to
 # observe. Its brief still passes the deliverability gate above.
+# The raw-launch-command escape hatch is NOT exempt, and that is deliberate. A
+# raw command installs no adapter wiring and no turn-end hook, so unless the
+# command itself reports, it will read as FM_SPAWN_DELIVERY_UNCONFIRMED. That is
+# the honest answer while verifying a NEW harness - its turns are not observable
+# yet, which is precisely what the verification establishes - and exit 3 leaves
+# the pane up to inspect, which that flow does anyway (see harness-adapters).
+# Exempting the shape instead would put a hole exactly where an unverified
+# adapter is least trustworthy.
 #
 # Exit codes:
 #   0  spawned, and the brief was observed to reach a worker

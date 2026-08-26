@@ -381,16 +381,30 @@ fm_fake_deliver_install() {
 #!/usr/bin/env bash
 set -u
 line=${1:-}
-# Only the launch line carries the brief; every other send-keys call (the
-# GOTMPDIR export, treehouse get, a steer) must produce nothing.
-case "$line" in *launch-brief*) : ;; *) exit 0 ;; esac
-# Pull the brief path out of the launch line and take the task id from its
-# PARENT directory. The data root is whatever FM_DATA_OVERRIDE says, so it is
-# not always literally named "data"; only the <id>/brief.md tail is invariant.
-task_path=$(printf '%s\n' "$line" | grep -oE '[^ '"'"'"]+/[^ '"'"'"/]+/brief\.md' | head -n 1)
-[ -n "$task_path" ] || exit 0
-id=${task_path%/brief.md}
-id=${id##*/}
+# FM_FAKE_DELIVER_OFF lets a case ask for the OTHER outcome on purpose: a stub
+# that launches and reports nothing, so fm-spawn returns could-not-observe.
+[ "${FM_FAKE_DELIVER_OFF:-0}" = 1 ] && exit 0
+# Two launch shapes, and only the launch line may produce anything - the
+# GOTMPDIR export, treehouse get, and any steer must stay silent.
+#   - A normal harness launch embeds the encoded brief, so the brief path names
+#     the task. The data root is whatever FM_DATA_OVERRIDE says, so it is not
+#     always literally named "data"; only the <id>/brief.md tail is invariant.
+#   - A RAW launch command (fm-spawn's escape hatch) carries NO brief at all -
+#     LAUNCH is the operator's command verbatim - so the task cannot be read off
+#     the line and the caller names it with FM_FAKE_DELIVER_ID.
+# `-l` identifies the launch literal in both shapes: fm-spawn sends the launch
+# command with send_literal, and nothing else on the spawn path uses that flag.
+id=
+case "$line" in
+  *launch-brief*)
+    task_path=$(printf '%s\n' "$line" | grep -oE '[^ '"'"'"]+/[^ '"'"'"/]+/brief\.md' | head -n 1)
+    [ -n "$task_path" ] || exit 0
+    id=${task_path%/brief.md}
+    id=${id##*/}
+    ;;
+  *' -l '*) id=${FM_FAKE_DELIVER_ID:-} ;;
+esac
+[ -n "$id" ] || exit 0
 state=${FM_STATE_OVERRIDE:-}
 if [ -z "$state" ]; then
   [ -n "${FM_HOME:-}" ] || exit 0
@@ -401,6 +415,18 @@ printf 'fm-status-event.v1 verb=working phase=setup summary=stub worker consumed
   >> "$state/$id.status" 2>/dev/null || true
 SH
   chmod +x "$fakebin/fm-fake-deliver"
+}
+
+# fm_test_fill_brief_task <brief> [task-text]: replace bin/fm-brief.sh's `{TASK}`
+# placeholder line with real task text, which is what firstmate does between
+# scaffolding a brief and dispatching it. A fixture that scaffolds and spawns
+# without this step is dispatching an unfilled scaffold, and bin/fm-spawn.sh
+# refuses that before allocation (FM_SPAWN_BRIEF_PLACEHOLDER).
+fm_test_fill_brief_task() {  # <brief> [task-text]
+  local brief=$1 text=${2:-'Exercise this path end to end.'}
+  [ -f "$brief" ] || return 1
+  awk -v t="$text" '{ if ($0 == "{TASK}") print t; else print }' "$brief" > "$brief.filled" \
+    && mv "$brief.filled" "$brief"
 }
 
 fm_fake_exit0() {
