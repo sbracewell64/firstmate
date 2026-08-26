@@ -393,7 +393,7 @@ fm_pub_seam_observe_commit_identity() {  # <repo-dir> <head> -> 0 observed, 1 no
   FM_PUB_SEAM_AUTHOR=
   FM_PUB_SEAM_COMMITTER=
   [ -n "$repo" ] && [ -d "$repo" ] || return 1
-  line=$(git --no-optional-locks -C "$repo" log -1 --no-show-signature \
+  line=$(fm_pub_seam_git --no-optional-locks -C "$repo" log -1 --no-show-signature \
     --format='%an <%ae>%n%cn <%ce>' "$head" 2>/dev/null) || return 1
   FM_PUB_SEAM_AUTHOR=$(printf '%s\n' "$line" | sed -n '1p')
   FM_PUB_SEAM_COMMITTER=$(printf '%s\n' "$line" | sed -n '2p')
@@ -726,8 +726,30 @@ fm_pub_seam_command_matches() {  # <repo> <remote> <head> <ref> <command...>
   [ "${1:-}" = git ] && [ "${2:-}" = -C ] && [ "${3:-}" = "$repo" ] \
     && [ "${4:-}" = push ] || return 1
   shift 4
-  [ "${1:-}" = --quiet ] && shift
   [ "$#" -eq 2 ] && [ "$1" = "$remote" ] && [ "$2" = "$head:$ref" ]
+}
+
+FM_PUB_SEAM_TRUSTED_GIT=
+FM_PUB_SEAM_TRUSTED_GIT_DIGEST=
+fm_pub_seam_trusted_git_resolve() {
+  local candidate digest
+  [ -n "$FM_PUB_SEAM_TRUSTED_GIT" ] && [ -n "$FM_PUB_SEAM_TRUSTED_GIT_DIGEST" ] && return 0
+  FM_PUB_SEAM_TRUSTED_GIT=
+  FM_PUB_SEAM_TRUSTED_GIT_DIGEST=
+  for candidate in /usr/bin/git /usr/local/bin/git /opt/homebrew/bin/git; do
+    [ -f "$candidate" ] && [ -x "$candidate" ] || continue
+    digest=$("$candidate" hash-object --no-filters "$candidate" 2>/dev/null) || continue
+    fm_auth_head_shape_valid "$digest" || continue
+    FM_PUB_SEAM_TRUSTED_GIT=$candidate
+    FM_PUB_SEAM_TRUSTED_GIT_DIGEST=$digest
+    return 0
+  done
+  return 1
+}
+
+fm_pub_seam_git() {
+  fm_pub_seam_trusted_git_resolve || return 1
+  "$FM_PUB_SEAM_TRUSTED_GIT" "$@"
 }
 
 # CLEAN INCLUDING UNTRACKED, and three-valued. A backup taken from a tree with
@@ -736,7 +758,7 @@ fm_pub_seam_command_matches() {  # <repo> <remote> <head> <ref> <command...>
 # on this disk, which is precisely the loss custody exists to prevent.
 fm_pub_seam_worktree_clean() {  # <repo> -> 0 clean, 1 dirty, 2 unobserved
   local repo=$1 out rc=0
-  out=$(git --no-optional-locks -C "$repo" status --porcelain --untracked-files=all 2>/dev/null) || rc=$?
+  out=$(fm_pub_seam_git --no-optional-locks -C "$repo" status --porcelain --untracked-files=all 2>/dev/null) || rc=$?
   [ "$rc" -eq 0 ] || return 2
   [ -z "$out" ] || return 1
   return 0
@@ -857,8 +879,8 @@ fm_pub_seam_resolve_custody() {  # <config-dir> <repo-dir> <item-or-dash> <venue
       ;;
   esac
 
-  actual_head=$(git --no-optional-locks -C "$repo" rev-parse HEAD 2>/dev/null) || actual_head=''
-  actual_tree=$(git --no-optional-locks -C "$repo" rev-parse 'HEAD^{tree}' 2>/dev/null) || actual_tree=''
+  actual_head=$(fm_pub_seam_git --no-optional-locks -C "$repo" rev-parse HEAD 2>/dev/null) || actual_head=''
+  actual_tree=$(fm_pub_seam_git --no-optional-locks -C "$repo" rev-parse 'HEAD^{tree}' 2>/dev/null) || actual_tree=''
   if [ -z "$actual_head" ] || [ -z "$actual_tree" ]; then
     fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_WORKTREE_UNOBSERVED" \
       "the head and tree $repo is currently on could not be read, so whether $head is the candidate in front of us could not be observed"
@@ -1219,7 +1241,7 @@ fm_pub_seam_token_of() {  # <guard-output>
 fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expected-tip> <item-or-dash> <effect> <command...>
   local guard=$1 repo=$2 remote=$3 venue=$4 ref=$5 head=$6 expected=$7 item=$8 effect=$9
   shift 9
-  local out rc=0 word id act
+  local out rc=0 word id class
   FM_PUB_SEAM_OUTPUT=
 
   out=$("$guard" prepare --effect "$effect" --repo "$repo" --remote "$remote" --venue "$venue" \
@@ -1275,6 +1297,12 @@ fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expecte
           return $?
           ;;
       esac
+      class=$(printf '%s\n' "$out" | awk '$1=="APPLIED" {print $2; exit}')
+      if [ "$class" = NOT_APPLICABLE ]; then
+        fm_pub_seam_set not-applicable "$FM_PUB_SEAM_TOKEN_NOT_APPLICABLE" \
+          "$ref proceeded ungoverned to $head on $venue under one-use authority $id, confirmed on the remote" '' ''
+        return $?
+      fi
       fm_pub_seam_set allow-exact "$FM_PUB_SEAM_TOKEN_ALLOW" \
         "$ref was published at $head on $venue under authority $id, confirmed on the remote" '' ''
       return $?

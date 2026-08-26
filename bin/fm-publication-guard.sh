@@ -201,8 +201,8 @@ OBSERVED_TIP=
 observe_tip() {  # <repo> <remote> <ref>
   local repo=$1 remote=$2 ref=$3 url out rc=0
   OBSERVED_TIP=
-  url=$(git --no-optional-locks -C "$repo" remote get-url --push "$remote" 2>/dev/null) || url=$remote
-  out=$(git --no-optional-locks -C "$repo" ls-remote "$url" "$ref" 2>/dev/null) || rc=$?
+  url=$(fm_pub_seam_git --no-optional-locks -C "$repo" remote get-url --push "$remote" 2>/dev/null) || url=$remote
+  out=$(fm_pub_seam_git --no-optional-locks -C "$repo" ls-remote "$url" "$ref" 2>/dev/null) || rc=$?
   if [ "$rc" -ne 0 ]; then
     return 1
   fi
@@ -310,7 +310,7 @@ cmd_prepare() {
   esac
 
   if [ -z "$tree" ]; then
-    tree=$(git --no-optional-locks -C "$repo" rev-parse "$head^{tree}" 2>/dev/null) || tree=''
+    tree=$(fm_pub_seam_git --no-optional-locks -C "$repo" rev-parse "$head^{tree}" 2>/dev/null) || tree=''
     [ -n "$tree" ] || cno "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
       "the tree of $head could not be read from $repo, so what this publication would carry could not be observed"
   fi
@@ -425,7 +425,8 @@ cmd_prepare() {
 cmd_consume() {
   local id=${1:-}; shift || true
   local repo='' remote='' now rc=0
-  local venue ref item head tree tip generation epoch fresh_id state record effect
+  local venue ref item head tree tip generation epoch fresh_id state record effect applicability
+  local trusted_git trusted_git_digest
 
   [ -n "$id" ] || die "consume requires an authorization id"
   while [ $# -gt 0 ]; do
@@ -480,6 +481,11 @@ cmd_consume() {
       "the act under publication authority $id is not the exact git push of $head to $ref on $remote from $repo"
   fi
 
+  fm_pub_seam_trusted_git_resolve || cno FM_PUB_TRUSTED_GIT_UNOBSERVED \
+    "no trusted Git executable could be resolved from the publication guard's fixed executable set"
+  trusted_git=$FM_PUB_SEAM_TRUSTED_GIT
+  trusted_git_digest=$FM_PUB_SEAM_TRUSTED_GIT_DIGEST
+
   if ! claim_acquire "$id" serial; then
     auth_read "$id" || true
     if [ "$(auth_field '.state // ""')" = spending ]; then
@@ -499,6 +505,7 @@ cmd_consume() {
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
   resolve_or_exit "$effect" "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$tip" "$OBSERVED_TIP"
+  applicability=$FM_PUB_SEAM_VERDICT
   case $FM_PUB_SEAM_VERDICT in
     no-effect)
       printf 'NO_EFFECT_ALREADY_EQUAL %s\n' "$FM_PUB_SEAM_REASON"
@@ -525,9 +532,11 @@ cmd_consume() {
 
   now=$(now_iso)
   record=$(printf '%s' "$AUTH_RECORD" | jq \
-    --arg now "$now" --arg pid "$$" \
+    --arg now "$now" --arg pid "$$" --arg executable "$trusted_git" \
+    --arg executable_digest "$trusted_git_digest" \
     '.state="spending" | .updated=$now
-     | .spend={intent:$now,by:$pid,outcome:"consumed-without-confirmed-effect",evidence:null}
+     | .spend={intent:$now,by:$pid,outcome:"consumed-without-confirmed-effect",evidence:null,
+               executable:{path:$executable,digest:$executable_digest}}
      | .history += [{at:$now,event:"intent-recorded"}]') \
     || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the intent record for $id could not be constructed, so the act was not attempted"
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
@@ -540,7 +549,7 @@ cmd_consume() {
   # point of writing it first.
   AUTH_RECORD=$record
 
-  "$@" || rc=$?
+  "$trusted_git" -C "$repo" push "$remote" "$head:$ref" || rc=$?
 
   if ! observe_tip "$repo" "$remote" "$ref"; then
     cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
@@ -561,7 +570,11 @@ cmd_consume() {
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
     || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the outcome record for $id could not be written although the remote confirms the effect"
 
-  printf 'APPLIED %s %s %s now at %s\n' "$(effect_class "$effect")" "$id" "$ref" "$OBSERVED_TIP"
+  if [ "$applicability" = not-applicable ]; then
+    printf 'APPLIED NOT_APPLICABLE %s %s now at %s\n' "$id" "$ref" "$OBSERVED_TIP"
+  else
+    printf 'APPLIED %s %s %s now at %s\n' "$(effect_class "$effect")" "$id" "$ref" "$OBSERVED_TIP"
+  fi
   return 0
 }
 
@@ -712,7 +725,7 @@ cmd_project() {
   fi
   [ "$item" != '-' ] || cno "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
     "no work identity was given and none is declared for $ref on $venue, so what this candidate is could not be established"
-  tree=$(git --no-optional-locks -C "$repo" rev-parse "$head^{tree}" 2>/dev/null) || tree=''
+  tree=$(fm_pub_seam_git --no-optional-locks -C "$repo" rev-parse "$head^{tree}" 2>/dev/null) || tree=''
 
   # --- custody, and with it reclaimability ---
   permitted=$(fm_pub_seam_custody_ref "$item")

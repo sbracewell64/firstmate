@@ -24,6 +24,11 @@ TMP_ROOT=$(fm_test_tmproot fm-attest)
 ATTEST="$ROOT/bin/fm-attest.sh"
 WORKFLOW="$ROOT/.github/workflows/no-mistakes-required.yml"
 NOTES_REF=refs/notes/no-mistakes
+FM_ATTEST_TEST_HOME="$TMP_ROOT/home"
+mkdir -p "$FM_ATTEST_TEST_HOME/config" "$FM_ATTEST_TEST_HOME/data"
+export FM_HOME="$FM_ATTEST_TEST_HOME"
+export FM_CONFIG_OVERRIDE="$FM_ATTEST_TEST_HOME/config"
+export FM_DATA_OVERRIDE="$FM_ATTEST_TEST_HOME/data"
 
 # A repository with one commit and no attestation ref.
 new_repo() {
@@ -425,8 +430,11 @@ write_out() {
 # recheck section owns that step, and one case there proves write still performs
 # it by default, so switching it off here cannot hide it going missing.
 publish_out() {
-  local repo=$1
-  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck 2>&1 )
+  local repo=$1 home=$1/fm-home
+  mkdir -p "$home/config" "$home/data" || return 1
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
+    "$ATTEST" write --no-recheck 2>&1 )
 }
 
 test_write_refuses_a_run_head_absent_from_this_checkout() {
