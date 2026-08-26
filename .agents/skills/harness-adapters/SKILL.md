@@ -177,6 +177,14 @@ First launch in a fresh worktree, or first ever on a machine, may show a trust o
 After every spawn, peek the pane within about 20 seconds.
 If such a dialog is showing, accept it from an active firstmate session using `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window> --key Enter`, or the choice the dialog requires, unless `FM_HOME` is already set to the active firstmate home; verify the brief started processing.
 
+**Read-only dispatch posture (observed 2026-08-26, Claude Code 2.1.246).**
+Claude is currently the only harness that can mechanically enforce firstmate's read-only execution surface, and `bin/fm-readonly-lib.sh` owns that judgement.
+Its readonly launch is the one crewmate command in `bin/fm-launch-lib.sh` that carries no autonomy bypass: `--permission-mode dontAsk` runs prompt-free without pre-approving everything, and `--disallowedTools` carries the file-mutating tools, with a `PreToolUse` Bash guard for the writes no tool deny list can see.
+Both flags are accepted by the installed CLI, verified from its own help output and from a real launched process.
+Because that launch drops `--dangerously-skip-permissions`, it does NOT suppress the folder-trust dialog the way every other claude template does, and a readonly task's working directory is created fresh each time, so the dialog appears on EVERY readonly dispatch rather than only a first launch.
+Handle it with the same peek-and-accept procedure above; `bin/fm-spawn.sh` prints a notice naming the directory, and never answers it for you.
+Whether `dontAsk` refuses a denied tool at runtime is not yet observed - [`docs/verification/readonly-execution-surface.md`](../../../docs/verification/readonly-execution-surface.md) records which half is proven and names the opt-in guard that closes the rest.
+
 Claude renders a predicted-next-prompt suggestion as dim/faint text inside an otherwise-empty composer after a turn completes.
 A plain `tmux capture-pane` cannot tell that ghost text apart from typed text.
 Firstmate launches every claude crewmate and secondmate with `CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false`, scoped to firstmate-launched agents through the launch templates in `bin/fm-launch-lib.sh`, so it never touches the captain's global config.

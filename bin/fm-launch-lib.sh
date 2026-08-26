@@ -223,6 +223,48 @@ launch_template() {
   local harness=$1 kind=${2:-ship}
   # shellcheck disable=SC2016  # single quotes are deliberate: $(cat ...) expands in the crewmate pane, not here
   case "$kind" in
+    readonly)
+      # The READ-ONLY execution surface (bin/fm-readonly-lib.sh owns it): a
+      # bounded inspection with no worktree and a sealed subject.
+      #
+      # This is the ONE crewmate launch in this file that does not carry an
+      # autonomy bypass, and that is the entire point. Every other template above
+      # reaches an unrestricted posture deliberately, because an unattended
+      # worker stalled on a permission prompt cannot make progress. A readonly
+      # worker has the same need to run unattended AND a requirement the others
+      # do not have: it must not be able to write. So it takes the prompt-free
+      # mode that is not a bypass, and pairs it with a tool deny list.
+      #
+      #   --permission-mode dontAsk   runs without prompting, unlike `manual`,
+      #                               and without pre-approving everything,
+      #                               unlike `bypassPermissions`.
+      #   --disallowedTools           the file mutators, substituted from
+      #                               fm_readonly_denied_tools so the list is
+      #                               never spelled twice.
+      #
+      # Bash is deliberately NOT denied - inspection is reading files and running
+      # read-only commands - so the Bash half of the enforcement is the
+      # PreToolUse guard bin/fm-spawn.sh wires alongside this launch.
+      #
+      # VERIFICATION BOUNDARY, stated because it is easy to over-read this arm.
+      # That claude 2.1.246 ACCEPTS `--permission-mode dontAsk` and
+      # `--disallowedTools` is verified from the installed CLI's own help output.
+      # That dontAsk actually refuses a denied tool AT RUNTIME is NOT verified
+      # here: proving it requires a real model turn, and the task that added this
+      # surface was constrained to spend nothing. The live opt-in guard in
+      # tests/fm-readonly-live-harness.test.sh is the command that closes that
+      # gap, and docs/verification/readonly-execution-surface.md records the
+      # difference rather than letting the unproven half read as proven.
+      case "$harness" in
+        claude) printf '%s' 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --permission-mode dontAsk --disallowedTools __DENIEDTOOLS__ __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"' ;;
+        # Every other adapter is refused BY NAME rather than launched with a
+        # posture nobody proved. A readonly dispatch that silently degraded to an
+        # ordinary autonomous launch would be a worker with write access to a
+        # subject it was told it could not touch, reported as read-only.
+        *) return 1 ;;
+      esac
+      return 0
+      ;;
     primary)
       case "$harness" in
         # The ghost-text suppression prefix is firstmate-required on every claude

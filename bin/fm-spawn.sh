@@ -3,6 +3,7 @@
 # secondmate in its isolated firstmate home.
 # Usage: fm-spawn.sh <task-id> <project-dir> --mode <no-mistakes|direct-PR|local-only> --yolo <on|off> --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> <project-dir> --scout --reason-code <CODE> [--route <ROUTE>] [--capability-floor <FLOOR>] [--tooling-gap-item <backlog-id>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>]
+#        fm-spawn.sh <task-id> <project-dir> --readonly --reason-code <CODE> [--readonly-head <commit-ish>] [--readonly-path <repo-relative-path>]... [--harness <name>] [--model <name>] [--effort <level>] [--backend <name>]
 #        fm-spawn.sh <task-id> [<firstmate-home>] [--harness <name>|harness|launch-command] [--model <name>] [--effort <level>] [--backend <name>] --secondmate
 #   --mode and --yolo are this task's delivery contract, REQUIRED for every ship
 #   spawn and refused on --scout and --secondmate spawns. Firstmate resolves both
@@ -211,6 +212,34 @@
 #   clears when a verified orca custody-reuse path lands, recorded in
 #   docs/verification/execution-attempt-replacement.md alongside the rest of
 #   this dispatch's verification.
+#   --readonly (or --no-worktree) dispatches onto the READ-ONLY execution
+#   surface: a bounded inspection that takes NO treehouse slot and gets NO
+#   worktree, so it can run while every slot in the pool is parked. That is the
+#   reason it exists - a non-mutating check used to need a slot it could not get.
+#   It is a SCOUT surface by construction (its deliverable is a report, and it
+#   has no branch to push), so it selects --scout and REFUSES --mode/--yolo,
+#   --secondmate, and --succeed-execution rather than sitting beside them.
+#   The subject is sealed BEFORE any endpoint exists, so a bad head never leaves
+#   an orphan window: bin/fm-readonly-subject.sh extracts an exact commit into
+#   /tmp/fm-<id>/seal/subject, strips write permission from it, and records a
+#   digest manifest so a mutation that lands anyway is still detectable. The pane
+#   works in /tmp/fm-<id>/work beside it. --readonly-head <commit-ish> chooses
+#   the commit (default: the same slot base an ordinary dispatch would use), and
+#   --readonly-path <repo-relative-path> (repeatable) seals only those paths;
+#   both are refused without --readonly.
+#   Enforcement is mechanical at the launch boundary and the harness must be able
+#   to provide it: the launch carries no autonomy bypass, denies the file-mutating
+#   tools, and wires a PreToolUse Bash guard for the writes a tool deny list
+#   cannot see. A harness with no such posture is REFUSED BY NAME rather than
+#   launched unrestricted, and a missing jq or node is refused too, because that
+#   guard fails closed and would otherwise deny every command the worker runs.
+#   bin/fm-readonly-lib.sh owns the surface, its vocabulary, and which harnesses
+#   qualify; docs/verification/readonly-execution-surface.md records what has
+#   actually been observed about it, including what has not.
+#   The task's metadata records execution_surface=readonly, readonly_subject=,
+#   readonly_head= and readonly_work=, and deliberately NO worktree= - it has
+#   none, and writing the pane's directory there would make teardown try to
+#   return a /tmp path to the pool. Teardown is canonical and gives nothing back.
 #   --scout records deliverable=scout in the task's meta (report deliverable, scratch
 #   worktree; see AGENTS.md task lifecycle); --secondmate records role=secondmate and
 #   launches in a provisioned firstmate home; the default is a commissioned crew ship
@@ -350,6 +379,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-pool-lib.sh
 . "$SCRIPT_DIR/fm-pool-lib.sh"
+# shellcheck source=bin/fm-readonly-lib.sh
+. "$SCRIPT_DIR/fm-readonly-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -400,6 +431,16 @@ SLOT_BASE_SET=0
 CONTRIB_SET=0
 ATTEMPT_BUDGET_SET=0
 SUCCEED_EXECUTION=0
+# The read-only execution surface: no pool slot, no worktree, a sealed subject.
+# bin/fm-readonly-lib.sh owns what the surface MEANS; this flag only selects it.
+READONLY=0
+READONLY_SUBJECT=
+READONLY_SEAL_DIR=
+READONLY_WORK=
+READONLY_HEAD_RESOLVED=
+READONLY_SEAL_HEAD=
+READONLY_SEAL_HEAD_SET=0
+READONLY_PATHS=()
 POS=()
 want_value=
 for a in "$@"; do
@@ -422,6 +463,8 @@ for a in "$@"; do
       route) ROUTE=$a; ROUTE_SET=1 ;;
       tooling-gap-item) TOOLING_GAP_ITEM=$a; TOOLING_GAP_ITEM_SET=1 ;;
       attempt-budget) ATTEMPT_BUDGET_ARG=$a; ATTEMPT_BUDGET_SET=1 ;;
+      readonly-head) READONLY_SEAL_HEAD=$a; READONLY_SEAL_HEAD_SET=1 ;;
+      readonly-path) READONLY_PATHS+=("$a") ;;
       *) echo "error: internal parser state for --$want_value" >&2; exit 1 ;;
     esac
     want_value=
@@ -431,6 +474,11 @@ for a in "$@"; do
     --scout) KIND=scout ;;
     --secondmate) KIND=secondmate ;;
     --succeed-execution) SUCCEED_EXECUTION=1 ;;
+    --readonly|--no-worktree) READONLY=1 ;;
+    --readonly-head) want_value='readonly-head' ;;
+    --readonly-head=*) READONLY_SEAL_HEAD=${a#--readonly-head=}; READONLY_SEAL_HEAD_SET=1 ;;
+    --readonly-path) want_value='readonly-path' ;;
+    --readonly-path=*) READONLY_PATHS+=("${a#--readonly-path=}") ;;
     --harness) want_value=harness ;;
     --harness=*) HARNESS_ARG=${a#--harness=}; HARNESS_SET=1 ;;
     --model) want_value=model ;;
@@ -483,6 +531,41 @@ for justification_flag in "reason-code=$REASON_CODE" "capability-floor=$CAPABILI
     exit 1
   }
 done
+# The read-only execution surface. It is a SCOUT surface by construction: its
+# deliverable is a report, it has no worktree to commit in and no branch to push,
+# so there is nothing a ship task could deliver from it. Selecting it therefore
+# selects the scout deliverable rather than sitting orthogonally beside it, and
+# every combination that would contradict that is refused here, before anything
+# is created.
+if [ "$READONLY" -eq 1 ]; then
+  [ "$KIND" != secondmate ] || {
+    echo "error: --readonly and --secondmate are different things: a secondmate owns a persistent home and its own state, while a readonly task is one bounded inspection with no worktree at all" >&2
+    exit 1
+  }
+  [ "$SUCCEED_EXECUTION" -eq 0 ] || {
+    echo "error: --readonly cannot be combined with --succeed-execution: a successor dispatch continues a lane that already holds a slot and a worktree, which is exactly what a readonly task never has" >&2
+    exit 1
+  }
+  [ "$MODE_SET" -eq 0 ] && [ "$YOLO_SET" -eq 0 ] || {
+    echo "error: --mode and --yolo are a ship task's delivery contract, and a readonly task delivers a report rather than a change; drop them" >&2
+    exit 1
+  }
+  KIND=scout
+fi
+if [ "$READONLY" -eq 0 ]; then
+  [ "$READONLY_SEAL_HEAD_SET" -eq 0 ] || {
+    echo "error: --readonly-head applies only to a --readonly spawn" >&2
+    exit 1
+  }
+  [ "${#READONLY_PATHS[@]}" -eq 0 ] || {
+    echo "error: --readonly-path applies only to a --readonly spawn" >&2
+    exit 1
+  }
+fi
+[ "$READONLY_SEAL_HEAD_SET" -eq 0 ] || [ -n "$READONLY_SEAL_HEAD" ] || {
+  echo "error: --readonly-head requires a non-empty value" >&2
+  exit 1
+}
 # A parent-delivered carrier replaces this home's own resolution, so it is
 # refused unless it is a secondmate spawn carrying a strictly valid W3C value.
 # Nothing else may reach the pane's TRACEPARENT export.
@@ -1413,6 +1496,43 @@ case "$ARG3" in
     ;;
 esac
 
+# A readonly dispatch replaces the launch resolved above with the READ-ONLY
+# template for this harness, and REFUSES BY NAME when that harness has none.
+#
+# This is the "where the harness cannot enforce, refuse" half of the surface. It
+# is not a fallback: silently launching an ordinary autonomous session for a task
+# whose whole contract is that it cannot write would produce a worker with write
+# access to a subject it was told it could not touch, reported as read-only. A
+# refusal names the harness and the ones that would work, so the caller can pick
+# one rather than guess why nothing happened.
+if [ "$READONLY" -eq 1 ]; then
+  if ! fm_readonly_harness_enforceable "$HARNESS"; then
+    echo "error: harness '$HARNESS' cannot mechanically enforce a read-only posture, so this readonly dispatch is refused rather than launched unrestricted." >&2
+    echo "       A readonly task must be unable to write, and that is a property of the launch boundary, not of the brief it is given." >&2
+    if readonly_ok=$(fm_readonly_enforceable_harnesses 2>/dev/null) && [ -n "$readonly_ok" ]; then
+      echo "       Harnesses that can: $(printf '%s' "$readonly_ok" | tr '\n' ' ')" >&2
+    else
+      echo "       The enforceable-harness roster could not be derived, which is itself a defect to fix before dispatching readonly work." >&2
+    fi
+    exit 1
+  fi
+  LAUNCH=$(launch_template "$HARNESS" readonly) || {
+    echo "error: no readonly launch template for harness '$HARNESS'" >&2
+    exit 1
+  }
+  # The Bash half of the enforcement runs as a PreToolUse hook, and that guard
+  # FAILS CLOSED: without jq or node it denies every command the worker runs.
+  # Checking here converts a task that would silently make no progress into a
+  # refusal naming the missing dependency, which is the whole reason the guard
+  # is allowed to fail closed at all.
+  for readonly_dep in jq node; do
+    command -v "$readonly_dep" >/dev/null 2>&1 || {
+      echo "error: a readonly dispatch needs '$readonly_dep' for its read-only Bash guard, which denies every command it cannot classify; install it before dispatching readonly work" >&2
+      exit 1
+    }
+  done
+fi
+
 # pi-signed is an explicitly selected executable identity, not an alias that may
 # silently fall back to pi. Resolve it from PATH before creating an endpoint and
 # retain the literal name in the launch command and task metadata.
@@ -2315,6 +2435,14 @@ real_path_or_raw() {  # <path>
 # Secondmate spawns own their home, and Orca owns its own worktree, so neither
 # goes through the treehouse pool.
 #
+# A READONLY dispatch does not go through it either, and that is the reason the
+# surface exists. It REQUESTS NO SLOT: the pool guard is never consulted, no slot
+# reservation is consumed, and `treehouse get` is never reached - so a bounded
+# inspection can run while every slot in the pool is parked, which is exactly the
+# state that made read-only checks impossible before. It takes nothing from work
+# that needs a worktree, because it never asks for one. Its subject is sealed
+# into the task's own temp root further below instead.
+#
 # The guard both refuses and CHOOSES: `treehouse get` takes no slot argument and
 # hands out the first available slot, so one parked slot would otherwise
 # blockade a pool whose later slots are empty. A named slot is entered by name
@@ -2327,6 +2455,58 @@ real_path_or_raw() {  # <path>
 # pane has settled into the slot, alongside the holder, or by the abort path;
 # when nothing was selected it is released right here, because the `treehouse
 # get` fallback claims its slot atomically.
+# The readonly surface's SUBJECT, sealed HERE - before the pool is consulted and
+# before any endpoint exists - for exactly the reason the comment above gives for
+# pool allocation: a refusal must never leave an orphan window behind. Sealing
+# after the backend created the pane meant an unresolvable head aborted the spawn
+# with a live, empty window and a half-made temp root already on disk.
+#
+# What it produces: an exact commit extracted by bin/fm-readonly-subject.sh,
+# which strips write permission from every sealed file and records a digest
+# manifest so a mutation that lands anyway is still detectable afterwards.
+#
+# The layout keeps the two halves apart on purpose:
+#   /tmp/fm-<id>/seal/subject/  the sealed tree - READ-ONLY, and the Bash guard
+#                               denies writes to it even though it sits inside
+#                               the task's own writable temp root
+#   /tmp/fm-<id>/work/          the pane's working directory - writable, and
+#                               where the harness settings file lives, because
+#                               settings cannot be written into a read-only
+#                               subject
+# The worker is placed in work/ and reads ../seal/subject/. The path base is the
+# same string TASK_TMP takes further below; teardown removes the whole root.
+if [ "$READONLY" -eq 1 ]; then
+  READONLY_SEAL_DIR="/tmp/fm-$ID/seal"
+  READONLY_SUBJECT="$READONLY_SEAL_DIR/subject"
+  READONLY_WORK="/tmp/fm-$ID/work"
+  mkdir -p "$READONLY_WORK" || { echo "error: cannot create the readonly work directory $READONLY_WORK" >&2; exit 1; }
+  # Default the sealed head to the same commit an ordinary dispatch would place a
+  # slot at, so a readonly inspection reads the code the fleet ACTUALLY RUNS
+  # unless the caller names another commit.
+  [ -n "$READONLY_SEAL_HEAD" ] || READONLY_SEAL_HEAD=${SLOT_BASE:-HEAD}
+  READONLY_SEAL_ARGS=(seal --repo "$PROJ_ABS" --head "$READONLY_SEAL_HEAD" --dest "$READONLY_SEAL_DIR")
+  for readonly_path in ${READONLY_PATHS[@]+"${READONLY_PATHS[@]}"}; do
+    READONLY_SEAL_ARGS+=(--path "$readonly_path")
+  done
+  if ! READONLY_SEAL_OUT=$("$FM_ROOT/bin/fm-readonly-subject.sh" "${READONLY_SEAL_ARGS[@]}" 2>&1); then
+    echo "error: could not seal the readonly subject for $ID at '$READONLY_SEAL_HEAD':" >&2
+    printf '%s\n' "$READONLY_SEAL_OUT" | sed 's/^/  /' >&2
+    # The sealer removes its own half-made dest, but the work directory created
+    # just above is this block's. No metadata exists yet, so teardown will never
+    # reap it and it would sit in /tmp forever. `rmdir` deliberately, not `rm -r`:
+    # it removes only what is empty, so a directory that somehow already holds
+    # something is left alone rather than deleted on a guess.
+    rmdir "$READONLY_WORK" 2>/dev/null || true
+    rmdir "/tmp/fm-$ID" 2>/dev/null || true
+    exit 1
+  fi
+  READONLY_HEAD_RESOLVED=$("$FM_ROOT/bin/fm-readonly-subject.sh" head --dest "$READONLY_SEAL_DIR" 2>/dev/null || true)
+  [ -n "$READONLY_HEAD_RESOLVED" ] || {
+    echo "error: the readonly subject for $ID was sealed but its recorded head could not be read back; refusing to launch an inspection whose subject cannot be cited" >&2
+    exit 1
+  }
+fi
+
 WT_SLOT_NAME=
 WT_SLOT_REAL=
 # A successor takes the slot the lane ALREADY HOLDS, so the allocator is not
@@ -2357,7 +2537,7 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
     ( cd "$WT_SLOT_REAL" 2>/dev/null && exec sleep 300 ) >/dev/null 2>&1 &
     SLOT_HOLDER_PID=$!
   fi
-elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+elif [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$READONLY" -eq 0 ]; then
   spawn_pool_select_lock_acquire "$PROJ_ABS_REAL" || exit 1
   # --for names this task, which is what a pool's slot reservation is matched
   # against: a queued trunk repair's reservation withholds one empty slot from
@@ -2808,7 +2988,7 @@ kimi_spawn_fail() {  # <detail>
   echo "error: $1; inspect window $T" >&2
 }
 
-if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$READONLY" -eq 0 ]; then
   if [ -n "$WT_SLOT_NAME" ]; then
     # `enter` is deliberate: unlike `get` it acquires the slot chosen above
     # without resetting it, so the slot base placement further below stays the
@@ -2895,7 +3075,10 @@ fi
 # its branch, head and content - committed or not - are exactly what the
 # replacement contract preserves. Whatever state the predecessor left is what
 # the successor opens on.
-if [ "$SUCCEED_EXECUTION" -eq 0 ] && [ "$KIND" != secondmate ] && [ -n "$WT" ] && [ -n "$SLOT_BASE" ]; then
+# A readonly dispatch never places either: it has no slot to place, and its
+# subject is fixed by the seal below at an exact head rather than by moving a
+# worktree's HEAD.
+if [ "$SUCCEED_EXECUTION" -eq 0 ] && [ "$KIND" != secondmate ] && [ "$READONLY" -eq 0 ] && [ -n "$WT" ] && [ -n "$SLOT_BASE" ]; then
   slot_head=$(git -C "$WT" rev-parse --verify --quiet HEAD 2>/dev/null || true)
   if [ "$slot_head" = "$SLOT_BASE" ]; then
     :
@@ -2919,6 +3102,43 @@ fi
 # targeted knob: TMPDIR is too broad (affects every program's temp, not just Go's).
 TASK_TMP="/tmp/fm-$ID"
 mkdir -p "$TASK_TMP/gotmp"
+
+if [ "$READONLY" -eq 1 ]; then
+  # The subject was sealed before any endpoint existed (see the seal block above
+  # the pool allocation). From here the pane's working directory takes the place
+  # a worktree would have held, so the hook wiring below writes into a directory
+  # that exists and is writable. state/<id>.meta deliberately records NO
+  # worktree= for this task.
+  WT=$READONLY_WORK
+
+  # Move the pane into the work directory. This is the readonly counterpart of
+  # `treehouse enter`, and it is confirmed the same way rather than assumed: a
+  # launch that ran while the pane was still sitting in the PRIMARY CHECKOUT
+  # would put an agent in the one directory this whole surface exists to keep it
+  # out of. Two consecutive reads must agree, for the same reason the treehouse
+  # wait above requires them - a single read can catch a stale transient path.
+  spawn_send_text_line "$WT_TARGET" "cd $(shell_quote "$READONLY_WORK")"
+  readonly_work_real=$(real_path_or_raw "$READONLY_WORK")
+  readonly_candidate=
+  readonly_entered=
+  for _ in $(seq 1 30); do
+    readonly_p=$(spawn_current_path "$WT_TARGET" || true)
+    if [ -n "$readonly_p" ] && [ "$(real_path_or_raw "$readonly_p")" = "$readonly_work_real" ]; then
+      if [ -n "$readonly_candidate" ]; then
+        readonly_entered=$readonly_p
+        break
+      fi
+      readonly_candidate=$readonly_work_real
+    else
+      readonly_candidate=
+    fi
+    sleep 1
+  done
+  if [ -z "$readonly_entered" ]; then
+    echo "error: the readonly pane for $ID did not enter $READONLY_WORK within 30s; refusing to launch an inspection whose working directory was never confirmed. Inspect window $T" >&2
+    exit 1
+  fi
+fi
 
 # Per-harness turn-end hook where enabled: a file that touches
 # state/<id>.turn-ended when the agent finishes a turn. Worktree-resident hooks
@@ -2988,8 +3208,24 @@ if [ "$KIND" != secondmate ]; then
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
       context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") --record $(shell_quote "$TASK_TMP/context-pressure.json")")
+      # The Bash half of the read-only enforcement. The launch flags deny the
+      # file-mutating TOOLS; this denies a write attempted through a shell
+      # command, which no tool deny list can see. --claude keeps stdout empty on
+      # a denial, which claude requires, and the guard is passed the task
+      # identity so it can tell this task's own report and status file from every
+      # other path (bin/fm-readonly-pretool-check.sh owns that contract).
+      readonly_pretool_json=
+      if [ "$READONLY" -eq 1 ]; then
+        readonly_guard_cmd="$(shell_quote "$FM_ROOT/bin/fm-readonly-pretool-check.sh") --claude"
+        readonly_guard_cmd="$readonly_guard_cmd --home $(shell_quote "$FM_HOME")"
+        readonly_guard_cmd="$readonly_guard_cmd --task $(shell_quote "$ID")"
+        readonly_guard_cmd="$readonly_guard_cmd --tasktmp $(shell_quote "$TASK_TMP")"
+        readonly_guard_cmd="$readonly_guard_cmd --subject $(shell_quote "$READONLY_SUBJECT")"
+        j_pretool=$(json_escape "$readonly_guard_cmd")
+        readonly_pretool_json="\"PreToolUse\":[{\"matcher\":\"Bash\",\"hooks\":[{\"type\":\"command\",\"command\":\"$j_pretool\"}]}],"
+      fi
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"statusLine":{"type":"command","command":"$context_statusline_command"},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
+{"statusLine":{"type":"command","command":"$context_statusline_command"},"hooks":{$readonly_pretool_json"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
@@ -3239,14 +3475,29 @@ fi
 {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
-  echo "worktree=$WT"
+  # A readonly task records NO worktree=, by design: it has none, and writing the
+  # pane's working directory into that field would be a lie the pool guard and
+  # teardown both act on - teardown would try to `treehouse return` a path under
+  # /tmp. It records the typed surface plus the subject it was sealed from
+  # instead, so every consumer that needs a location has one and no consumer can
+  # mistake it for a slot. bin/fm-backend.sh's endpoint validation requires this
+  # exact pair in place of worktree=, so an absent field is still refused for an
+  # ORDINARY task and only a declared readonly surface may omit it.
+  if [ "$READONLY" -eq 1 ]; then
+    echo "$FM_READONLY_META_FIELD=$FM_READONLY_SURFACE"
+    echo "readonly_subject=$READONLY_SUBJECT"
+    echo "readonly_head=$READONLY_HEAD_RESOLVED"
+    echo "readonly_work=$READONLY_WORK"
+  else
+    echo "worktree=$WT"
+  fi
   # Durable ownership for bin/fm-worktree-guard.sh: a process IDENTITY, not a
   # bare pid, because a reboot reissues pid numbers and a recorded pre-reboot
   # pid then resolves to an unrelated live process. Empty fields read as
   # UNRESOLVED at check time, never as a released slot. Only the treehouse pool
   # path records this: a secondmate owns its home and Orca owns its own
   # worktree, so neither is allocated from a shared pool.
-  if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
+  if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ] && [ "$READONLY" -eq 0 ]; then
     "$FM_ROOT/bin/fm-worktree-guard.sh" owner-fields "$WT" 2>/dev/null || true
   fi
   echo "project=$PROJ_ABS"
@@ -3374,6 +3625,19 @@ LAUNCH=${LAUNCH//__PIEXT__/$sq_piext}
 LAUNCH=${LAUNCH//__PITURNEND__/$sq_piturnend}
 LAUNCH=${LAUNCH//__PIWATCH__/$sq_piwatch}
 LAUNCH=${LAUNCH//__OPINPUT__/$sq_opinput}
+# The readonly template's tool deny list, substituted from its single owner so
+# the list is never spelled twice. A readonly launch whose deny list could not be
+# derived is refused rather than launched with the placeholder still in it: an
+# unsubstituted __DENIEDTOOLS__ would reach the CLI as a literal tool name and
+# deny nothing at all, which is the silently-unprotected case.
+if [ "$READONLY" -eq 1 ]; then
+  if READONLY_DENIED=$(fm_readonly_denied_tools_csv) && [ -n "$READONLY_DENIED" ]; then
+    LAUNCH=${LAUNCH//__DENIEDTOOLS__/$(shell_quote "$READONLY_DENIED")}
+  else
+    echo "error: could not derive the readonly tool deny list; refusing to launch a readonly task whose write-tool denial cannot be composed" >&2
+    exit 1
+  fi
+fi
 # Crewmate panes are created by a long-lived tmux/herdr daemon that does not
 # inherit firstmate's current environment, so a bare `claude` in the pane falls
 # back to the default ~/.claude store even when firstmate itself runs under a
@@ -3479,4 +3743,29 @@ fi
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
-echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+# A readonly dispatch reports the surface and the exact commit it sealed, never
+# a worktree= it does not have: a caller parsing this line for a worktree would
+# otherwise be handed a /tmp path and treat it as a pool slot.
+if [ "$READONLY" -eq 1 ]; then
+  # A readonly claude launch STOPS at the folder-trust dialog, and the caller has
+  # to know that or it will read a launched-but-idle pane as a wedged worker.
+  #
+  # The cause is structural, not incidental. Every other claude crewmate template
+  # carries --dangerously-skip-permissions, which suppresses that dialog as a
+  # side effect; the readonly template deliberately does not carry it, so the
+  # dialog is exposed. And the work directory is created fresh for every readonly
+  # task, so it is never an already-trusted path: this happens on EVERY dispatch,
+  # not only the first.
+  #
+  # It is surfaced rather than answered here. Granting folder trust automatically
+  # is a decision this repo does not make on the operator's behalf, and the
+  # harness-adapters skill owns how a trust dialog is handled.
+  if [ "$HARNESS" = claude ]; then
+    echo "notice: $ID is waiting at claude's folder-trust dialog for $READONLY_WORK and will not start until it is answered." >&2
+    echo "        This is expected on every readonly dispatch: the readonly launch carries no permission bypass, and its work directory is new each time." >&2
+    echo "        Handle it through the harness-adapters skill, then the worker begins." >&2
+  fi
+  echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW $FM_READONLY_META_FIELD=$FM_READONLY_SURFACE subject=$READONLY_SUBJECT head=$READONLY_HEAD_RESOLVED"
+else
+  echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+fi

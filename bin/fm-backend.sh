@@ -54,6 +54,17 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-${FM_ROOT:-$FM_BACKEND_DEFAULT_ROOT}}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 FM_BACKEND_CONFIG_DIR="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 
+# The execution-surface vocabulary, so the endpoint validation below can tell a
+# task that HAS no worktree from one whose worktree identity went missing. Loaded
+# only if a caller has not already sourced it, and its absence is deliberately
+# NOT fatal here: without it every task validates exactly as it did before, which
+# is the safe direction, because the readonly branch is the only thing it unlocks.
+if ! declare -F fm_readonly_meta_surface >/dev/null 2>&1 \
+   && [ -f "$FM_BACKEND_LIB_DIR/fm-readonly-lib.sh" ]; then
+  # shellcheck source=bin/fm-readonly-lib.sh
+  . "$FM_BACKEND_LIB_DIR/fm-readonly-lib.sh"
+fi
+
 # Verified backend adapters. Extend only after a backend gets its own
 # bin/backends/<name>.sh and empirical verification, mirroring AGENTS.md
 # section 4's harness-verification discipline. herdr is EXPERIMENTAL (P2;
@@ -416,10 +427,44 @@ fm_backend_validate_task_endpoint() {  # <meta-file> <task-id>
     echo "REFUSED: task $id has a missing, empty, or ambiguous window endpoint; preserving task state." >&2
     return 1
   }
-  worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
-    echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
-    return 1
-  }
+  # A READONLY task has no worktree by design, so it presents its sealed subject
+  # in that field's place. The substitution is deliberately narrow: the ordinary
+  # refusal below still fires for every task that does NOT declare the readonly
+  # surface, so an ordinary task whose worktree identity went missing is refused
+  # exactly as before. Only a record that positively declares the surface may
+  # omit it, and it must then carry a subject identity that is just as exact -
+  # omitting both is still a refusal.
+  #
+  # A surface field that could not be READ (return 2) refuses here rather than
+  # falling through to the worktree branch: that is could-not-observe, and
+  # treating it as "not readonly" would send an unreadable record down the pooled
+  # path, which is where teardown would try to return a slot that never existed.
+  if declare -F fm_readonly_meta_surface >/dev/null 2>&1; then
+    fm_readonly_meta_surface "$meta" >/dev/null 2>&1
+    case "$?" in
+      0)
+        worktree=$(fm_backend_meta_exact_value "$meta" readonly_subject) || {
+          echo "REFUSED: task $id declares the readonly execution surface but has a missing, empty, or ambiguous readonly_subject identity; preserving task state." >&2
+          return 1
+        }
+        ;;
+      2)
+        echo "REFUSED: task $id has an unreadable or ambiguous execution_surface field; preserving task state." >&2
+        return 1
+        ;;
+      *)
+        worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
+          echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
+          return 1
+        }
+        ;;
+    esac
+  else
+    worktree=$(fm_backend_meta_exact_value "$meta" worktree) || {
+      echo "REFUSED: task $id has a missing, empty, or ambiguous worktree identity; preserving task state." >&2
+      return 1
+    }
+  fi
   project=$(fm_backend_meta_exact_value "$meta" project) || {
     echo "REFUSED: task $id has a missing, empty, or ambiguous project identity; preserving task state." >&2
     return 1

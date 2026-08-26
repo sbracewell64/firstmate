@@ -434,6 +434,18 @@ BACKEND=$FM_BACKEND_VALIDATED_BACKEND
 T=$FM_BACKEND_VALIDATED_TARGET
 WT=$(fm_meta_get "$META" worktree)
 PROJ=$(fm_meta_get "$META" project)
+# Which execution surface this task ran on. A readonly task holds no pool slot
+# and has no worktree to return, so the pool-return branch far below is skipped
+# for it explicitly rather than by an empty worktree= happening to fail a -d
+# test. An unreadable surface field is treated as the ORDINARY case here on
+# purpose: the endpoint validation in bin/fm-backend.sh already refused this
+# teardown before reaching this line if it could not read that field, so
+# anything that gets here has a surface that was readable.
+IS_READONLY=0
+if declare -F fm_readonly_meta_is_readonly >/dev/null 2>&1 \
+   && fm_readonly_meta_is_readonly "$META"; then
+  IS_READONLY=1
+fi
 # Read for the wake ledger's terminal record only, here because the worktree is
 # returned long before that record is written and its branch is the join key
 # onto the pipeline's own review records. A read-only rev-parse: it inspects
@@ -2477,7 +2489,13 @@ if [ "$BACKEND" = orca ] && [ "$ROLE" != secondmate ]; then
   fi
   [ -z "$T_ORCA" ] || fm_backend_kill "$BACKEND" "$T" "$(meta_value "$META" zellij_tab_id)" "fm-$ID" 2>/dev/null || true
   fm_backend_remove_worktree "$BACKEND" "$ORCA_WORKTREE_ID"
-elif [ -d "$WT" ] && [ "$ROLE" != secondmate ]; then
+# A READONLY task never reaches the pool return below. It holds no slot and has
+# no worktree, so there is nothing to give back: its metadata records no
+# worktree= at all, which already makes the -d test false. The condition is
+# spelled out anyway rather than left to fall through, because "it happens to be
+# empty" and "it is deliberately absent" read identically at this line, and only
+# the second one is a contract. Its whole cleanup is the temp-root removal above.
+elif [ "$IS_READONLY" -eq 0 ] && [ -d "$WT" ] && [ "$ROLE" != secondmate ]; then
   branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
   if [ "$branch" != "HEAD" ]; then
     if git -C "$WT" checkout --detach -q 2>/dev/null; then
@@ -2585,7 +2603,22 @@ remove_kimi_turnend_auth "$STATE" "$ID"
 fm_backend_clear_transition "$BACKEND" "$STATE" "$T" || true
 # Remove the per-task temp root (/tmp/fm-<id>/, incl. its gotmp/) recorded by spawn.
 # Read before the state-file rm below; empty (pre-fix tasks without tasktmp=) is a no-op.
-[ -n "$TASK_TMP" ] && rm -rf "$TASK_TMP"
+#
+# A READONLY task's temp root also holds its sealed subject, whose files and
+# directories had write permission stripped so the worker could not mutate them
+# (bin/fm-readonly-subject.sh). `rm -rf` cannot unlink a child out of a directory
+# that is not writable, so without this the removal fails, and because the line
+# is `&&`-chained that failure is SILENT: the seal would survive every teardown
+# and accumulate one abandoned copy of the tree per readonly task. Restore write
+# permission on the task's own temp root first - it is this task's, created by
+# this task's spawn, and is being deleted in the next breath.
+if [ -n "$TASK_TMP" ]; then
+  chmod -R u+w "$TASK_TMP" 2>/dev/null || true
+  rm -rf "$TASK_TMP" || true
+  if [ -e "$TASK_TMP" ]; then
+    echo "warning: could not fully remove the per-task temp root $TASK_TMP for $ID; inspect and remove it by hand" >&2
+  fi
+fi
 write_landing_record_if_unlanded
 remove_pr_poll_artifacts "$STATE" "$ID" || exit 1
 retire_busy_state "$STATE" "$ID" "$BUSY_GEN" || exit 1
