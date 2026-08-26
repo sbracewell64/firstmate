@@ -2181,11 +2181,19 @@ CONTRIB_TARGET=
 BASE_STATE=
 CONTRIB_VENUE=
 CONTRIB_VENUE_URL=
+POLICY_REF=
+POLICY_GENERATION=
 if [ "$KIND" != secondmate ]; then
   if task_base_resolve "$PROJ_ABS"; then
     SLOT_BASE=$TASK_BASE_SLOT
     CONTRIB_TARGET=$TASK_BASE_CONTRIB
     BASE_STATE=$TASK_BASE_STATE
+    # Which ref at the venue owns policy, recorded rather than left to be
+    # guessed later. Without it, whether a venue's declaration is current is a
+    # question nothing downstream can answer, and bin/fm-attest.sh reports
+    # could-not-observe rather than substituting the venue's HEAD for it.
+    POLICY_REF=$(task_base_policy_ref_for "$TASK_BASE_CONTRIB_REF") || POLICY_REF=
+    [ -z "$POLICY_REF" ] || POLICY_GENERATION=$TASK_BASE_CONTRIB
   else
     echo "warning: $ID base references unresolved for $PROJ_ABS ($TASK_BASE_ERROR); the worktree is left at whatever commit the pool last used" >&2
     BASE_STATE=unresolved
@@ -3272,6 +3280,13 @@ fi
   # non-forge venue has when the identity is empty.
   [ -z "$CONTRIB_VENUE" ] || echo "contribution_venue=$CONTRIB_VENUE"
   [ -z "$CONTRIB_VENUE_URL" ] || echo "contribution_venue_url=$CONTRIB_VENUE_URL"
+  # The policy ROLE, which is a different axis from the contribution target
+  # even where the two resolve to the same commit today: policy_ref names what
+  # owns current policy at that venue, policy_generation the commit it resolved
+  # to when this task was dispatched. bin/fm-task-base-lib.sh owns the tuple
+  # they belong to and bin/fm-attest.sh re-resolves the ref before acting.
+  [ -z "$POLICY_REF" ] || echo "policy_ref=$POLICY_REF"
+  [ -z "$POLICY_GENERATION" ] || echo "policy_generation=$POLICY_GENERATION"
   # Agent-justification record. Written for every task dispatch; a --secondmate
   # spawn provisions a home rather than dispatching a task and carries none.
   [ -z "$REASONING_REQUIRED" ] || echo "reasoning_required=$REASONING_REQUIRED"

@@ -11,7 +11,7 @@ Pushing through it runs an AI-driven review/test/lint pipeline in an isolated wo
 
 A GitHub Actions check (`Require no-mistakes`) runs on PRs targeting `main` and fails unless the pull request's exact head commit carries a no-mistakes attestation.
 The attestation is a git note on `refs/notes/no-mistakes` naming the commit it covers, so it cannot be copied from another pull request and does not survive a rebase, an amend or a force-push; every new head needs its own.
-Publish one for the head you pushed with `bin/fm-attest.sh write`, which reads the pipeline's own run record and attests only the head that run validated.
+Publish one for the head you pushed with `bin/fm-attest.sh write --publish-repo <host/owner/repo>`, which reads the pipeline's own run record, attests only the head that run validated, and publishes only to the repository you named.
 [`docs/no-mistakes-attestation.md`](docs/no-mistakes-attestation.md) owns what the check does and does not establish.
 GitHub Actions and Dependabot are exempt so their automation keeps working, but regular contributor PRs without an attestation will not be reviewed or merged.
 
@@ -33,7 +33,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 8. Publish the attestation for the head it pushed:
 
    ```sh
-   bin/fm-attest.sh write
+   bin/fm-attest.sh write --publish-repo github.com/<your-fork-owner>/<repo>
    ```
 
    Publish as soon as step 7 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.
@@ -43,10 +43,11 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    Make no further commit before publishing, because a review or lint fix round or any later commit advances the head beyond the commit the completed run validated.
    Do not add a follow-up commit merely to restart the failed check; validate that new head through no-mistakes first, then publish its attestation.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
-   It publishes to the push target of `origin`, which step 3 pointed at your fork, and prints the repository it reached.
+   `--publish-repo` names the repository authorized to receive the note, and it is required rather than optional.
+   That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else, and a remote name in your checkout is configuration rather than authority over which repository that is.
+   The command carries the note through the push target of `origin`, which step 3 pointed at your fork, only after proving that remote addresses the repository you named; if it addresses another one it refuses before pushing anything.
    That remote-changing push is subject to the publication guard documented in [`docs/no-mistakes-attestation.md`](docs/no-mistakes-attestation.md), including any publication identity policy configured for the active Firstmate home.
-   That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
-   If your `origin` pushes to the parent rather than your fork, name the fork explicitly: `bin/fm-attest.sh write --remote <your-fork-remote>`.
+   If `origin` pushes to the parent rather than your fork, name the remote that reaches your fork as well: `bin/fm-attest.sh write --publish-repo github.com/<you>/<repo> --remote <your-fork-remote>`.
    Repeat this after any later push, because the attestation names one commit and a new commit is a new head.
 9. Step 8 completes the routine flow; no human nudge follows it.
    The check ran and refused before the note existed, and publishing a note fires no pull request event of its own, so step 8 re-runs that check for the head it just published; the pull request needs no closing, reopening or editing.

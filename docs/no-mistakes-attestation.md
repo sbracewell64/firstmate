@@ -8,14 +8,23 @@ This document owns what that check establishes, what it deliberately does not, a
 
 The check verifies a git note on `refs/notes/no-mistakes`, keyed by the pull request's exact head commit.
 
-A contribution venue declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose complete content is one line: `fm-attest.v1 required`.
-`bin/fm-attest.sh required` takes the governed venue identity, its repository URL, and the policy generation recorded by `bin/fm-task-base-lib.sh` as explicit inputs.
+A contribution venue declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose first line is exactly `fm-attest.v1 required`.
+That line alone is a complete declaration.
+A venue may follow it with `policy-ref: <ref>`, which is how the venue names the ref that owns its policy, in its own tree, rather than leaving that to be assumed elsewhere.
+Any other line is invalid rather than ignored: a venue saying something the reader cannot parse is not a venue that said nothing.
+`bin/fm-attest.sh required` takes the governed venue identity, its repository URL, the policy GENERATION, and the named policy REF as four explicit inputs, normalized once by `bin/fm-task-base-lib.sh`.
+The generation and the ref are separate arguments because they are separate facts: a commit is what was read, and a ref is what owns what is current.
+A bare commit may be the immutable resolved generation of policy, but it is not authority by itself, and the whole stale-generation question exists only because the two can disagree.
 It fetches that generation from the governed venue into a private scratch ref and reads the declaration blob only from the fetched commit, while publication remains bound to the candidate repository and exact head.
 An absent declaration reports not-required only when the venue's current generation is absent too, while a missing or inconsistent subject, an unreadable or mismatched policy ref, a superseded generation, a non-regular declaration, unreadable bytes, or any other content reports could-not-observe with its own reason.
 Absence is a fact about the venue only when it is read from the venue's current generation; read from a superseded one it is a fact about that generation's age, so a declaration absent at the supplied generation and present at the venue's current one reports `policy-generation-stale` rather than not-required.
 That is the ruling's rule against reinterpreting a missing marker as not-required, and without it a candidate based before the venue adopted the gate would publish nothing and say nothing.
-The current generation is the venue's own default branch, fetched from the same governed URL into its own private scratch ref under the same trap discipline, never an object that happens to be present locally.
-The could-not-observe reasons are `policy-subject-missing`, `policy-subject-mismatch`, `policy-ref-unreadable`, `policy-ref-mismatch`, `policy-generation-stale`, `policy-generation-currency-unobservable`, `policy-declaration-not-regular`, `policy-declaration-unreadable`, and `policy-declaration-invalid`.
+The current generation is resolved from the NAMED POLICY REF, fetched from the same governed URL into its own private scratch ref under the same trap discipline, never an object that happens to be present locally and never the venue's bare `HEAD`.
+`HEAD` and policy are not the same subject: `HEAD` is wherever the default branch points, and equating the two is defensible only where the canonical policy owner has actually declared that symbolic ref.
+Where nothing records or declares a policy ref, currency is not a question this can answer, and it reports `policy-ref-unrecorded` rather than substituting one.
+Applicability is settled before a declaration is credited: the named policy ref is re-resolved at the effect boundary, and a supplied generation that ref does not reach is not an older policy but a commit from another history that happens to carry the file, so it reports `policy-generation-unrelated` and decides nothing.
+Where both the venue's declaration and the task record name a policy ref and they differ, nothing picks a winner - two sources describing one role differently is `policy-ref-conflict`.
+The could-not-observe reasons are `policy-subject-missing`, `policy-subject-mismatch`, `policy-ref-unreadable`, `policy-ref-mismatch`, `policy-ref-unrecorded`, `policy-ref-unresolvable`, `policy-ref-conflict`, `policy-generation-stale`, `policy-generation-unrelated`, `policy-generation-currency-unobservable`, `policy-declaration-not-regular`, `policy-declaration-unreadable`, and `policy-declaration-invalid`.
 The repository invariant checks the other direction: any workflow mentioning `fm-attest.sh` requires the exact declaration, but that lint is not the publication gate.
 
 A note is used rather than a commit trailer or a line of pull request prose for three reasons.
@@ -107,9 +116,18 @@ What this check removes is the far weaker property it replaced, where the eviden
 This check is a provenance gate, not a quality one, and a passing attestation on a red pull request is still a red pull request.
 
 **That the workflow itself was not edited.**
-On `pull_request`, GitHub runs the workflow and scripts from the pull request's own head, so a pull request may change the gate that examines it.
-That was equally true of the body-string check this replaces and is a property of the event, not of this design.
-It is why the check's verdict is visible in the diff and why required-check configuration is a repository setting rather than something a workflow can assert about itself.
+On `pull_request`, GitHub runs the workflow from the pull request's own head. The workflow file is therefore the candidate's, but the PROGRAM THAT REACHES THE VERDICT IS NOT.
+`bin/fm-attest.sh` is resolved from the governed venue's policy generation - the base repository's policy ref, resolved to an exact commit and recorded in the job log - and the candidate's own copy is never executed to judge the candidate.
+Letting it be executed made every contribution the author of its own acceptance semantics: a change to the verifier took effect on the very check deciding whether to accept that change, and a candidate could widen what counts as evidence, or delete the judge and convert a refusal into an inability to look.
+
+If the authoritative verifier cannot be obtained, the check reaches no verdict and says so.
+It never falls back to the candidate's copy, because a fallback that runs the candidate whenever authority is unreachable is the same self-ratification with a step in front of it.
+An evidence generation the authoritative verifier does not understand is refused by it, on its own terms, rather than worked around.
+
+**Bootstrap is two-generation, never self-ratifying.**
+A pull request that changes the verifier is qualified and landed under the PREVIOUSLY authoritative policy plus every existing gate and independent review; only after it lands does the new policy generation become authoritative, and only then can a fresh descendant prove the new production path.
+A candidate cannot establish its own acceptance semantics by passing itself.
+The same rule governs this declaration format: the `policy-ref:` directive is parsed by the reader before any venue adopts it, so a home still running the older reader is never handed a declaration it would call invalid.
 
 ## Producing one
 
@@ -166,8 +184,23 @@ That predicate is what makes an unconditional publication step correct everywher
   `bin/fm-brief.sh` puts that call in the `no-mistakes` delivery contract, which is the document a worker executes; the two modes that run no pipeline have no evidence to publish and are told nothing.
   The flag makes the call safe to run in any project: where no check reads the result, nothing is recorded, nothing is pushed, and the pipeline tool is never even consulted.
 - `bin/fm-pr-check.sh` publishes at the fleet's own chokepoint, after the merge watch is armed, which is the first point at which the fleet holds the task's local copy, the request, and the request's head together.
+  It reads the repository that will receive the note FROM THE FORGE - the request's head repository - and passes it as the bound publication target, because on a fork layout that repository is neither the venue nor necessarily where any local remote points.
   It delegates rather than deciding: `bin/fm-attest.sh` remains the only thing that reads a run record, binds a note to the head that run validated, publishes it, and asks for the verdict to be re-derived.
   It reports one three-valued `attestation:` line - published, refused with the owner's own reason, not required, or could-not-observe - and never changes its own exit status, because a provenance answer must not undo an armed watch.
+
+### Where the note is published
+
+The note-publication repository and the notes ref are load-bearing effect identity, and `bin/fm-attest.sh write` binds both BEFORE its first push rather than checking them after it.
+
+`--publish-repo <host/owner/repo>` names the repository authorized to receive the note, and `--publish-notes-ref <ref>` the ref, and a push with no bound repository is refused as `publication-target-unbound`.
+The remote is demoted to the MECHANISM that carries the effect: its configured URL is reduced to a forge identity and compared with the bound one, and a disagreement is `publication-target-mismatch`, refused with the remote's ref untouched.
+An ssh host alias and a target that names no forge at all are accepted as alternative spellings of the same statement, never as substitutes for one that was never made.
+
+`origin`, another caller-selected remote name, or cwd-local git configuration may not choose the target on their own.
+A remote name is set by whoever cloned and re-pointed by ordinary maintenance, and on the fork layout `CONTRIBUTING.md` describes it addresses two different repositories depending on which URL is read; none of that is authority over which repository holds the pull request head.
+The post-push recheck remains required and remains valuable, but it is defence in depth: a target first checked after the push has already written to whatever it was pointing at, and no later reading repairs that.
+
+Venue, candidate/push repository and note-publication repository stay three independently bound roles, and equality between any two of them is a proven relation rather than a collapsed field.
 
 Neither of them can manufacture, transfer, relabel or infer an attestation, because neither writes one.
 A candidate whose pipeline run did not cover the exact head is refused by the same owner, with the same reason, from either call site, and the gate accepts nothing it would not have accepted before.

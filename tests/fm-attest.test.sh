@@ -464,7 +464,7 @@ publish_out() {
   mkdir -p "$home/config" "$home/data" || return 1
   ( cd "$repo" && PATH="$repo/stub/bin:$PATH" \
     FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
-    "$ATTEST" write --no-recheck 2>&1 )
+    "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" 2>&1 )
 }
 
 # The same publication, asked to do nothing where no check reads the result.
@@ -482,8 +482,9 @@ publish_only_if_required_out() {
       GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
       GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
       "$ATTEST" write --no-recheck --only-if-required \
+      --publish-repo "$(publish_target "$repo")" \
       --policy-venue github.com/fixture/policy --policy-url https://github.com/fixture/policy.git \
-      --policy-ref refs/heads/policy "$@" 2>&1 )
+      --policy-generation refs/heads/policy --policy-ref refs/heads/policy "$@" 2>&1 )
 }
 
 required_out() {
@@ -498,7 +499,8 @@ required_out() {
   ( cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
       GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
       "$ATTEST" required --policy-venue github.com/fixture/policy \
-      --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/policy 2>&1 )
+      --policy-url https://github.com/fixture/policy.git \
+      --policy-generation refs/heads/policy --policy-ref refs/heads/policy 2>&1 )
 }
 
 policy_remote() {
@@ -1049,7 +1051,7 @@ test_write_refuses_an_unreadable_push_target_without_leaking_credentials() {
   git -C "$repo" config remote.origin.pushurl 'https://someone:s3cr3t@127.0.0.1:1/owner/repo.git'
   install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
   out=$(cd "$repo" && GIT_TERMINAL_PROMPT=0 no_proxy='*' NO_PROXY='*' \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreadable push target was treated as one with no attestations"
   assert_contains "$out" "127.0.0.1:1/owner/repo.git" \
@@ -1129,7 +1131,7 @@ test_write_withholds_a_push_target_it_cannot_positively_parse() {
   # hole this design exists to close.
   git -C "$repo" config remote.origin.pushurl 'https://someone:pa ss@127.0.0.1:1/owner/repo.git'
   out=$(cd "$repo" && GIT_TERMINAL_PROMPT=0 no_proxy='*' NO_PROXY='*' \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreadable push target was published to"
   assert_contains "$out" "withheld in full" "a URL that could not be positively parsed was emitted"
@@ -1146,7 +1148,7 @@ test_write_withholds_a_push_target_it_cannot_positively_parse() {
   # only in that this URL does positively parse, is named rather than withheld.
   git -C "$repo" config remote.origin.pushurl 'https://someone:passphrase@127.0.0.1:1/owner/repo.git'
   out=$(cd "$repo" && GIT_TERMINAL_PROMPT=0 no_proxy='*' NO_PROXY='*' \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreadable push target was published to"
   assert_contains "$out" "https://127.0.0.1:1/owner/repo.git" \
@@ -1169,7 +1171,7 @@ test_write_names_an_scp_style_push_target() {
   # the parent, and this form has no password field to protect.
   git -C "$repo" config remote.origin.pushurl 'git@u14.invalid:owner/repo.git'
   out=$(cd "$repo" && GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0 \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreachable push target was published to"
   assert_contains "$out" "u14.invalid:owner/repo.git" "an scp-style push target was not named"
@@ -1179,7 +1181,7 @@ test_write_names_an_scp_style_push_target() {
   # withheld entirely rather than emitted with the password stripped off.
   git -C "$repo" config remote.origin.pushurl 'someone:hunter2@u14.invalid:owner/repo.git'
   out=$(cd "$repo" && GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0 \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreachable push target was published to"
   assert_contains "$out" "withheld in full" "a token with a colon before its @ was not withheld"
@@ -1815,8 +1817,15 @@ test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run() {
   workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
   [ -s "$script" ] || fail "the verify step's own script could not be read out of the workflow"
 
+  # POLICY_VERIFIER is what the previous step resolves out of the governed
+  # venue's policy generation. The stub stands in for THAT program, not for the
+  # candidate's copy of it: the step no longer runs anything out of the
+  # checkout, which is what test_check_step_refuses_to_run_the_candidates_own_verifier
+  # below pins.
   run_verify_step() {
-    ( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+    ( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone \
+        POLICY_VERIFIER="$dir/bin/fm-attest.sh" POLICY_SHA=policygeneration \
+        bash "$script" 2>&1 )
   }
 
   # Exit 1 is a refusal: the evidence was examined and found absent. That is a
@@ -1882,7 +1891,9 @@ test_check_step_names_validating_an_unvalidated_head_as_the_repair() {
   [ -s "$script" ] || fail "the verify step's own script could not be read out of the workflow"
 
   install_verifier_stub "$dir" 1
-  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone \
+    HEAD_REPO_FULL=owner/fork POLICY_VERIFIER="$dir/bin/fm-attest.sh" \
+    POLICY_SHA=policygeneration bash "$script" 2>&1 )
   rc=$?
   [ "$rc" -eq 1 ] || fail "a refused attestation did not fail the check with exit 1 (exit $rc): $out"
   # Each of these is a sentence the refusal did not carry before, because the
@@ -1900,7 +1911,9 @@ test_check_step_names_validating_an_unvalidated_head_as_the_repair() {
   # The matched control: a head that passes is told none of it, so the lines
   # above are reached by the refusal rather than printed unconditionally.
   install_verifier_stub "$dir" 0
-  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone \
+    HEAD_REPO_FULL=owner/fork POLICY_VERIFIER="$dir/bin/fm-attest.sh" \
+    POLICY_SHA=policygeneration bash "$script" 2>&1 )
   rc=$?
   [ "$rc" -eq 0 ] || fail "an attested head was failed by the check: $out"
   assert_not_contains "$out" "Validate this head first with 'git push no-mistakes'" \
@@ -2191,6 +2204,11 @@ test_show_reports_an_unknown_commit_as_such() {
 # A repository whose push target is a real bare repository, so the evidence
 # recheck reads is a note genuinely published rather than one recorded locally.
 # Echoes nothing; sets up "$repo", "$repo.fork.git" and the stub PATH.
+publish_target() {  # <repo> - the exact URL this repo's origin pushes to
+  git -C "$1" config --get remote.origin.pushurl 2>/dev/null \
+    || git -C "$1" config --get remote.origin.url 2>/dev/null
+}
+
 new_published_repo() {
   local repo=$1 head
   new_repo "$repo"
@@ -3166,7 +3184,7 @@ test_write_re_evaluates_the_head_it_published() {
     FM_TEST_RUNS_JSON="$repo/runs.json" \
     FM_TEST_PR_JSON="$repo/pr.json" \
     FM_TEST_PULLS_JSON="$repo/pulls.json" \
-      "$ATTEST" write 2>&1
+      "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1
   )
   rc=$?
   [ "$rc" -eq 0 ] || fail "write did not publish and re-evaluate in one step: $out"
@@ -3186,7 +3204,7 @@ test_write_no_recheck_publishes_without_asking_the_forge() {
   out=$(
     cd "$repo" || exit 2
     PATH="$repo/stub/bin:$PATH" FM_TEST_GH_LOG="$repo/gh.log" \
-      "$ATTEST" write --no-recheck 2>&1
+      "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" 2>&1
   )
   rc=$?
   [ "$rc" -eq 0 ] || fail "write --no-recheck was refused: $out"
@@ -3383,11 +3401,19 @@ install_superseded_policy_venue() {
 }
 
 superseded_out() {
-  local repo=$1 policy=$2 ref=$3
+  # ${4-...} rather than ${4:-...}: a caller passing an EMPTY policy ref is
+  # stating that nothing recorded one, and that is a case under test. The
+  # colon form would silently substitute the default and test the opposite.
+  local repo=$1 policy=$2 generation=$3 owner_ref=${4-refs/heads/policy}
+  # The generation and the ref that OWNS policy are supplied separately,
+  # because they are separate facts and the whole stale-generation question
+  # only exists where they disagree. Currency is read from the named ref, never
+  # from the venue's bare HEAD.
   ( cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
       GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
       "$ATTEST" required --policy-venue github.com/fixture/policy \
-      --policy-url https://github.com/fixture/policy.git --policy-ref "$ref" 2>&1 )
+      --policy-url https://github.com/fixture/policy.git \
+      --policy-generation "$generation" --policy-ref "$owner_ref" 2>&1 )
 }
 
 test_required_reports_a_superseded_policy_generation_as_neither() {
@@ -3472,7 +3498,8 @@ test_required_reports_an_unresolvable_default_ref_as_neither() {
   out=$(cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
     GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
     "$ATTEST" required --policy-venue github.com/fixture/policy \
-    --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/missing 2>&1)
+    --policy-url https://github.com/fixture/policy.git \
+    --policy-generation refs/heads/missing --policy-ref refs/heads/policy 2>&1)
   rc=$?
   [ "$rc" -eq 2 ] || fail "an unresolvable default ref became an answer (exit $rc): $out"
   assert_contains "$out" "policy-ref-unreadable" "the unresolved policy ref did not report its own reason"
@@ -3492,7 +3519,8 @@ test_required_refuses_a_foreign_local_policy_ref() {
   out=$(cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
     GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
     "$ATTEST" required --policy-venue github.com/fixture/policy \
-    --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/policy 2>&1)
+    --policy-url https://github.com/fixture/policy.git \
+    --policy-generation refs/heads/policy --policy-ref refs/heads/policy 2>&1)
   rc=$?
   [ "$rc" -eq 2 ] || fail "a foreign local policy ref decided venue policy (exit $rc): $out"
   assert_contains "$out" "policy-ref-unreadable" "the foreign ref did not report a venue fetch failure"
@@ -3528,7 +3556,8 @@ test_required_cleans_the_policy_ref_when_fetch_is_interrupted() {
     GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
     GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
     "$ATTEST" required --policy-venue github.com/fixture/policy \
-    --policy-url https://github.com/fixture/policy.git --policy-ref refs/heads/policy 2>&1)
+    --policy-url https://github.com/fixture/policy.git \
+    --policy-generation refs/heads/policy --policy-ref refs/heads/policy 2>&1)
   rc=$?
   [ "$rc" -eq 124 ] || fail "the interrupted policy fetch did not hit its bound (exit $rc): $out"
   assert_present "$fetched" "the interruption happened before the policy ref was fetched"
@@ -3671,7 +3700,9 @@ test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
   workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
   [ -s "$script" ] || fail "the verify step could not be lifted out of the workflow"
   out=$(cd "$dir" && HEAD_SHA=0123456789012345678901234567890123456789 \
-    PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1)
+    PR_NUMBER=1 PR_AUTHOR=someone HEAD_REPO_FULL=owner/fork \
+    POLICY_VERIFIER="$dir/bin/fm-attest.sh" POLICY_SHA=policygeneration \
+    bash "$script" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "the refusal branch did not fail"
   assert_not_contains "$out" "close and reopen" \
@@ -3685,7 +3716,349 @@ test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
   pass "fm-attest.sh: the check sends a contributor to publish, not to edit the request"
 }
 
+# ---------------------------------------------------------------------------
+# The role tuple and the policy generation. Browser Sol 19/5431020714 requires
+# each of these observed refusing, because each is a way the gate could be made
+# to answer about the wrong subject: the wrong generation, the wrong repository,
+# or a judge the candidate itself supplied.
+# ---------------------------------------------------------------------------
+
+# A venue with TWO unrelated histories, so "the generation supplied" and "the
+# generation the policy ref leads" can be made to disagree in the one way that
+# is not merely being older.
+install_split_history_venue() {
+  local repo=$1 policy
+  policy="$repo-split.git"
+  declare_gate "$repo"
+  git -C "$repo" add .github
+  git -C "$repo" commit -qm declaration
+  git init -q --bare "$policy"
+  git -C "$repo" push -q --force "$policy" HEAD:refs/heads/policy
+  # An orphan: it carries the same declaration file and shares no commit with
+  # the policy ref, which is exactly the shape that must not be read as an
+  # older policy.
+  git -C "$repo" checkout -q --orphan stranger
+  git -C "$repo" add -A
+  git -C "$repo" commit -qm stranger
+  git -C "$repo" push -q --force "$policy" HEAD:refs/heads/stranger
+  git -C "$repo" checkout -q -
+  git --git-dir="$policy" symbolic-ref HEAD refs/heads/policy
+  printf '%s\n' "$policy"
+}
+
+test_required_refuses_a_generation_the_policy_ref_does_not_reach() {
+  local repo policy out rc
+  # Watched red 1. The named policy ref resolves to one commit and the supplied
+  # generation is an unrelated one. It carries a declaration, so reading it
+  # alone answers "required" with complete confidence about a repository whose
+  # policy it never expressed. Applicability is decided before the declaration
+  # is credited, and an unrelated generation decides nothing.
+  repo="$TMP_ROOT/required-unrelated-generation"
+  new_repo "$repo"
+  policy=$(install_split_history_venue "$repo")
+  out=$(superseded_out "$repo" "$policy" refs/heads/stranger refs/heads/policy)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unrelated policy generation became an answer (exit $rc): $out"
+  assert_contains "$out" "policy-generation-unrelated" \
+    "the unrelated generation did not report its own reason"
+  assert_not_contains "$out" "reads a head-bound attestation" \
+    "a generation the policy ref never reached was credited as this venue's policy"
+  pass "fm-attest.sh: a generation the named policy ref does not reach answers neither way"
+}
+
+test_required_reads_the_named_policy_ref_rather_than_the_venues_head() {
+  local repo policy out rc
+  # Watched reds 2 and 3 together, because they are one property observed from
+  # both sides: the venue's HEAD says one thing and the named policy ref says
+  # another, and the answer must follow the ref.
+  #
+  # HEAD here points at a branch that never declared, while refs/heads/policy
+  # does. Reading HEAD - which is what this used to do - reports that a venue
+  # requiring attestation requires none, and publication is then skipped in
+  # exactly the repository that reads the note. The generation supplied is the
+  # undeclared one, so nothing but the ref can produce the right answer.
+  repo="$TMP_ROOT/required-ref-not-head"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" current)
+  # Move the venue's HEAD onto the generation that predates the declaration.
+  git --git-dir="$policy" symbolic-ref HEAD refs/heads/old
+  out=$(superseded_out "$repo" "$policy" refs/heads/old refs/heads/policy)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "the venue's HEAD decided its policy (exit $rc): $out"
+  assert_contains "$out" "policy-generation-stale" \
+    "a superseded generation was not reported as superseded once HEAD disagreed with the policy ref"
+  assert_not_contains "$out" "reads no head-bound attestation" \
+    "the venue's HEAD overrode the ref recorded as owning its policy"
+  pass "fm-attest.sh: policy follows the named ref, not the venue's HEAD"
+}
+
+test_required_refuses_when_no_ref_is_recorded_as_owning_policy() {
+  local repo policy out rc
+  # Watched red 4's precondition, and the one the old implementation answered by
+  # substituting HEAD. With no ref recorded, whether the supplied generation is
+  # current is not a question this can answer at all - and could-not-observe is
+  # the only honest answer, because not-required would silently skip publishing
+  # for every candidate based before a venue adopted the gate.
+  repo="$TMP_ROOT/required-no-policy-ref"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" current)
+  out=$(superseded_out "$repo" "$policy" refs/heads/old '')
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unrecorded policy ref produced an answer (exit $rc): $out"
+  assert_contains "$out" "policy-ref-unrecorded" \
+    "an unrecorded policy ref did not report its own reason"
+  assert_not_contains "$out" "reads no head-bound attestation" \
+    "an unanswerable currency question was reported as a venue that declares nothing"
+  pass "fm-attest.sh: with no ref recorded as owning policy, currency answers neither way"
+}
+
+test_required_refuses_a_policy_ref_it_cannot_resolve() {
+  local repo policy out rc
+  # Watched red 4. A named ref that cannot be resolved at the effect boundary
+  # leaves the supplied generation unproven, and an unproven generation carries
+  # no authority - not to require, and above all not to excuse.
+  repo="$TMP_ROOT/required-unresolvable-policy-ref"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" current)
+  out=$(superseded_out "$repo" "$policy" refs/heads/policy refs/heads/no-such-ref)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "an unresolvable policy ref became an answer (exit $rc): $out"
+  assert_contains "$out" "policy-ref-unresolvable" \
+    "an unresolvable policy ref did not report its own reason"
+  pass "fm-attest.sh: a policy ref that will not resolve answers neither way"
+}
+
+test_write_refuses_a_remote_that_addresses_another_repository() {
+  local repo out rc before
+  # Watched red 5. The remote resolves to a repository other than the one bound
+  # to receive the note. Before this, the ambient remote won and the note landed
+  # wherever it pointed; the refusal must come BEFORE the push, and the target
+  # it would have written to must be untouched.
+  repo="$TMP_ROOT/write-target-mismatch"
+  new_published_repo "$repo"
+  git -C "$repo" update-ref -d "$NOTES_REF"
+  git -C "$repo" push -q --delete origin "$NOTES_REF" 2>/dev/null || true
+  before=$(git -C "$repo" ls-remote origin "$NOTES_REF" 2>/dev/null || true)
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write \
+    --publish-repo github.com/someone/elsewhere 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a note was published through a remote addressing another repository: $out"
+  assert_contains "$out" "publication-target-mismatch" \
+    "the mismatched publication target did not report its own reason"
+  assert_contains "$out" "github.com/someone/elsewhere" \
+    "the refusal did not name the repository that was bound to receive the note"
+  git -C "$repo" rev-parse --verify --quiet "$NOTES_REF" >/dev/null 2>&1 \
+    && fail "a note was recorded locally despite the target being refused"
+  [ "$(git -C "$repo" ls-remote origin "$NOTES_REF" 2>/dev/null || true)" = "$before" ] \
+    || fail "the remote's notes ref moved despite the publication target being refused"
+  pass "fm-attest.sh: a remote addressing another repository is refused before the push"
+}
+
+test_write_refuses_a_notes_ref_the_effect_plan_did_not_name() {
+  local repo out rc
+  # Watched red 6. The gate reads exactly one ref, so publishing to a different
+  # one is evidence nothing will look at - indistinguishable at the boundary
+  # from having published nothing.
+  repo="$TMP_ROOT/write-notes-ref-mismatch"
+  new_published_repo "$repo"
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write \
+    --publish-repo "$(publish_target "$repo")" \
+    --publish-notes-ref refs/notes/no-mistakes \
+    --notes-ref refs/notes/somewhere-else 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a note was published to a ref the effect plan did not name: $out"
+  assert_contains "$out" "publication-notes-ref-mismatch" \
+    "the mismatched notes ref did not report its own reason"
+  git -C "$repo" rev-parse --verify --quiet refs/notes/somewhere-else >/dev/null 2>&1 \
+    && fail "a note was recorded on the unplanned ref"
+  pass "fm-attest.sh: a notes ref the effect plan did not name is refused before the push"
+}
+
+test_write_binds_the_three_repository_roles_independently_on_a_fork() {
+  local repo fork out rc
+  # Watched red 7. The venue the request is raised at, the repository the branch
+  # was pushed to, and the repository the note belongs on are three roles, and
+  # on a fork layout they are three different repositories. Each is bound
+  # separately here: origin FETCHES the parent and PUSHES the fork, the note is
+  # bound to the fork, and only the fork may move.
+  repo="$TMP_ROOT/write-fork-roles"
+  new_repo "$repo"
+  fork="$repo.fork.git"
+  git init -q --bare "$fork"
+  git init -q --bare "$repo.parent.git"
+  git -C "$repo" remote add origin https://github.com/upstream/repo.git
+  git -C "$repo" config remote.origin.pushurl https://github.com/contributor/repo.git
+  git -C "$repo" config url."$fork".insteadOf https://github.com/contributor/repo.git
+  git -C "$repo" config url."$repo.parent.git".insteadOf https://github.com/upstream/repo.git
+  install_pipeline_stub "$repo/stub" \
+    "$(run_status_toon fm/demo "$(git -C "$repo" rev-parse --short=8 HEAD)" completed)"
+  install_gh_stub "$repo/stub"
+
+  # The parent is where the request lives, so naming it as the note's home is
+  # the inversion this must refuse rather than perform.
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck \
+    --publish-repo github.com/upstream/repo 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "the note was published to the venue rather than the head repository: $out"
+  assert_contains "$out" "publication-target-mismatch" \
+    "binding the note to the venue instead of the head repository was not refused"
+  [ -z "$(git --git-dir="$repo.parent.git" for-each-ref refs/notes 2>/dev/null)" ] \
+    || fail "the parent repository received a note"
+
+  # The fork is the repository holding the head, and it alone moves.
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck \
+    --publish-repo github.com/contributor/repo 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "publication to the bound head repository was refused: $out"
+  [ -n "$(git --git-dir="$fork" for-each-ref "$NOTES_REF" 2>/dev/null)" ] \
+    || fail "the head repository did not receive the note"
+  [ -z "$(git --git-dir="$repo.parent.git" for-each-ref refs/notes 2>/dev/null)" ] \
+    || fail "the venue received a note as well as the head repository"
+  pass "fm-attest.sh: venue, push target and note repository stay independently bound on a fork"
+}
+
+# The resolve step's own script, run as the workflow runs it, against a
+# repository whose `pullrequest-source` remote is the governed venue. What it
+# must never do is take the verifier from the checkout it is standing in.
+new_policy_generation_fixture() {  # <dir> <candidate-verifier-body>
+  local dir=$1 body=${2-} venue
+  mkdir -p "$dir"
+  venue="$dir/venue.git"
+  git init -q "$dir/work"
+  git -C "$dir/work" config user.email t@e && git -C "$dir/work" config user.name t
+  mkdir -p "$dir/work/bin"
+  # The AUTHORITATIVE verifier: it supports reconcile and refuses everything.
+  {
+    printf '#!/usr/bin/env bash\n'
+    # shellcheck disable=SC2016  # Expansion is deliberately deferred to the stub.
+    printf 'case "${1:-}" in\n'
+    printf '  --supports) exit 0 ;;\n'
+    printf '  --print-format) echo "no-mistakes-attestation: v1" ;;\n'
+    printf '  *) echo "authoritative verifier refused"; exit 1 ;;\n'
+    printf 'esac\n'
+  } > "$dir/work/bin/fm-attest.sh"
+  chmod +x "$dir/work/bin/fm-attest.sh"
+  git -C "$dir/work" add -A
+  git -C "$dir/work" commit -qm policy
+  git init -q --bare "$venue"
+  git -C "$dir/work" push -q --force "$venue" HEAD:refs/heads/main
+
+  # The CANDIDATE checkout, carrying whatever verifier the test wants it to.
+  git init -q "$dir/candidate"
+  git -C "$dir/candidate" config user.email t@e && git -C "$dir/candidate" config user.name t
+  git -C "$dir/candidate" remote add pullrequest-source "$venue"
+  mkdir -p "$dir/candidate/bin"
+  if [ -n "$body" ]; then
+    printf '%s\n' "$body" > "$dir/candidate/bin/fm-attest.sh"
+    chmod +x "$dir/candidate/bin/fm-attest.sh"
+  fi
+  printf '%s\n' "$venue"
+}
+
+run_resolve_step() {  # <dir> [base-ref]
+  local dir=$1 ref=${2:-main} script env_file
+  script="$dir/resolve-step.sh"
+  workflow_step_script 'Resolve the authoritative verifier from the governed policy generation' > "$script"
+  [ -s "$script" ] || fail "the resolve step could not be lifted out of the workflow"
+  env_file="$dir/github-env"
+  : > "$env_file"
+  ( cd "$dir/candidate" && RUNNER_TEMP="$dir/runner" GITHUB_ENV="$env_file" \
+      BASE_REPO=owner/venue POLICY_REF="refs/heads/$ref" bash "$script" 2>&1 )
+}
+
+test_check_step_judges_a_candidate_by_the_governed_verifier_not_its_own() {
+  local dir out rc verifier
+  # Watched red 8. The candidate ships a verifier that passes everything. Under
+  # the old shape the workflow ran exactly that program to decide whether to
+  # accept exactly that change, so a contribution could widen what counts as
+  # evidence and have the widened rule judge its own admission.
+  dir="$TMP_ROOT/policy-candidate-permissive"
+  # shellcheck disable=SC2016  # Expansion is deliberately deferred to the stub.
+  new_policy_generation_fixture "$dir" \
+    '#!/usr/bin/env bash
+case "${1:-}" in --supports) exit 0 ;; --print-format) echo "anything goes" ;; *) exit 0 ;; esac'
+  out=$(run_resolve_step "$dir")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the resolve step failed on a readable venue (exit $rc): $out"
+  verifier=$(sed -n 's/^POLICY_VERIFIER=//p' "$dir/github-env")
+  [ -n "$verifier" ] || fail "no authoritative verifier was resolved: $out"
+  case $verifier in
+    "$dir/candidate"/*) fail "the authoritative verifier was taken from the candidate checkout" ;;
+  esac
+  "$verifier" verify --head deadbeef >/dev/null 2>&1 \
+    && fail "the resolved verifier accepted what the governed generation refuses"
+  assert_contains "$out" "is not authority here" \
+    "the step did not state that the candidate's own verifier is not authority"
+  pass "fm-attest.sh: the governed policy generation supplies the verifier, not the candidate"
+}
+
+test_check_step_does_not_become_a_pass_when_the_candidate_deletes_the_judge() {
+  local dir out rc verifier
+  # Watched red 9. The candidate carries NO bin/fm-attest.sh at all. Under the
+  # old shape that turned a refusal into "the check could not look", which is a
+  # different failure but still not the refusal the candidate had earned. The
+  # governed verifier is unaffected by what the candidate did or did not ship.
+  dir="$TMP_ROOT/policy-candidate-deleted"
+  new_policy_generation_fixture "$dir" ''
+  [ ! -e "$dir/candidate/bin/fm-attest.sh" ] || fail "the candidate fixture still carries a verifier"
+  out=$(run_resolve_step "$dir")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "deleting the candidate's verifier stopped the resolve step (exit $rc): $out"
+  verifier=$(sed -n 's/^POLICY_VERIFIER=//p' "$dir/github-env")
+  [ -n "$verifier" ] || fail "no verifier was resolved once the candidate deleted its own: $out"
+  "$verifier" verify --head deadbeef >/dev/null 2>&1 \
+    && fail "a candidate that deleted its verifier was not judged by current policy"
+  grep -q '^POLICY_UNRESOLVED=' "$dir/github-env" \
+    && fail "deleting the candidate's verifier was reported as an unresolvable policy generation"
+  pass "fm-attest.sh: deleting the candidate's verifier does not disarm the check"
+}
+
+test_check_step_reaches_no_verdict_rather_than_running_the_candidate() {
+  local dir out rc
+  # Watched red 10. The governed policy generation cannot be resolved. The one
+  # thing that must NOT happen is the candidate's copy being run instead: a
+  # fallback that reaches for the candidate whenever authority is unreachable is
+  # self-ratification with an extra step in front of it. The step declares no
+  # verifier, and the verify step then reports no verdict.
+  local script out2
+  dir="$TMP_ROOT/policy-unresolvable"
+  # shellcheck disable=SC2016  # Expansion is deliberately deferred to the stub.
+  new_policy_generation_fixture "$dir" \
+    '#!/usr/bin/env bash
+case "${1:-}" in --supports) exit 0 ;; *) exit 0 ;; esac'
+  out=$(run_resolve_step "$dir" no-such-policy-ref)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the resolve step aborted rather than declaring the authority unresolved: $out"
+  grep -q '^POLICY_UNRESOLVED=1' "$dir/github-env" \
+    || fail "an unresolvable policy generation was not declared as one: $out"
+  grep -q '^POLICY_VERIFIER=' "$dir/github-env" \
+    && fail "a verifier was declared despite the policy generation being unresolvable"
+
+  script="$dir/verify-step.sh"
+  workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
+  out2=$( cd "$dir/candidate" && HEAD_SHA=0123456789012345678901234567890123456789 \
+    PR_NUMBER=1 PR_AUTHOR=someone HEAD_REPO_FULL=owner/fork POLICY_UNRESOLVED=1 \
+    bash "$script" 2>&1 )
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an unobtainable authority let the check pass: $out2"
+  assert_contains "$out2" "could not obtain the authoritative" \
+    "the no-verdict outcome did not name the authority it could not obtain"
+  assert_not_contains "$out2" "carries no verified no-mistakes attestation" \
+    "an inability to obtain the judge borrowed the refusal's words"
+  pass "fm-attest.sh: an unobtainable authority reaches no verdict rather than running the candidate"
+}
+
 test_cases='
+test_required_refuses_a_generation_the_policy_ref_does_not_reach
+test_required_reads_the_named_policy_ref_rather_than_the_venues_head
+test_required_refuses_when_no_ref_is_recorded_as_owning_policy
+test_required_refuses_a_policy_ref_it_cannot_resolve
+test_write_refuses_a_remote_that_addresses_another_repository
+test_write_refuses_a_notes_ref_the_effect_plan_did_not_name
+test_write_binds_the_three_repository_roles_independently_on_a_fork
+test_check_step_judges_a_candidate_by_the_governed_verifier_not_its_own
+test_check_step_does_not_become_a_pass_when_the_candidate_deletes_the_judge
+test_check_step_reaches_no_verdict_rather_than_running_the_candidate
 test_absent_notes_ref_refuses_as_absent
 test_ref_without_note_for_head_refuses_distinctly
 test_unreadable_notes_ref_refuses_distinctly

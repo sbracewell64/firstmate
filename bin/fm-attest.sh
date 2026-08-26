@@ -8,9 +8,9 @@
 # that a pull_request workflow can read with contents: read.
 #
 # Usage:
-#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required {--policy-meta <file>|--policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>}] [--expect-head <sha>] [--notes-ref <ref>]
+#   fm-attest.sh write [--run <id>] [--remote <name>] [--publish-repo <host/owner/repo>] [--publish-notes-ref <ref>] [--no-push] [--no-recheck] [--only-if-required {--policy-meta <file>|--policy-venue <host/owner/repo> --policy-url <url> --policy-generation <commit> [--policy-ref <ref>]}] [--expect-head <sha>] [--notes-ref <ref>]
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
-#   fm-attest.sh required --policy-venue <host/owner/repo> --policy-url <url> --policy-ref <ref>
+#   fm-attest.sh required --policy-venue <host/owner/repo> --policy-url <url> --policy-generation <commit> [--policy-ref <ref>]
 #   fm-attest.sh declaration-check
 #   fm-attest.sh show [--commit <rev>] [--notes-ref <ref>]
 #   fm-attest.sh verify --head <sha> [--notes-ref <ref>]
@@ -944,6 +944,7 @@ cmd_reconcile() {
 #   2  unobservable   the declaration could not be read, so this says NEITHER.
 REQUIRED_DECLARATION=.github/no-mistakes-attestation
 REQUIRED_DECLARATION_CONTENT='fm-attest.v1 required'
+REQUIRED_DECLARATION_MAX_BYTES=512
 
 required_state=
 required_evidence=
@@ -959,10 +960,58 @@ required_policy_clear_traps() {
   trap - EXIT HUP INT TERM
 }
 
+# Parse a declaration blob's TEXT into its marker and its optional directives.
+# Sets required_declaration_policy_ref, and returns 1 when the text is not a
+# well-formed declaration.
+#
+# The first line is the marker and is unchanged from v1. Any further line is a
+# directive, and the only one recognized is:
+#
+#   policy-ref: <ref>
+#
+# which is how a venue DECLARES the ref that owns its policy. That declaration
+# lives in the venue's own tree, so the ref role is stated by the repository
+# whose policy it is, and nothing here has to equate policy with `HEAD` or with
+# a default branch in order to find it. An unrecognized directive is invalid
+# rather than ignored: a venue saying something this cannot read is not a venue
+# that said nothing, and skipping past it would silently drop the one statement
+# it made about its own policy.
+required_declaration_parse() {  # <text>
+  local text=${1-} line first=1 seen_policy_ref=0 value
+  required_declaration_policy_ref=
+  while IFS= read -r line; do
+    if [ "$first" -eq 1 ]; then
+      first=0
+      [ "$line" = "$REQUIRED_DECLARATION_CONTENT" ] || return 1
+      continue
+    fi
+    [ -n "$line" ] || continue
+    case $line in
+      'policy-ref: '*)
+        [ "$seen_policy_ref" -eq 0 ] || return 1
+        seen_policy_ref=1
+        value=${line#'policy-ref: '}
+        # A ref this cannot address is worse than an absent one, because it
+        # would be fetched from the venue as a refspec.
+        case $value in
+          '' | -* | *[[:space:]]* | *[[:cntrl:]]* | *:*) return 1 ;;
+        esac
+        required_declaration_policy_ref=$value
+        ;;
+      *) return 1 ;;
+    esac
+  done <<EOF
+$text
+EOF
+  [ "$first" -eq 0 ] || return 1
+  return 0
+}
+
 required_declaration_observe() {
   required_declaration_commit=$1
   required_declaration_state=unobservable
   required_declaration_fault=
+  required_declaration_policy_ref=
   required_declaration_entry=$(git ls-tree "$required_declaration_commit" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
     required_declaration_fault=unreadable
     return 0
@@ -987,7 +1036,14 @@ required_declaration_observe() {
     required_declaration_fault=unreadable
     return 0
   }
-  if [ "$required_declaration_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_declaration_size" != 22 ]; then
+  # A bound, not a fixed length: v1 was exactly the 22-byte marker line, and a
+  # v2 declaration may carry directives after it. The bound is what keeps an
+  # arbitrary blob out of the parser; the parser is what decides validity.
+  if [ "$required_declaration_size" -gt "$REQUIRED_DECLARATION_MAX_BYTES" ] 2>/dev/null; then
+    required_declaration_fault=invalid
+    return 0
+  fi
+  if ! required_declaration_parse "$required_declaration_content"; then
     required_declaration_fault=invalid
     return 0
   fi
@@ -995,40 +1051,78 @@ required_declaration_observe() {
   return 0
 }
 
-# Whether the venue's CURRENT generation carries the declaration, so that an
-# absence read from a supplied generation can be told apart from a superseded
+# Resolve the NAMED policy ref at the venue, right now, at the boundary where
+# its answer is about to be acted on. Sets required_policy_tip, or leaves it
+# empty with required_policy_tip_detail saying why.
+#
+# This is the re-resolution the ruling requires at the authority/effect
+# boundary. A generation supplied by a task record was resolved when that record
+# was written, which may be days of venue history ago; acting on it without
+# asking the ref again is acting on a snapshot and calling it current.
+required_policy_tip_observe() {  # <ref>
+  local ref=$1 fetched
+  required_policy_tip=
+  required_policy_tip_detail=
+
+  required_scratch_ref="refs/fm-attest/policy-tip-$$"
+  git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+  trap required_policy_cleanup EXIT
+  trap 'required_policy_cleanup; exit 2' HUP INT TERM
+  if ! git fetch --quiet --no-tags --force "$required_url" "$ref:$required_scratch_ref" 2>/dev/null; then
+    required_policy_cleanup
+    required_policy_clear_traps
+    required_policy_tip_detail="the policy ref $ref at $required_venue could not be resolved."
+    return 0
+  fi
+  required_policy_tip=$(git rev-parse --verify --quiet "$required_scratch_ref^{commit}" 2>/dev/null) \
+    || required_policy_tip=
+  fetched=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}' 2>/dev/null) || fetched=
+  required_policy_cleanup
+  required_policy_clear_traps
+  if [ -z "$required_policy_tip" ] || [ "$required_policy_tip" != "$fetched" ]; then
+    required_policy_tip=
+    required_policy_tip_detail="the policy ref $ref at $required_venue did not resolve to one matching commit."
+    return 0
+  fi
+  return 0
+}
+
+# Whether the venue's CURRENT policy generation carries the declaration, so that
+# an absence read from a supplied generation can be told apart from a superseded
 # one. Sets required_currency to present, absent, or unobservable, plus
 # required_current and required_currency_detail.
 #
-# It fetches the venue's own default branch from the governed URL into its own
-# private scratch ref, under the same trap discipline as the generation read
-# above, and never trusts an object that happens to be present locally: a
-# candidate checkout routinely holds commits from several repositories, and one
-# of those deciding another venue's currency is the same wrong-subject
-# substitution the referential-integrity rule refuses one level down.
-required_currency_observe() {
+# It resolves the NAMED POLICY REF, never the repository's bare `HEAD`. Those
+# are not the same subject: `HEAD` is whatever the venue's default branch points
+# at, and equating it with policy is the assumption the ruling forbids -
+# defensible only where the canonical policy owner has actually declared that
+# symbolic ref, which is a statement it makes in its own declaration rather than
+# one this program may make on its behalf. A venue whose policy ref nobody
+# recorded and whose supplied generation declares nothing has told us nothing
+# about what it currently requires, and that is a could-not-observe.
+#
+# The ref is read from the governed URL into a private scratch ref under the
+# same trap discipline as the generation read above, and never from an object
+# that happens to be present locally: a candidate checkout routinely holds
+# commits from several repositories, and one of those deciding another venue's
+# currency is the same wrong-subject substitution the referential-integrity rule
+# refuses one level down.
+required_currency_observe() {  # <policy-ref>
+  local ref=${1-}
   required_currency=unobservable
   required_current=
   required_currency_detail=
 
-  required_scratch_ref="refs/fm-attest/policy-current-$$"
-  git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
-  trap required_policy_cleanup EXIT
-  trap 'required_policy_cleanup; exit 2' HUP INT TERM
-  if ! git fetch --quiet --no-tags --force "$required_url" "HEAD:$required_scratch_ref" 2>/dev/null; then
-    required_policy_cleanup
-    required_policy_clear_traps
-    required_currency_detail="the venue's current generation could not be fetched."
+  if [ -z "$ref" ]; then
+    required_currency_detail="no ref is recorded as owning policy at $required_venue, so which generation is current cannot be established."
     return 0
   fi
-  required_current=$(git rev-parse --verify --quiet "$required_scratch_ref^{commit}" 2>/dev/null) || required_current=
-  required_current_fetched=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}' 2>/dev/null) || required_current_fetched=
-  required_policy_cleanup
-  required_policy_clear_traps
-  if [ -z "$required_current" ] || [ "$required_current" != "$required_current_fetched" ]; then
-    required_currency_detail="the venue's current generation did not resolve to one matching commit."
+  required_policy_tip_observe "$ref"
+  if [ -z "$required_policy_tip" ]; then
+    required_currency_detail=$required_policy_tip_detail
     return 0
   fi
+  required_current=$required_policy_tip
 
   # Equal generations cannot be stale, and answering from the entry already
   # read avoids a second tree read that could only agree with it.
@@ -1045,11 +1139,20 @@ required_currency_observe() {
   return 0
 }
 
+# required_observe <allow-checkout> <venue> <url> <generation> [<policy-ref>]
+#
+# The fourth argument is the exact GENERATION policy is read from, and the fifth
+# is the NAMED REF recorded as owning policy at that venue. They are separate
+# arguments because they are separate facts: a commit is what was read, a ref is
+# what owns what is current, and the whole stale-generation question only exists
+# because the two can disagree. The fifth may be empty, and an empty one is a
+# recorded absence rather than a licence to substitute the repository's `HEAD`.
 required_observe() {
   required_allow_checkout=${1:-0}
   required_venue=${2-}
   required_url=${3-}
   required_ref=${4-}
+  required_policy_ref=${5-}
   required_state=
   required_evidence=
   required_reason=
@@ -1114,13 +1217,28 @@ required_observe() {
       # agreement credits not-required. The current generation is the venue's
       # own default branch, fetched from the same governed URL by the same
       # mechanism; nothing here consults a remote of this checkout.
-      required_currency_observe
+      #
+      # The generation this reads is named by the RECORDED policy ref. A
+      # generation that declares nothing also names no policy ref of its own,
+      # so there is nothing in the venue's own tree to follow here, and the
+      # repository's `HEAD` is not a stand-in for one: that substitution is
+      # exactly what the ruling forbids. When nothing recorded which ref owns
+      # policy, this says so and stops, because "I could not find out" is a
+      # different answer from "no attestation is required here" and only one of
+      # them may silently skip publication.
+      if [ -z "$required_policy_ref" ]; then
+        required_state=unobservable
+        required_reason=policy-ref-unrecorded
+        required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, and no ref is recorded as owning policy there, so whether that generation is current cannot be established."
+        return 0
+      fi
+      required_currency_observe "$required_policy_ref"
       case "$required_currency" in
         absent) ;;
         present)
           required_state=unobservable
           required_reason=policy-generation-stale
-          required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, but the venue's current generation $required_current does, so this generation is superseded rather than undeclared."
+          required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, but $required_policy_ref now resolves to $required_current, which does, so this generation is superseded rather than undeclared."
           return 0
           ;;
         *)
@@ -1131,7 +1249,7 @@ required_observe() {
           ;;
       esac
       required_state=not-required
-      required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, and neither does its current generation"
+      required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, and neither does $required_policy_ref, the ref recorded as owning policy there"
       return 0
     fi
     case "$required_declaration_state:$required_declaration_fault" in
@@ -1155,6 +1273,52 @@ required_observe() {
         return 0
         ;;
     esac
+
+    # APPLICABILITY, re-derived at the effect boundary.
+    #
+    # The declaration has been read out of the supplied generation, but that
+    # generation was resolved when the task record was written. Before its
+    # answer is acted on, the ref that OWNS policy is resolved again, now, and
+    # the supplied generation is checked to be part of the history that ref
+    # leads: an ancestor of the current tip, or the tip itself.
+    #
+    # A generation the ref does not reach is not an older policy - it is a
+    # commit from some other history that happens to carry a declaration file,
+    # and reading this venue's requirements out of it is the wrong-subject
+    # substitution one level up from the one the declaration read already
+    # refuses. It is refused as could-not-observe rather than resolved either
+    # way, because an unrelated generation says nothing about what this venue
+    # requires.
+    #
+    # The ref comes from the venue's own declaration when it names one, and
+    # otherwise from what the task record recorded. When BOTH name one and they
+    # disagree, nothing here picks a winner: two sources describing the same
+    # role differently is precisely the ambiguity that must not be resolved by
+    # preference.
+    required_effective_ref=$required_declaration_policy_ref
+    if [ -n "$required_effective_ref" ] && [ -n "$required_policy_ref" ] \
+      && [ "$required_effective_ref" != "$required_policy_ref" ]; then
+      required_state=unobservable
+      required_reason=policy-ref-conflict
+      required_evidence="$required_venue generation $required_ref declares $required_effective_ref as its policy ref, but $required_policy_ref is recorded as owning policy there; the two name different refs for the same role."
+      return 0
+    fi
+    [ -n "$required_effective_ref" ] || required_effective_ref=$required_policy_ref
+    if [ -n "$required_effective_ref" ]; then
+      required_policy_tip_observe "$required_effective_ref"
+      if [ -z "$required_policy_tip" ]; then
+        required_state=unobservable
+        required_reason=policy-ref-unresolvable
+        required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref names $required_effective_ref as its policy ref, but $required_policy_tip_detail"
+        return 0
+      fi
+      if ! git merge-base --is-ancestor "$required_commit" "$required_policy_tip" 2>/dev/null; then
+        required_state=unobservable
+        required_reason=policy-generation-unrelated
+        required_evidence="$required_venue generation $required_ref is not reachable from $required_effective_ref, which now resolves to $required_policy_tip, so that generation is not part of the history this venue's policy ref leads."
+        return 0
+      fi
+    fi
     required_state=required
     required_evidence="$REQUIRED_DECLARATION at $required_venue generation $required_ref carries the required declaration"
     return 0
@@ -1196,10 +1360,11 @@ required_observe() {
     return 0
   }
   required_size=$(printf '%s' "$required_size" | tr -d '[:space:]')
-  if [ "$required_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_size" != 22 ]; then
+  if [ "$required_size" -gt "$REQUIRED_DECLARATION_MAX_BYTES" ] 2>/dev/null \
+    || ! required_declaration_parse "$required_content"; then
     required_state=unobservable
     required_reason=declaration-invalid
-    required_evidence="$REQUIRED_DECLARATION does not contain exactly one '$REQUIRED_DECLARATION_CONTENT' line."
+    required_evidence="$REQUIRED_DECLARATION does not begin with exactly one '$REQUIRED_DECLARATION_CONTENT' line followed only by directives this understands."
     return 0
   fi
 
@@ -1211,16 +1376,18 @@ required_observe() {
 cmd_required() {
   policy_venue=
   policy_url=
-  policy_ref=
+  policy_generation=
+  policy_owner_ref=
   while [ "$#" -gt 0 ]; do
     case "$1" in
       --policy-venue) [ "$#" -ge 2 ] || die "--policy-venue needs a value"; policy_venue=$2; shift 2 ;;
       --policy-url) [ "$#" -ge 2 ] || die "--policy-url needs a value"; policy_url=$2; shift 2 ;;
-      --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_ref=$2; shift 2 ;;
+      --policy-generation) [ "$#" -ge 2 ] || die "--policy-generation needs a value"; policy_generation=$2; shift 2 ;;
+      --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_owner_ref=$2; shift 2 ;;
       *) die "unexpected argument: $1" ;;
     esac
   done
-  required_observe 0 "$policy_venue" "$policy_url" "$policy_ref"
+  required_observe 0 "$policy_venue" "$policy_url" "$policy_generation" "$policy_owner_ref"
   case "$required_state" in
     required)
       emit "fm-attest: this repository reads a head-bound attestation ($required_evidence)"
@@ -1276,8 +1443,11 @@ cmd_write() {
   only_if_required=0
   policy_venue=
   policy_url=
-  policy_ref=
+  policy_generation=
+  policy_owner_ref=
   policy_meta=
+  publish_repo=
+  publish_notes_ref=
   notes_ref=$NOTES_REF_DEFAULT
   while [ "$#" -gt 0 ]; do
     case "$1" in
@@ -1287,8 +1457,11 @@ cmd_write() {
         ;;
       --policy-venue) [ "$#" -ge 2 ] || die "--policy-venue needs a value"; policy_venue=$2; shift 2 ;;
       --policy-url) [ "$#" -ge 2 ] || die "--policy-url needs a value"; policy_url=$2; shift 2 ;;
-      --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_ref=$2; shift 2 ;;
+      --policy-generation) [ "$#" -ge 2 ] || die "--policy-generation needs a value"; policy_generation=$2; shift 2 ;;
+      --policy-ref) [ "$#" -ge 2 ] || die "--policy-ref needs a value"; policy_owner_ref=$2; shift 2 ;;
       --policy-meta) [ "$#" -ge 2 ] || die "--policy-meta needs a value"; policy_meta=$2; shift 2 ;;
+      --publish-repo) [ "$#" -ge 2 ] || die "--publish-repo needs a value"; publish_repo=$2; shift 2 ;;
+      --publish-notes-ref) [ "$#" -ge 2 ] || die "--publish-notes-ref needs a value"; publish_notes_ref=$2; shift 2 ;;
       --run)
         [ "$#" -ge 2 ] || die "--run needs a value"
         run_id=$2
@@ -1324,16 +1497,18 @@ cmd_write() {
   [ -z "$expect_head" ] || is_full_sha "$expect_head" \
     || die "--expect-head must be a 40-character lowercase sha"
   if [ -n "$policy_meta" ]; then
-    [ -z "$policy_venue$policy_url$policy_ref" ] \
+    [ -z "$policy_venue$policy_url$policy_generation$policy_owner_ref" ] \
       || die "--policy-meta cannot be combined with explicit policy subject arguments"
     task_base_policy_metadata "$policy_meta" || {
       policy_venue=
       policy_url=
-      policy_ref=
+      policy_generation=
+      policy_owner_ref=
     }
     [ -z "$TASK_BASE_POLICY_VENUE" ] || policy_venue=$TASK_BASE_POLICY_VENUE
     [ -z "$TASK_BASE_POLICY_URL" ] || policy_url=$TASK_BASE_POLICY_URL
-    [ -z "$TASK_BASE_POLICY_REF" ] || policy_ref=$TASK_BASE_POLICY_REF
+    [ -z "$TASK_BASE_POLICY_GENERATION" ] || policy_generation=$TASK_BASE_POLICY_GENERATION
+    [ -z "$TASK_BASE_POLICY_REF" ] || policy_owner_ref=$TASK_BASE_POLICY_REF
   fi
 
   git rev-parse --git-dir >/dev/null 2>&1 || fail not-a-git-repository \
@@ -1346,7 +1521,7 @@ cmd_write() {
   # publication in one that did are both wrong, and a failed read is not a
   # licence to pick either.
   if [ "$only_if_required" -eq 1 ]; then
-    required_observe 0 "$policy_venue" "$policy_url" "$policy_ref"
+    required_observe 0 "$policy_venue" "$policy_url" "$policy_generation" "$policy_owner_ref"
     case "$required_state" in
       required) ;;
       not-required)
@@ -1526,6 +1701,63 @@ EOF
   if [ "$push" -eq 1 ]; then
     push_url=$(git remote get-url --push "$remote" 2>/dev/null) || push_url=$remote
     push_target=$(credential_safe_text "$push_url")
+
+    # THE EFFECT TARGET IS BOUND BEFORE THE FIRST PUSH, NOT CHECKED AFTER IT.
+    #
+    # Publishing a note is the protected effect this command exists to perform,
+    # and which repository receives it is load-bearing identity: the attestation
+    # is evidence only on the repository holding the pull request head, so a note
+    # that lands anywhere else is both a missing proof where one was needed and a
+    # write to a repository that never authorized one. `origin` is a name in this
+    # checkout's configuration. It is set by whoever cloned, it is re-pointed by
+    # ordinary maintenance, and on the fork layout CONTRIBUTING.md describes it
+    # addresses two different repositories depending on which URL is read. None
+    # of that is authority, so it may not be what chooses the target.
+    #
+    # So the target is a stated field of the effect plan, and the remote is
+    # demoted to the MECHANISM that carries it: its configured URL is reduced to
+    # a forge identity and must equal the bound one before anything is written.
+    # The alias spelling is accepted alongside the literal one for the same
+    # reason bin/fm-pr-check.sh accepts it - an ssh host alias is addressing
+    # rather than identity - and both are compared, never substituted.
+    #
+    # The recheck that follows publication remains, and remains valuable, but it
+    # is defence in depth: a target first checked after the push has already
+    # written to whatever it was pointing at, and no later reading repairs that.
+    push_identity_url=$(git config --get "remote.$remote.pushurl" 2>/dev/null) \
+      || push_identity_url=$(git config --get "remote.$remote.url" 2>/dev/null) \
+      || push_identity_url=$push_url
+    push_identity=$(task_base_venue_identity "$push_identity_url" 2>/dev/null || true)
+    push_identity_alias=$(task_base_venue_identity_alias "$push_identity_url" 2>/dev/null || true)
+    if [ -z "$publish_repo" ]; then
+      fail publication-target-unbound \
+        "No repository was named to publish $notes_ref to, so this would publish wherever the remote '$remote' currently points." \
+        "The attestation is evidence only on the repository holding the pull request head, and a remote name is configuration rather than authority over which repository that is." \
+        "Name it with --publish-repo <host/owner/repo>${push_identity:+; the remote \"$remote\" currently addresses $push_identity}." \
+        "Nothing was recorded or published."
+    fi
+    # Three spellings, all of them the caller STATING the target rather than a
+    # remote choosing it. The forge identity is the normal one; the alias
+    # spelling covers an ssh host alias; and the configured URL itself covers a
+    # target that names no forge at all, where equality of the URL is the same
+    # proof of identity by a shorter route. None of them is a fallback that
+    # lets an unstated target through.
+    if [ "$publish_repo" != "$push_identity" ] \
+      && [ "$publish_repo" != "$push_identity_alias" ] \
+      && [ "$publish_repo" != "$push_identity_url" ]; then
+      fail publication-target-mismatch \
+        "The remote '$remote' addresses ${push_identity:-a repository this could not name}, but $publish_repo is the repository bound to receive $notes_ref." \
+        "Publishing through it would write the attestation to a repository other than the one authorized to hold it." \
+        "Point that remote at $publish_repo, or name the remote that addresses it with --remote <name>, then re-run." \
+        "Nothing was recorded or published; the remote's $notes_ref is unchanged."
+    fi
+    if [ -n "$publish_notes_ref" ] && [ "$publish_notes_ref" != "$notes_ref" ]; then
+      fail publication-notes-ref-mismatch \
+        "The bound effect plan publishes $publish_notes_ref, but this would publish $notes_ref." \
+        "Those are different refs, and the gate reads only the one the plan names." \
+        "Nothing was recorded or published."
+    fi
+
     incoming_ref="$notes_ref-incoming"
     # Absence and unreadability are two different answers and only one of them is
     # a fact about the attestations there. A push target with no

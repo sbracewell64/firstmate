@@ -298,17 +298,50 @@ fm_pr_attest_reason() {
     | tail -1
 }
 
+# WHICH REPOSITORY THE EVIDENCE IS PUBLISHED TO IS READ FROM THE FORGE.
+#
+# The note is evidence only on the repository holding this request's head, and
+# on a fork layout that is not the venue the request was raised at and not
+# necessarily where any local remote points. The forge is the one place that
+# knows it, so it is asked, and an answer it will not give leaves publication
+# unbound rather than falling back to a remote name - the fallback would aim a
+# protected write with this checkout's configuration.
+FM_PR_ATTEST_PUBLISH_REPO=
+if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
+  # fm-retrieval-audit: not-a-collection - one pull request's head repository
+  if PUBLISH_OWNER_REPO=$(cd "$WT" && fm_run_timed 60 gh pr view "$URL" \
+    --json headRepositoryOwner,headRepository \
+    -q '.headRepositoryOwner.login + "/" + .headRepository.name' 2>/dev/null); then
+    case $PUBLISH_OWNER_REPO in
+      */*/* | /* | */) ;;
+      *[!A-Za-z0-9._/-]*) ;;
+      */*) FM_PR_ATTEST_PUBLISH_REPO=$(printf 'github.com/%s\n' "$PUBLISH_OWNER_REPO" | tr '[:upper:]' '[:lower:]') ;;
+    esac
+  fi
+fi
+
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
   printf 'attestation: could-not-observe (task %s has no reachable local copy, so whether this head needs published evidence is unknown)\n' "$ID"
 elif [ -z "$PR_HEAD" ]; then
   printf 'attestation: could-not-observe (the forge supplied no request head to bind publication to)\n'
 else
+  # The target is passed when the forge named one and omitted when it did not.
+  # Omitting it is NOT a fallback to the ambient remote: bin/fm-attest.sh
+  # refuses to push with no bound target, so an unknown target becomes a stated
+  # refusal at the moment publication would happen. What it must not become is a
+  # pre-emptive could-not-observe here, because a venue that reads no
+  # attestation publishes nothing and needs no target at all - answering
+  # "unknown" for it would report a question as unanswered when it was answered.
+  ATTEST_TARGET_ARGS=()
+  [ -z "$FM_PR_ATTEST_PUBLISH_REPO" ] \
+    || ATTEST_TARGET_ARGS=(--publish-repo "$FM_PR_ATTEST_PUBLISH_REPO")
   ATTEST_RC=0
   ATTEST_OUT=$(
     cd "$WT" \
       && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
         "$SCRIPT_DIR/fm-attest.sh" write --only-if-required \
           --policy-meta "$RECORD" \
+          "${ATTEST_TARGET_ARGS[@]+"${ATTEST_TARGET_ARGS[@]}"}" \
           --expect-head "$PR_HEAD" 2>&1
   ) || ATTEST_RC=$?
   ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
