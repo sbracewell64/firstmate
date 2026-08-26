@@ -3343,6 +3343,81 @@ test_required_reads_a_marker_from_the_repository_default_branch() {
   pass "fm-attest.sh: a pre-marker candidate reads the repository declaration"
 }
 
+# A venue whose current generation declares the gate, plus a supplied
+# generation from before it did. Returns the bare venue path; the marker lives
+# on the venue's HEAD and refs/heads/old is the pre-marker commit.
+install_superseded_policy_venue() {
+  local repo=$1 marker=${2:-current} policy old
+  policy="$repo-superseded.git"
+  old=$(git -C "$repo" rev-parse HEAD)
+  case "$marker" in
+    current)
+      declare_gate "$repo"
+      git -C "$repo" add .github
+      git -C "$repo" commit -qm declaration
+      ;;
+    never)
+      printf 'two\n' > "$repo/b.txt"
+      git -C "$repo" add b.txt
+      git -C "$repo" commit -qm advance
+      ;;
+    *) fail "unknown superseded fixture: $marker" ;;
+  esac
+  git init -q --bare "$policy"
+  git -C "$repo" push -q --force "$policy" HEAD:refs/heads/policy
+  git -C "$repo" push -q --force "$policy" "$old:refs/heads/old"
+  git --git-dir="$policy" symbolic-ref HEAD refs/heads/policy
+  printf '%s\n' "$policy"
+}
+
+superseded_out() {
+  local repo=$1 policy=$2 ref=$3
+  ( cd "$repo" && GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$policy.insteadOf" \
+      GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
+      "$ATTEST" required --policy-venue github.com/fixture/policy \
+      --policy-url https://github.com/fixture/policy.git --policy-ref "$ref" 2>&1 )
+}
+
+test_required_reports_a_superseded_policy_generation_as_neither() {
+  local repo policy out rc
+  # Topology case T7. A declaration absent from a generation the venue has
+  # moved past is a fact about that generation's age, not about the venue, and
+  # reporting it as not-required is the ruling's forbidden reinterpretation of
+  # a missing marker: a candidate based before the venue adopted the gate would
+  # publish nothing and say nothing, which is the recurrence itself.
+  repo="$TMP_ROOT/required-superseded-generation"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" current)
+  out=$(superseded_out "$repo" "$policy" refs/heads/old)
+  rc=$?
+  [ "$rc" -eq 2 ] || fail "a superseded policy generation became an answer (exit $rc): $out"
+  assert_contains "$out" "policy-generation-stale" \
+    "the superseded generation did not report its own reason"
+  assert_not_contains "$out" "reads no head-bound attestation" \
+    "a superseded generation was reported as a venue that declares nothing"
+  pass "fm-attest.sh: a superseded policy generation answers neither way"
+}
+
+test_required_still_answers_not_required_when_the_venue_never_declared() {
+  local repo policy out rc
+  # The case above with one input changed: the venue's CURRENT generation
+  # carries no declaration either. Both generations agree, so the absence is a
+  # fact about the venue and not-required is correct. Without this control the
+  # fix above would be satisfied by turning every non-current generation into
+  # could-not-observe, which would break the ordinary path the ruling's own
+  # watched red depends on.
+  repo="$TMP_ROOT/required-never-declared"
+  new_repo "$repo"
+  policy=$(install_superseded_policy_venue "$repo" never)
+  out=$(superseded_out "$repo" "$policy" refs/heads/old)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a venue that never declared did not answer not-required (exit $rc): $out"
+  assert_contains "$out" "carries no" "the answer did not name the absent declaration"
+  assert_not_contains "$out" "policy-generation-stale" \
+    "an absence both generations agree on was reported as superseded"
+  pass "fm-attest.sh: a generation the venue never declared at still answers not-required"
+}
+
 test_required_reports_an_unresolvable_default_ref_as_neither() {
   local repo policy out rc
   repo="$TMP_ROOT/required-default-unresolvable"
@@ -3659,6 +3734,8 @@ test_required_ignores_a_bare_invocation_without_the_marker
 test_required_reports_a_symlink_declaration_as_neither
 test_required_reports_wrong_declaration_content_as_neither
 test_required_reads_a_marker_from_the_repository_default_branch
+test_required_reports_a_superseded_policy_generation_as_neither
+test_required_still_answers_not_required_when_the_venue_never_declared
 test_required_reports_an_unresolvable_default_ref_as_neither
 test_required_refuses_a_foreign_local_policy_ref
 test_required_cleans_the_policy_ref_when_fetch_is_interrupted
