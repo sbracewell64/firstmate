@@ -69,7 +69,13 @@ FM_SHARED_CAPTAIN_MODE="444"
 # inheriting the rules without the registry would both leave a secondmate's own
 # crewmates outside zero-budget enforcement and make every inherited model read as
 # unregistered in that home.
-FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json models.json crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget trace-context}"
+# qualification-contract-dir travels on the same terms as crew-dispatch.json and
+# for the same reason: the dispatch rules a secondmate inherits are checked
+# against capability contracts, so a home reading a DIFFERENT contract generation
+# than the primary would answer the same route's requirement out of different
+# bytes. An absolute binding keeps the whole fleet on one directory; a
+# home-relative one converges each home on its own copy of that generation.
+FM_INHERITABLE_CONFIG="${FM_INHERITABLE_CONFIG:-crew-dispatch.json models.json crew-harness backlog-backend backend herdr-presentation-spaces startup-memory-budget qualification-contract-dir trace-context}"
 
 # Items whose value is a home-SESSION enablement decision rather than durable
 # local configuration. They are inherited at the launch convergence point, where

@@ -2,7 +2,7 @@
 name: bootstrap-diagnostics
 description: >-
   Agent-only handling playbook for session-start bootstrap diagnostics.
-  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, CAPACITY_UNMEASURED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, OUTBOUND, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
+  Use whenever the session-start digest's bootstrap section prints an actionable diagnostic line - MISSING, MISSING_MANUAL, BACKEND_INVALID, NEEDS_GH_AUTH, TANGLE, STARTUP_MEMORY_BUDGET, CREW_DISPATCH invalid, MODEL_REGISTRY, MODEL_PRICE, MODEL_VERIFY, ADMISSION_CONTROL, QUALIFICATION_CONTRACT_DIR, WAKE_LEDGER, TASK_AXIS_BACKFILL, CAPACITY_DEFERRED, CAPACITY_UNMEASURED, FLEET_SYNC, PR_CHECK_MIGRATION, VALIDATION_DAEMON, COMMITMENT, OUTBOUND, SECONDMATE_SYNC, SECONDMATE_LIVENESS, SECONDMATE_HANDOFF, NUDGE_SECONDMATES, or FMX - or when a standalone bin/fm-bootstrap.sh run prints one of those lines.
   A silent bootstrap section, or a BOOTSTRAP_INFO fact, means no skill load.
 user-invocable: false
 metadata:
@@ -44,6 +44,11 @@ When any diagnostic needs captain attention, report the plain consequence and re
 - `ADMISSION_CONTROL: invalid config/crew-dispatch.json _scheduling.admission_control - <reason>` - the optional fleet-admission policy exists but failed schema validation, so the fleet's admission layer cannot resolve a band.
   Do not dispatch new work in this home until the named field is corrected; an unknown field is refused rather than ignored precisely so a typo cannot silently disable a safety condition.
   `docs/configuration.md` "Fleet admission control" owns the schema, and `fleet-admission` owns what firstmate does with a resolved band.
+- `QUALIFICATION_CONTRACT_DIR: <exact problem>` - this home bound a capability-contract generation in `config/qualification-contract-dir` and that binding does not resolve, so no consumer can read which contracts a route's floor requires.
+  Repair the binding named in the line - a path that is not a directory, one that cannot be listed, a knob file that names no path or names two, or a generation missing a contract the tracked register ships - or remove the file to read the tracked generation.
+  Until it resolves, every qualification answer in this home is could-not-observe, so treat a withheld candidate as an unrepaired instrument and never as missing evidence: activating a bounded qualification workflow here would spend a run recording nothing.
+  Nothing falls back to the tracked contracts while a binding is refused, and that is deliberate - a silent fallback is the divergence the knob exists to close.
+  `docs/configuration.md` "Role qualification register" owns the knob, and `role-qualification` owns what firstmate does with each answer.
 - `WAKE_LEDGER: <n> outcome record(s) join no wake record` - that many recorded supervision costs point at a wake this home never drained, so every figure drawn from the ledger overcounts by up to that number.
   Treat it as a measurement defect, never as supervision work: report the count rather than any rate or total computed from the file, until those records are retired.
   The records are append-only evidence, so never rewrite, migrate or purge the file to clear the count; retire them in place with `bin/fm-wake-ledger.sh reconcile --list` to review the candidates and `invalidate --target outcome --reason <class>` to record the ruling, which excludes them from every count while leaving the raw records readable.

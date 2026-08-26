@@ -615,6 +615,313 @@ ACT
   pass "a qualified pass may not be asserted past the register"
 }
 
+# --- the home's contract-directory binding -----------------------------------
+#
+# The knob exists because the contract directory used to be bound only by an
+# environment variable each caller had to remember to export. A home keeping a
+# newer private generation was therefore read by whichever consumer happened to
+# export it while every other one silently read the tracked bytes, so ONE
+# contract id resolved to DIFFERENT bytes along a single qualification path.
+#
+# Every case below is written from outside the executables, and the instrument is
+# a contract that exists ONLY in the bound generation: which directory was read
+# is then something a reader can observe rather than something asserted about the
+# code. The refusals are asserted as refusals, because the failure mode being
+# closed is a silent fall back onto the tracked set - which looks exactly like
+# success.
+
+KNOB_HOME="$TMP_ROOT/knob-home"
+KNOB_RDIR="$TMP_ROOT/knob-records"
+KNOB_ABS="$TMP_ROOT/knob-generation"
+KNOB_REL=private-contracts
+TRACKED_CDIR="$ROOT/qualifications/contracts"
+KNOB_FILE="$KNOB_HOME/config/qualification-contract-dir"
+KNOB_ONLY=knob-only-review
+
+mkdir -p "$KNOB_HOME/config" "$KNOB_HOME/state" "$KNOB_HOME/data" "$KNOB_RDIR"
+
+# A COMPLETE generation: every contract the tracked register ships, plus one that
+# exists only here. The extra id is the instrument; the copied ones are what make
+# this a complete directory rather than a partial one.
+seed_generation() {  # <dir>
+  local dir=$1
+  rm -rf -- "$dir"
+  mkdir -p "$dir" || fail "could not create the fixture generation at $dir"
+  cp "$TRACKED_CDIR"/*.json "$dir/" \
+    || fail "the tracked generation could not be copied into $dir"
+  jq --arg id "$KNOB_ONLY" '.id = $id' "$TRACKED_CDIR/runtime-change-review.json" \
+    > "$dir/$KNOB_ONLY.json" \
+    || fail "the generation-only contract could not be written into $dir"
+}
+
+# Deliberately WITHOUT FM_QUALIFICATION_CONTRACT_DIR, so what these cases measure
+# is the home binding rather than the per-command override every other case here
+# uses.
+qual_knob() {
+  FM_HOME="$KNOB_HOME" \
+  FM_CONFIG_OVERRIDE="$KNOB_HOME/config" \
+  FM_STATE_OVERRIDE="$KNOB_HOME/state" \
+  FM_DATA_OVERRIDE="$KNOB_HOME/data" \
+  FM_QUALIFICATION_RECORD_DIR="$KNOB_RDIR" \
+  FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+  PATH="$FAKEBIN:$PATH" \
+    "$QUAL" "$@"
+}
+
+bind_knob() {  # <line...>
+  printf '%s\n' "$@" > "$KNOB_FILE"
+}
+
+unbind_knob() { rm -f -- "$KNOB_FILE"; }
+
+knob_state_field() {  # <contract> <model> <jq-path>
+  qual_knob state --contract "$1" --model "$2" --json 2>/dev/null | jq -r "$3"
+}
+
+TOKEN_DIR=FM_QUALIFICATION_CONTRACT_DIR_REFUSED
+
+test_the_contract_directory_knob_binds_the_home_and_the_environment_outranks_it() {
+  seed_generation "$KNOB_ABS"
+  unbind_knob
+
+  # NEGATIVE CONTROL: with no binding the tracked generation is read, and the
+  # generation-only contract is simply not there. Without this the case below
+  # would pass even if the knob were ignored.
+  [ "$(knob_state_field "$KNOB_ONLY" alpha/one .state)" = COULD_NOT_OBSERVE ] \
+    || fail "the control read the generation-only contract out of the TRACKED directory, so this case proves nothing"
+
+  bind_knob "$KNOB_ABS"
+  # The contract is now readable, so the answer moves off could-not-observe to
+  # the missing-record state. Nothing about the tracked generation changed.
+  [ "$(knob_state_field "$KNOB_ONLY" alpha/one .state)" = QUALIFICATION_REQUIRED ] \
+    || fail "the home binding was not read: the generation-only contract stayed unreadable"
+  [ "$(knob_state_field "$KNOB_ONLY" alpha/one .contract_dir)" = "$KNOB_ABS" ] \
+    || fail "the state receipt did not name the bound directory"
+
+  # The per-command override still outranks the binding, which is what keeps
+  # every existing caller of it working.
+  local out
+  out=$(FM_QUALIFICATION_CONTRACT_DIR="$CDIR" qual_knob state \
+    --contract "$KNOB_ONLY" --model alpha/one --json 2>/dev/null)
+  [ "$(printf '%s' "$out" | jq -r '.state')" = COULD_NOT_OBSERVE ] \
+    || fail "the environment override did not outrank the home binding"
+  [ "$(printf '%s' "$out" | jq -r '.contract_dir')" = "$CDIR" ] \
+    || fail "the receipt named the binding rather than the environment override that outranked it"
+  unbind_knob
+  pass "the contract directory knob binds the home and the environment outranks it"
+}
+
+test_the_contract_directory_knob_resolves_a_relative_path_against_the_home() {
+  seed_generation "$KNOB_HOME/$KNOB_REL"
+
+  # NEGATIVE CONTROL: the same relative name with nothing at it must refuse, so
+  # the resolution below is about where the path was anchored and not about the
+  # knob being ignored either way.
+  bind_knob "no-such-generation"
+  local out rc=0
+  out=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one 2>&1) || rc=$?
+  expect_code 4 "$rc" "a relative binding naming nothing must be could-not-observe"
+  assert_contains "$out" "$TOKEN_DIR" "the refusal did not name the binding"
+  assert_contains "$out" "$KNOB_HOME/no-such-generation" \
+    "a relative binding was not anchored on the home"
+
+  bind_knob "$KNOB_REL"
+  [ "$(knob_state_field "$KNOB_ONLY" alpha/one .state)" = QUALIFICATION_REQUIRED ] \
+    || fail "a relative binding was not resolved against the home"
+  [ "$(knob_state_field "$KNOB_ONLY" alpha/one .contract_dir)" = "$KNOB_HOME/$KNOB_REL" ] \
+    || fail "the receipt did not name the home-anchored directory"
+  unbind_knob
+  pass "the contract directory knob resolves a relative path against the home"
+}
+
+# The refusal is the whole guarantee. A binding this register cannot read as a
+# complete generation must stop each consumer BY NAME, because the alternative -
+# reading the tracked bytes instead - is indistinguishable from working.
+assert_every_consumer_refuses() {  # <what>
+  local what=$1 out rc
+  for cmd in "state --contract $KNOB_ONLY --model alpha/one" \
+             "contracts" \
+             "validate" \
+             "activate --route R-ANY" \
+             "dispatch qualify-nothing"; do
+    rc=0
+    # shellcheck disable=SC2086 # each entry is a deliberate argument list.
+    out=$(qual_knob $cmd 2>&1) || rc=$?
+    expect_code 4 "$rc" "$cmd did not report could-not-observe on $what"
+    assert_contains "$out" "$TOKEN_DIR" "$cmd did not name the refused binding on $what"
+    assert_contains "$out" "qualification-contract-dir" \
+      "$cmd did not name the knob to repair on $what"
+  done
+}
+
+assert_no_consumer_refuses() {  # <what>
+  local what=$1 out
+  for cmd in "state --contract $KNOB_ONLY --model alpha/one" \
+             "contracts" \
+             "validate" \
+             "activate --route R-ANY" \
+             "dispatch qualify-nothing"; do
+    # shellcheck disable=SC2086 # each entry is a deliberate argument list.
+    out=$(qual_knob $cmd 2>&1) || true
+    assert_not_contains "$out" "$TOKEN_DIR" \
+      "$cmd refused a sound binding, so the refusals asserted for $what prove nothing"
+  done
+}
+
+test_an_absent_contract_directory_refuses_in_every_consumer() {
+  seed_generation "$KNOB_ABS"
+  bind_knob "$KNOB_ABS"
+  assert_no_consumer_refuses "an absent directory"
+
+  bind_knob "$TMP_ROOT/there-is-no-generation-here"
+  assert_every_consumer_refuses "an absent directory"
+  unbind_knob
+  pass "an absent contract directory refuses in every consumer"
+}
+
+test_an_unlistable_contract_directory_refuses_rather_than_reading_the_tracked_set() {
+  seed_generation "$KNOB_ABS"
+  bind_knob "$KNOB_ABS"
+  local out rc=0
+  if [ "$(id -u)" = 0 ]; then
+    printf 'ok - an unlistable contract directory refuses (skipped: root ignores directory permissions)\n'
+    FM_TEST_PASSED_TESTS="${FM_TEST_PASSED_TESTS:-}test_an_unlistable_contract_directory_refuses_rather_than_reading_the_tracked_set"$'\n'
+    unbind_knob
+    return 0
+  fi
+  chmod 000 "$KNOB_ABS"
+  out=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one 2>&1) || rc=$?
+  chmod 755 "$KNOB_ABS"
+  expect_code 4 "$rc" "an unlistable generation was not could-not-observe"
+  assert_contains "$out" "$TOKEN_DIR" "an unlistable generation did not name the binding"
+  assert_contains "$out" "could not be listed" "the refusal did not say what could not be done"
+  unbind_knob
+  pass "an unlistable contract directory refuses rather than reading the tracked set"
+}
+
+test_an_empty_or_multi_path_binding_refuses_rather_than_guessing() {
+  seed_generation "$KNOB_ABS"
+  local out rc=0
+  bind_knob "" "   "
+  out=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one 2>&1) || rc=$?
+  expect_code 4 "$rc" "a binding naming no path was not could-not-observe"
+  assert_contains "$out" "names no path" "an empty binding was not refused by name"
+
+  rc=0
+  bind_knob "$KNOB_ABS" "$TRACKED_CDIR"
+  out=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one 2>&1) || rc=$?
+  expect_code 4 "$rc" "a binding naming two paths was not could-not-observe"
+  assert_contains "$out" "more than one path" "a two-path binding was not refused by name"
+  unbind_knob
+  pass "an empty or multi-path binding refuses rather than guessing"
+}
+
+test_an_incomplete_generation_refuses_and_the_environment_override_still_does_not() {
+  local partial="$TMP_ROOT/partial-generation" out rc=0
+  rm -rf -- "$partial"
+  mkdir -p "$partial"
+  jq --arg id "$KNOB_ONLY" '.id = $id' "$TRACKED_CDIR/runtime-change-review.json" \
+    > "$partial/$KNOB_ONLY.json" || fail "the partial generation could not be written"
+
+  bind_knob "$partial"
+  assert_every_consumer_refuses "an incomplete generation"
+  out=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one 2>&1) || true
+  assert_contains "$out" "runtime-risk-maker" \
+    "the refusal did not name a tracked contract the bound generation is missing"
+
+  # Completing it clears the refusal, which is what proves the refusal was about
+  # the missing contracts and not about the directory being a fixture.
+  cp "$TRACKED_CDIR"/*.json "$partial/" || fail "the generation could not be completed"
+  rc=0
+  qual_knob state --contract "$KNOB_ONLY" --model alpha/one >/dev/null 2>&1 || rc=$?
+  expect_code 3 "$rc" "a completed generation was still refused"
+
+  # The per-command override is a caller naming one narrow directory on purpose,
+  # so completeness is deliberately NOT asked of it - and every existing caller
+  # that points it at a fixture keeps working.
+  unbind_knob
+  rc=0
+  out=$(FM_QUALIFICATION_CONTRACT_DIR="$CDIR" qual_knob state \
+    --contract job-maker --model alpha/one 2>&1) || rc=$?
+  assert_not_contains "$out" "$TOKEN_DIR" \
+    "the environment override was refused for incompleteness, so a narrow fixture directory no longer works"
+  pass "an incomplete generation refuses and the environment override still does not"
+}
+
+test_the_state_receipt_names_the_generation_and_the_exact_contract_bytes() {
+  seed_generation "$KNOB_ABS"
+  bind_knob "$KNOB_ABS"
+  local json dir_digest bytes expected_bytes moved_dir_digest moved_bytes
+  json=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one --json 2>/dev/null)
+  dir_digest=$(printf '%s' "$json" | jq -r '.contract_dir_digest')
+  bytes=$(printf '%s' "$json" | jq -r '.contract_digest')
+  expected_bytes=$(sha256sum "$KNOB_ABS/$KNOB_ONLY.json" | awk '{print $1}')
+
+  [ "$(printf '%s' "$json" | jq -r '.contract_dir')" = "$KNOB_ABS" ] \
+    || fail "the receipt did not name the directory it read"
+  [ "$(printf '%s' "$json" | jq -r '.contract_dir_count')" = 5 ] \
+    || fail "the receipt did not count the contracts in the generation it read"
+  case "$dir_digest" in
+    [0-9a-f][0-9a-f]*) [ "${#dir_digest}" -eq 64 ] || fail "the generation digest is not a sha256" ;;
+    *) fail "the receipt carried no generation digest" ;;
+  esac
+  [ "$bytes" = "$expected_bytes" ] \
+    || fail "the receipt did not carry the sha256 of the exact contract bytes it read"
+  assert_contains "$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one 2>&1)" \
+    "$KNOB_ABS" "the human rendering did not name the directory it read"
+
+  # The two digests are different facts, and this is what keeps them apart: an
+  # unrelated contract changing moves the GENERATION and leaves the contract this
+  # reader read exactly where it was.
+  printf '\n' >> "$KNOB_ABS/runtime-risk-maker.json"
+  json=$(qual_knob state --contract "$KNOB_ONLY" --model alpha/one --json 2>/dev/null)
+  moved_dir_digest=$(printf '%s' "$json" | jq -r '.contract_dir_digest')
+  moved_bytes=$(printf '%s' "$json" | jq -r '.contract_digest')
+  [ "$moved_dir_digest" != "$dir_digest" ] \
+    || fail "a changed contract left the generation digest unmoved, so it cannot prove one generation was consumed"
+  [ "$moved_bytes" = "$bytes" ] \
+    || fail "an unrelated contract changing moved the digest of the bytes this reader actually read"
+  unbind_knob
+  pass "the state receipt names the generation and the exact contract bytes"
+}
+
+test_the_contract_directory_binding_is_inherited_by_a_secondmate_home() {
+  # The binding travels on the same terms as the dispatch rules it is checked
+  # against: a secondmate answering the same route's capability requirement out
+  # of a different generation is the divergence this whole knob closes.
+  local src dest
+  src="$TMP_ROOT/inherit-src/config"
+  dest="$TMP_ROOT/inherit-dest/config"
+  rm -rf -- "$TMP_ROOT/inherit-src" "$TMP_ROOT/inherit-dest"
+  mkdir -p "$src" "$dest"
+
+  # shellcheck source=bin/fm-config-inherit-lib.sh disable=SC1091
+  . "$ROOT/bin/fm-config-inherit-lib.sh"
+
+  # NEGATIVE CONTROL: with nothing to push, the destination stays empty, so the
+  # assertion below is about propagation rather than about the file existing.
+  propagate_inheritable_config "$src" "$dest" >/dev/null 2>&1 || true
+  assert_absent "$dest/qualification-contract-dir" \
+    "the destination already held a binding, so this case proves nothing"
+
+  printf '%s\n' "$KNOB_ABS" > "$src/qualification-contract-dir"
+  propagate_inheritable_config "$src" "$dest" >/dev/null 2>&1 \
+    || fail "propagating the inheritable config failed"
+  assert_present "$dest/qualification-contract-dir" \
+    "the contract directory binding was not inherited by the secondmate home"
+  [ "$(cat "$dest/qualification-contract-dir")" = "$KNOB_ABS" ] \
+    || fail "the inherited binding does not carry the primary's bytes"
+
+  # Primary-authoritative, like every other inherited item: removing it upstream
+  # mirrors that absence downstream rather than leaving a secondmate bound to a
+  # generation the primary no longer reads.
+  rm -f -- "$src/qualification-contract-dir"
+  propagate_inheritable_config "$src" "$dest" >/dev/null 2>&1 || true
+  assert_absent "$dest/qualification-contract-dir" \
+    "an unset primary binding was not mirrored as absence downstream"
+  pass "the contract directory binding is inherited by a secondmate home"
+}
+
 test_a_qualified_record_with_unchanged_dependencies_is_qualified
 test_no_record_is_qualification_required_and_never_failed
 test_a_failed_record_reads_failed_and_preserves_its_evidence
@@ -643,3 +950,11 @@ test_the_shipped_register_is_admissible
 test_the_shipped_sol_high_record_is_the_first_real_record_and_is_not_a_pass
 test_every_shipped_contract_declares_exactly_one_of_the_nine_axes
 test_a_qualified_pass_may_not_be_asserted_past_the_register
+test_the_contract_directory_knob_binds_the_home_and_the_environment_outranks_it
+test_the_contract_directory_knob_resolves_a_relative_path_against_the_home
+test_an_absent_contract_directory_refuses_in_every_consumer
+test_an_unlistable_contract_directory_refuses_rather_than_reading_the_tracked_set
+test_an_empty_or_multi_path_binding_refuses_rather_than_guessing
+test_an_incomplete_generation_refuses_and_the_environment_override_still_does_not
+test_the_state_receipt_names_the_generation_and_the_exact_contract_bytes
+test_the_contract_directory_binding_is_inherited_by_a_secondmate_home

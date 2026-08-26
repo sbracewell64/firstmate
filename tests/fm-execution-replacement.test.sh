@@ -1429,6 +1429,103 @@ SH
   pass "a reviewing lane refuses a replacement that is not independent of its maker"
 }
 
+# ONE CONTRACT DIRECTORY, OR A REFUSAL. This file used to derive the capability
+# contract directory itself, so a home binding one through
+# config/qualification-contract-dir was read by the register and NOT here, and a
+# single contract id resolved to different bytes along one qualification path.
+#
+# The two readers are driven apart deliberately: the contract this gate needs
+# exists ONLY in the home's own generation, so the tracked directory cannot
+# answer for it. What is asserted is the OUTCOME - unbound reads the tracked
+# generation and says so, an incomplete binding REFUSES by name rather than
+# quietly reading the tracked bytes instead, and a complete binding is read.
+test_a_reviewing_lane_reads_the_contract_directory_the_home_binds() {
+  local rec case_dir id out rc gen partial knob
+  rec=$(make_lane contractdir)
+  IFS='|' read -r _ _ _ _ case_dir id <<EOF
+$rec
+EOF
+  gen="$case_dir/generation"
+  partial="$case_dir/partial-generation"
+  knob="$case_dir/home/config/qualification-contract-dir"
+  mkdir -p "$gen" "$partial"
+  cp "$ROOT/qualifications/contracts"/*.json "$gen/" \
+    || fail "the tracked generation could not be copied into the bound one"
+  cat > "$gen/fixture-change-review.json" <<'JSON'
+{
+  "qualification_schema_version": 1,
+  "id": "fixture-change-review",
+  "role": "FIXTURE_CHANGE_REVIEWER",
+  "adjudication": { "required": true, "independence_dimensions": ["binding"] }
+}
+JSON
+  cp "$gen/fixture-change-review.json" "$partial/" \
+    || fail "the partial generation could not be written"
+  write_routed_config "$case_dir/home" ', "requires_capabilities": ["fixture-change-review"]'
+  cat > "$case_dir/qualification.sh" <<'SH'
+#!/usr/bin/env bash
+maker= reviewer=
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --maker) maker=$2; shift 2 ;;
+    --reviewer) reviewer=$2; shift 2 ;;
+    *) shift ;;
+  esac
+done
+[ "$maker" != "$reviewer" ] || exit 1
+exit 0
+SH
+  chmod +x "$case_dir/qualification.sh"
+  cat > "$case_dir/route.sh" <<'SH'
+#!/usr/bin/env bash
+if [ "${1:-}" = eligible ]; then
+  printf '{"candidates":[{"model":"other/small","eligible":true}],"floor_axes":{"requires_capabilities":["fixture-change-review"]}}\n'
+  exit 0
+fi
+exit 2
+SH
+  chmod +x "$case_dir/route.sh"
+
+  # NEGATIVE CONTROL: unbound, this gate reads the TRACKED generation - which is
+  # exactly what it did for every home before the binding existed - and says so
+  # by name. Without this the assertions below could pass on a gate that read
+  # nothing at all.
+  rc=0
+  out=$(FM_ROUTE_BIN="$case_dir/route.sh" \
+    FM_QUALIFICATION_BIN="$case_dir/qualification.sh" \
+    replace_lane "$case_dir" "$id" --maker "$PRIMARY") || rc=$?
+  [ "$rc" -eq 4 ] || fail "an unbound home did not read the tracked generation, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "could not be read at $ROOT/qualifications/contracts" \
+    "the unbound gate did not name the tracked generation it read"
+
+  # An INCOMPLETE binding holds the very contract this gate needs, and is still
+  # refused: a partial generation is not the complete contract directory the knob
+  # declares, and reading the tracked bytes instead is the divergence being closed.
+  printf '%s\n' "$partial" > "$knob"
+  rc=0
+  out=$(FM_ROUTE_BIN="$case_dir/route.sh" \
+    FM_QUALIFICATION_BIN="$case_dir/qualification.sh" \
+    replace_lane "$case_dir" "$id" --maker "$PRIMARY") || rc=$?
+  [ "$rc" -eq 4 ] || fail "an incomplete binding was read rather than refused, got rc=$rc"$'\n'"$out"
+  assert_contains "$out" "FM_QUALIFICATION_CONTRACT_DIR_REFUSED" \
+    "the replacement did not name the refused binding"
+  assert_contains "$out" "qualification-contract-dir" \
+    "the replacement did not name the knob to repair"
+  assert_not_contains "$out" "could not be read at $partial" \
+    "a partial generation was read as a complete one"
+
+  # A COMPLETE binding is read, and the same replacement the tracked generation
+  # could not establish is now sanctioned - which is what proves both readers
+  # resolve one directory rather than two.
+  printf '%s\n' "$gen" > "$knob"
+  rc=0
+  out=$(FM_ROUTE_BIN="$case_dir/route.sh" \
+    FM_QUALIFICATION_BIN="$case_dir/qualification.sh" \
+    replace_lane "$case_dir" "$id" --maker "$PRIMARY") || rc=$?
+  [ "$rc" -eq 0 ] || fail "the home's bound generation was not read by the replacement gate, got rc=$rc"$'\n'"$out"
+  pass "a reviewing lane reads the contract directory the home binds"
+}
+
 # --- Retirement -------------------------------------------------------------
 
 # The ledger retires with the record it belongs to, through the one owner that
@@ -1467,6 +1564,7 @@ test_a_successor_dispatch_without_a_sanctioned_successor_is_refused
 test_only_a_confirmed_launch_is_protected_from_rebinding
 test_an_ended_attempt_admits_a_fresh_execution_on_any_binding
 test_a_reviewing_lane_refuses_a_replacement_that_is_not_independent_of_its_maker
+test_a_reviewing_lane_reads_the_contract_directory_the_home_binds
 test_a_prelineage_lane_adopts_its_recorded_binding_and_replaces
 test_a_prelineage_lane_without_a_recorded_binding_refuses
 test_an_adopted_execution_is_not_re_pointed_like_an_unstarted_one

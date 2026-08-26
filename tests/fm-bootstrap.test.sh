@@ -766,6 +766,53 @@ test_treehouse_lease_check_follows_resolved_backend() {
   pass "bootstrap: the treehouse lease check follows the resolved backend's worktree provider"
 }
 
+# The capability-contract generation a home binds is reported the moment the
+# home opts in, because a generation nobody can see is precisely one that
+# silently diverges - the defect config/qualification-contract-dir exists to
+# close. Silent for a home that never bound one, an actionable line when the
+# binding does not resolve, and a no-action fact carrying the same receipt every
+# other consumer prints when it does.
+test_qualification_contract_dir_binding_is_reported_or_named() {
+  local case_dir home fakebin gen out
+  case_dir="$TMP_ROOT/qualification-contract-dir"
+  home="$case_dir/home"
+  gen="$case_dir/generation"
+  mkdir -p "$home/config" "$gen"
+  printf '%s\n' manual > "$home/config/backlog-backend"
+  fakebin=$(make_fake_toolchain "$case_dir")
+  printf '{"id":"one"}\n' > "$gen/one.json"
+  printf '{"id":"two"}\n' > "$gen/two.json"
+
+  # NEGATIVE CONTROL: an unbound home says nothing, so the lines below are
+  # evidence the report fires rather than evidence it always prints.
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_not_contains "$out" "qualification contract dir" \
+    "an unbound home reported a contract generation it never bound"
+  assert_not_contains "$out" "QUALIFICATION_CONTRACT_DIR:" \
+    "an unbound home reported a binding problem it cannot have"
+
+  printf '%s\n' "$gen" > "$home/config/qualification-contract-dir"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  assert_contains "$out" "BOOTSTRAP_INFO: qualification contract dir $gen (2 contracts, digest " \
+    "a resolved binding was not reported as a no-action fact carrying its receipt"
+  assert_not_contains "$out" "QUALIFICATION_CONTRACT_DIR:" \
+    "a resolved binding was also reported as a problem"
+
+  printf '%s\n' "$case_dir/there-is-no-generation-here" > "$home/config/qualification-contract-dir"
+  out=$(PATH="$fakebin:$BASE_PATH" FM_HOME="$home" FM_ROOT_OVERRIDE="$home" \
+    FM_FAKE_TREEHOUSE_LEASE_HELP=1 "$ROOT/bin/fm-bootstrap.sh")
+  # The register's own refusal is relayed verbatim, token and all, rather than
+  # trimmed or reworded: a diagnostic that enriches a refusal its owner already
+  # made is one an operator has to reconcile against the owner's own wording.
+  assert_contains "$out" "QUALIFICATION_CONTRACT_DIR: FM_QUALIFICATION_CONTRACT_DIR_REFUSED: config/qualification-contract-dir names $case_dir/there-is-no-generation-here" \
+    "a binding that does not resolve was not named as an actionable problem"
+  assert_not_contains "$out" "BOOTSTRAP_INFO: qualification contract dir" \
+    "a broken binding was also reported as a resolved no-action fact"
+  pass "bootstrap reports a bound contract generation and names a broken binding"
+}
+
 test_fleet_sync_timeout_scales_with_origin_backed_project_count() {
   local case_dir home fakebin fake_root out
   case_dir="$TMP_ROOT/fleet-timeout-scaled"
@@ -1666,6 +1713,7 @@ test_cmux_bundled_cli_satisfies_dependency
 test_unknown_backend_reports_invalid_configuration
 test_json_backends_require_jq_not_tmux
 test_treehouse_lease_check_follows_resolved_backend
+test_qualification_contract_dir_binding_is_reported_or_named
 test_fleet_sync_timeout_scales_with_origin_backed_project_count
 test_fleet_sync_timeout_floor_preserves_small_fleets
 test_fleet_sync_timeout_explicit_override_wins

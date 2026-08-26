@@ -16,6 +16,9 @@
 #                 "MODEL_VERIFY: <model> <probe problem>",
 #                 "ADMISSION_CONTROL: invalid config/crew-dispatch.json
 #                  _scheduling.admission_control - <reason>",
+#                 "QUALIFICATION_CONTRACT_DIR: <exact problem>",
+#                 "BOOTSTRAP_INFO: qualification contract dir <path>
+#                  (<n> contracts, digest <first 12>)",
 #                 "COMMITMENT: <id> UNMET (<label>)|COULD-NOT-OBSERVE - <evidence>",
 #                 "COMMITMENT: register unreadable - <reason>",
 #                 "COMMITMENT: register unevaluable - the register exited <rc>
@@ -173,6 +176,8 @@ DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 . "$SCRIPT_DIR/fm-admission-lib.sh"
 # shellcheck source=bin/fm-remote-readiness-lib.sh disable=SC1091
 . "$SCRIPT_DIR/fm-remote-readiness-lib.sh"
+# shellcheck source=bin/fm-qualification-lib.sh disable=SC1091
+. "$SCRIPT_DIR/fm-qualification-lib.sh"
 
 fleet_sync_origin_backed_project_count() {
   local count proj
@@ -1430,6 +1435,31 @@ crew_dispatch_validate() {
   fi
 }
 
+# The home's capability-contract binding, DETECT-ONLY. Silent unless this home
+# opted in by writing config/qualification-contract-dir, because a home reading
+# the tracked generation has nothing to say. When it is present the fact is
+# always reported, since the whole reason the knob exists is that a generation
+# nobody can see is one that silently diverges: the info line carries the
+# receipt every other consumer prints, so a session can tell at a glance whether
+# they agree.
+qualification_contract_dir_report() {
+  local knob dir gen count digest
+  knob="$CONFIG/$FM_QUALIFICATION_CONTRACT_DIR_KNOB"
+  { [ -e "$knob" ] || [ -L "$knob" ]; } || return 0
+  if ! dir=$(fm_qualification_contract_dir); then
+    echo "QUALIFICATION_CONTRACT_DIR: $dir"
+    return 0
+  fi
+  if ! gen=$(fm_qualification_contract_generation); then
+    echo "QUALIFICATION_CONTRACT_DIR: $dir resolves and its contract bytes could not be digested, so which generation this home reads COULD NOT BE OBSERVED"
+    return 0
+  fi
+  IFS=$'\t' read -r count digest <<EOF
+$gen
+EOF
+  echo "BOOTSTRAP_INFO: qualification contract dir $dir ($count contracts, digest ${digest:0:12})"
+}
+
 startup_memory_budget_setup() {
   # Primary bootstrap owns default publication. A secondmate is deliberately
   # passive here because its setting must converge from the primary through the
@@ -1526,6 +1556,7 @@ outbound_artifact_report
 crew_dispatch_validate
 model_registry_validate
 admission_control_validate
+qualification_contract_dir_report
 wake_ledger_reconcile
 wake_ledger_terminal_sweep
 if [ "${FM_BOOTSTRAP_VERBOSE_FACTS:-0}" = 1 ] \

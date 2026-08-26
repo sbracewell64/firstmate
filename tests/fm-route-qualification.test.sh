@@ -1333,6 +1333,145 @@ test_spawn_refuses_an_unqualified_binding_and_records_the_workflow() {
   pass "spawn refuses an unqualified binding and records the workflow"
 }
 
+# --- the home's contract-directory binding, through route and spawn ----------
+#
+# The register, the router and the spawn chokepoint used to reach the contract
+# directory through an environment variable each caller had to remember to
+# export, so a home keeping a newer private generation was read along part of the
+# qualification path and silently read the tracked bytes along the rest. These
+# cases run the ROUTER and the CHOKEPOINT with no such variable set, so what they
+# measure is the durable home binding.
+
+TRACKED_CDIR="$ROOT/qualifications/contracts"
+
+# The COMPLETE generation a home binding declares: this suite's fixture contracts
+# plus every contract the tracked register ships. A generation missing one of
+# those is a partial one, and the knob refuses it rather than reading it.
+seed_bound_generation() {  # <dir>
+  local dir=$1
+  rm -rf -- "$dir"
+  mkdir -p "$dir" || fail "could not create the bound generation at $dir"
+  cp "$TRACKED_CDIR"/*.json "$dir/" || fail "the tracked generation could not be copied into $dir"
+  cp "$CDIR"/*.json "$dir/" || fail "the fixture contracts could not be copied into $dir"
+}
+
+bind_generation() {  # <home> <dir>
+  printf '%s\n' "$2" > "$1/config/qualification-contract-dir"
+}
+
+# Deliberately WITHOUT FM_QUALIFICATION_CONTRACT_DIR, unlike run_route/run_spawn.
+run_route_bound() {  # <home> <args...>
+  local home=$1
+  shift
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_QUALIFICATION_RECORD_DIR="$RDIR" FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+    "$ROUTE" "$@" 2>&1
+}
+
+run_spawn_bound() {  # <home> <fakebin> <args...>
+  local home=$1 fakebin=$2
+  shift 2
+  FM_ROOT_OVERRIDE='' FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_DECISION_SURFACE_SNAPSHOT="${SNAPSHOT:-}" \
+    FM_QUALIFICATION_RECORD_DIR="$RDIR" FM_QUALIFICATION_OVERLAY_DIR="$NO_OVERLAY" \
+    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux HERDR_ENV='' PATH="$fakebin:$PATH" \
+    "$SPAWN" "$@" 2>&1
+}
+
+test_a_refused_contract_directory_withholds_every_route_candidate() {
+  local rec gen out rc=0
+  rec=$(make_home bounddir); read_home "$rec"
+  reset_register
+  write_record alpha-one-runtime runtime-job-maker RUNTIME_JOB_MAKER alpha/one alpha QUALIFIED
+  gen="$HOME_DIR/generation"
+  seed_bound_generation "$gen"
+
+  # NEGATIVE CONTROL: bound to a complete generation the same route HAS an
+  # eligible candidate, so the withholding below is caused by the broken binding
+  # and not by the fixture being unqualified anyway.
+  bind_generation "$HOME_DIR" "$gen"
+  out=$(run_route_bound "$HOME_DIR" eligible --route R-RUNTIME) || rc=$?
+  expect_code 0 "$rc" "a soundly bound generation left the route with no eligible candidate"
+  assert_contains "$out" "alpha/one" "the qualified binding was not eligible under the home binding"
+
+  bind_generation "$HOME_DIR" "$HOME_DIR/there-is-no-generation-here"
+  rc=0
+  out=$(run_route_bound "$HOME_DIR" eligible --route R-RUNTIME) || rc=$?
+  expect_code 3 "$rc" "a refused contract directory still produced an eligible candidate"
+  assert_contains "$out" "QUALIFICATION_COULD_NOT_OBSERVE" \
+    "a refused binding did not reach the router as could-not-observe"
+  assert_contains "$out" "FM_QUALIFICATION_CONTRACT_DIR_REFUSED" \
+    "the router did not carry the binding refusal through"
+  assert_contains "$out" "qualification-contract-dir" \
+    "the router did not name the knob to repair"
+  assert_not_contains "$out" "QUALIFICATION_REQUIRED" \
+    "a binding that could not be read was reported as missing evidence, which points at the wrong repair"
+
+  # The SUBJECT verdict a dispatch reads carries the same fact under its own
+  # token, so a caller acting on one model is stopped by the same binding.
+  rc=0
+  out=$(run_route_bound "$HOME_DIR" check --route R-RUNTIME --model alpha/one \
+        --harness pi --effort high) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a subject check passed on a contract directory it could not read"
+  assert_contains "$out" "FM_ROUTE_QUALIFICATION_UNREADABLE" \
+    "the subject verdict did not report the refused binding as could-not-observe"
+  assert_contains "$out" "FM_QUALIFICATION_CONTRACT_DIR_REFUSED" \
+    "the subject verdict did not carry the binding refusal through"
+
+  # The chokepoint fails closed on the same input, and never on the strength of
+  # the tracked bytes it did not read.
+  mkdir -p "$HOME_DIR/data/runtime-task"
+  printf 'You are a crewmate.\n\n# Definition of done\n' > "$HOME_DIR/data/runtime-task/brief.md"
+  rc=0
+  out=$(run_spawn_bound "$HOME_DIR" "$FAKEBIN" runtime-task "$PROJ_DIR" --scout \
+        --reason-code NOVEL_DECOMPOSITION --route R-RUNTIME --model alpha/one \
+        --effort high --harness pi) || rc=$?
+  [ "$rc" -ne 0 ] || fail "the spawn chokepoint launched on a contract directory it could not read"
+  assert_contains "$out" "FM_QUALIFICATION_CONTRACT_DIR_REFUSED" \
+    "the chokepoint refusal did not name the refused binding"
+  assert_absent "$HOME_DIR/state/runtime-task.meta" \
+    "a spawn refused for an unreadable binding still wrote task metadata"
+  pass "a refused contract directory withholds every route candidate"
+}
+
+test_the_activation_record_and_the_brief_carry_the_generation_state_reports() {
+  local rec out dir digest bytes act brief
+  rec=$(make_home generationreceipt); read_home "$rec"
+  reset_register
+
+  out=$(run_qual "$HOME_DIR" state --contract runtime-job-maker --model alpha/one --json 2>/dev/null | tail -1)
+  dir=$(printf '%s' "$out" | jq -r '.contract_dir')
+  digest=$(printf '%s' "$out" | jq -r '.contract_dir_digest')
+  bytes=$(printf '%s' "$out" | jq -r '.contract_digest')
+  [ "$dir" = "$CDIR" ] || fail "state did not report the directory it read, got $dir"
+  [ "${#digest}" -eq 64 ] || fail "state did not report a generation digest"
+  [ "$bytes" = "$(sha256sum "$CDIR/runtime-job-maker.json" | awk '{print $1}')" ] \
+    || fail "state did not report the sha256 of the exact contract bytes it read"
+
+  run_qual "$HOME_DIR" activate --route R-RUNTIME --blocks some-work >/dev/null 2>&1 \
+    || fail "the bounded workflow did not activate"
+  act="$HOME_DIR/state/qualification/$AID_ALPHA.activation"
+  brief="$HOME_DIR/data/$AID_ALPHA/brief.md"
+  assert_grep "contract_dir=$dir" "$act" "the activation record did not carry the directory it was spent against"
+  assert_grep "contract_dir_digest=$digest" "$act" "the activation record did not carry the generation digest state reports"
+  assert_grep "contract_digest=$bytes" "$act" "the activation record did not carry the exact contract bytes state reports"
+  assert_grep "$digest" "$brief" "the workflow brief did not carry the generation the workflow is spent against"
+  assert_grep "$bytes" "$brief" "the workflow brief did not carry the exact contract bytes to qualify against"
+
+  # THE CONTINUITY THIS BUYS: one contract byte moves and the receipt state now
+  # reports no longer matches the one the workflow was activated against, so a
+  # later reader can tell a stale generation from a matching one rather than
+  # assuming.
+  printf '\n' >> "$CDIR/runtime-job-change.json"
+  out=$(run_qual "$HOME_DIR" state --contract runtime-job-maker --model alpha/one --json 2>/dev/null | tail -1)
+  [ "$(printf '%s' "$out" | jq -r '.contract_dir_digest')" != "$digest" ] \
+    || fail "a changed generation still reported the digest the workflow was activated against"
+  pass "the activation record and the brief carry the generation state reports"
+}
+
 test_spawn_admits_a_qualified_binding_and_records_what_it_was_checked_against() {
   local rec
   rec=$(make_home spawnadmit); read_home "$rec"
@@ -1406,5 +1545,7 @@ test_the_workflow_bound_never_touches_the_blocked_work_accounting
 test_a_spent_workflow_bound_stops_rather_than_retrying_unbounded
 test_a_route_requiring_two_capabilities_needs_both_records
 test_spawn_refuses_an_unqualified_binding_and_records_the_workflow
+test_a_refused_contract_directory_withholds_every_route_candidate
+test_the_activation_record_and_the_brief_carry_the_generation_state_reports
 test_spawn_admits_a_qualified_binding_and_records_what_it_was_checked_against
 test_spawn_is_untouched_where_no_floor_declares_a_capability

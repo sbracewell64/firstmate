@@ -368,6 +368,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # fm-pr-lib.sh owns fm_task_id_path_safe, the task-id path-safety predicate.
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
+# fm-qualification-lib.sh owns which directory is this home's contract
+# generation. Sourced rather than re-derived, because this file reading the
+# capability contracts out of one directory while the register read them out of
+# another is exactly how one contract id came to resolve to different bytes
+# along a single qualification path.
+# shellcheck source=bin/fm-qualification-lib.sh
+. "$SCRIPT_DIR/fm-qualification-lib.sh"
 
 # The unified terminal states this file may produce. Two, not one.
 #
@@ -1378,12 +1385,16 @@ replace_independence_gate() {  # <id> <route> <alternate> <maker>
   local id=$1 route=$2 alternate=$3 maker=$4 qbin contracts c adjudicated=0 out dir
   local -a required=()
   qbin=${FM_QUALIFICATION_BIN:-$FM_ROOT/bin/fm-qualification.sh}
-  dir=${FM_QUALIFICATION_CONTRACT_DIR:-$FM_ROOT/qualifications/contracts}
   [ -n "$REPLACE_DECISION" ] || return 0
   contracts=$(printf '%s' "$REPLACE_DECISION" \
     | jq -r '(.floor_axes.requires_capabilities // []) | .[]' 2>/dev/null) \
     || replace_unobserved "route $route's declared capability contracts could not be read, so whether this assignment must be independent of its maker is unestablished"
   [ -n "$contracts" ] || return 0
+  # Resolved through the register's own owner, and only once this route is known
+  # to declare a capability at all, so a home whose binding is broken and whose
+  # routes require nothing is left inert.
+  dir=$(fm_qualification_contract_dir) \
+    || replace_unobserved "this home's capability contract directory binding is refused, so whether this assignment must be independent of its maker is unestablished: $dir"
   while IFS= read -r c; do
     [ -n "$c" ] || continue
     required+=("--contract" "$c")

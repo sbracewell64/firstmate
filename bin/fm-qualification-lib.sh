@@ -115,6 +115,7 @@ FM_QUAL_TOKEN_REQUIRED=FM_QUALIFICATION_REQUIRED
 FM_QUAL_TOKEN_STALE=FM_QUALIFICATION_STALE
 FM_QUAL_TOKEN_DUPLICATE=FM_QUALIFICATION_ALREADY_ACTIVE
 FM_QUAL_TOKEN_NO_PROMISING=FM_QUALIFICATION_NO_PROMISING_CANDIDATE
+FM_QUAL_TOKEN_CONTRACT_DIR=FM_QUALIFICATION_CONTRACT_DIR_REFUSED
 }
 
 # The five-value result vocabulary, spelled once. A synonym is refused rather
@@ -189,15 +190,183 @@ fm_qualification_home() {
   printf '%s\n' "${FM_HOME:-$(fm_qualification_code_root)}"
 }
 
-# Every location is overridable as a WHOLE DIRECTORY rather than as a root with a
-# suffix bolted on, so a test or a secondmate home names exactly the directory it
-# means and no caller has to know this layout to redirect it.
-fm_qualification_contract_dir() {
-  if [ -n "${FM_QUALIFICATION_CONTRACT_DIR:-}" ]; then
-    printf '%s\n' "$FM_QUALIFICATION_CONTRACT_DIR"
-    return 0
-  fi
+fm_qualification_config_dir() {
+  printf '%s\n' "${FM_CONFIG_OVERRIDE:-$(fm_qualification_home)/config}"
+}
+
+# The home config knob that BINDS a contract generation to this home durably.
+# docs/configuration.md "Role qualification register" owns its schema,
+# precedence, refusal semantics, receipt fields and inheritance.
+FM_QUALIFICATION_CONTRACT_DIR_KNOB=qualification-contract-dir
+
+fm_qualification_tracked_contract_dir() {
   printf '%s/qualifications/contracts\n' "$(fm_qualification_code_root)"
+}
+
+# Every contract id in a directory, one per line in C order. Exit 1 when the
+# directory cannot be listed at all, which is what keeps "no contracts" and "I
+# could not look" apart here too.
+fm_qualification_contract_ids() {  # <dir>
+  local dir=$1 f
+  { [ -d "$dir" ] && [ -r "$dir" ] && [ -x "$dir" ]; } || return 1
+  {
+    for f in "$dir"/*.json; do
+      [ -f "$f" ] || continue
+      f=${f##*/}
+      printf '%s\n' "${f%.json}"
+    done
+  } | LC_ALL=C sort
+}
+
+# THE ONE OWNER of "which directory is this home's contract generation", so
+# every consumer of the register reads one answer. Every location here is
+# overridable as a WHOLE DIRECTORY rather than as a root with a suffix bolted
+# on, so a test or a secondmate home names exactly the directory it means.
+#
+# Precedence, highest first:
+#
+#   FM_QUALIFICATION_CONTRACT_DIR   the existing PER-COMMAND override. A caller
+#                                   that exports it means exactly the directory
+#                                   it names, including a narrow fixture, so it
+#                                   is checked for existence and deliberately
+#                                   never for completeness.
+#   config/<knob>                   this home's durable BINDING. Its single line
+#                                   names the COMPLETE contract directory for the
+#                                   home, so it is additionally refused when it
+#                                   lacks a contract id the tracked generation
+#                                   carries.
+#   the tracked directory           the shipped default, unchecked, so a home
+#                                   that never opted in behaves exactly as it did
+#                                   before this knob existed.
+#
+# A REFUSAL IS NOT A FALLBACK, and that is the whole point of the knob. The
+# measured defect was a home keeping a newer private generation that only the
+# consumers happening to export the variable ever read, while every other one
+# silently read the tracked bytes - so one contract id resolved to different
+# bytes along one qualification path. Falling back to the tracked set on a bad
+# binding would rebuild exactly that, so a binding this register cannot read as a
+# complete generation refuses and every consumer surfaces it as could-not-observe.
+#
+# Prints the resolved directory and returns 0, or prints the REFUSAL REASON and
+# returns 1 - the same shape fm_qualification_resolve_target uses. The reason
+# carries FM_QUAL_TOKEN_CONTRACT_DIR itself, so every consumer that surfaces it
+# names the same token and the knob to repair without restating either.
+fm_qualification_contract_dir() {
+  local tracked knob source path nonblank want have missing
+  tracked=$(fm_qualification_tracked_contract_dir)
+
+  if [ -n "${FM_QUALIFICATION_CONTRACT_DIR:-}" ]; then
+    source="the FM_QUALIFICATION_CONTRACT_DIR environment override"
+    path=$FM_QUALIFICATION_CONTRACT_DIR
+  else
+    knob="$(fm_qualification_config_dir)/$FM_QUALIFICATION_CONTRACT_DIR_KNOB"
+    if [ ! -e "$knob" ]; then
+      printf '%s\n' "$tracked"
+      return 0
+    fi
+    source="config/$FM_QUALIFICATION_CONTRACT_DIR_KNOB"
+    if [ ! -f "$knob" ] || [ ! -r "$knob" ]; then
+      printf '%s: %s exists and could not be read, so which contract generation this home binds could not be established\n' "$FM_QUAL_TOKEN_CONTRACT_DIR" "$source"
+      return 1
+    fi
+    nonblank=$(awk '{ sub(/^[ \t]+/, ""); sub(/[ \t\r]+$/, ""); if ($0 != "") print }' "$knob" 2>/dev/null) || nonblank=
+    if [ -z "$nonblank" ]; then
+      printf '%s: %s is present and names no path; remove the file to read the tracked generation at %s, or write the one directory this home binds\n' "$FM_QUAL_TOKEN_CONTRACT_DIR" "$source" "$tracked"
+      return 1
+    fi
+    if [ "$(printf '%s\n' "$nonblank" | wc -l | tr -d ' ')" != 1 ]; then
+      printf '%s: %s carries more than one path; the knob is a single line naming the one complete contract directory for this home\n' "$FM_QUAL_TOKEN_CONTRACT_DIR" "$source"
+      return 1
+    fi
+    path=$nonblank
+  fi
+
+  # A relative binding resolves against FM_HOME, so a secondmate that inherits
+  # one converges on its OWN copy while an absolute one keeps the whole fleet on
+  # a single directory.
+  case "$path" in
+    /*) ;;
+    *) path="$(fm_qualification_home)/$path" ;;
+  esac
+
+  if [ ! -d "$path" ]; then
+    printf '%s: %s names %s, which is not a directory, so the contract generation it binds could not be read; the tracked generation at %s is deliberately NOT read instead, because a silent fallback is how one contract id came to resolve to different bytes along one path\n' \
+      "$FM_QUAL_TOKEN_CONTRACT_DIR" "$source" "$path" "$tracked"
+    return 1
+  fi
+  if [ ! -r "$path" ] || [ ! -x "$path" ]; then
+    printf '%s: %s names %s, which exists and could not be listed, so the contract generation it binds could not be read\n' "$FM_QUAL_TOKEN_CONTRACT_DIR" "$source" "$path"
+    return 1
+  fi
+
+  # COMPLETENESS is asked of the knob alone. The knob declares the complete
+  # contract directory for the home, so a generation missing a contract the
+  # tracked register ships is a partial one and refuses; the environment
+  # override is a per-command redirection whose caller means the narrow
+  # directory it named.
+  if [ -z "${FM_QUALIFICATION_CONTRACT_DIR:-}" ] && [ "$path" != "$tracked" ]; then
+    want=$(fm_qualification_contract_ids "$tracked") || want=
+    if [ -n "$want" ]; then
+      have=$(fm_qualification_contract_ids "$path") || have=
+      missing=$(LC_ALL=C comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "${have:-}") 2>/dev/null \
+        | tr '\n' ' ' | sed 's/ *$//')
+      if [ -n "$missing" ]; then
+        printf '%s: %s names %s, which is missing the contract(s) %s that the tracked generation at %s ships, so it is not the complete contract directory the knob declares and is refused rather than read as one\n' \
+          "$FM_QUAL_TOKEN_CONTRACT_DIR" "$source" "$path" "$missing" "$tracked"
+        return 1
+      fi
+    fi
+  fi
+
+  printf '%s\n' "$path"
+}
+
+fm_qualification_sha256_stdin() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum | awk '{print $1}'
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 | awk '{print $1}'
+  else
+    return 2
+  fi
+}
+
+# THE CONTINUITY RECEIPT: how many contracts the resolved generation holds and
+# one digest over their exact bytes, as "<count><TAB><digest>".
+#
+# The digest is taken over an "<id> <sha256>" manifest in C order rather than
+# over the directory path or the order the filesystem returns, so two homes
+# holding the SAME bytes in different places produce the same receipt while one
+# byte changing anywhere in the generation changes it. That is what lets a later
+# reader prove validate, activate, dispatch and state all consumed one
+# generation instead of taking it on trust.
+#
+# Returns 1 with the refusal reason when the directory binding is refused, and 2
+# when the bytes are present and could not be digested - which is
+# could-not-observe for its reader, never an empty generation.
+fm_qualification_contract_generation() {
+  local dir f id manifest='' n=0 d
+  dir=$(fm_qualification_contract_dir) || return 1
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    d=$(fm_qualification_sha256 "$f") || return 2
+    id=${f##*/}
+    manifest="$manifest${id%.json} $d
+"
+    n=$((n + 1))
+  done
+  d=$(printf '%s' "$manifest" | LC_ALL=C sort | fm_qualification_sha256_stdin) || return 2
+  [ -n "$d" ] || return 2
+  printf '%s\t%s\n' "$n" "$d"
+}
+
+# The bytes of the ONE contract a reader actually read, which is a different
+# fact from the generation it came out of: an unrelated contract changing moves
+# the generation digest and leaves this one alone.
+fm_qualification_contract_bytes_digest() {  # <contract-id>
+  local file
+  file=$(fm_qualification_contract_file "$1") || return 1
+  fm_qualification_sha256 "$file"
 }
 
 # Records come from two places and the difference is deliberate. The tracked
@@ -268,15 +437,19 @@ fm_qualification_today() {
 # Reading contracts and records
 # ---------------------------------------------------------------------------
 
+# Prints the contract's path, or the directory binding's refusal reason and 1.
 fm_qualification_contract_file() {  # <contract-id>
-  printf '%s/%s.json\n' "$(fm_qualification_contract_dir)" "$1"
+  local dir
+  dir=$(fm_qualification_contract_dir) || { printf '%s\n' "$dir"; return 1; }
+  printf '%s/%s.json\n' "$dir" "$1"
 }
 
 # fm_qualification_contract <contract-id>
-# Print the contract JSON. 0 read, 1 absent, 2 present and unreadable.
+# Print the contract JSON. 0 read, 1 absent, 2 present and unreadable, 3 the
+# home's contract directory binding is refused, so nothing was looked for.
 fm_qualification_contract() {
-  local file=$1
-  file=$(fm_qualification_contract_file "$1")
+  local file
+  file=$(fm_qualification_contract_file "$1") || return 3
   [ -f "$file" ] || return 1
   command -v jq >/dev/null 2>&1 || return 2
   jq -c . "$file" 2>/dev/null || return 2
@@ -618,12 +791,22 @@ fm_qualification_freshness_verdict() {  # <observations-json>
 # because a caller reading an empty result would have to invent a value.
 fm_qualification_state() {
   local contract_id=$1 model=$2 harness=${3:-} effort=${4:-}
-  local contract rc=0 files record='' record_id='' near='[]' problems
+  local contract rc=0 files record='' record_id='' near='[]' problems dir
   local state reason obs='[]' verdict recorded='' excluded=null
 
   if ! command -v jq >/dev/null 2>&1; then
     fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
       COULD_NOT_OBSERVE "jq is required to read the qualification register" '' '' '[]' '[]'
+    return 0
+  fi
+
+  # Asked FIRST, because a refused directory binding is a different fact from a
+  # contract that is missing out of a directory this register may read: nothing
+  # was looked for at all, so reporting it as an absent contract would send a
+  # reader to write a record when the repair is to the home's binding.
+  if ! dir=$(fm_qualification_contract_dir); then
+    fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
+      COULD_NOT_OBSERVE "$dir" '' '' '[]' '[]'
     return 0
   fi
 
@@ -637,6 +820,14 @@ fm_qualification_state() {
     2)
       fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
         COULD_NOT_OBSERVE "$FM_QUAL_TOKEN_UNREADABLE: contract $contract_id exists and could not be read" \
+        '' '' '[]' '[]'
+      return 0 ;;
+    3)
+      # The binding was sound one call ago and is not now, so nothing was looked
+      # for. Reported as the binding refusal it is rather than as a missing
+      # contract, which would send a reader to write a record.
+      fm_qualification_state_record "$contract_id" "$model" "$harness" "$effort" \
+        COULD_NOT_OBSERVE "$FM_QUAL_TOKEN_CONTRACT_DIR: the contract directory binding stopped resolving while $contract_id was being read" \
         '' '' '[]' '[]'
       return 0 ;;
   esac

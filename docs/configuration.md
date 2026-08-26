@@ -746,6 +746,39 @@ The captain ruling of 2026-08-13 separates them: missing qualification is an eng
 - `qualifications/records/<id>.json` is one observation of one binding against one contract, keyed by contract, fully qualified model, harness and native effort; provider is implied by the required fully qualified model and remains recorded as binding evidence. Harness version is recorded context rather than a key axis because its semantics cannot be probed on read, so that drift is bounded only by the declared `harness_semantics` dependency and its required `time_bound`; a later harness-version observation supersedes the earlier record for the same binding.
 - `data/qualifications/records/` is an optional home-private overlay with the same schema, for a binding or an evidence trail a home must not publish into a shared template repo. Its absence is silent; a tracked register that exists and cannot be read is could-not-observe.
 
+### Which contract generation a home reads (`config/qualification-contract-dir`)
+
+A home that keeps a newer private contract generation binds it in the optional local, gitignored `config/qualification-contract-dir`, whose single line is an absolute path or a path relative to `FM_HOME` naming the COMPLETE contract directory for that home.
+Absent means the tracked `qualifications/contracts` directory, so a home that never opted in behaves exactly as it did before the knob existed.
+`fm_qualification_contract_dir` in [`bin/fm-qualification-lib.sh`](../bin/fm-qualification-lib.sh) is the single owner of the resolution, and every consumer - `validate`, `state`, `activate`, `dispatch`, `bin/fm-route.sh`, `bin/fm-spawn.sh` and `bin/fm-attempt.sh replace` - reads that one answer.
+This knob exists because the directory used to be bound only by an environment variable each caller had to remember to export: a home's private generation was then read by whichever consumer happened to export it while every other one silently read the tracked bytes, so one contract id resolved to different bytes along a single qualification path.
+
+Precedence, highest first:
+
+| source | scope | completeness checked |
+| --- | --- | --- |
+| `FM_QUALIFICATION_CONTRACT_DIR` | one command, the existing per-command override | no - the caller means the narrow directory it named, including a fixture |
+| `config/qualification-contract-dir` | this home, durably | yes - the knob declares a complete generation |
+| tracked `qualifications/contracts` | the shipped default | not applicable |
+
+**A binding that does not resolve is a REFUSAL, never a fallback.**
+A path that is not a directory, one that exists and cannot be listed, a knob file that is unreadable, names no path, or carries more than one path, and a knob-bound directory missing any contract id the tracked generation ships are each refused, carrying the `FM_QUALIFICATION_CONTRACT_DIR_REFUSED` token and naming the knob.
+Every consumer surfaces that as could-not-observe: the register's `state` returns `COULD_NOT_OBSERVE`, `contracts`, `validate`, `activate` and `dispatch` exit 4, and the route and spawn qualification lines withhold every candidate under `QUALIFICATION_COULD_NOT_OBSERVE` rather than reporting `QUALIFICATION_REQUIRED`.
+The distinction is the action: missing evidence is qualified by a bounded workflow, while an unreadable binding is repaired at the knob and nothing is recorded against any binding.
+Reading the tracked bytes instead would rebuild the exact divergence the knob closes, which is why no consumer may fall back.
+
+**The continuity receipt.**
+`bin/fm-qualification.sh state` reports, in `--json` and in its human rendering, `contract_dir`, `contract_dir_count`, `contract_dir_digest` - one sha256 over an `<id> <sha256>` manifest of the whole generation in C order - and `contract_digest`, the sha256 of the exact contract file it read.
+The two digests are different facts: an unrelated contract changing moves the generation digest and leaves the read contract's own digest alone.
+`validate` prints the same directory, count and generation digest; `activate` records `contract_dir=`, `contract_dir_count=`, `contract_dir_digest=` and `contract_digest=` in the activation record and repeats the directory and both digests in the workflow brief; `dispatch` prints the generation resolving now beside the one the activation recorded.
+A later reader can therefore prove one generation was consumed across validate, activate, dispatch and state instead of assuming it.
+`bin/fm-bootstrap.sh` reports a resolved binding as `BOOTSTRAP_INFO: qualification contract dir <path> (<n> contracts, digest <first 12>)` and a binding that does not resolve as `QUALIFICATION_CONTRACT_DIR: <the register's own refusal>`, and stays silent for a home that never bound one.
+
+**Inheritance.**
+The knob travels to secondmate homes on the same terms as `config/crew-dispatch.json`, through the declared inherited-local-material set in [`bin/fm-config-inherit-lib.sh`](../bin/fm-config-inherit-lib.sh), because the dispatch rules a secondmate inherits are checked against these contracts and a home answering the same route's requirement out of a different generation is the divergence this knob closes.
+An absolute binding keeps the whole fleet on one directory; a home-relative one converges each home on its own copy of that generation.
+Like every inherited item it is primary-authoritative: unsetting it upstream mirrors that absence downstream.
+
 A record stores what was OBSERVED and the dependencies that observation rests on.
 It never stores the state a reader acts on: the interpreter computes that on every read, and a record carrying `state`, `verdict`, `score` or any other hand-written status word is refused outright.
 Five values are distinguished and none may collapse into another.

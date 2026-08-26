@@ -68,7 +68,14 @@
 #   FM_HOME                          the home whose config/, state/ and data/ are read
 #   FM_QUALIFICATION_BUDGET          default attempt budget for a workflow (2)
 #   FM_QUALIFICATION_TODAY           override today's date (tests)
-#   FM_QUALIFICATION_CONTRACT_DIR    read contracts from this directory instead
+#   FM_QUALIFICATION_CONTRACT_DIR    read contracts from this directory instead,
+#                                    for this one command. It outranks the home's
+#                                    config/qualification-contract-dir binding,
+#                                    which outranks the tracked generation; a
+#                                    binding that names a directory this register
+#                                    cannot read as a complete generation is
+#                                    REFUSED rather than falling back to the
+#                                    tracked set (bin/fm-qualification-lib.sh).
 #   FM_QUALIFICATION_RECORD_DIR      read tracked records from this directory
 #   FM_QUALIFICATION_OVERLAY_DIR     read the private record overlay from here
 set -u
@@ -193,9 +200,31 @@ EOF
   printf '%s\n' "$tmp"
 }
 
+# This home's contract-directory binding, surfaced as this command's own
+# refusal. The RESOLUTION is owned once by fm_qualification_contract_dir; this
+# only renders its refusal at the commands that read the register as a whole, so
+# a broken binding stops them by name instead of quietly reading tracked bytes.
+require_contract_dir() {
+  local dir
+  if ! dir=$(fm_qualification_contract_dir); then
+    printf 'fm-qualification: %s\n' "$dir" >&2
+    return "$EXIT_UNOBSERVED"
+  fi
+  printf '%s\n' "$dir"
+}
+
+# The generation receipt for a command that has already resolved the binding, as
+# "<count><TAB><digest>". An undigestable generation is could-not-observe and
+# prints nothing, so no caller can render a blank digest as a matching one.
+contract_generation() {
+  local gen
+  gen=$(fm_qualification_contract_generation) || return "$EXIT_UNOBSERVED"
+  printf '%s\n' "$gen"
+}
+
 cmd_contracts() {
   local dir f
-  dir=$(fm_qualification_contract_dir)
+  dir=$(require_contract_dir) || return "$EXIT_UNOBSERVED"
   [ -d "$dir" ] || { printf 'fm-qualification: no contract register at %s\n' "$dir" >&2; return "$EXIT_UNOBSERVED"; }
   if [ "$JSON" -eq 1 ]; then
     jq -s -c '.' "$dir"/*.json 2>/dev/null || return "$EXIT_UNOBSERVED"
@@ -255,10 +284,34 @@ state_exit_code() {  # <state>
 }
 
 cmd_state() {
-  local record state
+  local record state dir gen count digest bytes
   [ -n "${CONTRACTS[0]:-}" ] || die "state needs --contract"
   [ -n "$MODEL" ] || die "state needs --model"
   record=$(fm_qualification_state "${CONTRACTS[0]}" "$MODEL" "$HARNESS" "$EFFORT")
+
+  # THE CONTINUITY RECEIPT. The state alone says what was decided; this says out
+  # of WHICH bytes, so a later reader can prove validate, activate, dispatch and
+  # state consumed one generation rather than assuming it. A refused binding
+  # leaves all three fields null and the state itself already carries the
+  # refusal, so an absent receipt never reads as a matching one.
+  dir=$(fm_qualification_contract_dir) || dir=
+  count=; digest=; bytes=
+  if [ -n "$dir" ]; then
+    if gen=$(fm_qualification_contract_generation); then
+      IFS=$'\t' read -r count digest <<EOF
+$gen
+EOF
+    fi
+    bytes=$(fm_qualification_contract_bytes_digest "${CONTRACTS[0]}" 2>/dev/null) || bytes=
+  fi
+  record=$(printf '%s' "$record" | jq -c \
+    --arg dir "$dir" --arg digest "$digest" --arg bytes "$bytes" --arg count "$count" \
+    '. + {contract_dir: (if $dir == "" then null else $dir end),
+          contract_dir_digest: (if $digest == "" then null else $digest end),
+          contract_dir_count: (($count | tonumber?) // null),
+          contract_digest: (if $bytes == "" then null else $bytes end)}') \
+    || die "the state record could not be given its contract-generation receipt"
+
   state=$(printf '%s' "$record" | jq -r '.state')
   if [ "$JSON" -eq 1 ]; then
     printf '%s\n' "$record"
@@ -268,6 +321,9 @@ cmd_state() {
       "  state:    \(.state)",
       "  record:   \(.record // "none")",
       "  recorded: \(.recorded_result // "-")",
+      "  contract dir:    \(.contract_dir // "could-not-observe")",
+      "  dir digest:      \(.contract_dir_digest // "could-not-observe")\(if .contract_dir_count then " (" + (.contract_dir_count | tostring) + " contracts)" else "" end)",
+      "  contract digest: \(.contract_digest // "could-not-observe")",
       "  reason:   \(.reason)",
       (if (.dependencies | length) > 0
        then "  dependencies:", (.dependencies[] | "    \(.kind): \(.observation) - \(.detail)")
@@ -281,13 +337,16 @@ cmd_state() {
 }
 
 cmd_validate() {
-  local names f rc=0 problems dir line
+  local names f rc=0 problems dir line gen count digest
   names=$(routed_names_file) || names=
   local -a files=()
+  dir=
   if [ "${#POS[@]}" -gt 0 ]; then
+    # Named files are the caller's own, so the home binding is not resolved and
+    # cannot refuse them; the register-wide path below is the resolution site.
     files=("${POS[@]}")
   else
-    dir=$(fm_qualification_contract_dir)
+    dir=$(require_contract_dir) || return "$EXIT_UNOBSERVED"
     for f in "$dir"/*.json; do [ -f "$f" ] && files+=("$f"); done
     while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
 $(fm_qualification_record_files || true)
@@ -314,6 +373,16 @@ EOF
   [ -z "$names" ] || rm -f -- "$names"
   [ "$rc" -eq 0 ] || return "$EXIT_REFUSED"
   printf 'ok: %s contract and record files are admissible\n' "${#files[@]}"
+  if [ -n "$dir" ]; then
+    if gen=$(contract_generation); then
+      IFS=$'\t' read -r count digest <<EOF
+$gen
+EOF
+      printf 'contract dir %s (%s contracts, digest %s)\n' "$dir" "$count" "$digest"
+    else
+      printf 'contract dir %s (generation digest COULD NOT BE OBSERVED)\n' "$dir"
+    fi
+  fi
   return "$EXIT_OK"
 }
 
@@ -538,10 +607,16 @@ EOF
 cmd_activate() {
   local zero rc=0 class model contracts cost id tuple_id file out harness effort bootstrap route_entries route_entry
   local execution_route execution_model execution_harness execution_effort
+  local contract_dir contract_gen contract_count contract_digest contract_bytes
   [ -n "$ROUTE" ] || die "activate needs --route"
   if { [ -n "$HARNESS" ] || [ -n "$EFFORT" ]; } && [ -z "$SUBJECT_MODEL" ]; then
     die "activate requires --subject-model when --harness or --effort names a subject tuple; tuple overrides must never be applied to every route candidate"
   fi
+  # Resolved after the caller's own arguments and BEFORE any classification, so a
+  # home whose binding is refused is told that rather than being handed the route
+  # owner's downstream could-not-observe, which would send the reader to repair
+  # an observation the register never attempted.
+  contract_dir=$(require_contract_dir) || return "$EXIT_UNOBSERVED"
   local -a zero_args=(zero-route --route "$ROUTE" --json)
   [ -z "$SUBJECT_MODEL" ] || zero_args+=(--subject-model "$SUBJECT_MODEL")
   [ -z "$HARNESS" ] || zero_args+=(--harness "$HARNESS")
@@ -685,6 +760,21 @@ EOF2
   }
   fixture=$(printf '%s' "$predicate" | jq -r '.executable_predicate.fixture // empty')
   verify=$(printf '%s' "$predicate" | jq -r '.executable_predicate.verify // .executable_predicate.check // empty')
+  # The generation this workflow is being spent against, carried into BOTH the
+  # activation record and the worker's brief. A workflow that qualified a
+  # binding against one generation and was read back against another proved
+  # nothing, and without this receipt nobody could tell the two apart.
+  contract_count=; contract_digest=
+  if contract_gen=$(contract_generation); then
+    IFS=$'\t' read -r contract_count contract_digest <<EOF
+$contract_gen
+EOF
+  fi
+  contract_bytes=$(fm_qualification_contract_bytes_digest "$contract" 2>/dev/null) || contract_bytes=
+  if [ -z "$contract_digest" ] || [ -z "$contract_bytes" ]; then
+    printf 'fm-qualification: the exact contract bytes behind %s COULD NOT BE DIGESTED, so this workflow would carry no proof of which generation it was spent against and is not started\n' "$contract" >&2
+    return "$EXIT_UNOBSERVED"
+  fi
   brief_tmp=$(mktemp "$brief.XXXXXX") || {
     printf 'fm-qualification: could not write beside %s\n' "$brief" >&2
     return "$EXIT_UNOBSERVED"
@@ -695,6 +785,9 @@ EOF2
   {
     printf '# Role qualification workflow\n\n'
     printf 'Establish contract `%s` for binding `%s`, harness `%s`, and native effort `%s`.\n\n' "$contract" "$model" "$harness" "$effort"
+    printf 'Contract generation: `%s` (%s contracts, digest `%s`); contract `%s` digest `%s`.\n' \
+      "$contract_dir" "$contract_count" "$contract_digest" "$contract" "$contract_bytes"
+    printf 'Qualify against those exact bytes. A result observed against a different generation proves nothing about this one.\n\n'
     printf 'Run the contract predicate unchanged and preserve its complete evidence package.\n\n'
     [ -z "$fixture" ] || printf 'Use fixture `%s`.\n\n' "$fixture"
     [ -z "$verify" ] || printf 'Use verifier `%s`.\n\n' "$verify"
@@ -722,6 +815,10 @@ EOF2
     printf 'execution_harness=%s\n' "$execution_harness"
     printf 'execution_effort=%s\n' "$execution_effort"
     printf 'route=%s\n' "$ROUTE"
+    printf 'contract_dir=%s\n' "$contract_dir"
+    printf 'contract_dir_count=%s\n' "$contract_count"
+    printf 'contract_dir_digest=%s\n' "$contract_digest"
+    printf 'contract_digest=%s\n' "$contract_bytes"
     printf 'floor=%s\n' "$(printf '%s' "$zero" | jq -r '.floor // ""')"
     printf 'cost_rank=%s\n' "$cost"
     printf 'blocks=%s\n' "$BLOCKS"
@@ -801,8 +898,13 @@ cmd_activations() {
 cmd_dispatch() {
   local id=${POS[0]:-} file contract model route floor blocks harness effort
   local execution_route execution_model execution_harness execution_effort dispatch_rc
+  local contract_dir recorded_dir recorded_digest current_gen current_digest
   [ -n "$id" ] || die "dispatch needs an activation id"
   fm_task_id_path_safe "$id" || die "unsafe activation id: $id"
+  # The binding is resolved before anything is launched. A worker sent out to
+  # qualify a contract this home cannot currently read as one generation would
+  # produce a record nobody could attribute to a generation.
+  contract_dir=$(require_contract_dir) || return "$EXIT_UNOBSERVED"
   file=$(activation_file "$id")
   [ -f "$file" ] || { printf 'fm-qualification: no activation record at %s\n' "$file" >&2; return "$EXIT_UNOBSERVED"; }
   # Asked of the backlog owner rather than of a field here, so a workflow that was
@@ -841,6 +943,20 @@ cmd_dispatch() {
   local -a args=("$id" "$FM_HOME" --scout --reason-code NOVEL_DECOMPOSITION
                  --route "$execution_route" --model "$execution_model"
                  --harness "$execution_harness" --effort "$execution_effort")
+  # The receipt the activation recorded, beside the one resolving now, so a
+  # generation that moved under an open workflow is visible AT the launch rather
+  # than discovered when its record is read back. On stderr, and before the
+  # dry-run return, so it is observable on both paths without ever entering the
+  # command line the dry run prints.
+  recorded_dir=$(activation_field "$file" contract_dir || true)
+  recorded_digest=$(activation_field "$file" contract_dir_digest || true)
+  current_digest=
+  if current_gen=$(contract_generation); then
+    current_digest=${current_gen#*$'\t'}
+  fi
+  printf 'fm-qualification: contract dir %s, digest %s; activated against %s, digest %s\n' \
+    "$contract_dir" "${current_digest:-could-not-observe}" \
+    "${recorded_dir:-unrecorded}" "${recorded_digest:-unrecorded}" >&2
   # The candidate runs once on the bootstrap route; missing target qualification blocks only the target route, so a second invocation path would manufacture evidence.
   if [ "$DRY_RUN" -eq 1 ]; then
     printf 'bin/fm-spawn.sh'
