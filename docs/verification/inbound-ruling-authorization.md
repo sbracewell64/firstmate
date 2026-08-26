@@ -319,6 +319,7 @@ done
 | a missing plan field is defaulted rather than refused | `not ok - plan-incomplete: a missing plan field must be could-not-observe: spent: fm-auth-ba4bf45227ca421e9f11a05ba8f2fca7 landed demo-item at 1111111111111111111111111111111111111111: expected exit 4, got 0` |
 | credential screening always answers "no credential" | `not ok - credential: refusal token (missing: 'FM_AUTH_CREDENTIAL_BEARING_INPUT')` |
 | one-approval-one-landing is checked at the mint but not at the act | `not ok - one-landing: one approval performed 2 landings` |
+| sibling effect plans claim only their distinct authorization ids | `not ok - concurrent-siblings: concurrent plans entered 2 acts` |
 | the act is never performed | `not ok - nonvacuity: the act ran 0 times, not once` |
 | the local act is addressed at the mutable project alias instead of the pinned identity | `not ok - moved-project-alias: the replacement repository was retargeted` |
 | a zero-exit act is recorded applied without post-effect observation | `not ok - post-effect: unconfirmed success must be indeterminate: spent: fm-auth-...: expected exit 4, got 0` |
@@ -376,6 +377,7 @@ ok - an executable swapped after authorization refuses at effect time
 ok - an incomplete or unsupported effect plan refuses before the act
 ok - credential-bearing mechanism input is refused before the act
 ok - one approval grants one landing, even under a second plan
+ok - concurrent sibling plans share one ruling reservation
 ok - an act that exits non-zero leaves the authority indeterminate
 ok - a project alias moved after mint performs no act
 ok - successful exit requires post-effect proof

@@ -368,9 +368,10 @@ test_a_moved_forge_head_is_refused_even_when_the_caller_states_the_approved_head
 # --- 5: restart inside the spend window --------------------------------------
 
 test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
-  local dir id out rc crashed
+  local dir id sibling out rc crashed
   dir=$(new_case restart) || fail "restart: fixture failed"
   id=$(mint_id "$dir")
+  sibling=$(mint_plan "$dir" fm-ob-abcdef123456 --delete-branch | awk '{print $1}')
 
   crash_spend_during_act "$dir" "$id"
   # The crashed spend REACHED its act, which is the whole hazard being modelled,
@@ -393,6 +394,12 @@ test_a_restart_inside_the_spend_window_leaves_a_determinable_state() {
   assert_contains "$out" "FM_AUTH_SPEND_INDETERMINATE" "restart: refusal token"
   [ "$(act_count "$dir")" = "$crashed" ] \
     || fail "restart: the act ran again despite an indeterminate state"
+
+  out=$(run_auth "$dir" spend "$sibling" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 3 "$rc" "restart: a sibling passed a live ruling reservation: $out"
+  assert_contains "$out" "$id" "restart: the orphaned reservation did not name its holder"
+  [ "$(act_count "$dir")" = "$crashed" ] \
+    || fail "restart: a sibling act ran while the ruling was indeterminate"
 
   # Reconciliation is the only way out, and it needs an observation.
   out=$(run_auth "$dir" reconcile "$id" --observed not-applied 2>&1); rc=$?
@@ -993,6 +1000,45 @@ test_one_approval_grants_one_landing_even_under_a_second_plan() {
   pass "one approval grants one landing, even under a second plan"
 }
 
+test_concurrent_sibling_plans_share_one_ruling_reservation() {
+  local dir first second first_pid second_pid first_rc second_rc combined
+  dir=$(new_case concurrent-siblings) || fail "concurrent-siblings: fixture failed"
+  first=$(mint_id "$dir")
+  second=$(mint_plan "$dir" fm-ob-abcdef123456 --delete-branch | awk '{print $1}')
+  arm_blocking_act "$dir"
+
+  run_auth "$dir" spend "$first" --head "$HEAD_A" > "$dir/first.out" 2>&1 &
+  first_pid=$!
+  fm_test_reap "$first_pid"
+  run_auth "$dir" spend "$second" --head "$HEAD_A" > "$dir/second.out" 2>&1 &
+  second_pid=$!
+  fm_test_reap "$second_pid"
+
+  for _ in $(seq 1 300); do
+    [ -e "$dir/act-entered" ] && { ! kill -0 "$first_pid" 2>/dev/null || ! kill -0 "$second_pid" 2>/dev/null; } && break
+    sleep 0.01
+  done
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "concurrent-siblings: concurrent plans entered $(act_count "$dir") acts"
+  release_act "$dir"
+  wait "$first_pid"; first_rc=$?
+  wait "$second_pid"; second_rc=$?
+  combined=$(cat "$dir/first.out" "$dir/second.out")
+
+  { [ "$first_rc" -eq 0 ] && [ "$second_rc" -eq 3 ]; } \
+    || { [ "$first_rc" -eq 3 ] && [ "$second_rc" -eq 0 ]; } \
+    || fail "concurrent-siblings: exits were $first_rc and $second_rc, not one spend and one refusal: $combined"
+  assert_contains "$combined" "FM_AUTH_RULING_ALREADY_LANDED" "concurrent-siblings: refusal token"
+  if [ "$first_rc" -eq 3 ]; then
+    assert_contains "$(cat "$dir/first.out")" "$second" "concurrent-siblings: refusal did not name the holding authorization"
+  else
+    assert_contains "$(cat "$dir/second.out")" "$first" "concurrent-siblings: refusal did not name the holding authorization"
+  fi
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "concurrent-siblings: one ruling performed $(act_count "$dir") acts"
+  pass "concurrent sibling plans share one ruling reservation"
+}
+
 # --- 21: a non-zero act is not "no effect" -----------------------------------
 
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate() {
@@ -1260,6 +1306,7 @@ test_an_executable_swapped_after_authorization_refuses_at_effect_time
 test_an_incomplete_or_unsupported_effect_plan_refuses_before_the_act
 test_credential_bearing_input_is_refused_before_the_act
 test_one_approval_grants_one_landing_even_under_a_second_plan
+test_concurrent_sibling_plans_share_one_ruling_reservation
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate
 test_a_project_alias_moved_after_mint_performs_no_act
 test_a_target_ref_moved_after_mint_performs_no_act

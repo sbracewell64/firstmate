@@ -93,6 +93,8 @@ CORRELATION_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 CLAIM=
+RULING_RESERVATION=
+RULING_RESERVATION_RELEASE_ON_EXIT=0
 
 usage() { sed -n '2,/^set -u$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
@@ -123,6 +125,20 @@ auth_path() {
 auth_claim_path() {
   fm_auth_id_valid "${1:-}" || return 1
   printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
+}
+
+ruling_reservation_key() {  # <request-id> <head>
+  local sum key
+  sum=$(printf 'request_id=%s\nhead=%s\n' "$1" "$2" | fm_auth_digest) || return 1
+  key="${FM_AUTH_ID_PREFIX}${sum:0:$FM_AUTH_ID_HEX_WIDTH}"
+  fm_auth_id_valid "$key" || return 1
+  printf '%s\n' "$key"
+}
+
+ruling_reservation_path() {  # <request-id> <head>
+  local key
+  key=$(ruling_reservation_key "$1" "$2") || return 1
+  printf '%s/.%s.ruling-reservation\n' "$AUTH_DIR" "$key"
 }
 
 # Atomic by rename, so a reader never sees a half-written record and a crash
@@ -386,6 +402,82 @@ claim_release() {
   rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity" "$CLAIM/owner-group"
   rmdir "$CLAIM" 2>/dev/null || true
   CLAIM=
+}
+
+ruling_reservation_release() {
+  local holder
+  [ -n "$RULING_RESERVATION" ] || return 0
+  if [ ! -e "$RULING_RESERVATION" ]; then
+    RULING_RESERVATION=
+    RULING_RESERVATION_RELEASE_ON_EXIT=0
+    return 0
+  fi
+  holder=$(cat "$RULING_RESERVATION/holder-id" 2>/dev/null) || return 1
+  [ "$holder" = "$1" ] || return 1
+  rm -f "$RULING_RESERVATION/holder-id" || return 1
+  rmdir "$RULING_RESERVATION" 2>/dev/null || return 1
+  RULING_RESERVATION=
+  RULING_RESERVATION_RELEASE_ON_EXIT=0
+}
+
+spend_release() {
+  if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ] && [ -n "$RULING_RESERVATION" ]; then
+    ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}" || true
+  fi
+  claim_release
+}
+
+ruling_reservation_acquire() {  # <request-id> <head> <auth-id>
+  local dir
+  dir=$(ruling_reservation_path "$1" "$2") || return 1
+  mkdir -p "$AUTH_DIR" || return 1
+  mkdir "$dir" 2>/dev/null || return 1
+  if ! printf '%s\n' "$3" > "$dir/holder-id"; then
+    rm -f "$dir/holder-id"
+    rmdir "$dir" 2>/dev/null
+    return 1
+  fi
+  RULING_RESERVATION=$dir
+  RULING_RESERVATION_HOLDER=$3
+  RULING_RESERVATION_RELEASE_ON_EXIT=1
+  trap spend_release EXIT
+}
+
+RULING_RESERVATION_HOLDER=
+RULING_RESERVATION_STATE=
+ruling_reservation_state() {  # <request-id> <head>
+  local dir holder rc state
+  RULING_RESERVATION_HOLDER=
+  dir=$(ruling_reservation_path "$1" "$2") || { RULING_RESERVATION_STATE=unobserved; return; }
+  holder=$(cat "$dir/holder-id" 2>/dev/null) \
+    || { RULING_RESERVATION_STATE=unobserved; return; }
+  fm_auth_id_valid "$holder" \
+    || { RULING_RESERVATION_STATE=unobserved; return; }
+  RULING_RESERVATION_HOLDER=$holder
+  auth_read "$holder"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    state=$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')
+    case $state in
+      spent) RULING_RESERVATION_STATE=held; return ;;
+      granted|spending)
+        case $(claim_owner_state "$holder") in
+          live) RULING_RESERVATION_STATE=held ;;
+          *) RULING_RESERVATION_STATE=unobserved ;;
+        esac
+        return ;;
+    esac
+  fi
+  RULING_RESERVATION_STATE=unobserved
+}
+
+ruling_reservation_refuse() {  # <request-id> <head>
+  ruling_reservation_state "$1" "$2"
+  if [ "$RULING_RESERVATION_STATE" = held ]; then
+    refuse "$FM_AUTH_TOKEN_RULING_EXHAUSTED" \
+      "the ruling on $1 at $2 is reserved by $RULING_RESERVATION_HOLDER; one approval grants one landing"
+  fi
+  unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+    "the ruling on $1 at $2 is reserved by ${RULING_RESERVATION_HOLDER:-an unobservable authorization}, so whether its landing happened is unknown"
 }
 
 claim_group_state() {  # <process-group>
@@ -1019,6 +1111,10 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
       "authorization $id approves $grant_head but $owner#$number is now at $observed"
   fi
 
+  if ! ruling_reservation_acquire "$rid" "$grant_head" "$id"; then
+    ruling_reservation_refuse "$rid" "$grant_head"
+  fi
+
   # ONE APPROVAL, ONE LANDING. The effect plan is part of the identity, so a
   # different plan is a different authorization id - correct for identity, and
   # wrong for authority if it let one approval be landed twice. This is the same
@@ -1098,15 +1194,18 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the spend of $id could not be recorded before the act, so no act was performed"
+  RULING_RESERVATION_RELEASE_ON_EXIT=0
 
   # Written immediately before the act and never after it: a receipt written
   # afterwards could not tell an act that never ran from one that ran and could
   # not report. A receipt that cannot be written stops the act rather than
   # performing a landing whose outcome nothing could have recorded.
   if [ -n "$receipt" ]; then
-    printf 'entered\n' > "$receipt" 2>/dev/null \
-      || unobserved "$FM_AUTH_TOKEN_RECEIPT_UNOBSERVED" \
+    if ! printf 'entered\n' > "$receipt" 2>/dev/null; then
+      ruling_reservation_release "$id" || true
+      unobserved "$FM_AUTH_TOKEN_RECEIPT_UNOBSERVED" \
         "the act receipt at $receipt could not be written, so no act was performed under $id; reconcile it as not-applied"
+    fi
   fi
 
   "${FM_AUTH_ACT[@]}"
@@ -1139,9 +1238,14 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
        | .updated = $n
        | .history += [{at:$n, event:"act-failed", detail:("exit " + $c)}]')
   fi
-  auth_write "$id" "$rec" \
-    || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
+  if ! auth_write "$id" "$rec"; then
+    ruling_reservation_release "$id" || true
+    unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the act ran and its outcome could not be recorded for $id"
+  fi
+  if [ "$outcome_state" != spent ]; then
+    ruling_reservation_release "$id" || true
+  fi
   claim_release
 
   if [ "$outcome_state" = spent ]; then
@@ -1190,7 +1294,7 @@ cmd_status() {  # <auth-id>
 cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   local id=$1; shift
   local observed='' evidence=''
-  local rec state rc now
+  local rec state rc now rid head reservation
   while [ $# -gt 0 ]; do
     case $1 in
       --observed) observed=${2:-}; shift 2 || die "--observed needs a value" 2 ;;
@@ -1232,6 +1336,11 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
       "authorization $id is $state; only an indeterminate spend needs reconciling"
 
   now=$(now_iso)
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  head=$(printf '%s' "$rec" | jq -r '.grant.head')
+  reservation=$(ruling_reservation_path "$rid" "$head") \
+    || unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "the ruling reservation identity for $id could not be derived"
+  RULING_RESERVATION=$reservation
   if [ "$observed" = applied ]; then
     rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
       '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
@@ -1244,6 +1353,12 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   fi
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the reconciliation of $id could not be recorded"
+  if [ "$observed" = not-applied ]; then
+    ruling_reservation_release "$id" \
+      || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the ruling reservation for $id could not be released"
+  else
+    RULING_RESERVATION=
+  fi
   claim_release
   printf 'reconciled: %s is now %s\n' "$id" \
     "$(fm_auth_reported_status "$(printf '%s' "$rec" | jq -r '.state')")"
