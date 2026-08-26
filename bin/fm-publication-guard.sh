@@ -181,6 +181,9 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 CLAIM=
 CLAIM_OWNER_STATE=
+CLAIM_OWNER_PID=
+CLAIM_OWNER_IDENTITY=
+CLAIM_OWNER_GROUP=
 
 usage() { sed -n '2,/^set -u$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
@@ -189,87 +192,152 @@ refuse() { printf 'REFUSE %s: %s\n' "$1" "$2" >&2; exit 3; }
 cno() { printf 'CNO %s: %s\n' "$1" "$2" >&2; exit 4; }
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
-publication_claim_owner_state() {
-  local id=$1 allow_marker=${2:-0} dir pid identity group current entry name
-  dir=$(auth_claim_path "$id") || { CLAIM_OWNER_STATE=unobserved; return 1; }
+publication_claim_evidence_read() {
+  local dir=$1 entry name intent recorded
+  CLAIM_OWNER_PID=
+  CLAIM_OWNER_IDENTITY=
+  CLAIM_OWNER_GROUP=
   for entry in "$dir"/* "$dir"/.[!.]* "$dir"/..?*; do
     [ -e "$entry" ] || continue
     name=${entry##*/}
     case $name in
       owner-pid|owner-identity|owner-group) ;;
-      reclaiming) [ "$allow_marker" -eq 1 ] \
-        || { CLAIM_OWNER_STATE=unobserved; return 1; } ;;
-      *) CLAIM_OWNER_STATE=unobserved; return 1 ;;
+      reclaim-intent.json) ;;
+      *) return 4 ;;
     esac
   done
-  if ! pid=$(cat "$dir/owner-pid" 2>/dev/null) \
-    || ! identity=$(cat "$dir/owner-identity" 2>/dev/null) \
-    || ! group=$(cat "$dir/owner-group" 2>/dev/null); then
-    CLAIM_OWNER_STATE=unobserved
-    return 1
+  intent="$dir/reclaim-intent.json"
+  if [ -e "$intent" ]; then
+    jq -e 'type == "object" and keys == ["owner_group","owner_identity","owner_pid","schema"]
+      and .schema == "fm-publication-claim-reclaim.v1"
+      and (.owner_pid | type == "string")
+      and (.owner_identity | type == "string")
+      and (.owner_group | type == "string")' "$intent" >/dev/null 2>&1 || return 4
+    CLAIM_OWNER_PID=$(jq -r '.owner_pid' "$intent" 2>/dev/null) || return 4
+    CLAIM_OWNER_IDENTITY=$(jq -r '.owner_identity' "$intent" 2>/dev/null) || return 4
+    CLAIM_OWNER_GROUP=$(jq -r '.owner_group' "$intent" 2>/dev/null) || return 4
+    if [ -e "$dir/owner-pid" ]; then
+      recorded=$(cat "$dir/owner-pid" 2>/dev/null) || return 4
+      [ "$recorded" = "$CLAIM_OWNER_PID" ] || return 4
+    fi
+    if [ -e "$dir/owner-identity" ]; then
+      recorded=$(cat "$dir/owner-identity" 2>/dev/null) || return 4
+      [ "$recorded" = "$CLAIM_OWNER_IDENTITY" ] || return 4
+    fi
+    if [ -e "$dir/owner-group" ]; then
+      recorded=$(cat "$dir/owner-group" 2>/dev/null) || return 4
+      [ "$recorded" = "$CLAIM_OWNER_GROUP" ] || return 4
+    fi
+  else
+    CLAIM_OWNER_PID=$(cat "$dir/owner-pid" 2>/dev/null) \
+      && CLAIM_OWNER_IDENTITY=$(cat "$dir/owner-identity" 2>/dev/null) \
+      && CLAIM_OWNER_GROUP=$(cat "$dir/owner-group" 2>/dev/null) \
+      || return 4
   fi
-  case $pid in ''|*[!0-9]*) CLAIM_OWNER_STATE=unobserved; return 1 ;; esac
-  [ -n "$identity" ] && [ -n "$group" ] \
-    || { CLAIM_OWNER_STATE=unobserved; return 1; }
-  if ! ps -p "$pid" >/dev/null 2>&1; then
-    CLAIM_OWNER_STATE=dead
-    return 0
-  fi
-  current=$(fm_pid_identity "$pid" 2>/dev/null) \
-    || { CLAIM_OWNER_STATE=unobserved; return 1; }
+  case $CLAIM_OWNER_PID in ''|*[!0-9]*) return 4 ;; esac
+  [ -n "$CLAIM_OWNER_IDENTITY" ] && [ -n "$CLAIM_OWNER_GROUP" ] || return 4
+  return 0
+}
+
+publication_claim_owner_state() {
+  local pid=$1 identity=$2 table table_state current
+  CLAIM_OWNER_STATE=unobserved
+  table=$(LC_ALL=C ps -e -o pid= 2>/dev/null) || return 4
+  [ -n "$table" ] || return 4
+  table_state=$(printf '%s\n' "$table" | awk -v wanted="$pid" '
+    NF != 1 || $1 !~ /^[0-9]+$/ { bad=1 }
+    $1 == wanted { found=1 }
+    END {
+      if (bad || NR == 0) print "unobserved"
+      else if (found) print "present"
+      else print "absent"
+    }') || return 4
+  case $table_state in
+    absent)
+      CLAIM_OWNER_STATE=dead
+      return 0
+      ;;
+    present) ;;
+    *) return 4 ;;
+  esac
+  current=$(fm_pid_identity "$pid" 2>/dev/null) || return 4
   if [ "$current" = "$identity" ]; then
-    CLAIM_OWNER_STATE=live
-    return 1
+    CLAIM_OWNER_STATE=alive
+    return 3
   fi
   CLAIM_OWNER_STATE=dead
   return 0
 }
 
-publication_claim_reclaim_dead() {
-  local id=$1 dir marker before after state before_pid before_identity before_group
-  local after_pid after_identity after_group
-  publication_claim_owner_state "$id" || return 1
-  dir=$(auth_claim_path "$id") || { CLAIM_OWNER_STATE=unobserved; return 1; }
-  if before_pid=$(cat "$dir/owner-pid" 2>/dev/null) \
-    && before_identity=$(cat "$dir/owner-identity" 2>/dev/null) \
-    && before_group=$(cat "$dir/owner-group" 2>/dev/null); then
-    :
-  else
-    CLAIM_OWNER_STATE=unobserved
-    return 1
+publication_claim_intent_ensure() {
+  local id=$1 dir=$2 intent tmp
+  intent="$dir/reclaim-intent.json"
+  if [ -e "$intent" ]; then
+    return 0
   fi
-  before=$(printf '%s\n%s\n%s\n' "$before_pid" "$before_identity" "$before_group")
-  marker="$dir/reclaiming"
-  mkdir "$marker" 2>/dev/null || { CLAIM_OWNER_STATE=raced; return 1; }
-  auth_read "$id" || { CLAIM_OWNER_STATE=unobserved; rmdir "$marker" 2>/dev/null; return 1; }
+  tmp="$AUTH_DIR/.$id.reclaim-intent.${BASHPID:-$$}"
+  jq -n --arg pid "$CLAIM_OWNER_PID" --arg identity "$CLAIM_OWNER_IDENTITY" \
+    --arg group "$CLAIM_OWNER_GROUP" \
+    '{schema:"fm-publication-claim-reclaim.v1",owner_pid:$pid,
+      owner_identity:$identity,owner_group:$group}' > "$tmp" \
+    || { rm -f "$tmp"; return 4; }
+  if ln "$tmp" "$intent" 2>/dev/null; then
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  [ -e "$intent" ] || return 4
+}
+
+publication_claim_reclaim_dead() {
+  local id=$1 dir state rc digest tombstone had_intent=0
+  dir=$(auth_claim_path "$id") || { CLAIM_OWNER_STATE=unobserved; return 4; }
+  [ ! -e "$dir/reclaim-intent.json" ] || had_intent=1
+  publication_claim_evidence_read "$dir" || { CLAIM_OWNER_STATE=unobserved; return 4; }
+  if [ "$had_intent" -eq 0 ]; then
+    publication_claim_owner_state "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY"
+    rc=$?
+    case $rc in
+      0) ;;
+      3) return 3 ;;
+      *) CLAIM_OWNER_STATE=unobserved; return 4 ;;
+    esac
+  fi
+  publication_claim_intent_ensure "$id" "$dir" \
+    || { CLAIM_OWNER_STATE=unobserved; return 4; }
+  publication_claim_evidence_read "$dir" || { CLAIM_OWNER_STATE=unobserved; return 4; }
+  publication_claim_owner_state "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY"
+  rc=$?
+  case $rc in
+    0) ;;
+    3) return 3 ;;
+    *) CLAIM_OWNER_STATE=unobserved; return 4 ;;
+  esac
+  auth_read "$id" || { CLAIM_OWNER_STATE=unobserved; return 4; }
   state=$(auth_field '.state // ""')
   if [ "$state" != granted ]; then
     CLAIM_OWNER_STATE=unobserved
-    rmdir "$marker" 2>/dev/null
-    return 1
+    return 4
   fi
-  if after_pid=$(cat "$dir/owner-pid" 2>/dev/null) \
-    && after_identity=$(cat "$dir/owner-identity" 2>/dev/null) \
-    && after_group=$(cat "$dir/owner-group" 2>/dev/null); then
-    :
-  else
-    CLAIM_OWNER_STATE=unobserved
-    rmdir "$marker" 2>/dev/null
-    return 1
+  digest=$(printf '%s\n%s\n%s\n' "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY" \
+    "$CLAIM_OWNER_GROUP" | fm_auth_digest) \
+    || { CLAIM_OWNER_STATE=unobserved; return 4; }
+  tombstone="$AUTH_DIR/.$id.reclaimed.$digest"
+  perl -e 'exit(rename($ARGV[0], $ARGV[1]) ? 0 : ($!{ENOENT} ? 3 : 4))' \
+    "$dir" "$tombstone"
+  rc=$?
+  case $rc in
+    0|3) ;;
+    *) CLAIM_OWNER_STATE=unobserved; return 4 ;;
+  esac
+  if claim_acquire "$id" serial; then
+    rm -f "$tombstone/owner-pid" "$tombstone/owner-identity" \
+      "$tombstone/owner-group" "$tombstone/reclaim-intent.json"
+    rmdir "$tombstone" 2>/dev/null || true
+    return 0
   fi
-  after=$(printf '%s\n%s\n%s\n' "$after_pid" "$after_identity" "$after_group")
-  if [ "$after" != "$before" ] || ! publication_claim_owner_state "$id" 1; then
-    [ "$CLAIM_OWNER_STATE" = live ] || CLAIM_OWNER_STATE=unobserved
-    rmdir "$marker" 2>/dev/null
-    return 1
-  fi
-  rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group" \
-    || { CLAIM_OWNER_STATE=unobserved; rmdir "$marker" 2>/dev/null; return 1; }
-  if ! rmdir "$marker" 2>/dev/null || ! rmdir "$dir" 2>/dev/null; then
-    CLAIM_OWNER_STATE=unobserved
-    return 1
-  fi
-  claim_acquire "$id" serial
+  CLAIM_OWNER_STATE=raced
+  return 3
 }
 
 # --- the remote tip, OBSERVED -------------------------------------------------
@@ -653,7 +721,7 @@ cmd_consume() {
     fi
     if [ "$state" = granted ] && publication_claim_reclaim_dead "$id"; then
       :
-    elif [ "$CLAIM_OWNER_STATE" = live ] || [ "$CLAIM_OWNER_STATE" = raced ]; then
+    elif [ "$CLAIM_OWNER_STATE" = alive ] || [ "$CLAIM_OWNER_STATE" = raced ]; then
       refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
     else
       cno FM_PUB_CLAIM_OWNER_UNOBSERVED \

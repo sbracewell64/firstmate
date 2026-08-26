@@ -334,6 +334,15 @@ claim_fixture() {
   printf '%s\n' "$group" > "$dir/owner-group" || fail "claim-fixture: group"
 }
 
+claim_intent_fixture() {
+  local id=$1 pid=$2 identity=$3 group=$4 dir
+  dir="$FX_DATA/landing-authorizations/.$id.claim"
+  jq -n --arg pid "$pid" --arg identity "$identity" --arg group "$group" \
+    '{schema:"fm-publication-claim-reclaim.v1",owner_pid:$pid,
+      owner_identity:$identity,owner_group:$group}' \
+    > "$dir/reclaim-intent.json" || fail "claim-intent-fixture: write"
+}
+
 # --- (a) the green case, which every red below is one perturbation away from ---
 
 test_publishes_one_governed_candidate_exactly_once() {
@@ -687,6 +696,74 @@ test_refuses_to_reclaim_an_unreadable_owner_record() {
   assert_contains "$out" 'FM_PUB_CLAIM_OWNER_UNOBSERVED' "unreadable-claim: $out"
   [ "$(tip)" = '-' ] || fail "unreadable-claim: the publication executed"
   pass "an unreadable claim owner is could-not-observe"
+}
+
+test_process_table_failure_is_could_not_observe() {
+  local id out rc=0 fakebin
+  fixture process-table-unobserved
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999994 dead-owner 99999994
+  fakebin="$FX_HOME/fakebin"
+  mkdir "$fakebin" || fail "process-table-unobserved: fakebin"
+  printf '%s\n' '#!/usr/bin/env bash' 'exit 2' > "$fakebin/ps" \
+    || fail "process-table-unobserved: ps"
+  chmod +x "$fakebin/ps" || fail "process-table-unobserved: chmod"
+  out=$(PATH="$fakebin:$PATH" spend "$id") || rc=$?
+  [ "$rc" -eq 4 ] || fail "process-table-unobserved: ps failure exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_CLAIM_OWNER_UNOBSERVED' "process-table-unobserved: $out"
+  [ -d "$FX_DATA/landing-authorizations/.$id.claim" ] \
+    || fail "process-table-unobserved: the claim was reclaimed"
+  [ "$(tip)" = '-' ] || fail "process-table-unobserved: the publication executed"
+  pass "a process-table observation failure is could-not-observe"
+}
+
+test_recovers_a_reclaim_interrupted_after_intent() {
+  local id out
+  fixture reclaim-after-intent
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999995 dead-owner 99999995
+  claim_intent_fixture "$id" 99999995 dead-owner 99999995
+  out=$(spend "$id") || fail "reclaim-after-intent: recovery failed: $out"
+  assert_contains "$out" 'APPLIED' "reclaim-after-intent: $out"
+  [ "$(tip)" = "$FX_HEAD" ] || fail "reclaim-after-intent: the publication did not execute"
+  pass "a reclaim interrupted after its durable intent resumes"
+}
+
+test_recovers_a_reclaim_interrupted_while_removing_owner_files() {
+  local id out dir
+  fixture reclaim-mid-removal
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999996 dead-owner 99999996
+  claim_intent_fixture "$id" 99999996 dead-owner 99999996
+  dir="$FX_DATA/landing-authorizations/.$id.claim"
+  rm -f "$dir/owner-identity" "$dir/owner-group"
+  out=$(spend "$id") || fail "reclaim-mid-removal: recovery failed: $out"
+  assert_contains "$out" 'APPLIED' "reclaim-mid-removal: $out"
+  [ "$(tip)" = "$FX_HEAD" ] || fail "reclaim-mid-removal: the publication did not execute"
+  pass "a reclaim interrupted during owner-file removal resumes from intent"
+}
+
+test_unknown_reclaim_marker_is_could_not_observe() {
+  local id out rc=0 dir
+  fixture unknown-reclaim-marker
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999997 dead-owner 99999997
+  dir="$FX_DATA/landing-authorizations/.$id.claim"
+  mkdir "$dir/reclaiming" || fail "unknown-reclaim-marker: marker"
+  out=$(spend "$id") || rc=$?
+  [ "$rc" -eq 4 ] || fail "unknown-reclaim-marker: unknown marker exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_CLAIM_OWNER_UNOBSERVED' "unknown-reclaim-marker: $out"
+  [ -d "$dir/reclaiming" ] || fail "unknown-reclaim-marker: the marker was removed"
+  [ "$(tip)" = '-' ] || fail "unknown-reclaim-marker: the publication executed"
+  pass "an unknown reclaim marker is could-not-observe"
 }
 
 test_concurrent_dead_claim_reclaimers_execute_exactly_one_push() {
@@ -1817,6 +1894,10 @@ test_reclaims_a_dead_owner_before_spending_a_granted_authority
 test_does_not_reclaim_a_live_owner
 test_reclaims_a_reused_owner_pid_with_a_different_identity
 test_refuses_to_reclaim_an_unreadable_owner_record
+test_process_table_failure_is_could_not_observe
+test_recovers_a_reclaim_interrupted_after_intent
+test_recovers_a_reclaim_interrupted_while_removing_owner_files
+test_unknown_reclaim_marker_is_could_not_observe
 test_concurrent_dead_claim_reclaimers_execute_exactly_one_push
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
