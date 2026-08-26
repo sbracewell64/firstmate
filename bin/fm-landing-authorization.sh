@@ -391,7 +391,14 @@ claim_acquire() {  # <auth-id>
 }
 
 claim_terminate() {  # <signal>
-  local signal=$1 group=${BASHPID:-$$}
+  local signal=$1 group=${BASHPID:-$$} reservation=
+  if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ] && [ -n "$RULING_RESERVATION" ]; then
+    reservation=$RULING_RESERVATION
+    if ! ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}"; then
+      printf '%s: the ruling reservation at %s could not be released after signal %s; no act was performed\n' \
+        "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "$reservation" "$signal" >&2
+    fi
+  fi
   trap - EXIT INT TERM
   kill -s "$signal" -- "-$group" 2>/dev/null || exit 4
   exit 4
@@ -421,10 +428,28 @@ ruling_reservation_release() {
 }
 
 spend_release() {
+  local status=$? reservation= release_failed=0
+  trap - EXIT
+  # Ordinary exits release only before intent; after intent, explicit outcome or
+  # reconciliation paths decide whether an act may have happened.
   if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ] && [ -n "$RULING_RESERVATION" ]; then
-    ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}" || true
+    reservation=$RULING_RESERVATION
+    ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}" || release_failed=1
   fi
   claim_release
+  if [ "$release_failed" -eq 1 ]; then
+    printf '%s: the ruling reservation at %s could not be released; no act was performed\n' \
+      "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "$reservation" >&2
+    exit 4
+  fi
+  exit "$status"
+}
+
+ruling_reservation_release_or_unobserved() {  # <auth-id> <detail>
+  local reservation=$RULING_RESERVATION
+  ruling_reservation_release "$1" \
+    || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
+      "$2; the ruling reservation at $reservation could not be released"
 }
 
 ruling_reservation_acquire() {  # <request-id> <head> <auth-id>
@@ -1202,7 +1227,8 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
   # performing a landing whose outcome nothing could have recorded.
   if [ -n "$receipt" ]; then
     if ! printf 'entered\n' > "$receipt" 2>/dev/null; then
-      ruling_reservation_release "$id" || true
+      ruling_reservation_release_or_unobserved "$id" \
+        "the act receipt at $receipt could not be written, so no act was performed under $id"
       unobserved "$FM_AUTH_TOKEN_RECEIPT_UNOBSERVED" \
         "the act receipt at $receipt could not be written, so no act was performed under $id; reconcile it as not-applied"
     fi
@@ -1239,12 +1265,19 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
        | .history += [{at:$n, event:"act-failed", detail:("exit " + $c)}]')
   fi
   if ! auth_write "$id" "$rec"; then
-    ruling_reservation_release "$id" || true
+    ruling_reservation_release_or_unobserved "$id" \
+      "the act ran and its outcome could not be recorded for $id"
     unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the act ran and its outcome could not be recorded for $id"
   fi
   if [ "$outcome_state" != spent ]; then
-    ruling_reservation_release "$id" || true
+    if [ "$rc" -eq 0 ]; then
+      ruling_reservation_release_or_unobserved "$id" \
+        "the act under $id exited successfully, but post-effect observation did not confirm it: $POST_EFFECT_EVIDENCE"
+    else
+      ruling_reservation_release_or_unobserved "$id" \
+        "the act under $id exited $rc, which does not establish that it had no effect"
+    fi
   fi
   claim_release
 
@@ -1354,8 +1387,8 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the reconciliation of $id could not be recorded"
   if [ "$observed" = not-applied ]; then
-    ruling_reservation_release "$id" \
-      || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the ruling reservation for $id could not be released"
+    ruling_reservation_release_or_unobserved "$id" \
+      "the reconciliation of $id recorded that no act was applied"
   else
     RULING_RESERVATION=
   fi

@@ -179,6 +179,16 @@ act_count() {  # <dir>
   grep -c . "$dir/act.log"
 }
 
+ruling_reservation() {  # <dir>
+  local path
+  for path in "$1/home/data/landing-authorizations"/.*.ruling-reservation; do
+    [ -d "$path" ] || continue
+    printf '%s\n' "$path"
+    return 0
+  done
+  return 1
+}
+
 # The act the authority derives for the shared fixture's plan, as a caller would
 # assert it. Written out here rather than read back from the record, because an
 # assertion built from the thing it asserts proves nothing.
@@ -1039,6 +1049,73 @@ test_concurrent_sibling_plans_share_one_ruling_reservation() {
   pass "concurrent sibling plans share one ruling reservation"
 }
 
+test_a_pre_act_signal_releases_the_ruling_reservation() {
+  local dir id sibling job claim owner reservation out rc
+  dir=$(new_case signal-before-act) || fail "signal-before-act: fixture failed"
+  id=$(mint_id "$dir")
+  sibling=$(mint_plan "$dir" fm-ob-abcdef123456 --delete-branch | awk '{print $1}')
+  claim="$dir/home/data/landing-authorizations/.$id.claim"
+  mkfifo "$dir/receipt" || fail "signal-before-act: receipt fifo failed"
+
+  run_auth "$dir" spend "$id" --head "$HEAD_A" --receipt "$dir/receipt" \
+    > "$dir/signalled.out" 2>&1 &
+  job=$!
+  fm_test_reap "$job"
+  for _ in $(seq 1 300); do
+    reservation=$(ruling_reservation "$dir" 2>/dev/null) \
+      && [ -s "$claim/owner-pid" ] \
+      && [ "$(jq -r '.state' "$dir/home/data/landing-authorizations/$id.json")" = granted ] \
+      && break
+    sleep 0.01
+  done
+  [ -n "${reservation:-}" ] || fail "signal-before-act: no ruling reservation appeared"
+  owner=$(cat "$claim/owner-pid") || fail "signal-before-act: claim owner was unreadable"
+  kill -TERM "$owner" || fail "signal-before-act: could not signal spender"
+  wait "$job" 2>/dev/null || true
+  [ ! -e "$reservation" ] || fail "signal-before-act: signal orphaned $reservation"
+  [ "$(act_count "$dir")" = 0 ] || fail "signal-before-act: the signalled spend performed an act"
+  rm -f "$dir/receipt"
+
+  out=$(run_auth "$dir" spend "$sibling" --head "$HEAD_A" 2>&1); rc=$?
+  expect_code 0 "$rc" "signal-before-act: the released ruling could not land: $out"
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "signal-before-act: the later legitimate spend ran $(act_count "$dir") acts"
+  pass "a pre-act signal releases the ruling reservation"
+}
+
+test_a_failed_ruling_reservation_release_is_observable() {
+  local dir id job reservation out rc
+  dir=$(new_case reservation-release-failure) || fail "reservation-release-failure: fixture failed"
+  id=$(mint_id "$dir")
+  arm_blocking_act "$dir"
+  printf '%s\n' 7 > "$dir/act-rc"
+
+  run_auth "$dir" spend "$id" --head "$HEAD_A" > "$dir/release-failure.out" 2>&1 &
+  job=$!
+  fm_test_reap "$job"
+  for _ in $(seq 1 300); do
+    reservation=$(ruling_reservation "$dir" 2>/dev/null) \
+      && [ -e "$dir/act-entered" ] \
+      && break
+    sleep 0.01
+  done
+  [ -n "${reservation:-}" ] || fail "reservation-release-failure: no ruling reservation appeared"
+  : > "$reservation/release-blocker" \
+    || fail "reservation-release-failure: could not arm release failure"
+  release_act "$dir"
+  wait "$job"; rc=$?
+  out=$(cat "$dir/release-failure.out")
+  expect_code 4 "$rc" "reservation-release-failure: release failure was not could-not-observe: $out"
+  assert_contains "$out" "FM_AUTH_INTENT_UNRECORDABLE" "reservation-release-failure: token"
+  assert_contains "$out" "$reservation" "reservation-release-failure: path"
+  assert_contains "$out" "exited 7" "reservation-release-failure: act outcome"
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "reservation-release-failure: the indeterminate act ran $(act_count "$dir") times"
+  rm -f "$reservation/release-blocker"
+  rmdir "$reservation" || fail "reservation-release-failure: fixture cleanup failed"
+  pass "a failed ruling reservation release is observable"
+}
+
 # --- 21: a non-zero act is not "no effect" -----------------------------------
 
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate() {
@@ -1307,6 +1384,8 @@ test_an_incomplete_or_unsupported_effect_plan_refuses_before_the_act
 test_credential_bearing_input_is_refused_before_the_act
 test_one_approval_grants_one_landing_even_under_a_second_plan
 test_concurrent_sibling_plans_share_one_ruling_reservation
+test_a_pre_act_signal_releases_the_ruling_reservation
+test_a_failed_ruling_reservation_release_is_observable
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate
 test_a_project_alias_moved_after_mint_performs_no_act
 test_a_target_ref_moved_after_mint_performs_no_act
