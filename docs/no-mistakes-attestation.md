@@ -11,8 +11,11 @@ The check verifies a git note on `refs/notes/no-mistakes`, keyed by the pull req
 A contribution venue declares that its checks consume this evidence with a regular file at `.github/no-mistakes-attestation` whose complete content is one line: `fm-attest.v1 required`.
 `bin/fm-attest.sh required` takes the governed venue identity, its repository URL, and the policy generation recorded by `bin/fm-task-base-lib.sh` as explicit inputs.
 It fetches that generation from the governed venue into a private scratch ref and reads the declaration blob only from the fetched commit, while publication remains bound to the candidate repository and exact head.
-An absent declaration reports not-required, while a missing or inconsistent subject, an unreadable or mismatched policy ref, a non-regular declaration, unreadable bytes, or any other content reports could-not-observe with its own reason.
-The could-not-observe reasons are `policy-subject-missing`, `policy-subject-mismatch`, `policy-ref-unreadable`, `policy-ref-mismatch`, `policy-declaration-not-regular`, `policy-declaration-unreadable`, and `policy-declaration-invalid`.
+An absent declaration reports not-required only when the venue's current generation is absent too, while a missing or inconsistent subject, an unreadable or mismatched policy ref, a superseded generation, a non-regular declaration, unreadable bytes, or any other content reports could-not-observe with its own reason.
+Absence is a fact about the venue only when it is read from the venue's current generation; read from a superseded one it is a fact about that generation's age, so a declaration absent at the supplied generation and present at the venue's current one reports `policy-generation-stale` rather than not-required.
+That is the ruling's rule against reinterpreting a missing marker as not-required, and without it a candidate based before the venue adopted the gate would publish nothing and say nothing.
+The current generation is the venue's own default branch, fetched from the same governed URL into its own private scratch ref under the same trap discipline, never an object that happens to be present locally.
+The could-not-observe reasons are `policy-subject-missing`, `policy-subject-mismatch`, `policy-ref-unreadable`, `policy-ref-mismatch`, `policy-generation-stale`, `policy-generation-currency-unobservable`, `policy-declaration-not-regular`, `policy-declaration-unreadable`, and `policy-declaration-invalid`.
 The repository invariant checks the other direction: any workflow mentioning `fm-attest.sh` requires the exact declaration, but that lint is not the publication gate.
 
 A note is used rather than a commit trailer or a line of pull request prose for three reasons.

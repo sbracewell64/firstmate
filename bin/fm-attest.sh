@@ -959,6 +959,60 @@ required_policy_clear_traps() {
   trap - EXIT HUP INT TERM
 }
 
+# Whether the venue's CURRENT generation carries the declaration, so that an
+# absence read from a supplied generation can be told apart from a superseded
+# one. Sets required_currency to present, absent, or unobservable, plus
+# required_current and required_currency_detail.
+#
+# It fetches the venue's own default branch from the governed URL into its own
+# private scratch ref, under the same trap discipline as the generation read
+# above, and never trusts an object that happens to be present locally: a
+# candidate checkout routinely holds commits from several repositories, and one
+# of those deciding another venue's currency is the same wrong-subject
+# substitution the referential-integrity rule refuses one level down.
+required_currency_observe() {
+  required_currency=unobservable
+  required_current=
+  required_currency_detail=
+
+  required_scratch_ref="refs/fm-attest/policy-current-$$"
+  git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+  trap required_policy_cleanup EXIT
+  trap 'required_policy_cleanup; exit 2' HUP INT TERM
+  if ! git fetch --quiet --no-tags --force "$required_url" "HEAD:$required_scratch_ref" 2>/dev/null; then
+    required_policy_cleanup
+    required_policy_clear_traps
+    required_currency_detail="the venue's current generation could not be fetched."
+    return 0
+  fi
+  required_current=$(git rev-parse --verify --quiet "$required_scratch_ref^{commit}" 2>/dev/null) || required_current=
+  required_current_fetched=$(git rev-parse --verify --quiet 'FETCH_HEAD^{commit}' 2>/dev/null) || required_current_fetched=
+  required_policy_cleanup
+  required_policy_clear_traps
+  if [ -z "$required_current" ] || [ "$required_current" != "$required_current_fetched" ]; then
+    required_currency_detail="the venue's current generation did not resolve to one matching commit."
+    return 0
+  fi
+
+  # Equal generations cannot be stale, and answering from the entry already
+  # read avoids a second tree read that could only agree with it.
+  if [ "$required_current" = "$required_commit" ]; then
+    required_currency=absent
+    return 0
+  fi
+
+  required_current_entry=$(git ls-tree "$required_current" -- "$REQUIRED_DECLARATION" 2>/dev/null) || {
+    required_currency_detail="$REQUIRED_DECLARATION could not be inspected at the venue's current generation."
+    return 0
+  }
+  if [ -n "$required_current_entry" ]; then
+    required_currency=present
+  else
+    required_currency=absent
+  fi
+  return 0
+}
+
 required_observe() {
   required_allow_checkout=${1:-0}
   required_venue=${2-}
@@ -1022,8 +1076,35 @@ required_observe() {
       return 0
     }
     if [ -z "$required_entry" ]; then
+      # An absent declaration is only a fact about the VENUE when the
+      # generation it was read from is the venue's current one. Read from a
+      # superseded generation it is a fact about the AGE of that generation,
+      # and reporting it as not-required is the ruling's forbidden
+      # reinterpretation of a missing marker: a candidate based before the
+      # venue adopted the gate would silently publish nothing.
+      #
+      # So absence is checked twice, against two generations, and only
+      # agreement credits not-required. The current generation is the venue's
+      # own default branch, fetched from the same governed URL by the same
+      # mechanism; nothing here consults a remote of this checkout.
+      required_currency_observe
+      case "$required_currency" in
+        absent) ;;
+        present)
+          required_state=unobservable
+          required_reason=policy-generation-stale
+          required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, but the venue's current generation $required_current does, so this generation is superseded rather than undeclared."
+          return 0
+          ;;
+        *)
+          required_state=unobservable
+          required_reason=policy-generation-currency-unobservable
+          required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, and whether that generation is current could not be established: $required_currency_detail"
+          return 0
+          ;;
+      esac
       required_state=not-required
-      required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION"
+      required_evidence="$required_venue generation $required_ref carries no $REQUIRED_DECLARATION, and neither does its current generation"
       return 0
     fi
     required_mode=${required_entry%% *}
