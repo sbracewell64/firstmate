@@ -260,15 +260,41 @@ meta_value() {  # <key>
 }
 
 WT=$(meta_value worktree)
+# A READONLY task has no worktree by design and presents its own working
+# directory instead (bin/fm-readonly-lib.sh owns that surface). Without this the
+# empty worktree= below would make every LIVE readonly worker report as
+# "worktree gone (torn down?)" and exit before reading its status log, busy
+# state, or agent liveness at all - supervision would see a working inspection
+# as a finished one.
+#
+# The substitution is narrow on purpose: only a record that positively declares
+# the surface may use it, so an ordinary task whose worktree= went missing still
+# reports torn-down exactly as before.
+if [ -f "$SCRIPT_DIR/fm-readonly-lib.sh" ]; then
+  # shellcheck source=bin/fm-readonly-lib.sh
+  . "$SCRIPT_DIR/fm-readonly-lib.sh"
+  if fm_readonly_meta_is_readonly "$META"; then
+    WT=$(meta_value readonly_work)
+    [ -n "$WT" ] || WT=$(meta_value readonly_subject)
+  fi
+fi
 HARNESS=$(meta_value harness)
 # What the task PRODUCES decides whether a validation run can exist for it at
 # all; a record predating the axis split derives it from the retired kind field
 # (bin/fm-task-axis-lib.sh).
 DELIVERABLE=$(fm_task_deliverable "$META")
 
-# A torn-down (or never-created) worktree has no current state to read.
+# A torn-down (or never-created) working surface has no current state to read.
+# The precedence label stays `worktree-gone` because it is a consumed vocabulary
+# and a readonly task reaching here means the same thing; only the human detail
+# distinguishes them, so a reader is not told a worktree vanished for a task that
+# never had one.
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
   PRECEDENCE='worktree-gone'
+  if declare -F fm_readonly_meta_is_readonly >/dev/null 2>&1 \
+     && fm_readonly_meta_is_readonly "$META"; then
+    emit unknown none "readonly work directory gone (torn down?)"
+  fi
   emit unknown none "worktree gone (torn down?)"
 fi
 

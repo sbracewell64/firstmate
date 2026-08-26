@@ -587,6 +587,39 @@ test_sealed_subject_is_reclaimable_by_its_owner() {
   pass "the sealed subject is reclaimable by its owner after write permission is restored"
 }
 
+# Supervision reads current state through bin/fm-crew-state.sh, and that script
+# decides "torn down?" from whether the task's working directory still exists.
+# A readonly task has no worktree= at all, so without a surface-aware read every
+# LIVE readonly worker reported as "worktree gone (torn down?)" and exited before
+# looking at its status log, busy state, or agent liveness. A working inspection
+# read as a finished one.
+test_crew_state_does_not_report_a_live_readonly_task_as_torn_down() {
+  local home="$TMP_ROOT/crewstate" out
+  mkdir -p "$home/state" "$home/data" "$home/work"
+  printf 'window=x:1\nendpoint_task_id=rot\nexecution_surface=readonly\nreadonly_subject=%s/subject\nreadonly_work=%s/work\nproject=/p\nharness=claude\nkind=scout\nrole=crew\ndeliverable=scout\n' \
+    "$home" "$home" > "$home/state/rot.meta"
+  printf 'fm-status-event.v1 verb=working phase=inspect summary=looking\n' > "$home/state/rot.status"
+
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-crew-state.sh" rot 2>&1)
+  assert_not_contains "$out" "worktree gone" "a live readonly task must not report as a torn-down worktree"
+
+  # And the torn-down case still reports, in wording that fits a task which never
+  # had a worktree.
+  rmdir "$home/work"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-crew-state.sh" rot 2>&1)
+  assert_contains "$out" "readonly work directory gone" "a torn-down readonly task must still report as gone"
+
+  # An ORDINARY task with a missing worktree still reports exactly as before.
+  printf 'window=x:1\nendpoint_task_id=ord\nworktree=%s/nope\nproject=/p\nharness=claude\nkind=scout\nrole=crew\ndeliverable=scout\n' \
+    "$home" > "$home/state/ord.meta"
+  out=$(FM_HOME="$home" FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    "$ROOT/bin/fm-crew-state.sh" ord 2>&1)
+  assert_contains "$out" "worktree gone" "an ordinary task with a missing worktree must still report torn down"
+  pass "crew state reads a readonly task's own working surface instead of a worktree it never had"
+}
+
 test_scripts_are_shellcheck_clean() {
   command -v shellcheck >/dev/null 2>&1 || { pass "shellcheck unavailable; skipped"; return; }
   shellcheck "$ROOT/bin/fm-readonly-lib.sh" "$ROOT/bin/fm-readonly-subject.sh" \
@@ -620,6 +653,7 @@ test_guard_without_task_identity_denies_rather_than_allows
 test_readonly_dispatch_refuses_contradictory_combinations
 test_unenforceable_harness_is_refused_by_name
 test_endpoint_validation_accepts_readonly_without_widening_it
+test_crew_state_does_not_report_a_live_readonly_task_as_torn_down
 test_readonly_dispatch_never_consults_the_pool
 test_scripts_are_shellcheck_clean
 unlock_seals

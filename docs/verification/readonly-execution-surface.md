@@ -79,5 +79,9 @@ Until one lands, a readonly dispatch needs the dialog answered before the worker
 
 ## What the portable suite pins
 
-`tests/fm-readonly-surface.test.sh`, 27 cases, run green at `1f2141ad`:
-the three-valued `execution_surface` read, the derived enforceable-harness roster, the readonly launch template carrying no bypass, seal exactness against a dirty working copy, create-only sealing, git's own reason on a failed seal, prevention, three-way detection, could-not-observe, the write-intent allow/deny matrix including the sealed-subject carve-out and the fail-closed arm, the authority-widening denials with the forge and backlog read verbs still allowed, the seal being reclaimable by its owner so teardown can remove it, the transport's deny shaping and empty stdout, every dispatch refusal, the by-name unenforceable-harness refusal, and endpoint validation accepting a readonly subject without widening the ordinary contract.
+`tests/fm-readonly-surface.test.sh`, 28 cases, run green at `1f2141ad`:
+the three-valued `execution_surface` read, the derived enforceable-harness roster, the readonly launch template carrying no bypass, seal exactness against a dirty working copy, create-only sealing, git's own reason on a failed seal, prevention, three-way detection, could-not-observe, the write-intent allow/deny matrix including the sealed-subject carve-out and the fail-closed arm, the authority-widening denials with the forge and backlog read verbs still allowed, the seal being reclaimable by its owner so teardown can remove it, the transport's deny shaping and empty stdout, every dispatch refusal, the by-name unenforceable-harness refusal, endpoint validation accepting a readonly subject without widening the ordinary contract, and crew state reading a readonly task's own working surface.
+
+**One defect this suite exists to keep fixed.**
+`bin/fm-crew-state.sh` decides "torn down?" from whether the task's working directory still exists, and a readonly task has no `worktree=` at all.
+Before the surface-aware read, every LIVE readonly worker reported as `worktree gone (torn down?)` and exited before looking at its status log, busy state, or agent liveness, so supervision saw a working inspection as a finished one.
