@@ -715,6 +715,8 @@ An allowlist entry must also record `verified_at` and a `price_at_verification` 
 Every field above records what the price **was** when someone wrote it down, and `catalogue_sources` compares that against another local file that ages at the same rate.
 A repricing that lands after both were written is therefore invisible to all of it, and the allowlist keeps saying zero, correctly, about a price that no longer exists.
 `price_metadata` closes that by naming where to ask the provider itself, and `bin/fm-model-price-lib.sh` owns the resulting decision.
+Both URLs must identify public metadata because the fetch suppresses ambient curl and netrc configuration so no credential can attach to the request.
+The live-price path never reads a provider or harness credential store.
 
 Declaring it is an opt-in, per provider.
 A provider without `price_metadata` is untouched: nothing is fetched and nothing refuses, so a home that never opted in behaves exactly as it did before this existed.

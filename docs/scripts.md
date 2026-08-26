@@ -128,7 +128,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-tmux-lib.sh`         | Shared tmux pane primitives for composer capture, verified submit, and the submit-time busy check |
 | `fm-peek.sh`             | Print a bounded tail of a crewmate endpoint                                          |
 | `fm-model-registry-lib.sh` | Parse and validate the model registry and own the zero-budget and concurrency routing decisions |
-| `fm-model-verify.sh`     | Live entitlement probes and local price-drift checks for routed models              |
+| `fm-model-price-lib.sh`  | Fetch, normalize, and decide fresh provider model and resolved-endpoint prices without ambient credentials |
+| `fm-model-verify.sh`     | Refresh provider prices, enforce zero cost, run entitlement probes, and check local price drift for routed models |
 | `fm-route.sh`            | Read a route's floor, pool, eligible candidates and same-pool failover substitute, and record model or provider availability holds |
 | `fm-route-lib.sh`        | Own the routed-pool, capability-floor and availability rules every route decision applies |
 | `fm-capacity-lib.sh`     | Map current `quota-axi` evidence to three-valued routed-model capacity without changing the capability floor |
