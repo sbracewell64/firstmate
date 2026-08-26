@@ -50,7 +50,7 @@ The harness run takes about five minutes and must be allowed to finish; a run cu
 
 One run is the whole procedure, whichever subject moved.
 `bin/fm-test-isolation-proof.sh` executes every candidate first, publishes only from a run that observed every one of them good, and then asks `bin/fm-test-run.sh --check-coverage` whether the artifact it just wrote is accepted.
-A run with a failed or unmeasured subject prints `FM_ISOLATION_ARTIFACT WITHHELD`, exits non-zero, and leaves the previously committed artifact byte-identical.
+A run with a failed or unmeasured subject prints `FM_ISOLATION_ARTIFACT WITHHELD`, exits non-zero, and leaves the previous genuine artifact byte-identical.
 That is not tolerance in reverse: the measured failure stays a failure, and the fix is the subject, not a second pass.
 
 A proof also goes stale when the default branch changes a proven subject, because pull request CI checks the merge of the branch into that branch.
