@@ -646,7 +646,7 @@ make_send_fakebin() {  # <dir> -> echoes fakebin dir; logs every tmux call to $F
 set -u
 { printf 'tmux'; for a in "$@"; do printf '\x1f%s' "$a"; done; printf '\n'; } >> "${FM_TMUX_LOG:?}"
 case "${1:-}" in
-  send-keys) exit 0 ;;
+  send-keys) fm-fake-deliver "$*"; exit 0 ;;
   display-message)
     for a in "$@"; do case "$a" in *cursor_y*) printf '1\n'; exit 0 ;; esac; done
     printf 'fakepane\n'; exit 0 ;;
@@ -793,6 +793,8 @@ test_peek_conformance_old_vs_new() {
 make_spawn_fakebin() {  # <dir> <fake-worktree-path> -> echoes fakebin dir
   local dir=$1 wt=$2 fb="$1/fakebin"
   mkdir -p "$fb"
+  # Built by hand rather than through fm_fakebin, so install the stub worker.
+  fm_fake_deliver_install "$fb"
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
 set -u
@@ -802,6 +804,7 @@ case "\${1:-}" in
     for a in "\$@"; do case "\$a" in *pane_current_path*) printf '%s\\n' "$wt"; exit 0 ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
+  send-keys) fm-fake-deliver "\$*"; exit 0 ;;
 esac
 exit 0
 SH
@@ -854,6 +857,8 @@ run_spawn_case() {  # <bin-root> <fakebin> <log> <state> <data> <config> <proj> 
 make_spawn_symlink_fakebin() {  # <dir> <initial-project-path> <worktree-path> -> echoes fakebin dir
   local dir=$1 initial_path=$2 wt=$3 fb="$1/fakebin" counter="$1/poll-count"
   mkdir -p "$fb"
+  # Built by hand rather than through fm_fakebin, so install the stub worker.
+  fm_fake_deliver_install "$fb"
   : > "$counter"
   cat > "$fb/tmux" <<SH
 #!/usr/bin/env bash
@@ -872,6 +877,7 @@ case "\${1:-}" in
     ;; esac; done
     printf 'firstmate\\n'; exit 0 ;;
   list-windows) exit 0 ;;
+  send-keys) fm-fake-deliver "\$*"; exit 0 ;;
 esac
 exit 0
 SH
@@ -1064,7 +1070,7 @@ test_spawn_default_backend_writes_no_meta_field() {
   fm_git_worktree "$proj" "$wt" "fm/$id"
   local fb
   fb=$(make_spawn_fakebin "$TMP_ROOT/nobackend-fake" "$wt")
-  mkdir -p "$data/$id"; printf 'brief\n' > "$data/$id/brief.md"
+  mkdir -p "$data/$id"; printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   state="$TMP_ROOT/nobackend-state"; config="$TMP_ROOT/nobackend-config"
   mkdir -p "$state" "$config"
 
@@ -1086,7 +1092,7 @@ test_spawn_explicit_backend_flag_beats_autodetect_herdr_env() {
   id="explicitbackendz4"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   fb=$(make_spawn_fakebin "$TMP_ROOT/explicit-backend-fake" "$wt")
-  mkdir -p "$data/$id"; printf 'brief\n' > "$data/$id/brief.md"
+  mkdir -p "$data/$id"; printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   state="$TMP_ROOT/explicit-backend-state"; config="$TMP_ROOT/explicit-backend-config"
   mkdir -p "$state" "$config"
 
@@ -1110,7 +1116,7 @@ test_spawn_autodetect_nesting_resolves_tmux_silently() {
   id="nestbackendz5"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   fb=$(make_spawn_fakebin "$TMP_ROOT/nest-fake" "$wt")
-  mkdir -p "$data/$id"; printf 'brief\n' > "$data/$id/brief.md"
+  mkdir -p "$data/$id"; printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   state="$TMP_ROOT/nest-state"; config="$TMP_ROOT/nest-config"
   mkdir -p "$state" "$config"
 

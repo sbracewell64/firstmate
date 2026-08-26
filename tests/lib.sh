@@ -61,6 +61,18 @@ FM_TEST_EMPTY_COMMITMENT_DIR="${TMPDIR:-/tmp}/fm-test-empty-commitment-register"
 mkdir -p "$FM_TEST_EMPTY_COMMITMENT_DIR" 2>/dev/null || true
 export FM_COMMITMENT_DIR="$FM_TEST_EMPTY_COMMITMENT_DIR"
 
+# Pin the spawn delivery-confirmation bound to a SINGLE READING for every suite,
+# by the same discipline as the two above: the tests decide the inputs.
+# bin/fm-spawn.sh waits up to FM_SPAWN_DELIVERY_TIMEOUT_SECS for a worker's first
+# turn before it will report a spawn. A fake session provider launches no agent,
+# so a suite whose subject is allocation, routing, or metadata would pay that
+# entire bound as dead sleep on every spawn and reach the same verdict anyway.
+# Zero takes exactly one reading and does not wait; it does not weaken the check,
+# because a stub that never reports a turn is unconfirmed at one second and at
+# sixty. A suite that wants the wait itself - tests/fm-spawn-brief-delivery.test.sh,
+# which owns this contract - sets its own bound per invocation, which wins.
+export FM_SPAWN_DELIVERY_TIMEOUT_SECS=0
+
 # Point every suite's session-start outbound sweep (bootstrap's OUTBOUND check)
 # at an EMPTY backlog, for the same reason and by the same discipline as the two
 # above: whether this machine's real fleet currently strands work must not leak
@@ -341,7 +353,54 @@ fm_test_reap_orphans
 fm_fakebin() {
   local dir=$1 fakebin="$1/fakebin"
   mkdir -p "$fakebin"
+  fm_fake_deliver_install "$fakebin"
   printf '%s\n' "$fakebin"
+}
+
+# fm_fake_deliver_install <fakebin>: install `fm-fake-deliver`, the helper a
+# suite's fake session provider calls from its send-keys arm. Installed by
+# fm_fakebin for every suite, so a fake only has to CALL it.
+#
+# WHY IT EXISTS: bin/fm-spawn.sh refuses to report a spawn it could not observe
+# reaching a worker - it reports FM_SPAWN_DELIVERY_UNCONFIRMED and exits 3
+# instead. A fake session provider launches no agent, so a suite whose subject is
+# allocation, routing, metadata, or trace context would stop at that gate even
+# though its own subject succeeded. This helper simulates exactly what a worker
+# that consumed its launch brief does first - it reports - and nothing else. It
+# is the stub HARNESS, not a bypass: a suite that does not call it still gets the
+# honest unconfirmed verdict.
+#
+# It resolves the task the way fm-spawn does: the launch line names the brief as
+# <data>/<id>/brief.md, and the state directory comes from the
+# FM_STATE_OVERRIDE/FM_HOME environment the spawn already passed to its children.
+# When it can resolve neither it does nothing, so a mis-wired suite fails loudly
+# at the delivery gate instead of passing on a silent no-op.
+fm_fake_deliver_install() {
+  local fakebin=$1
+  cat > "$fakebin/fm-fake-deliver" <<'SH'
+#!/usr/bin/env bash
+set -u
+line=${1:-}
+# Only the launch line carries the brief; every other send-keys call (the
+# GOTMPDIR export, treehouse get, a steer) must produce nothing.
+case "$line" in *launch-brief*) : ;; *) exit 0 ;; esac
+# Pull the brief path out of the launch line and take the task id from its
+# PARENT directory. The data root is whatever FM_DATA_OVERRIDE says, so it is
+# not always literally named "data"; only the <id>/brief.md tail is invariant.
+task_path=$(printf '%s\n' "$line" | grep -oE '[^ '"'"'"]+/[^ '"'"'"/]+/brief\.md' | head -n 1)
+[ -n "$task_path" ] || exit 0
+id=${task_path%/brief.md}
+id=${id##*/}
+state=${FM_STATE_OVERRIDE:-}
+if [ -z "$state" ]; then
+  [ -n "${FM_HOME:-}" ] || exit 0
+  state="$FM_HOME/state"
+fi
+[ -d "$state" ] || exit 0
+printf 'fm-status-event.v1 verb=working phase=setup summary=stub worker consumed the launch brief\n' \
+  >> "$state/$id.status" 2>/dev/null || true
+SH
+  chmod +x "$fakebin/fm-fake-deliver"
 }
 
 fm_fake_exit0() {

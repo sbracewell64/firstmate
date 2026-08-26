@@ -314,6 +314,7 @@ make_producer_fakebin() {  # <dir> -> prints fakebin
 #!/usr/bin/env bash
 case "$*" in *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;; esac
 case "${1:-}" in display-message) printf 'firstmate\n'; exit 0 ;; esac
+case "${1:-}" in send-keys) fm-fake-deliver "$*" ;; esac
 exit 0
 SH
   chmod +x "$fakebin/tmux"
@@ -333,7 +334,7 @@ run_producer_spawn() {  # <name> <id> <spawn-arg>...
   printf 'codex\n' > "$home/config/crew-harness"
   fm_git_worktree "$proj" "$wt" "wt-$name"
   mkdir -p "$home/data/$id"
-  printf 'brief\n' > "$home/data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$home/data/$id/brief.md"
   touch "$home/state/.last-watcher-beat"
   FM_ROOT_OVERRIDE='' FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \

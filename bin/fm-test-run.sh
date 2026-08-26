@@ -288,6 +288,7 @@ family_for_basename() {
     fm-route-enforcement.test.sh|fm-route-qualification.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-launch.test.sh|fm-send-strict.test.sh|\
     fm-spawn-batch.test.sh|fm-spawn-dispatch-profile.test.sh|\
+    fm-spawn-brief-delivery.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)
       printf '%s\n' backend-dispatch
@@ -578,6 +579,7 @@ tests/fm-session-start.test.sh 66070
 tests/fm-sessionstart-nudge.test.sh 274
 tests/fm-shared-captain-inheritance.test.sh 4615
 tests/fm-slot-reservation.test.sh 31683
+tests/fm-spawn-brief-delivery.test.sh 16029
 tests/fm-spawn-dispatch-profile.test.sh 51982
 tests/fm-spawn-worktree-settle.test.sh 13775
 tests/fm-startup-memory-budget.test.sh 6509

@@ -21,7 +21,8 @@ esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
-  has-session|new-session|new-window|send-keys|kill-window) exit 0 ;;
+  send-keys) fm-fake-deliver "$*"; exit 0 ;;
+  has-session|new-session|new-window|kill-window) exit 0 ;;
 esac
 exit 0
 SH
@@ -41,7 +42,7 @@ make_spawn_case() {
   grok_home="$case_dir/grok"
   id="grok-$name-x1"
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" "$grok_home"
-  printf 'brief\n' > "$home/data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$home/data/$id/brief.md"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   touch "$home/state/.last-watcher-beat"
   printf '%s\n' "$case_dir|$home|$proj|$wt|$fakebin|$grok_home|$id"

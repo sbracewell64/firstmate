@@ -72,6 +72,7 @@ case "${1:-}" in
         esac
       done
     fi
+    fm-fake-deliver "$*"
     exit 0
     ;;
 esac

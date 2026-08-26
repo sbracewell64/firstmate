@@ -141,7 +141,7 @@ make_spawn_case() {
   fakebin=$(make_spawn_fakebin "$case_dir/fake")
   mkdir -p "$home/data/$id" "$home/projects" "$home/state" "$home/config" "$home/.kimi-code"
   printf '# Kimi test config\ndefault_model = "test"\n' > "$home/.kimi-code/config.toml"
-  printf 'brief for kimi\n' > "$home/data/$id/brief.md"
+  printf 'Task brief for kimi: exercise the spawn path end to end.\n' > "$home/data/$id/brief.md"
   printf 'kimi\n' > "$home/config/crew-harness"
   fm_git_worktree "$proj" "$wt" "wt-$name"
   touch "$home/state/.last-watcher-beat"
@@ -481,12 +481,19 @@ test_kimi_unconfirmed_delivery_fails_loudly() {
   rc=0
   out=$(FM_FAKE_KIMI_DELIVERY=no run_spawn \
     "$CASE_DIR" "$HOME_DIR" "$PROJ_DIR" "$WT_DIR" "$FAKEBIN_DIR" "$id") || rc=$?
-  [ "$rc" -ne 0 ] || fail "an unconfirmed kimi delivery should fail"
-  assert_contains "$out" "kimi brief pointer delivery was not confirmed" \
-    "unconfirmed kimi delivery lacked a loud diagnostic"
-  assert_grep 'failed: kimi brief pointer delivery was not confirmed' "$HOME_DIR/state/$id.status" \
-    "unconfirmed kimi delivery did not leave a supervisor-visible failure"
-  pass "fm-spawn: kimi treats a silent pointer drop as a failed spawn"
+  # Kimi's pointer predicate is now one source inside fm-spawn's fleet-wide
+  # delivery contract rather than a kimi-only gate, so a silent pointer drop
+  # reports that contract's typed could-not-observe result. It is deliberately
+  # NOT `failed`: nothing here observed the work failing, only that no first
+  # turn could be seen.
+  expect_code 3 "$rc" "an unconfirmed kimi delivery should report could-not-observe"
+  assert_contains "$out" "FM_SPAWN_DELIVERY_UNCONFIRMED" \
+    "unconfirmed kimi delivery lacked a loud typed diagnostic"
+  assert_not_contains "$out" "spawned $id" \
+    "a kimi spawn whose pointer was dropped was still reported as spawned"
+  assert_grep 'verb=blocked key=spawn-delivery-unconfirmed' "$HOME_DIR/state/$id.status" \
+    "unconfirmed kimi delivery did not leave a supervisor-visible record"
+  pass "fm-spawn: kimi treats a silent pointer drop as could-not-observe, loudly and visibly"
 }
 
 test_kimi_readiness_gate_precedes_pointer() {

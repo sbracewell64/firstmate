@@ -23,6 +23,26 @@
 #
 # All successful data commands print exactly one value and no diagnostics.
 # A non-match exits 1 silently. Invalid use exits 2. Bash 3.2 compatible.
+#
+# Exit codes:
+#   0  success - the single value is on stdout, nothing on stderr
+#   1  non-match (kind, classify, body): the input is not an operational input.
+#      Silent by design: "this is not one of ours" is an ANSWER, not a fault.
+#   2  refused: invalid use, an unsupported kind, or a body this owner cannot
+#      encode. ALWAYS names the reason on one line of stderr.
+#
+# WHY encode's refusal is LOUD while a non-match stays silent (task
+# spawn-refuses-empty-brief-and-confirms-delivery): the launch templates in
+# bin/fm-launch-lib.sh embed this CLI inside a DOUBLE-QUOTED command
+# substitution - `"$(... encode launch-brief < <brief>)"`. A silent non-zero
+# exit there does not abort the launch: the pane shell substitutes the empty
+# output and execs the harness with a present-but-EMPTY prompt argument, which
+# every harness accepts as a valid invocation with nothing to do. The agent
+# then idles forever with an empty composer while the spawn reports success.
+# A refusal that prints nothing is indistinguishable from an empty answer, so
+# encode names its reason on stderr and the caller (bin/fm-spawn.sh) runs this
+# encoder itself, before any allocation, rather than discovering the refusal
+# through a prompt that was never delivered.
 
 FM_OPERATIONAL_MARK=$'\xE2\x81\xA3'
 FM_OPERATIONAL_PREFIX="${FM_OPERATIONAL_MARK}FIRSTMATE_OP: "
@@ -186,11 +206,18 @@ fm_message_mark_from_firstmate() {  # <message> <result-var>
   printf -v "$result_var" '%s' "$transformed"
 }
 
+# fm_operational_read_stdin: read the whole body from stdin into <result-var>.
+# Returns 3 when stdin itself could not be read, which is a DIFFERENT answer
+# from an empty body and must not be narrowed into it. The trailing `x` guards
+# the newline command substitution strips; cat's own status rides out beside it
+# because a subshell assignment cannot escape.
 fm_operational_read_stdin() {  # <result-var>
-  local result_var=${1-} value
+  local result_var=${1-} value read_status
   [ -n "$result_var" ] || return 2
-  value=$(cat; printf x)
-  value=${value%x}
+  value=$(cat; printf 'x%s' "$?")
+  read_status=${value##*x}
+  value=${value%x*}
+  [ "$read_status" = 0 ] || return 3
   printf -v "$result_var" '%s' "$value"
 }
 
@@ -206,6 +233,19 @@ Current construction kinds:
   session-start watcher turn-end-guard away-supervisor from-firstmate launch-brief
 
 The from-firstmate kind uses its established live-charter-compatible carrier.
+
+Exit codes:
+  0  success: the single value is on stdout, nothing on stderr
+  1  non-match (kind, classify, body): not an operational input; silent
+  2  refused: invalid use, unknown kind, or an unencodable body
+
+encode NEVER refuses silently. Its callers embed it in "$(...)", where a silent
+non-zero status becomes an empty prompt argument instead of a stopped launch,
+so every refusal names itself on one line of stderr:
+  FM_OPINPUT_UNREADABLE_BODY  stdin could not be read
+  FM_OPINPUT_UNKNOWN_KIND     not a current construction kind
+  FM_OPINPUT_EMPTY_BODY       the body is empty
+  FM_OPINPUT_REFUSED          the body could not be encoded
 EOF
 }
 
@@ -216,9 +256,26 @@ fm_operational_main() {
       fm_operational_usage
       ;;
     encode)
-      [ "$#" -eq 2 ] || return 2
-      fm_operational_read_stdin input || return 2
-      fm_operational_input_construct "$argument" "$input" output || return 2
+      [ "$#" -eq 2 ] || { fm_operational_usage >&2; return 2; }
+      # Each refusal names itself on one line of stderr. A caller that embeds
+      # this in "$(...)" cannot see a bare non-zero status (see the header), so
+      # silence here becomes an empty prompt rather than a stopped launch.
+      if ! fm_operational_read_stdin input; then
+        echo "FM_OPINPUT_UNREADABLE_BODY: encode $argument: stdin could not be read" >&2
+        return 2
+      fi
+      if ! fm_operational_kind_is_current "$argument" && [ "$argument" != from-firstmate ]; then
+        echo "FM_OPINPUT_UNKNOWN_KIND: encode $argument: not a current construction kind ($FM_OPERATIONAL_KINDS from-firstmate)" >&2
+        return 2
+      fi
+      if [ -z "$input" ]; then
+        echo "FM_OPINPUT_EMPTY_BODY: encode $argument: refusing to encode an empty body; the caller would launch with an empty prompt" >&2
+        return 2
+      fi
+      if ! fm_operational_input_construct "$argument" "$input" output; then
+        echo "FM_OPINPUT_REFUSED: encode $argument: body could not be encoded" >&2
+        return 2
+      fi
       printf '%s' "$output"
       ;;
     kind)

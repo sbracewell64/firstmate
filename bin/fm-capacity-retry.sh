@@ -429,6 +429,27 @@ stop_wait_for_record_failure() {  # <id> <record-file> <detail>
   return 1
 }
 
+# delivery_unconfirmed_resume: bin/fm-spawn.sh sent the launch command for this
+# deferred task but could not observe a first turn (its exit 3). That is
+# COULD-NOT-OBSERVE, not a refused dispatch, and the difference decides whether
+# a second worker lands on this lane: the spawn already took a slot, published
+# state/<id>.meta, and recorded the execution as dispatched, so substituting the
+# next model in the pool - what a refusal does - would put a SECOND worker on a
+# lane whose agent may well be running. It never substitutes.
+#
+# The capacity wait itself is over either way (the dispatch was admitted and
+# launched), so the deferral record is retired rather than left to re-fire; what
+# remains is an observation firstmate must make by hand.
+delivery_unconfirmed_resume() {  # <record-file> <id> <route>
+  local rec=$1 id=$2 route=$3 line
+  rm -f -- "$rec"
+  line="blocked: $id launched onto route $route once capacity returned, but its first turn could not be observed; inspect the lane before any re-dispatch"
+  grep -qxF -- "$line" "$STATE/$id.status" 2>/dev/null \
+    || printf '%s\n' "$line" >> "$STATE/$id.status" 2>/dev/null || true
+  printf '%s resumed after its capacity wait but delivery could not be observed; inspect it with bin/fm-crew-state.sh %s and do not re-dispatch it\n' \
+    "$id" "$id"
+}
+
 keep_waiting() {  # <record-file> <refusal>
   local rec=$1 refusal=$2 id signature now tmp rc=0 defer_out sig line
   id=$(field "$rec" task)
@@ -645,6 +666,10 @@ tick_one_claimed() {  # <record-file> <force>
       # do but stay quiet.
       return 0
       ;;
+    *FM_SPAWN_DELIVERY_UNCONFIRMED*)
+      delivery_unconfirmed_resume "$rec" "$id" "$route"
+      return 0
+      ;;
     *)
       # The ROUTE OWNER names the substitute. `fm-route.sh next --after` returns
       # the eligible candidates that FOLLOW the recorded model in pool order,
@@ -684,7 +709,13 @@ tick_one_claimed() {  # <record-file> <force>
             "$id" "$candidate" "$route" "$effort"
           return 0
         fi
-        case "$out" in *FM_SPAWN_CAPACITY_DEFERRED*) return 0 ;; esac
+        case "$out" in
+          *FM_SPAWN_CAPACITY_DEFERRED*) return 0 ;;
+          *FM_SPAWN_DELIVERY_UNCONFIRMED*)
+            delivery_unconfirmed_resume "$rec" "$id" "$route"
+            return 0
+            ;;
+        esac
       done <<EOF
 $eligible
 EOF

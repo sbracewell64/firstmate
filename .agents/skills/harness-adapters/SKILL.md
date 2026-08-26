@@ -32,6 +32,7 @@ The primary-session "no turn ends blind" guard contract and harness hook install
 The primary-session watcher wake protocols are rendered from `docs/supervision-protocols/` by `bin/fm-supervision-instructions.sh`.
 The supervision knowledge lives here: busy state, exit command, interrupt, dialogs, resume behavior, and quirks.
 Each adapter's `Busy state` row names only which semantic source that harness uses; `bin/fm-busy-lib.sh` owns the contract itself, including verdicts, source attribution, and the verification gates that keep an unverified harness at unknown.
+`bin/fm-spawn.sh` now confirms for EVERY harness, not just kimi, that the launch brief actually reached a worker before it reports a spawn, and reports `FM_SPAWN_DELIVERY_UNCONFIRMED` as could-not-observe when no first turn appears within its declared bound; that script's header owns the accepted evidence and the exit codes.
 
 Never dispatch a crewmate or secondmate on an unverified adapter.
 If `config/crew-harness` or `config/secondmate-harness` names an unverified adapter, tell the captain under `AGENTS.md` section 9 that the requested worker runtime is not verified yet, use firstmate's own verified runtime for current work, and ask only whether to verify the requested runtime before future use.

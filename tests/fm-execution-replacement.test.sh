@@ -121,6 +121,9 @@ esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) printf "can't find session: firstmate\n" >&2; exit 1 ;;
+  # The stub harness: consume the launch brief and report a first turn, so the
+  # dispatch reaches its own subject instead of stopping at the delivery gate.
+  send-keys) fm-fake-deliver "$*"; exit 0 ;;
 esac
 exit 0
 SH

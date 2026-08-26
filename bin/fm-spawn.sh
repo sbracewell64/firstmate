@@ -240,7 +240,56 @@
 # a firstmate-owned global hook and registry, and a gitignored per-task pointer.
 # grok uses a firstmate-owned global hook under ${GROK_HOME:-$HOME/.grok}/hooks
 # plus a gitignored .fm-grok-turnend worktree pointer and a state token.
-# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path>
+# On success prints: spawned <id> harness=<name> kind=<ship|scout|secondmate> [mode=<mode> yolo=<on|off>] window=<backend-target> worktree=<path> [delivery=<source>]
+#
+# BRIEF DELIVERABILITY, checked before ANY allocation (no slot, no window, no
+# worktree, no metadata, no attempt spent). Every harness except kimi receives
+# the brief as ONE argv element built by the CREWMATE'S pane shell expanding
+# "$(fm-operational-input.sh encode launch-brief < <brief>)". fm-spawn types that
+# literal and stops watching, so an empty brief, an unreadable brief, and an
+# unresolvable encoder path all collapse into the same present-but-EMPTY prompt
+# that every harness accepts and then idles on. This gate runs the real encoder
+# over the real brief and refuses with a typed reason:
+#   FM_SPAWN_BRIEF_MISSING      no brief file
+#   FM_SPAWN_BRIEF_UNREADABLE   present but not readable
+#   FM_SPAWN_BRIEF_EMPTY        0 bytes
+#   FM_SPAWN_BRIEF_TOO_SHORT    under FM_SPAWN_BRIEF_MIN_BYTES (default 8)
+#   FM_SPAWN_BRIEF_PLACEHOLDER  still carries the unfilled {TASK} line
+#   FM_SPAWN_BRIEF_TOO_LARGE    over the single-argument launch envelope
+#   FM_SPAWN_BRIEF_UNENCODABLE  the encoder refused for any other reason
+# The envelope is the kernel's per-ARGUMENT limit MAX_ARG_STRLEN = 32 * PAGE_SIZE
+# (131072 bytes on a 4 KiB page; measured by bisection - 131071 accepted, 131072
+# E2BIG), NOT getconf ARG_MAX, which bounds the whole vector and never binds
+# first. It is declared in spawn_max_prompt_bytes() and overridable with
+# FM_SPAWN_MAX_PROMPT_BYTES. kimi is exempt from the envelope alone: it launches
+# bare and is handed a brief POINTER, so nothing rides its argv.
+#
+# DELIVERY CONFIRMATION, checked after the launch line is sent. Sending the line
+# and pressing Enter confirms a KEYSTROKE, not a SESSION; crediting one as the
+# other reported a live pane with an empty composer, and a pane that died with
+# `Argument list too long`, as successful spawns. Every harness (kimi included -
+# its pane predicate is one source inside this contract, no longer a parallel
+# gate) must now show positive evidence of a first turn within
+# FM_SPAWN_DELIVERY_TIMEOUT_SECS (default 60; 0 takes one reading and does not
+# wait), polled every FM_SPAWN_DELIVERY_POLL_SECS (default 0.5). Accepted
+# evidence, any one of: the worker's first status event; a turn-end marker that
+# was absent before this launch; the semantic busy record advanced PAST the
+# spawn seed (bin/fm-busy-lib.sh - `arm` seeds seq=1 before the send, so only
+# seq > 1 proves an adapter event landed); the backend's native busy verdict;
+# grok's isolated rendered-tail verdict; kimi's composed pane predicate.
+# A secondmate spawn is exempt and says so: its busy contract is deliberately
+# never armed and its charter is idle by default, so it has no first turn to
+# observe. Its brief still passes the deliverability gate above.
+#
+# Exit codes:
+#   0  spawned, and the brief was observed to reach a worker
+#   1  refused or failed - nothing was launched, or the launch itself failed
+#   3  COULD-NOT-OBSERVE: the launch command was sent but no first turn was seen
+#      within the bound. Prints FM_SPAWN_DELIVERY_UNCONFIRMED with the reason,
+#      the bound, and composer/busy diagnostics. This is neither success nor
+#      failure: the window, worktree, slot, attempt record and state/<id>.meta
+#      are all left intact because the agent may be running. Inspect with
+#      bin/fm-crew-state.sh <id>; never blind-retry a task on this line alone.
 # A ship task records the explicit mode/yolo it was passed; a secondmate spawn records
 # mode=secondmate, yolo=off, home=, and projects=; a scout records neither, and both the
 # success line and state/<id>.meta omit them.
@@ -1225,6 +1274,24 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
       fi
     fi
   fi
+  # A batch member that launched but whose first turn could not be observed is
+  # could-not-observe (exit 3), not a failed spawn: its lane holds a slot,
+  # metadata, and a dispatched execution. Reporting it as FAILED would invite
+  # exactly the re-dispatch that puts a second worker on that lane, so the two
+  # outcomes are named apart and the batch's own status keeps them apart too.
+  batch_report_one() {  # <status> <id=repo>
+    case "$1" in
+      0) return 0 ;;
+      3)
+        echo "batch: DELIVERY UNCONFIRMED for ${2%%=*} (${2#*=}) - it launched but no first turn was seen; inspect that lane with bin/fm-crew-state.sh ${2%%=*} and do not re-dispatch it" >&2
+        [ "$rc" -ne 0 ] || rc=3
+        ;;
+      *)
+        echo "batch: FAILED to spawn ${2%%=*} (${2#*=})" >&2
+        rc=1
+        ;;
+    esac
+  }
   for pair in "${POS[@]}"; do
     case "$pair" in
       *=*) : ;;
@@ -1235,9 +1302,13 @@ if [ "${#POS[@]}" -gt 0 ] && [ "${POS[0]}" != "$idpart" ] && case "$idpart" in *
       rc=2
       continue
     elif [ "$KIND" = scout ]; then
-      if FM_SPAWN_NO_GUARD=1 FM_SPAWN_ADMISSION_SNAPSHOT="$BATCH_ADMISSION_SNAPSHOT" "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" --scout; then :; else echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2; rc=1; fi
+      FM_SPAWN_NO_GUARD=1 FM_SPAWN_ADMISSION_SNAPSHOT="$BATCH_ADMISSION_SNAPSHOT" "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" --scout \
+        && batch_status=0 || batch_status=$?
+      batch_report_one "$batch_status" "$pair"
     else
-      if FM_SPAWN_NO_GUARD=1 FM_SPAWN_ADMISSION_SNAPSHOT="$BATCH_ADMISSION_SNAPSHOT" "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}"; then :; else echo "batch: FAILED to spawn ${pair%%=*} (${pair#*=})" >&2; rc=1; fi
+      FM_SPAWN_NO_GUARD=1 FM_SPAWN_ADMISSION_SNAPSHOT="$BATCH_ADMISSION_SNAPSHOT" "$FM_ROOT/bin/fm-spawn.sh" "${pair%%=*}" "${pair#*=}" "${shared_args[@]+"${shared_args[@]}"}" \
+        && batch_status=0 || batch_status=$?
+      batch_report_one "$batch_status" "$pair"
     fi
   done
   if [ -n "$BATCH_ADMISSION_SNAPSHOT" ]; then
@@ -2136,7 +2207,107 @@ else
   WT=""
   BRIEF="$DATA/$ID/brief.md"
 fi
-[ -f "$BRIEF" ] || { echo "error: no brief at $BRIEF" >&2; exit 1; }
+# ---------------------------------------------------------------------------
+# Launch-brief deliverability gate (task spawn-refuses-empty-brief-and-confirms-delivery).
+#
+# Checked HERE, before ANY allocation: no pool slot, no window, no worktree, no
+# metadata, no attempt spent. A brief that cannot be delivered must never cost a
+# slot or leave a recorded lane with no agent in it.
+#
+# WHY THIS RUNS THE REAL ENCODER rather than testing the brief's byte count:
+# every harness except kimi receives the brief as ONE argv element that the
+# CREWMATE'S PANE SHELL builds by expanding
+# "$(fm-operational-input.sh encode launch-brief < <brief>)"
+# (bin/fm-launch-lib.sh's launch_template). fm-spawn types that literal and
+# stops watching, so the expansion happens where nothing here can see it. An
+# empty brief, an unreadable brief, and an unresolvable encoder path all
+# collapse into the same present-but-EMPTY argument - a valid invocation with
+# no prompt, which every harness accepts and then idles on forever. A byte-count
+# test on the file catches only the first of the three. Running the real encoder
+# over the real brief is the only check whose subject is the prompt that will
+# actually be delivered.
+#
+# Every refusal below is typed FM_SPAWN_BRIEF_* so a caller can tell them apart
+# without parsing prose.
+spawn_max_prompt_bytes() {
+  # The envelope is the kernel's per-ARGUMENT limit, not getconf ARG_MAX. Linux
+  # caps one argv element at MAX_ARG_STRLEN = 32 * PAGE_SIZE; ARG_MAX (2097152
+  # on this host) bounds the whole vector and never binds first. Measured by
+  # bisection on this platform: 131071 bytes accepted, 131072 refused with
+  # E2BIG, against a 4096-byte page - exactly 32 * PAGE_SIZE. Derived from the
+  # live page size rather than hard-coded so a 16 KiB-page kernel gets its own
+  # real bound. Platforms with no per-argument limit (macOS bounds only the
+  # total) inherit this conservative one: refusing a brief that might have fit
+  # is loud and fixable, while accepting one that cannot exec is the defect
+  # this gate exists to stop.
+  local page
+  if [ -n "${FM_SPAWN_MAX_PROMPT_BYTES:-}" ]; then
+    printf '%s' "$FM_SPAWN_MAX_PROMPT_BYTES"
+    return 0
+  fi
+  page=$(getconf PAGESIZE 2>/dev/null || printf '')
+  case "$page" in ''|*[!0-9]*) page=4096 ;; esac
+  printf '%s' "$(( 32 * page ))"
+}
+
+# A brief shorter than this is a truncated or degenerate write, not a task.
+# Deliberately TINY, and deliberately the weakest of these checks: the
+# substantive guards are the empty, placeholder, and encoder checks around it,
+# which each name a definite fault. This one is a heuristic backstop for a write
+# that produced almost nothing, so it is set low enough that it cannot refuse a
+# legitimately terse brief - a false refusal here would stop real work, and the
+# fault it guards against is already rare.
+FM_SPAWN_BRIEF_MIN_BYTES=${FM_SPAWN_BRIEF_MIN_BYTES:-8}
+
+if [ ! -f "$BRIEF" ]; then
+  echo "FM_SPAWN_BRIEF_MISSING: no brief at $BRIEF; scaffold it with bin/fm-brief.sh before spawning" >&2
+  exit 1
+fi
+if [ ! -r "$BRIEF" ]; then
+  echo "FM_SPAWN_BRIEF_UNREADABLE: $BRIEF exists but cannot be read; the pane shell would launch with an empty prompt" >&2
+  exit 1
+fi
+BRIEF_BYTES=$(wc -c < "$BRIEF" | tr -d ' ')
+case "$BRIEF_BYTES" in ''|*[!0-9]*) BRIEF_BYTES=0 ;; esac
+if [ "$BRIEF_BYTES" -eq 0 ]; then
+  echo "FM_SPAWN_BRIEF_EMPTY: $BRIEF is 0 bytes; the encoder refuses an empty body and the pane shell would launch with an empty prompt, so the agent would idle with nothing to do" >&2
+  exit 1
+fi
+if [ "$BRIEF_BYTES" -lt "$FM_SPAWN_BRIEF_MIN_BYTES" ]; then
+  echo "FM_SPAWN_BRIEF_TOO_SHORT: $BRIEF is $BRIEF_BYTES bytes, under the $FM_SPAWN_BRIEF_MIN_BYTES-byte minimum; it carries no task" >&2
+  exit 1
+fi
+# An unfilled scaffold. bin/fm-brief.sh writes the placeholder as a line of its
+# own in all three shapes (ship, scout, and the secondmate charter), so an exact
+# whole-line match refuses the scaffold without touching a filled brief whose
+# task text merely quotes the token.
+if grep -qx '[[:space:]]*{TASK}[[:space:]]*' "$BRIEF"; then
+  echo "FM_SPAWN_BRIEF_PLACEHOLDER: $BRIEF still carries the unfilled {TASK} placeholder; replace it with the task before spawning" >&2
+  exit 1
+fi
+# Ask the encoder for its own header width instead of hard-coding it: the wire
+# form belongs to bin/fm-operational-input.sh and must not be restated here.
+BRIEF_HEADER_BYTES=$(printf 'x' | "$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief 2>/dev/null | wc -c | tr -d ' ') || BRIEF_HEADER_BYTES=
+case "$BRIEF_HEADER_BYTES" in ''|*[!0-9]*) BRIEF_HEADER_BYTES=1 ;; esac
+BRIEF_HEADER_BYTES=$(( BRIEF_HEADER_BYTES - 1 ))
+BRIEF_ENCODED_BYTES=$(( BRIEF_HEADER_BYTES + BRIEF_BYTES ))
+BRIEF_MAX_PROMPT=$(spawn_max_prompt_bytes)
+# kimi is the one harness that never puts the brief in argv: it launches bare and
+# is handed an absolute brief POINTER after its readiness gate
+# (bin/fm-launch-lib.sh), so the per-argument envelope does not bind for it.
+if [ "$HARNESS" != kimi ] && [ "$BRIEF_ENCODED_BYTES" -ge "$BRIEF_MAX_PROMPT" ]; then
+  echo "FM_SPAWN_BRIEF_TOO_LARGE: $BRIEF is $BRIEF_BYTES bytes, which encodes to $BRIEF_ENCODED_BYTES bytes and does not fit the $BRIEF_MAX_PROMPT-byte single-argument launch envelope (32 * PAGE_SIZE, declared in spawn_max_prompt_bytes); the largest deliverable brief is $(( BRIEF_MAX_PROMPT - BRIEF_HEADER_BYTES - 1 )) bytes. Shorten the brief or move the detail into a file the worker reads." >&2
+  exit 1
+fi
+# The catch-all with the right subject: whatever the pane shell would run, run it
+# here first. Anything the encoder refuses for a reason the checks above did not
+# name still stops the spawn, carrying the encoder's own typed line.
+BRIEF_ENCODE_ERR=$("$FM_ROOT/bin/fm-operational-input.sh" encode launch-brief < "$BRIEF" 2>&1 >/dev/null) \
+  && BRIEF_ENCODE_STATUS=0 || BRIEF_ENCODE_STATUS=$?
+if [ "$BRIEF_ENCODE_STATUS" -ne 0 ]; then
+  echo "FM_SPAWN_BRIEF_UNENCODABLE: $BRIEF cannot be encoded into a launch prompt (encoder exit $BRIEF_ENCODE_STATUS): ${BRIEF_ENCODE_ERR:-no reason reported}" >&2
+  exit 1
+fi
 
 delivery_rigor_rank() {  # <mode> -> 3 (most rigor) .. 1 (least); 0 = not a task mode
   case "$1" in
@@ -2792,20 +2963,140 @@ kimi_delivery_is_confirmed() {  # <plain-pane-capture>
   return 1
 }
 
-kimi_wait_for_delivery() {
-  local pane i=0 max=${FM_KIMI_DELIVERY_POLLS:-40} interval=${FM_KIMI_POLL_INTERVAL:-0.5}
-  while [ "$i" -lt "$max" ]; do
-    pane=$(kimi_capture)
-    kimi_delivery_is_confirmed "$pane" && return 0
-    i=$((i + 1))
-    [ "$i" -ge "$max" ] || sleep "$interval"
-  done
-  return 1
-}
-
 kimi_spawn_fail() {  # <detail>
   printf 'failed: %s\n' "$1" >> "$STATE/$ID.status"
   echo "error: $1; inspect window $T" >&2
+}
+
+# ---------------------------------------------------------------------------
+# Post-send delivery confirmation (task spawn-refuses-empty-brief-and-confirms-delivery).
+#
+# Before this existed, kimi was the ONLY harness whose brief delivery was ever
+# observed; for every other harness fm-spawn pressed Enter and printed
+# `spawned` unconditionally. A confirmed KEYSTROKE was being credited as a
+# confirmed SESSION - the wrong subject - so a launch that died in the pane
+# shell (an empty prompt, an E2BIG argument list, an invalid model, a shell
+# that broke the launch line) was reported as a successful spawn.
+#
+# This is ONE contract with several readings, not a per-harness ladder. kimi's
+# pane predicate is now one source inside it rather than a parallel gate.
+#
+# THE SEED TRAP, and why the busy source below tests seq: fm-busy-event.sh arm
+# seeds state/<id>.busy-state with `state=busy source=fm-spawn event=launch-brief`
+# at seq=1 BEFORE the launch line is ever sent. Reading that record - or asking
+# fm_busy_classify, which returns it verbatim - would confirm delivery on a
+# lane where nothing was delivered, re-creating the exact defect this gate
+# closes. Only `apply` can advance seq, and only against the armed gen, so
+# seq > 1 is the fact that an adapter's own turn-lifecycle event landed.
+#
+# The composer classifier is deliberately NOT a positive source here.
+# fm_composer_classify_content returns `empty` for a blank cursor row as well
+# as for a real agent composer, so it cannot tell an agent that started from a
+# pane still running a command. It is read at expiry as DIAGNOSTIC detail only.
+FM_SPAWN_DELIVERY_TIMEOUT_SECS=${FM_SPAWN_DELIVERY_TIMEOUT_SECS:-60}
+FM_SPAWN_DELIVERY_POLL_SECS=${FM_SPAWN_DELIVERY_POLL_SECS:-0.5}
+# A bound that is not a whole number of seconds is an unusable bound, not a
+# licence to wait forever or to skip the observation: fall back to the declared
+# default rather than letting arithmetic decide.
+case "$FM_SPAWN_DELIVERY_TIMEOUT_SECS" in ''|*[!0-9]*) FM_SPAWN_DELIVERY_TIMEOUT_SECS=60 ;; esac
+
+# spawn_delivery_evidence: ONE reading. Prints `confirmed <source>` or
+# `unconfirmed <reason>`. A caller may not narrow an unconfirmed reading into
+# either pole - it is could-not-observe, not a failure.
+spawn_delivery_evidence() {
+  local cur busy_out busy_seq busy_source native
+  # 1. The worker's own first status event: harness-independent, and the
+  #    strongest evidence there is - the agent read its brief and reported.
+  if [ -f "$STATE/$ID.status" ]; then
+    cur=$(wc -c < "$STATE/$ID.status" | tr -d ' ')
+    case "$cur" in ''|*[!0-9]*) cur=0 ;; esac
+    if [ "$cur" -gt "$SPAWN_DELIVERY_STATUS_BASELINE" ]; then
+      printf 'confirmed status-event'
+      return 0
+    fi
+  fi
+  # 2. A turn boundary fired. Covers codex (notify=) and grok (Stop hook),
+  #    which carry a turn-end marker but no semantic busy source. Only counted
+  #    when the marker was absent before this launch, so a leftover marker from
+  #    an earlier incarnation can never answer for this one.
+  if [ "$SPAWN_DELIVERY_TURNEND_BASELINE" = absent ] && [ -e "$TURNEND" ]; then
+    printf 'confirmed turn-ended'
+    return 0
+  fi
+  # 3. The semantic busy record advanced PAST the spawn seed (see the seed trap
+  #    above). Live-verified for claude, pi/pi-signed, and opencode in
+  #    docs/verification/supervision.md, where claude's UserPromptSubmit is
+  #    recorded firing for the argv launch prompt specifically.
+  if busy_out=$(fm_busy_record_read "$STATE" "$ID" 2>/dev/null); then
+    busy_source=$(printf '%s\n' "$busy_out" | awk '{print $2}')
+    busy_seq=$(printf '%s\n' "$busy_out" | awk '{print $4}')
+    case "$busy_seq" in
+      ''|*[!0-9]*) : ;;
+      *)
+        if [ "$busy_seq" -gt 1 ] && fm_busy_source_trusted "$HARNESS" "$busy_source"; then
+          printf 'confirmed busy-record:%s' "$busy_source"
+          return 0
+        fi
+        ;;
+    esac
+  fi
+  # 4. The backend's own native turn signal (herdr streaming). Generation state
+  #    is sufficient for busy, which is exactly the question here.
+  if command -v fm_backend_busy_state >/dev/null 2>&1; then
+    native=$(fm_backend_busy_state "$BACKEND" "$T" 2>/dev/null || true)
+    if [ "$native" = busy ]; then
+      printf 'confirmed backend-busy'
+      return 0
+    fi
+  fi
+  case "$HARNESS" in
+    grok*)
+      # grok arms no busy record, so the classifier's isolated rendered-tail
+      # fallback is grok's own evidence and cannot collide with the seed.
+      if [ "$(fm_busy_classify "$BACKEND" "$T" "$HARNESS" "$ID" "$STATE" 2>/dev/null)" = "busy grok-regex" ]; then
+        printf 'confirmed grok-tail'
+        return 0
+      fi
+      ;;
+    kimi*)
+      # kimi's brief arrives as a POINTER after launch, so its evidence is the
+      # composed pane state rather than a record. Same contract, different
+      # reading - this is the kimi gate that used to stand alone.
+      if kimi_delivery_is_confirmed "$(kimi_capture)"; then
+        printf 'confirmed kimi-pane'
+        return 0
+      fi
+      ;;
+  esac
+  printf 'unconfirmed no-first-turn-evidence'
+}
+
+# spawn_wait_for_delivery: poll spawn_delivery_evidence to the declared bound.
+# A bound of 0 takes exactly one reading and does not wait.
+spawn_wait_for_delivery() {
+  local end evidence
+  end=$(( $(date +%s) + FM_SPAWN_DELIVERY_TIMEOUT_SECS ))
+  while :; do
+    evidence=$(spawn_delivery_evidence)
+    case "$evidence" in
+      confirmed*) printf '%s' "$evidence"; return 0 ;;
+    esac
+    [ "$(date +%s)" -lt "$end" ] || break
+    sleep "$FM_SPAWN_DELIVERY_POLL_SECS"
+  done
+  printf '%s' "$evidence"
+  return 1
+}
+
+# spawn_delivery_diagnostic: what firstmate needs to inspect and steer the lane.
+# Every value here is descriptive; none of it is a verdict.
+spawn_delivery_diagnostic() {
+  local composer=unknown busy=unknown
+  if command -v fm_backend_composer_state >/dev/null 2>&1; then
+    composer=$(fm_backend_composer_state "$BACKEND" "$T" 2>/dev/null || printf 'unknown')
+  fi
+  busy=$(fm_busy_classify "$BACKEND" "$T" "$HARNESS" "$ID" "$STATE" 2>/dev/null || printf 'unknown unreadable')
+  printf 'composer=%s busy=%s' "${composer:-unknown}" "${busy:-unknown}"
 }
 
 if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
@@ -3425,6 +3716,17 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
     fi
   fi
 fi
+# Delivery-confirmation baseline, captured BEFORE the launch line is sent so
+# every source in spawn_delivery_evidence answers about THIS launch. A status
+# log or turn-end marker left by an earlier incarnation must never be readable
+# as this incarnation's first turn.
+SPAWN_DELIVERY_STATUS_BASELINE=0
+if [ -f "$STATE/$ID.status" ]; then
+  SPAWN_DELIVERY_STATUS_BASELINE=$(wc -c < "$STATE/$ID.status" | tr -d ' ')
+  case "$SPAWN_DELIVERY_STATUS_BASELINE" in ''|*[!0-9]*) SPAWN_DELIVERY_STATUS_BASELINE=0 ;; esac
+fi
+SPAWN_DELIVERY_TURNEND_BASELINE=absent
+[ ! -e "$TURNEND" ] || SPAWN_DELIVERY_TURNEND_BASELINE=present
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3
@@ -3452,10 +3754,6 @@ if [ "$HARNESS" = kimi ]; then
     kimi_spawn_fail "kimi brief pointer could not be submitted"
     exit 1
   fi
-  if ! kimi_wait_for_delivery; then
-    kimi_spawn_fail "kimi brief pointer delivery was not confirmed"
-    exit 1
-  fi
 fi
 if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   if ! fm_config_reread_discard_pending "$PROJ_ABS" "$ID" "$FM_HOME"; then
@@ -3467,7 +3765,9 @@ if [ "$KIND" = secondmate ] && [ "${FM_SKIP_SECONDMATE_INHERIT:-0}" != 1 ]; then
   fi
 fi
 
-# The launch is confirmed: everything above either succeeded or exited. Only now
+# The LAUNCH COMMAND was sent: everything above either succeeded or exited.
+# That is a confirmed keystroke, not yet a confirmed session - the pane shell
+# expands and execs the launch line where nothing above can see it. Only now
 # is this execution the one actually running the lane, and only now may another
 # dispatch be refused on the strength of that. A failure here is loud rather
 # than fatal, because the agent IS running and reporting a failed spawn would
@@ -3479,4 +3779,33 @@ fi
 
 SPAWN_DELIVERY=
 [ -z "$MODE" ] || SPAWN_DELIVERY=" mode=$MODE yolo=$YOLO"
-echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+
+# Now observe the SESSION. A secondmate is exempt and says so: its busy contract
+# is deliberately never armed (see the arming block above) and its charter makes
+# it idle by default, so there is no first turn to observe and a permanent
+# unconfirmed reading would be noise rather than evidence. Its brief is still
+# fully covered by the pre-allocation deliverability gate.
+if [ "$KIND" = secondmate ]; then
+  echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT"
+  exit 0
+fi
+SPAWN_DELIVERY_EVIDENCE=$(spawn_wait_for_delivery) && SPAWN_DELIVERY_CONFIRMED=1 || SPAWN_DELIVERY_CONFIRMED=0
+if [ "$SPAWN_DELIVERY_CONFIRMED" -eq 0 ]; then
+  # COULD-NOT-OBSERVE: not success, and not failure either. The window, the
+  # worktree, the slot, the attempt record and state/<id>.meta are all left
+  # exactly as they are, because the agent may well be running - firstmate must
+  # inspect and steer this lane, never blind-retry it into a second dispatch.
+  echo "FM_SPAWN_DELIVERY_UNCONFIRMED $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT reason=${SPAWN_DELIVERY_EVIDENCE#unconfirmed } bound=${FM_SPAWN_DELIVERY_TIMEOUT_SECS}s $(spawn_delivery_diagnostic)"
+  echo "note: $ID launched but no first turn was observed within ${FM_SPAWN_DELIVERY_TIMEOUT_SECS}s. This is could-not-observe, not a failed spawn: the lane's records are intact and the agent may be running. Inspect window $T with bin/fm-crew-state.sh $ID before doing anything else, and never re-dispatch this task on the strength of this line alone." >&2
+  # Wake firstmate through the durable channel it actually watches. stdout
+  # reaches whoever ran the spawn; a lane that may hold a silent agent has to
+  # reach supervision too. The verb is `blocked` and never `failed`: firstmate
+  # action IS needed, but nothing here observed the work failing, and recording
+  # could-not-observe as observed-bad is the narrowing this whole change exists
+  # to stop. This is the one supervisor-visible record for every harness - it is
+  # what kimi's own unconfirmed-delivery line used to be.
+  printf 'fm-status-event.v1 verb=blocked key=spawn-delivery-unconfirmed phase=launched evidence=%s summary=launched but the first turn could not be observed within %ss; inspect this lane before any re-dispatch\n' \
+    "$STATE/$ID.meta" "$FM_SPAWN_DELIVERY_TIMEOUT_SECS" >> "$STATE/$ID.status" 2>/dev/null || true
+  exit 3
+fi
+echo "spawned $ID harness=$HARNESS kind=$KIND$SPAWN_DELIVERY window=$META_WINDOW worktree=$WT delivery=${SPAWN_DELIVERY_EVIDENCE#confirmed }"

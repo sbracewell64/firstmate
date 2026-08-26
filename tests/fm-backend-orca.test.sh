@@ -13,6 +13,9 @@ TMP_ROOT=$(fm_test_tmproot fm-backend-orca-tests)
 make_orca_fakebin() {  # <dir> -> echoes fakebin dir
   local fb="$1/fakebin"
   mkdir -p "$fb"
+  # This fakebin is built by hand rather than through fm_fakebin, so the stub
+  # worker helper has to be installed explicitly.
+  fm_fake_deliver_install "$fb"
   cat > "$fb/orca" <<'SH'
 #!/usr/bin/env bash
 set -u
@@ -25,6 +28,9 @@ next=$(( $(cat "$COUNT_FILE" 2>/dev/null || echo 0) + 1 ))
   for a in "$@"; do printf '\x1f%s' "$a"; done
   printf '\n'
 } >> "$LOG"
+# The stub harness: an Orca terminal send that carries the launch brief is what
+# a real worker would consume and then report on.
+fm-fake-deliver "$*"
 if [ "${1:-}" = status ] && [ "${FM_ORCA_STATUS_RESPONSE:-ready}" != sequence ]; then
   printf '{"ok":true,"result":{"runtime":{"reachable":true,"state":"ready"}}}\n'
   exit 0
@@ -445,7 +451,7 @@ test_spawn_preserves_orca_metadata_when_pathless_worktree_cleanup_fails() {
   config="$TMP_ROOT/pathless-cleanup-config"
   fm_git_init_commit "$proj"
   mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case pathless-cleanup-fail
   printf '1\n' > "$RESP/1.exit"
@@ -481,7 +487,7 @@ test_spawn_writes_orca_metadata_and_launches_harness() {
   config="$TMP_ROOT/spawn-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case spawn
   log="$LOG"
@@ -546,7 +552,7 @@ test_spawn_refuses_orca_when_runtime_not_ready() {
   config="$TMP_ROOT/runtime-down-config"
   fm_git_init_commit "$proj"
   mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case runtime-down-spawn
   printf '{"ok":true,"result":{"runtime":{"reachable":false,"state":"starting"}}}\n' > "$RESP/1.out"
@@ -575,7 +581,7 @@ test_spawn_refuses_orca_nonisolated_worktree() {
   config="$TMP_ROOT/bad-spawn-config"
   fm_git_init_commit "$proj"
   mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case bad-spawn
   printf '1\n' > "$RESP/1.exit"
@@ -609,7 +615,7 @@ test_spawn_removes_orca_worktree_when_terminal_create_fails() {
   config="$TMP_ROOT/terminal-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case terminal-fail
   printf '1\n' > "$RESP/1.exit"
@@ -642,7 +648,7 @@ test_spawn_preserves_orca_metadata_when_abort_cleanup_fails() {
   config="$TMP_ROOT/cleanup-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   touch "$state/.last-watcher-beat"
   orca_case cleanup-fail
   printf '1\n' > "$RESP/1.exit"
@@ -676,7 +682,7 @@ test_spawn_releases_orca_resources_when_metadata_write_fails() {
   config="$TMP_ROOT/meta-fail-config"
   fm_git_worktree "$proj" "$wt" "fm/$id"
   mkdir -p "$data/$id" "$state/$id.meta" "$config"
-  printf 'brief\n' > "$data/$id/brief.md"
+  printf 'Task brief: exercise the spawn path end to end.\n' > "$data/$id/brief.md"
   orca_case meta-fail
   printf '1\n' > "$RESP/1.exit"
   printf '{"ok":true,"result":{"repo":{"id":"repo-meta-fail"}}}\n' > "$RESP/2.out"
