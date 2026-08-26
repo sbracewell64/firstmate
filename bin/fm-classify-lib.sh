@@ -791,7 +791,12 @@ decision_disposition() {  # <task-id> <key> <verb> [home]
   case "$task" in ''|*[!A-Za-z0-9._-]*) printf 'CNO_DECISION_SUBJECT'; return 0 ;; esac
   case "$key" in ''|*[!A-Za-z0-9._-]*) printf 'CNO_DECISION_SUBJECT'; return 0 ;; esac
   [ -n "$home" ] || { printf 'CNO_DECISION_SUBJECT'; return 0; }
-  recorded=$(_fm_decision_recorded_disposition "$home/data/$task/decision-$key.md")
+  # The two directories are resolved through the same overrides every bin/
+  # script uses, rather than assumed to sit under <home>. They always do in a
+  # real home; a caller that can name them separately (a fixture, a sweep over
+  # another home) was previously answered from whatever <home> happened to be,
+  # which is a reading about a different home's records.
+  recorded=$(_fm_decision_recorded_disposition "${FM_DATA_OVERRIDE:-$home/data}/$task/decision-$key.md")
   case $? in
     0)
       # Recorded, including recorded-but-unreadable, which is the empty string.
@@ -800,7 +805,7 @@ decision_disposition() {  # <task-id> <key> <verb> [home]
       ;;
     2) printf 'CNO_DECISION_SUBJECT'; return 0 ;;
   esac
-  meta="$home/state/$task.meta"
+  meta="${FM_STATE_OVERRIDE:-$home/state}/$task.meta"
   # No metadata means the subject of this decision is gone or was never
   # observable from here, so nothing about it can be established.
   [ -r "$meta" ] || { printf 'CNO_DECISION_SUBJECT'; return 0; }
@@ -810,6 +815,13 @@ decision_disposition() {  # <task-id> <key> <verb> [home]
   # against before writing it, so this fold can never accept a spelling the
   # producer does not emit or reject one it does.
   #
+  # It is the EFFECTIVE posture, not the value recorded on the task. The
+  # recorded value is a snapshot taken at dispatch, and a fleet whose captain
+  # had granted standing routine authority for every project went on rendering
+  # its decisions as owed by the captain because those snapshots still said
+  # `off`. bin/fm-autonomy-lib.sh owns that resolution and asks the canonical
+  # owner on every call; this fold only reads its answer.
+  #
   # Three answers, never two. A recorded posture outside that vocabulary is a
   # record this reader cannot interpret, which is could-not-observe about the
   # subject - so it takes CNO_DECISION_SUBJECT rather than being narrowed into
@@ -817,7 +829,7 @@ decision_disposition() {  # <task-id> <key> <verb> [home]
   # ABSENT posture is a different fact and NOT could-not-observe: a scout
   # records none by design, nothing granted standing authority, and the captain
   # holds the decision. That case falls through to the verb.
-  autonomy=$(fm_autonomy_state_of_meta "$meta"); autonomy_rc=$?
+  autonomy=$(fm_autonomy_state_effective "$meta"); autonomy_rc=$?
   case "$autonomy_rc" in
     0)
       # A member, so the comparison boundary answers 0 or 1 and never 2.

@@ -2,13 +2,25 @@
 # Perform the approved local merge for a local-only ship task: fast-forward the
 # project's default branch to the crewmate's fm/<id> branch.
 #
-# This is firstmate's merge gate-action (the captain's merge authority applied
-# locally instead of via a GitHub PR). It is the one sanctioned exception to hard
-# rule #1 "never run state-changing git in projects/", and it is narrow: it only
-# runs for mode=local-only tasks, only after the captain approves (or yolo=on
-# auto-approves), and only as a clean fast-forward - it refuses a diverged branch
-# and tells you to have the crewmate rebase. See AGENTS.md prime directives,
-# project management, and task lifecycle.
+# This is firstmate's merge gate-action, applied locally instead of via a GitHub
+# PR. It is the one sanctioned exception to hard rule #1 "never run state-changing
+# git in projects/", and it is narrow: it only runs for mode=local-only tasks,
+# only under a landing authority compiled from typed durable sources, and only as
+# a clean fast-forward - it refuses a diverged branch and tells you to have the
+# crewmate rebase. See AGENTS.md prime directives, project management, and task
+# lifecycle.
+#
+# THE AUTHORITY IS COMPILED, NOT RECALLED. bin/fm-landing-seam-lib.sh answers
+# whether the decision under this landing is one the captain reserved, from the
+# task's own delivery record, the captain's standing posture at its canonical
+# owner, and the typed disposition of every decision still open on the task.
+# Whether a captain message named this merge is not one of those inputs and
+# cannot be: an instruction's transport is not an authority source, and a gate
+# that waits for one holds every ordinary reversible landing by default. That
+# answer is reported on every run - a delegated landing says so and names its
+# sources - because a home that says nothing about who authorised a landing is
+# indistinguishable from one that never asked. It decides only WHO may authorize;
+# every refusal below still refuses on its own terms.
 #
 # Uncommitted work in the project blocks the merge only on a GENUINE COLLISION:
 # a path that is both uncommitted in the project checkout and rewritten by this
@@ -454,6 +466,17 @@ landing_repository() {  # <dir>
 }
 LANDING_REPO=$(landing_repository "$PROJ") || LANDING_REPO=-
 
+# WHOSE landing this is, compiled by bin/fm-landing-seam-lib.sh from the task's
+# own durable records, and reported either way. It answers only who may
+# authorize this landing; every refusal above still applies unchanged.
+AUTHORITY_RC=0
+fm_landing_authority_resolve "$FM_HOME" "$ID" || AUTHORITY_RC=$?
+if [ "$AUTHORITY_RC" -ne 0 ]; then
+  printf 'REFUSED: %s: %s\n' "$FM_LANDING_AUTHORITY_TOKEN" "$FM_LANDING_AUTHORITY_REASON" >&2
+  exit 1
+fi
+printf '%s: %s [%s]\n' "$FM_LANDING_AUTHORITY_TOKEN" \
+  "$FM_LANDING_AUTHORITY_REASON" "$FM_LANDING_AUTHORITY_SOURCES"
 if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - "$LANDING_REPO"; then
   printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
   exit 1

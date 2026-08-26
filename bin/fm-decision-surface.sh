@@ -69,6 +69,17 @@
 #       bin/fm-route.sh zero-route is the owner. A route blocked purely because
 #       nobody has qualified a candidate is CONTRADICTED and names the bounded
 #       workflow, never an escalation.
+#   fm-decision-surface.sh check landing-authority <task-id>
+#       Is "firstmate may land this work under authority it already holds"
+#       contradicted? bin/fm-landing-seam-lib.sh compiles that from the task's
+#       commission record, the captain's standing posture at its canonical
+#       owner, and the typed disposition of every decision still open on the
+#       task. CONTRADICTED means the captain reserved the underlying decision.
+#       It is never contradicted merely because the act is a merge, because no
+#       captain message said so, or because a posture used to be off. This check
+#       answers WHO may authorize the landing and never whether the work is fit
+#       to land: every test, review, head-binding and authorization gate still
+#       refuses on its own terms at the merge gates themselves.
 #   fm-decision-surface.sh owners [--json]
 #       The compensation ledger: owned deterministic work, and pending gaps.
 #   fm-decision-surface.sh platform-seam [--json] [--probe-platform]
@@ -102,6 +113,18 @@ CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 
+# The landing-authority compile. Sourced rather than shelled out to, because it
+# is a library with no command of its own and this surface is its firstmate-facing
+# composer; it pulls in the disposition fold and the autonomy owner itself.
+#
+# Only the AUTHORITY half of that library is reachable from here. Its governance
+# half needs the outbound gate register and the authorization identity
+# predicates, which the two merge gates source and this surface does not, because
+# whether a ruling governs a candidate is a question about a head that only the
+# chokepoint holds.
+# shellcheck source=bin/fm-landing-seam-lib.sh
+. "$SCRIPT_DIR/fm-landing-seam-lib.sh"
+
 EXIT_OK=0
 EXIT_USAGE=2
 EXIT_CONTRADICTED=3
@@ -134,24 +157,26 @@ while [ $# -gt 0 ]; do
       [ -z "$SUBCOMMAND" ] || die "unexpected argument '$1'"
       SUBCOMMAND=check
       shift
-      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, certified, or route-qualified"
+      [ $# -gt 0 ] || die "check needs a claim: capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified, or landing-authority"
       CHECK_CLAIM=$1
       case "$CHECK_CLAIM" in
         capacity-blocked) ;;
-        decision-pending|duplicate-dispatch|certified|route-qualified)
+        decision-pending|duplicate-dispatch|certified|route-qualified|landing-authority)
           shift
           [ $# -gt 0 ] || die "check $CHECK_CLAIM needs an id"
           TARGET=$1
-          # The certified claim is the one that hands its target to a command
-          # which builds a path from it and then runs git in whatever repository
-          # that path names. This surface composes owners; composing one is not
-          # a licence to pass it an id nobody checked, so the id is REFUSED here
-          # too rather than relied upon to be refused downstream.
-          if [ "$CHECK_CLAIM" = certified ]; then
-            fm_task_id_path_safe "$TARGET" || die "unsafe task id: $TARGET"
-          fi
+          # These two claims hand their target to code that builds a path from
+          # it - the certification predicate then runs git in whatever repository
+          # that path names, and the landing compile reads durable records under
+          # it. This surface composes owners; composing one is not a licence to
+          # pass it an id nobody checked, so the id is REFUSED here too rather
+          # than relied upon to be refused downstream.
+          case "$CHECK_CLAIM" in
+            certified|landing-authority)
+              fm_task_id_path_safe "$TARGET" || die "unsafe task id: $TARGET" ;;
+          esac
           ;;
-        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified" ;;
+        *) die "unknown claim '$CHECK_CLAIM': capacity-blocked, decision-pending, duplicate-dispatch, certified, route-qualified, landing-authority" ;;
       esac
       ;;
     owners)
@@ -263,6 +288,9 @@ owners_json() {
  {"compensation":"work_landed","status":"owned",
   "owner":"bin/fm-landed-lib.sh and bin/fm-pr-merge.sh merge_verification=",
   "note":"landing is re-verified against the current head, never remembered; a landing answer that could not be read is could-not-observe, never not-landed"},
+ {"compensation":"landing_authority","status":"owned",
+  "owner":"bin/fm-landing-seam-lib.sh, composed by fm-decision-surface.sh check landing-authority and refused at bin/fm-pr-merge.sh and bin/fm-merge-local.sh",
+  "note":"whether a landing is the captain's is compiled from the commission record, the standing posture at its canonical owner, and the typed disposition of every open decision; it is never derived from whether an instruction was typed, and a decision whose owner could not be read is could-not-observe rather than delegated"},
  {"compensation":"terminal_state","status":"owned",
   "owner":"bin/fm-wake-ledger.sh task --outcome landed|failed|abandoned",
   "note":"every terminal outcome is representable, so exhaustion cannot read as success"},
@@ -736,6 +764,34 @@ check_route_qualified() {
   esac
 }
 
+# "Firstmate may land this under authority it already holds" is the claim that
+# used to be answered by whether a sentence had been typed. bin/fm-landing-seam-lib.sh
+# owns the compile; this composes it so firstmate reads a machine-produced answer
+# instead of deriving one from what it remembers being told.
+#
+# CONTRADICTED means one thing only: a decision on this work is typed as the
+# captain's. UNEVALUABLE means a durable record needed to answer could not be
+# read - and unevaluable means the fact may not be asserted at all, in either
+# direction.
+check_landing_authority() {
+  local rc=0
+  fm_landing_authority_resolve "$FM_HOME" "$TARGET" || rc=$?
+  case "$rc" in
+    0)
+      verdict not-contradicted "landing-authority $TARGET" \
+        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · every test, review, head-binding and authorization gate still applies at the merge gate itself"
+      ;;
+    3)
+      verdict contradicted "landing-authority $TARGET" \
+        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · rule that decision before landing"
+      ;;
+    *)
+      verdict unevaluable "landing-authority $TARGET" \
+        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · sources: ${FM_LANDING_AUTHORITY_SOURCES:-none read}"
+      ;;
+  esac
+}
+
 check_duplicate_dispatch() {
   read_snapshot || {
     verdict unevaluable duplicate-dispatch "fleet census unreadable; existing work could not be enumerated"
@@ -779,6 +835,7 @@ case "$SUBCOMMAND" in
       duplicate-dispatch) check_duplicate_dispatch; exit $? ;;
       certified) check_certified; exit $? ;;
       route-qualified) check_route_qualified; exit $? ;;
+      landing-authority) check_landing_authority; exit $? ;;
     esac
     ;;
 esac

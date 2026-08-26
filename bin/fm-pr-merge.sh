@@ -105,6 +105,18 @@
 # and --subject and silently drops other flags. Adopting the precondition later
 # therefore requires changing the single gh-axi invocation at the end.
 #
+# THIS GATE DOES NOT DECIDE WHO MAY AUTHORIZE THE LANDING EITHER.
+# bin/fm-landing-seam-lib.sh compiles that from the task's own delivery record,
+# the captain's standing posture at its canonical owner, and the typed
+# disposition of every decision still open on the task. Whether a captain message
+# named this merge is not one of those inputs and cannot be: an instruction's
+# transport is not an authority source, and a gate that waits for one holds every
+# ordinary reversible landing by default. This file asks that compile before it
+# mints anything, reports the answer and its sources either way, and refuses a
+# landing the captain reserved or one whose reservation could not be read. The
+# compile decides only WHO may authorize; every refusal above and below still
+# refuses on its own terms, so no posture and no ruling can waive one.
+#
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints -
 # including which repositories are inside the declared governed landing domain -
@@ -598,11 +610,24 @@ record_merge_verification() {
 LANDING_AUTH_ID=
 LANDING_AUTHORIZATION=
 resolve_landing_authority() {  # <head>
-  local head=$1
+  local head=$1 authority_rc=0
   local plan=()
   # The repository this merge would write, taken from the pull request's own
   # parsed identity rather than from anything the caller supplies separately, so
   # the domain is asked about the repository the merge command actually addresses.
+  # WHOSE landing this is, before anything is minted. Compiled from the task's
+  # own durable records by bin/fm-landing-seam-lib.sh and reported either way,
+  # because a home that says nothing about who authorised a landing is
+  # indistinguishable from one that never asked. It answers only who may
+  # authorize; every refusal above and below still applies unchanged.
+  fm_landing_authority_resolve "$FM_HOME" "$ID" || authority_rc=$?
+  if [ "$authority_rc" -ne 0 ]; then
+    printf 'error: refusing to merge head %s: %s: %s\n' \
+      "$head" "$FM_LANDING_AUTHORITY_TOKEN" "$FM_LANDING_AUTHORITY_REASON" >&2
+    return 1
+  fi
+  printf '%s: %s [%s]\n' "$FM_LANDING_AUTHORITY_TOKEN" \
+    "$FM_LANDING_AUTHORITY_REASON" "$FM_LANDING_AUTHORITY_SOURCES"
   if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
     "$PR_OWNER/$PR_REPO"; then
     printf 'error: refusing to merge head %s: %s: %s\n' \

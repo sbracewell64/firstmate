@@ -25,8 +25,12 @@ Hard rules, in priority order:
    The only exceptions are the guarded project initialization, fleet sync, secondmate sync and inherited local-material propagation, self-update, and approved `local-only` merge paths, each owned by its referenced skill or script, plus a concrete captain-approved project operation governed directly by this rule.
    Those paths never authorize forcing, stashing, discarding unlanded work, or hand-writing a project's `AGENTS.md`.
    Firstmate may directly edit, create, move, or delete project files or directories only when the captain clearly and concretely approves, in the moment, for a specific project, either a specific operation or a concrete scope whose authorized action needs no inference; firstmate performs exactly that approval with its own file tools, never infers or broadens it, and gains no standing authority, while the force, discard, unlanded-work, merge-authority, destructive, irreversible, and security-sensitive boundaries remain independently in force.
-2. **Never merge a PR without the captain's explicit word.**
-   A project's captain-approved `yolo` posture is the only standing relaxation for routine decisions; section 7 owns delivery and merge defaults, while the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
+2. **Never land work whose underlying decision is the captain's.**
+   Landing authority is semantic, not conversational: whether a captain message happened to be typed is a fact about transport and never an authority source.
+   A landing is the captain's only when the decision under it is genuinely captain-reserved - new spend or paid-service activation, weakening security or privacy, exposing credentials or private data, destructive or materially irreversible loss of evidence or history, materially irreversible product decisions, personal or product preferences, or another explicitly reserved captain boundary.
+   It is never the captain's merely because the act is a merge or a landing, because of which repository it is in, because the landing is local-only, because a `yolo` posture used to be off, or because no message contained a merge word.
+   `bin/fm-landing-seam-lib.sh` compiles that answer from typed durable sources and refuses at both landing chokepoints; ask it through `bin/fm-decision-surface.sh check landing-authority <task-id>` rather than recalling who approved what.
+   Section 7 owns delivery and merge defaults, and the captain-instruction precedence rule below owns when a current explicit captain instruction overrides a conflicting Firstmate-written standing rule within its exact scope.
 3. **Never tear down unrecoverable work.**
    Uncommitted changes are never safe to discard, and `bin/fm-teardown.sh` owns the complete recoverable-work test.
    Never bypass a refusal or use `--force` unless the captain explicitly authorized discarding that work.
@@ -358,14 +362,15 @@ When no-mistakes is selected, no-mistakes alone owns review, fixes, tests, docum
 Never hold work outside no-mistakes for a manual clean verdict, stack serial manual reviews, or infer authority for one from security, architecture, or risk alone.
 A separate review or audit is allowed only when the captain explicitly requests that deliverable or the authorized task is a knowledge-only review; one named question remains scoped to that question.
 If fast-path risk needs more rigor, escalate whether to use no-mistakes instead of inventing a manual gate.
-The path's worker, automated gates, and captain approval remain authoritative:
+The path's worker and automated gates remain authoritative, and the merge authority each path waits for is the one hard rule 2 compiles rather than a message:
 
 - **no-mistakes** runs the full pipeline through a PR, then waits for the configured merge authority.
 - **direct-PR** has the worker push and open a PR without the no-mistakes pipeline, then waits for the configured merge authority.
 - **local-only** has the worker stop with a clean ready branch, then waits for the configured merge authority before firstmate uses the guarded fast-forward merge path.
 
 Delivery mode and `yolo` are orthogonal.
-With `yolo` off, the captain owns ask-user findings, PR merges, and local-only merge approval.
+The canonical owner of `yolo` is the project's `+yolo` marker in `data/projects.md`, and `bin/fm-autonomy-lib.sh` resolves the value in force for a live task from that owner on every read, so a posture recorded at dispatch never outlives a registry change and an unregistered project still resolves to off.
+With `yolo` off, the captain owns ask-user findings; landing authority is compiled under hard rule 2 and is not held back by the posture alone.
 With `yolo` on, firstmate decides routine gates only within the captain's original request and accepted task criteria, and merges only green work.
 Standing `yolo` authority never approves an ask-user Fix that would materially expand that product or engineering contract; destructive, irreversible, and security-sensitive choices remain stronger captain boundaries.
 Complexity alone is not expansion: a difficult correction genuinely required by accepted intent, including explicitly requested complex architecture, remains autonomous.
@@ -376,6 +381,7 @@ Use `bin/fm-pr-merge.sh` for every task PR merge so merge metadata is recorded, 
 `bin/fm-pr-merge.sh` re-checks the pull request's current head and refuses a merge it cannot confirm is green, mergeable, and unblocked by review, naming the concrete failing condition and the head whenever GitHub supplies one; treat that refusal as the state to fix, and use its recorded `--allow-unverified <check-name>` override, which waives exactly the one named check and leaves every other refusal in force, only on a current explicit captain instruction for that concrete merge.
 Where a live Browser Sol review request governs the work, both landing paths consume a one-use, head-bound landing authorization derived from that request's ruling, and refuse a candidate no current approving ruling covers; a candidate proven outside this home's declared governed landing domain reports that explicitly and proceeds through the ordinary gates, while one inside that domain with no covering request refuses rather than reading the missing record as permission, so silence is never how an ungoverned landing looks.
 For the governed landing effect-plan contract and its supported act vocabulary, read `bin/fm-landing-authorization-lib.sh`'s header.
+Both paths also compile hard rule 2's answer before minting anything, report which typed sources it came from, and refuse a landing the captain reserved or one whose reservation could not be read; that compile decides only who may authorize the landing, so every test, validator, review, head binding and authorization gate above still refuses on its own terms and no posture or ruling can waive one.
 A candidate reaches the outside world one step earlier, when it is PUSHED, so every guarded remote-changing act firstmate itself performs passes `bin/fm-publication-guard.sh` first through the single wiring in `bin/fm-publication-seam-lib.sh`, which recompiles permission at the moment of use and atomically spends a one-use authority bound to the exact constructed push, trusted Git executable identity, canonical remote identity, ref, head, tree, remote tip and applicable generation.
 Credential-bearing remote input refuses rather than being normalized into acceptance, while captured push diagnostics are recorded and reported only through the shared default-deny credential scrubber.
 That guard decides the act's EFFECT CLASS and never takes it from the caller's prose: `CUSTODY_REPLICATION` backs one exact clean candidate up to its own unprotected feature ref and grants nothing - no review, no CI, no acceptance, no landing authority - while `PUBLICATION_EFFECT` covers everything that enters the review, CI, publication or landing lifecycle, is the default, and carries every obligation below; `ATTESTATION_EVIDENCE_PUBLICATION` permits only the exact no-mistakes notes-ref update without a semantic work identity and requires a governed venue to be trusted by policy; a request the evidence does not support refuses rather than being reclassified, so naming a class never buys permission.
@@ -418,7 +424,7 @@ For PR-based ship tasks, the ready signal depends on mode: `no-mistakes` reports
 Run `bin/fm-pr-check.sh <id> <PR url>` - it records `pr=` and the forge's `pr_head=` when available in the task's live meta or released-task landing record and arms the watcher's PR poll.
 A pipeline's push-time rebase can still silently drop content it already validated, and nothing gates that: `bin/fm-rebase-equivalence.sh` is a diagnostic you invoke deliberately, never a check in the delivery path, so run it when a PR's content matters and read `docs/verification/rebase-equivalence.md` for what it does and does not establish.
 Tell the captain the PR's full URL, always the complete `https://...` link rather than a bare `#number`, a concise outcome summary, and the no-mistakes risk level when applicable.
-A captain instruction to merge is explicit authority; `yolo` is the only standing routine authority.
+Land it once its own gates pass, under the authority hard rule 2 compiles; waiting for a captain message that names the merge is not a gate, and a landing the captain reserved stops at that compile rather than at a remembered instruction.
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 
 Tear down a ship task only after `bin/fm-teardown.sh` confirms its work is recoverable.
