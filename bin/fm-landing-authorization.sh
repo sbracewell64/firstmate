@@ -428,7 +428,7 @@ ruling_reservation_release() {
 }
 
 spend_release() {
-  local status=$? reservation= release_failed=0
+  local status=$? reservation='' release_failed=0
   trap - EXIT
   # Ordinary exits release only before intent; after intent, explicit outcome or
   # reconciliation paths decide whether an act may have happened.
