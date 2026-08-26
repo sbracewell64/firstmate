@@ -86,33 +86,33 @@ def d01(stage):
     """LA-1's successor as found: an absent correlation is read as not-applicable
     instead of consulting the declared governed landing domain."""
     patch(stage, SEAM,
-          "  fm_landing_seam_domain_read \"$config\"",
+          "  case \"$FM_LANDING_SEAM_DOMAIN_STATE\" in",
           "  fm_landing_seam_set not-applicable \"$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE\" \\\n"
           "    \"no live Browser Sol review request governs $item\"\n"
           "  return $?\n"
-          "  fm_landing_seam_domain_read \"$config\"")
+          "  case \"$FM_LANDING_SEAM_DOMAIN_STATE\" in")
 
 
 def d02(stage):
     """An undeclared landing domain is read as an empty one."""
     patch(stage, SEAM,
-          "    FM_LANDING_SEAM_DOMAIN_STATE=undeclared",
-          "    FM_LANDING_SEAM_DOMAIN_STATE=empty")
+          "  if [ \"$venue_state\" = invalid ]; then\n    fm_landing_seam_set unobserved",
+          "  if [ \"$venue_state\" = invalid ]; then\n    fm_landing_seam_set not-applicable")
 
 
 def d03(stage):
     """A malformed landing domain declaration is read as an empty one."""
     patch(stage, SEAM,
-          "  FM_LANDING_SEAM_DOMAIN_STATE=unreadable\n  FM_LANDING_SEAM_DOMAIN_REPOS=",
-          "  FM_LANDING_SEAM_DOMAIN_STATE=empty\n  FM_LANDING_SEAM_DOMAIN_REPOS=")
+          "  if [ \"$venue_state\" = invalid ]; then\n    fm_landing_seam_set unobserved",
+          "  if [ \"$venue_state\" = invalid ]; then\n    fm_landing_seam_set not-applicable")
 
 
 def d04(stage):
     """The DECLARATION side of the comparison becomes case-sensitive, so a domain
     entry written in another case stops matching the repository it names."""
     patch(stage, SEAM,
-          "        else ($d.repos[] | ascii_downcase)",
-          "        else ($d.repos[])")
+          "then [.landing_domain.repos[] | ascii_downcase]",
+          "then [.landing_domain.repos[]]")
 
 
 def d12(stage):
@@ -186,8 +186,8 @@ def d13(stage):
     """A home with no control venue is refused instead of landing, which is the
     non-vacuity direction for the shipped default."""
     patch(stage, SEAM,
-          "  if [ \"$venue\" -eq 0 ]; then\n    fm_landing_seam_set not-applicable",
-          "  if [ \"$venue\" -eq 0 ]; then\n    fm_landing_seam_set unobserved")
+          "  if [ \"$venue_state\" = absent ]; then\n    fm_landing_seam_set not-applicable",
+          "  if [ \"$venue_state\" = absent ]; then\n    fm_landing_seam_set unobserved")
 
 
 def d14(stage):
@@ -231,8 +231,22 @@ def d19(stage):
     """Live governance with no configured control venue reads as ungoverned rather
     than as the configuration contradiction it is."""
     patch(stage, SEAM,
-          "    if [ \"$venue\" -eq 0 ]; then\n      fm_landing_seam_set unobserved \"$FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED\"",
-          "    if [ \"$venue\" -eq 0 ]; then\n      fm_landing_seam_set not-applicable \"$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE\"")
+          "    if [ \"$venue_state\" = absent ]; then\n      fm_landing_seam_set unobserved \"$FM_LANDING_SEAM_TOKEN_VENUE_UNCONFIGURED\"",
+          "    if [ \"$venue_state\" = absent ]; then\n      fm_landing_seam_set not-applicable \"$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE\"")
+
+
+def d22(stage):
+    """Invalid venue configuration is treated as absent and permits landing."""
+    patch(stage, SEAM,
+          "  if [ \"$venue_state\" = invalid ]; then\n    fm_landing_seam_set unobserved",
+          "  if [ \"$venue_state\" = invalid ]; then\n    fm_landing_seam_set not-applicable")
+
+
+def d23(stage):
+    """Repository schema validation accepts paths with extra components."""
+    patch(stage, SEAM,
+          "(type == \"string\") and test(\"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$\"))",
+          "(type == \"string\") and test(\"^[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$\"))")
 
 
 def d20(stage):
@@ -257,7 +271,8 @@ DEFECTS = [("D00", d00), ("D01", d01), ("D02", d02), ("D03", d03), ("D04", d04),
            ("D05", d05), ("D06", d06), ("D07", d07), ("D08", d08), ("D09", d09),
            ("D10", d10), ("D11", d11), ("D12", d12), ("D13", d13), ("D14", d14),
            ("D15", d15), ("D16", d16), ("D17", d17), ("D18", d18),
-           ("D19", d19), ("D20", d20), ("D21", d21)]
+           ("D19", d19), ("D20", d20), ("D21", d21), ("D22", d22),
+           ("D23", d23)]
 BY_NAME = dict(DEFECTS)
 
 

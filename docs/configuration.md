@@ -186,14 +186,14 @@ The seam reports `wiring: not-wired` until the platform projection resolves this
 Detecting that condition needs no configuration and always runs.
 Creating the missing artifact on the `sol-control` channel needs to know where to address it, and that is what this optional local, gitignored file holds.
 
-The file is one JSON object with two required fields, plus `landing_domain`, which is required only by the landing paths.
+The file is one JSON object with exactly the three fields shown below when used by a landing path.
 
 ```json
 { "repo": "owner/name", "issue": 2, "landing_domain": { "repos": ["owner/product"] } }
 ```
 
-`repo` is the control repository in `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
-`issue` may be a number or a string; both are read the same way.
+`repo` is the control repository in exact `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
+`issue` may be a JSON number or a non-empty string of digits; both are read the same way.
 
 `landing_domain.repos` names the repositories whose landings this home has placed under Browser Sol control, each as the venue's own `owner/name` path.
 It is compared case-insensitively, because a forge path is case-insensitive and a case difference that read as a different repository would shed the domain by renaming nothing.

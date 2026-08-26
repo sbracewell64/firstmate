@@ -346,7 +346,7 @@ test_pr_merge_refuses_when_the_landing_domain_is_undeclared() {
   [ "$RC" -ne 0 ] || fail "domain-undeclared: an undeclared landing domain must refuse the merge, got exit 0"
   merges=$(merge_count "$dir")
   [ "$merges" -eq 0 ] || fail "domain-undeclared: the forge was asked to merge $merges times without knowing whether the landing was governed"
-  assert_output_has "$dir" FM_LANDING_DOMAIN_UNDECLARED domain-undeclared
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID domain-undeclared
   pass "a configured venue with no declared landing domain refuses fm-pr-merge (merges executed: 0)"
 }
 
@@ -360,7 +360,7 @@ test_pr_merge_refuses_an_unreadable_landing_domain() {
   [ "$RC" -ne 0 ] || fail "domain-unreadable: a malformed landing domain must refuse the merge, got exit 0"
   merges=$(merge_count "$dir")
   [ "$merges" -eq 0 ] || fail "domain-unreadable: the forge was asked to merge $merges times under an unreadable domain declaration"
-  assert_output_has "$dir" FM_LANDING_DOMAIN_UNREADABLE domain-unreadable
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID domain-unreadable
   pass "a malformed landing domain declaration refuses fm-pr-merge (merges executed: 0)"
 }
 
@@ -397,9 +397,29 @@ test_pr_merge_refuses_multi_segment_domain_repositories() {
     [ "$RC" -ne 0 ] || fail "domain-shape: $repo must be rejected as malformed, got exit 0"
     merges=$(merge_count "$dir")
     [ "$merges" -eq 0 ] || fail "domain-shape: the forge was asked to merge $merges times with malformed repository $repo"
-    assert_output_has "$dir" FM_LANDING_DOMAIN_UNREADABLE domain-shape
+    assert_output_has "$dir" FM_LANDING_VENUE_INVALID domain-shape
   done
   pass "multi-segment landing-domain repositories refuse fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_invalid_venue_field_types() {
+  local dir merges config label
+  while IFS='|' read -r label config; do
+    dir=$(new_pr_case "venue-schema-$label")
+    configure_raw_venue "$dir" "$config"
+    run_pr_merge "$dir"
+    [ "$RC" -ne 0 ] || fail "venue-schema-$label: invalid venue configuration must refuse the merge, got exit 0"
+    merges=$(merge_count "$dir")
+    [ "$merges" -eq 0 ] || fail "venue-schema-$label: the forge was asked to merge $merges times under invalid configuration"
+    assert_output_has "$dir" FM_LANDING_VENUE_INVALID "venue-schema-$label"
+  done <<'EOF'
+repo-object|{"repo":{},"issue":2,"landing_domain":{"repos":[]}}
+issue-boolean|{"repo":"owner/control","issue":true,"landing_domain":{"repos":[]}}
+repo-extra-component|{"repo":"host/owner/control","issue":2,"landing_domain":{"repos":[]}}
+domain-non-string|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[7]}}
+unknown-key|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[]},"extra":true}
+EOF
+  pass "invalid typed and extended venue configurations refuse fm-pr-merge (merges executed: 0)"
 }
 
 test_pr_merge_lands_when_the_landing_domain_is_declared_empty() {
@@ -909,6 +929,7 @@ FM_CONTROLS=(
   test_pr_merge_refuses_malformed_venue_configuration
   test_pr_merge_refuses_venue_configuration_missing_repo
   test_pr_merge_refuses_multi_segment_domain_repositories
+  test_pr_merge_refuses_invalid_venue_field_types
   test_pr_merge_lands_when_the_landing_domain_is_declared_empty
   test_pr_merge_matches_the_landing_domain_case_insensitively
   test_pr_merge_matches_a_mixed_case_candidate_against_the_domain

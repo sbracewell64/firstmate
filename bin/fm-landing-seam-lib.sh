@@ -188,21 +188,42 @@ fm_landing_seam_candidate_valid() {  # <item> <head>
 # --- the venue ---------------------------------------------------------------
 
 FM_LANDING_SEAM_VENUE_STATE=
+FM_LANDING_SEAM_DOMAIN_STATE=
+FM_LANDING_SEAM_DOMAIN_REPOS=
 
 fm_landing_seam_venue_read() {  # <config-dir>
-  local file=${1:-}/sol-control.json raw repo issue
+  local file=${1:-}/sol-control.json raw repos
   FM_LANDING_SEAM_VENUE_STATE=invalid
+  FM_LANDING_SEAM_DOMAIN_STATE=
+  FM_LANDING_SEAM_DOMAIN_REPOS=
   if [ ! -e "$file" ]; then
     FM_LANDING_SEAM_VENUE_STATE=absent
     return 0
   fi
   [ -f "$file" ] && [ -r "$file" ] || return 0
   raw=$(cat "$file" 2>/dev/null) || return 0
-  printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 0
-  repo=$(printf '%s' "$raw" | jq -r '.repo // ""' 2>/dev/null) || return 0
-  issue=$(printf '%s' "$raw" | jq -r 'if .issue == null then "" else (.issue|tostring) end' 2>/dev/null) || return 0
-  [ -n "$repo" ] && [ -n "$issue" ] || return 0
+  repos=$(printf '%s' "$raw" | jq -cer '
+    if type == "object"
+      and (keys | sort) == ["issue", "landing_domain", "repo"]
+      and (.repo | type) == "string"
+      and (.repo | test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))
+      and (((.issue | type) == "number")
+        or ((.issue | type) == "string" and (.issue | test("^[0-9]+$"))))
+      and (.landing_domain | type) == "object"
+      and (.landing_domain.repos | type) == "array"
+      and all(.landing_domain.repos[];
+        (type == "string") and test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$"))
+    then [.landing_domain.repos[] | ascii_downcase]
+    else error("invalid sol-control schema")
+    end
+  ' 2>/dev/null) || return 0
   FM_LANDING_SEAM_VENUE_STATE=valid
+  if [ "$repos" = '[]' ]; then
+    FM_LANDING_SEAM_DOMAIN_STATE=empty
+  else
+    FM_LANDING_SEAM_DOMAIN_STATE=listed
+    FM_LANDING_SEAM_DOMAIN_REPOS=$(printf '%s' "$repos" | jq -r '.[]')
+  fi
   return 0
 }
 
@@ -228,18 +249,13 @@ fm_landing_seam_venue_read() {  # <config-dir>
 # repositories are governed and this is not one of them - and lands through the
 # ordinary gates.
 #
-# The four states are kept apart because they need four different repairs.
+# The two valid declaration states are kept apart because they answer different
+# applicability questions; every other present shape is invalid venue config.
 #
 #   listed      the declaration names repositories; membership decides
 #   empty       the declaration names none, so nothing in this home is governed.
 #               This is a complete positive answer on its own and needs no
 #               repository identity: an empty set contains nothing.
-#   undeclared  a venue is configured and the domain was never stated. This is
-#               NOT an empty domain. A home that configured Sol control and never
-#               said what it governs cannot answer this question, so it is
-#               could-not-observe and the landing stops with both repairs named.
-#   unreadable  the declaration is present and malformed, which is a defect in
-#               the declaration rather than an answer about this candidate.
 #
 # Repositories are compared as the venue's own `owner/name` path, lowercased,
 # because forge paths are case-insensitive and a case difference that read as a
@@ -249,41 +265,6 @@ fm_landing_seam_venue_read() {  # <config-dir>
 # domain. Two same-path repositories on different hosts therefore both match,
 # which over-includes rather than under-includes - a refusal an operator
 # reconciles rather than a landing nobody authorised.
-
-FM_LANDING_SEAM_DOMAIN_STATE=
-FM_LANDING_SEAM_DOMAIN_REPOS=
-
-fm_landing_seam_domain_read() {  # <config-dir>
-  local file=${1:-}/sol-control.json raw declared repos
-  FM_LANDING_SEAM_DOMAIN_STATE=unreadable
-  FM_LANDING_SEAM_DOMAIN_REPOS=
-  raw=$(cat "$file" 2>/dev/null) || return 0
-  printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 0
-  declared=$(printf '%s' "$raw" | jq -r 'if has("landing_domain") then "yes" else "no" end' 2>/dev/null) || return 0
-  if [ "$declared" != yes ]; then
-    FM_LANDING_SEAM_DOMAIN_STATE=undeclared
-    return 0
-  fi
-  # An explicit null is a malformed declaration rather than a way to say none:
-  # "none" has its own spelling, `{"repos": []}`, and accepting two spellings for
-  # a decision this consequential is how one of them stops being read.
-  repos=$(printf '%s' "$raw" | jq -r '
-      .landing_domain as $d
-      | if ($d | type) != "object" then error("shape")
-        elif ($d | has("repos") | not) then error("shape")
-        elif ($d.repos | type) != "array" then error("shape")
-        elif ([$d.repos[] | select(type != "string")] | length) > 0 then error("shape")
-        elif ([$d.repos[] | select(test("^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$") | not)] | length) > 0 then error("shape")
-        else ($d.repos[] | ascii_downcase)
-        end' 2>/dev/null) || return 0
-  if [ -z "$repos" ]; then
-    FM_LANDING_SEAM_DOMAIN_STATE=empty
-    return 0
-  fi
-  FM_LANDING_SEAM_DOMAIN_STATE=listed
-  FM_LANDING_SEAM_DOMAIN_REPOS=$repos
-  return 0
-}
 
 fm_landing_seam_domain_contains() {  # <repo-path>
   local repo
@@ -466,18 +447,7 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     return $?
   fi
 
-  fm_landing_seam_domain_read "$config"
   case "$FM_LANDING_SEAM_DOMAIN_STATE" in
-    undeclared)
-      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_DOMAIN_UNDECLARED" \
-        "this home configures a Browser Sol control venue and declares no landing_domain in config/sol-control.json, so whether $item at $head is inside the governed landing domain could not be observed; name the governed repositories as {\"landing_domain\": {\"repos\": [\"owner/name\"]}}, or declare that none are governed with {\"landing_domain\": {\"repos\": []}}"
-      return $?
-      ;;
-    unreadable)
-      fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_DOMAIN_UNREADABLE" \
-        "the landing_domain declared in config/sol-control.json is not an object carrying a repos array of owner/name paths, so whether $item at $head is inside the governed landing domain could not be observed"
-      return $?
-      ;;
     empty)
       fm_landing_seam_set not-applicable "$FM_LANDING_SEAM_TOKEN_NOT_APPLICABLE" \
         "this home declares an empty Browser Sol landing domain, so $item at $head is outside it and no ruling governs this landing"
