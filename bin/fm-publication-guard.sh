@@ -172,6 +172,8 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
+# shellcheck source=bin/fm-task-base-lib.sh
+. "$SCRIPT_DIR/fm-task-base-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
 . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
 # shellcheck source=bin/fm-publication-seam-lib.sh
@@ -198,10 +200,9 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 # those two produce opposite decisions.
 
 OBSERVED_TIP=
-observe_tip() {  # <repo> <remote> <ref>
-  local repo=$1 remote=$2 ref=$3 url out rc=0
+observe_tip() {  # <repo> <push-url> <ref>
+  local repo=$1 url=$2 ref=$3 out rc=0
   OBSERVED_TIP=
-  url=$(fm_pub_seam_git --no-optional-locks -C "$repo" remote get-url --push "$remote" 2>/dev/null) || url=$remote
   out=$(fm_pub_seam_git --no-optional-locks -C "$repo" ls-remote "$url" "$ref" 2>/dev/null) || rc=$?
   if [ "$rc" -ne 0 ]; then
     return 1
@@ -212,6 +213,28 @@ observe_tip() {  # <repo> <remote> <ref>
   fi
   OBSERVED_TIP=$(printf '%s\n' "$out" | awk 'NF {print $1; exit}')
   fm_auth_head_shape_valid "$OBSERVED_TIP"
+}
+
+RESOLVED_REMOTE_URL=
+RESOLVED_REMOTE_IDENTITY=
+resolve_remote() {  # <repo> <remote-name-or-url>
+  local repo=$1 remote=$2 url identity
+  RESOLVED_REMOTE_URL=
+  RESOLVED_REMOTE_IDENTITY=
+  url=$(fm_pub_seam_git --no-optional-locks -C "$repo" remote get-url --push "$remote" 2>/dev/null) || {
+    case $remote in
+      /*|./*|../*|file://*|https://*|http://*|ssh://*|git://*|*:*/*) url=$remote ;;
+      *) return 1 ;;
+    esac
+  }
+  [ -n "$url" ] || return 1
+  identity=$(task_base_venue_identity_alias "$url" 2>/dev/null) \
+    || identity=$(task_base_venue_identity "$url" 2>/dev/null) \
+    || identity=$(fm_landed_normalize_url "$url" 2>/dev/null) \
+    || return 1
+  [ -n "$identity" ] || return 1
+  RESOLVED_REMOTE_URL=$url
+  RESOLVED_REMOTE_IDENTITY=$identity
 }
 
 # --- record access ------------------------------------------------------------
@@ -284,7 +307,7 @@ resolve_or_exit() {  # <effect> <repo> <item> <venue> <ref> <head> <tree> <expec
 cmd_prepare() {
   local repo='' remote='' venue='' ref='' head='' tree='' item='-' expected='' dry=0
   local effect=publication
-  local subject epoch=1 id path state f raw now record
+  local subject epoch=1 id path state f raw now record push_url remote_identity
 
   while [ $# -gt 0 ]; do
     case $1 in
@@ -315,7 +338,12 @@ cmd_prepare() {
       "the tree of $head could not be read from $repo, so what this publication would carry could not be observed"
   fi
 
-  observe_tip "$repo" "$remote" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
+  resolve_remote "$repo" "$remote" || cno FM_PUB_REMOTE_UNRESOLVED \
+    "the push destination named by remote '$remote' could not be resolved, so no publication authority was granted"
+  push_url=$RESOLVED_REMOTE_URL
+  remote_identity=$RESOLVED_REMOTE_IDENTITY
+
+  observe_tip "$repo" "$push_url" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
   resolve_or_exit "$effect" "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$expected" "$OBSERVED_TIP"
@@ -329,7 +357,7 @@ cmd_prepare() {
   esac
 
   [ -z "$FM_PUB_SEAM_ITEM" ] || item=$FM_PUB_SEAM_ITEM
-  subject=$(fm_auth_effect_subject_digest "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
+  subject=$(fm_auth_effect_subject_digest "$effect" "$venue" "$remote" "$push_url" "$remote_identity" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the subject of this $effect could not be digested"
 
@@ -376,7 +404,7 @@ cmd_prepare() {
     done
   fi
 
-  id=$(fm_auth_effect_id "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
+  id=$(fm_auth_effect_id "$effect" "$venue" "$remote" "$push_url" "$remote_identity" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be digested"
 
@@ -388,8 +416,9 @@ cmd_prepare() {
   fi
 
   now=$(now_iso)
-  record=$(fm_auth_effect_record_new "$effect" "$id" "$FM_PUB_SEAM_REQUEST" "$venue" "$ref" \
-    "$item" "$head" "$tree" "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch" "$subject" "$now") \
+  record=$(fm_auth_effect_record_new "$effect" "$id" "$FM_PUB_SEAM_REQUEST" "$venue" \
+    "$remote" "$push_url" "$remote_identity" "$ref" "$item" "$head" "$tree" "$OBSERVED_TIP" \
+    "$FM_PUB_SEAM_GENERATION" "$epoch" "$subject" "$now") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization record could not be constructed"
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
     || cno "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
@@ -426,6 +455,7 @@ cmd_consume() {
   local id=${1:-}; shift || true
   local repo='' remote='' now rc=0
   local venue ref item head tree tip generation epoch fresh_id state record effect applicability
+  local recorded_remote recorded_push_url recorded_remote_identity observed_push_url observed_remote_identity
   local trusted_git trusted_git_digest
 
   [ -n "$id" ] || die "consume requires an authorization id"
@@ -468,6 +498,9 @@ cmd_consume() {
 
   effect=$AUTH_EFFECT
   venue=$(auth_field '.grant.venue // ""')
+  recorded_remote=$(auth_field '.grant.remote.name // ""')
+  recorded_push_url=$(auth_field '.grant.remote.push_url // ""')
+  recorded_remote_identity=$(auth_field '.grant.remote.identity // ""')
   ref=$(auth_field '.grant.ref // ""')
   item=$(auth_field '.grant.item // ""')
   head=$(auth_field '.grant.head // ""')
@@ -476,7 +509,17 @@ cmd_consume() {
   generation=$(auth_field '.grant.generation // ""')
   epoch=$(auth_field '.epoch // 1')
 
-  if ! fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" "$@"; then
+  resolve_remote "$repo" "$remote" || cno FM_PUB_REMOTE_UNRESOLVED \
+    "the consume-time push destination named by remote '$remote' could not be resolved"
+  observed_push_url=$RESOLVED_REMOTE_URL
+  observed_remote_identity=$RESOLVED_REMOTE_IDENTITY
+  if [ "$remote" != "$recorded_remote" ] || [ "$observed_push_url" != "$recorded_push_url" ] \
+    || [ "$observed_remote_identity" != "$recorded_remote_identity" ]; then
+    refuse FM_PUB_REMOTE_MISMATCH \
+      "publication authority $id records remote '$recorded_remote' at '$recorded_push_url' ($recorded_remote_identity), while consume observed '$remote' at '$observed_push_url' ($observed_remote_identity)"
+  fi
+
+  if ! fm_pub_seam_command_matches "$repo" "$recorded_remote" "$head" "$ref" "$@"; then
     refuse FM_PUB_COMMAND_MISMATCH \
       "the act under publication authority $id is not the exact git push of $head to $ref on $remote from $repo"
   fi
@@ -501,7 +544,7 @@ cmd_consume() {
   [ "$(fm_auth_spend_admissibility "$state")" = proceed ] \
     || refuse FM_PUB_REPLAY "publication authority $id is no longer available to spend"
 
-  observe_tip "$repo" "$remote" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
+  observe_tip "$repo" "$recorded_push_url" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
   resolve_or_exit "$effect" "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$tip" "$OBSERVED_TIP"
@@ -522,7 +565,7 @@ cmd_consume() {
       "publication authority $id rests on generation $generation and the current ruling and policy generation is $FM_PUB_SEAM_GENERATION, so the permission it carries addresses a world that has since changed"
   fi
 
-  fresh_id=$(fm_auth_effect_id "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
+  fresh_id=$(fm_auth_effect_id "$effect" "$venue" "$recorded_remote" "$recorded_push_url" "$recorded_remote_identity" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be recomputed"
   if [ "$fresh_id" != "$id" ]; then
@@ -549,9 +592,9 @@ cmd_consume() {
   # point of writing it first.
   AUTH_RECORD=$record
 
-  "$trusted_git" -C "$repo" push "$remote" "$head:$ref" || rc=$?
+  "$trusted_git" -C "$repo" push "$recorded_push_url" "$head:$ref" || rc=$?
 
-  if ! observe_tip "$repo" "$remote" "$ref"; then
+  if ! observe_tip "$repo" "$recorded_push_url" "$ref"; then
     cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
       "the publication under $id ran (exit $rc) and the resulting tip of $ref could not be observed, which does not establish that it had no effect; reconcile it with reconcile $id"
   fi
@@ -729,7 +772,7 @@ cmd_project() {
 
   # --- custody, and with it reclaimability ---
   permitted=$(fm_pub_seam_custody_ref "$item")
-  if ! observe_tip "$repo" "$remote" "$ref"; then
+  if ! resolve_remote "$repo" "$remote" || ! observe_tip "$repo" "$RESOLVED_REMOTE_URL" "$ref"; then
     custody=could-not-observe
     custody_note="the tip of $ref on $remote could not be observed, which is not the same as it being absent"
     reclaim=4

@@ -455,6 +455,48 @@ test_uses_the_fixed_trusted_git_instead_of_caller_resolution() {
   pass "caller functions and PATH shims cannot replace the recorded trusted Git executable"
 }
 
+test_authority_binds_the_remote_name_and_push_destination() {
+  local id other out rc=0 after
+  fixture remote-other
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  other="$TMP_ROOT/remote-other/other.git"
+  git init -q --bare "$other" || fail "remote-other: init"
+  git -C "$FX_REPO" remote add other "$other" || fail "remote-other: add"
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote other -- \
+    git -C "$FX_REPO" push other "$FX_HEAD:$REF") || rc=$?
+  [ "$rc" -eq 3 ] || fail "remote-other: another remote was accepted (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_REMOTE_MISMATCH' "remote-other: $out"
+  after=$(git -C "$FX_REPO" ls-remote "$other" "$REF")
+  [ -z "$after" ] || fail "remote-other: mismatched remote moved: $after"
+  spend "$id" > /dev/null || fail "remote-other: the recorded remote positive control failed"
+
+  fixture remote-repointed
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  other="$TMP_ROOT/remote-repointed/other.git"
+  git init -q --bare "$other" || fail "remote-repointed: init"
+  git -C "$FX_REPO" remote set-url --push origin "$other" || fail "remote-repointed: set-url"
+  rc=0
+  out=$(spend "$id") || rc=$?
+  [ "$rc" -eq 3 ] || fail "remote-repointed: changed push URL was accepted (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_REMOTE_MISMATCH' "remote-repointed: $out"
+
+  fixture remote-unresolved
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  git -C "$FX_REPO" remote remove origin || fail "remote-unresolved: remove"
+  rc=0
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push origin "$FX_HEAD:$REF") || rc=$?
+  [ "$rc" -eq 4 ] || fail "remote-unresolved: missing remote exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_REMOTE_UNRESOLVED' "remote-unresolved: $out"
+  pass "publication authorities bind remote names and resolved push destinations"
+}
+
 test_concurrent_consumers_execute_exactly_one_push() {
   local id first second first_rc=0 second_rc=0 count successes refusals i
   fixture concurrent-consume
@@ -1512,6 +1554,7 @@ test_retire_refuses_an_authority_whose_effect_is_unobserved
 test_publish_composes_the_decision_and_the_act
 test_refuses_commands_other_than_the_constructed_push
 test_uses_the_fixed_trusted_git_instead_of_caller_resolution
+test_authority_binds_the_remote_name_and_push_destination
 test_concurrent_consumers_execute_exactly_one_push
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
