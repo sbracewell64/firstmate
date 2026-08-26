@@ -762,35 +762,6 @@ fm_pub_seam_ref_protected() {  # <ref>
   return 1
 }
 
-# WHETHER THE ACT ITSELF WOULD OVERWRITE. Every check above reasons about the
-# subject; this one reasons about the command, because a plan that is exactly
-# right about its head and its tip still destroys history if the push carries a
-# force. It is applied to BOTH classes: the guard has already established the
-# remote is at the tip the plan was compiled against, so a fast-forward suffices,
-# and a guard that forbade a force on the weaker act while permitting it on the
-# stronger one would be incoherent.
-#
-# A LIST OF WHAT IS FORBIDDEN, unusually, rather than a whitelist - and the
-# reason is that the whitelist here would be a whitelist of every argument every
-# publication command may ever take. So the direction of the error is chosen
-# instead: a short-option cluster is treated as forcing when it carries any of
-# the forcing letters, which refuses a little more than it must and never less.
-fm_pub_seam_command_forces() {  # <command...>
-  local arg
-  for arg in "$@"; do
-    case $arg in
-      --force|--force-with-lease|--force-with-lease=*|--force-if-includes|--mirror|--delete|--prune)
-        return 0 ;;
-      +*:*) return 0 ;;
-      --*) ;;
-      -[!-]*)
-        case $arg in *[fd]*) return 0 ;; esac
-        ;;
-    esac
-  done
-  return 1
-}
-
 fm_pub_seam_command_matches() {  # <repo> <remote> <head> <ref> <command...>
   local repo=$1 remote=$2 head=$3 ref=$4
   shift 4

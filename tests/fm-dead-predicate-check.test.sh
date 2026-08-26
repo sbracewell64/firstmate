@@ -197,6 +197,20 @@ test_function_keyword_definition_is_scanned() {
   pass "function-keyword definitions are reported unchecked"
 }
 
+test_quoted_awk_function_is_not_shell_syntax() {
+  local dir out rc
+  dir=$(fixture quoted-awk-function 'live_one() { return 0; }
+live_one
+awk '\''
+  function helper(value) { return value }
+  BEGIN { print helper("ok") }
+'\''')
+  out=$(FM_ROOT_OVERRIDE="$dir" "$CHECK" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a quoted awk function was interpreted as shell syntax, exit $rc: $out"
+  pass "quoted awk functions are excluded before shell construct classification"
+}
+
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
@@ -507,6 +521,7 @@ test_punctuated_heredoc_does_not_hide_later_functions
 test_escaped_heredoc_payload_is_not_code
 test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
+test_quoted_awk_function_is_not_shell_syntax
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
 test_multiline_double_quoted_command_shape_is_not_a_call

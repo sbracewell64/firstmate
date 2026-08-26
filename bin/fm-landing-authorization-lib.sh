@@ -945,6 +945,7 @@ claim_acquire() {  # <auth-id> [serial]
   if [ "$mode" = serial ]; then
     trap 'claim_release; exit 4' INT TERM
   else
+    # indirect-call: claim_terminate - dispatched by the quoted trap handlers.
     trap 'claim_terminate INT' INT
     trap 'claim_terminate TERM' TERM
   fi
