@@ -994,8 +994,11 @@ required_observe() {
     # only the first of those is an observation. A failed search read as "no
     # match" is absence of detection standing in for detection of absence,
     # which is the one substitution this whole component exists to refuse.
+    required_command_start='(^[[:space:]]*|^[[:space:]]*[^#[:space:]].*(run:[[:space:]]*|[;&|][[:space:]]*))'
+    required_launcher='(([^[:space:]]*/)?(env|bash|sh|dash|zsh|ksh|command|exec)[[:space:]]+|[[:alpha:]_][[:alnum:]_]*=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*'
+    required_script="((\\.\\.?/|/)?([[:alnum:]_.-]+/)*)?fm-attest\\.sh([[:space:]]|\$|[\"'])"
     required_grep_rc=0
-    grep -Eq "(^[[:space:]]*|^[[:space:]]*[^#[:space:]].*(run:[[:space:]]*|[;&|][[:space:]]*))((\\.\\.?/|/)?([[:alnum:]_.-]+/)*)?fm-attest\\.sh([[:space:]]|\$|[\"'])" \
+    grep -Eq "$required_command_start$required_launcher$required_script" \
       "$required_file" 2>/dev/null \
       || required_grep_rc=$?
     case "$required_grep_rc" in

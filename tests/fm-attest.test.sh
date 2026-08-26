@@ -3162,6 +3162,30 @@ test_required_answers_a_repository_whose_checks_read_an_attestation() {
   pass "fm-attest.sh: a repository whose CI invokes the verifier reads an attestation"
 }
 
+test_required_answers_a_launcher_prefixed_invocation() {
+  local repo out rc
+  repo="$TMP_ROOT/required-launcher-declared"
+  new_repo "$repo"
+  mkdir -p "$repo/.github/workflows"
+  printf 'jobs:\n  check:\n    steps:\n      - run: bash bin/fm-attest.sh verify --head 0000\n' \
+    > "$repo/.github/workflows/some-gate.yml"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a launcher-prefixed verifier invocation was missed (exit $rc): $out"
+  assert_contains "$out" "some-gate.yml" "the launcher-prefixed declaration was not named"
+  pass "fm-attest.sh: a launcher-prefixed verifier invocation declares the gate"
+}
+
+test_required_answers_the_repository_workflow_fixture() {
+  local out rc
+  out=$(required_out "$ROOT")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the repository's real attestation workflow was missed (exit $rc): $out"
+  assert_contains "$out" "no-mistakes-required.yml" \
+    "the real workflow declaration was not named"
+  pass "fm-attest.sh: the real attestation workflow declares the gate"
+}
+
 test_required_answers_a_repository_whose_checks_read_none() {
   local repo out rc
   # The case above minus the one workflow that invokes the verifier.
@@ -3431,6 +3455,8 @@ test_recheck_reports_a_refused_rerun_without_claiming_one
 test_write_re_evaluates_the_head_it_published
 test_write_no_recheck_publishes_without_asking_the_forge
 test_required_answers_a_repository_whose_checks_read_an_attestation
+test_required_answers_a_launcher_prefixed_invocation
+test_required_answers_the_repository_workflow_fixture
 test_required_answers_a_repository_whose_checks_read_none
 test_required_ignores_a_commented_invocation
 test_required_ignores_an_invocation_inside_prose
