@@ -766,6 +766,7 @@ case "$LANDING_AUTHORIZATION" in
     "${merge_command[@]}"
     ;;
   fm-auth-*)
+    # fm-retrieval-audit: not-a-read - this constructs the redundant act assertion and does not invoke the forge command.
     asserted_act=(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "--$MERGE_METHOD")
     if [ "$DELETE_BRANCH" = 1 ]; then
       asserted_act+=(--delete-branch)

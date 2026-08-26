@@ -513,6 +513,17 @@ fm_auth_plan_reset() {
 #   indirect-call: fm_auth_plan_target_ref_valid
 #   indirect-call: fm_auth_plan_member_of
 #   indirect-call: fm_auth_plan_literal
+# The stock Bash 3.2-compatible here-document in the executable consumer makes
+# that file unreadable to the dead-predicate control, so declare its live calls
+# here where the control can observe them:
+#   indirect-call: fm_auth_id
+#   indirect-call: fm_auth_verdict_class
+#   indirect-call: fm_auth_pr_locator
+#   indirect-call: fm_auth_plan_parse
+#   indirect-call: fm_auth_plan_canonical_digest
+#   indirect-call: fm_auth_spend_admissibility
+#   indirect-call: fm_auth_reported_status
+#   indirect-call: fm_auth_record_new
 FM_AUTH_PLAN_VALUE=
 fm_auth_plan_read() {  # <plan-json> <field> [<validator> [<validator-arg>]]
   local plan=$1 field=$2 check=${3:-} value

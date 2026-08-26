@@ -311,6 +311,7 @@ post_effect_observe() {
       [ "$out" = "$FM_AUTH_PLAN_HEAD" ]
       ;;
     pr-merge)
+      # fm-retrieval-audit: not-a-collection - this reads the one pull request named by the closed effect plan.
       out=$(gh api "repos/$FM_AUTH_PLAN_REPO/pulls/$FM_AUTH_PLAN_PR" \
         --jq '[.merged, .head.sha] | @tsv' 2>/dev/null) || {
         POST_EFFECT_EVIDENCE="pr-merge merged=unobserved head=unobserved"
