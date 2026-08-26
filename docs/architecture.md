@@ -336,6 +336,16 @@ Only a named non-default branch checked out in `FM_ROOT` is a worktree tangle.
 If another live session holds the fleet lock, both surfaces keep the alarm but switch to read-only wording with no repair command.
 Ship briefs also tell the crewmate to verify `pwd -P` and `git rev-parse --show-toplevel` before creating `fm/<id>`, then stop with a blocked status if it landed in the primary checkout.
 
+### Parked-lane local custody
+
+A lane that is committed, clean and validated but deliberately unpublished satisfies none of teardown's remote recoverability authorities, so its pool slot stays held for as long as the hold lasts.
+[`bin/fm-lane-custody.sh`](../bin/fm-lane-custody.sh) owns the local alternative: it binds a task to its branch, head and tree under `refs/fm/custody/<task-id>/<head-sha>` in the repository's shared ref store, outside the disposable worktree, and records that mapping durably under `data/lane-custody/`.
+The record lives there rather than in `state/` because it has to answer questions after the lane is gone, and teardown's own volatile-state sweep removes `state/<task-id>.*`.
+Being an ordinary ref is what makes the mechanism load-bearing, because `git gc` and `git prune` treat it as a reachability root, so worktree return, branch deletion, slot reuse and maintenance cannot collect the parked objects.
+[`bin/fm-teardown.sh`](../bin/fm-teardown.sh) reads a re-verified custody ref as a third recoverability authority beside publication and landing, and its header owns how that answer combines with the other two.
+Local custody is deliberately weaker than either of them, because a parked lane survives this machine and nothing more, so teardown never parks a lane itself and never removes a parked ref; `fm-lane-custody.sh release` is the only path that retires one.
+The reopen proof, the exact commands, and the refusals for a missing, moved, ambiguous, dirty, moved-head or stale-mapping lane belong to that script's header and `--help`, while [`verification/lane-local-custody.md`](verification/lane-local-custody.md) records the observed reachability, its negative control, and the git it was observed against.
+
 ## No-mistakes gate authority boundary
 
 Firstmate's own no-mistakes gate runs agents inside a checkout that also contains the fleet-captain identity in `AGENTS.md`, so gate execution needs an authority boundary separate from ordinary crewmate worktree isolation.

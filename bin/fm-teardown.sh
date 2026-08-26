@@ -12,8 +12,21 @@
 # hard-resets/removes the worktree and kills its processes. Work is recoverable when
 # it is reachable from any remote-tracking branch (a fork counts as a remote, so
 # upstream-contribution PRs pushed to a fork satisfy this in any mode), OR - for a
-# normal ship task whose commits are not so reachable - when either of two
+# normal ship task whose commits are not so reachable - when any of three
 # authorities outside this worktree says so:
+#   PARKED - a LOCAL custody ref (refs/fm/custody/<task-id>/<head-sha>) in the
+#     repository's shared ref store binds this exact task, branch, head and tree.
+#     bin/fm-lane-custody.sh owns that whole contract, including the
+#     re-verification teardown asks for here; the ref lives outside the disposable
+#     worktree and keeps the objects reachable through worktree return, branch
+#     deletion, slot reuse and `git gc`. This is the answer for a lane that is
+#     finished and clean but deliberately unpublished - held behind a publication
+#     quarantine, say - which the two remote authorities below cannot reach.
+#     It is DELIBERATELY WEAKER than they are: a parked lane survives this machine
+#     and nothing else. Teardown never parks a lane itself, because minting the
+#     custody that authorizes its own cleanup would make this guard vacuous, and
+#     it never removes one either - `fm-lane-custody.sh release` is the only path
+#     that retires a custody ref.
 #   PUBLISHED - the forge reports a pull/merge request head that contains the
 #     current local work. A no-mistakes run pushes the branch from its OWN gate
 #     worktree, so the push that made the work retrievable happens in a copy of the
@@ -181,6 +194,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-admission-lib.sh"
 # shellcheck source=bin/fm-landed-lib.sh
 . "$SCRIPT_DIR/fm-landed-lib.sh"
+# shellcheck source=bin/fm-lane-custody-lib.sh
+. "$SCRIPT_DIR/fm-lane-custody-lib.sh"
 # shellcheck source=bin/fm-wake-lib.sh
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-nm-run-lib.sh
@@ -1007,17 +1022,83 @@ content_in_default() {
   fm_landed_tree_contains "$WT" "$ref"
 }
 
+# The three-valued result of the last local-custody observation, set only by
+# local_custody_holds_work and read by the refusal message, for the same reason
+# the publication observation carries one.
+CUSTODY_OBSERVATION=
+CUSTODY_DETAIL=
+
+# Has this lane been PARKED under a local custody ref outside its worktree?
+#
+# bin/fm-lane-custody.sh owns the whole contract - the ref namespace, the
+# task -> branch -> head -> tree binding, and the re-verification - and this asks
+# it rather than re-deriving any of it here. Teardown NEVER parks: minting the
+# custody that authorizes its own cleanup would make this guard vacuous, so the
+# authority always traces back to a deliberate `park` on a lane someone observed.
+#
+# --require-lane is not decoration. Without a worktree that owner can only speak
+# for the objects, and a `held` earned on objects alone would be credited here to
+# a claim it never examined: that the worktree in front of this cleanup is the
+# clean, unmoved lane those objects came from.
+#
+# Sets CUSTODY_OBSERVATION to exactly one of three values:
+#   held               a valid custody ref binds this exact lane
+#   not-held           the owner answered, and no valid custody covers this lane
+#   could-not-observe  the owner could not be reached or could not reach a verdict
+# Returns 0 only for held, and requires BOTH the exit status and the printed token
+# to say so, so a future drift in either one cannot widen this on its own.
+local_custody_holds_work() {  # <branch>
+  local branch=$1 out status token
+  CUSTODY_OBSERVATION=could-not-observe
+  CUSTODY_DETAIL="custody was never observed"
+  if [ ! -x "$SCRIPT_DIR/fm-lane-custody.sh" ]; then
+    CUSTODY_DETAIL="the lane custody owner is not runnable at $SCRIPT_DIR/fm-lane-custody.sh"
+    return 1
+  fi
+  out=$(FM_DATA_OVERRIDE="$DATA" FM_STATE_OVERRIDE="$STATE" \
+    FM_LANE_CUSTODY_DIR="${FM_LANE_CUSTODY_DIR:-$DATA/lane-custody}" \
+    "$SCRIPT_DIR/fm-lane-custody.sh" verify "$ID" \
+    --worktree "$WT" --branch "$branch" --require-lane 2>&1)
+  status=$?
+  token=$(printf '%s\n' "$out" | sed -n 's/^custody: \([a-z-]*\) .*/\1/p' | head -1)
+  CUSTODY_DETAIL=$(printf '%s\n' "$out" | head -1)
+  case "$status:$token" in
+    0:held)
+      CUSTODY_OBSERVATION=held
+      return 0
+      ;;
+    3:absent | 3:not-held)
+      CUSTODY_OBSERVATION=not-held
+      return 1
+      ;;
+    *)
+      CUSTODY_OBSERVATION=could-not-observe
+      [ -n "$CUSTODY_DETAIL" ] || CUSTODY_DETAIL="the lane custody owner exited $status with no readable verdict"
+      return 1
+      ;;
+  esac
+}
+
 # Is the worktree's committed work safe to discard, though its commits are
-# reachable from no remote-tracking branch this worktree can see? Two independent
-# authorities can say yes, and neither of them is this worktree's remote list:
+# reachable from no remote-tracking branch this worktree can see? Three
+# independent authorities can say yes, and none of them is this worktree's remote
+# list:
+#   parked    - a local custody ref outside this worktree binds these exact
+#               commits, so returning the worktree cannot collect them. Weaker
+#               than the two below - it survives this machine and nothing more -
+#               and available only because someone deliberately parked the lane
 #   published - the forge holds a request head containing this work, so the work
 #               survives whatever happens to this copy
 #   landed    - the content is already in the up-to-date default branch, which
 #               also covers a squash merge that deleted the head branch
-# Every other answer, including every could-not-observe from either authority, is
+# Custody is asked first because it is purely local: it settles the common parked
+# case without a forge round trip, and the two remote authorities still run on the
+# refusal path so the operator sees every value that was reached.
+# Every other answer, including every could-not-observe from any authority, is
 # non-zero, so the caller refuses. The guard never weakens in the dark.
 work_is_recoverable() {
   local branch=$1
+  local_custody_holds_work "$branch" && return 0
   forge_publication_observe "$branch" && return 0
   content_in_default
 }
@@ -1292,8 +1373,28 @@ teardown_treehouse_return() {
   return 1
 }
 
+# The task worktree's branch name, resolved once and cached, because the safety
+# check asks for it from more than one arm and a second `rev-parse` could answer
+# differently if the worktree moved between them.
+teardown_worktree_branch() {
+  if [ -z "${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}" ]; then
+    TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
+  fi
+  printf '%s\n' "$TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY"
+}
+
+# When custody is what made this release safe, the operator is about to lose the
+# only checkout of the work, so name what still holds it and how to get it back.
+# Silent for every other authority: a published or landed lane needs no such note.
+report_custody_release() {
+  [ "${CUSTODY_OBSERVATION:-}" = held ] || return 0
+  printf 'local custody holds this lane: %s\n' "$CUSTODY_DETAIL"
+  printf 'reopen it later with: %s reopen %s --into <fresh-worktree>\n' \
+    "$SCRIPT_DIR/fm-lane-custody.sh" "$ID"
+}
+
 validate_worktree_teardown_safety() {
-  local dirty_raw dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
+  local dirty unpushed_raw unpushed DEFAULT unmerged_raw unmerged branch
   [ -d "$WT" ] || return 0
   [ "$FORCE" != "--force" ] || return 0
   # Two independent reasons to waive this check, one per axis: a secondmate owns
@@ -1301,22 +1402,24 @@ validate_worktree_teardown_safety() {
   [ "$ROLE" != secondmate ] || return 0
   [ "$DELIVERABLE" != scout ] || return 0
 
-  # --untracked-files=all so git never collapses an untracked directory to a bare
-  # "?? .opencode/" line: the allowlist below names one exact spawn-written file, and
-  # a collapsed directory line could neither match it nor prove the directory holds
-  # nothing else. Expanding only ever adds lines, so it cannot hide real dirty work.
-  if ! dirty_raw=$(git -C "$WT" status --porcelain --untracked-files=all 2>/dev/null); then
-    if worktree_safety_blocked_by_lock "uncommitted changes"; then
-      return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
-    fi
-    echo "REFUSED: cannot inspect worktree $WT for uncommitted changes." >&2
-    echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
-    return 1
-  fi
-  # Firstmate's own spawn-written turn-end scaffolding (bin/fm-spawn.sh) is never the
-  # crewmate's work, so it must not read as uncommitted changes when the info/exclude
-  # write did not take. Allowlist those exact paths only.
-  dirty=$(printf '%s\n' "$dirty_raw" | grep -vE '^\?\? (\.claude/|\.opencode/plugins/fm-turn-end\.js$|\.fm-(grok|kimi)-turnend$)' | head -1 || true)
+  # bin/fm-lane-custody-lib.sh owns what "clean" means - the --untracked-files=all
+  # read and firstmate's own spawn-written turn-end allowlist - because local
+  # custody applies the identical test, and two definitions that must agree drift
+  # the moment either is edited alone. Its could-not-observe reaches the same lock
+  # path this always had.
+  fm_custody_worktree_clean "$WT"
+  case "$?" in
+    0) dirty= ;;
+    1) dirty=$FM_CUSTODY_DIRTY_LINE ;;
+    *)
+      if worktree_safety_blocked_by_lock "uncommitted changes"; then
+        return "$TEARDOWN_WORKTREE_SAFETY_LOCK_BLOCKED"
+      fi
+      echo "REFUSED: cannot inspect worktree $WT for uncommitted changes." >&2
+      echo "Restore the git index state, or get the captain's explicit OK to discard, then --force." >&2
+      return 1
+      ;;
+  esac
 
   if ! unpushed_raw=$(git -C "$WT" log --oneline HEAD --not --remotes -- 2>/dev/null); then
     if worktree_safety_blocked_by_lock "commits not on a remote"; then
@@ -1340,10 +1443,22 @@ validate_worktree_teardown_safety() {
     fi
     unmerged=$(printf '%s\n' "$unmerged_raw" | head -5)
     if [ -n "$dirty" ] || [ -n "$unmerged" ]; then
-      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
+      # A parked lane is recoverable here on the same terms as anywhere else: the
+      # custody ref holds these exact commits outside this worktree. Custody is
+      # consulted only once the worktree is clean, because it covers what was
+      # committed and nothing else - so uncommitted bytes still refuse, and the
+      # refusal below then honestly reports custody as never observed.
+      if [ -z "$dirty" ] && local_custody_holds_work "$(teardown_worktree_branch)"; then
+        report_custody_release
+        return 0
+      fi
+      echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT, not parked in local custody, and not on any remote." >&2
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
-      echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
+      printf 'custody: %s (%s)\n' \
+        "${CUSTODY_OBSERVATION:-could-not-observe}" \
+        "${CUSTODY_DETAIL:-custody was never observed}" >&2
+      echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), park it locally (bin/fm-lane-custody.sh park $ID), push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
   elif [ -n "$dirty" ]; then
@@ -1352,23 +1467,23 @@ validate_worktree_teardown_safety() {
     echo "Commit them (or get the captain's explicit OK to discard, then --force)." >&2
     return 1
   elif [ -n "$unpushed" ]; then
-    branch=${TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY:-}
-    if [ -z "$branch" ]; then
-      branch=$(git -C "$WT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)
-      TEARDOWN_WORKTREE_BRANCH_FOR_SAFETY=$branch
-    fi
+    branch=$(teardown_worktree_branch)
     if ! work_is_recoverable "$branch"; then
-      echo "REFUSED: worktree $WT has work not on any remote, not published at the forge, and not landed." >&2
+      echo "REFUSED: worktree $WT has work not parked in local custody, not on any remote, not published at the forge, and not landed." >&2
       printf 'unpushed commits:\n%s\n' "$unpushed" >&2
-      # Name which of the three values the publication observation reached. A
-      # could-not-observe refusal and a not-published refusal are the same
+      # Name which of the three values each observation reached. A
+      # could-not-observe refusal and a proven-negative refusal are the same
       # action and different facts, and only the operator can close the gap.
+      printf 'custody: %s (%s)\n' \
+        "${CUSTODY_OBSERVATION:-could-not-observe}" \
+        "${CUSTODY_DETAIL:-custody was never observed}" >&2
       printf 'publication: %s (%s)\n' \
         "${PUBLICATION_OBSERVATION:-could-not-observe}" \
         "${PUBLICATION_DETAIL:-publication was never observed}" >&2
-      echo "Push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
+      echo "Park it locally (bin/fm-lane-custody.sh park $ID), push the branch, land its PR, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
+    report_custody_release
   fi
 }
 

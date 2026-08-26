@@ -101,6 +101,7 @@ data/                personal fleet records; LOCAL, gitignored as a whole
   outbound-artifacts/  durable correlation records joining an outbound request to its ruling, the item it resumed, and its disposition; written only by bin/fm-outbound-artifact.sh, which owns their format, identity rule and crash-safe checkpointing.
                      ONE record serves both directions, so a ruling stays attributable to the request that asked for it.
   landing-authorizations/  one-use, head-bound authorities derived from those rulings and spent by the two landing chokepoints; written only by bin/fm-landing-authorization.sh, which owns their identity, lifecycle, and the intent-before-act spend sequence
+  lane-custody/      durable task -> branch -> head -> tree records for lanes PARKED under a local refs/fm/custody/ ref, so a finished, clean, deliberately unpublished lane can give its slot back; written only by bin/fm-lane-custody.sh, which owns their identity, refusals, and reopen proof, and kept rather than removed by teardown, which reads one as a third recoverability authority
   <id>/outbound-gate.json  OPTIONAL typed declaration that this item is waiting on an outbound artifact, naming its gate and exact head; the canonical alternative to firstmate recognising the wait from hold prose
   commitments/       OPTIONAL home-private commitment entries, same schema as the tracked commitments/ registry; LOCAL, gitignored; for captain-private commitments that must not reach a shared template repo. Absent is silent, unlike the tracked registry, whose absence is could-not-observe
   <id>/brief.md      per-task crewmate brief, or per-secondmate charter brief when role=secondmate
@@ -412,6 +413,7 @@ A captain instruction to merge is explicit authority; `yolo` is the only standin
 For any custom `state/<id>.check.sh` you write yourself, keep it an ordinary single-link mode-`0700` file, print one line only when firstmate should wake, print nothing otherwise, finish before `FM_CHECK_TIMEOUT`, then bind its current bytes with `bin/fm-check-register.sh <id>` before the watcher may execute it.
 
 Tear down a ship task only after `bin/fm-teardown.sh` confirms its work is recoverable.
+When a finished, clean lane is deliberately held unpublished and its slot is needed, `bin/fm-lane-custody.sh park <id>` binds its exact commits to a local custody ref outside the worktree so teardown can return the slot; that script owns the whole contract, including how to reopen the lane afterwards and the single path that retires a parked ref.
 When the captain releases one before its PR lands, that cleanup leaves a durable landing record so `bin/fm-pr-merge.sh` can still land the PR and `bin/fm-pr-check.sh` can rearm its merge watch afterwards.
 A teardown refusal for uncommitted or unrecoverable work is a stop-and-investigate result, never an obstacle to bypass.
 Never force teardown without explicit discard authority.

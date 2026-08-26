@@ -403,6 +403,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/lane-local-custody.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/outbound-transport-invariant.md",
       "audience": "maintainer-verification"
     },
