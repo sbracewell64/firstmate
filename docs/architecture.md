@@ -561,4 +561,5 @@ Use `/stow` before an intentional reset when the conversation may hold durable k
 ## Development notes
 
 The current watcher reliability work combines always-on bash triage with a durable queue for actionable wakes, a race-proof singleton lock, duplicate self-eviction, drain-time liveness assertion, and a self-verifying tracked-child arm wrapper.
+The singleton lock becomes durable on disk milliseconds before an acquire returns, so every acquirer installs its cleanup trap before the acquire and releases unconditionally, and the lock library publishes the in-flight lock for that trap to release - the contract and its rationale live in `bin/fm-wake-lib.sh`'s "Lock primitives" section.
 The presence-gated sub-supervisor (`bin/fm-supervise-daemon.sh`) provides walk-away supervision via the `/afk` skill while reusing the same shared wake classifier as the always-on watcher.

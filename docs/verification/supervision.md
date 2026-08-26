@@ -310,6 +310,54 @@ tests/fm-claude-stop-autoarm.test.sh
 tests/fm-turnend-guard.test.sh
 ```
 
+## Singleton lock acquire window
+
+The watcher singleton lock becomes durable on disk at `ln -s` inside `fm_lock_try_create` and the acquire does not return for several more milliseconds.
+An acquirer that installed its cleanup trap only after that return left the lock behind permanently when a fatal default-disposition signal arrived in between, with a holder pid that was already gone.
+The repair is stated in `bin/fm-wake-lib.sh`'s "Lock primitives" section: the library publishes the in-flight lock, and every acquirer installs its trap before the acquire and releases unconditionally.
+
+The reproduction is deterministic and load-free.
+It holds the subject inside the window by shimming the `readlink` the library runs against the lock path immediately after publishing it, waits for the shim's own marker so the signal cannot land before the window opens, and signals only a pid the test started.
+Holder liveness is read from the process table; a pid taken out of a lock file is never signalled.
+
+Executed on 2026-08-26 on Linux 6.18.33.2 (WSL2) with bash 5.3.9, against a `git archive` of `1f2141ad25b0da95b1d0a680b4b5887f2ec1ca5c` for the before column and this tree for the after column.
+
+```sh
+bash tests/fm-watcher-lock.test.sh
+bash tests/fm-watch-checkpoint.test.sh
+```
+
+Observed before the repair, with the same cases run against the pre-repair library and acquirers:
+
+```text
+not ok - migration signalled inside its acquire: watch lock survived with no live holder (holder=dead owner=.../state/.watch.lock.owner.BQYvQy files=pid )
+not ok - watcher signalled inside its acquire: watch lock survived with no live holder (holder=dead owner=.../state/.watch.lock.owner.rt6SwG files=pid )
+not ok - acquirer signalled inside a steal acquire: watch lock survived with no live holder (holder=dead owner=.../state/.watch.lock.steal.owner.ARbBN3 files=pid )
+not ok - claim rewrote the pid of a lock it had already published: NOT-ACQUIRED
+```
+
+Observed after the repair:
+
+```text
+ok - watch lock residue is classified by its holder, not by the bound
+ok - a migration signalled inside its own lock acquire leaves no watcher lock
+ok - a watcher signalled inside its own lock acquire leaves no watcher lock
+ok - a signal inside a steal acquire releases the pending lock and spares a foreign one
+ok - claiming a published lock reads its pid back instead of rewriting it
+ok - quiet checkpoint exits 124 with a clean checkpoint line and no live lock
+```
+
+The `files=pid ` in each before line is the attribution the bare absence assertion could not make: a lock holding only `pid` was published by a process that died inside its own acquire, while a lock a fully started watcher owned also holds `fm-home`, `watcher-path`, and `pid-identity`.
+
+Two properties the after column depends on, both executed rather than assumed:
+
+- The residue classifier is not vacuous. `test_watch_lock_residue_classifier_separates_the_two_shapes` drives a dead holder, an empty pid file, a live holder, and a cleared lock through `assert_watch_lock_cleared`, and confirms that the first two fail as product defects, the third is typed `TEST_ENVIRONMENT_RESOURCE_TIMEOUT` without a red, and the fourth returns clean.
+  The bounded wait at `tests/fm-watch-checkpoint.test.sh` therefore cannot hide an orphan by waiting longer: its verdict comes from the holder, not the bound.
+- The stretched window is not vacuous. Each case asserts the shim's marker, so if the library ever stops running `readlink` inside that window the case goes red instead of passing without ever entering it.
+
+Not observed: the rate at which this window is entered under real host contention.
+The reproduction moves the deadline instead of loading the machine, so it establishes the defect and its repair, not their frequency.
+
 ## Wedge-alarm channels
 
 The two real notification channels were bounded manually on 2026-07-10 on macOS 26.5.2 with Herdr 0.7.3.

@@ -4,6 +4,8 @@ set -u
 
 # shellcheck source=tests/lib.sh
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+# shellcheck source=tests/watch-lock-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/watch-lock-helpers.sh"
 
 CHECKPOINT="$ROOT/bin/fm-watch-checkpoint.sh"
 TMP_ROOT=$(fm_test_tmproot fm-watch-checkpoint)
@@ -24,7 +26,15 @@ test_quiet_checkpoint_exits_124_cleanly() {
   FM_HOME="$home" FM_POLL=1 FM_SIGNAL_GRACE=1 FM_CHECK_INTERVAL=999999 "$CHECKPOINT" --seconds 1 >"$out" 2>"$err" || status=$?
   expect_code 124 "$status" "quiet checkpoint exit"
   assert_contains "$(cat "$out")" "checkpoint: no actionable wake within 1s" "quiet checkpoint line missing"
-  assert_absent "$home/state/.watch.lock/pid" "watch lock pid survived quiet checkpoint timeout"
+  # The checkpoint returns when `timeout` reaps ITS child, and a process that
+  # child started - a migration the checkpoint never waited for - can still be
+  # releasing the lock at that instant. So this is a bounded wait rather than a
+  # bare absence check. The bound is deliberately generous (~100x the 14-16 ms
+  # this cleanup takes on an idle host, ~11x the 180 ms measured at 3x
+  # oversubscription) and decides nothing on its own: on expiry the verdict
+  # comes from whether a live process still holds the lock, so widening the
+  # bound can never turn a real orphan into a pass.
+  assert_watch_lock_cleared "$home/state/.watch.lock" 100 "quiet checkpoint" || return
   pass "quiet checkpoint exits 124 with a clean checkpoint line and no live lock"
 }
 

@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Shared durable wake queue and portable lock helpers.
+# Shared durable wake queue and portable lock helpers. The "Lock primitives"
+# section below owns the lock ownership model, the acquire window, and the
+# trap-before-acquire rule every acquirer owes it.
 
 FM_WAKE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_WAKE_DEFAULT_ROOT="$(cd "$FM_WAKE_LIB_DIR/.." && pwd)"
@@ -238,6 +240,36 @@ fm_lock_role() {
   cat "$1/role" 2>/dev/null
 }
 
+# --- Lock primitives, and the contract every acquirer owes them --------------
+#
+# A lock is a symlink at <lockdir> pointing at an owner directory this process
+# made, whose `pid` file names the shell that holds it. Release is pid-gated, so
+# releasing a lock owned by anyone else is already a no-op - that is what makes
+# an unconditional release safe, and the watcher's self-eviction path relies on
+# exactly that no-op.
+#
+# THE ACQUIRE WINDOW. fm_lock_try_create publishes the lock with `ln -s` and then
+# does several more milliseconds of work before returning, so there is an
+# interval in which the lock is durable on disk and NO caller yet knows it holds
+# anything. A fatal default-disposition signal there used to strand the lock
+# permanently with a dead holder pid. Two things close it, and an acquirer needs
+# both:
+#
+#   1. This library publishes FM_LOCK_PENDING_LOCK / FM_LOCK_PENDING_OWNER before
+#      the lock exists and clears them on every path out of fm_lock_try_create.
+#      fm_lock_release_pending removes a pending lock that still points at its
+#      pending owner.
+#   2. Every acquirer that holds a lock across real work INSTALLS ITS CLEANUP
+#      TRAP BEFORE THE ACQUIRE - never after it - and releases unconditionally:
+#      `fm_lock_release "$LOCK"` plus `fm_lock_release_pending`. A trap installed
+#      after the acquire returns cannot cover a window that opens inside it, and
+#      no caller can close that window from outside.
+#
+# Initialized here so the pending pair is readable before any acquire under
+# `set -u`, and so an acquirer's trap can run at any point in its life.
+FM_LOCK_PENDING_LOCK=
+FM_LOCK_PENDING_OWNER=
+
 fm_lock_abs_path() {
   local path=$1 dir base
   dir=$(dirname "$path")
@@ -310,10 +342,12 @@ fm_lock_claim_blocked_by_steal() {
 fm_lock_claim() {
   local lockdir=$1 ownerdir=$2 allowed_steal_owner=${3:-} mypid back
   mypid=${BASHPID:-$$}
-  if ! { printf '%s\n' "$mypid" > "$ownerdir/pid"; } 2>/dev/null; then
-    fm_lock_discard_owner "$ownerdir"
-    return 1
-  fi
+  # Read the pid back rather than writing it again. fm_lock_prepare_owner has
+  # already written this exact value from this exact shell, and the lock is
+  # published by now - so a second truncating write can only ever leave the
+  # published lock's pid file momentarily EMPTY, which is what a signal landing
+  # inside that truncate was observed to make durable. The read-back still
+  # verifies the file, which is the only thing the write ever bought here.
   back=$(cat "$ownerdir/pid" 2>/dev/null || true)
   if [ "$back" != "$mypid" ]; then
     fm_lock_discard_owner "$ownerdir"
@@ -336,6 +370,8 @@ fm_lock_claim() {
 fm_lock_try_create() {
   local lockdir=$1 allowed_steal_owner=${2:-} ownerdir
   FM_LOCK_OWNER_DIR=
+  FM_LOCK_PENDING_LOCK=
+  FM_LOCK_PENDING_OWNER=
   ownerdir=$(fm_lock_owner_dir "$lockdir") || return 1
   if [ -e "$lockdir" ] || [ -L "$lockdir" ]; then
     fm_lock_discard_owner "$ownerdir"
@@ -345,9 +381,19 @@ fm_lock_try_create() {
     fm_lock_discard_owner "$ownerdir"
     return 1
   fi
+  # Publish the IN-FLIGHT pair before the lock exists on disk. The ln -s below
+  # makes the lock durable, and this function does not return for several more
+  # milliseconds, so between those two instants the caller cannot know it holds
+  # anything and a fatal default-disposition signal leaves the lock behind
+  # forever. fm_lock_release_pending is what an acquirer's EXIT trap can act on
+  # in that window; it is only ever set here, and cleared on every path out.
+  FM_LOCK_PENDING_LOCK=$lockdir
+  FM_LOCK_PENDING_OWNER=$ownerdir
   if ln -s "$ownerdir" "$lockdir" 2>/dev/null && fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
     if fm_lock_claim "$lockdir" "$ownerdir" "$allowed_steal_owner"; then
       FM_LOCK_OWNER_DIR=$ownerdir
+      FM_LOCK_PENDING_LOCK=
+      FM_LOCK_PENDING_OWNER=
       return 0
     fi
     if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
@@ -357,7 +403,25 @@ fm_lock_try_create() {
     fm_lock_remove_stray_owner_link "$lockdir" "$ownerdir"
   fi
   fm_lock_discard_owner "$ownerdir"
+  FM_LOCK_PENDING_LOCK=
+  FM_LOCK_PENDING_OWNER=
   return 1
+}
+
+# Release a lock this process published but has not been handed back yet.
+# Acquirers call it from the cleanup trap they install BEFORE the acquire; it is
+# a no-op once fm_lock_try_create has returned either way, and it never touches a
+# lock that no longer points at the owner directory this process made.
+fm_lock_release_pending() {
+  local lockdir=${FM_LOCK_PENDING_LOCK:-} ownerdir=${FM_LOCK_PENDING_OWNER:-}
+  FM_LOCK_PENDING_LOCK=
+  FM_LOCK_PENDING_OWNER=
+  [ -n "$lockdir" ] && [ -n "$ownerdir" ] || return 0
+  if fm_lock_points_to_owner "$lockdir" "$ownerdir"; then
+    rm -f "$lockdir" 2>/dev/null || true
+  fi
+  fm_lock_discard_owner "$ownerdir"
+  return 0
 }
 
 fm_lock_remove_path() {

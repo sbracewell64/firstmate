@@ -8,6 +8,8 @@ set -u
 
 # shellcheck source=tests/wake-helpers.sh
 . "$(dirname "${BASH_SOURCE[0]}")/wake-helpers.sh"
+# shellcheck source=tests/watch-lock-helpers.sh
+. "$(dirname "${BASH_SOURCE[0]}")/watch-lock-helpers.sh"
 
 WATCH="$ROOT/bin/fm-watch.sh"
 WATCH_ARM="$ROOT/bin/fm-watch-arm.sh"
@@ -396,6 +398,10 @@ test_lock_paused_mid_acquire_claim_fails_during_steal() {
   out=$(FM_LOCK_STALE_AFTER=0 FM_STATE_OVERRIDE="$state" bash -c '
     . "$1"
     owner=$(fm_lock_owner_dir "$2") || exit 20
+    # Build the owner the way an acquire does: fm_lock_try_create always
+    # prepares the pid before publishing, so a fixture that skips it is not the
+    # state a paused claimant can actually be in.
+    fm_lock_prepare_owner "$owner" || exit 23
     ln -s "$owner" "$2" || exit 21
     fm_lock_try_acquire "$2.steal" || exit 22
     steal_owner=${FM_LOCK_OWNER_DIR:-}
@@ -1144,6 +1150,305 @@ test_msys_pid_identity_uses_proc() {
   pass "MSYS process identity uses compatible /proc fields"
 }
 
+# --- the acquire window ------------------------------------------------------
+#
+# bin/fm-wake-lib.sh publishes a lock with `ln -s` and then keeps working for
+# several milliseconds before the acquire returns. A fatal default-disposition
+# signal in that interval used to leave the lock behind forever with a dead
+# holder pid, because the acquirer installed its cleanup trap only afterwards.
+# The cases below drive that interval on purpose instead of waiting for a loaded
+# machine to land in it, so they are deterministic and need no timing luck.
+#
+# WHY A LATENCY INJECTOR AND NOT A FIXTURE. The property under test is about an
+# interval inside a function, so no fixture can build it: the only faithful way
+# to hold a process inside that window is to make one of the steps the window is
+# made of take a controlled amount of time. `readlink` is such a step - the
+# library runs it against the lock path immediately after publishing the lock -
+# so shimming it puts a controlled, observable window exactly where the defect
+# lived. It is a latency injector on a tool the path uses, never a read of the
+# product's source, and the same shape as fm_fake_git_fault in tests/lib.sh.
+#
+# NON-VACUITY. The shim writes a marker the moment it fires, and every case that
+# uses it asserts that marker. If the library ever stops running readlink inside
+# the window the shim silently never fires, and it is the marker - not the
+# absent lock - that turns that into a red instead of a free pass.
+#
+# The shim is inert unless the caller exports one of:
+#   FM_LOCK_WINDOW_LOCK     stretch the window on this exact lock path. Fires
+#                           once (gated on FM_LOCK_WINDOW_MARK, which it
+#                           creates), then holds until FM_LOCK_WINDOW_RELEASE
+#                           exists, capped so a wedged case cannot hang a suite.
+#   FM_LOCK_FREEZE_LOCK     make this lock's published `pid` file read-only the
+#                           first time the library looks at the lock, recording
+#                           FM_LOCK_FREEZE_MARK. That stands in for the
+#                           truncating rewrite that used to happen after the
+#                           lock was already published: a rewrite would now fail
+#                           and lose the acquire, while a read-back succeeds.
+#                           The truncate window itself is microseconds wide and
+#                           cannot be scheduled from outside, so the test pins
+#                           the rewrite's absence rather than its timing.
+install_lock_readlink_shim() {  # <fakebin>
+  local fakebin=$1 real
+  real=$(command -v readlink) || fail "no readlink on PATH to shim"
+  cat > "$fakebin/readlink" <<SH
+#!/usr/bin/env bash
+FM_LOCK_SHIM_REAL_READLINK='$real'
+SH
+  cat >> "$fakebin/readlink" <<'SH'
+if [ -n "${FM_LOCK_WINDOW_LOCK:-}" ] && [ "${1:-}" = "$FM_LOCK_WINDOW_LOCK" ] \
+  && [ -n "${FM_LOCK_WINDOW_MARK:-}" ] && [ ! -e "$FM_LOCK_WINDOW_MARK" ]; then
+  : > "$FM_LOCK_WINDOW_MARK"
+  fm_shim_i=0
+  while [ ! -e "${FM_LOCK_WINDOW_RELEASE:-/nonexistent}" ] && [ "$fm_shim_i" -lt 250 ]; do
+    sleep 0.02
+    fm_shim_i=$((fm_shim_i + 1))
+  done
+fi
+if [ -n "${FM_LOCK_FREEZE_LOCK:-}" ] && [ "${1:-}" = "$FM_LOCK_FREEZE_LOCK" ]; then
+  fm_shim_owner=$("$FM_LOCK_SHIM_REAL_READLINK" "$FM_LOCK_FREEZE_LOCK" 2>/dev/null || true)
+  if [ -n "$fm_shim_owner" ] && [ -f "$fm_shim_owner/pid" ]; then
+    chmod 0400 "$fm_shim_owner/pid" 2>/dev/null || true
+    [ -z "${FM_LOCK_FREEZE_MARK:-}" ] || : > "$FM_LOCK_FREEZE_MARK"
+  fi
+fi
+exec "$FM_LOCK_SHIM_REAL_READLINK" "$@"
+SH
+  chmod +x "$fakebin/readlink"
+}
+
+# Wait until the subject is demonstrably INSIDE the stretched window, then hand
+# back control. The shim's marker is the signal, not the lock symlink: the
+# symlink appears one step earlier, so waiting on it would let a case signal
+# before the window opened and then assert about a window it never entered.
+# Both facts are checked, because the marker alone would not prove the lock is
+# durable on disk at the instant of the signal.
+wait_inside_stretched_window() {  # <mark> <lock> <pid> <label>
+  local mark=$1 lock=$2 pid=$3 label=$4 i=0
+  while [ "$i" -lt 500 ]; do
+    if [ -e "$mark" ]; then
+      [ -L "$lock" ] || fail "$label entered the window with no published lock"
+      return 0
+    fi
+    is_live_non_zombie "$pid" || fail "$label exited before entering the stretched acquire window"
+    sleep 0.02
+    i=$((i + 1))
+  done
+  fail "$label never entered the stretched acquire window"
+}
+
+# No owner directory may outlive the acquire that made it: an orphaned owner dir
+# is the other half of the same residue, and a lock that was released while its
+# owner dir stayed behind is still litter a later reader has to explain.
+assert_no_lock_owner_dirs() {  # <state> <msg>
+  local d
+  for d in "$1"/.watch.lock*.owner.*; do
+    [ -e "$d" ] || continue
+    fail "$2 (left $d)"
+  done
+}
+
+# An acquirer that obeys the contract in bin/fm-wake-lib.sh: cleanup trap
+# installed BEFORE the acquire, releasing unconditionally.
+write_contract_acquirer() {  # <path>
+  cat > "$1" <<'SH'
+#!/usr/bin/env bash
+set -u
+# shellcheck disable=SC1090
+. "$1"
+FM_ACQUIRER_LOCK=$2
+acquirer_cleanup() {
+  fm_lock_release "$FM_ACQUIRER_LOCK"
+  fm_lock_release_pending
+}
+trap acquirer_cleanup EXIT
+trap 'exit 1' HUP INT TERM
+if fm_lock_try_acquire "$FM_ACQUIRER_LOCK"; then
+  printf 'ACQUIRED %s\n' "$(cat "$FM_ACQUIRER_LOCK/pid" 2>/dev/null || true)"
+  sleep 120
+else
+  printf 'NOT-ACQUIRED\n'
+fi
+SH
+  chmod +x "$1"
+}
+
+# The cases below lean on assert_watch_lock_cleared to tell a durable orphan
+# from a cleanup still in flight, so prove that it separates them before leaning
+# on it. A barrier that cannot go red for a dead holder would silence exactly
+# the defect these cases exist to catch.
+test_watch_lock_residue_classifier_separates_the_two_shapes() {
+  local dir state lock err out rc dead
+  dir=$(make_case lock-residue-classifier)
+  state="$dir/state"
+  lock="$state/.watch.lock"
+  err="$dir/classifier.err"
+  dead=999999
+  while kill -0 "$dead" 2>/dev/null; do
+    dead=$((dead + 1))
+  done
+
+  mkdir "$lock"
+  printf '%s\n' "$dead" > "$lock/pid"
+  rc=0
+  ( assert_watch_lock_cleared "$lock" 2 "classifier dead" ) 2>"$err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "residue classifier did not reject a dead holder (rc=$rc)"
+  assert_grep "watch lock survived with no live holder" "$err" \
+    "a dead holder was not reported as a product defect"
+  assert_grep "files=pid" "$err" "a dead-holder failure did not preserve the owner file list"
+
+  : > "$err"
+  printf '' > "$lock/pid"
+  rc=0
+  ( assert_watch_lock_cleared "$lock" 2 "classifier empty" ) 2>"$err" || rc=$?
+  [ "$rc" -eq 1 ] || fail "residue classifier did not reject an unreadable holder (rc=$rc)"
+  assert_grep "holder=unreadable" "$err" "an empty holder pid was not classified as unreadable"
+
+  # A LIVE holder at the bound is this machine, not the product: could-not-observe,
+  # never a red. $$ is a live pid that is not a watcher.
+  : > "$err"
+  printf '%s\n' "$$" > "$lock/pid"
+  rc=0
+  out=$( ( assert_watch_lock_cleared "$lock" 2 "classifier live" ) 2>"$err" ) || rc=$?
+  [ "$rc" -eq 1 ] || fail "residue classifier did not report a live holder as unobserved (rc=$rc)"
+  assert_contains "$out" "TEST_ENVIRONMENT_RESOURCE_TIMEOUT" \
+    "a live holder at the bound was not typed as a resource timeout"
+  assert_no_grep "not ok" "$err" "a live holder at the bound was reported as a product defect"
+
+  rm -f "$lock/pid"
+  rmdir "$lock"
+  assert_watch_lock_cleared "$lock" 2 "classifier cleared" \
+    || fail "residue classifier did not accept a cleared lock"
+  pass "watch lock residue is classified by its holder, not by the bound"
+}
+
+test_migration_signalled_inside_acquire_leaves_no_lock() {
+  local dir state fakebin out lock mark release pid
+  dir=$(make_case migrate-acquire-window)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/migrate.out"
+  lock="$state/.watch.lock"
+  mark="$dir/window-entered"
+  release="$dir/window-release"
+  install_lock_readlink_shim "$fakebin"
+  # No migration markers here on purpose: a home whose migration has not run is
+  # the one that reaches the watcher-lock acquire this case is about.
+  PATH="$fakebin:$PATH" FM_HOME="$dir" FM_STATE_OVERRIDE="$state" \
+    FM_LOCK_WINDOW_LOCK="$lock" FM_LOCK_WINDOW_MARK="$mark" FM_LOCK_WINDOW_RELEASE="$release" \
+    "$ROOT/bin/fm-pr-check-migrate.sh" --checks-safe > "$out" 2>&1 &
+  pid=$!
+  fm_test_reap "$pid"
+  wait_inside_stretched_window "$mark" "$lock" "$pid" "migration"
+  kill -TERM "$pid" 2>/dev/null || true
+  : > "$release"
+  wait "$pid" 2>/dev/null || true
+  assert_watch_lock_cleared "$lock" 200 "migration signalled inside its acquire" || return
+  assert_no_lock_owner_dirs "$state" \
+    "migration signalled inside its acquire left an owner directory behind"
+  pass "a migration signalled inside its own lock acquire leaves no watcher lock"
+}
+
+test_watcher_signalled_inside_acquire_leaves_no_lock() {
+  local dir state fakebin out lock mark release pid
+  dir=$(make_case watch-acquire-window)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  out="$dir/watch.out"
+  lock="$state/.watch.lock"
+  mark="$dir/window-entered"
+  release="$dir/window-release"
+  # Short-circuit the migration so the window the shim stretches is the
+  # WATCHER'S OWN acquire and not the migration's.
+  mark_pr_check_migration_complete "$state"
+  install_lock_readlink_shim "$fakebin"
+  PATH="$fakebin:$PATH" FM_STATE_OVERRIDE="$state" FM_POLL=5 FM_SIGNAL_GRACE=1 \
+    FM_CHECK_INTERVAL=999999 FM_HEARTBEAT=999999 \
+    FM_LOCK_WINDOW_LOCK="$lock" FM_LOCK_WINDOW_MARK="$mark" FM_LOCK_WINDOW_RELEASE="$release" \
+    "$WATCH" > "$out" 2>&1 &
+  pid=$!
+  fm_test_reap "$pid"
+  wait_inside_stretched_window "$mark" "$lock" "$pid" "watcher"
+  kill -TERM "$pid" 2>/dev/null || true
+  : > "$release"
+  wait "$pid" 2>/dev/null || true
+  assert_watch_lock_cleared "$lock" 200 "watcher signalled inside its acquire" || return
+  assert_no_lock_owner_dirs "$state" \
+    "watcher signalled inside its acquire left an owner directory behind"
+  pass "a watcher signalled inside its own lock acquire leaves no watcher lock"
+}
+
+test_pending_release_covers_steal_window_and_spares_a_foreign_lock() {
+  local dir state fakebin acquirer lock steal mark release dead pid holder
+  dir=$(make_case steal-acquire-window)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  acquirer="$dir/acquirer.sh"
+  lock="$state/.watch.lock"
+  steal="$lock.steal"
+  mark="$dir/window-entered"
+  release="$dir/window-release"
+  install_lock_readlink_shim "$fakebin"
+  write_contract_acquirer "$acquirer"
+  dead=999999
+  while kill -0 "$dead" 2>/dev/null; do
+    dead=$((dead + 1))
+  done
+  # A stale lock held by a dead FOREIGN pid. A numeric dead pid is stealable
+  # immediately, so the acquire takes the steal path and publishes the steal
+  # lock - the one window an acquirer's own fm_lock_release "$LOCK" cannot
+  # cover, because that lock is not its own.
+  mkdir "$lock"
+  printf '%s\n' "$dead" > "$lock/pid"
+  PATH="$fakebin:$PATH" \
+    FM_LOCK_WINDOW_LOCK="$steal" FM_LOCK_WINDOW_MARK="$mark" FM_LOCK_WINDOW_RELEASE="$release" \
+    bash "$acquirer" "$LIB" "$lock" > "$dir/acquirer.out" 2>&1 &
+  pid=$!
+  fm_test_reap "$pid"
+  wait_inside_stretched_window "$mark" "$steal" "$pid" "steal acquirer"
+  kill -TERM "$pid" 2>/dev/null || true
+  : > "$release"
+  wait "$pid" 2>/dev/null || true
+  assert_watch_lock_cleared "$steal" 200 "acquirer signalled inside a steal acquire" || return
+  # The same unconditional release must stay a no-op on a lock this process does
+  # not own - the property the watcher's self-eviction path depends on.
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  [ "$holder" = "$dead" ] || fail "unconditional release touched a lock owned by another pid (holder now '$holder')"
+  assert_no_lock_owner_dirs "$state" "steal acquire left an owner directory behind"
+  pass "a signal inside a steal acquire releases the pending lock and spares a foreign one"
+}
+
+test_claim_does_not_rewrite_an_already_published_pid() {
+  local dir state fakebin acquirer lock mark out pid i
+  dir=$(make_case claim-no-rewrite)
+  state="$dir/state"
+  fakebin="$dir/fakebin"
+  acquirer="$dir/acquirer.sh"
+  lock="$state/.watch.lock"
+  mark="$dir/freeze-fired"
+  out="$dir/acquirer.out"
+  install_lock_readlink_shim "$fakebin"
+  write_contract_acquirer "$acquirer"
+  PATH="$fakebin:$PATH" \
+    FM_LOCK_FREEZE_LOCK="$lock" FM_LOCK_FREEZE_MARK="$mark" \
+    bash "$acquirer" "$LIB" "$lock" > "$out" 2>&1 &
+  pid=$!
+  fm_test_reap "$pid"
+  fm_test_wait_file "$mark" 20 "$pid" "acquirer exited before the lock was published" \
+    "the published lock's pid file was never frozen"
+  i=0
+  while [ "$i" -lt 500 ] && [ ! -s "$out" ]; do
+    sleep 0.02
+    i=$((i + 1))
+  done
+  [ -s "$out" ] || fail "acquirer never reported whether it took the frozen-pid lock"
+  # A second, truncating write to the published pid file would fail here and
+  # lose the acquire. The read-back the claim really needs still succeeds.
+  assert_grep "ACQUIRED $pid" "$out" "claim rewrote the pid of a lock it had already published: $(cat "$out")"
+  kill -TERM "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+  pass "claiming a published lock reads its pid back instead of rewriting it"
+}
+
 # First: every case below leaves real watchers and arms in the background and
 # relies on the harness reaping them, so prove the reaper before leaning on it.
 test_harness_reaps_registered_process_tree_on_every_ending
@@ -1175,3 +1480,8 @@ test_arm_waits_for_peer_beacon_after_child_stands_down
 test_arm_fails_loud_when_no_fresh_watcher_confirmable
 test_cycle_exit_ledger_links_successor_and_stays_bounded
 test_stopped_watcher_is_live_but_stale_then_exit_is_classified
+test_watch_lock_residue_classifier_separates_the_two_shapes
+test_migration_signalled_inside_acquire_leaves_no_lock
+test_watcher_signalled_inside_acquire_leaves_no_lock
+test_pending_release_covers_steal_window_and_spares_a_foreign_lock
+test_claim_does_not_rewrite_an_already_published_pid

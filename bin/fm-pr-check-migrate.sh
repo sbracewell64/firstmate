@@ -287,7 +287,36 @@ if fm_pid_alive "$pid"; then
   fi
 fi
 
+MIGRATION_MARKER_TMP=
+MIGRATION_SCAN_MARKER_TMP=
+MIGRATION_LOG_TMP=
+MIGRATION_OBLIGATION_TMP=
+MIGRATION_QUARANTINE_TMP=
+MIGRATION_X_SHIM_TMP=
 lock_held=0
+migration_cleanup() {
+  fm_pr_poll_cleanup
+  [ -z "$MIGRATION_X_SHIM_TMP" ] || rm -f -- "$MIGRATION_X_SHIM_TMP"
+  [ -z "$MIGRATION_QUARANTINE_TMP" ] || rm -f -- "$MIGRATION_QUARANTINE_TMP"
+  [ -z "$MIGRATION_OBLIGATION_TMP" ] || rm -f -- "$MIGRATION_OBLIGATION_TMP"
+  [ -z "$MIGRATION_LOG_TMP" ] || rm -f -- "$MIGRATION_LOG_TMP"
+  [ -z "$MIGRATION_MARKER_TMP" ] || rm -f -- "$MIGRATION_MARKER_TMP"
+  [ -z "$MIGRATION_SCAN_MARKER_TMP" ] || rm -f -- "$MIGRATION_SCAN_MARKER_TMP"
+  # Unconditional, and not gated on lock_held: the watcher's singleton lock
+  # becomes durable inside fm_lock_try_acquire, several milliseconds before
+  # lock_held can be set, and a signal in that window is exactly what used to
+  # strand it. fm_lock_release is pid-gated, so this is already a no-op on a
+  # lock this process does not own; fm_lock_release_pending covers the lock
+  # this process published but has not been handed back yet.
+  fm_lock_release "$WATCH_LOCK"
+  fm_lock_release_pending
+}
+# Installed BEFORE the acquisition loop, with the initialisers it depends on: a
+# trap installed after the acquire returns cannot cover a window that opens
+# inside it (bin/fm-wake-lib.sh, "Lock primitives").
+trap migration_cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
 i=0
 while [ "$i" -lt 100 ]; do
   if fm_lock_try_acquire "$WATCH_LOCK"; then
@@ -308,25 +337,6 @@ if [ "$lock_held" -ne 1 ]; then
   echo "PR_CHECK_MIGRATION: watcher exclusion could not be acquired; review state/.watch.lock before rearming polls" >&2
   exit 1
 fi
-
-MIGRATION_MARKER_TMP=
-MIGRATION_SCAN_MARKER_TMP=
-MIGRATION_LOG_TMP=
-MIGRATION_OBLIGATION_TMP=
-MIGRATION_QUARANTINE_TMP=
-MIGRATION_X_SHIM_TMP=
-migration_cleanup() {
-  fm_pr_poll_cleanup
-  [ -z "$MIGRATION_X_SHIM_TMP" ] || rm -f -- "$MIGRATION_X_SHIM_TMP"
-  [ -z "$MIGRATION_QUARANTINE_TMP" ] || rm -f -- "$MIGRATION_QUARANTINE_TMP"
-  [ -z "$MIGRATION_OBLIGATION_TMP" ] || rm -f -- "$MIGRATION_OBLIGATION_TMP"
-  [ -z "$MIGRATION_LOG_TMP" ] || rm -f -- "$MIGRATION_LOG_TMP"
-  [ -z "$MIGRATION_MARKER_TMP" ] || rm -f -- "$MIGRATION_MARKER_TMP"
-  [ -z "$MIGRATION_SCAN_MARKER_TMP" ] || rm -f -- "$MIGRATION_SCAN_MARKER_TMP"
-  [ "$lock_held" -ne 1 ] || fm_lock_release "$WATCH_LOCK"
-}
-trap migration_cleanup EXIT
-trap 'exit 1' HUP INT TERM
 
 if [ ! -d "$STATE" ] || [ -L "$STATE" ]; then
   echo "PR_CHECK_MIGRATION: state directory is not a private ordinary directory; migration did not complete safely" >&2

@@ -871,6 +871,32 @@ fi
   exit 1
 }
 
+watcher_cleanup() {
+  local stopped=0
+  fm_active_check_stop || stopped=1
+  if [ "$stopped" -eq 0 ]; then
+    fm_check_output_cleanup
+    fm_custom_check_snapshot_cleanup
+  else
+    # A check child that outlived TERM-then-KILL is a reason to complain and to
+    # leave its output alone, never a reason to keep the singleton lock forever:
+    # the release below has to happen on this path too.
+    echo "watcher: a registered check process group would not stop; its output was left in place" >&2
+  fi
+  # Unconditional. fm_lock_release is pid-gated, so this no-ops on a lock this
+  # process does not own - which is exactly what the self-eviction path below
+  # relies on - and fm_lock_release_pending covers the window inside
+  # fm_lock_try_acquire where the lock is already durable on disk and this
+  # process does not yet know it holds anything.
+  fm_lock_release "$WATCH_LOCK"
+  fm_lock_release_pending
+}
+# Installed BEFORE the acquire: a trap installed after fm_lock_try_acquire
+# returns cannot cover a window that opens inside it (bin/fm-wake-lib.sh,
+# "Lock primitives").
+trap watcher_cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
 if ! fm_lock_try_acquire "$WATCH_LOCK"; then
   BEAT="$STATE/.last-watcher-beat"
   if [ -n "${FM_LOCK_HELD_PID:-}" ]; then
@@ -890,17 +916,10 @@ if ! fm_lock_try_acquire "$WATCH_LOCK"; then
   fi
   exit 0
 fi
-watcher_cleanup() {
-  fm_active_check_stop || return 1
-  fm_check_output_cleanup
-  fm_custom_check_snapshot_cleanup
-  fm_lock_release "$WATCH_LOCK"
-}
-trap watcher_cleanup EXIT
-trap 'exit 1' HUP INT TERM
-# This watcher's own pid, as recorded in the lock by fm_lock_claim (which writes
-# ${BASHPID:-$$} from this same main shell). Read directly, never via a command
-# substitution, so it matches the stored holder pid for the self-eviction check.
+# This watcher's own pid, as recorded in the lock by fm_lock_prepare_owner (which
+# writes ${BASHPID:-$$} from this same main shell). Read directly, never via a
+# command substitution, so it matches the stored holder pid for the
+# self-eviction check.
 WATCHER_PID=${BASHPID:-$$}
 printf '%s\n' "$FM_HOME" > "$WATCH_LOCK/fm-home" || true
 printf '%s\n' "$WATCH_PATH" > "$WATCH_LOCK/watcher-path" || true
