@@ -176,10 +176,10 @@ A candidate whose pipeline run did not cover the exact head is refused by the sa
 
 The recurrence is closed when this predicate holds and keeps holding:
 
-> For every open pull request whose governed contribution venue declares this gate at the task's recorded policy generation, the exact candidate head under review either carries a published attestation that `bin/fm-attest.sh verify` accepts from the candidate repository, or is refused by `bin/fm-attest.sh write` with a reason naming what about that candidate is missing.
+> For every open pull request handled by either publication call site, the governed contribution venue is either established as not requiring this gate by an absent declaration at both the task's recorded policy generation and the venue's current generation, or the exact candidate head under review carries a published attestation that `bin/fm-attest.sh verify` accepts from the candidate repository, or publication is refused with the owner's reason.
 
 The second half is what makes it a closing condition rather than a wish.
-A head with no attestation is only acceptable when the owner has said why in its own words - `run-incomplete`, `run-covers-another-head`, `no-run-record` - which are statements about the candidate that a person can act on.
+A head with no attestation is only acceptable when the owner has said why in its own words - for example `run-incomplete`, `run-covers-another-head`, `no-run-record`, `policy-generation-stale`, or `policy-generation-currency-unobservable` - which names either the candidate defect or the policy observation that prevented publication.
 A head with no attestation and no such refusal on record is the unowned step returning, and it is exactly what the two call sites above make impossible to reach silently.
 
 `bin/fm-attest.sh verify --head <sha>` against a fetched `refs/notes/no-mistakes` is how the first half is measured for one head.
