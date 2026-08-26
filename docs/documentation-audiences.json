@@ -383,6 +383,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/claude-permission-posture.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/decision-surface.md",
       "audience": "maintainer-verification"
     },

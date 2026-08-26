@@ -29,6 +29,15 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 # shellcheck source=/dev/null
 . "$LAUNCH_LIB"
 
+# claude's no-prompt permission posture, spelled out rather than read from
+# launch_claude_permission_flags. That is deliberate and is the whole point of a
+# pin: reading the owner would compare the owner to itself and pass no matter
+# what it said, so a widened allow rule or a weakened mode would reach a reviewer
+# unannounced. Changing the posture is supposed to fail here and be updated on
+# purpose. What the posture must MEAN, rather than what it must say, is pinned in
+# tests/fm-claude-no-prompt-posture.test.sh against the measured harness evidence.
+CLAUDE_POSTURE="--permission-mode dontAsk --settings '{\"permissions\":{\"allow\":[\"Bash\",\"Read\",\"Edit\",\"Write\",\"MultiEdit\",\"Glob\",\"Grep\",\"WebFetch\",\"WebSearch\"],\"defaultMode\":\"dontAsk\"}}'"
+
 HARNESSES=(claude codex opencode pi pi-signed grok kimi)
 # The harnesses README.md:61 lists as verified for a PRIMARY session. kimi is
 # deliberately absent, so launch_template refuses it for kind=primary.
@@ -51,7 +60,7 @@ test_ship_and_scout_templates_are_pinned() {
   local kind
   # shellcheck disable=SC2016  # single quotes are deliberate: these expand in the crewmate pane
   for kind in ship scout; do
-    assert_template "$kind" claude 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
+    assert_template "$kind" claude 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude '"$CLAUDE_POSTURE"' __MODELFLAG____EFFORTFLAG__"$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     assert_template "$kind" codex 'codex __MODELFLAG____EFFORTFLAG__--dangerously-bypass-approvals-and-sandbox -c "notify=[\"bash\",\"-c\",\"touch __TURNEND__\"]" "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     assert_template "$kind" opencode 'OPENCODE_CONFIG_CONTENT='\''{"permission":{"*":"allow"}}'\'' opencode __MODELFLAG__--prompt "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
     assert_template "$kind" pi 'FM_PI_HARNESS=pi pi __MODELFLAG____EFFORTFLAG__-e __PIEXT__ "$(__OPINPUT__ encode launch-brief < __BRIEF__)"'
@@ -99,11 +108,11 @@ test_secondmate_templates_are_pinned() {
 test_primary_claude_template_is_pinned() {
   # CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false is the ghost-text suppression a
   # hand-copied command already dropped once. README.md:90 documents the primary
-  # launch as bare `claude`; the only in-repo launch carrying
-  # --dangerously-skip-permissions is the headless print-mode session at
-  # tests/fm-claude-stop-autoarm-live-e2e.test.sh:115, so this pin records the
-  # flag's presence rather than claiming an interactive primary verified it.
-  assert_template primary claude 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude --dangerously-skip-permissions __MODELFLAG____EFFORTFLAG__'
+  # launch as bare `claude`; the permission posture is the measured no-prompt one
+  # rather than a bypass, because a bypass does not suppress claude's
+  # bypassImmune asks (docs/verification/claude-permission-posture.md). A primary
+  # carries it on the argv because the launcher writes no settings file for it.
+  assert_template primary claude 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false claude '"$CLAUDE_POSTURE"' __MODELFLAG____EFFORTFLAG__'
   pass "launch_template: the claude primary template is pinned"
 }
 
@@ -191,8 +200,15 @@ test_primary_keeps_the_autonomy_and_ghost_text_knowledge() {
   # The exact knowledge a hand-written launcher command has already lost once.
   assert_contains "$(launch_template claude primary)" 'CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false' \
     "the claude primary template must keep the ghost-text suppression prefix"
-  assert_contains "$(launch_template claude primary)" '--dangerously-skip-permissions' \
-    "the claude primary template must keep its autonomy flag"
+  # claude's autonomy is not a bypass. Its no-prompt guarantee comes from a mode
+  # that REFUSES instead of asking, plus the allow rules without which that mode
+  # would deny ordinary work, so both halves are what must survive here.
+  assert_contains "$(launch_template claude primary)" '--permission-mode dontAsk' \
+    "the claude primary template must keep the mode that refuses instead of asking"
+  assert_contains "$(launch_template claude primary)" '"defaultMode":"dontAsk"' \
+    "the claude primary template must keep the permission rules that mode needs"
+  assert_not_contains "$(launch_template claude primary)" '--dangerously-skip-permissions' \
+    "a bypass does not suppress claude's bypassImmune asks, so it must not return to the primary template"
   assert_contains "$(launch_template codex primary)" '--dangerously-bypass-approvals-and-sandbox' \
     "the codex primary template must keep its autonomy flag"
   assert_contains "$(launch_template grok primary)" '--always-approve' \
@@ -438,10 +454,18 @@ test_permission_posture_is_declared_for_every_launchable_harness() {
 
 test_permission_posture_never_invents_enforcement() {
   local h posture unknown=0
+  # claude is the one adapter whose launch keeps permission rules deciding, so it
+  # is the one allowed to say enforced. Every other adapter reaches its no-prompt
+  # posture by bypass or by having no permission system at all, and claiming
+  # enforcement for one of those would be protection that protects nothing -
+  # exactly what this case exists to refuse.
+  [ "$(launch_permission_posture claude)" = enforced ] \
+    || fail "claude launches with permission rules deciding, so its recorded posture must be enforced"
   for h in "${HARNESSES[@]}"; do
+    [ "$h" != claude ] || continue
     posture=$(launch_permission_posture "$h")
     [ "$posture" != enforced ] \
-      || fail "$h claims enforced permissions; no adapter in this repo does, so this is a fabricated posture"
+      || fail "$h claims enforced permissions; nothing in this repo records that for it, so this is a fabricated posture"
     [ "$posture" != unknown ] || unknown=$((unknown + 1))
   done
   # kimi is the recorded unknown: the header accounts for six adapters and kimi

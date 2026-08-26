@@ -543,7 +543,11 @@ EOF
   # once dropped, so its presence is what proves the single owner was used.
   assert_contains "$sent" "CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION=false" \
     "the launch must come from launch_template, ghost-text suppression included"
-  assert_contains "$sent" "--dangerously-skip-permissions" "the verified primary flags must survive"
+  assert_contains "$sent" "--permission-mode dontAsk" "the verified primary flags must survive"
+  assert_contains "$sent" '"defaultMode":"dontAsk"' \
+    "the permission rules the mode needs must survive too, or the started session denies ordinary work"
+  assert_not_contains "$sent" "--dangerously-skip-permissions" \
+    "a bypass does not suppress claude's bypassImmune asks, so the launcher must not start one"
   assert_contains "$sent" "clear && " "the launch must wipe the echoed command and any shell banner"
   assert_contains "$sent" "FM_HOME=" "the pane must be pinned to this home, not the server's inherited env"
   assert_contains "$sent" "$home" "the pinned home must be the launcher's own FM_HOME"
@@ -819,7 +823,7 @@ EOF
   herdrlog="$home/herdr.log"
   out=$(run_launch_cli "$home" "$fb" "$state" "$execlog" "$herdrlog" -- --entry claude --detach)
   sent=$(grep 'pane send-text' "$herdrlog" | head -1)
-  assert_contains "$sent" "--dangerously-skip-permissions" "--entry did not launch the named entry"
+  assert_contains "$sent" "--permission-mode dontAsk" "--entry did not launch the named entry"
   assert_contains "$out" "Claude" "the scripted launch must still name what it started"
   [ "$(jq -r '[.tabs[]|select(.label=="firstmate")]|length' "$state")" = 1 ] \
     || fail "--entry must create exactly one primary tab"
@@ -893,7 +897,7 @@ EOF
   l2="$h2/herdr.log"
   run_launch_cli "$h2" "$f2" "$s2" "$e2" "$l2" -- --entry claude --detach >/dev/null
   sent2=$(grep 'pane send-text' "$l2" | head -1)
-  assert_contains "$sent2" "--dangerously-skip-permissions" "the control launch must have reached the pane"
+  assert_contains "$sent2" "--permission-mode dontAsk" "the control launch must have reached the pane"
   assert_not_contains "$sent2" "FM_SESSION_ORIGIN_ID=u-test-origin" \
     "a launch with no origin id must carry no unattended marker"
   pass "scripted: the origin id reaches the started session, and absence carries no marker"

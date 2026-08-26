@@ -277,6 +277,7 @@ family_for_basename() {
       printf '%s\n' session-bootstrap
       ;;
     fm-afk-pi-herdr-return-e2e.test.sh|\
+    fm-claude-permission-posture-live-e2e.test.sh|\
     fm-codex-continuity-live-e2e.test.sh|fm-grok-continuity-live-e2e.test.sh|\
     fm-grok-stop-live-e2e.test.sh|fm-harness-liveness-drift-live-e2e.test.sh|\
     fm-opencode-primary-live-e2e.test.sh|fm-pi-primary-live-e2e.test.sh|\
@@ -287,6 +288,7 @@ family_for_basename() {
     fm-tmux-agent-liveness.test.sh|\
     fm-route-enforcement.test.sh|fm-route-qualification.test.sh|\
     fm-herdr-session-cleanup.test.sh|fm-launch.test.sh|fm-send-strict.test.sh|\
+    fm-claude-no-prompt-posture.test.sh|\
     fm-spawn-batch.test.sh|fm-spawn-dispatch-profile.test.sh|\
     fm-trace-context-spawn.test.sh|fm-spawn-worktree-settle.test.sh|\
     fm-teardown-endpoint-safety.test.sh)

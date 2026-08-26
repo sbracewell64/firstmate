@@ -1421,6 +1421,29 @@ if [ "$HARNESS" = pi-signed ] && ! command -v pi-signed >/dev/null 2>&1; then
   exit 1
 fi
 
+# CLAUDE NO-PROMPT PREFLIGHT. Asked HERE, the first point at which the launch
+# command exists, and deliberately before the attempt budget, admission, the
+# route, capacity, the worktree and the endpoint: a launch that could stop on a
+# permission gate must produce no worker at all, because a worker wedged on an
+# unanswerable ask holds a slot, reports nothing, and looks idle rather than
+# blocked.
+#
+# It applies to the raw-launch escape hatch exactly as it applies to the verified
+# template. That is the point: the escape hatch is how a hand-written claude
+# command reaches the fleet, so exempting it would leave the one path this guard
+# exists to close. bin/fm-launch-lib.sh owns the posture and the refusal wording.
+#
+# __MODELFLAG__ and __EFFORTFLAG__ are still unsubstituted here, and neither
+# resolver can emit a permission flag (model_flag_for_harness emits --model,
+# effort_flag_for_harness emits --effort), so nothing this check reads can change
+# between here and the send. The re-check immediately before the send covers the
+# substituted command anyway, so the guarantee never rests on that argument.
+case "$HARNESS" in
+  claude*)
+    launch_claude_posture_preflight "$LAUNCH" "the claude launch for '$ID'" || exit 1
+    ;;
+esac
+
 # config/secondmate-harness may carry optional model/effort tokens alongside the
 # harness ("<harness> [<model>] [<effort>]"). They apply only when this is a
 # --secondmate spawn and no explicit per-spawn harness/raw launch was supplied, so
@@ -2988,8 +3011,18 @@ if [ "$KIND" != secondmate ]; then
       j_stopfail=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event stop-failure 2>/dev/null || true")
       j_sessionend=$(json_escape "$busy_cmd_prefix idle $busy_suffix --event session-end 2>/dev/null || true")
       context_statusline_command=$(json_escape "$(shell_quote "$FM_ROOT/bin/fm-context-statusline.sh") --record $(shell_quote "$TASK_TMP/context-pressure.json")")
+      # The no-prompt permission posture, from its single owner in
+      # bin/fm-launch-lib.sh. The launch argv already carries it, so this copy is
+      # not what makes the worker unattended; it is what keeps the worktree
+      # correct for a session that is resumed IN it later without that argv, and
+      # it is generated rather than written out here so the two carriers cannot
+      # disagree. It is one fleet-wide posture and never a task-specific rule.
+      # Measured on Claude Code 2.1.246: permissions, hooks and statusLine coexist
+      # in this one file - the Stop hook still fired under the dontAsk posture
+      # (docs/verification/claude-permission-posture.md).
+      claude_permissions=$(launch_claude_permissions_json)
       cat > "$WT/.claude/settings.local.json" <<EOF
-{"statusLine":{"type":"command","command":"$context_statusline_command"},"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
+{"statusLine":{"type":"command","command":"$context_statusline_command"},"permissions":$claude_permissions,"hooks":{"UserPromptSubmit":[{"hooks":[{"type":"command","command":"$j_submit"}]}],"Stop":[{"hooks":[{"type":"command","command":"$j_stop"}]}],"StopFailure":[{"hooks":[{"type":"command","command":"$j_stopfail"}]}],"SessionEnd":[{"hooks":[{"type":"command","command":"$j_sessionend"}]}]}}
 EOF
       exclude_path '.claude/settings.local.json'
       ;;
@@ -3425,6 +3458,17 @@ if [ -n "$SPAWN_TRACEPARENT" ]; then
     fi
   fi
 fi
+# The same preflight, on the command that is actually about to be typed into the
+# pane. The early call is what refuses BEFORE anything is allocated; this one
+# closes the window between the two, so the guarantee rests on the EFFECTIVE
+# command rather than on an argument that nothing in between could have changed
+# it. A refusal here still beats a wedged worker, and the endpoint it leaves
+# behind is reconciled by the ordinary stuck-worker path.
+case "$HARNESS" in
+  claude*)
+    launch_claude_posture_preflight "$LAUNCH" "the effective claude launch for '$ID'" || exit 1
+    ;;
+esac
 sleep 0.3
 spawn_send_literal "$T" "$LAUNCH"
 sleep 0.3

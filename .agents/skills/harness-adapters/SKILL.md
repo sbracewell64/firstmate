@@ -172,10 +172,19 @@ The shared symptom is a healthy-looking pane with no work in progress, so each a
 | Busy state | Owned lifecycle hooks: `UserPromptSubmit` opens a turn, `Stop`, `StopFailure`, and `SessionEnd` close it. Claude fires no hook for a manual interrupt, so a firstmate-initiated interrupt must record the clear itself. |
 | Exit command | `/exit` |
 | Interrupt | single Escape |
+| Permission posture | `--permission-mode dontAsk` plus generated allow rules, both composed by `launch_claude_permission_flags` in `bin/fm-launch-lib.sh`. Permission enforcement stays ON: rules decide, and anything they do not allow is refused with a typed message rather than asked. Firstmate is the only adapter here that is not a bypass. Verified on Claude Code 2.1.246. |
+| Relaunch and resume | Recover through `bin/fm-spawn.sh`, which composes the posture and refuses a launch without it. A resume or relaunch typed by hand carries whatever flags it was given, so it must carry the same `--permission-mode` and `--settings` flags; a bare `claude` or `claude --continue` in a worker's worktree is not a recovered worker, it is an unguarded one. Whether a resumed session restores its predecessor's mode on its own has NOT been measured here, so do not rely on it. |
+| Bypass-immune asks | `--dangerously-skip-permissions` does NOT make a claude session promptless. Circuit breakers flagged `bypassImmune` (`dangerousRemoval`, `isolatePeerMachines`) raise an ask a bypass does not suppress and that "cannot be auto-allowed by permission rules", so a bypassed unattended worker still stops on one. Under the posture above the same trigger becomes a typed denial and nothing is asked. Measured pair on Claude Code 2.1.246 in [`docs/verification/claude-permission-posture.md`](../../../docs/verification/claude-permission-posture.md). |
 
-First launch in a fresh worktree, or first ever on a machine, may show a trust or bypass-permissions confirmation.
+Both halves of that posture are required and neither substitutes for the other.
+The mode with no allow rules denies ordinary work, so a worker launched that way is inert rather than unattended; the rules with no mode still ask.
+`bin/fm-spawn.sh` refuses any claude launch that is not exactly that posture, before it creates a worktree or an endpoint, and the refusal names the offending token.
+That refusal covers the raw-launch escape hatch too, so a hand-written claude command cannot route around it; never answer one by widening a rule, by adding a task-local rule, or by editing the captain's own Claude configuration.
+
+First launch in a fresh worktree, or first ever on a machine, may show a folder-trust confirmation.
 After every spawn, peek the pane within about 20 seconds.
 If such a dialog is showing, accept it from an active firstmate session using `FM_HOME=<this-firstmate-home> bin/fm-send.sh <window> --key Enter`, or the choice the dialog requires, unless `FM_HOME` is already set to the active firstmate home; verify the brief started processing.
+A bypass-permissions confirmation is no longer expected, because firstmate no longer launches claude with a bypass; treat one as a launch that escaped the posture rather than as a dialog to accept.
 
 Claude renders a predicted-next-prompt suggestion as dim/faint text inside an otherwise-empty composer after a turn completes.
 A plain `tmux capture-pane` cannot tell that ghost text apart from typed text.

@@ -29,9 +29,11 @@ Crewmates, scouts, and secondmates continue to come from `bin/fm-spawn.sh`; both
 
 ## Sessions start without permission prompts
 
-Every harness the menu can start runs its session without permission prompts, four through an explicit bypass flag and one because that harness has no permission system at all.
-The launcher states this on every render, before you choose, because you are entitled to know the posture of the session your front door starts.
-`bin/fm-launch-lib.sh` records that obligation and which flag each adapter uses.
+Every harness the menu can start runs its session without permission prompts.
+They do not all get there the same way: Claude Code keeps its permission rules switched on and refuses anything they do not allow, three harnesses use an explicit bypass flag, and one has no permission system at all.
+Claude Code's is the stricter arrangement and is deliberate - a bypass would not even deliver the guarantee there, because some of its permission checks raise a request no bypass suppresses and no rule may answer.
+The launcher states the no-prompt posture on every render, before you choose, because you are entitled to know the posture of the session your front door starts.
+`bin/fm-launch-lib.sh` records that obligation and how each adapter reaches it, and [`docs/verification/claude-permission-posture.md`](verification/claude-permission-posture.md) records what was measured for Claude Code.
 
 ## Availability is probed, not declared
 
