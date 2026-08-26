@@ -151,9 +151,10 @@ PORTABLE_SERIAL_BUDGET_MS=3039944
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
 #
-# Derived, not chosen: 8 shards put the balanced wall at 3039944/8 = 379993 ms
-# (~6.33 min) against the 15-minute cap below. The measured worst shard was
-# 458362 ms, still below the independent 9-minute shard-headroom bound.
+# The existing 8 shards put the re-derived balanced wall at 3039944/8 = 379993
+# ms (~6.33 min) against the 15-minute cap below. The measured worst shard was
+# 458362 ms, still below the independent 9-minute shard-headroom bound. This
+# refresh did not re-derive the shard count.
 # The floor for any count is the longest single script
 # (tests/fm-pr-check-security.test.sh, 257620 ms), which binds near 10 shards.
 PORTABLE_SERIAL_SHARDS=8
@@ -977,11 +978,10 @@ PY
 # past the declared bound, or could not be observed at all.
 #
 # Deliberately NOT a jitter detector. The semantic verdict rides on the LANE
-# total, which the basis runs put within 2.7% of each other, against a 25%
-# allowance; a single shard's wall is only ever compared to the hang tripwire, at
-# a bound roughly 1.8x above its healthy wall. Neither can be reached by ordinary
-# runner variance, so a failure here means the suite changed, not that a runner
-# was slow.
+# total against the existing 25% growth allowance; a single shard's wall is only
+# ever compared to the independent 9-minute headroom bound below the hang
+# tripwire. A breach therefore reports lane growth or dangerous shard imbalance,
+# not a comparison with the balanced-wall estimate.
 #
 # A missing, unreadable, or incomplete artifact set is could-not-observe (exit 3)
 # and never a pass: a shard cancelled at its timeout uploads no timing, which is

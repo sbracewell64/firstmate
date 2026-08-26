@@ -78,7 +78,7 @@ Hints only affect balance: the coverage guard keeps the partition complete and d
 `bin/fm-test-run.sh` is the single owner of the lane budget, shard count, drift bounds, current measured basis, and derived balance.
 Its comments state the evidence and derivation beside the declarations so a future remeasurement updates the contract in one place.
 
-Refresh the hints from a complete per-script duration map recovered from the per-shard timing artifacts of a green run **on this repository's own lineage**, whose serial inventory matches the head being measured.
+Refresh the hints and budget from a complete per-script duration map and shard-wall totals recovered from the per-shard timing artifacts of a green run **on this repository's own lineage**, whose serial inventory matches the head being measured.
 Artifacts from a fork or upstream with a different test inventory describe a different lane and must not be transferred in.
 
 ```sh
@@ -87,8 +87,8 @@ jq -r '.scripts[] | [.path, .duration_ms] | @tsv' /tmp/fm-serial/*.json | LC_ALL
 bin/fm-test-run.sh --check-coverage
 ```
 
-Refuse the refresh unless every script in the serial inventory has exactly one recovered duration, then replace the `portable_serial_weight_hints` table wholesale with those measured pairs.
-A hint-only refresh leaves the budget, shard count, and bounds unchanged; re-derive them only when their stated sizing policies are being revisited.
+Refuse the refresh unless every script in the serial inventory has exactly one recovered duration, then replace the `portable_serial_weight_hints` table wholesale with those measured pairs and re-derive the budget from the complete lane.
+Re-derive the shard count and bounds only when their stated sizing policies are being revisited.
 
 ## Serial budget recurrence control
 
