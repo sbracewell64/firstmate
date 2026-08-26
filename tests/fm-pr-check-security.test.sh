@@ -565,6 +565,7 @@ declare_attestation_gate() {
   mkdir -p "$dir/wt/.github/workflows"
   printf 'jobs:\n  check:\n    steps:\n      - run: bin/fm-attest.sh verify --head 0000\n' \
     > "$dir/wt/.github/workflows/gate.yml"
+  printf 'fm-attest.v1 required\n' > "$dir/wt/.github/no-mistakes-attestation"
 }
 
 test_provenance_chokepoint_leaves_a_repository_that_reads_none_alone() {

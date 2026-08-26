@@ -11,6 +11,7 @@
 #   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required] [--expect-head <sha>] [--notes-ref <ref>]
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
 #   fm-attest.sh required
+#   fm-attest.sh declaration-check
 #   fm-attest.sh show [--commit <rev>] [--notes-ref <ref>]
 #   fm-attest.sh verify --head <sha> [--notes-ref <ref>]
 #   fm-attest.sh reconcile --head <sha> --remote <name> --pr <number> --pr-remote <name> [--notes-ref <ref>] [--window <seconds>] [--poll <seconds>]
@@ -208,7 +209,7 @@ case "$RECONCILE_POLL" in '' | *[!0-9]* | 0*) RECONCILE_POLL=15 ;; esac
 # probed by running it could not tell "this program does not do that" from
 # "that failed". Answering as an exit status rather than as text keeps the probe
 # out of the business of reading messages.
-CAPABILITIES="write verify recheck reconcile show required"
+CAPABILITIES="write verify recheck reconcile show required declaration-check"
 
 # ---------------------------------------------------------------------------
 # printing - the one path text leaves this script by
@@ -927,26 +928,20 @@ cmd_reconcile() {
 # already knows it cannot do from a name.
 #
 # The question is answered from what the repository DECLARES rather than from
-# anything about its name, its remote, or the fleet it belongs to: a workflow
-# under .github/workflows that invokes bin/fm-attest.sh is a repository whose CI
-# reads this evidence, and nothing else is. That is the consumer naming its own
-# producer, so the two cannot come apart the way a hard-coded list of
-# repositories would.
+# anything about its name, its remote, or the fleet it belongs to. The fixed
+# declaration is a regular .github/no-mistakes-attestation file containing the
+# exact line "fm-attest.v1 required".
 #
 # It is an OBSERVATION and not a verdict on evidence, so it does not borrow the
 # refusal and failure headlines above. Reporting "not attested" for a repository
 # that attests nothing would send a reader to publish a note no check reads.
 # Three exits, and the third is a real answer rather than a missing one:
 #
-#   0  required      a workflow here invokes the verifier.
-#   1  not required   this repository declares no such workflow.
+#   0  required      the exact declaration is present.
+#   1  not required   the declaration is absent.
 #   2  unobservable   the declaration could not be read, so this says NEITHER.
-#
-# An unreadable workflow file lands on 2 rather than on 1, because absence of
-# detection is not detection of absence, and a caller that published nothing on
-# a failed read would leave exactly the unattested head this whole mechanism
-# exists to prevent.
-REQUIRED_WORKFLOW_DIR=.github/workflows
+REQUIRED_DECLARATION=.github/no-mistakes-attestation
+REQUIRED_DECLARATION_CONTENT='fm-attest.v1 required'
 
 required_state=
 required_evidence=
@@ -965,64 +960,53 @@ required_observe() {
     return 0
   }
 
-  required_dir="$required_top/$REQUIRED_WORKFLOW_DIR"
-  if [ ! -e "$required_dir" ]; then
+  required_file="$required_top/$REQUIRED_DECLARATION"
+  if [ ! -e "$required_file" ] && [ ! -L "$required_file" ]; then
     required_state=not-required
-    required_evidence="it carries no $REQUIRED_WORKFLOW_DIR"
+    required_evidence="it carries no $REQUIRED_DECLARATION"
     return 0
   fi
-  if [ ! -d "$required_dir" ] || [ ! -r "$required_dir" ]; then
+  if [ -L "$required_file" ]; then
     required_state=unobservable
-    required_reason=workflows-unreadable
-    required_evidence="$REQUIRED_WORKFLOW_DIR exists but could not be read as a directory of workflows."
+    required_reason=declaration-not-regular
+    required_evidence="$REQUIRED_DECLARATION is a symbolic link rather than a regular declaration file."
+    return 0
+  fi
+  if [ ! -f "$required_file" ]; then
+    required_state=unobservable
+    required_reason=declaration-not-regular
+    required_evidence="$REQUIRED_DECLARATION is not a regular declaration file."
+    return 0
+  fi
+  if [ ! -r "$required_file" ]; then
+    required_state=unobservable
+    required_reason=declaration-unreadable
+    required_evidence="$REQUIRED_DECLARATION could not be read."
     return 0
   fi
 
-  # One match is conclusive and an unreadable file is not, so the whole set is
-  # scanned before either is reported. A workflow this could not read clouds
-  # only the NEGATIVE answer: it cannot unsay a declaration already found, and
-  # letting it do so would refuse to publish in the very repository whose gate
-  # was sitting there in plain sight.
-  required_unreadable=
-  for required_file in "$required_dir"/*.yml "$required_dir"/*.yaml; do
-    [ -e "$required_file" ] || continue
-    if [ ! -f "$required_file" ] || [ ! -r "$required_file" ]; then
-      [ -n "$required_unreadable" ] || required_unreadable=${required_file#"$required_top"/}
-      continue
-    fi
-    # grep reports no match as 1 and a failure of its own as more than 1, and
-    # only the first of those is an observation. A failed search read as "no
-    # match" is absence of detection standing in for detection of absence,
-    # which is the one substitution this whole component exists to refuse.
-    required_command_start='(^[[:space:]]*|^[[:space:]]*[^#[:space:]].*(run:[[:space:]]*|[;&|][[:space:]]*))'
-    required_launcher='(([^[:space:]]*/)?(env|bash|sh|dash|zsh|ksh|command|exec)[[:space:]]+|[[:alpha:]_][[:alnum:]_]*=[^[:space:]]+[[:space:]]+|-[^[:space:]]+[[:space:]]+)*'
-    required_script="((\\.\\.?/|/)?([[:alnum:]_.-]+/)*)?fm-attest\\.sh([[:space:]]|\$|[\"'])"
-    required_grep_rc=0
-    grep -Eq "$required_command_start$required_launcher$required_script" \
-      "$required_file" 2>/dev/null \
-      || required_grep_rc=$?
-    case "$required_grep_rc" in
-      0)
-        required_state=required
-        required_evidence="${required_file#"$required_top"/} invokes this verifier"
-        return 0
-        ;;
-      1) ;;
-      *)
-        [ -n "$required_unreadable" ] || required_unreadable=${required_file#"$required_top"/}
-        ;;
-    esac
-  done
-
-  [ -z "$required_unreadable" ] || {
+  required_content=$(cat "$required_file" 2>/dev/null) || {
     required_state=unobservable
-    required_reason=workflow-unreadable
-    required_evidence="$required_unreadable could not be searched, so whether it invokes this verifier is unknown, and no other workflow here does."
+    required_reason=declaration-unreadable
+    required_evidence="$REQUIRED_DECLARATION could not be read."
     return 0
   }
+  required_size=$(wc -c < "$required_file" 2>/dev/null) || {
+    required_state=unobservable
+    required_reason=declaration-unreadable
+    required_evidence="$REQUIRED_DECLARATION could not be read."
+    return 0
+  }
+  required_size=$(printf '%s' "$required_size" | tr -d '[:space:]')
+  if [ "$required_content" != "$REQUIRED_DECLARATION_CONTENT" ] || [ "$required_size" != 22 ]; then
+    required_state=unobservable
+    required_reason=declaration-invalid
+    required_evidence="$REQUIRED_DECLARATION does not contain exactly one '$REQUIRED_DECLARATION_CONTENT' line."
+    return 0
+  fi
 
-  required_state=not-required
-  required_evidence="no workflow under $REQUIRED_WORKFLOW_DIR invokes this verifier"
+  required_state=required
+  required_evidence="$REQUIRED_DECLARATION contains the required declaration"
   return 0
 }
 
@@ -1045,6 +1029,29 @@ cmd_required() {
       exit 2
       ;;
   esac
+}
+
+cmd_declaration_check() {
+  [ "$#" -eq 0 ] || die "unexpected argument: $1"
+  declaration_top=$(git rev-parse --show-toplevel 2>/dev/null) || die "not inside a git repository"
+  declaration_workflows="$declaration_top/.github/workflows"
+  declaration_match=1
+  if [ -d "$declaration_workflows" ]; then
+    declaration_match=0
+    grep -rFqs 'fm-attest.sh' "$declaration_workflows" 2>/dev/null || declaration_match=$?
+  fi
+  case "$declaration_match" in
+    1) return 0 ;;
+    0) ;;
+    *) die "could not inspect workflows for attestation consumers" ;;
+  esac
+  required_observe
+  [ "$required_state" = required ] || {
+    report 'repository invariant failed' "${required_reason:-declaration-missing}" \
+      "A workflow mentions fm-attest.sh, but $REQUIRED_DECLARATION is not the exact regular declaration."
+    exit 1
+  }
+  emit "fm-attest: declaration invariant satisfied"
 }
 
 # ---------------------------------------------------------------------------
@@ -2125,6 +2132,7 @@ case "$command" in
   recheck) cmd_recheck "$@" ;;
   reconcile) cmd_reconcile "$@" ;;
   required) cmd_required "$@" ;;
+  declaration-check) cmd_declaration_check "$@" ;;
   show) cmd_show "$@" ;;
   # A capability query, answered as an exit status and nothing else: zero for a
   # capability this program has, non-zero for one it does not. It is not a
