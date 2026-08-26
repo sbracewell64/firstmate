@@ -216,10 +216,14 @@ observe_tip() {  # <repo> <push-url> <ref>
 }
 
 RESOLVED_REMOTE_URL=
+RESOLVED_REMOTE_SAFE_URL=
+RESOLVED_REMOTE_URL_DIGEST=
 RESOLVED_REMOTE_IDENTITY=
 resolve_remote() {  # <repo> <remote-name-or-url>
-  local repo=$1 remote=$2 url identity
+  local repo=$1 remote=$2 url safe_url digest identity
   RESOLVED_REMOTE_URL=
+  RESOLVED_REMOTE_SAFE_URL=
+  RESOLVED_REMOTE_URL_DIGEST=
   RESOLVED_REMOTE_IDENTITY=
   url=$(fm_pub_seam_git --no-optional-locks -C "$repo" remote get-url --push "$remote" 2>/dev/null) || {
     case $remote in
@@ -228,12 +232,18 @@ resolve_remote() {  # <repo> <remote-name-or-url>
     esac
   }
   [ -n "$url" ] || return 1
-  identity=$(task_base_venue_identity_alias "$url" 2>/dev/null) \
-    || identity=$(task_base_venue_identity "$url" 2>/dev/null) \
-    || identity=$(fm_landed_normalize_url "$url" 2>/dev/null) \
+  safe_url=$(task_base_remote_safe_url "$url" 2>/dev/null) || return 1
+  [ -n "$safe_url" ] || return 1
+  digest=$(printf '%s' "$safe_url" | fm_auth_digest) || return 1
+  [ -n "$digest" ] || return 1
+  identity=$(task_base_venue_identity_alias "$safe_url" 2>/dev/null) \
+    || identity=$(task_base_venue_identity "$safe_url" 2>/dev/null) \
+    || identity=$(fm_landed_normalize_url "$safe_url" 2>/dev/null) \
     || return 1
   [ -n "$identity" ] || return 1
   RESOLVED_REMOTE_URL=$url
+  RESOLVED_REMOTE_SAFE_URL=$safe_url
+  RESOLVED_REMOTE_URL_DIGEST=$digest
   RESOLVED_REMOTE_IDENTITY=$identity
 }
 
@@ -307,7 +317,7 @@ resolve_or_exit() {  # <effect> <repo> <item> <venue> <ref> <head> <tree> <expec
 cmd_prepare() {
   local repo='' remote='' venue='' ref='' head='' tree='' item='-' expected='' dry=0
   local effect=publication
-  local subject epoch=1 id path state f raw now record push_url remote_identity
+  local subject epoch=1 id path state f raw now record push_url safe_url url_digest remote_identity
 
   while [ $# -gt 0 ]; do
     case $1 in
@@ -341,6 +351,8 @@ cmd_prepare() {
   resolve_remote "$repo" "$remote" || cno FM_PUB_REMOTE_UNRESOLVED \
     "the push destination named by remote '$remote' could not be resolved, so no publication authority was granted"
   push_url=$RESOLVED_REMOTE_URL
+  safe_url=$RESOLVED_REMOTE_SAFE_URL
+  url_digest=$RESOLVED_REMOTE_URL_DIGEST
   remote_identity=$RESOLVED_REMOTE_IDENTITY
 
   observe_tip "$repo" "$push_url" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
@@ -357,7 +369,7 @@ cmd_prepare() {
   esac
 
   [ -z "$FM_PUB_SEAM_ITEM" ] || item=$FM_PUB_SEAM_ITEM
-  subject=$(fm_auth_effect_subject_digest "$effect" "$venue" "$remote" "$push_url" "$remote_identity" "$ref" "$item" "$head" "$tree" \
+  subject=$(fm_auth_effect_subject_digest "$effect" "$venue" "$remote" "$safe_url" "$url_digest" "$remote_identity" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the subject of this $effect could not be digested"
 
@@ -404,7 +416,7 @@ cmd_prepare() {
     done
   fi
 
-  id=$(fm_auth_effect_id "$effect" "$venue" "$remote" "$push_url" "$remote_identity" "$ref" "$item" "$head" "$tree" \
+  id=$(fm_auth_effect_id "$effect" "$venue" "$remote" "$safe_url" "$url_digest" "$remote_identity" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be digested"
 
@@ -417,7 +429,7 @@ cmd_prepare() {
 
   now=$(now_iso)
   record=$(fm_auth_effect_record_new "$effect" "$id" "$FM_PUB_SEAM_REQUEST" "$venue" \
-    "$remote" "$push_url" "$remote_identity" "$ref" "$item" "$head" "$tree" "$OBSERVED_TIP" \
+    "$remote" "$safe_url" "$url_digest" "$remote_identity" "$ref" "$item" "$head" "$tree" "$OBSERVED_TIP" \
     "$FM_PUB_SEAM_GENERATION" "$epoch" "$subject" "$now") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization record could not be constructed"
   fm_auth_store_write "$AUTH_DIR" "$id" "$record" \
@@ -455,7 +467,8 @@ cmd_consume() {
   local id=${1:-}; shift || true
   local repo='' remote='' now rc=0
   local venue ref item head tree tip generation epoch fresh_id state record effect applicability
-  local recorded_remote recorded_push_url recorded_remote_identity observed_push_url observed_remote_identity
+  local recorded_remote recorded_safe_url recorded_url_digest recorded_remote_identity
+  local observed_safe_url observed_url_digest observed_remote_identity act_url
   local trusted_git trusted_git_digest
 
   [ -n "$id" ] || die "consume requires an authorization id"
@@ -499,7 +512,8 @@ cmd_consume() {
   effect=$AUTH_EFFECT
   venue=$(auth_field '.grant.venue // ""')
   recorded_remote=$(auth_field '.grant.remote.name // ""')
-  recorded_push_url=$(auth_field '.grant.remote.push_url // ""')
+  recorded_safe_url=$(auth_field '.grant.remote.safe_url // ""')
+  recorded_url_digest=$(auth_field '.grant.remote.url_digest // ""')
   recorded_remote_identity=$(auth_field '.grant.remote.identity // ""')
   ref=$(auth_field '.grant.ref // ""')
   item=$(auth_field '.grant.item // ""')
@@ -511,12 +525,15 @@ cmd_consume() {
 
   resolve_remote "$repo" "$remote" || cno FM_PUB_REMOTE_UNRESOLVED \
     "the consume-time push destination named by remote '$remote' could not be resolved"
-  observed_push_url=$RESOLVED_REMOTE_URL
+  act_url=$RESOLVED_REMOTE_URL
+  observed_safe_url=$RESOLVED_REMOTE_SAFE_URL
+  observed_url_digest=$RESOLVED_REMOTE_URL_DIGEST
   observed_remote_identity=$RESOLVED_REMOTE_IDENTITY
-  if [ "$remote" != "$recorded_remote" ] || [ "$observed_push_url" != "$recorded_push_url" ] \
+  if [ "$remote" != "$recorded_remote" ] || [ "$observed_safe_url" != "$recorded_safe_url" ] \
+    || [ "$observed_url_digest" != "$recorded_url_digest" ] \
     || [ "$observed_remote_identity" != "$recorded_remote_identity" ]; then
     refuse FM_PUB_REMOTE_MISMATCH \
-      "publication authority $id records remote '$recorded_remote' at '$recorded_push_url' ($recorded_remote_identity), while consume observed '$remote' at '$observed_push_url' ($observed_remote_identity)"
+      "publication authority $id records remote '$recorded_remote' with URL digest '$recorded_url_digest', while consume observed '$remote' with URL digest '$observed_url_digest'"
   fi
 
   if ! fm_pub_seam_command_matches "$repo" "$recorded_remote" "$head" "$ref" "$@"; then
@@ -544,7 +561,7 @@ cmd_consume() {
   [ "$(fm_auth_spend_admissibility "$state")" = proceed ] \
     || refuse FM_PUB_REPLAY "publication authority $id is no longer available to spend"
 
-  observe_tip "$repo" "$recorded_push_url" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
+  observe_tip "$repo" "$act_url" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
   resolve_or_exit "$effect" "$repo" "$item" "$venue" "$ref" "$head" "$tree" "$tip" "$OBSERVED_TIP"
@@ -565,7 +582,7 @@ cmd_consume() {
       "publication authority $id rests on generation $generation and the current ruling and policy generation is $FM_PUB_SEAM_GENERATION, so the permission it carries addresses a world that has since changed"
   fi
 
-  fresh_id=$(fm_auth_effect_id "$effect" "$venue" "$recorded_remote" "$recorded_push_url" "$recorded_remote_identity" "$ref" "$item" "$head" "$tree" \
+  fresh_id=$(fm_auth_effect_id "$effect" "$venue" "$recorded_remote" "$recorded_safe_url" "$recorded_url_digest" "$recorded_remote_identity" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION" "$epoch") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the authorization identity could not be recomputed"
   if [ "$fresh_id" != "$id" ]; then
@@ -592,9 +609,9 @@ cmd_consume() {
   # point of writing it first.
   AUTH_RECORD=$record
 
-  "$trusted_git" -C "$repo" push "$recorded_push_url" "$head:$ref" || rc=$?
+  "$trusted_git" -C "$repo" push "$act_url" "$head:$ref" >/dev/null 2>&1 || rc=$?
 
-  if ! observe_tip "$repo" "$recorded_push_url" "$ref"; then
+  if ! observe_tip "$repo" "$act_url" "$ref"; then
     cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
       "the publication under $id ran (exit $rc) and the resulting tip of $ref could not be observed, which does not establish that it had no effect; reconcile it with reconcile $id"
   fi

@@ -408,9 +408,9 @@ fm_auth_effect_valid() {  # <candidate>
 # replication and a publication of the same head on the same ref are different
 # acts with different permissions, so they must digest to different authorities -
 # otherwise the cheaper one's authority would present as the dearer one's.
-fm_auth_effect_identity_canonical() {  # <effect> <venue> <remote> <push-url> <remote-identity> <ref> <item> <head> <tree> <tip> <generation> <epoch>
-  printf 'schema=%s\neffect=%s\nvenue=%s\nremote=%s\npush_url=%s\nremote_identity=%s\nref=%s\nitem=%s\nhead=%s\ntree=%s\ntip=%s\ngeneration=%s\nepoch=%s\n' \
-    "$FM_AUTH_SCHEMA" "$1" "${2:--}" "$3" "$4" "$5" "$6" "$7" "$8" "${9:--}" "${10:--}" "${11}" "${12:-1}"
+fm_auth_effect_identity_canonical() {  # <effect> <venue> <remote> <safe-url> <url-digest> <remote-identity> <ref> <item> <head> <tree> <tip> <generation> <epoch>
+  printf 'schema=%s\neffect=%s\nvenue=%s\nremote=%s\nsafe_url=%s\nurl_digest=%s\nremote_identity=%s\nref=%s\nitem=%s\nhead=%s\ntree=%s\ntip=%s\ngeneration=%s\nepoch=%s\n' \
+    "$FM_AUTH_SCHEMA" "$1" "${2:--}" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10:--}" "${11:--}" "${12}" "${13:-1}"
 }
 
 fm_auth_effect_id() {  # <same arguments as fm_auth_effect_identity_canonical> -> id
@@ -422,9 +422,9 @@ fm_auth_effect_id() {  # <same arguments as fm_auth_effect_identity_canonical> -
 
 # The subject WITHOUT its epoch, so the store can be asked "what has already
 # happened to this exact subject?" before an epoch is chosen for it.
-fm_auth_effect_subject_digest() {  # <effect> <venue> <remote> <push-url> <remote-identity> <ref> <item> <head> <tree> <tip> <generation>
-  printf 'schema=%s\neffect=%s\nvenue=%s\nremote=%s\npush_url=%s\nremote_identity=%s\nref=%s\nitem=%s\nhead=%s\ntree=%s\ntip=%s\ngeneration=%s\n' \
-    "$FM_AUTH_SCHEMA" "$1" "${2:--}" "$3" "$4" "$5" "$6" "$7" "$8" "${9:--}" "${10:--}" "${11}" | fm_auth_digest
+fm_auth_effect_subject_digest() {  # <effect> <venue> <remote> <safe-url> <url-digest> <remote-identity> <ref> <item> <head> <tree> <tip> <generation>
+  printf 'schema=%s\neffect=%s\nvenue=%s\nremote=%s\nsafe_url=%s\nurl_digest=%s\nremote_identity=%s\nref=%s\nitem=%s\nhead=%s\ntree=%s\ntip=%s\ngeneration=%s\n' \
+    "$FM_AUTH_SCHEMA" "$1" "${2:--}" "$3" "$4" "$5" "$6" "$7" "$8" "$9" "${10:--}" "${11:--}" "${12}" | fm_auth_digest
 }
 
 # --- verdict classification --------------------------------------------------
@@ -863,23 +863,25 @@ fm_auth_record_new() {  # <id> <request> <comment> <verdict> <item> <project> <r
 # mints an authority, so it is still one-use, still head-bound and still
 # crash-recoverable. What governance adds is the ruling, not the exactly-once.
 
-fm_auth_effect_record_new() {  # <effect> <id> <request-or-empty> <venue> <remote> <push-url> <remote-identity> <ref> <item> <head> <tree> <tip> <generation> <epoch> <subject> <now>
+fm_auth_effect_record_new() {  # <effect> <id> <request-or-empty> <venue> <remote> <safe-url> <url-digest> <remote-identity> <ref> <item> <head> <tree> <tip> <generation> <epoch> <subject> <now>
   local effect=$1
   shift
   fm_auth_effect_valid "$effect" || return 1
   jq -n \
     --arg schema "$FM_AUTH_SCHEMA" --arg effect "$effect" \
     --arg id "$1" --arg request "$2" --arg venue "$3" --arg remote "$4" \
-    --arg push_url "$5" --arg remote_identity "$6" --arg ref "$7" \
-    --arg item "$8" --arg head "$9" --arg tree "${10}" --arg tip "${11}" \
-    --arg generation "${12}" --arg epoch "${13}" --arg subject "${14}" --arg now "${15}" \
+    --arg safe_url "$5" --arg url_digest "$6" --arg remote_identity "$7" \
+    --arg ref "$8" --arg item "$9" --arg head "${10}" --arg tree "${11}" \
+    --arg tip "${12}" --arg generation "${13}" --arg epoch "${14}" \
+    --arg subject "${15}" --arg now "${16}" \
     '{schema:$schema,
       authorization_id:$id,
       effect:$effect,
       request_id:(if $request == "" or $request == "-" then null else $request end),
       subject:$subject,
       epoch:($epoch|tonumber),
-      grant:{venue:$venue,remote:{name:$remote,push_url:$push_url,identity:$remote_identity},
+      grant:{venue:$venue,remote:{name:$remote,safe_url:$safe_url,
+                                 url_digest:$url_digest,identity:$remote_identity},
              ref:$ref,item:$item,head:$head,tree:$tree,
              tip:(if $tip == "" or $tip == "-" then null else $tip end),
              generation:$generation},
