@@ -616,6 +616,70 @@ EOF
 }
 
 # ---------------------------------------------------------------------------
+# May this run's records become the acceptance artifact?
+# ---------------------------------------------------------------------------
+
+# The one owner of that question, so the harness that runs the subjects and this
+# module's regressions judge it identically. Prints the refusal reason and
+# returns 1 when the records may NOT be published; prints nothing and returns 0
+# when they may.
+#
+# The rule is the well-founded ordering stated in bin/fm-test-isolation-proof.sh:
+# a proof may only be written from a run that observed EVERY candidate good.
+# Publishing a run that observed a subset would make the artifact assert a
+# smaller universe than the one it was asked about, and that artifact then
+# becomes the acceptance evidence the same subset is measured against - which is
+# exactly the cycle docs/architecture.md names EVIDENCE_GENERATION_WELL_FOUNDEDNESS.
+#
+# This is not tolerance running in reverse. It never converts a measured FAIL
+# into a pass and never suppresses one; it decides only whether a run has earned
+# the right to REPLACE the previous genuine evidence, and a run that has not
+# leaves that evidence exactly as it was.
+fm_isolation_artifact_refusal() {
+  local records=$1 candidates=$2 failed=$3 agg_rc=$4
+  local recorded expected
+
+  if [ ! -f "$records" ] || [ ! -r "$records" ]; then
+    printf 'records-unreadable\n'
+    return 1
+  fi
+  if [ ! -f "$candidates" ] || [ ! -r "$candidates" ]; then
+    printf 'candidate-universe-unreadable\n'
+    return 1
+  fi
+  case "$failed" in
+    ''|*[!0-9]*) printf 'failure-count-unreadable\n'; return 1 ;;
+  esac
+  if [ "$failed" -ne 0 ]; then
+    printf 'subject-not-observed-good\n'
+    return 1
+  fi
+  case "$agg_rc" in
+    ''|*[!0-9]*) printf 'aggregate-status-unreadable\n'; return 1 ;;
+  esac
+  if [ "$agg_rc" -ne 0 ]; then
+    printf 'isolation-check-failed\n'
+    return 1
+  fi
+
+  expected=$(LC_ALL=C sort -u "$candidates" | grep -v '^$' || true)
+  if [ -z "$expected" ]; then
+    printf 'candidate-universe-empty\n'
+    return 1
+  fi
+  recorded=$(awk -F'\t' '$1 != "" { print $1 }' "$records" | LC_ALL=C sort -u)
+  if [ "$recorded" != "$expected" ]; then
+    printf 'records-are-not-the-candidate-universe\n'
+    return 1
+  fi
+  if awk -F'\t' '$3 != "0" { found = 1 } END { exit !found }' "$records"; then
+    printf 'records-hold-a-non-passing-subject\n'
+    return 1
+  fi
+  return 0
+}
+
+# ---------------------------------------------------------------------------
 # Writing a proof
 # ---------------------------------------------------------------------------
 
@@ -623,12 +687,22 @@ EOF
 # both the harness and this module's own regression tests go through. Records
 # arrive as the TSV that fm_isolation_record_subject produces, which is the only
 # thing that produces them.
+#
+# The destination is replaced WHOLE, never opened for truncation in place: the
+# document is serialised into a sibling temporary file and renamed over the
+# destination. A write that dies partway therefore leaves the previous genuine
+# artifact byte-identical rather than a truncated document that reads as
+# could-not-observe. What may be written at all is a separate question, owned by
+# bin/fm-test-isolation-proof.sh: this writer records exactly the records it is
+# handed, including failing ones, because the fixture regressions in
+# tests/fm-test-isolation-proof.test.sh need to build a proof with no passing
+# subject on purpose.
 fm_isolation_write_proof() {
   local out=$1 started=$2 finished=$3 run_id=$4 total=$5 failed=$6 concurrency=$7 duration=$8 records=$9
   local contract_digest=${10} lanes=${11} runner_jobs_max=${12}
   python3 - "$out" "$started" "$finished" "$run_id" "$total" "$failed" "$concurrency" "$duration" "$records" \
     "$contract_digest" "$lanes" "$runner_jobs_max" <<'PY'
-import json, sys
+import json, os, sys
 (out, started, finished, run_id, total, failed, concurrency, duration, records_path,
  contract_digest, lanes_path, runner_jobs_max) = sys.argv[1:13]
 scripts = []
@@ -689,8 +763,19 @@ doc = {
     "production_sharding_enabled": False,
     "fm_test_run_jobs_enabled": False,
 }
-with open(out, "w", encoding="utf-8") as fh:
-    json.dump(doc, fh, indent=2, sort_keys=True)
-    fh.write("\n")
+tmp = "%s.tmp.%d" % (out, os.getpid())
+try:
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(doc, fh, indent=2, sort_keys=True)
+        fh.write("\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, out)
+except BaseException:
+    try:
+        os.unlink(tmp)
+    except OSError:
+        pass
+    raise
 PY
 }

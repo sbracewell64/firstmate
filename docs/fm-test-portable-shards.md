@@ -6,7 +6,7 @@
 ## Verification inputs
 
 The candidate timings below came from the 2026-07-29 concurrent proof run (`run_id fm-isolation-1785367157179-18165`), which ran 24 candidates with four workers, no failures, and 149010 ms total wall time.
-That run has since been superseded as the isolation proof by the 2026-08-19 re-measurement recorded in [fm-test-isolation-proof.md](fm-test-isolation-proof.md), which recorded 298803 ms total wall time, with 17 of the 24 proven subjects changed since the earlier proof and 7 unchanged.
+That run has since been superseded as the isolation proof; [fm-test-isolation-proof.md](fm-test-isolation-proof.md) owns the current verification record.
 This table preserves the 2026-07-29 durations only because they are what the lane balance was derived from; the current measurements live in `docs/fm-test-isolation-proof.json`.
 
 | duration_ms | script |
@@ -38,7 +38,7 @@ This table preserves the 2026-07-29 durations only because they are what the lan
 
 ## Parallel lanes
 
-The two-lane longest-processing-time split in `list_portable_parallel_1` and `list_portable_parallel_2` derives from the 2026-07-29 per-subject durations above, not from the current 2026-08-19 measurements.
+The two-lane longest-processing-time split in `list_portable_parallel_1` and `list_portable_parallel_2` derives from the 2026-07-29 per-subject durations above, not from the current measurements.
 The split is therefore known-stale for balance purposes, pending the follow-up parallel-lane-split-rebalance, which re-derives it from the current durations in `docs/fm-test-isolation-proof.json`.
 
 | Lane | Script count | Estimated duration (2026-07-29 basis) |
