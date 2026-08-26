@@ -1063,7 +1063,53 @@ test_a_project_alias_moved_after_mint_performs_no_act() {
   pass "a project alias moved after mint performs no act"
 }
 
-# --- 23: successful exit still needs post-effect proof -----------------------
+# --- 23: a moved target ref cannot silently retarget the local act -----------
+
+test_a_target_ref_moved_after_mint_performs_no_act() {
+  local dir project base middle head record id out rc
+  dir=$(new_case moved-target-ref) || fail "moved-target-ref: fixture failed"
+  project="$dir/project"
+  git init -q -b main "$project" || fail "moved-target-ref: repository failed"
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m base || fail "moved-target-ref: base failed"
+  base=$(git -C "$project" rev-parse HEAD)
+  git -C "$project" checkout -q -b work || fail "moved-target-ref: work branch failed"
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m middle || fail "moved-target-ref: middle failed"
+  middle=$(git -C "$project" rev-parse HEAD)
+  git -C "$project" -c user.name='Firstmate Tests' -c user.email='tests@example.invalid' \
+    -c commit.gpgsign=false commit -q --allow-empty -m head || fail "moved-target-ref: head failed"
+  head=$(git -C "$project" rev-parse HEAD)
+  git -C "$project" checkout -q main || fail "moved-target-ref: main checkout failed"
+
+  record=$(corr_path "$dir")
+  jq --arg head "$head" '.identity.head = $head' "$record" > "$record.next" \
+    || fail "moved-target-ref: correlation update failed"
+  mv "$record.next" "$record"
+  printf '%s\n' "$head" > "$dir/forge_head"
+  out=$(run_auth "$dir" mint fm-ob-abcdef123456 --effect local-fast-forward \
+    --project "$project" --target-branch main --assert-head "$head" 2>&1); rc=$?
+  expect_code 0 "$rc" "moved-target-ref: mint failed: $out"
+  id=$(printf '%s' "$out" | awk '{print $1}')
+  jq -e --arg base "$base" '.effect.target_head == $base' \
+    "$dir/home/data/landing-authorizations/$id.json" >/dev/null \
+    || fail "moved-target-ref: the plan did not pin the target ref's mint-time object"
+
+  # The alias now names another commit which is still an ancestor of the approved
+  # head. An ancestry-only freshness check would silently accept this retarget.
+  git -C "$project" update-ref refs/heads/main "$middle" "$base" \
+    || fail "moved-target-ref: target ref move failed"
+  out=$(run_auth "$dir" spend "$id" --head "$head" 2>&1); rc=$?
+  expect_code 3 "$rc" "moved-target-ref: a moved target ref must refuse: $out"
+  assert_contains "$out" "FM_AUTH_EFFECT_PLAN_STALE" "moved-target-ref: refusal token"
+  [ "$(git -C "$project" rev-parse main)" = "$middle" ] \
+    || fail "moved-target-ref: the protected fast-forward ran after the ref moved"
+  [ "$(run_auth "$dir" status "$id" 2>&1)" = granted ] \
+    || fail "moved-target-ref: a stale ref consumed the authority"
+  pass "a target ref moved after mint performs no act"
+}
+
+# --- 24: successful exit still needs post-effect proof -----------------------
 
 test_successful_exit_requires_post_effect_proof() {
   local confirmed unconfirmed id out rc evidence
@@ -1152,10 +1198,10 @@ SH
 
   # The plan is closed: it names the executable by path and digest, the project by
   # a resolved identity, the ref, the exact object, ff-only, and non-force.
-  plan=$(jq -r '[.effect.kind,.effect.target_ref,.effect.head,.effect.mode,
+  plan=$(jq -r '[.effect.kind,.effect.target_ref,.effect.target_head,.effect.head,.effect.mode,
                  (.effect.force|tostring),.effect.executable_name] | join(" ")' \
     "$dir/home/data/landing-authorizations/$id.json")
-  [ "$plan" = "local-fast-forward refs/heads/main $head ff-only false git" ] \
+  [ "$plan" = "local-fast-forward refs/heads/main $before $head ff-only false git" ] \
     || fail "real-path: the minted plan is '$plan'"
   jq -e '.effect.executable_path | startswith("/")' \
     "$dir/home/data/landing-authorizations/$id.json" >/dev/null \
@@ -1216,6 +1262,7 @@ test_credential_bearing_input_is_refused_before_the_act
 test_one_approval_grants_one_landing_even_under_a_second_plan
 test_an_act_that_exits_non_zero_leaves_the_authority_indeterminate
 test_a_project_alias_moved_after_mint_performs_no_act
+test_a_target_ref_moved_after_mint_performs_no_act
 test_successful_exit_requires_post_effect_proof
 test_the_whole_path_lands_one_real_fast_forward_and_proves_it
 

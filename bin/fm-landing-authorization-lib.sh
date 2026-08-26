@@ -77,7 +77,9 @@
 #                        exec_name/exec_path/exec_digest
 #   local-fast-forward   venue=local, project=<path as addressed>,
 #                        project_identity=<resolved path>,
-#                        target_ref=refs/heads/<branch>, head=<exact sha>,
+#                        target_ref=refs/heads/<branch>,
+#                        target_head=<exact sha observed at mint>,
+#                        head=<exact sha to land>,
 #                        mode=ff-only, force=no,
 #                        exec_name/exec_path/exec_digest
 #
@@ -467,6 +469,7 @@ FM_AUTH_PLAN_DELETE_BRANCH=
 FM_AUTH_PLAN_PROJECT=
 FM_AUTH_PLAN_PROJECT_IDENTITY=
 FM_AUTH_PLAN_TARGET_REF=
+FM_AUTH_PLAN_TARGET_HEAD=
 FM_AUTH_PLAN_MODE=
 FM_AUTH_PLAN_FORCE=
 FM_AUTH_PLAN_EXEC_NAME=
@@ -488,6 +491,7 @@ fm_auth_plan_reset() {
   FM_AUTH_PLAN_PROJECT=
   FM_AUTH_PLAN_PROJECT_IDENTITY=
   FM_AUTH_PLAN_TARGET_REF=
+  FM_AUTH_PLAN_TARGET_HEAD=
   FM_AUTH_PLAN_MODE=
   FM_AUTH_PLAN_FORCE=
   FM_AUTH_PLAN_EXEC_NAME=
@@ -659,14 +663,16 @@ no' || return $?
       FM_AUTH_PLAN_PROJECT_IDENTITY=$FM_AUTH_PLAN_VALUE
       fm_auth_plan_read "$plan" target_ref fm_auth_plan_target_ref_valid || return $?
       FM_AUTH_PLAN_TARGET_REF=$FM_AUTH_PLAN_VALUE
+      fm_auth_plan_read "$plan" target_head fm_auth_head_shape_valid || return $?
+      FM_AUTH_PLAN_TARGET_HEAD=$FM_AUTH_PLAN_VALUE
       fm_auth_plan_read "$plan" head fm_auth_head_shape_valid || return $?
       FM_AUTH_PLAN_HEAD=$FM_AUTH_PLAN_VALUE
       fm_auth_plan_read "$plan" mode fm_auth_plan_literal ff-only || return $?
       FM_AUTH_PLAN_MODE=$FM_AUTH_PLAN_VALUE
-      FM_AUTH_PLAN_CANONICAL=$(printf 'effect=%s\nvenue=%s\nproject=%s\nproject_identity=%s\ntarget_ref=%s\nhead=%s\nmode=%s\nforce=%s\nexec_name=%s\nexec_path=%s\nexec_digest=%s\n' \
+      FM_AUTH_PLAN_CANONICAL=$(printf 'effect=%s\nvenue=%s\nproject=%s\nproject_identity=%s\ntarget_ref=%s\ntarget_head=%s\nhead=%s\nmode=%s\nforce=%s\nexec_name=%s\nexec_path=%s\nexec_digest=%s\n' \
         "$FM_AUTH_PLAN_KIND" "$FM_AUTH_PLAN_VENUE" "$FM_AUTH_PLAN_PROJECT" \
         "$FM_AUTH_PLAN_PROJECT_IDENTITY" "$FM_AUTH_PLAN_TARGET_REF" \
-        "$FM_AUTH_PLAN_HEAD" "$FM_AUTH_PLAN_MODE" "$FM_AUTH_PLAN_FORCE" \
+        "$FM_AUTH_PLAN_TARGET_HEAD" "$FM_AUTH_PLAN_HEAD" "$FM_AUTH_PLAN_MODE" "$FM_AUTH_PLAN_FORCE" \
         "$FM_AUTH_PLAN_EXEC_NAME" "$FM_AUTH_PLAN_EXEC_PATH" "$FM_AUTH_PLAN_EXEC_DIGEST")
       FM_AUTH_ACT=("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT_IDENTITY"
         merge --ff-only --quiet "$FM_AUTH_PLAN_HEAD")

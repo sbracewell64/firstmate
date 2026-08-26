@@ -496,7 +496,7 @@ assert_equal() {  # <asserted-or-empty> <derived> <what>
 MINT_EFFECT=
 mint_plan() {  # <kind> <repo> <pr-number> <head> <method> <delete-branch> <project> <target-branch>
   local kind=$1 repo=$2 number=$3 head=$4 method=$5 delete=$6 project=$7 branch=$8
-  local exec_name identity plan digest rc=0
+  local exec_name identity target_head plan digest rc=0
   MINT_EFFECT=
   exec_name=$(fm_auth_effect_executable_name "$kind") \
     || unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" \
@@ -519,11 +519,14 @@ mint_plan() {  # <kind> <repo> <pr-number> <head> <method> <delete-branch> <proj
       identity=$(cd "$project" 2>/dev/null && pwd -P) \
         || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
           "the project at '$project' could not be resolved to one exact directory, so the act this authority would permit could not be pinned"
+      target_head=$("$EXEC_PATH" -C "$identity" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "the target ref refs/heads/$branch in $identity could not be resolved to one exact commit, so the act this authority would permit could not be pinned"
       plan=$(jq -n --arg kind "$kind" --arg project "$project" --arg identity "$identity" \
-        --arg ref "refs/heads/$branch" --arg head "$head" \
+        --arg ref "refs/heads/$branch" --arg target_head "$target_head" --arg head "$head" \
         --arg name "$exec_name" --arg path "$EXEC_PATH" --arg digest "$EXEC_DIGEST" \
         '{kind:$kind,venue:"local",project:$project,project_identity:$identity,
-          target_ref:$ref,head:$head,mode:"ff-only",force:false,
+          target_ref:$ref,target_head:$target_head,head:$head,mode:"ff-only",force:false,
           executable_name:$name,executable_path:$path,executable_digest:$digest}') \
         || die "the effect plan could not be constructed" 4
       ;;
@@ -798,7 +801,7 @@ plan_defect_stop() {  # <auth-id>
 # not be read stops the act as could-not-observe; what was read and disagrees is
 # a refusal. Neither silently retargets the act at whatever is there now.
 plan_reobserve() {  # <auth-id>
-  local id=$1 digest branch identity present ancestor
+  local id=$1 digest branch identity present target_head ancestor
   if [ ! -f "$FM_AUTH_PLAN_EXEC_PATH" ] || [ ! -x "$FM_AUTH_PLAN_EXEC_PATH" ]; then
     refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
       "authorization $id performs its act with $FM_AUTH_PLAN_EXEC_PATH, which is no longer an executable file"
@@ -824,6 +827,12 @@ plan_reobserve() {  # <auth-id>
       [ "refs/heads/$branch" = "$FM_AUTH_PLAN_TARGET_REF" ] \
         || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
           "authorization $id advances $FM_AUTH_PLAN_TARGET_REF, but $FM_AUTH_PLAN_PROJECT has refs/heads/$branch checked out"
+      target_head=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT" rev-parse --verify --quiet "$FM_AUTH_PLAN_TARGET_REF^{commit}" 2>/dev/null) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "$FM_AUTH_PLAN_TARGET_REF in $FM_AUTH_PLAN_PROJECT could not be resolved at effect time"
+      [ "$target_head" = "$FM_AUTH_PLAN_TARGET_HEAD" ] \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "$FM_AUTH_PLAN_TARGET_REF now resolves to $target_head, not the $FM_AUTH_PLAN_TARGET_HEAD authorization $id pinned"
       present=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT" rev-parse --verify --quiet "$FM_AUTH_PLAN_HEAD^{commit}" 2>/dev/null) \
         || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
           "the commit $FM_AUTH_PLAN_HEAD authorization $id lands is not present in $FM_AUTH_PLAN_PROJECT"
