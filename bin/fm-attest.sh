@@ -948,6 +948,16 @@ REQUIRED_DECLARATION_CONTENT='fm-attest.v1 required'
 required_state=
 required_evidence=
 required_reason=
+required_scratch_ref=
+
+required_policy_cleanup() {
+  [ -z "${required_scratch_ref:-}" ] || git update-ref -d "$required_scratch_ref" >/dev/null 2>&1
+  required_scratch_ref=
+}
+
+required_policy_clear_traps() {
+  trap - EXIT HUP INT TERM
+}
 
 required_observe() {
   required_allow_checkout=${1:-0}
@@ -985,8 +995,11 @@ required_observe() {
     fi
     required_scratch_ref="refs/fm-attest/policy-$$"
     git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+    trap required_policy_cleanup EXIT
+    trap 'required_policy_cleanup; exit 2' HUP INT TERM
     if ! git fetch --quiet --no-tags --force "$required_url" "$required_ref:$required_scratch_ref" 2>/dev/null; then
-      git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+      required_policy_cleanup
+      required_policy_clear_traps
       required_state=unobservable
       required_reason=policy-ref-unreadable
       required_evidence="The policy generation $required_ref at $required_venue could not be fetched."
@@ -994,7 +1007,8 @@ required_observe() {
     fi
     required_commit=$(git rev-parse --verify --quiet "$required_scratch_ref^{commit}" 2>/dev/null) || required_commit=
     required_fetched_commit=$(git rev-parse --verify --quiet FETCH_HEAD^{commit} 2>/dev/null) || required_fetched_commit=
-    git update-ref -d "$required_scratch_ref" >/dev/null 2>&1 || true
+    required_policy_cleanup
+    required_policy_clear_traps
     if [ -z "$required_commit" ] || [ "$required_commit" != "$required_fetched_commit" ]; then
       required_state=unobservable
       required_reason=policy-ref-mismatch
