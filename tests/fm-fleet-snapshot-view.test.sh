@@ -1011,6 +1011,65 @@ SH
   pass "the fleet view refuses to report success for a failed or empty snapshot"
 }
 
+# A parent asks a child home for --secondmate-home-summary under the parent's own
+# short deadline, and the bearings path gives it one second. The complete census
+# cannot be taken inside that budget, so taking it there costs the parent the
+# whole observation: it records the child as "structured home snapshot timed out"
+# instead of reading its work, which is strictly worse than the reading the
+# census was added to improve. This pins both halves of that split - no census in
+# the bounded projection, the complete census still taken by the full snapshot
+# whose cost its caller accounts for.
+#
+# python3 is the census reader and nothing else in this path runs it, so counting
+# its invocations observes whether a census was taken through the script's own
+# interface rather than through its source.
+test_secondmate_home_summary_takes_no_census() {
+  local home fakebin real probe out rc summary_calls json_calls
+  real=$(command -v python3) || { pass "skip: python3 not found"; return 0; }
+  home=$(make_home census-budget)
+  write_fixture "$home"
+  fakebin=$(make_fakebin "$home")
+  probe=$home/census-probe.log
+  cat > "$fakebin/python3" <<SH
+#!/usr/bin/env bash
+echo invoked >> "$probe"
+exec "$real" "\$@"
+SH
+  chmod +x "$fakebin/python3"
+
+  # The subject here is the census, not the projection's total wall clock. Those
+  # are different costs and only one of them is this contract's: on this fixture
+  # the summary measured 1410 ms at 1f2141ad, where no census existed at all, so
+  # a one-second assertion would fail for per-task reads that predate the census
+  # and would credit the census with a cost it does not own. The generous bound
+  # below is only a wedge guard - the regression this replaces spun for fifty
+  # minutes because bash defers a trapped SIGTERM, so `timeout` without a
+  # kill-after could never reap it. The census's own absence is asserted exactly,
+  # by count, just below.
+  : > "$probe"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" timeout -s KILL 60 "$SNAPSHOT" --secondmate-home-summary)
+  rc=$?
+  expect_code 0 "$rc" \
+    "the bounded secondmate home summary must return rather than wedge"
+  printf '%s' "$out" | jq -e '.schema == "fm-secondmate-home-summary.v1"' >/dev/null \
+    || fail "the bounded summary must still emit its own schema: $out"
+  summary_calls=$(wc -l < "$probe" | tr -d ' ')
+  [ "$summary_calls" -eq 0 ] \
+    || fail "the bounded secondmate home summary must take no census, but the census reader ran $summary_calls time(s)"
+
+  # Non-vacuity control: the same probe must SEE a census where completeness is
+  # the requirement. Without this, the zero above would pass just as happily on a
+  # broken probe as on a census that was correctly skipped.
+  : > "$probe"
+  out=$(PATH="$fakebin:$PATH" FM_HOME="$home" "$SNAPSHOT" --json)
+  rc=$?
+  expect_code 0 "$rc" "the full snapshot must still succeed"
+  json_calls=$(wc -l < "$probe" | tr -d ' ')
+  [ "$json_calls" -gt 0 ] \
+    || fail "the full snapshot must still take the complete census; the probe saw none, so the zero above proves nothing"
+  pass "the bounded secondmate home summary takes no census while the full snapshot still takes the complete one"
+}
+
 # The identity contract is red-capable: removing only an expected invocation
 # fails, while the same fixture passes after a legitimate test is added.
 test_test_identity_contract() {
@@ -1078,5 +1137,6 @@ test_oversized_task_row_is_never_silently_dropped
 test_empty_fleet_is_success_not_failure
 test_unreadable_home_data_fails_loudly
 test_view_never_reports_success_for_a_failed_snapshot
+test_secondmate_home_summary_takes_no_census
 test_test_identity_contract
 fm_test_contract "${BASH_SOURCE[0]}"

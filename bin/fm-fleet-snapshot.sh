@@ -208,6 +208,11 @@ says what failed, and prints no snapshot.
 --secondmate-home-summary emits the bounded structured summary used after a
 validated registered-home handoff. It is local-only, skips nested secondmate
 aggregation, and marks inventory contradictions or unavailable child state invalid.
+It takes NO no-mistakes census: a parent asks for it under the parent's own short
+deadline, so the complete census belongs to --json, whose caller accounts for its
+cost. Nothing is claimed by skipping it - this summary carries no census field, so
+it makes no quiescence claim, and the per-task census read only ever ADDS a
+positive attribution.
 Its invalidity object names the normalized failure kind and affected ids.
 Actionable tasks-axi captain holds appear as decisions_open and stay visible in
 queued with hold_reason, hold_kind, and plural blocker fields for downstream
@@ -1597,7 +1602,25 @@ nm_census_unavailable_json() {  # <code> <subject> <detail>
 
 NM_CENSUS_JSON=$(nm_census_unavailable_json CENSUS_DISABLED FM_SNAPSHOT_NM_CENSUS \
   "the complete no-mistakes run census was not taken for this snapshot")
-if [ "${FM_SNAPSHOT_NM_CENSUS:-1}" = 1 ]; then
+if [ "$OUTPUT_MODE" = secondmate-home-summary ]; then
+  # The census is an ADDED and expensive observation, and it belongs to the full
+  # snapshot, whose cost its caller accounts for. This mode is a bounded
+  # projection a PARENT asks a child home for under the parent's own short
+  # deadline - run_timed "$FM_SNAPSHOT_SECONDMATE_TIMEOUT" above, and one second
+  # in the bearings path - so taking the census here spends the entire budget on
+  # it and the parent reads the child as "structured home snapshot timed out"
+  # instead of reading its work. That is a strictly worse observation than the
+  # one the census was added to improve.
+  #
+  # Skipping it claims nothing. This summary carries no census field, so it makes
+  # no quiescence claim that could weaken, and the per-task census read in
+  # bin/fm-crew-state.sh only ever ADDS a positive attribution, so declining it
+  # leaves every task exactly where it already was. FM_CREW_STATE_CENSUS=0 is
+  # what keeps those per-task reads from each taking their OWN census once this
+  # one is not staged for them through FM_NM_CENSUS_FILE: one declined
+  # observation rather than one full census per task.
+  export FM_CREW_STATE_CENSUS=0
+elif [ "${FM_SNAPSHOT_NM_CENSUS:-1}" = 1 ]; then
   # A census that cannot be taken is reported as could-not-observe, never as a
   # snapshot failure: this is an ADDED observation, and a host that cannot stage
   # a temporary file must still get the fleet snapshot it could always produce.
