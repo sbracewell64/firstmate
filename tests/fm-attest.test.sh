@@ -437,6 +437,47 @@ publish_out() {
     "$ATTEST" write --no-recheck 2>&1 )
 }
 
+# The same publication, asked to do nothing where no check reads the result.
+# Deliberately the same command as publish_out plus one flag, so a difference in
+# outcome can only be that flag.
+publish_only_if_required_out() {
+  local repo=$1
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck --only-if-required 2>&1 )
+}
+
+required_out() {
+  local repo=$1
+  ( cd "$repo" && "$ATTEST" required 2>&1 )
+}
+
+# A workflow that invokes the verifier, which is what a repository declaring
+# this gate looks like. The name is deliberately not the one this repository
+# uses, because the declaration is what the workflow DOES and never what it is
+# called.
+declare_gate() {
+  local repo=$1 name=${2:-some-gate.yml}
+  mkdir -p "$repo/.github/workflows"
+  printf 'jobs:\n  check:\n    steps:\n      - run: bin/fm-attest.sh verify --head 0000\n' \
+    > "$repo/.github/workflows/$name"
+}
+
+# A workflow that declares nothing about this gate, so a repository can carry
+# CI without carrying this one.
+declare_unrelated_workflow() {
+  local repo=$1 name=${2:-unrelated.yml}
+  mkdir -p "$repo/.github/workflows"
+  printf 'jobs:\n  build:\n    steps:\n      - run: make\n' > "$repo/.github/workflows/$name"
+}
+
+# A push target's published attestations, or nothing. Used as the observable for
+# "was anything published", so a claim that nothing was published is read off
+# the repository rather than off the absence of a message.
+published_heads() {
+  local fork=$1
+  git -C "$fork" rev-parse --verify --quiet "$NOTES_REF" >/dev/null 2>&1 || return 0
+  git -C "$fork" ls-tree -r --name-only "$NOTES_REF" | tr -d '/'
+}
+
 test_write_refuses_a_run_head_absent_from_this_checkout() {
   local repo head out rc
   repo="$TMP_ROOT/write-other-head"
@@ -3095,6 +3136,134 @@ test_write_no_recheck_publishes_without_asking_the_forge() {
   pass "fm-attest.sh: write --no-recheck publishes and asks the forge nothing"
 }
 
+# ---------------------------------------------------------------------------
+# required, and the publication step it makes safe to run everywhere.
+#
+# Publication had no owner: nothing invoked it, so a validated candidate reached
+# the delivery boundary with no evidence whenever nobody remembered to publish
+# by hand. The step below is what an owner runs unconditionally, which is only
+# safe if one predicate decides where it applies. Each case here is paired with
+# one that differs by a single input, because a predicate that answered "not
+# required" everywhere would silently restore exactly the recurrence it exists
+# to end.
+# ---------------------------------------------------------------------------
+
+test_required_answers_a_repository_whose_checks_read_an_attestation() {
+  local repo out rc
+  repo="$TMP_ROOT/required-declared"
+  new_repo "$repo"
+  declare_unrelated_workflow "$repo"
+  declare_gate "$repo"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a repository whose workflow invokes the verifier was not reported as reading one: $out"
+  assert_contains "$out" "some-gate.yml" "the answer did not name the declaration it read"
+  pass "fm-attest.sh: a repository whose CI invokes the verifier reads an attestation"
+}
+
+test_required_answers_a_repository_whose_checks_read_none() {
+  local repo out rc
+  # The case above minus the one workflow that invokes the verifier.
+  repo="$TMP_ROOT/required-undeclared"
+  new_repo "$repo"
+  declare_unrelated_workflow "$repo"
+  out=$(required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a repository declaring no such gate did not answer 'not required' (exit $rc): $out"
+  assert_contains "$out" "reads no head-bound attestation" \
+    "the answer did not say the repository reads none"
+  pass "fm-attest.sh: a repository with CI but no such gate reads no attestation"
+}
+
+test_required_reports_an_unreadable_declaration_as_neither() {
+  local repo out rc
+  # Absence of detection is not detection of absence. An unreadable workflow
+  # could be the one declaring the gate, so this must not join the case above.
+  repo="$TMP_ROOT/required-unreadable"
+  new_repo "$repo"
+  declare_unrelated_workflow "$repo"
+  chmod 000 "$repo/.github/workflows/unrelated.yml"
+  out=$(required_out "$repo")
+  rc=$?
+  chmod 644 "$repo/.github/workflows/unrelated.yml"
+  [ "$rc" -eq 2 ] || fail "an unreadable declaration was resolved into an answer (exit $rc): $out"
+  assert_contains "$out" "workflow-unreadable" "the unsearchable declaration did not report its own reason"
+  assert_not_contains "$out" "reads no head-bound attestation" \
+    "a declaration that could not be read was reported as one that is absent"
+  pass "fm-attest.sh: a declaration that could not be read answers neither way"
+}
+
+test_required_is_not_unsaid_by_an_unreadable_sibling() {
+  local repo out rc
+  # The case above plus a readable declaration. One workflow that invokes the
+  # verifier settles the question, so an unreadable neighbour cannot withdraw an
+  # answer already found and stop publication in the repository that needs it.
+  repo="$TMP_ROOT/required-unreadable-sibling"
+  new_repo "$repo"
+  declare_unrelated_workflow "$repo"
+  declare_gate "$repo"
+  chmod 000 "$repo/.github/workflows/unrelated.yml"
+  out=$(required_out "$repo")
+  rc=$?
+  chmod 644 "$repo/.github/workflows/unrelated.yml"
+  [ "$rc" -eq 0 ] || fail "a declared gate was withdrawn by an unreadable neighbour (exit $rc): $out"
+  pass "fm-attest.sh: an unreadable workflow cannot unsay a declaration already read"
+}
+
+test_write_only_if_required_publishes_nothing_where_no_check_reads_it() {
+  local repo fork head out rc
+  repo="$TMP_ROOT/write-only-if-required-none"
+  fork="$TMP_ROOT/write-only-if-required-none-fork.git"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+
+  # The negative control first: without the flag this same fixture publishes, so
+  # the silence below is the flag's doing and not a fixture that could never
+  # have published anything.
+  out=$(publish_only_if_required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the publication step failed where no check reads it: $out"
+  assert_contains "$out" "nothing published" "the step did not say it published nothing"
+  [ -z "$(published_heads "$fork")" ] || fail "a repository that reads no attestation was published to"
+
+  declare_gate "$repo"
+  git -C "$repo" add .github
+  git -C "$repo" commit -qm gate
+  head=$(git -C "$repo" rev-parse HEAD)
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(publish_only_if_required_out "$repo")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the publication step was refused where a check reads it: $out"
+  assert_contains "$(published_heads "$fork")" "$head" \
+    "the repository whose check reads an attestation was not published to"
+  pass "fm-attest.sh: the publication step touches only a repository whose checks read it"
+}
+
+test_write_only_if_required_stops_rather_than_guess_at_an_unreadable_declaration() {
+  local repo fork head out rc
+  repo="$TMP_ROOT/write-only-if-required-unreadable"
+  fork="$TMP_ROOT/write-only-if-required-unreadable-fork.git"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  declare_unrelated_workflow "$repo"
+  chmod 000 "$repo/.github/workflows/unrelated.yml"
+  out=$(publish_only_if_required_out "$repo")
+  rc=$?
+  chmod 644 "$repo/.github/workflows/unrelated.yml"
+  # Publishing into a repository that never asked and skipping publication in
+  # one that did are both wrong, so a failed read buys neither.
+  [ "$rc" -eq 2 ] || fail "an unreadable declaration was resolved into an action (exit $rc): $out"
+  assert_contains "$out" "workflow-unreadable" "the stop did not name its own cause"
+  [ -z "$(published_heads "$fork")" ] || fail "an unreadable declaration still published"
+  pass "fm-attest.sh: an unreadable declaration stops publication rather than guessing"
+}
+
 test_check_step_no_longer_sends_a_contributor_to_edit_the_request() {
   local dir script out rc
   # The message the workflow actually prints, lifted out of the workflow and run
@@ -3206,6 +3375,12 @@ test_recheck_records_every_decision_it_made
 test_recheck_reports_a_refused_rerun_without_claiming_one
 test_write_re_evaluates_the_head_it_published
 test_write_no_recheck_publishes_without_asking_the_forge
+test_required_answers_a_repository_whose_checks_read_an_attestation
+test_required_answers_a_repository_whose_checks_read_none
+test_required_reports_an_unreadable_declaration_as_neither
+test_required_is_not_unsaid_by_an_unreadable_sibling
+test_write_only_if_required_publishes_nothing_where_no_check_reads_it
+test_write_only_if_required_stops_rather_than_guess_at_an_unreadable_declaration
 test_check_step_no_longer_sends_a_contributor_to_edit_the_request
 test_reconcile_converges_on_an_attestation_published_during_the_window
 test_reconcile_refuses_a_head_no_attestation_arrives_for

@@ -8,8 +8,9 @@
 # that a pull_request workflow can read with contents: read.
 #
 # Usage:
-#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--notes-ref <ref>]
+#   fm-attest.sh write [--run <id>] [--remote <name>] [--no-push] [--no-recheck] [--only-if-required] [--notes-ref <ref>]
 #   fm-attest.sh recheck --head <sha> [--repo <owner/name> --pr <number>] [--remote <name>] [--notes-ref <ref>] [--dry-run]
+#   fm-attest.sh required
 #   fm-attest.sh show [--commit <rev>] [--notes-ref <ref>]
 #   fm-attest.sh verify --head <sha> [--notes-ref <ref>]
 #   fm-attest.sh reconcile --head <sha> --remote <name> --pr <number> --pr-remote <name> [--notes-ref <ref>] [--window <seconds>] [--poll <seconds>]
@@ -34,6 +35,13 @@
 # an unchanged head. It is bounded, idempotent, and durably records each request
 # before making it. It never reports anything about the check itself: GitHub
 # stays the only place a verdict comes from. --no-recheck on write skips it.
+#
+# required answers, for one checkout, whether this repository's own CI reads a
+# head-bound attestation at all. It is the predicate that lets an unconditional
+# publication step be safe in every repository: a caller that must publish where
+# the gate exists, and must touch nothing where it does not, asks here rather
+# than deciding for itself. Three-valued like every other observation in this
+# repository, and its exit status is the whole answer.
 #
 # verify is the CI side. It reads a note already fetched into this repository
 # and reports one distinct reason per failure, so an absent attestation is
@@ -200,7 +208,7 @@ case "$RECONCILE_POLL" in '' | *[!0-9]* | 0*) RECONCILE_POLL=15 ;; esac
 # probed by running it could not tell "this program does not do that" from
 # "that failed". Answering as an exit status rather than as text keeps the probe
 # out of the business of reading messages.
-CAPABILITIES="write verify recheck reconcile show"
+CAPABILITIES="write verify recheck reconcile show required"
 
 # ---------------------------------------------------------------------------
 # printing - the one path text leaves this script by
@@ -907,6 +915,134 @@ cmd_reconcile() {
 }
 
 # ---------------------------------------------------------------------------
+# required - is a head-bound attestation read here at all?
+# ---------------------------------------------------------------------------
+#
+# The publication step has to be unconditional to be reliable, and it has to
+# touch nothing in a repository that never asked for it. Those two are only
+# compatible if one place answers "does this repository read a head-bound
+# attestation", so every caller asks the same question and gets the same answer.
+# Deciding it at each call site is how a step becomes conditional on the caller
+# recognising a repository, which is the recognition problem this repository
+# already knows it cannot do from a name.
+#
+# The question is answered from what the repository DECLARES rather than from
+# anything about its name, its remote, or the fleet it belongs to: a workflow
+# under .github/workflows that invokes bin/fm-attest.sh is a repository whose CI
+# reads this evidence, and nothing else is. That is the consumer naming its own
+# producer, so the two cannot come apart the way a hard-coded list of
+# repositories would.
+#
+# It is an OBSERVATION and not a verdict on evidence, so it does not borrow the
+# refusal and failure headlines above. Reporting "not attested" for a repository
+# that attests nothing would send a reader to publish a note no check reads.
+# Three exits, and the third is a real answer rather than a missing one:
+#
+#   0  required      a workflow here invokes the verifier.
+#   1  not required   this repository declares no such workflow.
+#   2  unobservable   the declaration could not be read, so this says NEITHER.
+#
+# An unreadable workflow file lands on 2 rather than on 1, because absence of
+# detection is not detection of absence, and a caller that published nothing on
+# a failed read would leave exactly the unattested head this whole mechanism
+# exists to prevent.
+REQUIRED_WORKFLOW_DIR=.github/workflows
+
+required_state=
+required_evidence=
+required_reason=
+
+required_observe() {
+  required_state=
+  required_evidence=
+  required_reason=
+
+  required_top=$(git rev-parse --show-toplevel 2>/dev/null) || required_top=
+  [ -n "$required_top" ] || {
+    required_state=unobservable
+    required_reason=not-a-git-repository
+    required_evidence="This directory is not inside a git repository, so no repository declares anything here."
+    return 0
+  }
+
+  required_dir="$required_top/$REQUIRED_WORKFLOW_DIR"
+  if [ ! -e "$required_dir" ]; then
+    required_state=not-required
+    required_evidence="it carries no $REQUIRED_WORKFLOW_DIR"
+    return 0
+  fi
+  if [ ! -d "$required_dir" ] || [ ! -r "$required_dir" ]; then
+    required_state=unobservable
+    required_reason=workflows-unreadable
+    required_evidence="$REQUIRED_WORKFLOW_DIR exists but could not be read as a directory of workflows."
+    return 0
+  fi
+
+  # One match is conclusive and an unreadable file is not, so the whole set is
+  # scanned before either is reported. A workflow this could not read clouds
+  # only the NEGATIVE answer: it cannot unsay a declaration already found, and
+  # letting it do so would refuse to publish in the very repository whose gate
+  # was sitting there in plain sight.
+  required_unreadable=
+  for required_file in "$required_dir"/*.yml "$required_dir"/*.yaml; do
+    [ -e "$required_file" ] || continue
+    if [ ! -f "$required_file" ] || [ ! -r "$required_file" ]; then
+      [ -n "$required_unreadable" ] || required_unreadable=${required_file#"$required_top"/}
+      continue
+    fi
+    # grep reports no match as 1 and a failure of its own as more than 1, and
+    # only the first of those is an observation. A failed search read as "no
+    # match" is absence of detection standing in for detection of absence,
+    # which is the one substitution this whole component exists to refuse.
+    required_grep_rc=0
+    grep -q 'fm-attest\.sh' "$required_file" 2>/dev/null || required_grep_rc=$?
+    case "$required_grep_rc" in
+      0)
+        required_state=required
+        required_evidence="${required_file#"$required_top"/} invokes this verifier"
+        return 0
+        ;;
+      1) ;;
+      *)
+        [ -n "$required_unreadable" ] || required_unreadable=${required_file#"$required_top"/}
+        ;;
+    esac
+  done
+
+  [ -z "$required_unreadable" ] || {
+    required_state=unobservable
+    required_reason=workflow-unreadable
+    required_evidence="$required_unreadable could not be searched, so whether it invokes this verifier is unknown, and no other workflow here does."
+    return 0
+  }
+
+  required_state=not-required
+  required_evidence="no workflow under $REQUIRED_WORKFLOW_DIR invokes this verifier"
+  return 0
+}
+
+cmd_required() {
+  [ "$#" -eq 0 ] || die "unexpected argument: $1"
+  required_observe
+  case "$required_state" in
+    required)
+      emit "fm-attest: this repository reads a head-bound attestation ($required_evidence)"
+      exit 0
+      ;;
+    not-required)
+      emit "fm-attest: this repository reads no head-bound attestation ($required_evidence)"
+      exit 1
+      ;;
+    *)
+      report 'cannot tell whether an attestation is read here' "$required_reason" \
+        "$required_evidence" \
+        "That is a declaration this could not read rather than one that is absent, so this says neither that an attestation is required here nor that it is not."
+      exit 2
+      ;;
+  esac
+}
+
+# ---------------------------------------------------------------------------
 # write - the contributor side
 # ---------------------------------------------------------------------------
 
@@ -916,9 +1052,14 @@ cmd_write() {
   push=1
   publication_expected_tip=
   recheck=1
+  only_if_required=0
   notes_ref=$NOTES_REF_DEFAULT
   while [ "$#" -gt 0 ]; do
     case "$1" in
+      --only-if-required)
+        only_if_required=1
+        shift
+        ;;
       --run)
         [ "$#" -ge 2 ] || die "--run needs a value"
         run_id=$2
@@ -948,6 +1089,29 @@ cmd_write() {
 
   git rev-parse --git-dir >/dev/null 2>&1 || fail not-a-git-repository \
     "This directory is not inside a git repository, so there is no head to attest."
+
+  # Asked before anything is read or recorded, so an unconditional publication
+  # step costs a repository that reads no attestation exactly one file listing
+  # and changes nothing there. An unreadable declaration stops the command
+  # instead: publishing into a repository that never asked for it and skipping
+  # publication in one that did are both wrong, and a failed read is not a
+  # licence to pick either.
+  if [ "$only_if_required" -eq 1 ]; then
+    required_observe
+    case "$required_state" in
+      required) ;;
+      not-required)
+        emit "fm-attest: nothing published - this repository reads no head-bound attestation ($required_evidence)"
+        return 0
+        ;;
+      *)
+        fail "$required_reason" \
+          "$required_evidence" \
+          "Nothing was recorded or published: whether an attestation belongs in this repository could not be established."
+        ;;
+    esac
+  fi
+
   command -v no-mistakes >/dev/null 2>&1 || fail pipeline-tool-missing \
     "no-mistakes is not on PATH, so its run record cannot be read." \
     "That is a missing tool rather than a missing run: install it and re-run."
@@ -1941,6 +2105,7 @@ case "$command" in
   verify) cmd_verify "$@" ;;
   recheck) cmd_recheck "$@" ;;
   reconcile) cmd_reconcile "$@" ;;
+  required) cmd_required "$@" ;;
   show) cmd_show "$@" ;;
   # A capability query, answered as an exit status and nothing else: zero for a
   # capability this program has, non-zero for one it does not. It is not a

@@ -221,6 +221,37 @@ test_ship_modes_generate_clean_briefs() {
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 
+# The pipeline produces the head-bound evidence a delivery boundary's own check
+# reads, and nothing else publishes it. A worker that stops at `done:` therefore
+# leaves a validated candidate with no evidence, which is the state that kept
+# recurring, so the publication step belongs in the contract the worker actually
+# executes rather than in prose it may never load. It is paired with the two
+# modes that run no pipeline: neither has evidence to publish, and a step that
+# appeared in all three would be a step nobody had thought about.
+test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
+  local home id mode brief
+  home="$TMP_ROOT/attest-step-home"
+  write_registry "$home"
+
+  for id_mode in "brief-attest-a1:no-mistakes" "brief-attest-a2:direct-PR" "brief-attest-a3:local-only"; do
+    id=${id_mode%%:*}
+    mode=${id_mode##*:}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1 \
+      || fail "$id: scaffold for mode $mode failed"
+    brief="$home/data/$id/brief.md"
+    if [ "$mode" = no-mistakes ]; then
+      assert_grep "bin/fm-attest.sh write --only-if-required" "$brief" \
+        "$id: the pipeline contract does not publish the head-bound evidence"
+      grep -q 'Run it unconditionally' "$brief" \
+        || fail "$id: the publication step is left to the worker to judge"
+    else
+      assert_no_grep "fm-attest.sh" "$brief" \
+        "$id: a mode that runs no pipeline was told to publish pipeline evidence"
+    fi
+  done
+  pass "fm-brief.sh: the pipeline contract publishes the evidence its own check reads"
+}
+
 # A ship task's delivery mode is firstmate's per-task decision, so a missing or
 # unusable value must stop the scaffold instead of silently defaulting. The
 # no-mistakes-prod-only row is the conditional registry policy: it is never a task
@@ -1036,6 +1067,7 @@ test_help_includes_entire_header
 test_crewmate_scaffolds_carry_who_is_speaking
 test_secondmate_charter_keeps_its_own_marker_consequence
 test_ship_modes_generate_clean_briefs
+test_no_mistakes_brief_requires_publishing_the_head_bound_evidence
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
