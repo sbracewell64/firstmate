@@ -82,6 +82,15 @@ make_fake_root() {
   # behind work_is_landed(). This fixture never reaches that predicate (its
   # worktree path does not exist), but the source line runs unconditionally.
   ln -s "$ROOT/bin/fm-landed-lib.sh" "$fake/bin/fm-landed-lib.sh"
+  # fm-lane-custody-lib.sh: teardown sources it for the shared clean-worktree
+  # predicate behind both its own dirty check and local lane custody. Same
+  # unconditional source line, same reason it must be reachable here.
+  ln -s "$ROOT/bin/fm-lane-custody-lib.sh" "$fake/bin/fm-lane-custody-lib.sh"
+  # fm-lane-custody.sh: teardown EXECS it to ask whether a lane is parked. This
+  # fixture never reaches that question, and teardown reports could-not-observe
+  # rather than failing when the owner is absent, but the fake root carries it so
+  # it stays a faithful copy of the siblings teardown depends on.
+  ln -s "$ROOT/bin/fm-lane-custody.sh" "$fake/bin/fm-lane-custody.sh"
   # fm-wake-lib.sh: teardown sources it for serialized secondmate lifecycle locks.
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
   # fm-status-event-lib.sh: fm-wake-lib.sh sources this sibling, so it must be
@@ -171,6 +180,15 @@ test_teardown_skips_gracefully_without_tasktmp() {
   # behind work_is_landed(). This fixture never reaches that predicate (its
   # worktree path does not exist), but the source line runs unconditionally.
   ln -s "$ROOT/bin/fm-landed-lib.sh" "$fake/bin/fm-landed-lib.sh"
+  # fm-lane-custody-lib.sh: teardown sources it for the shared clean-worktree
+  # predicate behind both its own dirty check and local lane custody. Same
+  # unconditional source line, same reason it must be reachable here.
+  ln -s "$ROOT/bin/fm-lane-custody-lib.sh" "$fake/bin/fm-lane-custody-lib.sh"
+  # fm-lane-custody.sh: teardown EXECS it to ask whether a lane is parked. This
+  # fixture never reaches that question, and teardown reports could-not-observe
+  # rather than failing when the owner is absent, but the fake root carries it so
+  # it stays a faithful copy of the siblings teardown depends on.
+  ln -s "$ROOT/bin/fm-lane-custody.sh" "$fake/bin/fm-lane-custody.sh"
   ln -s "$ROOT/bin/fm-wake-lib.sh" "$fake/bin/fm-wake-lib.sh"
   ln -s "$ROOT/bin/fm-status-event-lib.sh" "$fake/bin/fm-status-event-lib.sh"
   cat > "$fake/bin/fm-guard.sh" <<'SH'
