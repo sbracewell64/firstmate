@@ -130,11 +130,12 @@ JOBS_MAX=4
 # it. This block is the one owner of every number the recurrence control checks;
 # docs/fm-test-portable-shards.md owns how to re-derive them.
 #
-# BASIS (2026-08-26). Measured on this repo's own CI run 33012291827, whose
-# portable-serial inventory contained 136 scripts. Per-shard timing artifacts
-# summed to 2983662 ms of script time, which is the declared budget below. The
-# slowest shard wall was 465228 ms, below the independently enforced 540000 ms
-# headroom bound.
+# BASIS (2026-08-17). Measured on this repo's own main-push CI runs 32044341699
+# and 32046031290, whose portable-serial inventories matched each other at 122
+# scripts. Per-shard timing artifacts summed to 2398034 ms and 2335349 ms of
+# script time; the mean, 2366725 ms, is the declared budget below. Job wall
+# exceeded script sum by under 10 s on every shard, so the shard wall is the
+# script sum for budgeting purposes.
 #
 # This replaces a 2026-08-02 basis of 69 scripts and 1143762 ms. The lane did not
 # drift within a stale budget; it grew to 2.07x of it, so the budget is re-derived
@@ -147,17 +148,17 @@ JOBS_MAX=4
 # had a consumer that could notice and the proof did not, which is what
 # bin/fm-test-isolation-lib.sh now supplies. Read that file's header for the
 # freshness model; this comment is only the cross-reference to it.
-PORTABLE_SERIAL_BUDGET_MS=2983662
+PORTABLE_SERIAL_BUDGET_MS=2366725
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
 #
-# Derived, not chosen: 8 shards put the balanced wall at 2983662/8 = 372958 ms
-# (~6.22 min) against the 15-minute cap below, which preserves a 2.4x
-# hang-tripwire margin. Four shards would put it at ~12.43 min and
+# Derived, not chosen: 8 shards put the balanced wall at 2366725/8 = 295841 ms
+# (~4.93 min) against the 15-minute cap below, which is the ~3x hang-tripwire
+# margin this lane was designed around. Four shards would put it at ~9.86 min and
 # 1.5x, which is the margin that let one shard reach the cap and cancel the run.
 # The floor for any count is the longest single script
-# (tests/fm-pr-check-security.test.sh, 249030 ms), which binds near 12 shards.
+# (tests/fm-pr-check-security.test.sh, 216161 ms), which binds near 10 shards.
 PORTABLE_SERIAL_SHARDS=8
 
 # The hang tripwire .github/workflows/ci.yml sets on every serial shard job.
@@ -178,15 +179,15 @@ PORTABLE_SERIAL_BUDGET_DRIFT_PCT=25
 
 # SHARD headroom is checked only against the hang tripwire, never against the
 # balanced wall, so per-shard jitter is not a verdict. At 60% of a 15-minute cap
-# the bound is 9 min: 1.45x the ~6.22 min balanced wall and still above the
-# measured 7.75 min slowest shard, but low enough to fire before the cap.
+# the bound is 9 min: 1.83x the ~4.93 min healthy wall and far outside the 11%
+# shard spread, but still low enough to fire before a shard reaches the cap.
 PORTABLE_SERIAL_SHARD_HEADROOM_PCT=60
 
 # Balance hint for a portable-serial script with no measured duration. Rounded
 # from the measured per-script mean of the declared budget
-# (2983662/136 = 21939 ms) so a newly added test neither starves nor overloads
+# (2366725/122 = 19399 ms) so a newly added test neither starves nor overloads
 # the shard it lands in.
-PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=22000
+PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=20000
 
 usage() {
   awk '
@@ -535,7 +536,6 @@ tests/fm-guard-stale-banner.test.sh 5731
 tests/fm-harness-liveness-drift-live-e2e.test.sh 19
 tests/fm-herdr-session-cleanup.test.sh 6212
 tests/fm-kimi-harness.test.sh 16457
-tests/fm-landing-seam.test.sh 39302
 tests/fm-launch-lib.test.sh 660
 tests/fm-launch.test.sh 6703
 tests/fm-loop-actuate.test.sh 10713
@@ -550,7 +550,7 @@ tests/fm-operational-input.test.sh 215
 tests/fm-pending-reply.test.sh 8883
 tests/fm-pi-primary-live-e2e.test.sh 19
 tests/fm-pi-watch-extension.test.sh 16575
-tests/fm-pr-check-security.test.sh 249030
+tests/fm-pr-check-security.test.sh 216161
 tests/fm-procevent.test.sh 49237
 tests/fm-public-followup.test.sh 24526
 tests/fm-quota-array-dispatch-live-e2e.test.sh 20
@@ -558,7 +558,7 @@ tests/fm-reasoning-required.test.sh 45521
 tests/fm-rebase-equivalence.test.sh 9329
 tests/fm-remote-backlog-handoff.test.sh 17978
 tests/fm-remote-doctor.test.sh 4138
-tests/fm-remote-job.test.sh 37142
+tests/fm-remote-job.test.sh 38512
 tests/fm-remote-reply.test.sh 8847
 tests/fm-remote-secondmate-lifecycle-e2e.test.sh 159094
 tests/fm-remote-secondmate-trace-context.test.sh 37385
