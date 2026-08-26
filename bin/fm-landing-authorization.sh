@@ -123,11 +123,6 @@ auth_path() {
   fm_auth_store_path "$AUTH_DIR" "${1:-}"
 }
 
-auth_claim_path() {
-  fm_auth_id_valid "${1:-}" || return 1
-  printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
-}
-
 ruling_reservation_key() {  # <request-id> <head>
   local sum key
   sum=$(printf 'request_id=%s\nhead=%s\n' "$1" "$2" | fm_auth_digest) || return 1
@@ -361,52 +356,6 @@ post_effect_observe() {
 # would let the next caller past the one guard that is telling the truth.
 # `reconcile` clears both together, which is the only path that has an
 # observation to justify it.
-claim_acquire() {  # <auth-id>
-  local dir pid identity group
-  dir=$(auth_claim_path "$1") || return 1
-  pid=${BASHPID:-$$}
-  group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 1
-  [ "$group" = "$pid" ] || return 1
-  identity=$(fm_pid_identity "$pid") || return 1
-  mkdir -p "$AUTH_DIR" || return 1
-  mkdir "$dir" 2>/dev/null || return 1
-  if printf '%s\n' "$pid" > "$dir/owner-pid" \
-    && printf '%s\n' "$identity" > "$dir/owner-identity" \
-    && printf '%s\n' "$group" > "$dir/owner-group"; then
-    :
-  else
-    rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"
-    rmdir "$dir" 2>/dev/null
-    return 1
-  fi
-  CLAIM=$dir
-  trap claim_release EXIT
-  trap 'claim_terminate INT' INT
-  trap 'claim_terminate TERM' TERM
-  return 0
-}
-
-claim_terminate() {  # <signal>
-  local signal=$1 group=${BASHPID:-$$} reservation=
-  if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ] && [ -n "$RULING_RESERVATION" ]; then
-    reservation=$RULING_RESERVATION
-    if ! ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}"; then
-      printf '%s: the ruling reservation at %s could not be released after signal %s; no act was performed\n' \
-        "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "$reservation" "$signal" >&2
-    fi
-  fi
-  trap - EXIT INT TERM
-  kill -s "$signal" -- "-$group" 2>/dev/null || exit 4
-  exit 4
-}
-
-claim_release() {
-  [ -n "$CLAIM" ] || return 0
-  rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity" "$CLAIM/owner-group"
-  rmdir "$CLAIM" 2>/dev/null || true
-  CLAIM=
-}
-
 ruling_reservation_release() {
   local holder
   [ -n "$RULING_RESERVATION" ] || return 0

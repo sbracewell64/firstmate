@@ -720,6 +720,16 @@ fm_pub_seam_command_forces() {  # <command...>
   return 1
 }
 
+fm_pub_seam_command_matches() {  # <repo> <remote> <head> <ref> <command...>
+  local repo=$1 remote=$2 head=$3 ref=$4
+  shift 4
+  [ "${1:-}" = git ] && [ "${2:-}" = -C ] && [ "${3:-}" = "$repo" ] \
+    && [ "${4:-}" = push ] || return 1
+  shift 4
+  [ "${1:-}" = --quiet ] && shift
+  [ "$#" -eq 2 ] && [ "$1" = "$remote" ] && [ "$2" = "$head:$ref" ]
+}
+
 # CLEAN INCLUDING UNTRACKED, and three-valued. A backup taken from a tree with
 # uncommitted work in it is a backup of something other than what it says it is:
 # the ref would carry the committed head while the work that mattered stayed only
@@ -1234,17 +1244,7 @@ fm_pub_seam_publish() {  # <guard> <repo> <remote> <venue> <ref> <head> <expecte
       return $?
       ;;
     NOT_APPLICABLE)
-      rc=0
-      act=$("$@" 2>&1) || rc=$?
-      FM_PUB_SEAM_OUTPUT=$act
-      if [ "$rc" -ne 0 ]; then
-        fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
-          "the ungoverned publication of $ref at $head exited $rc, which does not establish that it had no effect"
-        return $?
-      fi
-      fm_pub_seam_set not-applicable "$FM_PUB_SEAM_TOKEN_NOT_APPLICABLE" \
-        "no publication identity policy and no live Browser Sol request govern $ref on $venue, so it was published ungoverned"
-      return $?
+      :
       ;;
     ALLOW_EXACT) ;;
     *)

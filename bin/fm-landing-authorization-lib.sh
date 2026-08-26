@@ -913,4 +913,52 @@ fm_auth_store_write() {  # <dir> <auth-id> <json>
   mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
 }
 
+auth_claim_path() {
+  fm_auth_id_valid "${1:-}" || return 1
+  printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
+}
+
+claim_acquire() {  # <auth-id> [serial]
+  local dir pid identity group mode=${2:-group}
+  dir=$(auth_claim_path "$1") || return 1
+  pid=${BASHPID:-$$}
+  group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 1
+  [ "$mode" = serial ] || [ "$group" = "$pid" ] || return 1
+  identity=$(fm_pid_identity "$pid") || return 1
+  mkdir -p "$AUTH_DIR" || return 1
+  mkdir "$dir" 2>/dev/null || return 1
+  if printf '%s\n' "$pid" > "$dir/owner-pid" \
+    && printf '%s\n' "$identity" > "$dir/owner-identity" \
+    && printf '%s\n' "$group" > "$dir/owner-group"; then
+    :
+  else
+    rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"
+    rmdir "$dir" 2>/dev/null
+    return 1
+  fi
+  CLAIM=$dir
+  trap claim_release EXIT
+  if [ "$mode" = serial ]; then
+    trap 'claim_release; exit 4' INT TERM
+  else
+    trap 'claim_terminate INT' INT
+    trap 'claim_terminate TERM' TERM
+  fi
+  return 0
+}
+
+claim_terminate() {  # <signal>
+  local signal=$1 group=${BASHPID:-$$}
+  trap - EXIT INT TERM
+  kill -s "$signal" -- "-$group" 2>/dev/null || exit 4
+  exit 4
+}
+
+claim_release() {
+  [ -n "$CLAIM" ] || return 0
+  rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity" "$CLAIM/owner-group"
+  rmdir "$CLAIM" 2>/dev/null || true
+  CLAIM=
+}
+
 # fail-closed-predicates: enforced

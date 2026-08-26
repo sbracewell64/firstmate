@@ -56,6 +56,7 @@ fm_git_identity fmtest fmtest@example.invalid
 FM_TEST_IDENTITY_CONTRACT=1
 
 GUARD="$ROOT/bin/fm-publication-guard.sh"
+REAL_GIT=$(command -v git)
 
 TMP_ROOT=$(fm_test_tmproot fm-publication-seam) || exit 1
 
@@ -276,10 +277,19 @@ record() {  # <request-id> <state> [<verdict>] [<head>]
 
 guard() {  # <args...>
   ( export FM_HOME="$FX_HOME" FM_CONFIG_OVERRIDE="$FX_CONFIG" FM_DATA_OVERRIDE="$FX_DATA"
+    [ ! -x "$FX_HOME/fakebin/git" ] || export PATH="$FX_HOME/fakebin:$PATH"
     export FM_QUALIFICATION_CONTRACT_DIR="$QUAL_CONTRACTS"
     export FM_QUALIFICATION_RECORD_DIR="$FX_QUAL_RECORDS"
     export FM_QUALIFICATION_OVERLAY_DIR="$QUAL_NO_OVERLAY"
     bash "$GUARD" "$@" ) 2>&1
+}
+
+noop_push() {
+  mkdir -p "$FX_HOME/fakebin" || fail "noop-push: mkdir"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [ "${3:-}" = push ]; then exit 0; fi' \
+    "exec '$REAL_GIT' \"\$@\"" > "$FX_HOME/fakebin/git" || fail "noop-push: write"
+  chmod +x "$FX_HOME/fakebin/git" || fail "noop-push: chmod"
 }
 
 tip() {  # -> the remote's current tip for the candidate ref, or "-"
@@ -308,7 +318,7 @@ grant() {
 # Spend an authority by publishing the candidate through it, and echo the result.
 spend() {  # <auth-id>
   guard consume "$1" --repo "$FX_REPO" --remote origin -- \
-    git -C "$FX_REPO" push --quiet origin "$REF:$REF"
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$REF"
 }
 
 states() {  # -> "<id> <state>" per recorded authority
@@ -387,7 +397,7 @@ test_publish_composes_the_decision_and_the_act() {
   reviewed
   out=$(guard publish --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$FX_HEAD" --expected-tip - -- \
-    git -C "$FX_REPO" push --quiet origin "$REF:$REF") || rc=$?
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$REF") || rc=$?
   [ "$rc" -eq 0 ] || fail "publish: the composed operation did not complete (exit $rc): $out"
   assert_contains "$out" 'APPLIED' "publish: the composed operation reported no applied result: $out"
   after=$(tip) || fail "publish: the remote tip could not be observed"
@@ -403,7 +413,7 @@ test_a_refusal_relays_its_reason_rather_than_its_shape() {
   record fm-ob-token emitted
   out=$(guard publish --repo "$FX_REPO" --remote origin --venue "$VENUE" \
     --ref "$REF" --head "$FX_HEAD" --expected-tip - -- \
-    git -C "$FX_REPO" push --quiet origin "$REF:$REF") || rc=$?
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$REF") || rc=$?
   [ "$rc" -eq 3 ] || fail "token: a held publication did not refuse (exit $rc): $out"
   # THE REASON, NOT THE SHAPE. The guard prints `REFUSE <token>`, so a wiring
   # that read the first field relayed the literal word `REFUSE` as the token -
@@ -546,7 +556,9 @@ test_retire_refuses_an_authority_whose_effect_is_unobserved() {
   policy
   reviewed
   grant; id=$GRANT_ID
-  guard consume "$id" --repo "$FX_REPO" --remote origin -- true > /dev/null 2>&1 || true
+  noop_push
+  guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$REF" > /dev/null 2>&1 || true
   out=$(guard retire "$id" --reason 'tidy up') || rc=$?
   [ "$rc" -eq 3 ] || fail "retire-indeterminate: an unobserved effect was retired (exit $rc): $out"
   assert_contains "$out" 'reconcile' "retire-indeterminate: the refusal did not name the owner that settles it: $out"
@@ -811,9 +823,11 @@ test_retires_an_authority_consumed_without_a_confirmed_effect() {
   policy
   reviewed
   grant; id=$GRANT_ID
+  noop_push
   # The act runs and does not move the ref. Its exit status says nothing about
   # whether it had an effect, so the authority must not return to the pool.
-  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- true) || rc=$?
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$REF") || rc=$?
   [ "$rc" -eq 4 ] \
     || fail "unconfirmed: an unconfirmed effect was not could-not-observe (exit $rc): $out"
   assert_contains "$out" 'FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT' \
@@ -837,6 +851,7 @@ test_retires_an_authority_consumed_without_a_confirmed_effect() {
 
   # And recovery can still proceed: a FRESH authority is granted for the same
   # unchanged subject, which is what keeps the retirement from wedging the lane.
+  rm -f "$FX_HOME/fakebin/git"
   grant; id=$GRANT_ID
   out=$(spend "$id") || fail "unconfirmed: recovery could not publish under a fresh authority: $out"
   [ "$(tip)" = "$FX_HEAD" ] || fail "unconfirmed: recovery did not publish the candidate"
@@ -871,16 +886,19 @@ test_refuses_a_retained_predecessor_ref() {
 # command.
 
 test_reports_an_ungoverned_publication_rather_than_staying_silent() {
-  local out after
+  local out after state
   fixture ungoverned
   # No policy and no request: nothing in this home could govern this candidate.
-  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
-    --ref "$REF" --head "$FX_HEAD" --expected-tip - --item "$ITEM") \
+  out=$(guard publish --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip - --item "$ITEM" -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$REF") \
     || fail "ungoverned: a publication nothing governs was not permitted: $out"
-  assert_contains "$out" 'NOT_APPLICABLE' \
+  assert_contains "$out" 'APPLIED' \
     "ungoverned: the result did not report that nothing governed it: $out"
   after=$(tip) || fail "ungoverned: the remote tip could not be observed"
-  [ "$after" = '-' ] || fail "ungoverned: deciding applicability moved the remote to $after"
+  [ "$after" = "$FX_HEAD" ] || fail "ungoverned: the confirmed remote tip was $after"
+  state=$(states | awk 'NF {print $2; exit}')
+  [ "$state" = spent ] || fail "ungoverned: the effect did not consume a one-use authority: $state"
   pass "a publication nothing governs is reported as ungoverned rather than passing silently"
 }
 
@@ -1184,7 +1202,7 @@ test_custody_refuses_every_force_form() {
     out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
       git -C "$FX_REPO" push "$arg" origin "$FX_HEAD:$CUSTODY_REF") || rc=$?
     [ "$rc" -eq 3 ] || fail "custody-force: '$arg' was not refused (exit $rc): $out"
-    assert_contains "$out" 'FM_PUB_FORCE_REFUSED' \
+    assert_contains "$out" 'FM_PUB_COMMAND_MISMATCH' \
       "custody-force: the refusal of '$arg' did not name the rule: $out"
     after=$(custody_tip) || fail "custody-force: the custody ref could not be observed"
     [ "$after" = '-' ] || fail "custody-force: '$arg' moved the remote to $after"
@@ -1278,9 +1296,11 @@ test_custody_consumed_without_a_confirmed_effect_is_reobserved_not_reused() {
   fixture custody-unconfirmed
   policy
   custody_grant; id=$GRANT_ID
+  noop_push
   # The act runs and does not move the ref. Its exit status says nothing about
   # whether it had an effect, so the authority must not return to the pool.
-  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- true) || rc=$?
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push --quiet origin "$FX_HEAD:$CUSTODY_REF") || rc=$?
   [ "$rc" -eq 4 ] \
     || fail "custody-unconfirmed: an unconfirmed custody effect was not could-not-observe (exit $rc): $out"
   assert_contains "$out" 'FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT' \

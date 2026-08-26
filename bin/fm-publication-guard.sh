@@ -170,10 +170,14 @@ OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
 # shellcheck source=bin/fm-landing-authorization-lib.sh
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-wake-lib.sh
+. "$SCRIPT_DIR/fm-wake-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
 . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
 # shellcheck source=bin/fm-publication-seam-lib.sh
 . "$SCRIPT_DIR/fm-publication-seam-lib.sh"
+
+CLAIM=
 
 usage() { sed -n '2,/^set -u$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
@@ -321,13 +325,10 @@ cmd_prepare() {
       printf 'NO_EFFECT_ALREADY_EQUAL %s\n' "$FM_PUB_SEAM_REASON"
       return 0
       ;;
-    not-applicable)
-      printf 'NOT_APPLICABLE %s\n' "$FM_PUB_SEAM_REASON"
-      return 0
-      ;;
+    not-applicable) ;;
   esac
 
-  item=$FM_PUB_SEAM_ITEM
+  [ -z "$FM_PUB_SEAM_ITEM" ] || item=$FM_PUB_SEAM_ITEM
   subject=$(fm_auth_effect_subject_digest "$effect" "$venue" "$ref" "$item" "$head" "$tree" \
     "$OBSERVED_TIP" "$FM_PUB_SEAM_GENERATION") \
     || cno "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" "the subject of this $effect could not be digested"
@@ -438,15 +439,6 @@ cmd_consume() {
   [ -n "$repo" ] && [ -n "$remote" ] || die "consume requires --repo and --remote"
   [ $# -gt 0 ] || die "consume requires a command after --"
 
-  # THE COMMAND IS PART OF WHAT IS BEING AUTHORIZED. Every check below reasons
-  # about the subject, and a plan exactly right about its head and its tip still
-  # destroys history if the push carries a force. This is the first point at
-  # which the act itself is visible, so it is asked here and for both classes.
-  if fm_pub_seam_command_forces "$@"; then
-    refuse "$FM_PUB_SEAM_TOKEN_FORCE" \
-      "the act under this authority carries a forcing argument, and no authority this guard grants covers overwriting or removing what a remote already holds"
-  fi
-
   auth_read "$id" || case $? in
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id has been granted, so there is nothing to publish under" ;;
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "the publication authority $id could not be read as this contract's record, so whether it permits anything could not be observed" ;;
@@ -483,6 +475,26 @@ cmd_consume() {
   generation=$(auth_field '.grant.generation // ""')
   epoch=$(auth_field '.epoch // 1')
 
+  if ! fm_pub_seam_command_matches "$repo" "$remote" "$head" "$ref" "$@"; then
+    refuse FM_PUB_COMMAND_MISMATCH \
+      "the act under publication authority $id is not the exact git push of $head to $ref on $remote from $repo"
+  fi
+
+  if ! claim_acquire "$id" serial; then
+    auth_read "$id" || true
+    if [ "$(auth_field '.state // ""')" = spending ]; then
+      cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
+        "a publication under $id began and recorded no outcome, so whether its effect happened is unknown"
+    fi
+    refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
+  fi
+
+  auth_read "$id" || cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
+    "publication authority $id could not be reread after its exclusive claim was acquired"
+  state=$(auth_field '.state // ""')
+  [ "$(fm_auth_spend_admissibility "$state")" = proceed ] \
+    || refuse FM_PUB_REPLAY "publication authority $id is no longer available to spend"
+
   observe_tip "$repo" "$remote" "$ref" || cno "$FM_PUB_SEAM_TOKEN_TIP_UNOBSERVED" \
     "the current tip of $ref on $remote could not be observed, which is not the same as that ref being absent"
 
@@ -493,7 +505,7 @@ cmd_consume() {
       return 0
       ;;
     not-applicable)
-      cno FM_PUB_GOVERNANCE_WITHDRAWN \
+      [ -z "$generation" ] || cno FM_PUB_GOVERNANCE_WITHDRAWN \
         "publication authority $id was granted for governed work and $item on $venue is no longer governed, so what this authority now permits could not be established"
       ;;
   esac
