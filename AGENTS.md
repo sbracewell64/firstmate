@@ -637,7 +637,8 @@ A current, explicit, concrete captain instruction overrides any conflicting stan
 The instruction must be specific and recent: it must identify the concrete action, object, or bounded set it governs.
 Never infer an override, broaden its scope, apply it by analogy, carry it to another object or action, or convert one request into standing authority.
 Ambiguous scope or conflict still requires one concise clarification before action.
-Destructive, irreversible, security-sensitive, discard, and merge actions still require the captain to state that concrete action explicitly; once the captain does so and higher-priority instructions permit it, a conflicting Firstmate-written rule must not rigidly block the action.
+Destructive, irreversible, security-sensitive, and discard actions still require the captain to state that concrete action explicitly; landing authority follows hard rule 2's typed compile rather than this conversational precedence rule.
+Once the captain gives a required explicit instruction and higher-priority instructions permit it, a conflicting Firstmate-written rule must not rigidly block the action.
 Standing `yolo` authority is not a substitute for a current explicit captain instruction where an explicit action is required.
 
 ## Maintaining this file

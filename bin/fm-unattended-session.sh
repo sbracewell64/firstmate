@@ -15,7 +15,7 @@
 # AUTHORITY, under the captain's 2026-08-03 ruling. This grants EXECUTION without
 # a live human-started session. It widens NOTHING about what may be approved once
 # running: an unattended session inherits exactly the authority a captain-started
-# session has, so hard rule 2 (no merge without the captain's explicit word),
+# session has, so hard rule 2 (a typed captain-reserved decision blocks landing),
 # hard rule 3 (no teardown of unlanded work, no force, no discard), the ask-user
 # authority contract and the destructive/irreversible/security-sensitive
 # boundaries all stand unchanged. A session that cannot proceed under those rules
