@@ -89,6 +89,7 @@ bin/fm-test-run.sh --check-coverage
 
 Refuse the refresh unless every script in the serial inventory has exactly one recovered duration, then replace the `portable_serial_weight_hints` table wholesale with those measured pairs and re-derive the budget from the complete lane.
 Re-derive the shard count and bounds only when their stated sizing policies are being revisited.
+A budget-and-hint refresh changes balance estimates and recurrence-control evidence only; it does not change test inventory, selection, or execution semantics.
 
 ## Serial budget recurrence control
 
