@@ -293,6 +293,7 @@ The guard has already established the remote is at the tip the plan was compiled
 The 2026-08-27 UTC rerun at candidate `ff80599ab64cc0955405b8b4965b69b3876d428d` completed the publication-seam suite with `FM_TEST_CONTRACT status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
 Its 64 controls include stale-claim recovery, durable interrupted-reclaim recovery, live-owner and surviving-process-group refusals, concurrent reclaimer serialization, and serialization of consume against reconcile and retire.
 The same 64 controls were rerun directly at candidate `0462f4a2947847f98415935b7fbcd317587306f2`; the suite printed each positive control, ended with `FM_TEST_CONTRACT suite=fm-publication-seam.test.sh status=pass`, and exited 0.
+The subsequent CI run `33030583955` timed out portable serial shard 2 after `fm-watch-triage.test.sh` passed and the unchanged `fm-remote-job.test.sh` began, so the aggregate correctly reported the missing shard artifact as could-not-observe; the immediately preceding run `33029663411` completed that same test in 38,318 ms, and a direct rerun at `1b00d850194057c601249982d8c5dc0495f7c20f` printed all 19 controls and `ALL TESTS PASSED` in 39 seconds.
 The publication-seam run includes the canonical-command positive control paired with the force-axis refusal, and the dead-predicate run includes the quoted trap-handler positive and non-trap negative controls.
 This evidence does not replace the independent review required before landing.
 
