@@ -290,7 +290,7 @@ publication_claim_intent_ensure() {
 }
 
 publication_claim_reclaim_dead() {
-  local id=$1 dir state rc digest tombstone had_intent=0
+  local id=$1 expected_state=$2 dir state rc digest tombstone had_intent=0
   dir=$(auth_claim_path "$id") || { CLAIM_OWNER_STATE=unobserved; return 4; }
   [ ! -e "$dir/reclaim-intent.json" ] || had_intent=1
   publication_claim_evidence_read "$dir" || { CLAIM_OWNER_STATE=unobserved; return 4; }
@@ -315,7 +315,7 @@ publication_claim_reclaim_dead() {
   esac
   auth_read "$id" || { CLAIM_OWNER_STATE=unobserved; return 4; }
   state=$(auth_field '.state // ""')
-  if [ "$state" != granted ]; then
+  if [ "$state" != "$expected_state" ]; then
     CLAIM_OWNER_STATE=unobserved
     return 4
   fi
@@ -719,7 +719,7 @@ cmd_consume() {
       cno FM_PUB_CONSUMED_WITHOUT_CONFIRMED_EFFECT \
         "a publication under $id began and recorded no outcome, so whether its effect happened is unknown"
     fi
-    if [ "$state" = granted ] && publication_claim_reclaim_dead "$id"; then
+    if [ "$state" = granted ] && publication_claim_reclaim_dead "$id" granted; then
       :
     elif [ "$CLAIM_OWNER_STATE" = alive ] || [ "$CLAIM_OWNER_STATE" = raced ]; then
       refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
@@ -1097,8 +1097,19 @@ cmd_reconcile() {
   case $observed in applied|not-applied) ;; *) die "reconcile requires --observed applied|not-applied" ;; esac
   [ -n "$evidence" ] || die "reconcile requires --evidence naming what was observed"
 
-  claim_acquire "$id" serial \
-    || refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
+  if ! claim_acquire "$id" serial; then
+    auth_read "$id" || cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
+      "publication authority $id could not be read while its claim owner was checked"
+    state=$(auth_field '.state // ""')
+    if [ "$state" = spending ] && publication_claim_reclaim_dead "$id" spending; then
+      :
+    elif [ "$CLAIM_OWNER_STATE" = alive ] || [ "$CLAIM_OWNER_STATE" = raced ]; then
+      refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
+    else
+      cno FM_PUB_CLAIM_OWNER_UNOBSERVED \
+        "the owner of the claim on $id could not be observed, so the claim was not reclaimed"
+    fi
+  fi
   auth_read "$id" || case $? in
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id exists to reconcile" ;;
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "publication authority $id could not be read" ;;

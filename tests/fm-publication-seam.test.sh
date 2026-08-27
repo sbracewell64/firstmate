@@ -1000,6 +1000,41 @@ test_retire_and_reconcile_cannot_overwrite_a_live_consume() {
   pass "retire and reconcile cannot overwrite a live consume"
 }
 
+test_reconcile_reclaims_a_killed_consumers_stale_claim() {
+  local id consume_pid out i record
+  fixture reconcile-killed-consumer
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  printf '%s\n' '#!/usr/bin/env bash' ": > '$FX_DATA/push-started'" \
+    "while [ ! -e '$FX_DATA/release-push' ]; do sleep 0.01; done" 'exit 0' \
+    > "$FX_REMOTE/hooks/pre-receive" || fail "reconcile-killed: hook"
+  chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "reconcile-killed: chmod"
+  spend "$id" > "$FX_DATA/consume.out" 2>&1 &
+  consume_pid=$!
+  fm_test_reap "$consume_pid"
+  record="$FX_DATA/landing-authorizations/$id.json"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -f "$record" ] && [ "$(jq -r '.state' "$record")" = spending ] \
+      && [ -d "$FX_DATA/landing-authorizations/.$id.claim" ] && break
+    sleep 0.1
+  done
+  [ "$(jq -r '.state' "$record")" = spending ] \
+    || fail "reconcile-killed: consume never recorded spending"
+  fm_test_kill_tree "$consume_pid"
+  [ -d "$FX_DATA/landing-authorizations/.$id.claim" ] \
+    || fail "reconcile-killed: killed consumer left no stale claim"
+  [ "$(tip)" = '-' ] || fail "reconcile-killed: killed publication moved the remote"
+  out=$(guard reconcile "$id" --observed not-applied --evidence 'remote ref observed absent') \
+    || fail "reconcile-killed: stale claim was not reclaimed: $out"
+  assert_contains "$out" 'RECONCILED' "reconcile-killed: $out"
+  [ "$(jq -r '.state' "$record")" = void ] \
+    || fail "reconcile-killed: authority did not become void: $(jq -c . "$record")"
+  [ ! -d "$FX_DATA/landing-authorizations/.$id.claim" ] \
+    || fail "reconcile-killed: reclaimed claim was not released"
+  pass "reconcile reclaims a killed consumer's stale claim"
+}
+
 # --- (b) an active publication hold -------------------------------------------
 
 test_refuses_a_candidate_under_an_active_publication_hold() {
@@ -1930,6 +1965,7 @@ test_retiring_is_idempotent_and_records_it_once
 test_retire_refuses_an_authority_that_records_an_act
 test_retire_refuses_an_authority_whose_effect_is_unobserved
 test_retire_and_reconcile_cannot_overwrite_a_live_consume
+test_reconcile_reclaims_a_killed_consumers_stale_claim
 test_publish_composes_the_decision_and_the_act
 test_refuses_commands_other_than_the_constructed_push
 test_uses_the_fixed_trusted_git_instead_of_caller_resolution
