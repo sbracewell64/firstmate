@@ -15,6 +15,7 @@ Sixteen properties, and one control without which none of them means anything:
 2. Permission is re-compiled at the moment of use, so an authority granted while eligible refuses once a newer hold, a revoked ruling or a bumped generation arrives.
 3. A remote that moved under a granted authority refuses without overwriting what moved it.
 4. An authority is spent exactly once through the authorization store's atomic compare-and-claim mechanism, so concurrent consumers execute one push and every replay refuses and publishes nothing.
+   A claim binds the owning process identity and process group; a provably dead owner can be reclaimed through a durable, restartable intent, while a live group or unobservable owner refuses reclamation, and consume, reconcile and retire cannot overwrite one another.
 5. An authority consumed before its effect is durably `consumed-without-confirmed-effect`, is never resurrected, and recovery mints a fresh authority for the same unchanged subject rather than reusing it.
 6. A remote already equal to the head is a typed `NO_EFFECT_ALREADY_EQUAL` result that consumes no authority.
 7. A governed candidate publishes only when a ruling is bound to the EXACT head being published and the role qualification register currently records the declared reviewer as qualified and assignment-distinct against the declared maker.
@@ -289,7 +290,8 @@ The guard has already established the remote is at the tip the plan was compiled
 
 ## Refreshing this record
 
-The 2026-08-26 rerun at candidate `28955ba1789394780734aae928322b15fcbb9865` completed the publication-seam and dead-predicate suites with `FM_TEST_CONTRACT status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0` for each.
+The 2026-08-27 UTC rerun at candidate `ff80599ab64cc0955405b8b4965b69b3876d428d` completed the publication-seam suite with `FM_TEST_CONTRACT status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
+Its 64 controls include stale-claim recovery, durable interrupted-reclaim recovery, live-owner and surviving-process-group refusals, concurrent reclaimer serialization, and serialization of consume against reconcile and retire.
 The publication-seam run includes the canonical-command positive control paired with the force-axis refusal, and the dead-predicate run includes the quoted trap-handler positive and non-trap negative controls.
 This evidence does not replace the independent review required before landing.
 
@@ -342,7 +344,7 @@ Replacing either with `void` would turn evidence into a tidier claim than the ev
 Both new files carry `# fail-closed-predicates: enforced`, so every predicate in them must have a call site or say in writing why it does not.
 The repository run went from `enrolled=4 alive=85 could_not_observe=0` to `enrolled=6 alive=123 could_not_observe=0`.
 
-The 2026-08-26 pass at candidate `28955ba1789394780734aae928322b15fcbb9865` reads `enrolled=6 scanned=124 unchecked=242 alive=150 could_not_observe=0 marked=0`.
+The 2026-08-27 UTC pass at candidate `ff80599ab64cc0955405b8b4965b69b3876d428d` reads `enrolled=6 scanned=124 unchecked=242 alive=151 could_not_observe=0 marked=0`.
 
 That enrolment is load-bearing rather than decorative, and it caught three real defects across this work.
 The third was this pass's own: generalising the authority identity over its effect left four `fm_auth_publication_*` wrappers with no call site, and they were deleted rather than marked `unused-by-design`, because a wrapper nobody calls is exactly what the control exists to refuse.
