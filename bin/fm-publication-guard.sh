@@ -235,29 +235,37 @@ publication_claim_evidence_read() {
       || return 4
   fi
   case $CLAIM_OWNER_PID in ''|*[!0-9]*) return 4 ;; esac
-  [ -n "$CLAIM_OWNER_IDENTITY" ] && [ -n "$CLAIM_OWNER_GROUP" ] || return 4
+  case $CLAIM_OWNER_GROUP in ''|*[!0-9]*) return 4 ;; esac
+  [ -n "$CLAIM_OWNER_IDENTITY" ] || return 4
   return 0
 }
 
 publication_claim_owner_state() {
-  local pid=$1 identity=$2 table table_state current
+  local pid=$1 identity=$2 group=$3 table table_state current
   CLAIM_OWNER_STATE=unobserved
-  table=$(LC_ALL=C ps -e -o pid= 2>/dev/null) || return 4
+  table=$(LC_ALL=C ps -e -o pid= -o pgid= 2>/dev/null) || return 4
   [ -n "$table" ] || return 4
-  table_state=$(printf '%s\n' "$table" | awk -v wanted="$pid" '
-    NF != 1 || $1 !~ /^[0-9]+$/ { bad=1 }
-    $1 == wanted { found=1 }
+  table_state=$(printf '%s\n' "$table" | awk -v wanted_pid="$pid" -v wanted_group="$group" '
+    NF != 2 || $1 !~ /^[0-9]+$/ || $2 !~ /^[0-9]+$/ { bad=1 }
+    $1 == wanted_pid { owner=1 }
+    $2 == wanted_group { group=1 }
     END {
       if (bad || NR == 0) print "unobserved"
-      else if (found) print "present"
-      else print "absent"
+      else if (owner && group) print "owner-and-group-present"
+      else if (owner) print "owner-present"
+      else if (group) print "group-present"
+      else print "gone"
     }') || return 4
   case $table_state in
-    absent)
+    gone)
       CLAIM_OWNER_STATE=dead
       return 0
       ;;
-    present) ;;
+    owner-and-group-present|group-present)
+      CLAIM_OWNER_STATE=alive
+      return 3
+      ;;
+    owner-present) ;;
     *) return 4 ;;
   esac
   current=$(fm_pid_identity "$pid" 2>/dev/null) || return 4
@@ -267,6 +275,21 @@ publication_claim_owner_state() {
   fi
   CLAIM_OWNER_STATE=dead
   return 0
+}
+
+publication_claim_group_ensure() {
+  local pid group
+  pid=${BASHPID:-$$}
+  group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') \
+    || cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation's process group could not be observed"
+  [ -n "$group" ] \
+    || cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation's process group could not be observed"
+  [ "$group" != "$pid" ] || return 0
+  [ "${FM_PUBLICATION_GROUP_EXPECTED:-}" != "$pid" ] \
+    || cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation could not enter an isolated process group"
+  exec perl -MPOSIX -e '$ENV{FM_PUBLICATION_GROUP_EXPECTED}=$$; POSIX::setpgid(0, 0); exec @ARGV' \
+    "$BASH" "$0" "$@"
+  cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation could not enter an isolated process group"
 }
 
 publication_claim_intent_ensure() {
@@ -295,7 +318,7 @@ publication_claim_reclaim_dead() {
   [ ! -e "$dir/reclaim-intent.json" ] || had_intent=1
   publication_claim_evidence_read "$dir" || { CLAIM_OWNER_STATE=unobserved; return 4; }
   if [ "$had_intent" -eq 0 ]; then
-    publication_claim_owner_state "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY"
+    publication_claim_owner_state "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY" "$CLAIM_OWNER_GROUP"
     rc=$?
     case $rc in
       0) ;;
@@ -306,7 +329,7 @@ publication_claim_reclaim_dead() {
   publication_claim_intent_ensure "$id" "$dir" \
     || { CLAIM_OWNER_STATE=unobserved; return 4; }
   publication_claim_evidence_read "$dir" || { CLAIM_OWNER_STATE=unobserved; return 4; }
-  publication_claim_owner_state "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY"
+  publication_claim_owner_state "$CLAIM_OWNER_PID" "$CLAIM_OWNER_IDENTITY" "$CLAIM_OWNER_GROUP"
   rc=$?
   case $rc in
     0) ;;
@@ -1252,6 +1275,9 @@ cmd_list() {
 # --- dispatch -----------------------------------------------------------------
 
 [ $# -gt 0 ] || { usage; exit 2; }
+case $1 in
+  consume|publish|reconcile|retire) publication_claim_group_ensure "$@" ;;
+esac
 case $1 in
   -h|--help) usage; exit 0 ;;
   prepare) shift; cmd_prepare "$@" ;;

@@ -671,13 +671,12 @@ test_does_not_reclaim_a_live_owner() {
 }
 
 test_reclaims_a_reused_owner_pid_with_a_different_identity() {
-  local id out group
+  local id out
   fixture reused-pid-claim
   policy
   reviewed
   grant; id=$GRANT_ID
-  group=$(ps -o pgid= -p "$$" | tr -d '[:space:]') || fail "reused-pid-claim: group"
-  claim_fixture "$id" "$$" stale-process-identity "$group"
+  claim_fixture "$id" "$$" stale-process-identity 99999998
   out=$(spend "$id") || fail "reused-pid-claim: a reused pid was not reclaimed: $out"
   assert_contains "$out" 'APPLIED' "reused-pid-claim: $out"
   [ "$(tip)" = "$FX_HEAD" ] || fail "reused-pid-claim: the publication did not execute"
@@ -782,7 +781,7 @@ test_concurrent_dead_claim_reclaimers_execute_exactly_one_push() {
   spend "$id" > "$FX_DATA/first.out" 2>&1 &
   first=$!
   fm_test_reap "$first"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
     [ -e "$FX_DATA/push-count" ] && break
     sleep 0.1
   done
@@ -1033,6 +1032,48 @@ test_reconcile_reclaims_a_killed_consumers_stale_claim() {
   [ ! -d "$FX_DATA/landing-authorizations/.$id.claim" ] \
     || fail "reconcile-killed: reclaimed claim was not released"
   pass "reconcile reclaims a killed consumer's stale claim"
+}
+
+test_reconcile_refuses_while_a_killed_consumers_push_group_survives() {
+  local id consume_pid owner_pid owner_group member out rc=0 i record
+  fixture reconcile-live-push-group
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  printf '%s\n' '#!/usr/bin/env bash' ": > '$FX_DATA/push-started'" \
+    "while [ ! -e '$FX_DATA/release-push' ]; do sleep 0.01; done" 'exit 0' \
+    > "$FX_REMOTE/hooks/pre-receive" || fail "reconcile-live-group: hook"
+  chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "reconcile-live-group: chmod"
+  spend "$id" > "$FX_DATA/consume.out" 2>&1 &
+  consume_pid=$!
+  fm_test_reap "$consume_pid"
+  record="$FX_DATA/landing-authorizations/$id.json"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$FX_DATA/push-started" ] && break
+    sleep 0.1
+  done
+  [ -e "$FX_DATA/push-started" ] || fail "reconcile-live-group: push child never started"
+  owner_pid=$(cat "$FX_DATA/landing-authorizations/.$id.claim/owner-pid") \
+    || fail "reconcile-live-group: owner pid"
+  owner_group=$(cat "$FX_DATA/landing-authorizations/.$id.claim/owner-group") \
+    || fail "reconcile-live-group: owner group"
+  while IFS= read -r member; do
+    [ -n "$member" ] && fm_test_reap "$member"
+  done <<<"$(ps -e -o pid= -o pgid= | awk -v group="$owner_group" '$2 == group {print $1}')"
+  kill -KILL "$owner_pid" || fail "reconcile-live-group: kill owner"
+  wait "$consume_pid" 2>/dev/null || true
+  out=$(guard reconcile "$id" --observed not-applied --evidence 'premature observation') || rc=$?
+  [ "$rc" -eq 3 ] || fail "reconcile-live-group: reconcile exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_IN_FLIGHT' "reconcile-live-group: $out"
+  [ "$(jq -r '.state' "$record")" = spending ] \
+    || fail "reconcile-live-group: live push group lost indeterminate state"
+  : > "$FX_DATA/release-push"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ "$(tip)" = "$FX_HEAD" ] && break
+    sleep 0.1
+  done
+  [ "$(tip)" = "$FX_HEAD" ] || fail "reconcile-live-group: surviving push did not move the remote"
+  pass "reconcile refuses while a killed consumer's push group survives"
 }
 
 # --- (b) an active publication hold -------------------------------------------
@@ -1966,6 +2007,7 @@ test_retire_refuses_an_authority_that_records_an_act
 test_retire_refuses_an_authority_whose_effect_is_unobserved
 test_retire_and_reconcile_cannot_overwrite_a_live_consume
 test_reconcile_reclaims_a_killed_consumers_stale_claim
+test_reconcile_refuses_while_a_killed_consumers_push_group_survives
 test_publish_composes_the_decision_and_the_act
 test_refuses_commands_other_than_the_constructed_push
 test_uses_the_fixed_trusted_git_instead_of_caller_resolution
