@@ -610,7 +610,8 @@ test_concurrent_consumers_execute_exactly_one_push() {
   policy
   reviewed
   grant; id=$GRANT_ID
-  printf '%s\n' '#!/usr/bin/env bash' "printf x >> '$FX_DATA/push-count'" 'sleep 2' 'exit 0' \
+  printf '%s\n' '#!/usr/bin/env bash' "printf x >> '$FX_DATA/push-count'" \
+    "while [ ! -e '$FX_DATA/release-push' ]; do sleep 0.01; done" 'exit 0' \
     > "$FX_REMOTE/hooks/pre-receive" || fail "concurrent-consume: hook"
   chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "concurrent-consume: chmod"
   guard consume "$id" --repo "$FX_REPO" --remote origin -- \
@@ -625,8 +626,9 @@ test_concurrent_consumers_execute_exactly_one_push() {
     git -C "$FX_REPO" push origin "$FX_HEAD:$REF" > "$FX_DATA/second.out" 2>&1 &
   second=$!
   fm_test_reap "$second"
-  wait "$first" || first_rc=$?
   wait "$second" || second_rc=$?
+  : > "$FX_DATA/release-push"
+  wait "$first" || first_rc=$?
   successes=0 refusals=0
   [ "$first_rc" -eq 0 ] && successes=$(( successes + 1 ))
   [ "$second_rc" -eq 0 ] && successes=$(( successes + 1 ))
@@ -767,23 +769,31 @@ test_unknown_reclaim_marker_is_could_not_observe() {
 }
 
 test_concurrent_dead_claim_reclaimers_execute_exactly_one_push() {
-  local id first second first_rc=0 second_rc=0 count successes
+  local id first second first_rc=0 second_rc=0 count successes i
   fixture concurrent-dead-claim
   policy
   reviewed
   grant; id=$GRANT_ID
   claim_fixture "$id" 99999993 dead-owner 99999993
-  printf '%s\n' '#!/usr/bin/env bash' "printf x >> '$FX_DATA/push-count'" 'sleep 1' 'exit 0' \
+  printf '%s\n' '#!/usr/bin/env bash' "printf x >> '$FX_DATA/push-count'" \
+    "while [ ! -e '$FX_DATA/release-push' ]; do sleep 0.01; done" 'exit 0' \
     > "$FX_REMOTE/hooks/pre-receive" || fail "concurrent-dead-claim: hook"
   chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "concurrent-dead-claim: chmod"
   spend "$id" > "$FX_DATA/first.out" 2>&1 &
   first=$!
   fm_test_reap "$first"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$FX_DATA/push-count" ] && break
+    sleep 0.1
+  done
+  [ -e "$FX_DATA/push-count" ] \
+    || fail "concurrent-dead-claim: the first consumer never reached the effect"
   spend "$id" > "$FX_DATA/second.out" 2>&1 &
   second=$!
   fm_test_reap "$second"
-  wait "$first" || first_rc=$?
   wait "$second" || second_rc=$?
+  : > "$FX_DATA/release-push"
+  wait "$first" || first_rc=$?
   successes=0
   [ "$first_rc" -eq 0 ] && successes=$(( successes + 1 ))
   [ "$second_rc" -eq 0 ] && successes=$(( successes + 1 ))
