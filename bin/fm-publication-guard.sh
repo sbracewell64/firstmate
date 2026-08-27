@@ -287,9 +287,10 @@ publication_claim_group_ensure() {
   [ "$group" != "$pid" ] || return 0
   [ "${FM_PUBLICATION_GROUP_EXPECTED:-}" != "$pid" ] \
     || cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation could not enter an isolated process group"
-  exec perl -MPOSIX -e '$ENV{FM_PUBLICATION_GROUP_EXPECTED}=$$; POSIX::setpgid(0, 0); exec @ARGV' \
-    "$BASH" "$0" "$@"
-  cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation could not enter an isolated process group"
+  if ! exec perl -MPOSIX -e '$ENV{FM_PUBLICATION_GROUP_EXPECTED}=$$; POSIX::setpgid(0, 0); exec @ARGV' \
+    "$BASH" "$0" "$@"; then
+    cno FM_PUB_CLAIM_OWNER_UNOBSERVED "the publication operation could not enter an isolated process group"
+  fi
 }
 
 publication_claim_intent_ensure() {
