@@ -292,6 +292,7 @@ The guard has already established the remote is at the tip the plan was compiled
 
 The 2026-08-27 UTC rerun at candidate `ff80599ab64cc0955405b8b4965b69b3876d428d` completed the publication-seam suite with `FM_TEST_CONTRACT status=pass` and `FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0`.
 Its 64 controls include stale-claim recovery, durable interrupted-reclaim recovery, live-owner and surviving-process-group refusals, concurrent reclaimer serialization, and serialization of consume against reconcile and retire.
+The same 64 controls were rerun directly at candidate `0462f4a2947847f98415935b7fbcd317587306f2`; the suite printed each positive control, ended with `FM_TEST_CONTRACT suite=fm-publication-seam.test.sh status=pass`, and exited 0.
 The publication-seam run includes the canonical-command positive control paired with the force-axis refusal, and the dead-predicate run includes the quoted trap-handler positive and non-trap negative controls.
 This evidence does not replace the independent review required before landing.
 
