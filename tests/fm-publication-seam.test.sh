@@ -964,6 +964,42 @@ test_retire_refuses_an_authority_whose_effect_is_unobserved() {
   pass "retiring refuses an authority whose effect is unobserved, leaving it for reconciliation"
 }
 
+test_retire_and_reconcile_cannot_overwrite_a_live_consume() {
+  local id consume_pid consume_rc=0 out rc=0 i record
+  fixture retire-race
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  printf '%s\n' '#!/usr/bin/env bash' ": > '$FX_DATA/push-started'" \
+    "while [ ! -e '$FX_DATA/release-push' ]; do sleep 0.01; done" 'exit 0' \
+    > "$FX_REMOTE/hooks/pre-receive" || fail "retire-race: hook"
+  chmod +x "$FX_REMOTE/hooks/pre-receive" || fail "retire-race: chmod"
+  spend "$id" > "$FX_DATA/consume.out" 2>&1 &
+  consume_pid=$!
+  fm_test_reap "$consume_pid"
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [ -e "$FX_DATA/push-started" ] && break
+    sleep 0.1
+  done
+  [ -e "$FX_DATA/push-started" ] || fail "retire-race: consume never reached the effect"
+  out=$(guard retire "$id" --reason 'raced retirement') || rc=$?
+  [ "$rc" -eq 3 ] || fail "retire-race: retire exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_IN_FLIGHT' "retire-race: $out"
+  rc=0
+  out=$(guard reconcile "$id" --observed not-applied --evidence 'stale observation') || rc=$?
+  [ "$rc" -eq 3 ] || fail "reconcile-race: reconcile exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_IN_FLIGHT' "reconcile-race: $out"
+  : > "$FX_DATA/release-push"
+  wait "$consume_pid" || consume_rc=$?
+  [ "$consume_rc" -eq 0 ] || fail "retire-race: consume failed: $(cat "$FX_DATA/consume.out")"
+  record="$FX_DATA/landing-authorizations/$id.json"
+  [ "$(jq -r '.state' "$record")" = spent ] \
+    || fail "retire-race: concurrent transition overwrote spent state: $(jq -c . "$record")"
+  [ "$(jq -r '.spend.outcome' "$record")" = applied ] \
+    || fail "retire-race: concurrent transition erased effect evidence: $(jq -c .spend "$record")"
+  pass "retire and reconcile cannot overwrite a live consume"
+}
+
 # --- (b) an active publication hold -------------------------------------------
 
 test_refuses_a_candidate_under_an_active_publication_hold() {
@@ -1893,6 +1929,7 @@ test_a_retired_authority_cannot_be_consumed_and_moves_nothing
 test_retiring_is_idempotent_and_records_it_once
 test_retire_refuses_an_authority_that_records_an_act
 test_retire_refuses_an_authority_whose_effect_is_unobserved
+test_retire_and_reconcile_cannot_overwrite_a_live_consume
 test_publish_composes_the_decision_and_the_act
 test_refuses_commands_other_than_the_constructed_push
 test_uses_the_fixed_trusted_git_instead_of_caller_resolution

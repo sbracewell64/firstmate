@@ -1097,6 +1097,8 @@ cmd_reconcile() {
   case $observed in applied|not-applied) ;; *) die "reconcile requires --observed applied|not-applied" ;; esac
   [ -n "$evidence" ] || die "reconcile requires --evidence naming what was observed"
 
+  claim_acquire "$id" serial \
+    || refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
   auth_read "$id" || case $? in
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id exists to reconcile" ;;
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "publication authority $id could not be read" ;;
@@ -1151,6 +1153,8 @@ cmd_retire() {
   done
   [ -n "$reason" ] || die "retire requires --reason naming why this authority must never be spent"
 
+  claim_acquire "$id" serial \
+    || refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
   auth_read "$id" || case $? in
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id exists to retire" ;;
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "publication authority $id could not be read, so what retiring it would discard could not be established" ;;
