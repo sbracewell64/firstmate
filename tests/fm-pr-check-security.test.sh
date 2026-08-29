@@ -90,6 +90,13 @@ case " $* " in
         "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}"
     fi
     ;;
+  # The head oid and the head repository come back from one read, which is the
+  # shape bin/fm-pr-check.sh actually asks for; answering only the older
+  # single-field form would let a second forge query per event go unnoticed here.
+  *"headRefOid,headRepositoryOwner,headRepository"*)
+    printf '%s %s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" \
+      "${FM_TEST_GH_HEAD_REPO:-o/r}"
+    ;;
   *" headRefOid "*) printf '%s\n' "${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}" ;;
 esac
 SH
