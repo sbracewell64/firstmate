@@ -837,7 +837,6 @@ fm_make_wide_drift_runner() {
     "$dest/bin/fm-test-run.sh" || return 1
   grep -q '^PORTABLE_SERIAL_BUDGET_DRIFT_PCT=19$' "$dest/bin/fm-test-run.sh" || return 1
 }
-
 # A declared budget moved off the mean of its own samples: stale calibration
 # credit surviving a changed load-bearing axis.
 fm_make_moved_budget_runner() {
@@ -935,7 +934,6 @@ test_variance_control_an_unqualified_basis_cannot_credit_a_pass() {
   set -e
   [ "$rc" -eq 0 ] || fail "the shipped basis must let a healthy lane pass, got $rc: $out"
   assert_contains "$out" "verdict=ok" "the shipped basis must credit a healthy lane"
-
   rm -rf "$tmp"
   pass "an unqualified single-sample basis credits neither a pass nor a failure"
 }
@@ -962,7 +960,6 @@ test_variance_control_a_narrowed_envelope_is_refused() {
   set -e
   [ "$rc" -eq 0 ] || fail "the shipped basis must be qualified, got $rc: $out"
   assert_contains "$out" "verdict=qualified" "the shipped basis must report verdict=qualified"
-
   rm -rf "$tmp"
   pass "a declared envelope narrower than its own evidence is refused"
 }
@@ -1055,7 +1052,6 @@ test_variance_control_declarations_must_match_their_own_evidence() {
   out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "the shipped declarations must match their evidence, got $rc: $out"
-
   rm -rf "$tmp"
   pass "declared calibration must agree with the evidence it was derived from"
 }
