@@ -620,6 +620,10 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
 # --- the authority compile ----------------------------------------------------
 #
 # WHOSE LANDING IS THIS? Compiled from typed sources, and from nothing else.
+# This tracked header owns the compiled rule. Its governing specification is the
+# Captain-private ruling record at the home's
+# data/captain-rulings-2026-08-26-standing-landing-authority.md; that record is
+# private evidence by design, not a tracked documentation surface.
 #
 # WHAT THIS REPLACES. On 2026-08-26 a pull request whose landing merits an
 # outside reviewer had already approved was held, and the only thing holding it

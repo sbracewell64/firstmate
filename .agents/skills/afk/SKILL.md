@@ -75,7 +75,7 @@ a false exit is self-correcting (the captain re-runs `/afk`).
 
 afk changes how aggressively firstmate surfaces things, **not who approves what**.
 "Away" never means "approves more" or "approves less."
-A PR ready for merge or a needs-decision finding keeps the same configured authority and exceptions from `AGENTS.md` section 7, while anything requiring the captain still waits for the captain's explicit word.
+A landing keeps the authority compiled by `bin/fm-decision-surface.sh check landing-authority <task-id>`, while a needs-decision finding keeps the configured authority and exceptions from `AGENTS.md` section 7; anything that compile or those rules reserve to the captain still waits for the captain.
 The daemon only batches the notification.
 
 ## Operational prefix contract
