@@ -28,6 +28,14 @@
 # Aggregation (no suite execution):
 #   fm-test-run.sh --aggregate-json <out.json> <lane.json> [more lane.json...]
 #
+# Measurement-basis qualification (no suite execution):
+#   fm-test-run.sh --check-basis
+#     Re-derives the mean and the measured spread from the declared basis
+#     samples and refuses when either disagrees with the declarations, or when
+#     the basis carries fewer samples than the declared minimum. Prints one
+#     FM_TEST_BASIS line. Exits 0 qualified, 1 the declarations disagree with
+#     their own evidence, 4 the basis is too small to calibrate the lane axis.
+#
 # Serial-lane budget recurrence control (no suite execution):
 #   fm-test-run.sh --check-budget <lane.json> [more lane.json...]
 #     Judges the serial lane a run actually executed against the declared budget
@@ -37,6 +45,9 @@
 #     Prints one FM_TEST_BUDGET line and exits:
 #       0  within budget and the declared partition ran exactly once
 #       1  drifted past a stated bound, or the partition did not hold
+#       4  measurement could-not-observe: the lane sits within the declared
+#          measured spread of the drift threshold, or the basis is unqualified,
+#          so the lane axis carries no product verdict either way
 #       3  could not be observed (missing, unreadable, or incomplete artifacts,
 #          which is what a shard cancelled at its hang tripwire leaves behind)
 #
@@ -130,34 +141,80 @@ JOBS_MAX=4
 # This block is the one owner of every number the recurrence control checks;
 # docs/fm-test-portable-shards.md owns how to re-derive them.
 #
-# BASIS (2026-08-26). Measured on this repo's own PR CI run 32998443526, whose
-# portable-serial inventory contained 136 scripts. Its eight per-shard timing
-# artifacts' per-script durations summed to 3039944 ms. Shard wall time is used
-# only for the worst-shard headroom comparison. Every shard completed with zero
-# failures, so the observed lane is the declared budget below.
+# BASIS (2026-08-29). QUALIFIED MULTI-OBSERVATION basis: 18 CI runs recorded
+# 2026-08-26..2026-08-29 across main and the branches of pull requests 134, 137
+# and 138, every one of them on the same 136-script portable-serial inventory
+# with zero script failures. portable_serial_basis_samples() below carries all
+# 18, each with the run id and head that produced it, so the basis can be
+# re-derived from its own evidence instead of trusted.
 #
-# This supersedes the 2026-08-17 basis of 122 scripts and 2366725 ms. The lane
-# grew past that inventory and budget, so both are re-derived from what the suite
-# now is rather than restored to what it used to be.
+#   declared budget  = the mean of those 18 lane totals            = 2968619 ms
+#   measured spread  = max |sample - budget| / budget = 5.986%  -> declared 6%
+#   drift allowance  = 3x the measured spread                      = 18%
+#
+# WHY THIS BASIS IS PLURAL. A single run cannot measure its own uncertainty, so
+# a one-run basis cannot establish that a growth threshold is separated from
+# environmental movement. The previous basis was one run (32998443526,
+# 3039944 ms) and the 25% allowance it retained had no measured support at all.
+# 18 samples of the same inventory put the observed envelope at 6%, which is
+# what the allowance is now derived FROM rather than asserted against.
+#
+# THE ADVERSE EVIDENCE THIS BASIS EXISTS TO EXPLAIN, preserved rather than
+# laundered. Pull request 133 ran the SAME bin/fm-test-run.sh blob 82bf999c as
+# main against its own unchanged 137-script inventory and landed on BOTH sides
+# of the then-declared 2958406 ms bound:
+#
+#   run 33032980891 head 7f9f69bc  2786722 ms  below
+#   run 33029663411 head 0462f4a2  2875920 ms  below
+#   run 33031974388 head 31363d42  2942861 ms  below
+#   run 33024470703 head 57aee0a8  2976279 ms  ABOVE
+#   run 33012539386 head 890e0a80  2997408 ms  ABOVE
+#   run 33022553898 head 656f2c24  3108169 ms  ABOVE
+#
+# Same candidate, same policy, opposite verdicts. Neither side is the true one
+# and the later favorable samples do not erase the earlier adverse ones. That
+# pair is why the lane axis now answers cno inside the measured envelope rather
+# than calling either side a product verdict.
+#
+# This supersedes the 2026-08-17 basis of 122 scripts and 2366725 ms and the
+# 2026-08-26 single-run basis of 3039944 ms. The lane genuinely grew past the
+# 2026-08-17 inventory, so the budget is re-derived from what the suite now is;
+# it is never restored to what it used to be and never widened to make a sample
+# pass. 18% is NARROWER than the 25% it replaces.
 #
 # That rule is not local to this number. The isolation proof reached the same
 # state from the same cause - its subjects moved while the recorded evidence
 # stayed put - and is repaired the same way: re-MEASURE against what the code now
-# is, never restamp the old evidence to match. The difference is that this budget
-# had a consumer that could notice and the proof did not, which is what
-# bin/fm-test-isolation-lib.sh now supplies. Read that file's header for the
-# freshness model; this comment is only the cross-reference to it.
-PORTABLE_SERIAL_BUDGET_MS=3039944
+# is, never restamp the old evidence to match. Read
+# bin/fm-test-isolation-lib.sh's header for that freshness model; this comment is
+# only the cross-reference to it.
+PORTABLE_SERIAL_BUDGET_MS=2968619
+
+# The measured environmental envelope of the basis above, as a whole percent of
+# the declared budget, rounded UP from the observed 5.986% so the envelope is
+# never declared narrower than what was actually observed.
+#
+# This is the instrument's resolution. Inside it the lane total cannot tell
+# suite growth apart from runner movement, so a lane whose distance from the
+# drift threshold is within this envelope is reported cno rather than as a
+# product pass or a product failure.
+PORTABLE_SERIAL_MEASURED_SPREAD_PCT=6
+
+# How many qualified same-inventory observations the basis must carry before the
+# lane axis may return a product verdict at all. Below this the instrument is
+# uncalibrated and every lane reads cno, which is what stops a single favorable
+# sample from being rebased into a pass.
+PORTABLE_SERIAL_BASIS_MIN_SAMPLES=8
 
 # How many separate-runner shards the portable serial remainder splits into.
 # One owner: CI lane names carry this count and are refused when they disagree.
 #
-# The existing 8 shards put the re-derived balanced wall at 3039944/8 = 379993
-# ms (~6.33 min) against the 15-minute cap below. The measured worst shard was
-# 458362 ms, still below the independent 9-minute shard-headroom bound. This
-# refresh did not re-derive the shard count.
+# The existing 8 shards put the balanced wall at 2968619/8 = 371077 ms
+# (~6.18 min) against the 15-minute cap below. The qualified basis did not move
+# the sizing rule, so the count is unchanged here; re-deriving it under the ~3x
+# hang-tripwire margin that originally sized this lane is separate work.
 # The floor for any count is the longest single script
-# (tests/fm-pr-check-security.test.sh, 257620 ms), which binds near 10 shards.
+# (tests/fm-pr-check-security.test.sh, 257620 ms), which binds near 11 shards.
 PORTABLE_SERIAL_SHARDS=8
 
 # The hang tripwire .github/workflows/ci.yml sets on every serial shard job.
@@ -167,25 +224,65 @@ PORTABLE_SERIAL_SHARDS=8
 # lane name carrying the wrong shard count is refused.
 PORTABLE_SERIAL_TIMEOUT_MIN=15
 
-# Recurrence-control bounds, both stated against the declared budget above.
+# LANE drift allowance, derived rather than asserted: 3x the 6% measured spread
+# above. That places the drift threshold at 3502970 ms and the cno window at
+# 3292792..3713148 ms, so a lane must clear the envelope by a full envelope
+# width in either direction before the axis will call it.
 #
-# LANE drift is the semantic PASS/FAIL signal because aggregate lane time is
-# more stable than any one shard. The existing 25% allowance remains the growth
-# boundary; the new measured lane becomes its basis rather than being hidden
-# inside that allowance.
-PORTABLE_SERIAL_BUDGET_DRIFT_PCT=25
+# The largest qualified sample, 3074726 ms, sits 218066 ms (7.35% of budget)
+# below the pass ceiling, which is more than the whole measured envelope. A
+# healthy suite therefore still PASSES rather than parking on cno forever, and
+# growth beyond the envelope still FAILS.
+#
+# This bound is derived from the spread and is never widened to admit a sample.
+# Re-measuring the basis is what absorbs growth that already happened.
+PORTABLE_SERIAL_BUDGET_DRIFT_PCT=18
 
 # SHARD headroom is checked only against the hang tripwire, never against the
 # balanced wall, so per-shard jitter is not a verdict. At 60% of a 15-minute cap
-# the bound is 9 min: 1.18x the measured 7.64-minute worst shard and 1.42x the
-# ~6.33-minute balanced wall, but still low enough to fire before the cap.
+# the bound is 9 min against a ~6.18 min balanced wall. This axis answers a
+# different question from the lane axis - proximity to a job timeout, not suite
+# growth - so it keeps its own deterministic verdict.
 PORTABLE_SERIAL_SHARD_HEADROOM_PCT=60
 
 # Balance hint for a portable-serial script with no measured duration. Rounded
 # from the measured per-script mean of the declared budget
-# (3039944/136 = 22353 ms) so a newly added test neither starves nor overloads
+# (2968619/136 = 21828 ms) so a newly added test neither starves nor overloads
 # the shard it lands in.
 PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=22000
+
+# The qualified observations the budget and spread above are derived FROM, one
+# per line as "<run-id> <head> <lane-ms>". Every one is a CI run of this
+# repository's own 136-script portable-serial inventory with zero script
+# failures, recorded 2026-08-26..2026-08-29.
+#
+# This table is evidence, not decoration: --check-basis re-derives the mean and
+# the spread from these lines and refuses when either disagrees with the
+# declarations above, so the two cannot drift apart silently. An adverse sample
+# may never be deleted to improve the numbers; re-measuring means replacing the
+# whole table from a fresh set of runs, exactly like the weight hints.
+portable_serial_basis_samples() {
+  cat <<'EOF'
+32992825736 1ebdf3bd 2810550
+32994090563 5218cd8a 2941063
+32998443526 f2631785 3039944
+33000979712 1c58904d 2987123
+33006158339 d6fa2d30 3074726
+33007341010 601393fc 2941059
+33009849291 af13a31b 3057939
+33011266153 05d5067e 3027470
+33012188876 a2bc1e65 2994535
+33012291827 d62cc50d 2983662
+33014755502 6a48ef02 3020882
+33016433772 40f181dd 2957219
+33017276039 c1284e0e 2998916
+33018918797 fedc1134 3019169
+33020225875 cc58b439 2861399
+33020877733 076f5b6f 3027101
+33021966375 64d0b267 2790931
+33023852185 96fed3ec 2901461
+EOF
+}
 
 usage() {
   awk '
@@ -974,6 +1071,109 @@ print(f"FM_TEST_AGGREGATE lanes={len(lanes)} total={total} failed={failed} skipp
 PY
 }
 
+# Qualification check for the declared measurement basis. The declarations and
+# the samples they were derived from live in the same file, which is exactly how
+# they drift apart, so this re-derives both from the sample table and refuses a
+# disagreement rather than trusting the constants.
+#
+# It answers three-valued like everything else here. A basis too small to
+# measure its own uncertainty is not a failing basis, it is an UNCALIBRATED
+# instrument, so it exits 4 (measurement could-not-observe) rather than 1.
+check_serial_basis() {
+  local tmp rc
+  command -v python3 >/dev/null 2>&1 || die "--check-basis requires python3"
+  tmp=$(mktemp -d)
+  portable_serial_basis_samples >"$tmp/samples"
+  set +e
+  python3 - \
+    "$tmp/samples" \
+    "$PORTABLE_SERIAL_BUDGET_MS" \
+    "$PORTABLE_SERIAL_MEASURED_SPREAD_PCT" \
+    "$PORTABLE_SERIAL_BASIS_MIN_SAMPLES" \
+    "$PORTABLE_SERIAL_BUDGET_DRIFT_PCT" <<'BASISPY'
+import math, sys
+from pathlib import Path
+
+samples_path = sys.argv[1]
+budget, spread_pct, min_samples, drift_pct = (int(a) for a in sys.argv[2:6])
+
+
+def unobserved(reason, message):
+    print("FM_TEST_BASIS verdict=could-not-observe reason=%s" % reason)
+    print("fm-test-run: basis: %s" % message, file=sys.stderr)
+    raise SystemExit(3)
+
+
+samples = []
+for raw in Path(samples_path).read_text(encoding="utf-8").split("\n"):
+    raw = raw.strip()
+    if not raw:
+        continue
+    parts = raw.split()
+    if len(parts) != 3:
+        unobserved("malformed-sample-line", "sample line is not '<run-id> <head> <lane-ms>': %s" % raw)
+    try:
+        ms = int(parts[2])
+    except ValueError:
+        unobserved("non-numeric-sample", "sample has a non-numeric lane total: %s" % raw)
+    if ms <= 0:
+        unobserved("non-positive-sample", "sample has a non-positive lane total: %s" % raw)
+    samples.append(ms)
+
+if not samples:
+    unobserved("empty-basis", "the declared basis carries no samples")
+
+n = len(samples)
+
+# One run cannot measure its own uncertainty. Below the declared minimum the
+# instrument is uncalibrated and the lane axis may not return a product verdict.
+if n < min_samples:
+    print(
+        "FM_TEST_BASIS verdict=cno samples=%d min_samples=%d budget_ms=%d declared_spread_pct=%d"
+        % (n, min_samples, budget, spread_pct)
+    )
+    print(
+        "fm-test-run: basis: %d qualified observation(s) is below the declared minimum of %d, "
+        "so the lane axis is uncalibrated and can credit neither a pass nor a failure" % (n, min_samples),
+        file=sys.stderr,
+    )
+    raise SystemExit(4)
+
+mean = sum(samples) // n
+observed_dev = max(abs(v - budget) for v in samples)
+observed_pct = observed_dev * 100.0 / budget
+required_pct = int(math.ceil(observed_pct))
+
+problems = []
+if mean != budget:
+    problems.append("declared budget %d ms is not the mean of its own %d samples (%d ms)" % (budget, n, mean))
+# Declaring an envelope NARROWER than what was observed would hide real movement
+# inside a product verdict, which is the defect this basis exists to remove.
+if spread_pct < required_pct:
+    problems.append(
+        "declared spread %d%% is narrower than the observed %.3f%% (needs at least %d%%)"
+        % (spread_pct, observed_pct, required_pct)
+    )
+if drift_pct <= spread_pct:
+    problems.append(
+        "drift allowance %d%% does not clear the %d%% measured spread, so the threshold sits "
+        "inside the noise it is meant to be separated from" % (drift_pct, spread_pct)
+    )
+
+print(
+    "FM_TEST_BASIS verdict=%s samples=%d budget_ms=%d mean_ms=%d observed_spread_pct=%.3f "
+    "declared_spread_pct=%d drift_pct=%d"
+    % ("qualified" if not problems else "unqualified", n, budget, mean, observed_pct, spread_pct, drift_pct)
+)
+for problem in problems:
+    print("fm-test-run: basis: %s" % problem, file=sys.stderr)
+raise SystemExit(1 if problems else 0)
+BASISPY
+  rc=$?
+  set -e
+  rm -rf "$tmp"
+  return "$rc"
+}
 # Recurrence control for serial-lane budget drift. Reads the per-shard timing
 # artifacts a run just produced and answers three-valued: within budget, drifted
 # past the declared bound, or could not be observed at all.
@@ -1017,17 +1217,25 @@ check_serial_budget() {
     "$PORTABLE_SERIAL_BUDGET_DRIFT_PCT" \
     "$PORTABLE_SERIAL_TIMEOUT_MIN" \
     "$PORTABLE_SERIAL_SHARD_HEADROOM_PCT" \
+    "$PORTABLE_SERIAL_MEASURED_SPREAD_PCT" \
+    "$PORTABLE_SERIAL_BASIS_MIN_SAMPLES" \
+    "$(portable_serial_basis_samples | grep -c . || true)" \
     "$@" <<'PY'
 import json, re, sys
 from pathlib import Path
 
 expected_path, shards, budget, drift_pct, timeout_min, headroom_pct = sys.argv[1:7]
+spread_pct, basis_min, basis_n = (int(a) for a in sys.argv[7:10])
 shards = int(shards)
 budget = int(budget)
 drift_pct = int(drift_pct)
 timeout_ms = int(timeout_min) * 60000
 headroom_ms = timeout_ms * int(headroom_pct) // 100
 allowed = budget + budget * drift_pct // 100
+# The instrument resolution carried onto the decision boundary. A lane whose
+# distance from `allowed` falls inside this cannot be told apart from ordinary
+# runner movement, so it yields no product verdict in either direction.
+cno_band = allowed * spread_pct // 100
 
 expected = {l for l in Path(expected_path).read_text(encoding="utf-8").split("\n") if l}
 
@@ -1042,7 +1250,7 @@ def unobserved(msg):
 
 
 seen = {}
-for raw in sys.argv[7:]:
+for raw in sys.argv[10:]:
     p = Path(raw)
     try:
         doc = json.loads(p.read_text(encoding="utf-8"))
@@ -1136,11 +1344,40 @@ if dup or gone or extra:
     if extra:
         failures.append(f"scripts run that the declared lane does not contain: {', '.join(extra)}")
 
-if lane_total > allowed:
+# THE LANE AXIS, and the only axis the measured spread applies to. It is the one
+# whose input is a wall-clock measurement of a shared hosted runner, so it is the
+# one that can be moved across its own threshold by the environment alone. The
+# partition and shard-headroom axes below are deterministic facts about what ran,
+# not measurements of how fast, and keep their ordinary verdicts.
+#
+# Three outcomes, and the middle one is a real answer rather than a missing one:
+#   lane_total > allowed + cno_band   growth past the boundary by more than the
+#                                     instrument can explain            -> FAIL
+#   within cno_band of allowed        indistinguishable from runner movement,
+#                                     so neither side may be credited   -> CNO
+#   lane_total < allowed - cno_band   materially clear of the boundary  -> PASS
+lane_cno = None
+if basis_n < basis_min:
+    # An uncalibrated instrument cannot certify anything, so no number of
+    # favorable samples can be rebased into a pass while the basis is this thin.
+    lane_cno = (
+        f"the declared basis carries {basis_n} qualified observation(s), below the "
+        f"declared minimum of {basis_min}; the lane axis is uncalibrated, so this "
+        f"{lane_total} ms lane credits neither a pass nor a failure"
+    )
+elif lane_total > allowed + cno_band:
     failures.append(
         f"lane grew to {lane_total} ms, past the {allowed} ms bound "
-        f"({drift_pct}% over the declared {budget} ms budget); "
-        f"rebalance cannot fix growth, so re-derive the budget and shard count"
+        f"({drift_pct}% over the declared {budget} ms budget) by more than the "
+        f"{cno_band} ms measured-spread allowance; that is beyond what runner "
+        f"movement explains, so re-derive the budget from a fresh qualified basis"
+    )
+elif lane_total >= allowed - cno_band:
+    lane_cno = (
+        f"lane measured {lane_total} ms, within the {cno_band} ms measured spread "
+        f"({spread_pct}%) of the {allowed} ms bound; the same candidate under the same "
+        f"policy has been observed on both sides of a boundary this close, so the lane "
+        f"axis reports no product verdict"
     )
 
 if worst > headroom_ms:
@@ -1150,15 +1387,24 @@ if worst > headroom_ms:
         f"it is close enough to the cap to cancel on a slower runner"
     )
 
+# A deterministic failure still outranks the measurement verdict: a run that did
+# not execute the declared lane, or a shard crowding the hang tripwire, is a fact
+# about the run rather than a reading that noise could explain.
+verdict = "drifted" if failures else ("cno" if lane_cno else "ok")
+
 print(
     "FM_TEST_BUDGET verdict=%s shards=%d lane_ms=%d budget_ms=%d allowed_ms=%d "
+    "spread_pct=%d cno_band_ms=%d basis_samples=%d "
     "balanced_ms=%d worst_shard=%d worst_shard_ms=%d headroom_ms=%d"
     % (
-        "drifted" if failures else "ok",
+        verdict,
         shards,
         lane_total,
         budget,
         allowed,
+        spread_pct,
+        cno_band,
+        basis_n,
         lane_total // shards,
         worst_idx,
         worst,
@@ -1167,6 +1413,9 @@ print(
 )
 for f in failures:
     print(f"fm-test-run: serial budget: {f}", file=sys.stderr)
+if lane_cno and not failures:
+    print(f"fm-test-run: serial budget: {lane_cno}", file=sys.stderr)
+    sys.exit(4)
 sys.exit(1 if failures else 0)
 PY
   rc=$?
@@ -1750,6 +1999,11 @@ while [ "$#" -gt 0 ]; do
       MODE=check-budget
       shift
       ;;
+    --check-basis)
+      [ -z "${MODE:-}" ] || die "--check-basis cannot be combined with --$MODE"
+      MODE=check-basis
+      shift
+      ;;
     --aggregate-json)
       [ "$#" -gt 1 ] || die "--aggregate-json requires an output path"
       AGGREGATE_OUT=$2
@@ -1821,6 +2075,11 @@ fi
 
 if [ "$CHECK_COVERAGE" -eq 1 ]; then
   run_coverage_guard
+  exit $?
+fi
+
+if [ "${MODE:-}" = "check-basis" ]; then
+  check_serial_basis
   exit $?
 fi
 

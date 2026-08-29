@@ -78,7 +78,12 @@ Hints only affect balance: the coverage guard keeps the partition complete and d
 `bin/fm-test-run.sh` is the single owner of the lane budget, associated shard count and drift bounds, current measured basis, and derived balance.
 Its comments state the evidence and derivation beside the declarations so a future remeasurement updates the contract in one place.
 
-Refresh the hints and budget from a complete per-script duration map recovered from the per-shard timing artifacts of a green run **on this repository's own lineage**, whose serial inventory matches the head being measured.
+Refresh the hints and budget from complete per-script duration maps recovered from the per-shard timing artifacts of runs **on this repository's own lineage**, whose serial inventory matches the head being measured.
+
+The basis must be PLURAL, and `PORTABLE_SERIAL_BASIS_MIN_SAMPLES` is the declared floor.
+A single run cannot measure its own uncertainty, so a one-run basis cannot show that the growth threshold is separated from ordinary environmental movement, and the lane axis refuses to credit any product verdict while the basis is that thin.
+Declare the budget as the mean of the qualified samples and derive the drift allowance from their measured spread; never widen the allowance to admit a sample, and never delete an adverse sample to improve the numbers.
+Record every sample in `portable_serial_basis_samples()` with the run id and head that produced it, so `bin/fm-test-run.sh --check-basis` can re-derive the mean and the spread and refuse a declaration that has drifted from its own evidence.
 Use shard-wall totals only for the worst-shard headroom comparison.
 Artifacts from a fork or upstream with a different test inventory describe a different lane and must not be transferred in.
 
@@ -103,16 +108,26 @@ It answers three-valued, and could-not-observe is never a pass.
 | Exit | Verdict | Meaning |
 |---:|---|---|
 | 0 | `ok` | Within every stated bound, and the declared partition ran exactly once. |
-| 1 | `drifted` | A stated bound was passed, or the run did not execute the lane this head declares. |
+| 1 | `drifted` | A stated upper bound was exceeded by more than the measured spread, or the run did not execute the lane this head declares. |
+| 4 | `cno` | Measurement could-not-observe: the lane sits within the declared measured spread of its threshold, or the basis is too small to calibrate the axis. Neither a pass nor a failure. |
 | 3 | `could-not-observe` | Artifacts missing, unreadable, structurally invalid, incomplete, or built for a different shard count. |
+
+The two could-not-observe values answer different questions and must not be collapsed.
+Exit 3 means the evidence could not be read at all, which is an instrument defect to repair, and CI fails on it.
+Exit 4 means the evidence was read correctly and the instrument cannot resolve which side of the boundary the lane is on, which is a fact about measurement resolution rather than about the candidate; CI reports it and treats the semantic axis as carrying no verdict, neither green nor red.
 
 A shard cancelled at its hang tripwire uploads no timing, so it lands on that third value rather than on either of the other two.
 Negative durations are structurally invalid evidence because they could otherwise manufacture an under-budget verdict.
 The summary duration is shard wall time, so legitimate runner overhead may make it longer than the sum of its script durations.
 A summary duration shorter than that sum is self-contradictory evidence and yields `could-not-observe`.
 
-The lane-drift bound carries the stable semantic verdict, while shard headroom is compared only with the hang tripwire so ordinary per-shard jitter is not called a defect.
+The lane-drift bound carries the semantic verdict, while shard headroom is compared only with the hang tripwire so ordinary per-shard jitter is not called a defect.
 `bin/fm-test-run.sh` owns both current thresholds and their measured margins.
+
+The lane axis is the only one the measured spread applies to, because it is the only one whose input is a wall-clock measurement on a shared hosted runner.
+Whether the declared partition ran, and whether a shard is crowding its hang tripwire, are facts about what happened rather than measurements of how fast, so they keep ordinary pass/fail verdicts and a deterministic failure still outranks a measurement `cno`.
+This separation exists because pull request 133 ran the same runner blob against its own unchanged inventory and landed on both sides of the then-declared bound, which proved that boundary was reporting the runner rather than the suite.
+Those adverse observations are preserved in the basis comment in `bin/fm-test-run.sh`; a later favourable sample does not erase an earlier adverse one.
 
 The shard-headroom bound detects dangerous imbalance independently of lane growth, before an overloaded shard reaches its timeout.
 

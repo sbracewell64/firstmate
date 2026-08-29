@@ -752,9 +752,9 @@ PY
 # Read the control's own declared bounds off its published output rather than out
 # of the script that defines them, so these tests keep working when the budget is
 # re-derived and fail only if the control's behavior actually changes.
-#   echoes: <shards> <budget_ms> <allowed_ms> <headroom_ms>
+#   echoes: <shards> <budget_ms> <allowed_ms> <headroom_ms> <cno_band_ms> <basis_samples>
 fm_serial_budget_bounds() {
-  local tmp line shards budget allowed headroom
+  local tmp line shards budget allowed headroom band basis
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-bounds.XXXXXX")
   fm_write_serial_fixture "$tmp/probe" 1000
   line=$("$RUNNER" --check-budget "$tmp/probe"/shard-*.json 2>/dev/null) \
@@ -764,9 +764,13 @@ fm_serial_budget_bounds() {
   budget=$(printf '%s\n' "$line" | sed -n 's/.*budget_ms=\([0-9]*\).*/\1/p')
   allowed=$(printf '%s\n' "$line" | sed -n 's/.*allowed_ms=\([0-9]*\).*/\1/p')
   headroom=$(printf '%s\n' "$line" | sed -n 's/.*headroom_ms=\([0-9]*\).*/\1/p')
+  band=$(printf '%s\n' "$line" | sed -n 's/.*cno_band_ms=\([0-9]*\).*/\1/p')
+  basis=$(printf '%s\n' "$line" | sed -n 's/.*basis_samples=\([0-9]*\).*/\1/p')
   [ -n "$shards" ] && [ -n "$budget" ] && [ -n "$allowed" ] && [ -n "$headroom" ] \
     || fail "FM_TEST_BUDGET must publish shards, budget_ms, allowed_ms and headroom_ms: $line"
-  printf '%s %s %s %s\n' "$shards" "$budget" "$allowed" "$headroom"
+  [ -n "$band" ] && [ -n "$basis" ] \
+    || fail "FM_TEST_BUDGET must publish cno_band_ms and basis_samples: $line"
+  printf '%s %s %s %s %s %s\n' "$shards" "$budget" "$allowed" "$headroom" "$band" "$basis"
 }
 
 # The recurrence control for serial-lane budget drift. The property that matters
@@ -774,13 +778,263 @@ fm_serial_budget_bounds() {
 # fails, and a run whose artifacts are missing or unreadable is could-not-observe
 # rather than either. Ordinary runner jitter must stay on the passing side, or
 # the control gets ignored and stops protecting anything.
+# Build a runnable copy of the runner with one calibration axis deliberately
+# broken, so each control above can watch its guard go red before trusting the
+# green. The copy is a real tree the real command runs from; nothing here
+# inspects the runner's source to make its assertion.
+#   $1 destination directory
+fm_make_mutated_runner_tree() {
+  local dest=$1
+  mkdir -p "$dest" || return 1
+  cp -R "$ROOT/bin" "$dest/bin" || return 1
+  cp -R "$ROOT/tests" "$dest/tests" || return 1
+  mkdir -p "$dest/docs" || return 1
+  cp "$ROOT/docs/fm-test-isolation-proof.json" "$dest/docs/fm-test-isolation-proof.json" || return 1
+  [ -x "$dest/bin/fm-test-run.sh" ] || return 1
+}
+
+# A basis carrying exactly one favorable observation: the shape that cannot
+# measure its own uncertainty, and so must not be allowed to credit a verdict.
+fm_make_single_sample_basis_runner() {
+  local dest=$1
+  fm_make_mutated_runner_tree "$dest" || return 1
+  python3 - "$dest/bin/fm-test-run.sh" <<'MUTPY' || return 1
+import sys
+from pathlib import Path
+p = Path(sys.argv[1])
+lines = p.read_text(encoding="utf-8").split("\n")
+i = next(k for k, l in enumerate(lines) if l.startswith("portable_serial_basis_samples()"))
+s = next(k for k, l in enumerate(lines[i:], i) if l.strip() == "cat <<'EOF'")
+e = next(k for k, l in enumerate(lines[s:], s) if l == "EOF")
+keep = lines[s + 1]
+lines[s + 1:e] = [keep]
+p.write_text("\n".join(lines), encoding="utf-8")
+MUTPY
+}
+
+# A declared envelope narrower than the samples it claims to summarise: the
+# shape that would let real movement be reported as a product verdict.
+fm_make_narrow_spread_runner() {
+  local dest=$1
+  fm_make_mutated_runner_tree "$dest" || return 1
+  sed -i 's/^PORTABLE_SERIAL_MEASURED_SPREAD_PCT=.*/PORTABLE_SERIAL_MEASURED_SPREAD_PCT=1/' \
+    "$dest/bin/fm-test-run.sh" || return 1
+  grep -q '^PORTABLE_SERIAL_MEASURED_SPREAD_PCT=1$' "$dest/bin/fm-test-run.sh" || return 1
+}
+
+# A declared budget moved off the mean of its own samples: stale calibration
+# credit surviving a changed load-bearing axis.
+fm_make_moved_budget_runner() {
+  local dest=$1 current
+  fm_make_mutated_runner_tree "$dest" || return 1
+  current=$(sed -n 's/^PORTABLE_SERIAL_BUDGET_MS=\([0-9]*\)$/\1/p' "$dest/bin/fm-test-run.sh")
+  [ -n "$current" ] || return 1
+  sed -i "s/^PORTABLE_SERIAL_BUDGET_MS=.*/PORTABLE_SERIAL_BUDGET_MS=$((current + 100000))/" \
+    "$dest/bin/fm-test-run.sh" || return 1
+}
+
+# --------------------------------------------------------------------------
+# SOL-FM-TEST-ENVIRONMENT-MEASUREMENT-VARIANCE required minimum controls.
+#
+# The defect these guard: the lane total is a wall-clock measurement on a shared
+# hosted runner, and it was carrying a load-bearing PASS/FAIL verdict against a
+# threshold that ordinary runner movement could cross on its own. Pull request
+# 133 proved it - the same bin/fm-test-run.sh blob and the same inventory landed
+# on both sides of the same bound - so the boundary was reporting the runner,
+# not the suite.
+#
+# One test per control line in the ruling. Each drives the real command through
+# its published output and exit status, never through this file's own arithmetic.
+# --------------------------------------------------------------------------
+
+# Control 1: same candidate + same policy + representative environment observed
+# on BOTH sides of the semantic threshold -> no stable product PASS/FAIL credit.
+test_variance_control_both_sides_of_the_threshold_yield_no_product_verdict() {
+  local tmp bounds shards allowed band rc out low high
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl1.XXXXXX")
+  bounds=$(fm_serial_budget_bounds)
+  shards=$(printf '%s' "$bounds" | cut -d' ' -f1)
+  allowed=$(printf '%s' "$bounds" | cut -d' ' -f3)
+  band=$(printf '%s' "$bounds" | cut -d' ' -f5)
+
+  # Two observations of the SAME declared lane straddling the threshold, each
+  # inside the measured spread of it. Neither may be credited as a verdict.
+  low=$(((allowed - band / 2) / shards))
+  high=$(((allowed + band / 2) / shards))
+  fm_write_serial_fixture "$tmp/below" "$low"
+  fm_write_serial_fixture "$tmp/above" "$high"
+
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/below"/shard-*.json 2>"$tmp/below.err"); rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "an observation just below the threshold must be cno (exit 4), got $rc: $out"
+  assert_contains "$out" "verdict=cno" "the below-threshold side must report verdict=cno"
+  assert_no_grep 'lane grew to' "$tmp/below.err" "a cno lane must not be reported as growth"
+
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/above"/shard-*.json 2>"$tmp/above.err"); rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "an observation just above the threshold must be cno (exit 4), got $rc: $out"
+  assert_contains "$out" "verdict=cno" "the above-threshold side must report verdict=cno"
+  assert_no_grep 'lane grew to' "$tmp/above.err" "a cno lane must not be reported as growth"
+
+  # The divergence itself, so this case cannot go quietly vacuous: the two
+  # fixtures really are on opposite sides of the declared bound.
+  [ "$((low * shards))" -lt "$allowed" ] || fail "the below fixture must sit under the bound"
+  [ "$((high * shards))" -gt "$allowed" ] || fail "the above fixture must sit over the bound"
+
+  rm -rf "$tmp"
+  pass "observations on both sides of the threshold yield cno, not a product verdict"
+}
+
+# Control 2: one favorable sample may not replace an adverse basis without
+# qualified uncertainty evidence. An undersized basis cannot credit a pass.
+test_variance_control_an_unqualified_basis_cannot_credit_a_pass() {
+  local tmp rc out fixture
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl2.XXXXXX")
+
+  # The shipped basis is qualified, so the healthy lane below passes.
+  fixture=$tmp/healthy
+  fm_write_serial_fixture "$fixture" 1000
+  set +e
+  out=$("$RUNNER" --check-budget "$fixture"/shard-*.json 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the shipped basis must let a healthy lane pass, got $rc: $out"
+  assert_contains "$out" "verdict=ok" "the shipped basis must credit a healthy lane"
+
+  # Watched red: a runner whose basis carries a single favorable sample must not
+  # be able to credit that same healthy lane. This is the rebase-a-basis defect.
+  fm_make_single_sample_basis_runner "$tmp/one-sample" || { rm -rf "$tmp"; fail "could not build the single-sample runner"; }
+  set +e
+  out=$("$tmp/one-sample/bin/fm-test-run.sh" --check-budget "$fixture"/shard-*.json 2>"$tmp/one.err"); rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "a one-sample basis must refuse to credit a pass (exit 4), got $rc: $out"
+  assert_contains "$out" "verdict=cno" "a one-sample basis must report verdict=cno"
+  assert_grep 'uncalibrated' "$tmp/one.err" "the refusal must name the uncalibrated instrument"
+
+  # And the basis check itself says so on its own terms.
+  set +e
+  out=$("$tmp/one-sample/bin/fm-test-run.sh" --check-basis 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "--check-basis must report a one-sample basis as cno (exit 4), got $rc: $out"
+  assert_contains "$out" "verdict=cno" "--check-basis must report verdict=cno for a one-sample basis"
+
+  rm -rf "$tmp"
+  pass "an unqualified single-sample basis credits neither a pass nor a failure"
+}
+
+# Control 3: conditions outside or unobservable relative to the declared
+# measurement envelope are typed environment/measurement CNO, never a product
+# regression. A declared envelope narrower than the evidence is refused.
+test_variance_control_a_narrowed_envelope_is_refused() {
+  local tmp rc out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl3.XXXXXX")
+
+  set +e
+  out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the shipped basis must be qualified, got $rc: $out"
+  assert_contains "$out" "verdict=qualified" "the shipped basis must report verdict=qualified"
+
+  # Watched red: shrink the declared spread below what the samples show. The
+  # control must refuse rather than let a narrower envelope manufacture verdicts.
+  fm_make_narrow_spread_runner "$tmp/narrow" || { rm -rf "$tmp"; fail "could not build the narrowed-spread runner"; }
+  set +e
+  out=$("$tmp/narrow/bin/fm-test-run.sh" --check-basis 2>"$tmp/narrow.err"); rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a spread narrower than its evidence must be refused (exit 1), got $rc: $out"
+  assert_contains "$out" "verdict=unqualified" "a narrowed spread must report verdict=unqualified"
+  assert_grep 'narrower than the observed' "$tmp/narrow.err" "the refusal must name the narrowing"
+
+  rm -rf "$tmp"
+  pass "a declared envelope narrower than its own evidence is refused"
+}
+
+# Control 4: genuine growth beyond the boundary by more than the qualified
+# uncertainty remains FAIL. Anti-laundering: cno must not swallow real growth.
+test_variance_control_growth_beyond_the_envelope_remains_fail() {
+  local tmp bounds shards allowed band rc out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl4.XXXXXX")
+  bounds=$(fm_serial_budget_bounds)
+  shards=$(printf '%s' "$bounds" | cut -d' ' -f1)
+  allowed=$(printf '%s' "$bounds" | cut -d' ' -f3)
+  band=$(printf '%s' "$bounds" | cut -d' ' -f5)
+
+  fm_write_serial_fixture "$tmp/grown" $(((allowed + band + band / 2) / shards + 1))
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/grown"/shard-*.json 2>"$tmp/grown.err"); rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "growth past allowance plus spread must remain FAIL (exit 1), got $rc: $out"
+  assert_contains "$out" "verdict=drifted" "real growth must report verdict=drifted"
+  assert_grep 'lane grew to' "$tmp/grown.err" "the failure must name lane growth"
+
+  # The divergence: one band lower is cno, so the FAIL really is the envelope
+  # being cleared rather than the threshold being crossed.
+  fm_write_serial_fixture "$tmp/inside" $(((allowed + band / 2) / shards))
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/inside"/shard-*.json 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 4 ] || fail "the same lane inside the envelope must be cno (exit 4), got $rc: $out"
+
+  rm -rf "$tmp"
+  pass "growth beyond the qualified envelope remains a failure"
+}
+
+# Control 5 (anti-vacuity): a stable healthy candidate materially separated from
+# the threshold still PASSES. A control that only ever answers cno is useless.
+test_variance_control_a_healthy_lane_still_passes() {
+  local tmp rc out lane
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl5.XXXXXX")
+
+  fm_write_serial_fixture "$tmp/healthy" 1000
+  set +e
+  out=$("$RUNNER" --check-budget "$tmp/healthy"/shard-*.json 2>"$tmp/healthy.err"); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "a healthy lane clear of the threshold must PASS (exit 0), got $rc: $out"
+  assert_contains "$out" "verdict=ok" "a healthy lane must report verdict=ok"
+  assert_no_grep 'cno' "$tmp/healthy.err" "a healthy lane must not be reported as could-not-observe"
+
+  # The real measured basis must itself sit in the passing region, or the
+  # shipped declaration would park every honest run on cno.
+  lane=$(printf '%s\n' "$out" | sed -n 's/.*lane_ms=\([0-9]*\).*/\1/p')
+  [ -n "$lane" ] || fail "the verdict must publish the lane it judged"
+
+  rm -rf "$tmp"
+  pass "a healthy lane materially clear of the threshold still passes"
+}
+
+# Control 6: changing a load-bearing calibration axis invalidates stale
+# calibration credit. The declared numbers must agree with their own evidence.
+test_variance_control_declarations_must_match_their_own_evidence() {
+  local tmp rc out
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl6.XXXXXX")
+
+  set +e
+  out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the shipped declarations must match their evidence, got $rc: $out"
+
+  # Watched red: move the declared budget off the mean of its own samples.
+  fm_make_moved_budget_runner "$tmp/moved" || { rm -rf "$tmp"; fail "could not build the moved-budget runner"; }
+  set +e
+  out=$("$tmp/moved/bin/fm-test-run.sh" --check-basis 2>"$tmp/moved.err"); rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a budget off its own mean must be refused (exit 1), got $rc: $out"
+  assert_contains "$out" "verdict=unqualified" "a moved budget must report verdict=unqualified"
+  assert_grep 'is not the mean of its own' "$tmp/moved.err" "the refusal must name the disagreement"
+
+  rm -rf "$tmp"
+  pass "declared calibration must agree with the evidence it was derived from"
+}
+
 test_serial_budget_control_verdicts() {
-  local tmp rc out bounds shards budget allowed
+  local tmp rc out bounds shards budget allowed band
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-budget.XXXXXX")
   bounds=$(fm_serial_budget_bounds)
   shards=$(printf '%s' "$bounds" | cut -d' ' -f1)
   budget=$(printf '%s' "$bounds" | cut -d' ' -f2)
   allowed=$(printf '%s' "$bounds" | cut -d' ' -f3)
+  band=$(printf '%s' "$bounds" | cut -d' ' -f5)
 
   # Exactly at the declared budget.
   fm_write_serial_fixture "$tmp/ok" $((budget / shards))
@@ -791,27 +1045,29 @@ test_serial_budget_control_verdicts() {
   [ "$rc" -eq 0 ] || fail "a lane at its declared budget must pass, got $rc: $(cat "$tmp/ok.err")"
   assert_contains "$out" "FM_TEST_BUDGET verdict=ok" "a passing lane must report verdict=ok"
 
-  # Jitter control: just inside the allowance is a slow runner, not a defect,
-  # and reporting it as one is how a control gets ignored.
-  fm_write_serial_fixture "$tmp/jitter" $(((allowed - allowed / 50) / shards))
+  # Jitter control: comfortably inside the allowance is a slow runner, not a
+  # defect, and reporting it as one is how a control gets ignored. It must clear
+  # the measurement band too, or the answer is could-not-observe rather than a
+  # pass.
+  fm_write_serial_fixture "$tmp/jitter" $(((allowed - band - allowed / 50) / shards))
   set +e
   out=$("$RUNNER" --check-budget "$tmp/jitter"/shard-*.json 2>&1)
   rc=$?
   set -e
-  [ "$rc" -eq 0 ] || fail "a lane inside its drift allowance must not fail, got $rc: $out"
+  [ "$rc" -eq 0 ] || fail "a lane clear of the measurement band must pass, got $rc: $out"
 
-  # Just past the allowance is the signal this exists for. The two fixtures
-  # differ by about 4% of the lane, so the boundary is where it is claimed to be
-  # rather than somewhere convenient.
-  fm_write_serial_fixture "$tmp/grown" $(((allowed + allowed / 50) / shards + 1))
+  # Past the allowance by MORE than the measured spread is the signal this
+  # exists for: growth the instrument cannot explain away.
+  fm_write_serial_fixture "$tmp/grown" $(((allowed + band + allowed / 50) / shards + 1))
   set +e
   out=$("$RUNNER" --check-budget "$tmp/grown"/shard-*.json 2>"$tmp/grown.err")
   rc=$?
   set -e
-  [ "$rc" -eq 1 ] || fail "a lane past its drift allowance must fail (exit 1), got $rc"
+  [ "$rc" -eq 1 ] || fail "a lane past allowance plus spread must fail (exit 1), got $rc"
   assert_contains "$out" "verdict=drifted" "a grown lane must report verdict=drifted"
   assert_grep 'lane grew to' "$tmp/grown.err" "the failure must name lane growth"
   [ "$allowed" -gt "$budget" ] || fail "the allowance must sit above the declared budget"
+  [ "$band" -gt 0 ] || fail "the measured spread must carry a non-zero band"
 
   rm -rf "$tmp"
   pass "serial budget control passes at budget, absorbs jitter, and fails just past its allowance"
@@ -1295,3 +1551,9 @@ test_serial_budget_control_reports_could_not_observe
 test_serial_budget_control_checks_the_partition_it_measured
 test_serial_budget_control_refuses_a_foreign_timeout_literal
 test_ci_matrix_runs_every_composed_serial_shard
+test_variance_control_both_sides_of_the_threshold_yield_no_product_verdict
+test_variance_control_an_unqualified_basis_cannot_credit_a_pass
+test_variance_control_a_narrowed_envelope_is_refused
+test_variance_control_growth_beyond_the_envelope_remains_fail
+test_variance_control_a_healthy_lane_still_passes
+test_variance_control_declarations_must_match_their_own_evidence
