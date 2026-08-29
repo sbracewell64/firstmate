@@ -132,8 +132,9 @@ JOBS_MAX=4
 #
 # BASIS (2026-08-26). Measured on this repo's own PR CI run 32998443526, whose
 # portable-serial inventory contained 136 scripts. Its eight per-shard timing
-# artifacts summed to 3039944 ms of shard wall time. Every shard completed with
-# zero failures, so the observed lane is the declared budget below.
+# artifacts' per-script durations summed to 3039944 ms. Shard wall time is used
+# only for the worst-shard headroom comparison. Every shard completed with zero
+# failures, so the observed lane is the declared budget below.
 #
 # This supersedes the 2026-08-17 basis of 122 scripts and 2366725 ms. The lane
 # grew past that inventory and budget, so both are re-derived from what the suite
