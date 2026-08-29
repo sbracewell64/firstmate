@@ -192,10 +192,21 @@ if [ "$RECONSTRUCTED" = 1 ]; then
   # The rebuild above already asked the forge for this exact pull request.
   PR_HEAD=$RECONSTRUCTED_HEAD
 elif [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
-  # fm-retrieval-audit: not-a-collection - one pull request's head oid
-  if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
-    && fm_pr_head_valid "$REMOTE_HEAD"; then
-    PR_HEAD=$REMOTE_HEAD
+  # The head oid and the head REPOSITORY come back from ONE read, because they
+  # are two fields of one pull request and asking twice would make a second
+  # forge query per ready event out of a question the first answer already
+  # carries. The repository is what the attestation chokepoint below publishes
+  # to; it is read here so that read is not a separate one.
+  # fm-retrieval-audit: not-a-collection - one pull request's head oid and head repository
+  if REMOTE_VIEW=$(cd "$WT" && gh pr view "$URL" \
+    --json headRefOid,headRepositoryOwner,headRepository \
+    -q '.headRefOid + " " + (.headRepositoryOwner.login // "") + "/" + (.headRepository.name // "")' \
+    2>/dev/null); then
+    REMOTE_HEAD=${REMOTE_VIEW%% *}
+    REMOTE_HEAD_REPO=${REMOTE_VIEW#* }
+    if fm_pr_head_valid "$REMOTE_HEAD"; then
+      PR_HEAD=$REMOTE_HEAD
+    fi
   fi
 elif fm_pr_forge_view "$URL"; then
   # A released task has no worktree left to resolve the request from, so the
@@ -307,18 +318,11 @@ fm_pr_attest_reason() {
 # unbound rather than falling back to a remote name - the fallback would aim a
 # protected write with this checkout's configuration.
 FM_PR_ATTEST_PUBLISH_REPO=
-if [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
-  # fm-retrieval-audit: not-a-collection - one pull request's head repository
-  if PUBLISH_OWNER_REPO=$(cd "$WT" && fm_run_timed 60 gh pr view "$URL" \
-    --json headRepositoryOwner,headRepository \
-    -q '.headRepositoryOwner.login + "/" + .headRepository.name' 2>/dev/null); then
-    case $PUBLISH_OWNER_REPO in
-      */*/* | /* | */) ;;
-      *[!A-Za-z0-9._/-]*) ;;
-      */*) FM_PR_ATTEST_PUBLISH_REPO=$(printf 'github.com/%s\n' "$PUBLISH_OWNER_REPO" | tr '[:upper:]' '[:lower:]') ;;
-    esac
-  fi
-fi
+case ${REMOTE_HEAD_REPO-} in
+  '' | */*/* | /* | */) ;;
+  *[!A-Za-z0-9._/-]*) ;;
+  */*) FM_PR_ATTEST_PUBLISH_REPO=$(printf 'github.com/%s\n' "$REMOTE_HEAD_REPO" | tr '[:upper:]' '[:lower:]') ;;
+esac
 
 if [ -z "$WT" ] || [ ! -d "$WT" ]; then
   printf 'attestation: could-not-observe (task %s has no reachable local copy, so whether this head needs published evidence is unknown)\n' "$ID"
