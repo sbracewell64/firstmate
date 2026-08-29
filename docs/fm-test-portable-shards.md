@@ -78,7 +78,8 @@ Hints only affect balance: the coverage guard keeps the partition complete and d
 `bin/fm-test-run.sh` is the single owner of the lane budget, associated shard count and drift bounds, current measured basis, and derived balance.
 Its comments state the evidence and derivation beside the declarations so a future remeasurement updates the contract in one place.
 
-Refresh the hints and budget from a complete per-script duration map and shard-wall totals recovered from the per-shard timing artifacts of a green run **on this repository's own lineage**, whose serial inventory matches the head being measured.
+Refresh the hints and budget from a complete per-script duration map recovered from the per-shard timing artifacts of a green run **on this repository's own lineage**, whose serial inventory matches the head being measured.
+Use shard-wall totals only for the worst-shard headroom comparison.
 Artifacts from a fork or upstream with a different test inventory describe a different lane and must not be transferred in.
 
 ```sh
