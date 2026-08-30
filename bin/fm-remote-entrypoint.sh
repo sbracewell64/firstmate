@@ -29,7 +29,7 @@
 set -eu
 
 PROTOCOL=1
-DOCTOR_SHA256=bda3a4139bf1592e1ef66c49af75df19cee4e2ba1f4cc7d0a7130d14aede43a0
+DOCTOR_SHA256=2a27c5995c5dc8313d3bfd535664b020fa35d29c814804f5845251a55bc59362
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 
 # shellcheck source=bin/fm-remote-job-lib.sh
