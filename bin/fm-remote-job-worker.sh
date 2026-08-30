@@ -17,7 +17,7 @@
 #
 # Every published result declares which side of the execution-start boundary it
 # came from. This worker writes the execution_start witness at exactly one
-# place: the moment it releases the governed command to exec in
+# place: immediately after it releases the governed command to exec in
 # worker_run_with_timeout. Pre-execution validation shares the job's deadline
 # but never writes that witness, so its expiry publishes admission_expired and
 # never the command's exit status. After the governed command returns, an

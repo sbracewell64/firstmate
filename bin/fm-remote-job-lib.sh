@@ -27,13 +27,14 @@
 #   admission_expired  a deadline passed before the governed command started
 #   admission_refused  the record or command was refused before it started
 #   infrastructure     the worker could not observe an execution result
-# execution_start is the positive execution-start witness: the epoch second at
-# which the worker released the governed command to exec, written at that one
-# boundary and nowhere else. exit exists only alongside outcome=executed, so a
-# consumer cannot read an exit-code-shaped integer for a command that did not
-# run, and outcome=executed without a readable witness is refused rather than
-# believed. Pre-execution validation runs under the same bounded deadline but
-# writes no witness, so its expiry stays an admission outcome.
+# execution_start is the positive execution-start witness: the epoch second
+# recorded immediately after the worker released the governed command to exec,
+# written at that one boundary and nowhere else. exit exists only alongside
+# outcome=executed, so a consumer cannot read an exit-code-shaped integer for a
+# command that did not run, and outcome=executed without a readable witness is
+# refused rather than believed. Pre-execution validation runs under the same
+# bounded deadline but writes no witness, so its expiry stays an admission
+# outcome.
 #
 # fm_remote_job_wait publishes FM_REMOTE_JOB_OUTCOME, FM_REMOTE_JOB_EXECUTION_START,
 # and FM_REMOTE_JOB_EXIT, the last only for outcome=executed. Callers that

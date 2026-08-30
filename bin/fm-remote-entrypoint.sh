@@ -17,8 +17,8 @@
 # stdin is captured as bounded job input. The completed worker result is relayed
 # with stdout and stderr kept separate. An exit status is relayed only when the
 # worker witnessed the governed command start; a request that expired, was
-# refused, or whose result could not be observed before that boundary has no
-# execution verdict, so it exits FM_REMOTE_JOB_NO_EXECUTION_STATUS (75) with a
+# refused, or whose execution result could not be observed has no execution
+# verdict, so it exits FM_REMOTE_JOB_NO_EXECUTION_STATUS (75) with a
 # typed "no execution verdict" diagnostic on stderr instead of borrowing the
 # command's exit status. That diagnostic is the carrier of the distinction,
 # because one byte of exit status cannot separate an admission outcome from a
