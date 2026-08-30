@@ -242,6 +242,7 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
     if [ "$mode" = no-mistakes ]; then
       assert_grep 'bin/fm-attest.sh" write --only-if-required' "$brief" \
         "$id: the pipeline contract does not publish the head-bound evidence"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
       assert_grep '--publish-repo "$(fm_meta_get' "$brief" \
         "$id: the pipeline contract does not bind the publication repository"
       assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
