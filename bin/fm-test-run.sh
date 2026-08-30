@@ -259,8 +259,10 @@ PORTABLE_SERIAL_DEFAULT_WEIGHT_MS=22000
 # This table is evidence, not decoration: --check-basis re-derives the mean and
 # the spread from these lines and refuses when either disagrees with the
 # declarations above, so the two cannot drift apart silently. An adverse sample
-# may never be deleted to improve the numbers; re-measuring means replacing the
-# whole table from a fresh set of runs, exactly like the weight hints.
+# may never be deleted to improve the numbers. If an inventory change requires
+# a fresh qualified table, preserve every displaced adverse sample verbatim in
+# the adjacent BASIS evidence before replacing the table; only the weight hints
+# are replaced wholesale without that evidence-preservation step.
 portable_serial_basis_samples() {
   cat <<'EOF'
 32992825736 1ebdf3bd 2810550
@@ -1185,10 +1187,11 @@ BASISPY
 # past the declared bound, or could not be observed at all.
 #
 # Deliberately NOT a jitter detector. The semantic verdict rides on the LANE
-# total against the existing 25% growth allowance; a single shard's wall is only
-# ever compared to the independent 9-minute headroom bound below the hang
-# tripwire. A breach therefore reports lane growth or dangerous shard imbalance,
-# not a comparison with the balanced-wall estimate.
+# total against the derived 18% growth allowance and its 6% measurement band; a
+# single shard's wall is only ever compared to the independent 9-minute
+# headroom bound below the hang tripwire. A breach therefore reports lane
+# growth or dangerous shard imbalance, not a comparison with the balanced-wall
+# estimate.
 #
 # A missing, unreadable, or incomplete artifact set is could-not-observe (exit 3)
 # and never a pass: a shard cancelled at its timeout uploads no timing, which is
