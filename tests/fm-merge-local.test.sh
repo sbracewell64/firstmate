@@ -91,7 +91,7 @@ make_case() {
   if [ "$layout" = worktree ]; then
     repo="$case_dir/repo"
   fi
-  mkdir -p "$case_dir/state" "$repo/docs"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$repo/docs"
   git -C "$repo" init -q
   # Set the default branch without relying on `git init -b` (git 2.28+).
   git -C "$repo" symbolic-ref HEAD refs/heads/main
@@ -114,7 +114,10 @@ make_case() {
     "worktree=$case_dir/wt" \
     "project=$proj" \
     "kind=ship" \
-    "mode=local-only"
+    "mode=local-only" \
+    "harness=claude" \
+    "model=opus"
+  fm_test_model_registry "$case_dir/config/models.json"
   # Keep the shared watcher-liveness banner quiet: this suite exercises the merge
   # guard, not supervision staleness.
   touch "$case_dir/state/.last-watcher-beat"
@@ -143,6 +146,7 @@ run_merge_local() {
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_PIPELINE_STATE_DB="$case_dir/pipeline.sqlite" \
   PATH="${FM_TEST_PATH_PREFIX:-}${FM_TEST_PATH_PREFIX:+:}$PATH" \
     "$MERGE_LOCAL" "$TASK_ID" "$@"
 }
@@ -150,6 +154,10 @@ run_merge_local() {
 # Run the merge and capture its streams; echoes nothing, sets RC.
 attempt_merge() {
   local case_dir=$1
+  rm -f "$case_dir/pipeline.sqlite"
+  fm_test_pipeline_db "$case_dir/pipeline.sqlite" "$case_dir/project" \
+    "$BRANCH|openai|gpt-5.6-sol|review||completed|$(git -C "$case_dir/project" rev-parse "$BRANCH")" \
+    || fail "pipeline fixture failed"
   set +e
   run_merge_local "$case_dir" > "$case_dir/stdout" 2> "$case_dir/stderr"
   RC=$?

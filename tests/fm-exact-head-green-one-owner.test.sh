@@ -237,7 +237,11 @@ make_consumer_case() {  # <name> <members-json> <total> <oid> -> case dir
     --arg head "$HEAD" --arg oid "$oid" '
     {data: {repository: {pullRequest: {
       headRefOid: $head, mergeable: "MERGEABLE", reviewDecision: "APPROVED",
-      commits: {nodes: [{commit: {oid: $oid, statusCheckRollup: {contexts: {
+      author: {login: "maker"},
+      reviews: {totalCount: 1, nodes: [{state: "APPROVED", author: {login: "reviewer"}, commit: {oid: $head}}]},
+      commits: {totalCount: 1, nodes: [{commit: {oid: $oid,
+        author: {user: {login: "maker"}}, committer: {user: {login: "maker"}},
+        statusCheckRollup: {contexts: {
         totalCount: $total, nodes: $members}}}}]}}}}}' > "$dir/pr.json"
   cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash

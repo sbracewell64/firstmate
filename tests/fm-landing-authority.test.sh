@@ -151,9 +151,12 @@ write_correlation() {
 add_forge() {  # <dir> [<forge-head>]
   local dir=$1 head=${2:-$HEAD_A}
   printf '%s\n' "$head" > "$dir/forge_head"
-  cat > "$dir/fakebin/gh-axi" <<'SH'
+cat > "$dir/fakebin/gh-axi" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "$FM_TEST_GH_AXI_LOG"
+case "$*" in
+  'pr merge '*) : > "$FM_TEST_FORGE_MERGED" ;;
+esac
 exit 0
 SH
   cat > "$dir/fakebin/gh" <<'SH'
@@ -173,7 +176,13 @@ if [ "${1:-}" = api ]; then
       exit $?
       ;;
     */pulls/*)
-      cat "$FM_TEST_FORGE_HEAD"
+      case "$*" in
+        *'.merged, .head.sha'*)
+          [ -f "$FM_TEST_FORGE_MERGED" ] || exit 1
+          printf 'true\t%s\n' "$(cat "$FM_TEST_FORGE_HEAD")"
+          ;;
+        *) cat "$FM_TEST_FORGE_HEAD" ;;
+      esac
       exit 0
       ;;
   esac
@@ -274,6 +283,7 @@ run_pr_merge() {  # <dir> [args...]
     FM_HOME="$dir/home" \
     FM_TEST_GH_AXI_LOG="$dir/gh-axi.log" \
     FM_TEST_GH_LOG="$dir/gh.log" \
+    FM_TEST_FORGE_MERGED="$dir/forge-merged" \
     FM_TEST_ROLLUP_FIXTURE="$dir/rollup.json" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
     FM_PIPELINE_STATE_DB="${FM_PIPELINE_STATE_DB:-}" \
