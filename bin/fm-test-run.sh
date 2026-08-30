@@ -34,7 +34,8 @@
 #     samples and refuses when either disagrees with the declarations, or when
 #     the basis carries fewer samples than the declared minimum. Prints one
 #     FM_TEST_BASIS line. Exits 0 qualified, 1 the declarations disagree with
-#     their own evidence, 4 the basis is too small to calibrate the lane axis.
+#     their own evidence, 3 the sample evidence cannot be read, or 4 the basis
+#     is too small to calibrate the lane axis.
 #
 # Serial-lane budget recurrence control (no suite execution):
 #   fm-test-run.sh --check-budget <lane.json> [more lane.json...]
@@ -1078,9 +1079,10 @@ PY
 # they drift apart, so this re-derives both from the sample table and refuses a
 # disagreement rather than trusting the constants.
 #
-# It answers three-valued like everything else here. A basis too small to
-# measure its own uncertainty is not a failing basis, it is an UNCALIBRATED
-# instrument, so it exits 4 (measurement could-not-observe) rather than 1.
+# A basis too small to measure its own uncertainty is not a failing basis, it is
+# an UNCALIBRATED instrument, so it exits 4 (measurement could-not-observe)
+# rather than 1. Malformed or absent sample evidence exits 3 because the basis
+# could not be observed at all.
 check_serial_basis() {
   local tmp rc
   command -v python3 >/dev/null 2>&1 || die "--check-basis requires python3"
@@ -1183,8 +1185,8 @@ BASISPY
   return "$rc"
 }
 # Recurrence control for serial-lane budget drift. Reads the per-shard timing
-# artifacts a run just produced and answers three-valued: within budget, drifted
-# past the declared bound, or could not be observed at all.
+# artifacts a run just produced and distinguishes within budget, drifted past
+# the declared bound, measurement cno, and evidence that could not be observed.
 #
 # Deliberately NOT a jitter detector. The semantic verdict rides on the LANE
 # total against the derived 18% growth allowance and its 6% measurement band; a

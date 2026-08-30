@@ -105,7 +105,7 @@ A budget-and-hint refresh changes balance estimates and recurrence-control evide
 It exists because serial-lane growth was invisible until a shard reached its cap: nothing compared the lane the suite had become against the lane its timeout was sized for.
 It does not validate a changed hint table's composed partition, because historical artifacts retain the shard assignment that their run actually executed; score a hint refresh by composing the current shards and summing them against a complete measured duration map.
 
-It answers three-valued, and could-not-observe is never a pass.
+The lane's semantic axis answers pass, fail, or measurement could-not-observe, while unreadable run evidence has a separate could-not-observe outcome; neither could-not-observe outcome is a pass.
 
 | Exit | Verdict | Meaning |
 |---:|---|---|
@@ -118,7 +118,7 @@ The two could-not-observe values answer different questions and must not be coll
 Exit 3 means the evidence could not be read at all, which is an instrument defect to repair, and CI fails on it.
 Exit 4 means the evidence was read correctly and the instrument cannot resolve which side of the boundary the lane is on, which is a fact about measurement resolution rather than about the candidate; CI reports it and treats the semantic axis as carrying no verdict, neither green nor red.
 
-A shard cancelled at its hang tripwire uploads no timing, so it lands on that third value rather than on either of the other two.
+A shard cancelled at its hang tripwire uploads no timing, so it exits 3 rather than producing any lane-axis verdict.
 Negative durations are structurally invalid evidence because they could otherwise manufacture an under-budget verdict.
 The summary duration is shard wall time, so legitimate runner overhead may make it longer than the sum of its script durations.
 A summary duration shorter than that sum is self-contradictory evidence and yields `could-not-observe`.
