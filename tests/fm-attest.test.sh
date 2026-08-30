@@ -3743,7 +3743,7 @@ install_split_history_venue() {
   git -C "$repo" add -A
   git -C "$repo" commit -qm stranger
   git -C "$repo" push -q --force "$policy" HEAD:refs/heads/stranger
-  git -C "$repo" checkout -q -
+  git -C "$repo" checkout -q fm/demo
   git --git-dir="$policy" symbolic-ref HEAD refs/heads/policy
   printf '%s\n' "$policy"
 }
