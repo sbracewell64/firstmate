@@ -107,8 +107,6 @@ FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
-OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # bin/fm-pr-lib.sh owns fm_task_id_path_safe, this fleet's one predicate for
 # "may this task id be used to build a path?". Sourced rather than restated so a
@@ -783,12 +781,15 @@ check_route_qualified() {
 # read - and unevaluable means the fact may not be asserted at all, in either
 # direction.
 check_landing_authority() {
-  local rc=0 seam_rc=0 record route mode
+  local rc=0 seam_rc=0 record mode
   record=$(fm_pr_identity_record_path "$STATE" "$TARGET" 2>/dev/null || true)
   if [ -n "$record" ]; then
     mode=$(grep '^mode=' "$record" | tail -1 | cut -d= -f2- || true)
-    [ "$mode" = local-only ] && route=local || route=pr-live
-    fm_landing_candidate_resolve "$FM_HOME" "$TARGET" "$route" "$record" || seam_rc=$?
+    if [ "$mode" = local-only ]; then
+      fm_landing_candidate_resolve "$FM_HOME" "$TARGET" local "$record" || seam_rc=$?
+    else
+      fm_landing_candidate_resolve "$FM_HOME" "$TARGET" pr-live "$record" || seam_rc=$?
+    fi
     if [ -n "$FM_LANDING_CANDIDATE_HEAD" ]; then
       fm_landing_authority_resolve "$FM_HOME" "$TARGET" "$FM_LANDING_SEAM_VERDICT" \
         "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || rc=$?

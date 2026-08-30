@@ -112,6 +112,7 @@ _FM_LANDING_SEAM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/nu
 # shellcheck source=bin/fm-independence-lib.sh
 . "$_FM_LANDING_SEAM_LIB_DIR/fm-independence-lib.sh"
 
+# shellcheck disable=SC2016  # This is a jq program; its variables are expanded by jq.
 FM_LANDING_REVIEW_EVIDENCE_JQ='(. as $v
   | (([$v.pr_author] + $v.commit_makers) | map(select(length > 0) | ascii_downcase) | unique) as $makers
   | ($v.approved_reviews | map(select((.head | ascii_downcase) == ($v.head | ascii_downcase)))) as $approvals
@@ -718,8 +719,11 @@ fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <revi
       review="pipeline gaps:$(fm_independence_gaps "$independence" | paste -sd, -)${recorded_heads:+ stale-head=$recorded_heads expected=$head}"
     fi
   fi
+  # shellcheck disable=SC2034  # Output consumed by the merge-gate sourcing callers.
   FM_LANDING_CANDIDATE_HEAD=$head
+  # shellcheck disable=SC2034  # Output consumed by the merge-gate sourcing callers.
   FM_LANDING_CANDIDATE_REVIEW=$review
+  # shellcheck disable=SC2034  # Output consumed by the decision-surface sourcing caller.
   FM_LANDING_CANDIDATE_REASON="candidate head=$head review=${review:-could-not-observe}"
   fm_landing_seam_resolve "$outbound" "$config" "$task" "$head" "${url:--}" || seam_rc=$?
   return "$seam_rc"
