@@ -143,6 +143,8 @@ SH
   touch "$home/state/.last-watcher-beat"
   write_routed_config "$home" "$extra"
   fm_git_worktree "$proj" "$wt" "wt-$name"
+  git -C "$proj" remote add origin "https://github.com/example/$name.git"
+  git -C "$proj" config remote.origin.pushurl "https://github.com/example/$name.git"
   mkdir -p "$home/data/$id"
   printf 'brief for %s\n\nDelivery contract: mode=no-mistakes\n' "$id" > "$home/data/$id/brief.md"
 
@@ -336,6 +338,28 @@ EOF
   assert_not_contains "$(cat "$case_dir/treehouse.log")" "status" \
     "and it must still take no allocation decision of its own"
   pass "control 14: the verdict and the slot follow the allocator's record, never a directory count"
+}
+
+test_a_successor_refuses_a_repointed_publication_repository() {
+  local rec case_dir id proj out rc recorded
+  rec=$(make_lane publication-owner)
+  IFS='|' read -r _ proj _ _ case_dir id <<EOF
+$rec
+EOF
+  recorded=github.com/example/publication-owner
+  printf 'publication_repo=%s\n' "$recorded" >> "$case_dir/home/state/$id.meta"
+  out=$(replace_lane "$case_dir" "$id"); rc=$?
+  [ "$rc" -eq 0 ] || fail "the successor must be sanctioned before its publication target is checked"$'\n'"$out"
+  git -C "$proj" config remote.origin.pushurl https://github.com/elsewhere/repointed.git
+  out=$(spawn_in "$case_dir" "$id" --harness codex --model "$ALTERNATE" --effort medium \
+    --route R-MED --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION \
+    --succeed-execution); rc=$?
+  [ "$rc" -ne 0 ] || fail "a successor silently rebound publication to the repointed remote"
+  assert_contains "$out" "$recorded" "the refusal did not name the inherited publication repository"
+  assert_contains "$out" "github.com/elsewhere/repointed" "the refusal did not name the current push repository"
+  [ "$(meta_field "$case_dir" "$id" publication_repo)" = "$recorded" ] \
+    || fail "the refused successor rewrote the durable publication target"
+  pass "a successor inherits its publication repository and refuses remote drift"
 }
 
 # --- Controls 3 and 12: quiescence, and ambiguity that refuses ---------------
@@ -1448,6 +1472,7 @@ EOF
 
 test_c01_c02_the_lane_continues_on_its_own_slot_and_asks_for_no_other
 test_c14_allocation_truth_is_never_a_directory_count
+test_a_successor_refuses_a_repointed_publication_repository
 test_c03_replacement_is_refused_until_the_old_process_group_is_quiescent
 test_c12_ambiguous_ownership_is_could_not_observe_and_refuses
 test_c11_irreversible_work_in_flight_refuses_replacement

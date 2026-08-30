@@ -1273,6 +1273,7 @@ SUCCEED_CONTRIB_VENUE=
 SUCCEED_CONTRIB_VENUE_URL=
 SUCCEED_POLICY_REF=
 SUCCEED_POLICY_GENERATION=
+SUCCEED_PUBLICATION_REPO=
 SUCCEED_PR=
 SUCCEED_PR_HEAD=
 if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
@@ -1321,6 +1322,7 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   SUCCEED_CONTRIB_VENUE_URL=$(fm_meta_get "$STATE/$ID.meta" contribution_venue_url)
   SUCCEED_POLICY_REF=$(fm_meta_get "$STATE/$ID.meta" policy_ref)
   SUCCEED_POLICY_GENERATION=$(fm_meta_get "$STATE/$ID.meta" policy_generation)
+  SUCCEED_PUBLICATION_REPO=$(fm_meta_get "$STATE/$ID.meta" publication_repo)
   SUCCEED_PR=$(fm_meta_get "$STATE/$ID.meta" pr)
   SUCCEED_PR_HEAD=$(fm_meta_get "$STATE/$ID.meta" pr_head)
 fi
@@ -2272,8 +2274,27 @@ if [ "$KIND" != secondmate ]; then
     [ -z "$SUCCEED_CONTRIB_VENUE_URL" ] || CONTRIB_VENUE_URL=$SUCCEED_CONTRIB_VENUE_URL
   fi
   if [ "$KIND" != scout ]; then
-    PUBLICATION_URL=$(fm_landed_push_url "$PROJ_ABS" 2>/dev/null || true)
-    PUBLICATION_REPO=$(task_base_venue_identity "$PUBLICATION_URL" 2>/dev/null || true)
+    PUBLICATION_URL_STATUS=0
+    PUBLICATION_URL=$(fm_landed_push_url "$PROJ_ABS" 2>/dev/null) || PUBLICATION_URL_STATUS=$?
+    if [ "$PUBLICATION_URL_STATUS" -eq 1 ]; then
+      PUBLICATION_URL=$(git --no-optional-locks -C "$PROJ_ABS" remote get-url origin 2>/dev/null || true)
+    elif [ "$PUBLICATION_URL_STATUS" -ne 0 ]; then
+      PUBLICATION_URL=
+    fi
+    CURRENT_PUBLICATION_REPO=$(task_base_venue_identity "$PUBLICATION_URL" 2>/dev/null || true)
+    if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+      if [ -z "$SUCCEED_PUBLICATION_REPO" ]; then
+        echo "error: $ID records no publication repository for its successor to inherit; refusing to derive the protected publication target from the checkout's current push URL '${PUBLICATION_URL:-unresolved}'" >&2
+        exit 1
+      fi
+      if [ -z "$CURRENT_PUBLICATION_REPO" ] || [ "$CURRENT_PUBLICATION_REPO" != "$SUCCEED_PUBLICATION_REPO" ]; then
+        echo "error: $ID's recorded publication repository is $SUCCEED_PUBLICATION_REPO, but the checkout's current push URL '${PUBLICATION_URL:-unresolved}' addresses ${CURRENT_PUBLICATION_REPO:-an unresolved repository}; refusing to rebind the successor's protected publication target" >&2
+        exit 1
+      fi
+      PUBLICATION_REPO=$SUCCEED_PUBLICATION_REPO
+    else
+      PUBLICATION_REPO=$CURRENT_PUBLICATION_REPO
+    fi
   fi
 fi
 
