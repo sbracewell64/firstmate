@@ -187,7 +187,8 @@ FM_AUTH_ID_HEX_WIDTH=32
 # stronger one, which is the exact confusion the effect field exists to prevent.
 FM_AUTH_EFFECTS='landing
 publication
-custody'
+custody
+attestation-evidence'
 
 # Authorization lifecycle.
 #

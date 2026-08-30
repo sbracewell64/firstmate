@@ -208,6 +208,8 @@ unknown <unknown>'
 FM_PUB_SEAM_CLASS_CUSTODY=CUSTODY_REPLICATION
 # shellcheck disable=SC2034
 FM_PUB_SEAM_CLASS_PUBLICATION=PUBLICATION_EFFECT
+# shellcheck disable=SC2034
+FM_PUB_SEAM_CLASS_ATTESTATION=ATTESTATION_EVIDENCE_PUBLICATION
 
 # The refs that are never a custody target, whatever a policy says. Built in for
 # the same reason the placeholder identities are: a floor a home could switch off
@@ -951,6 +953,67 @@ fm_pub_seam_resolve_custody() {  # <config-dir> <repo-dir> <item-or-dash> <venue
     "replicating $ref at $head on $venue into an absent ref is permitted custody for work $item, and grants nothing beyond a remote copy of that commit" \
     '' "$generation"
   return $?
+}
+
+fm_pub_seam_resolve_attestation_evidence() {  # <config-dir> <item-or-dash> <venue> <ref> <head> <tree> <expected-tip> <observed-tip>
+  local config=$1 item=$2 venue=$3 ref=$4 head=$5 tree=$6 expected=$7 observed=$8
+  local policy_generation='' generation=''
+
+  if ! fm_pub_seam_subject_valid "$item" "$venue" "$ref" "$head" "$tree" "$expected" "$observed"; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
+      "the attestation evidence publication does not name one exact ref update, so whether it may proceed could not be asked"
+    return $?
+  fi
+  if [ "$item" != '-' ] || [ "$ref" != refs/notes/no-mistakes ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_CLASS_MISMATCH" \
+      "attestation evidence may only update refs/notes/no-mistakes without claiming semantic work, and this names item '$item' at $ref"
+    return $?
+  fi
+  if [ "$observed" = "$head" ]; then
+    fm_pub_seam_set no-effect "$FM_PUB_SEAM_TOKEN_NO_EFFECT" \
+      "$venue already has $ref at $head, so this attestation evidence publication moves nothing and consumes no authorization"
+    return $?
+  fi
+  if [ "$expected" != "$observed" ]; then
+    fm_pub_seam_set refused "$FM_PUB_SEAM_TOKEN_REMOTE_MOVED" \
+      "$venue has $ref at $observed while this attestation evidence publication was compiled against $expected, so the planned update no longer addresses it"
+    return $?
+  fi
+
+  fm_pub_seam_policy_read "$config"
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = unreadable ]; then
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" \
+      "the publication identity policy at $config/$FM_PUB_SEAM_POLICY_FILE could not be read as JSON"
+    return $?
+  fi
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = present ]; then
+    policy_generation=$(fm_pub_seam_policy_get '.generation // ""')
+    if [ -z "$policy_generation" ]; then
+      fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" \
+        "the publication identity policy at $config/$FM_PUB_SEAM_POLICY_FILE declares no generation"
+      return $?
+    fi
+    if ! fm_pub_seam_policy_venue_governed "$venue"; then
+      fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_CANDIDATE_UNBOUND" \
+        "the publication policy in this home does not identify $venue as a trusted publication destination"
+      return $?
+    fi
+  fi
+
+  generation=$(fm_pub_seam_generation "$policy_generation" '' '' attestation-evidence "$venue" "$ref" '-')
+  [ -n "$generation" ] || {
+    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" \
+      "the policy generation for publishing attestation evidence on $venue could not be compiled"
+    return $?
+  }
+  FM_PUB_SEAM_ITEM='-'
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = absent ]; then
+    fm_pub_seam_set not-applicable "$FM_PUB_SEAM_TOKEN_NOT_APPLICABLE" \
+      "this home declares no publication identity policy, so publishing exact attestation evidence on $venue is ungoverned"
+  else
+    fm_pub_seam_set allow-exact "$FM_PUB_SEAM_TOKEN_ALLOW" \
+      "publishing the exact $ref update at $head on trusted venue $venue is permitted attestation evidence" '' "$generation"
+  fi
 }
 
 # --- the compiled generation --------------------------------------------------

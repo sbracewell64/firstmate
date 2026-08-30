@@ -458,7 +458,7 @@ auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
   # a record this command may act on.
   effect=$(printf '%s' "$raw" | jq -r '.effect // ""')
   fm_auth_effect_valid "$effect" || return 4
-  case $effect in publication|custody) ;; *) return 4 ;; esac
+  case $effect in publication|custody|attestation-evidence) ;; *) return 4 ;; esac
   AUTH_EFFECT=$effect
   # LOCATION IS NOT IDENTITY: a record adopted from its filename can be moved
   # into place, so the record must name itself.
@@ -477,6 +477,7 @@ auth_field() { printf '%s' "$AUTH_RECORD" | jq -r "$1" 2>/dev/null; }
 effect_class() {  # <effect>
   case ${1:-} in
     custody) printf '%s' "$FM_PUB_SEAM_CLASS_CUSTODY" ;;
+    attestation-evidence) printf '%s' "$FM_PUB_SEAM_CLASS_ATTESTATION" ;;
     *) printf '%s' "$FM_PUB_SEAM_CLASS_PUBLICATION" ;;
   esac
 }
@@ -489,12 +490,18 @@ effect_class() {  # <effect>
 resolve_or_exit() {  # <effect> <repo> <item> <venue> <ref> <head> <tree> <expected> <observed>
   local effect=$1 rc=0
   shift
-  if [ "$effect" = custody ]; then
-    fm_pub_seam_resolve_custody "$CONFIG" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
-  else
-    fm_pub_seam_resolve "$OUTBOUND_DIR" "$AUTH_DIR" "$CONFIG" "$1" \
-      "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
-  fi
+  case $effect in
+    custody)
+      fm_pub_seam_resolve_custody "$CONFIG" "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
+      ;;
+    attestation-evidence)
+      fm_pub_seam_resolve_attestation_evidence "$CONFIG" "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
+      ;;
+    *)
+      fm_pub_seam_resolve "$OUTBOUND_DIR" "$AUTH_DIR" "$CONFIG" "$1" \
+        "$2" "$3" "$4" "$5" "$6" "$7" "$8" || rc=$?
+      ;;
+  esac
   case $rc in
     0) return 0 ;;
     3) refuse "$FM_PUB_SEAM_TOKEN" "$FM_PUB_SEAM_REASON" ;;
@@ -528,8 +535,8 @@ cmd_prepare() {
     && [ -n "$head" ] && [ -n "$expected" ] \
     || die "prepare requires --repo, --remote, --venue, --ref, --head and --expected-tip"
   case $effect in
-    publication|custody) ;;
-    *) die "unknown effect class: $effect (custody or publication)" ;;
+    publication|custody|attestation-evidence) ;;
+    *) die "unknown effect class: $effect (custody, publication, or attestation-evidence)" ;;
   esac
 
   if [ -z "$tree" ]; then
@@ -884,8 +891,8 @@ cmd_publish() {
     || die "publish requires --repo, --remote, --venue, --ref, --head and --expected-tip"
   [ $# -gt 0 ] || die "publish requires a command after --"
   case $effect in
-    publication|custody) ;;
-    *) die "unknown effect class: $effect (custody or publication)" ;;
+    publication|custody|attestation-evidence) ;;
+    *) die "unknown effect class: $effect (custody, publication, or attestation-evidence)" ;;
   esac
 
   fm_pub_seam_publish "$0" "$repo" "$remote" "$venue" "$ref" "$head" "$expected" "$item" \

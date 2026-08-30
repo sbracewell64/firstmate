@@ -840,6 +840,55 @@ test_write_refuses_to_publish_when_governance_cannot_be_established() {
   pass "fm-attest.sh: a publication this home's governance cannot place is refused, and the push target is unchanged"
 }
 
+test_write_publishes_attestation_evidence_to_a_governed_venue() {
+  local repo fork home head out rc
+  repo="$TMP_ROOT/write-governed-attestation"
+  fork="$TMP_ROOT/write-governed-attestation-fork.git"
+  home="$TMP_ROOT/write-governed-attestation-home"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  mkdir -p "$home/config" "$home/data"
+  printf '{"generation":"pol-1","venues":{"-":{}}}\n' \
+    > "$home/config/publication-identity.json"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(publish_out_home "$repo" "$home")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "governed attestation evidence was refused: $out"
+  assert_contains "$out" "under a spent publication authority" \
+    "governed attestation evidence did not report its authority: $out"
+  assert_contains "$(git -C "$fork" ls-tree -r --name-only "$NOTES_REF" | tr -d '/')" "$head" \
+    "governed attestation evidence never reached the trusted target"
+  pass "fm-attest.sh: governed attestation evidence publishes through an exact one-use authority"
+}
+
+test_write_refuses_an_unintended_attestation_evidence_ref() {
+  local repo fork home head out rc unintended
+  repo="$TMP_ROOT/write-governed-unintended"
+  fork="$TMP_ROOT/write-governed-unintended-fork.git"
+  home="$TMP_ROOT/write-governed-unintended-home"
+  unintended=refs/notes/unintended
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  mkdir -p "$home/config" "$home/data"
+  printf '{"generation":"pol-1","venues":{"-":{}}}\n' \
+    > "$home/config/publication-identity.json"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
+    "$ATTEST" write --no-recheck --notes-ref "$unintended" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an unintended attestation evidence ref was published: $out"
+  assert_contains "$out" 'FM_PUB_EFFECT_CLASS_MISMATCH' \
+    "the unintended ref refusal did not identify the effect mismatch: $out"
+  git -C "$fork" rev-parse --verify --quiet "$unintended" >/dev/null 2>&1 \
+    && fail "the unintended attestation evidence ref reached the remote"
+  pass "fm-attest.sh: attestation evidence cannot publish an unintended ref"
+}
+
 test_write_reports_the_rejection_reason_with_credentials_redacted() {
   local repo fork head out rc
   repo="$TMP_ROOT/write-push-rejected"
@@ -3101,6 +3150,8 @@ test_write_publishes_to_the_push_target_it_reconciled_against
 test_write_reports_the_rejection_reason_with_credentials_redacted
 test_write_publishes_ungoverned_and_says_so
 test_write_refuses_to_publish_when_governance_cannot_be_established
+test_write_publishes_attestation_evidence_to_a_governed_venue
+test_write_refuses_an_unintended_attestation_evidence_ref
 test_write_publishes_a_first_attestation_to_a_push_target_with_no_ref
 test_write_refuses_an_unreadable_push_target_without_leaking_credentials
 test_write_emits_only_positively_safe_urls
