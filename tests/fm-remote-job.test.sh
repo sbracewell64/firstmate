@@ -482,6 +482,26 @@ fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the pre-execution timeout 
 rm -f -- "$ACCOUNT_HOME/.local/bin/git"
 pass "pre-execution validation expires as admission and witnesses no execution"
 
+VALIDATOR_124_SIDE_EFFECT="$TMP_ROOT/validator-124-side-effect"
+cat > "$ACCOUNT_HOME/.local/bin/git" <<'SH'
+#!/bin/bash
+exit 124
+SH
+chmod +x "$ACCOUNT_HOME/.local/bin/git"
+FM_REMOTE_JOB_TIMEOUT=10
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
+  fm-touch-job.sh "$VALIDATOR_124_SIDE_EFFECT" < /dev/null > /dev/null
+JOB_ID=$FM_REMOTE_JOB_ID
+fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_OUTCOME" = admission_refused ] \
+  || fail "a validator exit 124 was not refused (got $FM_REMOTE_JOB_OUTCOME)"
+[ -z "$FM_REMOTE_JOB_EXIT" ] || fail "a validator exit 124 published a command exit status"
+[ -z "$FM_REMOTE_JOB_EXECUTION_START" ] || fail "a validator exit 124 claimed command execution"
+assert_absent "$VALIDATOR_124_SIDE_EFFECT" "the governed command ran after validator exit 124"
+fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the validator exit 124 job could not be reaped"
+rm -f -- "$ACCOUNT_HOME/.local/bin/git"
+pass "a validator exit 124 is admission refusal, not expiry"
+
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-output-job.sh < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"

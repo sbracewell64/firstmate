@@ -524,17 +524,11 @@ worker_run_job() { # <account-home> <job-dir>
     "$git_bin" -C "$root" ls-files --error-unmatch "bin/$command" >/dev/null 2>&1
   rc=$?
   set -e
-  case "$rc" in
-    0) ;;
-    124) worker_publish_result "$job" admission_expired; return ;;
-    *)
-      if [ "$WORKER_RUN_RESULT" = infrastructure ]; then
-        worker_publish_result "$job" infrastructure
-      else
-        worker_publish_result "$job" admission_refused
-      fi
-      return
-      ;;
+  case "$WORKER_RUN_RESULT:$rc" in
+    child:0) ;;
+    timeout:*) worker_publish_result "$job" admission_expired; return ;;
+    infrastructure:*) worker_publish_result "$job" infrastructure; return ;;
+    child:*) worker_publish_result "$job" admission_refused; return ;;
   esac
   fm_remote_job_build_child_path "$root" >/dev/null
   for command in stdin stdout stderr; do
