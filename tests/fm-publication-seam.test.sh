@@ -998,7 +998,7 @@ test_retire_and_reconcile_cannot_overwrite_a_live_consume() {
 }
 
 test_reconcile_reclaims_a_killed_consumers_stale_claim() {
-  local id consume_pid out i record
+  local id consume_pid out record
   fixture reconcile-killed-consumer
   policy
   reviewed
@@ -1011,11 +1011,9 @@ test_reconcile_reclaims_a_killed_consumers_stale_claim() {
   consume_pid=$!
   fm_test_reap "$consume_pid"
   record="$FX_DATA/landing-authorizations/$id.json"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    [ -f "$record" ] && [ "$(jq -r '.state' "$record")" = spending ] \
-      && [ -d "$FX_DATA/landing-authorizations/.$id.claim" ] && break
-    sleep 0.1
-  done
+  fm_test_wait_file "$FX_DATA/push-started" 10 "$consume_pid" \
+    "reconcile-killed: consume exited before reaching the effect" \
+    "reconcile-killed: consume never reached the effect"
   [ "$(jq -r '.state' "$record")" = spending ] \
     || fail "reconcile-killed: consume never recorded spending"
   fm_test_kill_tree "$consume_pid"
