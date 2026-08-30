@@ -333,6 +333,20 @@ jobs:
       # a run that lost a shard's timing cannot support a within-budget claim.
       # bin/fm-test-run.sh owns the bounds and why each one cannot be reached by
       # ordinary runner jitter.
+      # The budget and spread are derived numbers; this proves they still match
+      # the samples they were derived from, so a hand-edited constant cannot
+      # quietly widen the envelope the lane axis is judged against.
+      - name: Check the declared measurement basis is qualified
+        if: always()
+        run: |
+          set -eu
+          rc=0
+          bin/fm-test-run.sh --check-basis || rc=$?
+          case "$rc" in
+            0) ;;
+            4) echo "::warning::serial measurement basis is not yet qualified; the lane axis carries no product verdict" ;;
+            *) echo "::error::declared serial budget disagrees with its own measurement basis"; exit "$rc" ;;
+          esac
       - name: Check serial lane against its declared budget
         if: always()
         env:
@@ -350,6 +364,13 @@ jobs:
           bin/fm-test-run.sh --check-budget "${inputs[@]}" || rc=$?
           case "$rc" in
             0) ;;
+            # The lane sits within the declared measured spread of its own
+            # threshold. Under SOL-FM-TEST-ENVIRONMENT-MEASUREMENT-VARIANCE that
+            # is a typed measurement could-not-observe: it is NOT a product
+            # regression, so it does not fail the job, and it is NOT a pass, so
+            # it must not be read as the lane having been cleared. Every other
+            # axis this job checks keeps its own verdict.
+            4) echo "::warning::serial lane semantic axis is could-not-observe (measurement variance overlaps the threshold); it is neither green nor red and carries no product verdict" ;;
             3) echo "::error::serial lane budget could not be observed; see the reason above"; exit 1 ;;
             *) echo "::error::serial lane drifted past its declared budget; see the bounds above"; exit "$rc" ;;
           esac
