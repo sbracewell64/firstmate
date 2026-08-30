@@ -1,8 +1,8 @@
 # shellcheck shell=bash
 # fm-publication-seam-lib.sh - the single owner of ONE question, asked
-# immediately before every governed remote-changing candidate publication this
-# fleet owns: may THIS exact head move THIS exact ref on THIS exact remote, from
-# the tip it is standing on, right now?
+# immediately before every guarded remote-changing act this fleet owns: may THIS
+# exact head move THIS exact ref on THIS exact remote, from the tip it is standing
+# on, right now?
 #
 # Source it; it defines and runs nothing on its own:
 #   # shellcheck source=bin/fm-publication-seam-lib.sh

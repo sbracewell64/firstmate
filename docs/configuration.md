@@ -217,7 +217,7 @@ When the deadline expires the sweep is terminated and reported as unevaluable ra
 
 ## Publication identity policy (config/publication-identity.json)
 
-[`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) decides whether a remote-changing candidate publication may proceed, and this optional local, gitignored file is where a home declares which venues it governs and who the governed parties are.
+[`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) decides whether a guarded remote-changing act may proceed, and this optional local, gitignored file is where a home declares trusted publication venues and the parties governing candidate work on them.
 It names real people and real delivery actors, so it is home-private and never ships in a template repo.
 
 ```json
@@ -245,12 +245,13 @@ It names real people and real delivery actors, so it is home-private and never s
 ```
 
 `generation` is required and is part of what an authority binds, so bumping it retires every authority granted under the previous one.
-A venue named here is governed; a venue absent from the file is not governed by this policy, though a live Browser Sol request may still govern the work.
-All six `identities` axes are required for a governed venue: a policy declaring four of them has not made a weaker promise, it has left two unstated, and an unstated axis is could-not-observe.
+A venue named here is trusted and governed for publication; a venue absent from the file is not governed by this policy, though a live Browser Sol request may still govern candidate work.
+All six `identities` axes are required for candidate publication on a governed venue: a policy declaring four of them has not made a weaker promise, it has left two unstated, and an unstated axis is could-not-observe.
 `maker` and `reviewer` must name different parties.
-`review_contracts` names the capability contracts a governed venue requires its `reviewer` to hold, checked against the role qualification register at publication time.
-It is required for a governed venue on the same terms as the identity axes: a venue declaring none has not promised a lighter review, it has left unstated what its reviewer had to be qualified for, and that is could-not-observe.
-A governed venue also requires a ruling bound to the exact head being published; declaring a venue governed says a review is REQUIRED and never that one happened.
+`review_contracts` names the capability contracts a governed venue requires its `reviewer` to hold for candidate publication, checked against the role qualification register at publication time.
+It is required for candidate publication on a governed venue on the same terms as the identity axes: a venue declaring none has not promised a lighter review, it has left unstated what its reviewer had to be qualified for, and that is could-not-observe.
+A governed candidate publication also requires a ruling bound to the exact head being published; declaring a venue governed says a review is REQUIRED and never that one happened.
+Attestation-evidence publication uses the venue declaration only as destination trust: it may update only `refs/notes/no-mistakes`, carries no semantic work identity, and is not authorized by candidate identities or rulings.
 `protected_refs` adds glob patterns to the built-in set of refs custody replication may never address, and a home may add to that set but not subtract from it.
 `work` maps each publishable ref to the semantic work identity it carries and its `role`; only `canonical` is actionable, so a retained predecessor stays readable and stays unable to publish.
 `placeholders` adds identities to the built-in list that is never a governed party whatever a policy says; that list is built in rather than configured because a placeholder a home could switch off is not a floor.

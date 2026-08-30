@@ -179,7 +179,7 @@ FM_AUTH_ID_HEX_WIDTH=32
 # whole value of the authority is that its subject is known before it is spent.
 # shellcheck disable=SC2034  # contract constant consumed by sourcing callers
 #
-# CUSTODY IS A THIRD EFFECT rather than a flag on publication, because the two
+# CUSTODY IS A SEPARATE EFFECT rather than a flag on publication, because the two
 # grant different things and a record must say which. A custody authority backs
 # one exact committed candidate up to its own unprotected feature ref; it grants
 # no review, no CI, no acceptance and no landing. Spelling that as a mode of

@@ -230,19 +230,20 @@ This is a writing rule, not a migration.
 
 ### `publication`
 
-Ruled 2026-08-22, when the candidate-publication effect guard was built and the two senses met in one decision.
+Ruled 2026-08-22, when the candidate-publication effect guard was built and the first two senses met in one decision; the evidence sense joined that owner when guarded attestation publication was added.
 
 | | |
 |---|---|
 | **Disposition** | QUALIFY |
 | **Bundle sense** | posting a review bundle's attachments and its request to a Browser Sol control issue, owned by [`bin/fm-outbound-artifact.sh`](../bin/fm-outbound-artifact.sh) and its correlation records |
 | **Candidate sense** | moving a ref on a remote so a candidate head exists outside this machine, owned by [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-publication-guard.sh`](../bin/fm-publication-guard.sh) |
+| **Evidence sense** | moving the exact `refs/notes/no-mistakes` ref so head-bound attestation evidence exists on the pull request's repository, owned by [`bin/fm-attest.sh`](../bin/fm-attest.sh) through the same publication seam and guard |
 
 NO-CONTACT was not available, and the contact point is load-bearing rather than incidental.
 The candidate sense reads the bundle sense's own correlation records to decide whether a hold stands, so one function asks about both senses in the same fold.
 The resemblance is durable rather than passing: both senses emit something to a remote, both are bound to an exact head, and both record a durable artifact afterwards, so a reader who knows one recognises the shape of the other and reaches for the wrong owner.
 
-Write `bundle publication` for the first sense and `candidate publication` for the second.
+Write `bundle publication`, `candidate publication`, or `attestation-evidence publication` for the corresponding sense.
 Bare `publication` is acceptable only where the surrounding text has already fixed which one is meant, and never in a refusal, a token, or a header sentence that introduces the subject.
 
 Nothing is renamed.
@@ -254,7 +255,7 @@ A second collision was ruled with it and needs no row of its own, because one ow
 That is deliberate: a second authorization owner would bring a second store and a second idea of what `spent` means.
 The file keeps its name, its header states the widening, and `effect=` in the identity is what a reader distinguishes them by.
 
-**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `landing-authorizations/` row and section 7's publication chokepoint paragraph; the headers of [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh); the publish path of [`bin/fm-attest.sh`](../bin/fm-attest.sh); [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
+**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `landing-authorizations/` row and section 7's publication chokepoint paragraph; the headers of [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh); the publish path of [`bin/fm-attest.sh`](../bin/fm-attest.sh); [`docs/no-mistakes-attestation.md`](no-mistakes-attestation.md); [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
 
 ### `custody`
 

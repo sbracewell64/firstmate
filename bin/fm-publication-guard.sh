@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# fm-publication-guard.sh - the one chokepoint every remote-changing candidate
-# publication this fleet performs must pass, and the one-use authority it spends.
+# fm-publication-guard.sh - the one chokepoint every guarded remote-changing act
+# this fleet performs must pass, and the one-use authority it spends.
 #
 # WHAT THIS IS FOR. A candidate reaches the outside world when it is PUSHED. Every
 # reviewer, every CI run, every bot and every later ruling is reacting to a head
@@ -64,7 +64,7 @@
 #                                   [--tree <sha>] [--item <work-id>]
 #                                   [--effect custody|publication|attestation-evidence]
 #                                   [--dry-run]
-#       Compile the eligibility verdict for one exact candidate effect and, when
+#       Compile the eligibility verdict for one exact remote-changing effect and, when
 #       it is permitted, mint the one-use authority that effect must spend.
 #
 #       --dry-run compiles and prints the SAME verdict and writes nothing. Use it
@@ -144,7 +144,7 @@
 #   NO_EFFECT_ALREADY_EQUAL       the remote already equals the head. A typed
 #                                 NO-EFFECT result: nothing moves and no
 #                                 authority is consumed
-#   NOT_APPLICABLE                no policy and no ruling govern this candidate;
+#   NOT_APPLICABLE                no policy and no ruling govern this act;
 #                                 it proceeds, and it is REPORTED as ungoverned
 #   REFUSE <token>                a verdict was reached and it is no
 #   CNO <token>                   no verdict was reached. Never read as either
