@@ -86,8 +86,23 @@ test_dead_producer_is_reported_apart_from_a_timeout() {
   pass "a producer that dies without its marker is reported apart from a timeout"
 }
 
+test_marker_written_by_an_exiting_producer_still_satisfies_the_wait() {
+  local marker="$TMP_ROOT/exiting.marker" out="$TMP_ROOT/exiting.out" producer status
+  ( : > "$marker" ) &
+  producer=$!
+  fm_test_reap "$producer"
+  run_wait "$marker" 30 "$producer" "$out"
+  status=$?
+  wait "$producer" 2>/dev/null || true
+  expect_code 0 "$status" "a marker written immediately before producer exit must satisfy the wait"
+  assert_grep returned "$out" "the producer's completed readiness signal was lost at exit"
+  assert_no_grep "producer exited" "$out" "a completed readiness signal was mistaken for producer failure"
+  pass "a readiness signal survives its producer exiting in the same breath"
+}
+
 test_returns_as_soon_as_the_marker_appears
 test_bound_is_wall_clock_seconds_not_iterations
 test_dead_producer_is_reported_apart_from_a_timeout
+test_marker_written_by_an_exiting_producer_still_satisfies_the_wait
 
 echo "ALL TESTS PASSED"
