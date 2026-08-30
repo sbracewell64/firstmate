@@ -90,6 +90,17 @@ cat > "$REMOTE_ROOT/bin/fm-mutate.sh" <<'SH'
 #!/usr/bin/env bash
 printf 'mutation\n' >> "$1"
 SH
+cat > "$REMOTE_ROOT/bin/fm-hold-e2e.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'started\n' > "$1"
+until [ -e "$2" ]; do sleep 0.05; done
+SH
+cat > "$REMOTE_ROOT/bin/fm-overrun-e2e.sh" <<'SH'
+#!/usr/bin/env bash
+printf 'started\n' > "$1"
+sleep 30
+printf 'finished\n' > "$2"
+SH
 chmod +x "$REMOTE_ROOT/bin"/*.sh
 chmod +x "$REMOTE_ROOT/bin/tasks-axi"
 git -C "$REMOTE_ROOT" init -q -b main
@@ -459,6 +470,130 @@ assert_contains "$out" 'doctor does not match the trusted bootstrap identity' \
 cp "$ROOT/bin/fm-remote-doctor.sh" "$REMOTE_ROOT/bin/fm-remote-doctor.sh"
 chmod +x "$REMOTE_ROOT/bin/fm-remote-doctor.sh"
 pass "doctor bootstrap remains authenticated when git is unavailable"
+
+# The whole production composition, not a record parser: fm-on -> the SSH
+# process boundary -> the fixed entrypoint -> durable stage -> queued admission
+# -> the worker's claim and start boundary -> a child that runs, a child that
+# overruns, or a request that never starts -> typed relay -> caller
+# classification -> reap. A request that never crossed the start boundary must
+# reach the caller as an admission outcome, never as that command's exit status.
+JOBS_DIR="$TMP_ROOT/remote-jobs/jobs"
+
+e2e_queued_deadline_passed() { # a queued record exists and its admission window has closed
+  local job deadline now attempt=0
+  while [ "$attempt" -lt 400 ]; do
+    for job in "$JOBS_DIR"/job-*; do
+      [ -d "$job" ] || continue
+      [ "$(cat "$job/state" 2>/dev/null || true)" = queued ] || continue
+      deadline=$(cat "$job/queue_deadline" 2>/dev/null || true)
+      case "$deadline" in ''|*[!0-9]*) continue ;; esac
+      now=$(date +%s)
+      [ "$now" -gt "$deadline" ] && return 0
+    done
+    attempt=$((attempt + 1))
+    sleep 0.05
+  done
+  return 1
+}
+
+e2e_job_records() {
+  local job count=0
+  for job in "$JOBS_DIR"/job-*; do
+    [ -d "$job" ] || continue
+    count=$((count + 1))
+  done
+  printf '%s\n' "$count"
+}
+
+E2E_HOLD_STARTED="$TMP_ROOT/e2e-hold-started"
+E2E_HOLD_RELEASE="$TMP_ROOT/e2e-hold-release"
+E2E_EXPIRED_MUTATIONS="$TMP_ROOT/e2e-expired-mutations"
+fm_on ios fm-hold-e2e.sh "$E2E_HOLD_STARTED" "$E2E_HOLD_RELEASE" \
+  > "$TMP_ROOT/e2e-hold.out" 2> "$TMP_ROOT/e2e-hold.err" &
+E2E_HOLD_PID=$!
+fm_test_reap "$E2E_HOLD_PID"
+for _ in $(seq 1 300); do
+  [ -f "$E2E_HOLD_STARTED" ] && break
+  sleep 0.05
+done
+assert_present "$E2E_HOLD_STARTED" "the held remote job never started executing"
+FM_REMOTE_JOB_QUEUE_TIMEOUT=1 fm_on ios fm-mutate.sh "$E2E_EXPIRED_MUTATIONS" \
+  > "$TMP_ROOT/e2e-expired.out" 2> "$TMP_ROOT/e2e-expired.err" &
+E2E_EXPIRED_PID=$!
+fm_test_reap "$E2E_EXPIRED_PID"
+e2e_queued_deadline_passed || fail "the second request never reached an expired queued admission"
+assert_absent "$E2E_EXPIRED_MUTATIONS" "the queued request mutated while it was still waiting for admission"
+touch "$E2E_HOLD_RELEASE"
+set +e
+wait "$E2E_HOLD_PID"
+E2E_HOLD_RC=$?
+wait "$E2E_EXPIRED_PID"
+E2E_EXPIRED_RC=$?
+set -e
+[ "$E2E_HOLD_RC" -eq 0 ] || fail "the held remote job did not finish normally (got $E2E_HOLD_RC)"
+assert_absent "$E2E_EXPIRED_MUTATIONS" "a request that never started still mutated the remote host"
+[ "$E2E_EXPIRED_RC" -eq 75 ] \
+  || fail "an unadmitted request did not reach the caller as an admission outcome (got $E2E_EXPIRED_RC)"
+assert_grep 'no execution verdict' "$TMP_ROOT/e2e-expired.err" \
+  "the caller received no typed no-execution diagnostic"
+assert_grep 'outcome=admission_expired' "$TMP_ROOT/e2e-expired.err" \
+  "the caller could not tell admission expiry from an execution result"
+[ "$(e2e_job_records)" -eq 0 ] || fail "the expired request left a durable record behind"
+pass "a request that never starts reaches the caller as admission expiry and reaps deterministically"
+
+E2E_OVERRUN_STARTED="$TMP_ROOT/e2e-overrun-started"
+E2E_OVERRUN_FINISHED="$TMP_ROOT/e2e-overrun-finished"
+set +e
+FM_REMOTE_JOB_TIMEOUT=1 fm_on ios fm-overrun-e2e.sh "$E2E_OVERRUN_STARTED" "$E2E_OVERRUN_FINISHED" \
+  > "$TMP_ROOT/e2e-overrun.out" 2> "$TMP_ROOT/e2e-overrun.err"
+E2E_OVERRUN_RC=$?
+set -e
+assert_present "$E2E_OVERRUN_STARTED" "the overrunning command never started, so its timeout proves nothing"
+assert_absent "$E2E_OVERRUN_FINISHED" "the execution timeout did not stop the command"
+[ "$E2E_OVERRUN_RC" -eq 124 ] \
+  || fail "a started command that overran its deadline did not return the execution timeout (got $E2E_OVERRUN_RC)"
+assert_no_grep 'no execution verdict' "$TMP_ROOT/e2e-overrun.err" \
+  "an execution timeout was reported as if the command never ran"
+[ "$(e2e_job_records)" -eq 0 ] || fail "the timed-out request left a durable record behind"
+pass "a started command that overruns stays a distinct execution timeout"
+
+# Status 75 is also the caller-side projection for a request with no execution
+# verdict, so the typed diagnostic must distinguish that case from a command
+# that genuinely started and returned the same status.
+E2E_EXIT_75_ARGV="$REMOTE_HOME/e2e-exit-75-argv.bin"
+set +e
+fm_on ios fm-probe-one.sh "$E2E_EXIT_75_ARGV" 75 \
+  > "$TMP_ROOT/e2e-exit-75.out" 2> "$TMP_ROOT/e2e-exit-75.err"
+E2E_EXIT_75_RC=$?
+set -e
+[ "$E2E_EXIT_75_RC" -eq 75 ] \
+  || fail "a started command's exit 75 was not preserved (got $E2E_EXIT_75_RC)"
+assert_present "$E2E_EXIT_75_ARGV" "the exit-75 command never started, so its classification proves nothing"
+assert_no_grep 'no execution verdict' "$TMP_ROOT/e2e-exit-75.err" \
+  "a genuine command exit 75 was classified as a no-execution result"
+[ "$(e2e_job_records)" -eq 0 ] || fail "the exit-75 request left a durable record behind"
+pass "a genuine command exit 75 remains distinct from the no-execution projection"
+
+E2E_ARGV_ACTUAL="$REMOTE_HOME/e2e-argv.bin"
+printf 'e2e payload\n' > "$TMP_ROOT/e2e-stdin"
+set +e
+# shellcheck disable=SC2016 # Literal shell-looking argv is the injection probe.
+fm_on ios fm-probe-one.sh "$E2E_ARGV_ACTUAL" 23 \
+  'plain' 'two words' '$(touch /tmp/fm-on-injected)' '' $'line one\nline two' \
+  < "$TMP_ROOT/e2e-stdin" > "$TMP_ROOT/e2e-normal.out" 2> "$TMP_ROOT/e2e-normal.err"
+E2E_NORMAL_RC=$?
+set -e
+[ "$E2E_NORMAL_RC" -eq 23 ] || fail "the normal path lost its command exit status after the failure paths"
+cmp -s "$ARGV_EXPECTED" "$E2E_ARGV_ACTUAL" || fail "the normal path lost argv boundaries after the failure paths"
+assert_grep 'stdin: e2e payload' "$TMP_ROOT/e2e-normal.out" "the normal path lost stdin after the failure paths"
+assert_grep 'stdout: 5 args' "$TMP_ROOT/e2e-normal.out" "the normal path lost stdout after the failure paths"
+assert_grep 'stderr: separate' "$TMP_ROOT/e2e-normal.err" "the normal path merged stderr after the failure paths"
+assert_absent /tmp/fm-on-injected "shell-looking argv was interpreted after the failure paths"
+out=$(fm_on ios fm-probe-two.sh)
+assert_contains "$out" 'secret=absent' "the normal path lost its environment isolation after the failure paths"
+assert_contains "$out" "home=$REMOTE_HOME" "the normal path lost its configured home after the failure paths"
+[ "$(e2e_job_records)" -eq 0 ] || fail "the normal path left durable records behind"
+pass "the same seam still runs a normal command with unchanged identity, isolation, streams, and cleanup"
 
 if FM_HOME="$LOCAL_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_SSH_BIN="$FAKEBIN/fake-ssh" \
   "$ROOT/bin/fm-on.sh" '-oProxyCommand=bad' fm-probe-two.sh >/dev/null 2>&1; then

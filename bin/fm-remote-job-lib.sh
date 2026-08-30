@@ -8,12 +8,40 @@
 # runtime PATH.
 #
 # A job directory is mode 0700 and contains root, home, argv (NUL-delimited),
-# stdin, stdout, stderr, queue_deadline, timeout, deadline, exit, and state.
+# stdin, stdout, stderr, queue_deadline, timeout, deadline, execution_start,
+# outcome, exit, and state.
 # Stage writes state=queued last. The worker atomically claims a job with
 # .claim, establishes its execution deadline, changes state to running, writes
-# bounded stdout/stderr and exit, then publishes state=done last. Callers wait
-# for done, relay stdout and stderr separately, then reap only their completed
-# record. Input, argv, stdout, and stderr are each capped at 1048576 bytes.
+# bounded stdout/stderr, then publishes its typed outcome and state=done last.
+# Callers wait for done, relay stdout and stderr separately, then reap only
+# their completed record. Input, argv, stdout, and stderr are each capped at
+# 1048576 bytes.
+#
+# Admission and execution are separate observations. A request that never
+# crosses the boundary that launches the governed command has NO execution
+# verdict, so this protocol never represents it as that command's exit status.
+# The closed outcome vocabulary is:
+#   executed           the governed command was released to exec, and exit is
+#                      its own status (124 still means the command exceeded its
+#                      execution deadline)
+#   admission_expired  a deadline passed before the governed command started
+#   admission_refused  the record or command was refused before it started
+#   infrastructure     the worker could not observe an execution result
+# execution_start is the positive execution-start witness: the epoch second
+# recorded immediately after the worker released the governed command to exec,
+# written at that one boundary and nowhere else. exit exists only alongside
+# outcome=executed, so a consumer cannot read an exit-code-shaped integer for a
+# command that did not run, and outcome=executed without a readable witness is
+# refused rather than believed. Pre-execution validation runs under the same
+# bounded deadline but writes no witness, so its expiry stays an admission
+# outcome.
+#
+# fm_remote_job_wait publishes FM_REMOTE_JOB_OUTCOME, FM_REMOTE_JOB_EXECUTION_START,
+# and FM_REMOTE_JOB_EXIT, the last only for outcome=executed. Callers that
+# project the result onto a command-style exit status use
+# FM_REMOTE_JOB_NO_EXECUTION_STATUS for every non-execution outcome and print
+# the typed diagnostic, because a single byte of exit status cannot carry the
+# distinction on its own.
 #
 # The worker accepts only a tracked, non-symlink executable named fm-*.sh below
 # its configured FM_ROOT/bin. Every child receives env -i with the composed
@@ -35,6 +63,8 @@ FM_REMOTE_JOB_TIMEOUT=${FM_REMOTE_JOB_TIMEOUT:-360}
 FM_REMOTE_JOB_WAIT_GRACE=${FM_REMOTE_JOB_WAIT_GRACE:-30}
 FM_REMOTE_JOB_POLL_SECONDS=${FM_REMOTE_JOB_POLL_SECONDS:-0.05}
 FM_REMOTE_JOB_REAP_SECONDS=${FM_REMOTE_JOB_REAP_SECONDS:-3600}
+# shellcheck disable=SC2034 # Sourceable API: the caller-side projection of every non-execution outcome.
+FM_REMOTE_JOB_NO_EXECUTION_STATUS=75
 FM_REMOTE_JOB_OPERATOR_PATH=
 FM_REMOTE_JOB_CHILD_PATH=
 FM_REMOTE_JOB_STATE=
@@ -43,6 +73,8 @@ FM_REMOTE_JOB_ID=
 FM_REMOTE_JOB_STDOUT=
 FM_REMOTE_JOB_STDERR=
 FM_REMOTE_JOB_EXIT=
+FM_REMOTE_JOB_OUTCOME=
+FM_REMOTE_JOB_EXECUTION_START=
 FM_REMOTE_JOB_ERROR=
 FM_REMOTE_JOB_REPAIRED=0
 
@@ -406,9 +438,50 @@ fm_remote_job_read_state() { # <job-dir>
   case "$value" in queued|running|'done') printf '%s\n' "$value" ;; *) return 1 ;; esac
 }
 
-fm_remote_job_read_number() { # <job-dir> queue_deadline|timeout|deadline
+fm_remote_job_valid_outcome() { # <value>
+  case "$1" in executed|admission_expired|admission_refused|infrastructure) return 0 ;; esac
+  return 1
+}
+
+fm_remote_job_outcome_is_execution() { # <value>
+  [ "$1" = executed ]
+}
+
+fm_remote_job_outcome_diagnostic() { # <value>
+  case "$1" in
+    executed) printf 'the governed command ran and exit is its own status\n' ;;
+    admission_expired) printf 'the request expired before the governed command started\n' ;;
+    admission_refused) printf 'the request was refused before the governed command started\n' ;;
+    infrastructure) printf 'the worker could not observe an execution result for the request\n' ;;
+    *) return 1 ;;
+  esac
+}
+
+fm_remote_job_write_outcome() { # <job-dir> <outcome>
+  local job=$1 value=$2 tmp
+  fm_remote_job_valid_outcome "$value" || return 1
+  [ -d "$job" ] && [ ! -L "$job" ] || return 1
+  tmp=$(umask 077; mktemp "$job/.outcome.XXXXXX") || return 1
+  printf '%s\n' "$value" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+  mv -f -- "$tmp" "$job/outcome"
+}
+
+fm_remote_job_read_outcome() { # <job-dir>
+  local job=$1 value extra
+  fm_remote_job_regular_bounded "$job/outcome" 64 || return 1
+  IFS= read -r value < "$job/outcome" || return 1
+  if IFS= read -r extra < <(tail -n +2 "$job/outcome"); then
+    : "$extra"
+    return 1
+  fi
+  fm_remote_job_valid_outcome "$value" || return 1
+  printf '%s\n' "$value"
+}
+
+fm_remote_job_read_number() { # <job-dir> queue_deadline|timeout|deadline|execution_start
   local job=$1 field=$2 value
-  case "$field" in queue_deadline|timeout|deadline) ;; *) return 1 ;; esac
+  case "$field" in queue_deadline|timeout|deadline|execution_start) ;; *) return 1 ;; esac
   fm_remote_job_regular_bounded "$job/$field" 32 || return 1
   value=$(tr -d '\n' < "$job/$field")
   case "$value" in ''|*[!0-9]*) return 1 ;; esac
@@ -416,9 +489,9 @@ fm_remote_job_read_number() { # <job-dir> queue_deadline|timeout|deadline
   printf '%s\n' "$value"
 }
 
-fm_remote_job_write_number() { # <job-dir> queue_deadline|timeout|deadline <value>
+fm_remote_job_write_number() { # <job-dir> queue_deadline|timeout|deadline|execution_start <value>
   local job=$1 field=$2 value=$3 tmp
-  case "$field" in queue_deadline|timeout|deadline) ;; *) return 1 ;; esac
+  case "$field" in queue_deadline|timeout|deadline|execution_start) ;; *) return 1 ;; esac
   case "$value" in ''|*[!0-9]*|0) return 1 ;; esac
   [ -d "$job" ] && [ ! -L "$job" ] || return 1
   tmp=$(umask 077; mktemp "$job/.$field.XXXXXX") || return 1
@@ -488,6 +561,12 @@ fm_remote_job_stage() { # <account-home> <root> <home> <command> [args...]; stdi
 
 fm_remote_job_wait() { # <account-home> <id>
   local account_home=$1 id=$2 job state queue_deadline execution_timeout wait_deadline exit_value
+  local outcome witness
+  FM_REMOTE_JOB_STDOUT=
+  FM_REMOTE_JOB_STDERR=
+  FM_REMOTE_JOB_EXIT=
+  FM_REMOTE_JOB_OUTCOME=
+  FM_REMOTE_JOB_EXECUTION_START=
   fm_remote_job_prepare_state "$account_home" || return 1
   job=$(fm_remote_job_job_dir "$id") || {
     FM_REMOTE_JOB_ERROR="remote job record disappeared or became unsafe"
@@ -511,20 +590,47 @@ fm_remote_job_wait() { # <account-home> <id>
     case "$state" in
       'done')
         if ! fm_remote_job_regular_bounded "$job/stdout" "$FM_REMOTE_JOB_MAX_BYTES" ||
-          ! fm_remote_job_regular_bounded "$job/stderr" "$FM_REMOTE_JOB_MAX_BYTES" ||
-          ! fm_remote_job_regular_bounded "$job/exit" 32; then
+          ! fm_remote_job_regular_bounded "$job/stderr" "$FM_REMOTE_JOB_MAX_BYTES"; then
           FM_REMOTE_JOB_ERROR="remote job result is unsafe or exceeds its byte bound"
           return 1
         fi
-        exit_value=$(tr -d '\n' < "$job/exit")
-        case "$exit_value" in ''|*[!0-9]*) FM_REMOTE_JOB_ERROR="remote job exit status is invalid"; return 1 ;; esac
-        [ "$exit_value" -le 255 ] || { FM_REMOTE_JOB_ERROR="remote job exit status is invalid"; return 1; }
+        outcome=$(fm_remote_job_read_outcome "$job") || {
+          FM_REMOTE_JOB_ERROR="remote job published no readable typed outcome"
+          return 1
+        }
+        witness=
+        if [ -e "$job/execution_start" ] || [ -L "$job/execution_start" ]; then
+          witness=$(fm_remote_job_read_number "$job" execution_start) || {
+            FM_REMOTE_JOB_ERROR="remote job execution-start witness is malformed"
+            return 1
+          }
+        fi
+        if fm_remote_job_outcome_is_execution "$outcome"; then
+          [ -n "$witness" ] || {
+            FM_REMOTE_JOB_ERROR="remote job reported an execution result with no execution-start witness"
+            return 1
+          }
+          fm_remote_job_regular_bounded "$job/exit" 32 || {
+            FM_REMOTE_JOB_ERROR="remote job result is unsafe or exceeds its byte bound"
+            return 1
+          }
+          exit_value=$(tr -d '\n' < "$job/exit")
+          case "$exit_value" in ''|*[!0-9]*) FM_REMOTE_JOB_ERROR="remote job exit status is invalid"; return 1 ;; esac
+          [ "$exit_value" -le 255 ] || { FM_REMOTE_JOB_ERROR="remote job exit status is invalid"; return 1; }
+          # shellcheck disable=SC2034 # Sourceable API consumed by the entrypoint after this function returns.
+          FM_REMOTE_JOB_EXIT=$exit_value
+        elif [ -e "$job/exit" ] || [ -L "$job/exit" ]; then
+          FM_REMOTE_JOB_ERROR="remote job published a command exit status for $outcome, which established no execution"
+          return 1
+        fi
         # shellcheck disable=SC2034 # Sourceable API consumed by the entrypoint after this function returns.
         FM_REMOTE_JOB_STDOUT="$job/stdout"
         # shellcheck disable=SC2034 # Sourceable API consumed by the entrypoint after this function returns.
         FM_REMOTE_JOB_STDERR="$job/stderr"
         # shellcheck disable=SC2034 # Sourceable API consumed by the entrypoint after this function returns.
-        FM_REMOTE_JOB_EXIT=$exit_value
+        FM_REMOTE_JOB_OUTCOME=$outcome
+        # shellcheck disable=SC2034 # Sourceable API consumed by the entrypoint after this function returns.
+        FM_REMOTE_JOB_EXECUTION_START=$witness
         return 0
         ;;
       queued|running) ;;
@@ -543,7 +649,7 @@ fm_remote_job_reap() { # <account-home> <id>; only removes an exact completed re
   fm_remote_job_prepare_state "$account_home" || return 1
   job=$(fm_remote_job_job_dir "$id") || return 1
   [ "$(fm_remote_job_read_state "$job")" = 'done' ] || return 1
-  for file in root home queue_deadline timeout deadline argv stdin stdout stderr exit state; do
+  for file in root home queue_deadline timeout deadline execution_start argv stdin stdout stderr exit outcome state; do
     [ -e "$job/$file" ] || continue
     [ ! -L "$job/$file" ] || return 1
     rm -f -- "$job/$file" || return 1
