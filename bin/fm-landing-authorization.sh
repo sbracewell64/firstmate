@@ -390,6 +390,19 @@ spend_release() {
   exit "$status"
 }
 
+spend_terminate() {  # <signal>
+  local signal=$1 group=${BASHPID:-$$}
+  trap - EXIT INT TERM
+  # Before intent, the reservation and claim protect no possible effect and a
+  # signal must release both before it terminates the owned process group.
+  if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ]; then
+    ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}" || true
+    claim_release
+  fi
+  kill -s "$signal" -- "-$group" 2>/dev/null || exit 4
+  exit 4
+}
+
 ruling_reservation_release_or_unobserved() {  # <auth-id> <detail>
   local reservation=$RULING_RESERVATION
   ruling_reservation_release "$1" \
@@ -411,6 +424,8 @@ ruling_reservation_acquire() {  # <request-id> <head> <auth-id>
   RULING_RESERVATION_HOLDER=$3
   RULING_RESERVATION_RELEASE_ON_EXIT=1
   trap spend_release EXIT
+  trap 'spend_terminate INT' INT
+  trap 'spend_terminate TERM' TERM
 }
 
 RULING_RESERVATION_HOLDER=
