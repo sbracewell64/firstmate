@@ -4065,7 +4065,266 @@ case "${1:-}" in --supports) exit 0 ;; *) exit 0 ;; esac'
   pass "fm-attest.sh: an unobtainable authority reaches no verdict rather than running the candidate"
 }
 
+# ---------------------------------------------------------------------------
+# The acceptance runner's control flow. The exact-head REVISE on PR #134
+# (applying 19/5431020714) found that protecting bin/fm-attest.sh left the
+# workflow wrapper - the program that selects, sequences, or could bypass the
+# verifier - in candidate hands. The law now: on pull_request_target the
+# platform takes the workflow FILE from the governed branch, and the file runs
+# bin/fm-attest-gate.sh out of the governed generation, so a candidate's edits
+# to either are proposal-only. These tests pin both halves: the five wrapper
+# tamperings are REAL programs under the preceding law, and INERT under this
+# one, because nothing of the candidate's is ever consulted.
+# ---------------------------------------------------------------------------
+
+# The five wrapper tamperings the ruling names. Each writes a candidate copy of
+# the workflow whose acceptance semantics differ from the governed file's.
+install_tampered_workflow() {  # <dir> <tamper>
+  local dir=$1 tamper=$2
+  mkdir -p "$dir/.github/workflows"
+  case $tamper in
+    skip-policy-resolution)
+      # (a) the policy-resolution step is deleted outright.
+      awk '
+        $0 == "      - name: Resolve the authoritative verifier from the governed policy generation" { skipping = 1 }
+        skipping && /^      - name: / && $0 != "      - name: Resolve the authoritative verifier from the governed policy generation" { skipping = 0 }
+        !skipping { print }
+      ' "$WORKFLOW" > "$dir/.github/workflows/no-mistakes-required.yml"
+      ;;
+    substitute-candidate-verifier)
+      # (b) the resolved verifier is pointed at the candidate's own copy.
+      # shellcheck disable=SC2016  # The unexpanded text is what the workflow carries.
+      sed 's|POLICY_VERIFIER=${policy_dir}/bin/fm-attest.sh|POLICY_VERIFIER=${PWD}/bin/fm-attest.sh|' \
+        "$WORKFLOW" > "$dir/.github/workflows/no-mistakes-required.yml"
+      ;;
+    force-verify-success)
+      # (c) the verify step is made to succeed before it looks at anything.
+      sed 's|^          set -eu$|          set -eu\n          exit 0|' \
+        "$WORKFLOW" > "$dir/.github/workflows/no-mistakes-required.yml"
+      ;;
+    remove-verify-step)
+      # (d) the verify step is deleted outright.
+      awk '
+        $0 == "      - name: Verify the head-bound no-mistakes attestation" { skipping = 1 }
+        skipping && /^      - name: / && $0 != "      - name: Verify the head-bound no-mistakes attestation" { skipping = 0 }
+        !skipping { print }
+      ' "$WORKFLOW" > "$dir/.github/workflows/no-mistakes-required.yml"
+      ;;
+    change-policy-ref-selection)
+      # (e) the ref policy is read from is redirected to a candidate branch.
+      # shellcheck disable=SC2016  # The unexpanded text is what the workflow carries.
+      sed 's|POLICY_REF: refs/heads/${{ github.event.pull_request.base.ref }}|POLICY_REF: refs/heads/attacker-policy|' \
+        "$WORKFLOW" > "$dir/.github/workflows/no-mistakes-required.yml"
+      ;;
+    *) fail "unknown wrapper tamper: $tamper" ;;
+  esac
+}
+
+wrapper_tampers='skip-policy-resolution substitute-candidate-verifier force-verify-success remove-verify-step change-policy-ref-selection'
+
+# Extract a named step from an arbitrary workflow file, the same way
+# workflow_step_script extracts from the repository's own.
+workflow_step_script_from() {  # <file> <step-name>
+  local file=$1 want=$2
+  awk -v want="$want" '
+    /^      - / { in_step = 0; collecting = 0 }
+    $0 == "      - name: " want { in_step = 1; next }
+    in_step && $0 == "        run: |" { collecting = 1; next }
+    !collecting { next }
+    $0 == "" { print ""; next }
+    substr($0, 1, 10) == "          " { print substr($0, 11); next }
+    { collecting = 0; in_step = 0 }
+  ' "$file"
+}
+
+test_workflow_subscribes_the_governed_event_and_checks_out_its_generation() {
+  local on_block ref_line
+  # The platform rule this whole repair leans on: pull_request_target executes
+  # the workflow file from the governed branch. A file that does not subscribe
+  # it has no governed leg at all, and a target leg that checks out the
+  # candidate head would execute candidate code with the governed file.
+  on_block=$(awk '/^on:$/,/^permissions:/' "$WORKFLOW")
+  printf '%s\n' "$on_block" | grep -q 'pull_request_target:' \
+    || fail "the workflow does not subscribe pull_request_target, so no governed leg exists"
+  printf '%s\n' "$on_block" | grep -q '  pull_request:' \
+    || fail "the transitional pull_request leg is gone before a descendant generation may remove it"
+  # shellcheck disable=SC2016  # The unexpanded expression is the asserted file text.
+  ref_line=$(grep -F "ref: \${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}" "$WORKFLOW" || true)
+  [ -n "$ref_line" ] \
+    || fail "the checkout does not send the governed leg to the base generation and the transitional leg to the head"
+  # The governed leg refuses to exist without the gate program beside the
+  # verifier, and the verify step dispatches the governed gate before any
+  # inline flow can run.
+  workflow_step_script 'Resolve the authoritative verifier from the governed policy generation' \
+    | grep -q 'bin/fm-attest-gate.sh' \
+    || fail "the resolve step never selects the governed acceptance gate"
+  workflow_step_script 'Verify the head-bound no-mistakes attestation' \
+    | grep -q 'POLICY_GATE' \
+    || fail "the verify step never dispatches the governed acceptance gate"
+  pass "fm-attest.sh: the workflow subscribes the governed event and checks out its generation"
+}
+
+test_wrapper_tampering_is_real_under_the_preceding_law() {
+  local dir tamper file
+  # The RED half. Each tamper, were the candidate's file still the acceptance
+  # program - which is exactly what the preceding law's pull_request leg runs -
+  # carries different executable semantics than the governed file. Without
+  # this, the green half below could be satisfied by tamperings that change
+  # nothing.
+  dir="$TMP_ROOT/wrapper-tamper-real"
+  for tamper in $wrapper_tampers; do
+    rm -rf "$dir"; mkdir -p "$dir"
+    install_tampered_workflow "$dir" "$tamper"
+    file="$dir/.github/workflows/no-mistakes-required.yml"
+    [ -s "$file" ] || fail "tamper $tamper produced no workflow file"
+    cmp -s "$file" "$WORKFLOW" \
+      && fail "tamper $tamper left the workflow byte-identical, so it tests nothing"
+    case $tamper in
+      skip-policy-resolution)
+        [ -z "$(workflow_step_script_from "$file" 'Resolve the authoritative verifier from the governed policy generation')" ] \
+          || fail "tamper $tamper did not remove the policy-resolution step"
+        ;;
+      substitute-candidate-verifier)
+        # shellcheck disable=SC2016  # The unexpanded text is what the tampered file carries.
+        grep -q 'POLICY_VERIFIER=${PWD}/bin/fm-attest.sh' "$file" \
+          || fail "tamper $tamper did not point the verifier at the candidate copy"
+        ;;
+      force-verify-success)
+        workflow_step_script_from "$file" 'Verify the head-bound no-mistakes attestation' \
+          | head -3 | grep -q '^exit 0$' \
+          || fail "tamper $tamper did not force the verify step to success"
+        ;;
+      remove-verify-step)
+        [ -z "$(workflow_step_script_from "$file" 'Verify the head-bound no-mistakes attestation')" ] \
+          || fail "tamper $tamper did not remove the verify step"
+        ;;
+      change-policy-ref-selection)
+        grep -q 'refs/heads/attacker-policy' "$file" \
+          || fail "tamper $tamper did not redirect the policy-ref selection"
+        ;;
+    esac
+  done
+  pass "fm-attest.sh: each wrapper tamper is a real change to the preceding law's program"
+}
+
+test_wrapper_tampering_cannot_reach_the_governed_acceptance_program() {
+  local dir venue tamper out rc marker
+  # The GREEN half, and the ruling's watched reds (a) through (e) in one
+  # mechanism: on the governed leg both the workflow file and the acceptance
+  # program come from the governed generation, so the acceptance run is built
+  # here from the VENUE's bytes alone - exactly what the platform does on
+  # pull_request_target - while a fully tampered candidate tree sits in reach
+  # and is proven untouched. The candidate's gate, verifier and workflow are
+  # booby-trapped to leave a marker if anything executes them; the venue's
+  # verifier refuses, and the verdict must remain that refusal for every
+  # tamper, with no marker.
+  dir="$TMP_ROOT/wrapper-tamper-inert"
+  rm -rf "$dir"; mkdir -p "$dir/venue"
+  # The venue generation: the real workflow and gate, and a verifier that
+  # refuses everything - so any flip to success can only come from candidate
+  # bytes getting into the program.
+  mkdir -p "$dir/venue/bin" "$dir/venue/.github/workflows"
+  cp "$WORKFLOW" "$dir/venue/.github/workflows/no-mistakes-required.yml"
+  cp "$ROOT/bin/fm-attest-gate.sh" "$dir/venue/bin/fm-attest-gate.sh"
+  # shellcheck disable=SC2016  # Expansion is deliberately deferred to the stub.
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in --supports) exit 0 ;; --print-format) echo fmt ;; *) exit 1 ;; esac\n' \
+    > "$dir/venue/bin/fm-attest.sh"
+  chmod +x "$dir/venue/bin/fm-attest-gate.sh" "$dir/venue/bin/fm-attest.sh"
+  ( cd "$dir/venue" && git init -q . && git add -A \
+    && git -c user.email=t@e -c user.name=t commit -qm policy )
+
+  for tamper in $wrapper_tampers; do
+    rm -rf "$dir/candidate"; mkdir -p "$dir/candidate/bin"
+    install_tampered_workflow "$dir/candidate" "$tamper"
+    marker="$dir/candidate/EXECUTED"
+    printf '#!/usr/bin/env bash\ntouch %s\nexit 0\n' "$marker" > "$dir/candidate/bin/fm-attest.sh"
+    printf '#!/usr/bin/env bash\ntouch %s\nexit 0\n' "$marker" > "$dir/candidate/bin/fm-attest-gate.sh"
+    chmod +x "$dir/candidate/bin/fm-attest.sh" "$dir/candidate/bin/fm-attest-gate.sh"
+
+    # The governed leg, as the platform runs it: workdir is the venue
+    # generation's checkout, the program is its own gate, and the candidate
+    # head crosses in as data. The candidate tree exists on disk and its
+    # tampered file subscribes whatever it likes; none of it is consulted.
+    out=$( cd "$dir/venue" \
+      && HEAD_SHA=0123456789012345678901234567890123456789 \
+        HEAD_REPO=owner/fork BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone \
+        FM_GATE_POLICY_SHA=venuegeneration bash bin/fm-attest-gate.sh 2>&1 )
+    rc=$?
+    [ "$rc" -eq 1 ] \
+      || fail "tamper $tamper changed the governed verdict (exit $rc): $out"
+    printf '%s\n' "$out" | grep -q 'carries no verified no-mistakes attestation' \
+      || fail "tamper $tamper turned the governed refusal into something else: $out"
+    [ ! -e "$marker" ] \
+      || fail "tamper $tamper got candidate bytes executed by the governed acceptance run"
+    # And the program judging is provably the venue's: the file the platform
+    # would take from the governed branch is untouched by the tamper.
+    git -C "$dir/venue" diff --quiet \
+      || fail "tamper $tamper modified the governed generation itself"
+  done
+  pass "fm-attest.sh: all five wrapper tamperings are inert against the governed acceptance program"
+}
+
+test_gate_script_owns_the_error_model_and_never_leaves_its_generation() {
+  local dir out rc
+  # The gate program's own contract: its verifier is its sibling and nothing
+  # else, an unusable sibling is a no-verdict rather than a search, and its
+  # refusal carries the bound publish command. A candidate verifier planted in
+  # the working directory - the place a lazy path would pick it up - is never
+  # executed.
+  dir="$TMP_ROOT/gate-script-contract"
+  rm -rf "$dir"; mkdir -p "$dir/generation" "$dir/cwd/bin"
+  cp "$ROOT/bin/fm-attest-gate.sh" "$dir/generation/fm-attest-gate.sh"
+  chmod +x "$dir/generation/fm-attest-gate.sh"
+  printf '#!/usr/bin/env bash\ntouch %s/CWD-EXECUTED\nexit 0\n' "$dir" > "$dir/cwd/bin/fm-attest.sh"
+  chmod +x "$dir/cwd/bin/fm-attest.sh"
+  ( cd "$dir/cwd" && git init -q . )
+
+  # No sibling verifier: a no-verdict in the could-not-obtain voice, and the
+  # planted candidate copy stays unexecuted.
+  out=$( cd "$dir/cwd" && HEAD_SHA=0123456789012345678901234567890123456789 \
+    HEAD_REPO=owner/fork BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone \
+    bash "$dir/generation/fm-attest-gate.sh" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a gate with no sibling verifier did not fail (exit $rc)"
+  printf '%s\n' "$out" | grep -q 'could not obtain the authoritative' \
+    || fail "a missing sibling was not reported as a no-verdict: $out"
+  printf '%s\n' "$out" | grep -q 'carries no verified' \
+    && fail "a missing sibling borrowed the refusal's words"
+  [ ! -e "$dir/CWD-EXECUTED" ] || fail "the gate executed a verifier from the working directory"
+
+  # A sibling without the reconcile contract: the unsupported-version
+  # no-verdict, never a fallback.
+  printf '#!/usr/bin/env bash\nexit 1\n' > "$dir/generation/fm-attest.sh"
+  chmod +x "$dir/generation/fm-attest.sh"
+  out=$( cd "$dir/cwd" && HEAD_SHA=0123456789012345678901234567890123456789 \
+    HEAD_REPO=owner/fork BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone \
+    bash "$dir/generation/fm-attest-gate.sh" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "an unsupported sibling did not fail (exit $rc)"
+  printf '%s\n' "$out" | grep -q 'does not support the reconcile' \
+    || fail "an unsupported sibling was not reported as version skew: $out"
+
+  # A refusing sibling: the refusal, carrying the bound publish command with
+  # the head repository the note belongs on.
+  # shellcheck disable=SC2016  # Expansion is deliberately deferred to the stub.
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in --supports) exit 0 ;; --print-format) echo fmt ;; *) exit 1 ;; esac\n' \
+    > "$dir/generation/fm-attest.sh"
+  out=$( cd "$dir/cwd" && HEAD_SHA=0123456789012345678901234567890123456789 \
+    HEAD_REPO=owner/fork BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone \
+    bash "$dir/generation/fm-attest-gate.sh" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a refusing sibling did not fail the gate (exit $rc)"
+  printf '%s\n' "$out" | grep -q -- '--publish-repo github.com/owner/fork' \
+    || fail "the refusal does not carry the bound publish command: $out"
+  [ ! -e "$dir/CWD-EXECUTED" ] || fail "the gate reached outside its generation for a verifier"
+  pass "fm-attest.sh: the acceptance gate owns its error model and never leaves its generation"
+}
+
 test_cases='
+test_workflow_subscribes_the_governed_event_and_checks_out_its_generation
+test_wrapper_tampering_is_real_under_the_preceding_law
+test_wrapper_tampering_cannot_reach_the_governed_acceptance_program
+test_gate_script_owns_the_error_model_and_never_leaves_its_generation
 test_required_refuses_a_generation_the_policy_ref_does_not_reach
 test_required_reads_the_named_policy_ref_rather_than_the_venues_head
 test_required_refuses_when_no_ref_is_recorded_as_owning_policy
