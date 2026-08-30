@@ -108,11 +108,11 @@ Without the first half, publishing correctly is not enough either, because the s
 
 - Date: 2026-08-30
 - Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json docs/fm-test-isolation-proof.json`
-- Artifact: `run_id fm-isolation-1788131315190-881141`
+- Artifact: `run_id fm-isolation-1788132534590-831496`
 - Result, one pass, exit 0:
 
 ```
-FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=770364
+FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=601624
 FM_ISOLATION_ARTIFACT WRITTEN path=docs/fm-test-isolation-proof.json subjects=24 candidates=24
 FM_ISOLATION_SEAM PROVEN consumer=bin/fm-test-run.sh check=--check-coverage
 ```
