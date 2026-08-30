@@ -116,12 +116,27 @@ What this check removes is the far weaker property it replaced, where the eviden
 This check is a provenance gate, not a quality one, and a passing attestation on a red pull request is still a red pull request.
 
 **That the workflow itself was not edited.**
-On `pull_request`, GitHub runs the workflow from the pull request's own head. The workflow file is therefore the candidate's, but the PROGRAM THAT REACHES THE VERDICT IS NOT.
-`bin/fm-attest.sh` is resolved from the governed venue's policy generation - the base repository's policy ref, resolved to an exact commit and recorded in the job log - and the candidate's own copy is never executed to judge the candidate.
-Letting it be executed made every contribution the author of its own acceptance semantics: a change to the verifier took effect on the very check deciding whether to accept that change, and a candidate could widen what counts as evidence, or delete the judge and convert a refusal into an inability to look.
+## Who supplies the acceptance runner
 
-If the authoritative verifier cannot be obtained, the check reaches no verdict and says so.
+On `pull_request`, GitHub runs the workflow file from the pull request's own head, so everything that file says - which steps exist, what they resolve, whether the verifier is called at all - is candidate-controlled.
+Protecting `bin/fm-attest.sh` alone therefore left the self-ratification class open one level up: a candidate could not rewrite the judge, but still supplied the wrapper that selects, sequences, or bypasses the judge.
+The exact-head REVISE on PR #134 (applying 19/5431020714) names that gap, and the law now stands on two mechanisms:
+
+- **The acceptance program is `bin/fm-attest-gate.sh`**, a script in the policy generation's own `bin/`, owning the repository addressing, the policy identity statement, the verify/reconcile sequencing, and the contributor-facing error model.
+  Its verifier is its sibling `fm-attest.sh` - the same generation's by construction - and an unusable sibling is a no-verdict, never a search for another copy.
+- **On `pull_request_target`, the platform takes the workflow file from the governed branch.**
+  The checkout is the base branch - the policy generation itself - the candidate head crosses in as a sha and is never checked out or executed, permissions stay `contents: read`, and the file runs the generation's own gate.
+  A candidate's edits to the workflow or the gate are proposal-only: they can become current policy only by landing under the preceding generation.
+
+The `pull_request` subscription is the PRECEDING law's trigger, kept for one generation so the candidate introducing this law is itself judged under the law that preceded it, and removed by the next descendant generation - the two-generation rule applied to the workflow file.
+On that transitional leg the wrapper file is still the candidate's, but the fetched policy generation's gate judges whenever that generation carries one; the inline flow behind it exists only for policy generations from before the gate did.
+
+If the governed program cannot be obtained, the check reaches no verdict and says so.
 It never falls back to the candidate's copy, because a fallback that runs the candidate whenever authority is unreachable is the same self-ratification with a step in front of it.
+
+**Bootstrap is two-generation, never self-ratifying.**
+
+The program that reaches the verdict is therefore never the candidate's.
 An evidence generation the authoritative verifier does not understand is refused by it, on its own terms, rather than worked around.
 
 **Bootstrap is two-generation, never self-ratifying.**
