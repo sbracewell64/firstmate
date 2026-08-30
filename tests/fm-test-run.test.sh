@@ -822,6 +822,22 @@ fm_make_narrow_spread_runner() {
   grep -q '^PORTABLE_SERIAL_MEASURED_SPREAD_PCT=1$' "$dest/bin/fm-test-run.sh" || return 1
 }
 
+fm_make_wide_spread_runner() {
+  local dest=$1
+  fm_make_mutated_runner_tree "$dest" || return 1
+  sed -i 's/^PORTABLE_SERIAL_MEASURED_SPREAD_PCT=.*/PORTABLE_SERIAL_MEASURED_SPREAD_PCT=7/' \
+    "$dest/bin/fm-test-run.sh" || return 1
+  grep -q '^PORTABLE_SERIAL_MEASURED_SPREAD_PCT=7$' "$dest/bin/fm-test-run.sh" || return 1
+}
+
+fm_make_wide_drift_runner() {
+  local dest=$1
+  fm_make_mutated_runner_tree "$dest" || return 1
+  sed -i 's/^PORTABLE_SERIAL_BUDGET_DRIFT_PCT=.*/PORTABLE_SERIAL_BUDGET_DRIFT_PCT=19/' \
+    "$dest/bin/fm-test-run.sh" || return 1
+  grep -q '^PORTABLE_SERIAL_BUDGET_DRIFT_PCT=19$' "$dest/bin/fm-test-run.sh" || return 1
+}
+
 # A declared budget moved off the mean of its own samples: stale calibration
 # credit surviving a changed load-bearing axis.
 fm_make_moved_budget_runner() {
@@ -893,14 +909,8 @@ test_variance_control_an_unqualified_basis_cannot_credit_a_pass() {
   local tmp rc out fixture
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl2.XXXXXX")
 
-  # The shipped basis is qualified, so the healthy lane below passes.
   fixture=$tmp/healthy
   fm_write_serial_fixture "$fixture" 1000
-  set +e
-  out=$("$RUNNER" --check-budget "$fixture"/shard-*.json 2>/dev/null); rc=$?
-  set -e
-  [ "$rc" -eq 0 ] || fail "the shipped basis must let a healthy lane pass, got $rc: $out"
-  assert_contains "$out" "verdict=ok" "the shipped basis must credit a healthy lane"
 
   # Watched red: a runner whose basis carries a single favorable sample must not
   # be able to credit that same healthy lane. This is the rebase-a-basis defect.
@@ -919,6 +929,13 @@ test_variance_control_an_unqualified_basis_cannot_credit_a_pass() {
   [ "$rc" -eq 4 ] || fail "--check-basis must report a one-sample basis as cno (exit 4), got $rc: $out"
   assert_contains "$out" "verdict=cno" "--check-basis must report verdict=cno for a one-sample basis"
 
+  # The shipped basis is qualified, so the healthy lane below passes.
+  set +e
+  out=$("$RUNNER" --check-budget "$fixture"/shard-*.json 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the shipped basis must let a healthy lane pass, got $rc: $out"
+  assert_contains "$out" "verdict=ok" "the shipped basis must credit a healthy lane"
+
   rm -rf "$tmp"
   pass "an unqualified single-sample basis credits neither a pass nor a failure"
 }
@@ -930,12 +947,6 @@ test_variance_control_a_narrowed_envelope_is_refused() {
   local tmp rc out
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl3.XXXXXX")
 
-  set +e
-  out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
-  set -e
-  [ "$rc" -eq 0 ] || fail "the shipped basis must be qualified, got $rc: $out"
-  assert_contains "$out" "verdict=qualified" "the shipped basis must report verdict=qualified"
-
   # Watched red: shrink the declared spread below what the samples show. The
   # control must refuse rather than let a narrower envelope manufacture verdicts.
   fm_make_narrow_spread_runner "$tmp/narrow" || { rm -rf "$tmp"; fail "could not build the narrowed-spread runner"; }
@@ -945,6 +956,12 @@ test_variance_control_a_narrowed_envelope_is_refused() {
   [ "$rc" -eq 1 ] || fail "a spread narrower than its evidence must be refused (exit 1), got $rc: $out"
   assert_contains "$out" "verdict=unqualified" "a narrowed spread must report verdict=unqualified"
   assert_grep 'narrower than the observed' "$tmp/narrow.err" "the refusal must name the narrowing"
+
+  set +e
+  out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the shipped basis must be qualified, got $rc: $out"
+  assert_contains "$out" "verdict=qualified" "the shipped basis must report verdict=qualified"
 
   rm -rf "$tmp"
   pass "a declared envelope narrower than its own evidence is refused"
@@ -1009,11 +1026,6 @@ test_variance_control_declarations_must_match_their_own_evidence() {
   local tmp rc out
   tmp=$(mktemp -d "${TMPDIR:-/tmp}/fm-test-run-ctl6.XXXXXX")
 
-  set +e
-  out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
-  set -e
-  [ "$rc" -eq 0 ] || fail "the shipped declarations must match their evidence, got $rc: $out"
-
   # Watched red: move the declared budget off the mean of its own samples.
   fm_make_moved_budget_runner "$tmp/moved" || { rm -rf "$tmp"; fail "could not build the moved-budget runner"; }
   set +e
@@ -1022,6 +1034,27 @@ test_variance_control_declarations_must_match_their_own_evidence() {
   [ "$rc" -eq 1 ] || fail "a budget off its own mean must be refused (exit 1), got $rc: $out"
   assert_contains "$out" "verdict=unqualified" "a moved budget must report verdict=unqualified"
   assert_grep 'is not the mean of its own' "$tmp/moved.err" "the refusal must name the disagreement"
+
+  fm_make_wide_spread_runner "$tmp/wide-spread" || { rm -rf "$tmp"; fail "could not build the widened-spread runner"; }
+  set +e
+  out=$("$tmp/wide-spread/bin/fm-test-run.sh" --check-basis 2>"$tmp/wide-spread.err"); rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a spread wider than its derived value must be refused (exit 1), got $rc: $out"
+  assert_contains "$out" "verdict=unqualified" "a widened spread must report verdict=unqualified"
+  assert_grep 'disagrees with the observed' "$tmp/wide-spread.err" "the refusal must name the spread derivation disagreement"
+
+  fm_make_wide_drift_runner "$tmp/wide-drift" || { rm -rf "$tmp"; fail "could not build the widened-drift runner"; }
+  set +e
+  out=$("$tmp/wide-drift/bin/fm-test-run.sh" --check-basis 2>"$tmp/wide-drift.err"); rc=$?
+  set -e
+  [ "$rc" -eq 1 ] || fail "a drift allowance wider than 3x spread must be refused (exit 1), got $rc: $out"
+  assert_contains "$out" "verdict=unqualified" "a widened drift must report verdict=unqualified"
+  assert_grep 'disagrees with 3x' "$tmp/wide-drift.err" "the refusal must name the drift derivation disagreement"
+
+  set +e
+  out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "the shipped declarations must match their evidence, got $rc: $out"
 
   rm -rf "$tmp"
   pass "declared calibration must agree with the evidence it was derived from"

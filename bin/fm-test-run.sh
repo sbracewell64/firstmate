@@ -1154,10 +1154,16 @@ if spread_pct < required_pct:
         "declared spread %d%% is narrower than the observed %.3f%% (needs at least %d%%)"
         % (spread_pct, observed_pct, required_pct)
     )
-if drift_pct <= spread_pct:
+elif spread_pct != required_pct:
     problems.append(
-        "drift allowance %d%% does not clear the %d%% measured spread, so the threshold sits "
-        "inside the noise it is meant to be separated from" % (drift_pct, spread_pct)
+        "declared spread %d%% disagrees with the observed %.3f%% it is derived from (expected %d%%)"
+        % (spread_pct, observed_pct, required_pct)
+    )
+required_drift_pct = 3 * spread_pct
+if drift_pct != required_drift_pct:
+    problems.append(
+        "drift allowance %d%% disagrees with 3x the %d%% declared spread (expected %d%%)"
+        % (drift_pct, spread_pct, required_drift_pct)
     )
 
 print(
