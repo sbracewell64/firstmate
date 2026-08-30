@@ -376,6 +376,7 @@ worker_publish_result() { # <job-dir> <outcome> [<exit, only with executed>]
 worker_run_with_timeout() { # <job-dir> <witness 0|1> <seconds> <command> [args...]
   local job=$1 witness=$2 timeout=$3 group_file armed_file group_pid rc tmp deadline next_heartbeat
   local timed_out=0 heartbeat_failed=0
+  WORKER_RUN_RESULT=infrastructure
   shift 3
   group_file="$job/.claim/group"
   armed_file="$job/.claim/armed"
@@ -461,8 +462,12 @@ worker_run_with_timeout() { # <job-dir> <witness 0|1> <seconds> <command> [args.
   rc=$?
   rm -f -- "$group_file" "$armed_file"
   WORKER_ACTIVE_JOB=
-  [ "$timed_out" -eq 0 ] || return 124
+  if [ "$timed_out" -ne 0 ]; then
+    WORKER_RUN_RESULT=timeout
+    return 124
+  fi
   [ "$heartbeat_failed" -eq 0 ] || return 125
+  WORKER_RUN_RESULT=child
   return "$rc"
 }
 
@@ -522,8 +527,14 @@ worker_run_job() { # <account-home> <job-dir>
   case "$rc" in
     0) ;;
     124) worker_publish_result "$job" admission_expired; return ;;
-    125) worker_publish_result "$job" infrastructure; return ;;
-    *) worker_publish_result "$job" admission_refused; return ;;
+    *)
+      if [ "$WORKER_RUN_RESULT" = infrastructure ]; then
+        worker_publish_result "$job" infrastructure
+      else
+        worker_publish_result "$job" admission_refused
+      fi
+      return
+      ;;
   esac
   fm_remote_job_build_child_path "$root" >/dev/null
   for command in stdin stdout stderr; do
@@ -570,7 +581,8 @@ worker_run_job() { # <account-home> <job-dir>
   wait "$stderr_reader"
   rm -f -- "$stdout_pipe" "$stderr_pipe"
   set -e
-  if [ "$rc" -eq 125 ] || ! fm_remote_job_read_number "$job" execution_start >/dev/null 2>&1; then
+  if [ "$WORKER_RUN_RESULT" = infrastructure ] ||
+    ! fm_remote_job_read_number "$job" execution_start >/dev/null 2>&1; then
     worker_publish_result "$job" infrastructure || worker_error "could not publish result for ${job##*/}"
     return
   fi

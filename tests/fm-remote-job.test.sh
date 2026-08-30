@@ -65,6 +65,10 @@ head -c 1200000 < /dev/zero
 head -c 1200000 < /dev/zero >&2
 exit 23
 SH
+cat > "$REMOTE_ROOT/bin/fm-exit-125-job.sh" <<'SH'
+#!/bin/bash
+exit 125
+SH
 chmod +x "$REMOTE_ROOT/bin"/*.sh
 cat > "$RUNTIME_BIN/perl" <<'SH'
 #!/bin/bash
@@ -273,7 +277,7 @@ wait "$OTHER_PID" 2>/dev/null || true
 OTHER_PID=
 pass "stale ownership is reclaimed without signaling a reused pid"
 
-FM_REMOTE_JOB_TIMEOUT=1
+FM_REMOTE_JOB_TIMEOUT=2
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-timeout-job.sh < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
@@ -286,6 +290,17 @@ TIMEOUT_JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the timed-out job could not be reaped"
 assert_absent "$TIMEOUT_JOB_DIR" "reaping left the typed execution record behind"
 pass "an execution timeout is an execution outcome with a start witness"
+
+FM_REMOTE_JOB_TIMEOUT=10
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-exit-125-job.sh < /dev/null > /dev/null
+JOB_ID=$FM_REMOTE_JOB_ID
+fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_OUTCOME" = executed ] \
+  || fail "a child exit 125 was not published as an execution outcome (got $FM_REMOTE_JOB_OUTCOME)"
+[ "$FM_REMOTE_JOB_EXIT" -eq 125 ] || fail "a child exit 125 was replaced with an infrastructure outcome"
+[ -n "$FM_REMOTE_JOB_EXECUTION_START" ] || fail "a child exit 125 carried no execution-start witness"
+fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the child exit 125 job could not be reaped"
+pass "a governed command preserves child exit status 125"
 
 # Negative control for the absence assertion in the expiry case below: the same
 # fixture, admitted normally, provably mutates. Without watching it go red the
