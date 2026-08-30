@@ -181,8 +181,8 @@ test <test@example.com>
 Your Name <you@example.com>
 unknown <unknown>'
 
-# THE TWO EFFECT CLASSES A REMOTE-CHANGING CANDIDATE ACT CAN HAVE, and the
-# distinction the whole of this section exists to hold open.
+# THE THREE EFFECT CLASSES A REMOTE-CHANGING ACT CAN HAVE, and the distinction
+# the whole of this section exists to hold open.
 #
 #   CUSTODY_REPLICATION  durable backup of one exact committed candidate to its
 #                        OWN ordinary unprotected feature ref. It grants nothing:
@@ -194,6 +194,11 @@ unknown <unknown>'
 #                        publication or landing lifecycle. Every obligation this
 #                        file already compiled belongs to this class and none of
 #                        them is relaxed.
+#   ATTESTATION_EVIDENCE_PUBLICATION
+#                        the exact refs/notes/no-mistakes update, carrying no
+#                        semantic work identity. A governed venue must be trusted
+#                        by policy, but a candidate ruling does not authorize or
+#                        describe this evidence-only ref.
 #
 # WHY THE CLASS IS DECIDED HERE AND NEVER BY THE CALLER'S PROSE. A caller may ask
 # for custody; it may not describe its way into it. Asking is a typed request and

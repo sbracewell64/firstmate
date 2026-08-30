@@ -1,7 +1,7 @@
 # Verification: the candidate-publication effect and identity guard
 
 Audience: maintainer-verification.
-Subject: `bin/fm-publication-guard.sh` and `bin/fm-publication-seam-lib.sh`, the publication and custody effect subjects added to `bin/fm-landing-authorization-lib.sh`, and the seam that consumes them inside `bin/fm-attest.sh`.
+Subject: `bin/fm-publication-guard.sh` and `bin/fm-publication-seam-lib.sh`, the publication, custody and attestation-evidence subjects added to `bin/fm-landing-authorization-lib.sh`, and the seam that consumes attestation evidence inside `bin/fm-attest.sh`.
 Regression owners: `tests/fm-publication-seam.test.sh` for the guard and its controls, `tests/fm-attest.test.sh` for the wiring into the real publication path.
 
 ## What is claimed
@@ -22,7 +22,7 @@ Sixteen properties, and one control without which none of them means anything:
    Policy governance says a review is REQUIRED and never that one happened; a register answer of could-not-observe is non-PASS and never a pass.
 8. An outbound record in a state no landed vocabulary declares reads as a hold in force, not as an absence of one.
 9. An approval bound to this head does not cover for another live governing request that is still unanswered.
-10. A remote-changing candidate act carries an effect class the GUARD decides: `CUSTODY_REPLICATION` grants nothing beyond a remote copy of one exact commit on the work's own unprotected feature ref, `PUBLICATION_EFFECT` carries every obligation above, and a class the evidence does not support is refused rather than reclassified.
+10. A remote-changing act carries an effect class the GUARD decides: `CUSTODY_REPLICATION` grants nothing beyond a remote copy of one exact commit on the work's own unprotected feature ref, `PUBLICATION_EFFECT` carries every candidate-publication obligation above, `ATTESTATION_EVIDENCE_PUBLICATION` permits only the exact `refs/notes/no-mistakes` update without a semantic work identity and requires a governed destination to be trusted by policy, and a class the evidence does not support is refused rather than reclassified.
 11. The candidate states `local-only`, `custody-replicated`, `review-published`, `publication-qualified`, `landing-authorized` and `landed` are projected from the durable owners, none implies the next, and a slot is reclaimable only when `ls-remote` resolves the custody ref to the exact candidate head.
 12. Consume accepts only the constructed single-ref, non-forcing `git -C <repo> push <remote> <head>:<ref>` token sequence bound by the authority; wrappers, extra refspecs, alternate sources and other argument shapes refuse before the act.
 13. Every observation and act resolves Git from the fixed trusted executable set rather than from caller functions or `PATH`, and the spend record identifies the selected executable by absolute path and content digest.
@@ -269,9 +269,9 @@ That is the corrected behaviour; the first run of this probe reported `review-pu
 Throughout, the operational authorization store stayed byte-identical (`sha256 4e1782f3...`, one record) and `refs/heads/fm/candidate-publication-effect-guard` stayed absent on the remote, before and after every step.
 Asking the question changes nothing.
 
-## The two effect classes
+## The three effect classes
 
-A remote-changing candidate act is one of exactly two things, and the guard decides which.
+A remote-changing act is one of exactly three things, and the guard decides which.
 
 `CUSTODY_REPLICATION` is a durable backup of one exact committed candidate to its own unprotected feature ref, `refs/heads/fm/<work-id>` on the work's own venue.
 It grants nothing: no pull request, no review request, no CI implication, no acceptance, no landing authority, no publication-qualified state.
@@ -281,11 +281,15 @@ It is not subject to the review it does not claim, so a candidate under an activ
 `PUBLICATION_EFFECT` is anything that makes the candidate enter the review, CI, publication or landing lifecycle.
 It is the default, and it carries every obligation this record already claimed.
 
+`ATTESTATION_EVIDENCE_PUBLICATION` is only the exact `refs/notes/no-mistakes` update and carries no semantic work identity.
+In a governed home its destination must be a venue trusted by the publication identity policy, while candidate rulings and review identities do not authorize or describe this evidence-only ref.
+In an ungoverned home the same exact update proceeds through the one-use spend and post-effect confirmation and reports that it was ungoverned.
+
 `--effect` names the class a caller WANTS and never settles it.
 The request is verified against observation, and one the evidence does not support is refused rather than quietly reclassified - so a caller cannot discover the class by trying, and custody is strictly weaker in what it grants while being strictly stricter in what it demands.
 There is no argument by which naming a class obtains more permission than the evidence already gives.
 
-The force refusal applies to BOTH classes.
+The force refusal applies to all three classes.
 The guard has already established the remote is at the tip the plan was compiled against, so a fast-forward suffices, and forbidding a force on the weaker act while permitting it on the stronger one would be incoherent.
 
 ## Refreshing this record

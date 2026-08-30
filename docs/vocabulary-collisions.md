@@ -250,7 +250,7 @@ The `FM_PUB_*` tokens, `fm_pub_seam_*` functions and the `publication` effect va
 This is a writing rule, not a migration.
 
 A second collision was ruled with it and needs no row of its own, because one owner carries both senses under one name.
-[`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh) now owns the one-use authority for three effects, `landing`, `publication` and `custody`, so its file name is narrower than its contents.
+[`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh) now owns the one-use authority for four effects, `landing`, `publication`, `custody` and `attestation-evidence`, so its file name is narrower than its contents.
 That is deliberate: a second authorization owner would bring a second store and a second idea of what `spent` means.
 The file keeps its name, its header states the widening, and `effect=` in the identity is what a reader distinguishes them by.
 

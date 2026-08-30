@@ -25,8 +25,8 @@
 # `prepare` prints the closed typed answer such an integration needs, so the
 # semantic decision has one compiler rather than one per caller.
 #
-# THE TWO EFFECT CLASSES, and why the distinction is the guard's and not the
-# caller's. A remote-changing candidate act is one of exactly two things:
+# THE THREE EFFECT CLASSES, and why the distinction is the guard's and not the
+# caller's. A remote-changing act is one of exactly three things:
 #
 #   CUSTODY_REPLICATION  durable backup of one exact committed candidate to its
 #                        OWN unprotected feature ref, refs/heads/fm/<work-id> on
@@ -44,6 +44,11 @@
 #   PUBLICATION_EFFECT   anything that makes the candidate enter the review, CI,
 #                        publication or landing lifecycle. Every obligation this
 #                        guard already compiled belongs here, unchanged.
+#   ATTESTATION_EVIDENCE_PUBLICATION
+#                        the exact refs/notes/no-mistakes update, carrying no
+#                        semantic work identity. A governed venue must be trusted
+#                        by policy, but a candidate ruling does not authorize or
+#                        describe this evidence-only ref.
 #
 # `--effect` names the class a caller wants and never settles it. The guard
 # verifies the request against observation and REFUSES one the evidence does not
@@ -57,7 +62,8 @@
 #                                   --venue <host/owner/repo> --ref <refs/...>
 #                                   --head <sha> --expected-tip <sha|->
 #                                   [--tree <sha>] [--item <work-id>]
-#                                   [--effect custody|publication] [--dry-run]
+#                                   [--effect custody|publication|attestation-evidence]
+#                                   [--dry-run]
 #       Compile the eligibility verdict for one exact candidate effect and, when
 #       it is permitted, mint the one-use authority that effect must spend.
 #
@@ -91,7 +97,7 @@
 #                                   --venue <host/owner/repo> --ref <refs/...>
 #                                   --head <sha> --expected-tip <sha|->
 #                                   [--item <work-id>]
-#                                   [--effect custody|publication]
+#                                   [--effect custody|publication|attestation-evidence]
 #                                   -- <command> [args...]
 #       prepare and consume composed into the one operation a caller actually
 #       wants: decide, and if permitted perform <command> inside the authority.
