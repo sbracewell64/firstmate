@@ -557,6 +557,23 @@ assert_no_grep 'no execution verdict' "$TMP_ROOT/e2e-overrun.err" \
 [ "$(e2e_job_records)" -eq 0 ] || fail "the timed-out request left a durable record behind"
 pass "a started command that overruns stays a distinct execution timeout"
 
+# Status 75 is also the caller-side projection for a request with no execution
+# verdict, so the typed diagnostic must distinguish that case from a command
+# that genuinely started and returned the same status.
+E2E_EXIT_75_ARGV="$REMOTE_HOME/e2e-exit-75-argv.bin"
+set +e
+fm_on ios fm-probe-one.sh "$E2E_EXIT_75_ARGV" 75 \
+  > "$TMP_ROOT/e2e-exit-75.out" 2> "$TMP_ROOT/e2e-exit-75.err"
+E2E_EXIT_75_RC=$?
+set -e
+[ "$E2E_EXIT_75_RC" -eq 75 ] \
+  || fail "a started command's exit 75 was not preserved (got $E2E_EXIT_75_RC)"
+assert_present "$E2E_EXIT_75_ARGV" "the exit-75 command never started, so its classification proves nothing"
+assert_no_grep 'no execution verdict' "$TMP_ROOT/e2e-exit-75.err" \
+  "a genuine command exit 75 was classified as a no-execution result"
+[ "$(e2e_job_records)" -eq 0 ] || fail "the exit-75 request left a durable record behind"
+pass "a genuine command exit 75 remains distinct from the no-execution projection"
+
 E2E_ARGV_ACTUAL="$REMOTE_HOME/e2e-argv.bin"
 printf 'e2e payload\n' > "$TMP_ROOT/e2e-stdin"
 set +e
