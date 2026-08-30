@@ -681,7 +681,7 @@ test_concurrent_spends_revalidate_after_claiming() {
 }
 
 test_concurrent_mints_cannot_replace_a_spent_record() {
-  local dir first second first_pid second_pid id
+  local dir first second first_pid second_pid id candidate
   dir=$(new_case concurrent-mint) || fail "concurrent-mint: fixture failed"
   mint_plan "$dir" fm-ob-abcdef123456 >"$dir/first-mint.out" 2>&1 &
   first_pid=$!
@@ -693,7 +693,13 @@ test_concurrent_mints_cannot_replace_a_spent_record() {
   wait "$second_pid" || true
   first=$(awk '{print $1}' "$dir/first-mint.out")
   second=$(awk '{print $1}' "$dir/second-mint.out")
-  id=${first:-$second}
+  id=
+  for candidate in "$first" "$second"; do
+    if fm_auth_id_shape "$candidate"; then
+      id=$candidate
+      break
+    fi
+  done
   fm_auth_id_shape "$id" || fail "concurrent-mint: neither mint produced an authorization"
   run_auth "$dir" spend "$id" --head "$HEAD_A" >/dev/null 2>&1 \
     || fail "concurrent-mint: minted authorization could not be spent"
