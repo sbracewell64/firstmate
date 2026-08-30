@@ -964,7 +964,7 @@ test_retire_refuses_an_authority_whose_effect_is_unobserved() {
 }
 
 test_retire_and_reconcile_cannot_overwrite_a_live_consume() {
-  local id consume_pid consume_rc=0 out rc=0 i record
+  local id consume_pid consume_rc=0 out rc=0 record
   fixture retire-race
   policy
   reviewed
@@ -976,11 +976,9 @@ test_retire_and_reconcile_cannot_overwrite_a_live_consume() {
   spend "$id" > "$FX_DATA/consume.out" 2>&1 &
   consume_pid=$!
   fm_test_reap "$consume_pid"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    [ -e "$FX_DATA/push-started" ] && break
-    sleep 0.1
-  done
-  [ -e "$FX_DATA/push-started" ] || fail "retire-race: consume never reached the effect"
+  fm_test_wait_file "$FX_DATA/push-started" 10 "$consume_pid" \
+    "retire-race: consume exited before reaching the effect" \
+    "retire-race: consume never reached the effect"
   out=$(guard retire "$id" --reason 'raced retirement') || rc=$?
   [ "$rc" -eq 3 ] || fail "retire-race: retire exited $rc: $out"
   assert_contains "$out" 'FM_PUB_IN_FLIGHT' "retire-race: $out"
