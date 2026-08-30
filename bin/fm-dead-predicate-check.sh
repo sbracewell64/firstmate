@@ -53,15 +53,11 @@
 #     line-local read cannot tell an unreadable file's payload text from its code.
 #     When a consumer becomes unreadable the repair is the construct that made it
 #     unreadable, never a mark that hides the gap.
-#   - BARE DISPATCH. The function name survives that file's quote walk at that
-#     line as a whole word, so the shell reads it as a command word or as a word
-#     handed to something that dispatches it by name. A pure-output command word
-#     (`echo`, `printf`, `cat`, `:`) is opaque data at a site exactly as it is
-#     everywhere else here, and is refused.
-#   - HANDLER DISPATCH. The raw line names the function inside a quoted word and
-#     the same line carries a dispatcher outside quotes - `trap`, `eval`, `xargs`,
-#     or `bash`/`sh`/`env` with `-c` - so the quoted word is evaluated as a
-#     command rather than printed.
+#   - BARE DISPATCH. The function begins a command after indentation and optional
+#     shell control words, begins a command substitution, begins a canonical
+#     one-line function body, or is a bare argument to a command that can dispatch
+#     it by name. Assignments, test expressions, and output commands are data.
+#   - HANDLER DISPATCH. The function is the quoted handler operand of `trap`.
 #
 # Everything else is REFUSED and named: a mark with no site, an unparseable or
 # unknown site file, a line past end of file, a line that never mentions the
@@ -237,9 +233,15 @@ function_has_call_site() {  # <function>
 #
 # Prints the file with quoted spans blanked. Exits 1 if a span is still
 # open at end of file, the one case this cannot resolve.
-strip_quoted() {  # <file>
+strip_quoted() {  # <file>; FM_STRIP_EMIT_COMMENTS=1 emits only real comments
   awk '
-    BEGIN { mode = "normal"; escaped = 0; subdepth = 0; saw_backtick = 0 }
+    BEGIN {
+      mode = "normal"
+      escaped = 0
+      subdepth = 0
+      saw_backtick = 0
+      emit_comments = ENVIRON["FM_STRIP_EMIT_COMMENTS"] == "1"
+    }
     {
       out = ""
       n = length($0)
@@ -274,7 +276,10 @@ strip_quoted() {  # <file>
         # without this every "control\047s" or "doesn\047t" in a header opened a
         # quote that never closed, so the file read as unterminated and every
         # predicate in it became could-not-observe.
-        if (c == "#" && (i == 1 || substr($0, i-1, 1) ~ /[ \t]/)) break
+        if (c == "#" && (i == 1 || substr($0, i-1, 1) ~ /[ \t]/)) {
+          if (emit_comments) out = substr($0, i)
+          break
+        }
         if (c == "$" && nextc == "\047") {
           mode = (mode == "sub" ? "subansi" : "ansi")
           i++
@@ -293,7 +298,7 @@ strip_quoted() {  # <file>
             subdepth--
           }
         }
-        out = out c
+        if (!emit_comments) out = out c
       }
       print out
     }
@@ -302,6 +307,10 @@ strip_quoted() {  # <file>
       if (saw_backtick) exit 2
     }
   ' "$1"
+}
+
+shell_comments() {  # <file> - one quote-aware comment field per source line
+  FM_STRIP_EMIT_COMMENTS=1 strip_quoted "$1"
 }
 
 # ONE quote walk per FILE, not per (file x function).
@@ -431,24 +440,32 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
     BEGIN {
       raw = ENVIRON["FM_SITE_RAW"]
       stripped = ENVIRON["FM_SITE_STRIPPED"]
+      dq = sprintf("%c", 34)
       word = "(^|[^A-Za-z0-9_])" fn "([^A-Za-z0-9_]|$)"
+      controls = "((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*"
       if (stripped ~ ("^[[:space:]]*(function[[:space:]]+)?" fn "[[:space:]]*(\\(\\)|\\{)")) {
         print "is the definition of " fn ", not a call to it"
         exit
       }
-      if (stripped ~ word) {
+      if (stripped ~ ("^[[:space:]]*" controls fn "([^A-Za-z0-9_]|$)")) exit
+      if (stripped ~ ("\\$\\([[:space:]]*" fn "([^A-Za-z0-9_]|$)")) exit
+      if (stripped ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) exit
+      if (stripped ~ /^[[:space:]]*(test|\[\[?)([[:space:]]|$)/ && stripped ~ word) {
+        print "places " fn " in data, not in an executable dispatch position"
+        exit
+      }
+      if (stripped ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*([[:space:]]+[^;|&[:space:]]+)*[[:space:]]+" fn "([[:space:]]+[^;|&[:space:]]+)*[[:space:]]*([;|&]|$)")) {
         if (stripped ~ /^[[:space:]]*(echo|printf|cat|:)([[:space:]]|$)/)
           print "hands " fn " to an output command, which is opaque data and never call evidence"
+        else if (stripped ~ /^[[:space:]]*(test|\[)([[:space:]]|$)/)
+          print "places " fn " in data, not in an executable dispatch position"
+        else
+          exit
         exit
       }
-      if (raw ~ word) {
-        if (stripped ~ /(^|[^A-Za-z0-9_])(trap|eval|xargs)([^A-Za-z0-9_]|$)/) exit
-        if (stripped ~ /(^|[^A-Za-z0-9_])(bash|sh|env)([^A-Za-z0-9_]|$)/) {
-          if (stripped ~ /(^|[[:space:]])-c([^A-Za-z0-9_]|$)/) exit
-        }
-        print "names " fn " only where the shell does not dispatch it"
-        exit
-      }
+      if (raw ~ ("^[[:space:]]*trap[[:space:]]+\\047" fn "\\047[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
+      if (raw ~ ("^[[:space:]]*trap[[:space:]]+" dq fn dq "[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
+      if (raw ~ word) { print "names " fn " only where the shell does not dispatch it"; exit }
       print "does not mention " fn
     }')
   [ -n "$reason" ] || return 0
@@ -463,6 +480,7 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
 # ruling on code it is not enforcing.
 MARK_VERIFIED=()
 MARK_VERIFIED_SITE=()
+MARK_CLASSIFIED_DATA_SITE=()
 REFUSED_MARKS=()
 collect_marks() {
   local f hit lineno rest fn site path resolved reason
@@ -488,8 +506,13 @@ collect_marks() {
         MARK_VERIFIED_SITE+=("$fn|$resolved")
       else
         REFUSED_MARKS+=("$f"$'\t'"$lineno"$'\t'"$fn"$'\t'"${site:-}"$'\t'"$reason")
+        case $reason in
+          *'opaque data'*|*'places '*"$fn"*' in data'*)
+            [ -z "$resolved" ] || MARK_CLASSIFIED_DATA_SITE+=("$fn|$resolved")
+            ;;
+        esac
       fi
-    done < <(grep -nE '#[[:space:]]*indirect-call:' "$f")
+    done < <(shell_comments "$f" | grep -nE '^#[[:space:]]*indirect-call:')
   done
 }
 
@@ -512,6 +535,14 @@ mark_verified() {  # <function>
 mark_verified_in_file() {  # <function> <file>
   local key="$1|$2" entry
   for entry in "${MARK_VERIFIED_SITE[@]:-}"; do
+    [ "$entry" = "$key" ] && return 0
+  done
+  return 1
+}
+
+mark_classified_data_in_file() {  # <function> <file>
+  local key="$1|$2" entry
+  for entry in "${MARK_CLASSIFIED_DATA_SITE[@]:-}"; do
     [ "$entry" = "$key" ] && return 0
   done
   return 1
@@ -593,6 +624,7 @@ for f in "${PARSEABLE[@]}"; do
     # dispatch here suppresses nothing, and the file goes unchecked as it would
     # have with no mark at all.
     mark_verified_in_file "$fn" "$f" && continue
+    mark_classified_data_in_file "$fn" "$f" && continue
     unsupported=$(strip_cached "$f" | awk -v fn="$fn" '
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.

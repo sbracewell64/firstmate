@@ -200,9 +200,9 @@ test_function_keyword_definition_is_scanned() {
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
-  dir=$(fixture indirect 'live_one() { return 0; }' 'callback=live_one
-# indirect-call: live_one bin/consumer.sh:2
-"$callback"')
+  dir=$(fixture indirect 'live_one() { return 0; }' 'dispatch() { "$2"; }
+# indirect-call: live_one bin/consumer.sh:4
+dispatch value live_one')
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "an explicitly identified indirect call was refused, exit $rc: $out"
   pass "an explicit indirect call site counts as consulted"
@@ -372,6 +372,52 @@ dispatch value validate_one'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "a mark naming a bare pass-by-name dispatch was refused, exit $rc: $out"
   pass "a mark naming a bare pass-by-name dispatch site counts as consulted"
+}
+
+test_assignment_site_is_refused_and_dead() {
+  local dir out rc
+  dir=$(fixture mark-assignment 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+value=dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "an assignment site was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "the assignment mark was not refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "the assignment kept the predicate alive: $out"
+  pass "an assignment cannot manufacture indirect-call evidence"
+}
+
+test_comparison_site_is_refused_and_dead() {
+  local dir out rc
+  dir=$(fixture mark-comparison 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+[ "$value" = dead_one ]'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a comparison site was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "the comparison mark was not refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "the comparison kept the predicate alive: $out"
+  pass "a test comparison cannot manufacture indirect-call evidence"
+}
+
+test_trap_trailing_comment_site_is_refused_and_dead() {
+  local dir out rc
+  dir=$(fixture mark-trap-comment 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+trap '\''other'\'' EXIT # dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a trap trailing comment was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "the trap-comment mark was not refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "the trap comment kept the predicate alive: $out"
+  pass "a trap-line trailing comment cannot manufacture indirect-call evidence"
+}
+
+test_quoted_marker_string_is_not_discovered() {
+  local dir out rc
+  dir=$(fixture quoted-marker 'live_one() { return 0; }' 'live_one
+printf '\''%s\n'\'' '\''# indirect-call: live_one bin/consumer.sh:900'\''')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a quoted marker string produced a refusal, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED' && fail "quoted marker data was discovered as a mark: $out"
+  pass "a quoted marker string is data and never a mark"
 }
 
 test_a_refused_mark_is_red_even_when_the_function_is_alive() {
@@ -722,6 +768,10 @@ test_mark_site_that_is_the_definition_is_refused
 test_mark_site_inside_a_multiline_string_is_refused
 test_mark_site_handing_the_name_to_an_output_command_is_refused
 test_mark_naming_a_bare_pass_by_name_dispatch_counts
+test_assignment_site_is_refused_and_dead
+test_comparison_site_is_refused_and_dead
+test_trap_trailing_comment_site_is_refused_and_dead
+test_quoted_marker_string_is_not_discovered
 test_a_refused_mark_is_red_even_when_the_function_is_alive
 test_mark_is_reported_in_json_with_its_site_and_reason
 test_call_in_quoted_substitution_counts
