@@ -346,6 +346,7 @@ else
         "$SCRIPT_DIR/fm-attest.sh" write --only-if-required \
           --policy-meta "$RECORD" \
           "${ATTEST_TARGET_ARGS[@]+"${ATTEST_TARGET_ARGS[@]}"}" \
+          --publish-notes-ref refs/notes/no-mistakes \
           --expect-head "$PR_HEAD" 2>&1
   ) || ATTEST_RC=$?
   ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")

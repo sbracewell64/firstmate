@@ -69,7 +69,7 @@
 # shellcheck disable=SC2034 # The resolution outputs are read by callers (fm-spawn.sh) and tests, not by this lib.
 TASK_BASE_SLOT='' TASK_BASE_SLOT_REF='' TASK_BASE_CONTRIB='' TASK_BASE_CONTRIB_REF='' TASK_BASE_STATE='' TASK_BASE_ERROR=''
 # shellcheck disable=SC2034 # Same: consumed by fm-spawn.sh (records them) and tests.
-TASK_BASE_VENUE='' TASK_BASE_VENUE_URL=''
+TASK_BASE_VENUE='' TASK_BASE_VENUE_URL='' TASK_BASE_VENUE_REF=''
 TASK_BASE_POLICY_VENUE='' TASK_BASE_POLICY_URL='' TASK_BASE_POLICY_REF=''
 # shellcheck disable=SC2034 # The rest of the policy role tuple, read by bin/fm-attest.sh and tests.
 TASK_BASE_POLICY_GENERATION='' TASK_BASE_POLICY_ROLE='' TASK_BASE_POLICY_TARGET=''
@@ -529,6 +529,7 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   local status refs complete
   TASK_BASE_VENUE=
   TASK_BASE_VENUE_URL=
+  TASK_BASE_VENUE_REF=
   TASK_BASE_ERROR=
 
   target_sha=$(git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
@@ -547,8 +548,13 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   upstream_ref=$(task_base_upstream_ref "$dir")
   status=$?
   if [ "$status" -eq 1 ]; then
+    name=$(default_branch "$dir" 2>/dev/null) || {
+      TASK_BASE_ERROR="no default branch in $dir, so the venue policy ref cannot be named"
+      return 2
+    }
     TASK_BASE_VENUE_URL=$fetch_url
     TASK_BASE_VENUE=$(task_base_venue_identity "$fetch_url" || true)
+    TASK_BASE_VENUE_REF=$(task_base_policy_ref_for "$name") || return 2
     return 0
   fi
   if [ "$status" -ne 0 ]; then
@@ -585,6 +591,7 @@ task_base_venue() {  # <repo-dir> <contribution-target>
     "$target_sha" "$upstream_ref" 2>/dev/null; then
     TASK_BASE_VENUE_URL=$upstream_url
     TASK_BASE_VENUE=$(task_base_venue_identity "$upstream_url" || true)
+    TASK_BASE_VENUE_REF=$(task_base_policy_ref_for "$upstream_ref") || return 2
     return 0
   fi
 
@@ -606,6 +613,7 @@ task_base_venue() {  # <repo-dir> <contribution-target>
       "$target_sha" "$ref" 2>/dev/null; then
       TASK_BASE_VENUE_URL=$push_url
       TASK_BASE_VENUE=$(task_base_venue_identity "$push_url" || true)
+      TASK_BASE_VENUE_REF=$(task_base_policy_ref_for "$name") || return 2
       return 0
     fi
   done <<EOF
