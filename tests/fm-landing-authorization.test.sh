@@ -1524,10 +1524,14 @@ run_test_batch \
   test_an_unobservable_head_stops_the_spend_without_destroying_the_authorization \
   test_a_spend_already_in_flight_is_refused \
   test_concurrent_spends_revalidate_after_claiming \
-  test_concurrent_mints_cannot_replace_a_spent_record \
   test_a_partial_enumeration_is_could_not_observe_rather_than_a_short_list \
   test_reconciliation_cannot_reclaim_a_live_spenders_authorization \
   test_malformed_authorization_ids_cannot_address_the_store
+# This control already creates its own concurrent process groups. Keep unrelated
+# process-heavy cases out of the same batch so hosted-runner pressure cannot make
+# both contenders fail group establishment before the mint race begins.
+run_test_batch \
+  test_concurrent_mints_cannot_replace_a_spent_record
 run_test_batch \
   test_malformed_or_misbound_authorization_records_are_unreadable \
   test_the_act_is_the_authoritys_own_and_an_assertion_may_only_agree \
