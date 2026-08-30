@@ -15,14 +15,21 @@
 # an Aqua requirement.
 #
 # stdin is captured as bounded job input. The completed worker result is relayed
-# with stdout and stderr kept separate and its exit status preserved. An SSH
-# disconnect remains unknown completion to fm-on.sh, which preserves OpenSSH's
-# exit 255 behavior. The shared library header owns job fields, bounds, PATH,
-# LaunchAgent contract, and worker environment.
+# with stdout and stderr kept separate. An exit status is relayed only when the
+# worker witnessed the governed command start; a request that expired, was
+# refused, or whose result could not be observed before that boundary has no
+# execution verdict, so it exits FM_REMOTE_JOB_NO_EXECUTION_STATUS (75) with a
+# typed "no execution verdict" diagnostic on stderr instead of borrowing the
+# command's exit status. That diagnostic is the carrier of the distinction,
+# because one byte of exit status cannot separate an admission outcome from a
+# command that genuinely exited with the same number. An SSH disconnect remains
+# unknown completion to fm-on.sh, which preserves OpenSSH's exit 255 behavior.
+# The shared library header owns job fields, the outcome vocabulary, bounds,
+# PATH, LaunchAgent contract, and worker environment.
 set -eu
 
 PROTOCOL=1
-DOCTOR_SHA256=7bb13d9fad8455978bf109d4681a3aa3cb170565c8a74be4ec7b520427db14c2
+DOCTOR_SHA256=bda3a4139bf1592e1ef66c49af75df19cee4e2ba1f4cc7d0a7130d14aede43a0
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 
 # shellcheck source=bin/fm-remote-job-lib.sh
@@ -142,7 +149,13 @@ if ! fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID"; then
 fi
 cat "$FM_REMOTE_JOB_STDOUT"
 cat "$FM_REMOTE_JOB_STDERR" >&2
-RESULT=$FM_REMOTE_JOB_EXIT
+if fm_remote_job_outcome_is_execution "$FM_REMOTE_JOB_OUTCOME"; then
+  RESULT=$FM_REMOTE_JOB_EXIT
+else
+  printf 'error: no execution verdict: outcome=%s: %s' "$FM_REMOTE_JOB_OUTCOME" \
+    "$(fm_remote_job_outcome_diagnostic "$FM_REMOTE_JOB_OUTCOME")" >&2
+  RESULT=$FM_REMOTE_JOB_NO_EXECUTION_STATUS
+fi
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || true
 trap - EXIT
 rm -rf -- "$TMP"

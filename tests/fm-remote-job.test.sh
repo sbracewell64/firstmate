@@ -277,9 +277,30 @@ FM_REMOTE_JOB_TIMEOUT=1
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-timeout-job.sh < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_OUTCOME" = executed ] \
+  || fail "an execution timeout was not published as an execution outcome (got $FM_REMOTE_JOB_OUTCOME)"
 [ "$FM_REMOTE_JOB_EXIT" -eq 124 ] || fail "the worker did not terminate an over-time job"
+[ -n "$FM_REMOTE_JOB_EXECUTION_START" ] \
+  || fail "an execution timeout carried no execution-start witness"
+TIMEOUT_JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the timed-out job could not be reaped"
-pass "the worker enforces the job timeout and publishes its result"
+assert_absent "$TIMEOUT_JOB_DIR" "reaping left the typed execution record behind"
+pass "an execution timeout is an execution outcome with a start witness"
+
+# Negative control for the absence assertion in the expiry case below: the same
+# fixture, admitted normally, provably mutates. Without watching it go red the
+# later assert_absent could be satisfied by a fixture that never writes at all.
+QUEUED_CONTROL_EFFECT="$TMP_ROOT/queued-control-effect"
+FM_REMOTE_JOB_TIMEOUT=10
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
+  fm-touch-job.sh "$QUEUED_CONTROL_EFFECT" < /dev/null > /dev/null
+JOB_ID=$FM_REMOTE_JOB_ID
+fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_OUTCOME" = executed ] \
+  || fail "the admitted control fixture did not execute (got $FM_REMOTE_JOB_OUTCOME)"
+assert_present "$QUEUED_CONTROL_EFFECT" \
+  "the admitted control fixture never mutated, so the expiry assertion below would be vacuous"
+fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the control fixture could not be reaped"
 
 QUEUED_SIDE_EFFECT="$TMP_ROOT/queued-side-effect"
 QUEUED_HOLD_RELEASE="$TMP_ROOT/queued-hold-release"
@@ -306,11 +327,19 @@ printf '%s\n' "$(date +%s)" > "$STATE_ROOT/jobs/$JOB_ID/queue_deadline"
 touch "$QUEUED_HOLD_RELEASE"
 fm_remote_job_wait "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 124 ] || fail "an expired queued job did not publish a timeout result"
+[ "$FM_REMOTE_JOB_OUTCOME" = admission_expired ] \
+  || fail "an expired queued job did not publish an admission outcome (got $FM_REMOTE_JOB_OUTCOME)"
+[ -z "$FM_REMOTE_JOB_EXIT" ] \
+  || fail "an expired queued job published a command exit status ($FM_REMOTE_JOB_EXIT)"
+[ -z "$FM_REMOTE_JOB_EXECUTION_START" ] \
+  || fail "an expired queued job claimed an execution-start witness"
+EXPIRED_JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
+assert_absent "$EXPIRED_JOB_DIR/exit" "an expired queued job left an exit-code-shaped field on its record"
 assert_absent "$QUEUED_SIDE_EFFECT" "the worker executed a queued job after its durable deadline"
 fm_remote_job_reap "$ACCOUNT_HOME" "$FIRST_JOB_ID" || fail "the blocking job could not be reaped"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the expired queued job could not be reaped"
-pass "the worker expires queued jobs before they can mutate"
+assert_absent "$EXPIRED_JOB_DIR" "reaping left the typed admission record behind"
+pass "queue expiry is a typed admission outcome that never mutates or borrows an exit status"
 
 FIRST_DELAYED_SIDE_EFFECT="$TMP_ROOT/first-delayed-side-effect"
 SECOND_DELAYED_SIDE_EFFECT="$TMP_ROOT/second-delayed-side-effect"
@@ -364,7 +393,9 @@ for _ in $(seq 1 100); do
 done
 assert_present "$STATE_ROOT/worker.ready" "the replacement worker did not become ready"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 125 ] || fail "the interrupted job did not publish an unknown-completion result"
+[ "$FM_REMOTE_JOB_OUTCOME" = infrastructure ] \
+  || fail "the interrupted job did not publish an unobserved-result outcome (got $FM_REMOTE_JOB_OUTCOME)"
+[ -z "$FM_REMOTE_JOB_EXIT" ] || fail "an interrupted job published a command exit status"
 sleep 3
 assert_absent "$SHUTDOWN_SIDE_EFFECT" "the active command mutated after worker shutdown"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the interrupted job could not be reaped"
@@ -391,7 +422,10 @@ done
 [ -n "${RESTARTED_WORKER_PID:-}" ] && [ "$RESTARTED_WORKER_PID" != "$CRASHED_WORKER_PID" ] \
   || fail "the Linux supervisor did not restart a crashed worker"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 125 ] || fail "worker crash recovery did not publish unknown completion"
+[ "$FM_REMOTE_JOB_OUTCOME" = infrastructure ] \
+  || fail "worker crash recovery did not publish an unobserved-result outcome (got $FM_REMOTE_JOB_OUTCOME)"
+[ -z "$FM_REMOTE_JOB_EXIT" ] \
+  || fail "crash recovery promoted an unconfirmed execution to a command exit status"
 sleep 3
 assert_absent "$CRASH_SIDE_EFFECT" "an orphaned command mutated after worker crash recovery"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the crash-recovered job could not be reaped"
@@ -418,17 +452,27 @@ JOB_ID=$FM_REMOTE_JOB_ID
 JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
 PREEXEC_ELAPSED=$(( $(date +%s) - PREEXEC_BEGAN ))
-[ "$FM_REMOTE_JOB_EXIT" -eq 124 ] || fail "the pre-execution deadline did not publish a timeout result"
+[ "$FM_REMOTE_JOB_OUTCOME" = admission_expired ] \
+  || fail "a pre-execution deadline was not published as an admission outcome (got $FM_REMOTE_JOB_OUTCOME)"
+[ -z "$FM_REMOTE_JOB_EXIT" ] \
+  || fail "a pre-execution deadline published a command exit status ($FM_REMOTE_JOB_EXIT)"
+# Pre-execution validation runs under the same bounded launcher as the governed
+# command, so this proves the witness is written at the governed boundary only.
+[ -z "$FM_REMOTE_JOB_EXECUTION_START" ] \
+  || fail "tracked-command validation wrote an execution-start witness"
 assert_present "$PREEXEC_STARTED" "the pre-execution timeout fixture did not enter tracked-command validation"
 assert_absent "$PREEXEC_FINISHED" "tracked-command validation continued after the job timeout"
 [ "$PREEXEC_ELAPSED" -le 7 ] || fail "tracked-command validation exceeded the job timeout bound"
 fm_remote_job_reap "$ACCOUNT_HOME" "$JOB_ID" || fail "the pre-execution timeout leaked output readers or FIFOs"
 rm -f -- "$ACCOUNT_HOME/.local/bin/git"
-pass "pre-execution validation obeys the job timeout"
+pass "pre-execution validation expires as admission and witnesses no execution"
 
 fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-output-job.sh < /dev/null > /dev/null
 JOB_ID=$FM_REMOTE_JOB_ID
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_OUTCOME" = executed ] \
+  || fail "a normal command did not publish an execution outcome (got $FM_REMOTE_JOB_OUTCOME)"
+[ -n "$FM_REMOTE_JOB_EXECUTION_START" ] || fail "a normal command carried no execution-start witness"
 [ "$FM_REMOTE_JOB_EXIT" -eq 23 ] || fail "bounded output changed the command exit status"
 OUTPUT_BYTES=$(LC_ALL=C wc -c < "$FM_REMOTE_JOB_STDOUT" | tr -d ' ')
 [ "$OUTPUT_BYTES" -le "$FM_REMOTE_JOB_MAX_BYTES" ] || fail "the worker retained output beyond its byte bound"
@@ -452,9 +496,79 @@ rm -f -- "$JOB_DIR/argv"
 ln -s "$TMP_ROOT/not-an-argv" "$JOB_DIR/argv"
 fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
 fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
-[ "$FM_REMOTE_JOB_EXIT" -eq 126 ] || fail "the worker accepted a symlinked argv record"
+[ "$FM_REMOTE_JOB_OUTCOME" = admission_refused ] \
+  || fail "the worker accepted a symlinked argv record (got $FM_REMOTE_JOB_OUTCOME)"
+[ -z "$FM_REMOTE_JOB_EXIT" ] || fail "a refused record published a command exit status"
 assert_absent "$SIDE_EFFECT" "the worker executed a job after its argv changed to a symlink"
-pass "the worker refuses symlinked job fields before command execution"
+pass "the worker refuses symlinked job fields as admission, not as a command result"
+
+# A command that provably ran, whose witness cannot be read, must not become an
+# execution verdict. The record is tampered while no worker owns it, exactly as
+# the symlinked-argv case above does, and a directory in the witness's place
+# survives the worker's write yet cannot be read back as a witness.
+UNWITNESSED_SIDE_EFFECT="$TMP_ROOT/unwitnessed-side-effect"
+WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
+kill -TERM "$WORKER_PID"
+for _ in $(seq 1 100); do
+  [ ! -f "$STATE_ROOT/worker.pid" ] && break
+  sleep 0.05
+done
+assert_absent "$STATE_ROOT/worker.pid" "the worker did not stop before the witness tamper"
+FM_REMOTE_JOB_TIMEOUT=10
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" \
+  fm-touch-job.sh "$UNWITNESSED_SIDE_EFFECT" < /dev/null > /dev/null
+JOB_ID=$FM_REMOTE_JOB_ID
+UNWITNESSED_JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
+mkdir "$UNWITNESSED_JOB_DIR/execution_start"
+fm_remote_job_ensure_worker "$REMOTE_ROOT" "$ACCOUNT_HOME" || fail "$FM_REMOTE_JOB_ERROR"
+for _ in $(seq 1 200); do
+  [ "$(fm_remote_job_read_state "$UNWITNESSED_JOB_DIR" 2>/dev/null || true)" = 'done' ] && break
+  sleep 0.05
+done
+[ "$(fm_remote_job_read_state "$UNWITNESSED_JOB_DIR" 2>/dev/null || true)" = 'done' ] \
+  || fail "the unwitnessed job never completed"
+assert_present "$UNWITNESSED_SIDE_EFFECT" \
+  "the unwitnessed fixture never ran, so this case would not test an unreadable witness"
+[ "$(fm_remote_job_read_outcome "$UNWITNESSED_JOB_DIR")" = infrastructure ] \
+  || fail "an unwitnessed run was published as an execution result"
+assert_absent "$UNWITNESSED_JOB_DIR/exit" "an unwitnessed run published a command exit status"
+if fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" 2>/dev/null; then
+  fail "a caller accepted a result whose execution-start witness could not be read"
+fi
+assert_contains "$FM_REMOTE_JOB_ERROR" 'execution-start witness is malformed' \
+  "an unreadable witness was refused for the wrong reason"
+pass "an unreadable execution-start witness never becomes an execution verdict"
+
+# The caller-side invariants: a completed record is re-read here, so each
+# tampered field is refused rather than believed.
+fm_remote_job_stage "$ACCOUNT_HOME" "$REMOTE_ROOT" "$REMOTE_HOME" fm-probe-job.sh < /dev/null > /dev/null
+JOB_ID=$FM_REMOTE_JOB_ID
+TAMPER_JOB_DIR="$STATE_ROOT/jobs/$JOB_ID"
+fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "$FM_REMOTE_JOB_ERROR"
+[ "$FM_REMOTE_JOB_OUTCOME" = executed ] || fail "the tamper baseline did not execute"
+GOOD_WITNESS=$FM_REMOTE_JOB_EXECUTION_START
+printf 'not-a-witness\n' > "$TAMPER_JOB_DIR/execution_start"
+if fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" 2>/dev/null; then
+  fail "a malformed execution-start witness was accepted"
+fi
+[ -z "$FM_REMOTE_JOB_EXIT" ] || fail "a refused read left a command exit status behind"
+rm -f -- "$TAMPER_JOB_DIR/execution_start"
+if fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" 2>/dev/null; then
+  fail "an execution result with no execution-start witness was accepted"
+fi
+assert_contains "$FM_REMOTE_JOB_ERROR" 'no execution-start witness' \
+  "a missing witness was refused for the wrong reason"
+printf '%s\n' "$GOOD_WITNESS" > "$TAMPER_JOB_DIR/execution_start"
+fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" || fail "restoring the witness did not restore the execution result"
+fm_remote_job_write_outcome "$TAMPER_JOB_DIR" admission_expired \
+  || fail "the tampered record could not be retyped"
+if fm_remote_job_wait "$ACCOUNT_HOME" "$JOB_ID" 2>/dev/null; then
+  fail "an admission outcome carrying a command exit status was accepted"
+fi
+assert_contains "$FM_REMOTE_JOB_ERROR" 'established no execution' \
+  "an admission outcome with an exit status was refused for the wrong reason"
+[ -z "$FM_REMOTE_JOB_EXIT" ] || fail "a refused admission read exposed a command exit status"
+pass "callers refuse a missing, malformed, or contradicted execution witness"
 
 QUARANTINE_STARTED="$TMP_ROOT/quarantine-started"
 QUARANTINE_SIDE_EFFECT="$TMP_ROOT/quarantine-side-effect"

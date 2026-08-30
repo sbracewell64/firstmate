@@ -11,9 +11,18 @@
 # FM_HOME, FM_ROOT_OVERRIDE, and FM_REMOTE_JOB_ACTIVE=1. Commands receive their
 # captured stdin and have a 360-second default timeout. Their stdout and stderr
 # are independently constrained to the job library's 1048576-byte bound. A
-# record is marked done only after its bounded outputs and numeric exit status
-# have been committed. The library header owns the exact record fields and
-# lifecycle.
+# record is marked done only after its bounded outputs and its typed outcome
+# have been committed. The library header owns the exact record fields, the
+# closed outcome vocabulary, and the lifecycle.
+#
+# Every published result declares which side of the execution-start boundary it
+# came from. This worker writes the execution_start witness at exactly one
+# place: the moment it releases the governed command to exec in
+# worker_run_with_timeout. Pre-execution validation shares the job's deadline
+# but never writes that witness, so its expiry publishes admission_expired and
+# never the command's exit status. After the governed command returns, an
+# absent witness publishes infrastructure rather than promoting an unwitnessed
+# terminal state to an execution result.
 set -u
 
 SCRIPT_DIR=$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
@@ -323,7 +332,7 @@ worker_recover_orphaned_job() { # <job-dir>
   done
   : > "$job/stdout"
   printf 'remote job worker stopped before this job completed\n' > "$job/stderr"
-  worker_publish_result "$job" 125
+  worker_publish_result "$job" infrastructure
 }
 
 worker_read_text() { # <job-dir> <field> <max>
@@ -339,24 +348,35 @@ worker_read_text() { # <job-dir> <field> <max>
   printf '%s\n' "$value"
 }
 
-worker_publish_result() { # <job-dir> <exit>
-  local job=$1 exit_status=$2 tmp
-  case "$exit_status" in ''|*[!0-9]*) exit_status=125 ;; esac
-  [ "$exit_status" -le 255 ] || exit_status=125
+worker_publish_result() { # <job-dir> <outcome> [<exit, only with executed>]
+  local job=$1 outcome=$2 exit_status=${3:-} tmp
+  fm_remote_job_valid_outcome "$outcome" || return 1
+  if fm_remote_job_outcome_is_execution "$outcome"; then
+    case "$exit_status" in ''|*[!0-9]*) outcome=infrastructure; exit_status= ;; esac
+    if [ -n "$exit_status" ] && [ "$exit_status" -gt 255 ]; then
+      outcome=infrastructure
+      exit_status=
+    fi
+  else
+    exit_status=
+  fi
   for tmp in stdout stderr; do
     fm_remote_job_regular_bounded "$job/$tmp" "$FM_REMOTE_JOB_MAX_BYTES" || return 1
   done
-  tmp=$(umask 077; mktemp "$job/.exit.XXXXXX") || return 1
-  printf '%s\n' "$exit_status" > "$tmp" || { rm -f -- "$tmp"; return 1; }
-  chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
-  mv -f -- "$tmp" "$job/exit" || { rm -f -- "$tmp"; return 1; }
+  if [ -n "$exit_status" ]; then
+    tmp=$(umask 077; mktemp "$job/.exit.XXXXXX") || return 1
+    printf '%s\n' "$exit_status" > "$tmp" || { rm -f -- "$tmp"; return 1; }
+    chmod 600 "$tmp" || { rm -f -- "$tmp"; return 1; }
+    mv -f -- "$tmp" "$job/exit" || { rm -f -- "$tmp"; return 1; }
+  fi
+  fm_remote_job_write_outcome "$job" "$outcome" || return 1
   fm_remote_job_write_state "$job" 'done'
 }
 
-worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
-  local job=$1 timeout=$2 group_file armed_file group_pid rc tmp deadline next_heartbeat
+worker_run_with_timeout() { # <job-dir> <witness 0|1> <seconds> <command> [args...]
+  local job=$1 witness=$2 timeout=$3 group_file armed_file group_pid rc tmp deadline next_heartbeat
   local timed_out=0 heartbeat_failed=0
-  shift 2
+  shift 3
   group_file="$job/.claim/group"
   armed_file="$job/.claim/armed"
   WORKER_ACTIVE_JOB=$job
@@ -402,6 +422,18 @@ worker_run_with_timeout() { # <job-dir> <seconds> <command> [args...]
     worker_signal_process_or_group group KILL "$group_pid"
     wait "$group_pid" 2>/dev/null || true
     rm -f -- "$group_file"
+    WORKER_ACTIVE_JOB=
+    return 125
+  fi
+  # The child execs as soon as this armed file exists, so the witness is written
+  # after it: a witness can never precede the release it attests to. Losing the
+  # race the other way leaves an unwitnessed run, which publishes as an
+  # unobserved result rather than as an execution verdict.
+  if [ "$witness" -eq 1 ] && ! fm_remote_job_write_number "$job" execution_start "$(date +%s)"; then
+    worker_signal_process_or_group group TERM "$group_pid"
+    worker_signal_process_or_group group KILL "$group_pid"
+    wait "$group_pid" 2>/dev/null || true
+    rm -f -- "$group_file" "$armed_file"
     WORKER_ACTIVE_JOB=
     return 125
   fi
@@ -454,59 +486,59 @@ worker_run_job() { # <account-home> <job-dir>
   local account_home=$1 job=$2 root home command command_path git_bin rc deadline remaining
   local stdout_pipe stderr_pipe stdout_reader stderr_reader
   local -a argv child_env
-  root=$(worker_read_text "$job" root 8192) || { worker_publish_result "$job" 126; return; }
-  home=$(worker_read_text "$job" home 8192) || { worker_publish_result "$job" 126; return; }
-  root=$(fm_remote_job_canonical_existing_dir "$root") || { worker_publish_result "$job" 126; return; }
-  home=$(fm_remote_job_canonical_home "$home") || { worker_publish_result "$job" 126; return; }
-  [ "$root" = "$FM_ROOT" ] || { worker_publish_result "$job" 126; return; }
+  root=$(worker_read_text "$job" root 8192) || { worker_publish_result "$job" admission_refused; return; }
+  home=$(worker_read_text "$job" home 8192) || { worker_publish_result "$job" admission_refused; return; }
+  root=$(fm_remote_job_canonical_existing_dir "$root") || { worker_publish_result "$job" admission_refused; return; }
+  home=$(fm_remote_job_canonical_home "$home") || { worker_publish_result "$job" admission_refused; return; }
+  [ "$root" = "$FM_ROOT" ] || { worker_publish_result "$job" admission_refused; return; }
   [ -f "$root/AGENTS.md" ] && [ ! -L "$root/AGENTS.md" ] &&
-    [ -d "$root/bin" ] && [ ! -L "$root/bin" ] || { worker_publish_result "$job" 126; return; }
-  fm_remote_job_regular_bounded "$job/argv" "$FM_REMOTE_JOB_MAX_BYTES" || { worker_publish_result "$job" 126; return; }
-  fm_remote_job_regular_bounded "$job/stdin" "$FM_REMOTE_JOB_MAX_BYTES" || { worker_publish_result "$job" 126; return; }
-  deadline=$(fm_remote_job_read_deadline "$job") || { worker_publish_result "$job" 126; return; }
+    [ -d "$root/bin" ] && [ ! -L "$root/bin" ] || { worker_publish_result "$job" admission_refused; return; }
+  fm_remote_job_regular_bounded "$job/argv" "$FM_REMOTE_JOB_MAX_BYTES" || { worker_publish_result "$job" admission_refused; return; }
+  fm_remote_job_regular_bounded "$job/stdin" "$FM_REMOTE_JOB_MAX_BYTES" || { worker_publish_result "$job" admission_refused; return; }
+  deadline=$(fm_remote_job_read_deadline "$job") || { worker_publish_result "$job" admission_refused; return; }
   remaining=$((deadline - $(date +%s)))
-  [ "$remaining" -gt 0 ] || { worker_publish_result "$job" 124; return; }
+  [ "$remaining" -gt 0 ] || { worker_publish_result "$job" admission_expired; return; }
   argv=()
   while IFS= read -r -d '' command; do argv+=("$command"); done < "$job/argv"
-  [ "${#argv[@]}" -ge 1 ] || { worker_publish_result "$job" 126; return; }
+  [ "${#argv[@]}" -ge 1 ] || { worker_publish_result "$job" admission_refused; return; }
   command=${argv[0]}
-  case "$command" in fm-*.sh) ;; *) worker_publish_result "$job" 126; return ;; esac
-  case "$command" in */*|*..*) worker_publish_result "$job" 126; return ;; esac
+  case "$command" in fm-*.sh) ;; *) worker_publish_result "$job" admission_refused; return ;; esac
+  case "$command" in */*|*..*) worker_publish_result "$job" admission_refused; return ;; esac
   command_path="$root/bin/$command"
   [ -f "$command_path" ] && [ ! -L "$command_path" ] && [ -x "$command_path" ] || {
-    worker_publish_result "$job" 126
+    worker_publish_result "$job" admission_refused
     return
   }
   fm_remote_job_compose_operator_path "$account_home" >/dev/null
   git_bin=$(fm_remote_job_operator_tool git 2>/dev/null || true)
-  [ -n "$git_bin" ] || { worker_publish_result "$job" 126; return; }
+  [ -n "$git_bin" ] || { worker_publish_result "$job" admission_refused; return; }
   remaining=$((deadline - $(date +%s)))
-  [ "$remaining" -gt 0 ] || { worker_publish_result "$job" 124; return; }
+  [ "$remaining" -gt 0 ] || { worker_publish_result "$job" admission_expired; return; }
   set +e
-  worker_run_with_timeout "$job" "$remaining" \
+  worker_run_with_timeout "$job" 0 "$remaining" \
     "$git_bin" -C "$root" ls-files --error-unmatch "bin/$command" >/dev/null 2>&1
   rc=$?
   set -e
   case "$rc" in
     0) ;;
-    124) worker_publish_result "$job" 124; return ;;
-    125) worker_publish_result "$job" 125; return ;;
-    *) worker_publish_result "$job" 126; return ;;
+    124) worker_publish_result "$job" admission_expired; return ;;
+    125) worker_publish_result "$job" infrastructure; return ;;
+    *) worker_publish_result "$job" admission_refused; return ;;
   esac
   fm_remote_job_build_child_path "$root" >/dev/null
   for command in stdin stdout stderr; do
-    [ -f "$job/$command" ] && [ ! -L "$job/$command" ] || { worker_publish_result "$job" 126; return; }
+    [ -f "$job/$command" ] && [ ! -L "$job/$command" ] || { worker_publish_result "$job" admission_refused; return; }
   done
   stdout_pipe="$job/.stdout.pipe"
   stderr_pipe="$job/.stderr.pipe"
   [ ! -e "$stdout_pipe" ] && [ ! -L "$stdout_pipe" ] && [ ! -e "$stderr_pipe" ] && [ ! -L "$stderr_pipe" ] || {
-    worker_publish_result "$job" 125
+    worker_publish_result "$job" infrastructure
     return
   }
-  mkfifo "$stdout_pipe" "$stderr_pipe" || { worker_publish_result "$job" 125; return; }
+  mkfifo "$stdout_pipe" "$stderr_pipe" || { worker_publish_result "$job" infrastructure; return; }
   chmod 600 "$stdout_pipe" "$stderr_pipe" || {
     rm -f -- "$stdout_pipe" "$stderr_pipe"
-    worker_publish_result "$job" 125
+    worker_publish_result "$job" infrastructure
     return
   }
   worker_capture_output "$stdout_pipe" "$job/stdout" &
@@ -527,18 +559,22 @@ worker_run_job() { # <account-home> <job-dir>
   remaining=$((deadline - $(date +%s)))
   [ "$remaining" -gt 0 ] || {
     worker_cleanup_output_capture "$job" "$stdout_reader" "$stderr_reader"
-    worker_publish_result "$job" 124
+    worker_publish_result "$job" admission_expired
     return
   }
   set +e
-  worker_run_with_timeout "$job" "$remaining" "${child_env[@]}" \
+  worker_run_with_timeout "$job" 1 "$remaining" "${child_env[@]}" \
     "$command_path" "${argv[@]:1}" < "$job/stdin" > "$stdout_pipe" 2> "$stderr_pipe"
   rc=$?
   wait "$stdout_reader"
   wait "$stderr_reader"
   rm -f -- "$stdout_pipe" "$stderr_pipe"
   set -e
-  worker_publish_result "$job" "$rc" || worker_error "could not publish result for ${job##*/}"
+  if [ "$rc" -eq 125 ] || ! fm_remote_job_read_number "$job" execution_start >/dev/null 2>&1; then
+    worker_publish_result "$job" infrastructure || worker_error "could not publish result for ${job##*/}"
+    return
+  fi
+  worker_publish_result "$job" executed "$rc" || worker_error "could not publish result for ${job##*/}"
 }
 
 worker_process_once() { # <account-home>
@@ -554,9 +590,9 @@ worker_process_once() { # <account-home>
       queued)
         worker_clear_dead_claim "$job" || continue
         queue_deadline=$(fm_remote_job_read_number "$job" queue_deadline 2>/dev/null || true)
-        case "$queue_deadline" in ''|*[!0-9]*) worker_publish_result "$job" 126 || true; continue ;; esac
+        case "$queue_deadline" in ''|*[!0-9]*) worker_publish_result "$job" admission_refused || true; continue ;; esac
         if [ "$(date +%s)" -ge "$queue_deadline" ]; then
-          worker_publish_result "$job" 124 || true
+          worker_publish_result "$job" admission_expired || true
           continue
         fi
         ;;
@@ -568,18 +604,18 @@ worker_process_once() { # <account-home>
     esac
     worker_claim "$job" || continue
     timeout=$(fm_remote_job_read_number "$job" timeout 2>/dev/null || true)
-    case "$timeout" in ''|*[!0-9]*) worker_publish_result "$job" 126 || true; continue ;; esac
+    case "$timeout" in ''|*[!0-9]*) worker_publish_result "$job" admission_refused || true; continue ;; esac
     if [ "$timeout" -gt 3600 ]; then
-      worker_publish_result "$job" 126 || true
+      worker_publish_result "$job" admission_refused || true
       continue
     fi
     deadline=$(( $(date +%s) + timeout ))
     fm_remote_job_write_number "$job" deadline "$deadline" || {
-      worker_publish_result "$job" 125 || true
+      worker_publish_result "$job" infrastructure || true
       continue
     }
     fm_remote_job_write_state "$job" running || {
-      worker_publish_result "$job" 125 || true
+      worker_publish_result "$job" infrastructure || true
       continue
     }
     worker_run_job "$account_home" "$job"

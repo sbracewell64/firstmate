@@ -354,6 +354,16 @@ report_required_tools_from_worker() {
     report_required_tools
     return 0
   fi
+  # A probe that never started reports no tools either way, so it is separated
+  # from a probe that ran and answered badly rather than folded into it.
+  if ! fm_remote_job_outcome_is_execution "$FM_REMOTE_JOB_OUTCOME"; then
+    fm_remote_job_reap "${HOME:-}" "$job_id" 2>/dev/null || true
+    set_check remote-job-probe \
+      "fixable: the remote job worker never ran the required-tool probe ($FM_REMOTE_JOB_OUTCOME)" \
+      "rerun this command with --fix to restart the worker"
+    report_required_tools
+    return 0
+  fi
   probe_stdout=$FM_REMOTE_JOB_STDOUT
   probe_stderr=$FM_REMOTE_JOB_STDERR
   probe_exit=$FM_REMOTE_JOB_EXIT

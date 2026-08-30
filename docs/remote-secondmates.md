@@ -29,7 +29,8 @@ The entrypoint accepts encoded argv for genuine executable `bin/fm-*.sh` files o
 It never accepts a shell command string.
 The readiness-owning doctor runs over this plain SSH bootstrap so read-only mode can report worker gaps and `--fix` can install or repair the worker.
 The entrypoint authorizes that bootstrap with normal git tracking when git resolves and with its pinned doctor digest when doctor must report that git itself is missing.
-After setup, every other command verifies Firstmate's account-owned remote job worker, stages the encoded argv and stdin bytes, waits for its result, and relays stdout, stderr, and the exit status separately.
+After setup, every other command verifies Firstmate's account-owned remote job worker, stages the encoded argv and stdin bytes, waits for its result, and relays stdout, stderr, and the typed outcome separately.
+The command's own exit status is relayed only when that outcome records the command actually starting, as the classification section below describes.
 On macOS the worker is `dev.firstmate.remote-job`, an Aqua-scoped LaunchAgent at `~/Library/LaunchAgents/dev.firstmate.remote-job.plist` with logs under `~/Library/Logs/`.
 After that bootstrap every non-doctor `fm-on.sh` target runs through that worker in the remote account's GUI session, never in the SSH process or a Herdr pane.
 Linux uses the same queue and worker protocol without the Aqua-session requirement.
@@ -162,6 +163,11 @@ An SSH exit status of 255 always means transport failure or unknown remote compl
 The transport never retries automatically.
 Semantic callers preserve the route or pending request and require same-host reconciliation rather than resending an operation that may already have happened.
 An unavailable remote home is projected as unknown and is never replaced by a local second mate.
+
+Admission and execution are separate observations, so a remote request that never reached the command has no verdict about that command.
+A request that expired in the queue, was refused before launch, or whose result the worker could not observe returns exit 75 with a typed `no execution verdict` diagnostic naming the outcome, rather than borrowing an exit status the command never produced.
+The command's own status, including exit 124 when it started and then exceeded its execution deadline, is returned only once the worker recorded that the command started.
+Read that diagnostic rather than the status alone, because a command can genuinely exit 75 as well; [`bin/fm-remote-job-lib.sh`](../bin/fm-remote-job-lib.sh) owns the outcome vocabulary and the execution-start witness.
 
 ## Backlog handoff
 
