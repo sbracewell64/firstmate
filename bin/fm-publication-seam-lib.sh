@@ -1000,20 +1000,20 @@ fm_pub_seam_resolve_attestation_evidence() {  # <config-dir> <item-or-dash> <ven
     fi
   fi
 
+  FM_PUB_SEAM_ITEM='-'
+  if [ "$FM_PUB_SEAM_POLICY_STATE" = absent ]; then
+    fm_pub_seam_set not-applicable "$FM_PUB_SEAM_TOKEN_NOT_APPLICABLE" \
+      "this home declares no publication identity policy, so publishing exact attestation evidence on $venue is ungoverned"
+    return $?
+  fi
   generation=$(fm_pub_seam_generation "$policy_generation" '' '' attestation-evidence "$venue" "$ref" '-')
   [ -n "$generation" ] || {
     fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_POLICY_UNREADABLE" \
       "the policy generation for publishing attestation evidence on $venue could not be compiled"
     return $?
   }
-  FM_PUB_SEAM_ITEM='-'
-  if [ "$FM_PUB_SEAM_POLICY_STATE" = absent ]; then
-    fm_pub_seam_set not-applicable "$FM_PUB_SEAM_TOKEN_NOT_APPLICABLE" \
-      "this home declares no publication identity policy, so publishing exact attestation evidence on $venue is ungoverned"
-  else
-    fm_pub_seam_set allow-exact "$FM_PUB_SEAM_TOKEN_ALLOW" \
-      "publishing the exact $ref update at $head on trusted venue $venue is permitted attestation evidence" '' "$generation"
-  fi
+  fm_pub_seam_set allow-exact "$FM_PUB_SEAM_TOKEN_ALLOW" \
+    "publishing the exact $ref update at $head on trusted venue $venue is permitted attestation evidence" '' "$generation"
 }
 
 # --- the compiled generation --------------------------------------------------

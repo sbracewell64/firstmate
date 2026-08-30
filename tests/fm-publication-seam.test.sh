@@ -1264,6 +1264,28 @@ test_refuses_attestation_evidence_after_governed_generation_changes() {
   pass "governed attestation evidence refuses after its policy generation changes"
 }
 
+test_publishes_ungoverned_attestation_evidence_with_empty_generation() {
+  local id out rc=0 after record notes_ref=refs/notes/no-mistakes
+  fixture ungoverned-attestation
+  out=$(guard prepare --effect attestation-evidence --repo "$FX_REPO" --remote origin \
+    --venue "$VENUE" --ref "$notes_ref" --head "$FX_HEAD" --expected-tip -)
+  id=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
+  [ -n "$id" ] || fail "ungoverned-attestation: evidence was not authorized: $out"
+  record="$FX_DATA/landing-authorizations/$id.json"
+  [ "$(jq -r '.grant.generation' "$record")" = '' ] \
+    || fail "ungoverned-attestation: absent policy retained a generation: $(cat "$record")"
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push origin "$FX_HEAD:$notes_ref") || rc=$?
+  [ "$rc" -eq 0 ] || fail "ungoverned-attestation: evidence publish exited $rc: $out"
+  assert_contains "$out" 'APPLIED NOT_APPLICABLE' \
+    "ungoverned-attestation: successful evidence lost its ungoverned verdict: $out"
+  after=$(git -C "$FX_REPO" ls-remote "$FX_REMOTE" "$notes_ref" | awk 'NF {print $1; exit}') \
+    || fail "ungoverned-attestation: remote observation failed"
+  [ "$after" = "$FX_HEAD" ] \
+    || fail "ungoverned-attestation: remote is at '$after' rather than $FX_HEAD"
+  pass "ungoverned attestation evidence prepares and consumes with no generation"
+}
+
 # --- (j) a wrong expected remote tip -------------------------------------------
 
 test_refuses_a_wrong_expected_remote_tip() {
@@ -2050,6 +2072,7 @@ test_refuses_a_valid_identity_under_a_live_must_close_ruling
 test_refuses_two_actionable_candidates_for_one_semantic_work
 test_refuses_a_changed_policy_generation
 test_refuses_attestation_evidence_after_governed_generation_changes
+test_publishes_ungoverned_attestation_evidence_with_empty_generation
 test_refuses_a_wrong_expected_remote_tip
 test_refuses_a_replayed_authority_and_publishes_nothing
 test_refuses_unexpected_remote_movement_without_overwriting_it
