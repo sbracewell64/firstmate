@@ -1243,6 +1243,27 @@ test_refuses_a_changed_policy_generation() {
   pass "an authority whose ruling or policy generation has since changed refuses"
 }
 
+test_refuses_attestation_evidence_after_governed_generation_changes() {
+  local id out rc=0 after notes_ref=refs/notes/no-mistakes
+  fixture attestation-generation
+  policy
+  out=$(guard prepare --effect attestation-evidence --repo "$FX_REPO" --remote origin \
+    --venue "$VENUE" --ref "$notes_ref" --head "$FX_HEAD" --expected-tip -)
+  id=$(printf '%s\n' "$out" | awk '$1=="ALLOW_EXACT" {print $2; exit}')
+  [ -n "$id" ] || fail "attestation-generation: governed evidence was not authorized: $out"
+  policy "$FX_AUTHOR" "$FX_AUTHOR" pol-2
+  out=$(guard consume "$id" --repo "$FX_REPO" --remote origin -- \
+    git -C "$FX_REPO" push origin "$FX_HEAD:$notes_ref") || rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "attestation-generation: stale governed evidence exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_GENERATION_CHANGED' \
+    "attestation-generation: the refusal did not name the changed generation: $out"
+  after=$(git -C "$FX_REPO" ls-remote "$FX_REMOTE" "$notes_ref") \
+    || fail "attestation-generation: remote observation failed"
+  [ -z "$after" ] || fail "attestation-generation: stale evidence moved the remote: $after"
+  pass "governed attestation evidence refuses after its policy generation changes"
+}
+
 # --- (j) a wrong expected remote tip -------------------------------------------
 
 test_refuses_a_wrong_expected_remote_tip() {
@@ -2028,6 +2049,7 @@ test_refuses_an_identity_that_maps_to_no_governed_party
 test_refuses_a_valid_identity_under_a_live_must_close_ruling
 test_refuses_two_actionable_candidates_for_one_semantic_work
 test_refuses_a_changed_policy_generation
+test_refuses_attestation_evidence_after_governed_generation_changes
 test_refuses_a_wrong_expected_remote_tip
 test_refuses_a_replayed_authority_and_publishes_nothing
 test_refuses_unexpected_remote_movement_without_overwriting_it
