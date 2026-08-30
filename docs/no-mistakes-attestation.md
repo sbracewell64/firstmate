@@ -253,10 +253,9 @@ A repository or a ref that could not be read at all ends it differently, as `can
 Not reading a repository is not reading an absence, which is the same line this component draws everywhere else.
 Both outcomes are red; what differs is that one sends a contributor to publish an attestation and the other sends them to re-run a job.
 
-The verifier runs from the pull request's own head, so a head raised before `reconcile` existed does not carry it.
-The workflow asks `bin/fm-attest.sh --supports reconcile` before choosing what to run, and verifies such a head without a window exactly as it did before rather than failing it for the age of its checkout.
-`--supports` answers as an exit status and nothing else, so a caller never has to tell "this program does not do that" from "that failed" by reading a message.
-That fallback can go once no open pull request predates the subcommand.
+The verifier runs from the governed venue's resolved policy generation, so the age of the pull request head no longer determines whether `reconcile` is available.
+The workflow requires that authoritative verifier to report support for `reconcile`; an authority that cannot do so reaches the no-verdict path rather than falling back to either `verify` or the candidate's copy.
+`--supports` answers as an exit status and nothing else, so the workflow never has to tell "this program does not do that" from "that failed" by reading a message.
 
 ## Re-evaluating a head after the note is published
 
