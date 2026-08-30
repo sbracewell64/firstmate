@@ -19,7 +19,6 @@ REAL_GIT=$(command -v git)
 OTHER_PID=
 RECOVERY_WORKER_PID=
 mkdir -p "$REMOTE_ROOT/bin" "$REMOTE_HOME" "$ACCOUNT_HOME" "$RUNTIME_BIN"
-trap 'if [ -n "$OTHER_PID" ]; then kill "$OTHER_PID" 2>/dev/null || true; fi; if [ -n "$RECOVERY_WORKER_PID" ]; then kill "$RECOVERY_WORKER_PID" 2>/dev/null || true; fi; if [ -f "$STATE_ROOT/worker.pid" ]; then kill "$(cat "$STATE_ROOT/worker.pid")" 2>/dev/null || true; fi; rm -rf -- "$TMP_ROOT"' EXIT
 
 cp "$ROOT/bin/fm-remote-job-lib.sh" "$ROOT/bin/fm-remote-job-worker.sh" "$REMOTE_ROOT/bin/"
 printf 'fixture\n' > "$REMOTE_ROOT/AGENTS.md"
@@ -163,6 +162,7 @@ HOME="$ACCOUNT_HOME" PATH="$RUNTIME_BIN:/usr/bin:/bin:/usr/sbin:/sbin" FM_FAKE_P
   FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=5 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" > "$TMP_ROOT/worker.out" 2> "$TMP_ROOT/worker.err" &
+fm_test_reap "$!"
 for _ in $(seq 1 100); do
   [ -f "$STATE_ROOT/worker.ready" ] && break
   sleep 0.05
@@ -262,6 +262,7 @@ wait "$CRASHED_WORKER_PID" 2>/dev/null || true
 assert_present "$STATE_ROOT/worker.lock" "an unclean exit did not retain the worker ownership lock"
 sleep 20 &
 OTHER_PID=$!
+fm_test_reap "$OTHER_PID"
 printf '%s\n' "$OTHER_PID" > "$STATE_ROOT/worker.pid"
 printf '%s\n' "$OTHER_PID" > "$STATE_ROOT/worker.lock/pid"
 touch -t 200001010000 "$STATE_ROOT/worker.ready" "$STATE_ROOT/worker.lock"
@@ -402,6 +403,7 @@ kill -0 "$WORKER_PID" 2>/dev/null && fail "the worker did not finish its TERM sh
 HOME="$ACCOUNT_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="$STATE_ROOT" \
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux FM_REMOTE_JOB_TIMEOUT=1 \
   "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" >> "$TMP_ROOT/worker.out" 2>> "$TMP_ROOT/worker.err" &
+fm_test_reap "$!"
 for _ in $(seq 1 100); do
   [ -f "$STATE_ROOT/worker.ready" ] && break
   sleep 0.05
@@ -650,8 +652,10 @@ chmod 700 "$RECOVERY_HOME" "$RECOVERY_STATE" "$RECOVERY_STATE/jobs" "$RECOVERY_S
   "$RECOVERY_STATE/worker.lock" "$RECOVERY_JOB" "$RECOVERY_JOB/.claim"
 sleep 20 &
 QUARANTINED_PROCESS_PID=$!
+fm_test_reap "$QUARANTINED_PROCESS_PID"
 sleep 0.01 &
 QUARANTINE_OWNER_PID=$!
+fm_test_reap "$QUARANTINE_OWNER_PID"
 wait "$QUARANTINE_OWNER_PID" 2>/dev/null || true
 printf '%s\n' "$QUARANTINE_OWNER_PID" > "$RECOVERY_STATE/worker.lock/pid"
 printf 'stale\n' > "$RECOVERY_STATE/worker.lock/start"
@@ -679,6 +683,7 @@ HOME="$RECOVERY_HOME" FM_ROOT_OVERRIDE="$REMOTE_ROOT" FM_REMOTE_JOB_STATE_ROOT="
   FM_REMOTE_JOB_PLATFORM_OVERRIDE=Linux "$REMOTE_ROOT/bin/fm-remote-job-worker.sh" \
   > "$TMP_ROOT/recovery-worker.out" 2> "$TMP_ROOT/recovery-worker.err" &
 RECOVERY_WORKER_PID=$!
+fm_test_reap "$RECOVERY_WORKER_PID"
 for _ in $(seq 1 300); do
   [ -f "$RECOVERY_STATE/worker.ready" ] && break
   sleep 0.05
