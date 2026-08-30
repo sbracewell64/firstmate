@@ -1046,11 +1046,9 @@ test_reconcile_refuses_while_a_killed_consumers_push_group_survives() {
   consume_pid=$!
   fm_test_reap "$consume_pid"
   record="$FX_DATA/landing-authorizations/$id.json"
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    [ -e "$FX_DATA/push-started" ] && break
-    sleep 0.1
-  done
-  [ -e "$FX_DATA/push-started" ] || fail "reconcile-live-group: push child never started"
+  fm_test_wait_file "$FX_DATA/push-started" 10 "$consume_pid" \
+    "reconcile-live-group: consume exited before starting the push child" \
+    "reconcile-live-group: push child never started"
   owner_pid=$(cat "$FX_DATA/landing-authorizations/.$id.claim/owner-pid") \
     || fail "reconcile-live-group: owner pid"
   owner_group=$(cat "$FX_DATA/landing-authorizations/.$id.claim/owner-group") \
