@@ -23,12 +23,62 @@
 # ACCEPTED SYNTAX. Definitions are unindented `name() {` lines. Calls begin a
 # command after indentation and optional shell control words, follow an unquoted
 # command boundary, occur in a command substitution, begin a canonical one-line
-# function body, name a trap handler - written bare as `trap fn SIG` or as the
-# first word of a quoted handler, `trap 'fn args' SIG` - or use an
-# `indirect-call: name` mark. A
-# `printf` command is accepted only as opaque data and never as call evidence.
+# function body, name a trap handler, or are declared by a SITE-PINNED
+# `indirect-call:` mark this control re-reads and confirms. A `printf` command is
+# accepted only as opaque data and never as call evidence.
 # Heredocs and every other function definition or function-name use are UNCHECKED
 # rather than interpreted or skipped.
+#
+# THE INDIRECT-CALL MARK, AND WHY IT CARRIES A SITE.
+#
+# A dynamic dispatch is a real call this control's syntax cannot resolve on its
+# own: a handler string a `trap` re-evaluates, a validator handed to its caller by
+# name. A mark at the source is how such a call is declared:
+#
+#   # indirect-call: <function> <file>:<line>
+#
+# The mark is DISCOVERY, never proof. A bare `# indirect-call: <function>` used to
+# be counted on its own, so one fabricated comment naming a function nothing
+# dispatches flipped that function from DEAD to ALIVE with no call anywhere in the
+# tree. That is a proxy marker upgrading an unobserved construct into a positive
+# fact, which is the exact failure this file exists to refuse, so the mark now
+# only says WHERE to look and this control does the looking.
+#
+# A mark counts only when the control re-reads the exact `<file>:<line>` it names
+# and observes the function there in an executable position. That site read is
+# closed and enumerated:
+#
+#   - The site file must be one this control can parse. A mark may not rescue a
+#     call site inside a heredoc or any other unreadable construct, because a
+#     line-local read cannot tell an unreadable file's payload text from its code.
+#     When a consumer becomes unreadable the repair is the construct that made it
+#     unreadable, never a mark that hides the gap.
+#   - BARE DISPATCH. The function name survives that file's quote walk at that
+#     line as a whole word, so the shell reads it as a command word or as a word
+#     handed to something that dispatches it by name. A pure-output command word
+#     (`echo`, `printf`, `cat`, `:`) is opaque data at a site exactly as it is
+#     everywhere else here, and is refused.
+#   - HANDLER DISPATCH. The raw line names the function inside a quoted word and
+#     the same line carries a dispatcher outside quotes - `trap`, `eval`, `xargs`,
+#     or `bash`/`sh`/`env` with `-c` - so the quoted word is evaluated as a
+#     command rather than printed.
+#
+# Everything else is REFUSED and named: a mark with no site, an unparseable or
+# unknown site file, a line past end of file, a line that never mentions the
+# function, a line that mentions it only in a comment or in quoted data, and a
+# line that is the function's own definition. A refused mark is not merely
+# uncounted, it is a red verdict, because a mark is a written claim about how a
+# call is made and a claim the code does not support is manufactured evidence
+# rather than an oversight. The line number is part of that claim, so a mark left
+# behind when its site moved refuses rather than drifting quietly onto whatever
+# now sits at that line.
+#
+# WHERE MARKS ARE READ FROM, stated so this coverage cannot inflate either. Marks
+# are read out of the same parseable consumer files everything else here is read
+# from. A mark written inside an unparseable file is neither counted nor refused,
+# because that file's syntax is not readable at all - it manufactures nothing,
+# and the way to see it is the same as for every other line in that file, which
+# is to repair the construct that made the file unreadable.
 #
 # WHAT THIS DOES NOT CATCH, STATED SO THE COVERAGE CANNOT INFLATE.
 #
@@ -98,7 +148,8 @@
 # Exit status is the verdict, so a caller that ignores stdout still stops safely:
 #   0  every enrolled file's functions are consulted, or explicitly marked
 #   2  usage error
-#   3  at least one function is defined and never consulted
+#   3  at least one function is defined and never consulted, or an indirect-call
+#      mark could not be verified at the site it names
 #   4  could-not-observe - no enrolled file was found, or a target was unreadable
 #
 # 4 IS NOT 0. A checker that finds nothing to check has not established that the
@@ -130,27 +181,14 @@ function_definitions() {  # <file>
 }
 
 function_has_call_site() {  # <function>
-  local fn=$1
-  # Call identity does not depend on which consumer contains the call. Search
-  # each precomputed corpus once per function instead of launching a pipeline
-  # for every (function x file) pair.
-  grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$RAW_CALL_SITE_CORPUS" && return 0
-  grep -Eq "^[[:space:]]*trap[[:space:]]+['\"][[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$RAW_CALL_SITE_CORPUS" && return 0
-    # The indirect-call mark is deliberately a COMMENT, so it must be read from
-    # the raw file: the stripped text has comments removed, which is correct for
-    # call detection and would silently discard the one call form that is
-    # declared rather than written.
-    # A TRAP HANDLER WRITTEN AS A QUOTED STRING is the second call form the
-    # stripped text cannot carry, for the same reason and with the same remedy.
-    # `trap fn SIG` survives stripping and the battery below matches it;
-    # `trap 'fn args' SIG` does not, because the handler lives inside the quotes
-    # that stripping removes. Naming a trap handler has always been accepted
-    # syntax, so reading this form from the raw file RESTORES a declared call
-    # form rather than widening the list to excuse a file - the distinction this
-    # control's whitelist exists to hold. The match is anchored to a trap command
-    # AND to the handler's first word, so a name that merely appears somewhere
-    # inside some other quoted string is still not a call site.
-  if awk -v fn="$fn" '
+  local fn=$1 f
+  # A VERIFIED mark, never the mark's text. The mark itself is a comment and the
+  # stripped text has comments removed, which is correct: a declared call is
+  # counted because this control re-read the site the mark named and saw the
+  # function dispatched there, not because the comment exists.
+  mark_verified "$fn" && return 0
+  for f in "${SCANNABLE[@]}"; do
+    if strip_cached "$f" | awk -v fn="$fn" '
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
@@ -179,11 +217,11 @@ function_has_call_site() {  # <function>
       $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       END { exit(found ? 0 : 1) }
-    ' "$STRIPPED_CALL_SITE_CORPUS"; then
-    return 0
-  fi
+    '; then
+      return 0
+    fi
+  done
   return 1
 }
 
@@ -312,20 +350,170 @@ strip_cached() {  # <file> - stripped text on stdout, exit status of strip_quote
 # "<line>:<text>" on stdout and 1 when the file is outside the accepted syntax.
 file_parse_refusal() {  # <file>
   local f=$1 hit strip_rc
-  strip_cached "$f" >/dev/null
-  strip_rc=$?
-  case $strip_rc in
-    0)
-      hit=$({ strip_cached "$f" | grep -nF '<<' | grep -vF '<<<'
-              strip_cached "$f" | grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]'
-            } | head -1)
-      ;;
-    1) hit="0:unterminated quoted string" ;;
-    2) hit="0:legacy backtick substitution" ;;
-    *) hit="0:quote walk failed" ;;
-  esac
+  hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
+          grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
+        } | sed -n '1p')
+  if [ -z "$hit" ]; then
+    strip_cached "$f" >/dev/null
+    strip_rc=$?
+    case $strip_rc in
+      0) ;;
+      1) hit="0:unterminated quoted string" ;;
+      2) hit="0:legacy backtick substitution" ;;
+      *) hit="0:quote walk failed" ;;
+    esac
+  fi
   [ -z "$hit" ] && return 0
   printf '%s\n' "$hit"
+  return 1
+}
+
+# THE SITE READ. Everything below turns an `indirect-call:` mark from a claim
+# into an observation, or refuses it.
+#
+# The mark's own text establishes NOTHING. It supplies a file and a line, and
+# these functions go and read that line. What comes back is the file's own quote
+# walk at that line - the same walk every other call form here is judged on - so a
+# site cannot mean one thing to a mark and another to the direct-call rules.
+
+# Which parseable consumer a site names, printed on stdout. A site file outside
+# the parseable set is refused rather than read, because the line-local read
+# cannot tell an unreadable file's payload text from its code, and a mark that
+# could name a heredoc line would be exactly the "mark instead of repair" move
+# that produced the fabricated marks this site pinning exists to stop.
+site_file_parseable() {  # <path-as-written>
+  local path=$1 candidate p
+  [ -n "$path" ] || return 1
+  for candidate in "$ROOT/$path" "$path"; do
+    for p in "${PARSEABLE[@]}"; do
+      [ "$p" = "$candidate" ] || continue
+      printf '%s\n' "$p"
+      return 0
+    done
+  done
+  return 1
+}
+
+# Why a mark's site does not establish the call. Prints the reason and returns 1
+# when the site cannot carry the mark, and returns 0 silently when it does.
+mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
+  local fn=$1 site=$2 resolved=$3 lineno total raw stripped reason
+  [ -n "$site" ] || { printf 'names no <file>:<line> dispatch site\n'; return 1; }
+  case $site in
+    *:*) ;;
+    *) printf 'site "%s" is not a <file>:<line> reference\n' "$site"; return 1 ;;
+  esac
+  lineno=${site##*:}
+  case $lineno in
+    ''|*[!0-9]*) printf 'site "%s" is not a <file>:<line> reference\n' "$site"; return 1 ;;
+  esac
+  [ "$lineno" -gt 0 ] || { printf 'site "%s" names line 0\n' "$site"; return 1; }
+  if [ -z "$resolved" ]; then
+    printf 'site %s is not a file this control can parse, so no call site in it was read\n' \
+      "${site%:*}"
+    return 1
+  fi
+  total=$(strip_cached "$resolved" | awk 'END { print NR }')
+  if [ "$lineno" -gt "${total:-0}" ]; then
+    printf 'site %s is past the end of that file (%s lines)\n' "$site" "${total:-0}"
+    return 1
+  fi
+  raw=$(sed -n "${lineno}p" "$resolved")
+  stripped=$(strip_cached "$resolved" | sed -n "${lineno}p")
+  # The two readings answer different halves of the question and neither is
+  # sufficient alone. The STRIPPED line is the file-context truth about what the
+  # shell executes there, so it is what a bare dispatch must survive; reading the
+  # raw line for that would count a line in the middle of a multi-line string.
+  # The RAW line is the only place a quoted handler's text still exists, so it is
+  # what a handler dispatch is read from, and the dispatcher word that makes that
+  # text executable is required OUTSIDE the quotes.
+  reason=$(FM_SITE_RAW=$raw FM_SITE_STRIPPED=$stripped awk -v fn="$fn" '
+    BEGIN {
+      raw = ENVIRON["FM_SITE_RAW"]
+      stripped = ENVIRON["FM_SITE_STRIPPED"]
+      word = "(^|[^A-Za-z0-9_])" fn "([^A-Za-z0-9_]|$)"
+      if (stripped ~ ("^[[:space:]]*(function[[:space:]]+)?" fn "[[:space:]]*(\\(\\)|\\{)")) {
+        print "is the definition of " fn ", not a call to it"
+        exit
+      }
+      if (stripped ~ word) {
+        if (stripped ~ /^[[:space:]]*(echo|printf|cat|:)([[:space:]]|$)/)
+          print "hands " fn " to an output command, which is opaque data and never call evidence"
+        exit
+      }
+      if (raw ~ word) {
+        if (stripped ~ /(^|[^A-Za-z0-9_])(trap|eval|xargs)([^A-Za-z0-9_]|$)/) exit
+        if (stripped ~ /(^|[^A-Za-z0-9_])(bash|sh|env)([^A-Za-z0-9_]|$)/) {
+          if (stripped ~ /(^|[[:space:]])-c([^A-Za-z0-9_]|$)/) exit
+        }
+        print "names " fn " only where the shell does not dispatch it"
+        exit
+      }
+      print "does not mention " fn
+    }')
+  [ -n "$reason" ] || return 0
+  printf 'site %s %s\n' "$site" "$reason"
+  return 1
+}
+
+# Every mark in a file this control can parse, each one resolved against the site
+# it names. A verified mark counts as a call; a refused one is reported and turns
+# the run red. Marks naming something no enrolled file defines are left alone:
+# they cannot upgrade any verdict here, so refusing them would be this control
+# ruling on code it is not enforcing.
+MARK_VERIFIED=()
+MARK_VERIFIED_SITE=()
+REFUSED_MARKS=()
+collect_marks() {
+  local f hit lineno rest fn site path resolved reason
+  for f in "${PARSEABLE[@]}"; do
+    while IFS= read -r hit; do
+      lineno=${hit%%:*}
+      rest=${hit#*:}
+      rest=${rest#*indirect-call:}
+      read -r fn site _ <<<"$rest"
+      [ -n "${fn:-}" ] || continue
+      case $fn in
+        [A-Za-z_]*) ;;
+        *) continue ;;
+      esac
+      function_is_enrolled "$fn" || continue
+      case ${site:-} in
+        *:*) path=${site%:*} ;;
+        *) path='' ;;
+      esac
+      resolved=$(site_file_parseable "$path") || resolved=''
+      if reason=$(mark_site_refusal "$fn" "${site:-}" "$resolved"); then
+        MARK_VERIFIED+=("$fn")
+        MARK_VERIFIED_SITE+=("$fn|$resolved")
+      else
+        REFUSED_MARKS+=("$f"$'\t'"$lineno"$'\t'"$fn"$'\t'"${site:-}"$'\t'"$reason")
+      fi
+    done < <(grep -nE '#[[:space:]]*indirect-call:' "$f")
+  done
+}
+
+function_is_enrolled() {  # <name>
+  local fn=$1 known
+  for known in "${FUNCTIONS[@]:-}"; do
+    [ "$known" = "$fn" ] && return 0
+  done
+  return 1
+}
+
+mark_verified() {  # <function>
+  local fn=$1 entry
+  for entry in "${MARK_VERIFIED[@]:-}"; do
+    [ "$entry" = "$fn" ] && return 0
+  done
+  return 1
+}
+
+mark_verified_in_file() {  # <function> <file>
+  local key="$1|$2" entry
+  for entry in "${MARK_VERIFIED_SITE[@]:-}"; do
+    [ "$entry" = "$key" ] && return 0
+  done
   return 1
 }
 
@@ -365,86 +553,83 @@ fi
 for f in "${FILES[@]}"; do
   [ -r "$f" ] || die "target is unreadable: $f" 4
   grep -qxF "$ENROL_MARKER" "$f" 2>/dev/null || die "target is not enrolled: $f" 4
-  if ! refusal=$(file_parse_refusal "$f"); then
-    die "UNCHECKED $f:${refusal%%:*} unsupported construct: ${refusal#*:}" 4
-  fi
+  unsupported=$({ grep -nF '<<' "$f" | grep -vF '<<<'; grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"; } | sed -n '1p')
+  [ -z "$unsupported" ] \
+    || die "UNCHECKED $f:${unsupported%%:*} unsupported construct: ${unsupported#*:}" 4
 done
 
 # Partition every consumer into those this control can reason about and those it
 # cannot. An unchecked consumer is NAMED, not skipped: the list is the honest
 # measurement of how much of the repository this control can actually see, and
 # the way to shorten it is to make more files parse.
-SCANNABLE=()
+PARSEABLE=()
 UNCHECKED_CONSUMERS=()
 UNCHECKED_FILES=()
 while IFS= read -r cf; do
   [ -n "$cf" ] || continue
   [ -r "$cf" ] || { UNCHECKED_CONSUMERS+=("$cf: unreadable"); UNCHECKED_FILES+=("$cf"); continue; }
   if refusal=$(file_parse_refusal "$cf"); then
-    SCANNABLE+=("$cf")
+    PARSEABLE+=("$cf")
   else
     UNCHECKED_CONSUMERS+=("$cf:${refusal%%:*} ${refusal#*:}")
     UNCHECKED_FILES+=("$cf")
   fi
 done < <(consumer_files)
 
-RAW_CALL_SITE_CORPUS="$STRIP_DIR/raw-call-sites"
-STRIPPED_CALL_SITE_CORPUS="$STRIP_DIR/stripped-call-sites"
-: > "$RAW_CALL_SITE_CORPUS"
-: > "$STRIPPED_CALL_SITE_CORPUS"
-for cf in "${SCANNABLE[@]}"; do
-  cat "$cf" >> "$RAW_CALL_SITE_CORPUS"
-  strip_cached "$cf" >> "$STRIPPED_CALL_SITE_CORPUS"
-done
-
 FUNCTIONS=()
 for f in "${FILES[@]}"; do
   while IFS= read -r line; do FUNCTIONS+=("${line#*:}"); done < <(function_definitions "$f")
 done
+
+collect_marks
+
 VALIDATED_SCANNABLE=()
-FUNCTION_WORDS=$(printf '%s ' "${FUNCTIONS[@]}")
-for f in "${SCANNABLE[@]}"; do
-  unsupported=$(strip_cached "$f" | awk -v functions="$FUNCTION_WORDS" '
-    BEGIN { count = split(functions, names, " ") }
-    {
-      text = $0
-      for (i = 1; i <= count; i++) {
-        fn = names[i]
-        if (fn == "") continue
+for f in "${PARSEABLE[@]}"; do
+  unsupported=''
+  for fn in "${FUNCTIONS[@]}"; do
+    # A mark whose VERIFIED site is in this file explains this file's use of that
+    # name, so the unsupported-form complaint below is not raised for it. The
+    # suppression follows the site rather than the comment: a mark that names no
+    # dispatch here suppresses nothing, and the file goes unchecked as it would
+    # have with no mark at all.
+    mark_verified_in_file "$fn" "$f" && continue
+    unsupported=$(strip_cached "$f" | awk -v fn="$fn" '
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
       # narrowing of the accepted syntax, and it is what makes a repo-wide run
       # cheap enough to sit on the automatic check path.
-        if (index(text, fn) == 0) continue
-        if (text ~ "^[[:space:]]*#") continue
-        if (text ~ ("^" fn "\\(\\)[[:space:]]*\\{")) continue
-        if (text ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)")) continue
-        if (text ~ /^[[:space:]]*printf[[:space:]]/) continue
-        if (text ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)")) { print NR ":" fn ":" text; exit }
-      }
-    }
+      index($0, fn) == 0 { next }
+      $0 ~ "^[[:space:]]*#" { next }
+      $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
+      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      # A CONTINUATION LINE that opens with || or && , optionally negated. This is
+      # a genuine call site and a common idiom - measured at 65 occurrences across
+      # bin/ - so its absence was the whitelist being under-specified rather than
+      # the code being unusual. Added on that measurement, NOT to make a file pass:
+      # widening an accepted-syntax list to silence a refusal is shaping a control
+      # around its own answer, which is the failure this whitelist exists to avoid.
+      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
+      $0 ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)") { print NR ":" $0; exit }
     ')
+    [ -z "$unsupported" ] || break
+  done
   if [ -n "$unsupported" ]; then
-    unsupported_line=${unsupported%%:*}
-    unsupported_rest=${unsupported#*:}
-    unsupported_fn=${unsupported_rest%%:*}
-    unsupported_text=${unsupported_rest#*:}
-    UNCHECKED_CONSUMERS+=("$f:$unsupported_line unsupported call-site form for $unsupported_fn: $unsupported_text")
+    UNCHECKED_CONSUMERS+=("$f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}")
     UNCHECKED_FILES+=("$f")
   else
     VALIDATED_SCANNABLE+=("$f")
@@ -522,6 +707,11 @@ DEAD=0
 MARKED=0
 CNO=0
 ALIVE=0
+REFUSED=${#REFUSED_MARKS[@]}
+refused_json=$(printf '%s\n' "${REFUSED_MARKS[@]:-}" \
+  | jq -R 'select(length > 0) | split("\t")
+           | {file:.[0],line:(.[1]|tonumber),function:.[2],site:.[3],reason:.[4]}' \
+  | jq -s .)
 
 for f in "${FILES[@]}"; do
   [ -r "$f" ] || die "target is unreadable: $f" 4
@@ -562,11 +752,15 @@ if [ "$JSON" -eq 1 ]; then
     --argjson files "$(printf '%s\n' "${FILES[@]}" | jq -R . | jq -s .)" \
     --argjson unchecked "$(printf '%s\n' "${UNCHECKED_CONSUMERS[@]:-}" | jq -R . | jq -s 'map(select(. != ""))')" \
     --argjson scanned "${#SCANNABLE[@]}" --argjson alive "$ALIVE" \
-    '{schema:"fm-dead-predicate-check.v1",enrolled:$files,scanned_consumers:$scanned,
-      unchecked_consumers:$unchecked,alive:$alive,dead:$dead,could_not_observe:$cno,marked:$marked}'
+    --argjson refused "$refused_json" \
+    '{schema:"fm-dead-predicate-check.v2",enrolled:$files,scanned_consumers:$scanned,
+      unchecked_consumers:$unchecked,alive:$alive,dead:$dead,could_not_observe:$cno,
+      refused_marks:$refused,marked:$marked}'
 else
   printf '%s' "$marked_json" | jq -r '.[] |
     "  marked   \(.function)  \(.file):\(.line)  unused by design: \(.reason)"'
+  printf '%s' "$refused_json" | jq -r '.[] |
+    "  REFUSED  \(.function)  \(.file):\(.line)  indirect-call mark \(.reason)"'
   printf '%s' "$cno_json" | jq -r '.[] |
     "  CNO      \(.function)  \(.file):\(.line)  no call site among files this control can read"'
   printf '%s' "$dead_json" | jq -r '.[] |
@@ -577,17 +771,24 @@ else
     printf '  %s\n' "${UNCHECKED_CONSUMERS[@]}"
     printf 'This list measures how much of the repository this control can see. Shorten it by making files parse.\n'
   fi
-  if [ "$DEAD" -eq 0 ] && [ "$CNO" -eq 0 ]; then
-    # alive= and could_not_observe= are printed ALWAYS, including when both are
-    # zero. A line reading only "no dead predicates" is equally consistent with
-    # every predicate resolved and with none of them being resolvable, and those
-    # are different facts. A quiet control must never read as a clean repository.
-    printf 'fm-dead-predicate-check: ok enrolled=%s scanned=%s unchecked=%s alive=%s could_not_observe=%s marked=%s\n' \
-      "${#FILES[@]}" "${#SCANNABLE[@]}" "${#UNCHECKED_CONSUMERS[@]}" "$ALIVE" "$CNO" "$MARKED"
+  if [ "$REFUSED" -gt 0 ]; then
+    printf '\n%s indirect-call mark(s) REFUSED: the site each names does not dispatch the function.\n' "$REFUSED"
+    printf 'A mark declares WHERE a call is made and is counted only when that site is re-read and the\n'
+    printf 'function is found there in an executable position. Point each mark at the real dispatch, or\n'
+    printf 'delete the mark and let the verdict the code supports stand.\n'
+  fi
+  if [ "$DEAD" -eq 0 ] && [ "$CNO" -eq 0 ] && [ "$REFUSED" -eq 0 ]; then
+    # alive=, could_not_observe= and refused= are printed ALWAYS, including when
+    # all three are zero. A line reading only "no dead predicates" is equally
+    # consistent with every predicate resolved and with none of them being
+    # resolvable, and those are different facts. A quiet control must never read
+    # as a clean repository.
+    printf 'fm-dead-predicate-check: ok enrolled=%s scanned=%s unchecked=%s alive=%s could_not_observe=%s refused=%s marked=%s\n' \
+      "${#FILES[@]}" "${#SCANNABLE[@]}" "${#UNCHECKED_CONSUMERS[@]}" "$ALIVE" "$CNO" "$REFUSED" "$MARKED"
   elif [ "$DEAD" -gt 0 ]; then
     printf '\n%s function(s) exist but nothing consults them. A guard nothing calls is not a guard.\n' "$DEAD"
     printf 'Wire each one in, or mark the definition with "# %s <reason>" on the line above it.\n' "$KEEP_MARKER"
-  else
+  elif [ "$CNO" -gt 0 ]; then
     printf '\n%s function(s) COULD NOT BE OBSERVED: no call site was found, but an unchecked consumer may hold one.\n' "$CNO"
     printf 'That is not a pass and not a dead predicate. Make the unchecked consumers parse to resolve it.\n'
   fi
@@ -597,6 +798,11 @@ fi
 # never make this red: a control that is permanently red gets ignored and then
 # removed, and every case it enforces would be lost with it. They are reported
 # and counted, and only bite when a predicate's verdict actually depends on one.
-[ "$DEAD" -eq 0 ] || exit 3
+#
+# A REFUSED mark is red at the same severity as a dead predicate, and for the same
+# reason: both are a written claim the code does not support. A mark whose site
+# does not dispatch is manufactured call evidence, which is worse than a missing
+# call site because it reads as proof.
+if [ "$DEAD" -gt 0 ] || [ "$REFUSED" -gt 0 ]; then exit 3; fi
 [ "$CNO" -eq 0 ] || exit 4
 exit 0

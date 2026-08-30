@@ -18,7 +18,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-admission.sh`        | Decide the task-independent fleet admission band from a fresh census, with the exact per-rule explanation |
 | `fm-admission-lib.sh`    | Shared fleet-admission policy reader and `_scheduling.admission_control` schema validator |
 | `fm-decision-surface.sh` | Compose the read-only operational decision surface, refuse a claim structured state contradicts, and report the compensation ledger and platform seam |
-| `fm-dead-predicate-check.sh` | Refuse enrolled shell files containing functions with no repository-wide call site, and report unevaluable syntax or enrollment |
+| `fm-dead-predicate-check.sh` | Refuse enrolled shell files containing functions with no repository-wide call site or an unverifiable indirect-call mark, and report unevaluable syntax or enrollment |
 | `fm-outbound-artifact-lib.sh` | Own the outbound-artifact invariant, gate vocabulary, identity rule, recognizer, and correlation-record shape |
 | `fm-outbound-artifact.sh` | Compile waiting-item requests, typed rulings, correction, authorization-bound closure, and disposition |
 | `fm-outbound-seam-proof.sh` | Exercise the typed outbound return path through a real fast-forward on a throwaway repository |

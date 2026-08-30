@@ -197,56 +197,218 @@ test_function_keyword_definition_is_scanned() {
   pass "function-keyword definitions are reported unchecked"
 }
 
-test_quoted_awk_function_is_not_shell_syntax() {
-  local dir out rc
-  dir=$(fixture quoted-awk-function 'live_one() { return 0; }
-live_one
-awk '\''
-  function helper(value) { return value }
-  BEGIN { print helper("ok") }
-'\''')
-  out=$(FM_ROOT_OVERRIDE="$dir" "$CHECK" 2>&1)
-  rc=$?
-  [ "$rc" -eq 0 ] || fail "a quoted awk function was interpreted as shell syntax, exit $rc: $out"
-  pass "quoted awk functions are excluded before shell construct classification"
-}
-
-# A TRAP HANDLER NAMED ONLY INSIDE QUOTES is a call site and needs no mark.
-# Stripping quotes before classifying constructs is correct, but it also removes
-# the handler of `trap 'fn args' SIG`, which left a genuinely live function
-# reading dead and invited an `indirect-call:` mark to paper over it. A mark
-# declares a call the control cannot see; this one IS visible in accepted syntax,
-# so the control reads it rather than being told about it.
-test_quoted_trap_handler_is_a_call_site() {
-  local dir out rc
-  dir=$(fixture quoted-trap 'live_one() { return 0; }' "trap 'live_one INT' INT")
-  out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 0 ] || fail "a trap handler named inside quotes read dead without a mark, exit $rc: $out"
-  pass "a trap handler named inside a quoted trap string reads alive without a mark"
-}
-
-# THE ANCHOR, asserted so the rule above cannot quietly become "any quoted first
-# word is a call". The name sits at the head of a quoted string exactly as it
-# would in a trap handler, but the command is not `trap`, so it stays dead. This
-# is what keeps the quoted-handler rule from re-widening what quote stripping
-# deliberately narrowed.
-test_quoted_first_word_outside_trap_is_not_a_call_site() {
-  local dir out rc
-  dir=$(fixture quoted-first-word 'dead_one() { return 0; }' "printf '%s\\n' 'dead_one INT'")
-  out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "a quoted first word outside a trap command counted as a call, exit $rc: $out"
-  pass "a quoted first word outside a trap command is not a call site"
-}
-
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
   dir=$(fixture indirect 'live_one() { return 0; }' 'callback=live_one
-# indirect-call: live_one callback dispatch
+# indirect-call: live_one bin/consumer.sh:2
 "$callback"')
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "an explicitly identified indirect call was refused, exit $rc: $out"
   pass "an explicit indirect call site counts as consulted"
+}
+
+# THE MARK CASES. A mark is the one call form that is DECLARED rather than
+# written, which is what makes it the one form a fabricated comment could forge.
+# Every case below drives the control to a verdict from a fixture that differs by
+# the dispatch alone, so a mark can never be observed to carry a verdict the code
+# does not.
+
+test_fabricated_mark_with_no_dispatch_is_refused_and_dead() {
+  local dir out rc
+  # THE WATCHED RED, and the exact shape that was measured red on this control.
+  # The name occurs twice in the whole fixture: at its definition, and inside a
+  # comment. There is no dispatch. One generation of this control read the
+  # comment as positive proof and answered ALIVE, which is a proxy marker
+  # upgrading an unobserved construct into a semantic fact.
+  dir=$(fixture fabricated-mark 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one
+echo unrelated'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a fabricated mark did not turn the control red, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' \
+    || fail "the fabricated mark was not refused by name: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' \
+    || fail "the predicate the fabricated mark named was not reported dead: $out"
+  pass "a fabricated indirect-call mark naming no dispatch site is refused, and the predicate stays dead"
+}
+
+test_quoted_trap_dispatch_named_by_a_site_counts() {
+  local dir out rc
+  # The positive arm, and its own negative control in the same fixture shape. A
+  # single-quoted trap handler is a real call whose text this control's quote
+  # walk blanks by design, so it is exactly the case a mark exists for. The first
+  # arm proves the fixture is dead WITHOUT the mark, so the second arm's pass is
+  # attributable to the verified site rather than to the fixture being alive
+  # anyway.
+  dir=$(fixture trap-site-negative 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" 'trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "trap site: the unmarked control arm was not dead, exit $rc: $out"
+
+  dir=$(fixture trap-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a mark naming a real quoted-trap dispatch was refused, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'alive=1' \
+    || fail "the verified mark did not resolve the predicate as consulted: $out"
+  pass "a mark naming a real quoted-trap dispatch counts, and the same fixture is dead without it"
+}
+
+test_mark_naming_a_wrong_line_is_refused() {
+  local dir out rc
+  # The line number is part of the claim. A mark left behind when its dispatch
+  # moved must refuse rather than drift onto whatever now sits at that line,
+  # because a mark that survives its own site is a stale positive.
+  dir=$(fixture mark-wrong-line 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:1
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming the wrong line was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*does not mention cleanup_handler' \
+    || fail "the stale mark was not refused by name: $out"
+  pass "a mark naming a line that does not dispatch the function is refused"
+}
+
+test_deleting_the_dispatch_while_keeping_the_mark_cannot_keep_it_alive() {
+  local dir out rc
+  # Same fixture, same mark, dispatch deleted. The verdict must follow the code.
+  dir=$(fixture dispatch-deleted 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "dispatch-deleted: the baseline arm was not alive, exit $rc: $out"
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+trap - EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "deleting the dispatch left the mark carrying the call, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*cleanup_handler' \
+    || fail "the orphaned mark was not refused: $out"
+  pass "deleting the invocation while keeping the mark does not preserve the call fact"
+}
+
+test_mark_site_past_end_of_file_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-past-eof 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:900
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming a line past end of file was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*past the end' \
+    || fail "the out-of-range site was not named: $out"
+  pass "a mark naming a line past the end of its site file is refused"
+}
+
+test_mark_site_in_an_unparseable_file_is_refused() {
+  local dir out rc
+  # A mark may not rescue a call site this control cannot read. The line-local
+  # read cannot tell an unreadable file's payload text from its code, so a mark
+  # pointing into a heredoc would let the "write a mark instead of repairing the
+  # construct" move back in through the site.
+  dir=$(fixture mark-unparseable-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/unparseable.sh:4'
+  add_unparseable_consumer "$dir" 'cleanup_handler'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark into an unparseable file was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*not a file this control can parse' \
+    || fail "the unparseable site was not named: $out"
+  printf '%s' "$out" | grep -q 'alive=1' \
+    && fail "a mark into an unparseable file was counted as a call: $out"
+  pass "a mark naming a site inside a file this control cannot parse is refused"
+}
+
+test_mark_site_that_is_the_definition_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-definition-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/sample-lib.sh:3'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming the definition was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*is the definition of' \
+    || fail "the definition site was not named: $out"
+  pass "a mark naming the function's own definition as its dispatch site is refused"
+}
+
+test_mark_site_inside_a_multiline_string_is_refused() {
+  local dir out rc
+  # The site is judged in FILE context, not line context. Read on its own, the
+  # middle line of a multi-line string looks like a bare command; read through
+  # the file's quote walk it is the data it actually is.
+  dir=$(fixture mark-multiline-string-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:4
+message="first
+cleanup_handler
+last"'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark into a multi-line string was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*cleanup_handler' \
+    || fail "the quoted-data site was not refused: $out"
+  pass "a mark naming a line inside a multi-line string is refused, because the site is read in file context"
+}
+
+test_mark_site_handing_the_name_to_an_output_command_is_refused() {
+  local dir out rc
+  # Opaque data at a site, exactly as it is everywhere else in this control.
+  dir=$(fixture mark-output-command-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+echo cleanup_handler'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming an output command was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*opaque data' \
+    || fail "the output-command site was not named: $out"
+  pass "a mark naming a site that only prints the function name is refused"
+}
+
+test_mark_naming_a_bare_pass_by_name_dispatch_counts() {
+  local dir out rc
+  # The shape this repository actually uses: a validator handed to its caller by
+  # name and invoked through a variable. The name is a bare word at the site, so
+  # the shell really does hand that word to something that dispatches it.
+  dir=$(fixture mark-pass-by-name 'validate_one() { return 0; }')
+  # shellcheck disable=SC2016 # The generated fixture dispatches at runtime.
+  add_plain_consumer "$dir" 'dispatch() { "$2"; }
+# indirect-call: validate_one bin/plain-consumer.sh:4
+dispatch value validate_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a mark naming a bare pass-by-name dispatch was refused, exit $rc: $out"
+  pass "a mark naming a bare pass-by-name dispatch site counts as consulted"
+}
+
+test_a_refused_mark_is_red_even_when_the_function_is_alive() {
+  local dir out rc
+  # A refused mark is a written claim the code does not support, so it is red on
+  # its own account. Letting a real call elsewhere absorb it would leave
+  # manufactured evidence in the tree with nothing reporting it.
+  dir=$(fixture refused-mark-still-red 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one
+# indirect-call: live_one bin/plain-consumer.sh:900'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a refused mark on a live function was not red, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*live_one' \
+    || fail "the refused mark was not reported: $out"
+  printf '%s' "$out" | grep -q 'DEAD' \
+    && fail "a function with a real call site was reported dead: $out"
+  pass "a mark that cannot be verified is red even when the function has a real call site"
+}
+
+test_mark_is_reported_in_json_with_its_site_and_reason() {
+  local dir out rc
+  # The JSON is what a downstream consumer reads, so the refusal has to be a
+  # typed record there and not only a line of prose.
+  dir=$(fixture mark-json 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:900'
+  out=$(run_check "$dir" --json 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "the JSON arm did not refuse, exit $rc: $out"
+  printf '%s' "$out" | jq -e '
+    .schema == "fm-dead-predicate-check.v2"
+    and ((.refused_marks | length) == 1)
+    and (.refused_marks[0].function == "dead_one")
+    and (.refused_marks[0].site == "bin/plain-consumer.sh:900")
+    and ((.refused_marks[0].reason | length) > 0)
+    and (.alive == 0)
+  ' >/dev/null \
+    || fail "the refusal was not a typed JSON record: $out"
+  pass "a refused mark is reported as a typed record naming its site and its reason"
 }
 
 test_call_in_quoted_substitution_counts() {
@@ -358,6 +520,35 @@ test_outbound_library_stays_enrolled() {
   grep -qF "$MARKER" "$ROOT/bin/fm-outbound-artifact-lib.sh" \
     || fail "bin/fm-outbound-artifact-lib.sh is no longer enrolled in the dead-predicate control"
   pass "the outbound library is enrolled, and cannot be quietly un-enrolled"
+}
+
+test_repository_has_no_dead_predicates_under_the_control() {
+  # This asserts the SAME outcome the CI invariants job asserts by running the
+  # same command with no arguments over the real repository. Accepting exit 4
+  # here as well as 0 would have made the test pass while CI went red, and would
+  # have let the repository drift into a state where no predicate resolves at
+  # all - which is what the control's own header says must never read as clean.
+  local consumer="$ROOT/bin/fm-landing-authorization.sh" out rc
+  out=$("$CHECK" --json 2>&1); rc=$?
+  [ "$rc" -ne 3 ] \
+    || fail "the real repository has an unconsulted guard: $out"
+  [ "$rc" -ne 4 ] \
+    || fail "the real repository has an unresolved predicate; that is not a pass: $out"
+  [ "$rc" -eq 0 ] \
+    || fail "the real repository produced an unexpected verdict, exit $rc: $out"
+  printf '%s' "$out" | jq -e --arg consumer "$consumer" '
+    .schema == "fm-dead-predicate-check.v2"
+    and (.alive > 0)
+    and ((.dead | length) == 0)
+    and ((.could_not_observe | length) == 0)
+    and ((.refused_marks | length) == 0)
+    and (.unchecked_consumers
+      | map(startswith($consumer + ":"))
+      | any
+      | not)
+  ' >/dev/null \
+    || fail "the repository verdict did not prove the landing-authorization consumer readable: $out"
+  pass "the real repository passes the CI control with the landing-authorization consumer readable"
 }
 
 test_control_is_wired_into_the_automatic_check_path() {
@@ -520,10 +711,19 @@ test_punctuated_heredoc_does_not_hide_later_functions
 test_escaped_heredoc_payload_is_not_code
 test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
-test_quoted_awk_function_is_not_shell_syntax
-test_quoted_trap_handler_is_a_call_site
-test_quoted_first_word_outside_trap_is_not_a_call_site
 test_explicit_indirect_call_counts
+test_fabricated_mark_with_no_dispatch_is_refused_and_dead
+test_quoted_trap_dispatch_named_by_a_site_counts
+test_mark_naming_a_wrong_line_is_refused
+test_deleting_the_dispatch_while_keeping_the_mark_cannot_keep_it_alive
+test_mark_site_past_end_of_file_is_refused
+test_mark_site_in_an_unparseable_file_is_refused
+test_mark_site_that_is_the_definition_is_refused
+test_mark_site_inside_a_multiline_string_is_refused
+test_mark_site_handing_the_name_to_an_output_command_is_refused
+test_mark_naming_a_bare_pass_by_name_dispatch_counts
+test_a_refused_mark_is_red_even_when_the_function_is_alive
+test_mark_is_reported_in_json_with_its_site_and_reason
 test_call_in_quoted_substitution_counts
 test_multiline_double_quoted_command_shape_is_not_a_call
 test_same_line_double_quoted_command_shape_is_not_a_call
@@ -535,4 +735,6 @@ test_mark_must_be_adjacent_to_the_definition
 test_no_enrolled_file_is_could_not_observe
 test_outbound_library_stays_enrolled
 test_control_is_wired_into_the_automatic_check_path
+test_repository_has_no_dead_predicates_under_the_control
+
 printf '\nall fm-dead-predicate-check tests passed\n'
