@@ -1751,7 +1751,13 @@ EOF
         "Point that remote at $publish_repo, or name the remote that addresses it with --remote <name>, then re-run." \
         "Nothing was recorded or published; the remote's $notes_ref is unchanged."
     fi
-    if [ -n "$publish_notes_ref" ] && [ "$publish_notes_ref" != "$notes_ref" ]; then
+    if [ -z "$publish_notes_ref" ]; then
+      fail publication-notes-ref-unbound \
+        "No notes ref was named in the effect plan, so this would publish whichever ref --notes-ref selected." \
+        "Name the gate's ref with --publish-notes-ref <ref>." \
+        "Nothing was recorded or published."
+    fi
+    if [ "$publish_notes_ref" != "$notes_ref" ]; then
       fail publication-notes-ref-mismatch \
         "The bound effect plan publishes $publish_notes_ref, but this would publish $notes_ref." \
         "Those are different refs, and the gate reads only the one the plan names." \

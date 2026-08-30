@@ -464,7 +464,8 @@ publish_out() {
   mkdir -p "$home/config" "$home/data" || return 1
   ( cd "$repo" && PATH="$repo/stub/bin:$PATH" \
     FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
-    "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" 2>&1 )
+    "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" \
+      --publish-notes-ref "$NOTES_REF" 2>&1 )
 }
 
 # The same publication, asked to do nothing where no check reads the result.
@@ -483,6 +484,7 @@ publish_only_if_required_out() {
       GIT_CONFIG_VALUE_0=https://github.com/fixture/policy.git \
       "$ATTEST" write --no-recheck --only-if-required \
       --publish-repo "$(publish_target "$repo")" \
+      --publish-notes-ref "$NOTES_REF" \
       --policy-venue github.com/fixture/policy --policy-url https://github.com/fixture/policy.git \
       --policy-generation refs/heads/policy --policy-ref refs/heads/policy "$@" 2>&1 )
 }
@@ -1051,7 +1053,7 @@ test_write_refuses_an_unreadable_push_target_without_leaking_credentials() {
   git -C "$repo" config remote.origin.pushurl 'https://someone:s3cr3t@127.0.0.1:1/owner/repo.git'
   install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
   out=$(cd "$repo" && GIT_TERMINAL_PROMPT=0 no_proxy='*' NO_PROXY='*' \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreadable push target was treated as one with no attestations"
   assert_contains "$out" "127.0.0.1:1/owner/repo.git" \
@@ -1131,7 +1133,7 @@ test_write_withholds_a_push_target_it_cannot_positively_parse() {
   # hole this design exists to close.
   git -C "$repo" config remote.origin.pushurl 'https://someone:pa ss@127.0.0.1:1/owner/repo.git'
   out=$(cd "$repo" && GIT_TERMINAL_PROMPT=0 no_proxy='*' NO_PROXY='*' \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreadable push target was published to"
   assert_contains "$out" "withheld in full" "a URL that could not be positively parsed was emitted"
@@ -1148,7 +1150,7 @@ test_write_withholds_a_push_target_it_cannot_positively_parse() {
   # only in that this URL does positively parse, is named rather than withheld.
   git -C "$repo" config remote.origin.pushurl 'https://someone:passphrase@127.0.0.1:1/owner/repo.git'
   out=$(cd "$repo" && GIT_TERMINAL_PROMPT=0 no_proxy='*' NO_PROXY='*' \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreadable push target was published to"
   assert_contains "$out" "https://127.0.0.1:1/owner/repo.git" \
@@ -1171,7 +1173,7 @@ test_write_names_an_scp_style_push_target() {
   # the parent, and this form has no password field to protect.
   git -C "$repo" config remote.origin.pushurl 'git@u14.invalid:owner/repo.git'
   out=$(cd "$repo" && GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0 \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreachable push target was published to"
   assert_contains "$out" "u14.invalid:owner/repo.git" "an scp-style push target was not named"
@@ -1181,7 +1183,7 @@ test_write_names_an_scp_style_push_target() {
   # withheld entirely rather than emitted with the password stripped off.
   git -C "$repo" config remote.origin.pushurl 'someone:hunter2@u14.invalid:owner/repo.git'
   out=$(cd "$repo" && GIT_SSH_COMMAND=false GIT_TERMINAL_PROMPT=0 \
-    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1)
+    PATH="$repo/stub/bin:$PATH" "$ATTEST" write --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unreachable push target was published to"
   assert_contains "$out" "withheld in full" "a token with a colon before its @ was not withheld"
@@ -3184,7 +3186,7 @@ test_write_re_evaluates_the_head_it_published() {
     FM_TEST_RUNS_JSON="$repo/runs.json" \
     FM_TEST_PR_JSON="$repo/pr.json" \
     FM_TEST_PULLS_JSON="$repo/pulls.json" \
-      "$ATTEST" write --publish-repo "$(publish_target "$repo")" 2>&1
+      "$ATTEST" write --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1
   )
   rc=$?
   [ "$rc" -eq 0 ] || fail "write did not publish and re-evaluate in one step: $out"
@@ -3204,7 +3206,7 @@ test_write_no_recheck_publishes_without_asking_the_forge() {
   out=$(
     cd "$repo" || exit 2
     PATH="$repo/stub/bin:$PATH" FM_TEST_GH_LOG="$repo/gh.log" \
-      "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" 2>&1
+      "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" --publish-notes-ref "$NOTES_REF" 2>&1
   )
   rc=$?
   [ "$rc" -eq 0 ] || fail "write --no-recheck was refused: $out"
@@ -3874,6 +3876,19 @@ test_write_refuses_a_notes_ref_the_effect_plan_did_not_name() {
   pass "fm-attest.sh: a notes ref the effect plan did not name is refused before the push"
 }
 
+test_write_refuses_an_unbound_notes_ref() {
+  local repo out rc
+  repo="$TMP_ROOT/write-notes-ref-unbound"
+  new_published_repo "$repo"
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write \
+    --publish-repo "$(publish_target "$repo")" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an unbound notes ref was published: $out"
+  assert_contains "$out" "publication-notes-ref-unbound" \
+    "the unbound notes ref did not report its own reason"
+  pass "fm-attest.sh: publication requires a bound notes ref"
+}
+
 test_write_binds_the_three_repository_roles_independently_on_a_fork() {
   local repo fork out rc
   # Watched red 7. The venue the request is raised at, the repository the branch
@@ -3897,7 +3912,8 @@ test_write_binds_the_three_repository_roles_independently_on_a_fork() {
   # The parent is where the request lives, so naming it as the note's home is
   # the inversion this must refuse rather than perform.
   out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck \
-    --publish-repo github.com/upstream/repo 2>&1)
+    --publish-repo github.com/upstream/repo \
+    --publish-notes-ref refs/notes/no-mistakes 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "the note was published to the venue rather than the head repository: $out"
   assert_contains "$out" "publication-target-mismatch" \
@@ -3907,7 +3923,8 @@ test_write_binds_the_three_repository_roles_independently_on_a_fork() {
 
   # The fork is the repository holding the head, and it alone moves.
   out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck \
-    --publish-repo github.com/contributor/repo 2>&1)
+    --publish-repo github.com/contributor/repo \
+    --publish-notes-ref refs/notes/no-mistakes 2>&1)
   rc=$?
   [ "$rc" -eq 0 ] || fail "publication to the bound head repository was refused: $out"
   [ -n "$(git --git-dir="$fork" for-each-ref "$NOTES_REF" 2>/dev/null)" ] \
@@ -4053,6 +4070,7 @@ test_required_refuses_a_generation_the_policy_ref_does_not_reach
 test_required_reads_the_named_policy_ref_rather_than_the_venues_head
 test_required_refuses_when_no_ref_is_recorded_as_owning_policy
 test_required_refuses_a_policy_ref_it_cannot_resolve
+test_write_refuses_an_unbound_notes_ref
 test_write_refuses_a_remote_that_addresses_another_repository
 test_write_refuses_a_notes_ref_the_effect_plan_did_not_name
 test_write_binds_the_three_repository_roles_independently_on_a_fork

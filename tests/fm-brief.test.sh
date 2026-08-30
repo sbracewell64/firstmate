@@ -242,6 +242,10 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
     if [ "$mode" = no-mistakes ]; then
       assert_grep 'bin/fm-attest.sh" write --only-if-required' "$brief" \
         "$id: the pipeline contract does not publish the head-bound evidence"
+      assert_grep '--publish-repo "$(fm_meta_get' "$brief" \
+        "$id: the pipeline contract does not bind the publication repository"
+      assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
+        "$id: the pipeline contract does not bind the publication notes ref"
       grep -q 'Run it unconditionally' "$brief" \
         || fail "$id: the publication step is left to the worker to judge"
     else
@@ -263,6 +267,8 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
   # shellcheck disable=SC2016 # This fixture must preserve literal runtime expansions.
   printf '%s\n' '#!/usr/bin/env bash' \
     'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
+  printf '%s\n' 'fm_meta_get() { printf '\''github.com/example/repo\n'\''; }' \
+    > "$root_with_space/bin/fm-backend.sh"
   chmod +x "$root_with_space/bin/fm-attest.sh"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root_with_space" "$ROOT/bin/fm-brief.sh" \
     "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \

@@ -1271,6 +1271,8 @@ SUCCEED_CONTRIB_TARGET=
 SUCCEED_BASE_STATE=
 SUCCEED_CONTRIB_VENUE=
 SUCCEED_CONTRIB_VENUE_URL=
+SUCCEED_POLICY_REF=
+SUCCEED_POLICY_GENERATION=
 SUCCEED_PR=
 SUCCEED_PR_HEAD=
 if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
@@ -1317,6 +1319,8 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   SUCCEED_BASE_STATE=$(fm_meta_get "$STATE/$ID.meta" base_state)
   SUCCEED_CONTRIB_VENUE=$(fm_meta_get "$STATE/$ID.meta" contribution_venue)
   SUCCEED_CONTRIB_VENUE_URL=$(fm_meta_get "$STATE/$ID.meta" contribution_venue_url)
+  SUCCEED_POLICY_REF=$(fm_meta_get "$STATE/$ID.meta" policy_ref)
+  SUCCEED_POLICY_GENERATION=$(fm_meta_get "$STATE/$ID.meta" policy_generation)
   SUCCEED_PR=$(fm_meta_get "$STATE/$ID.meta" pr)
   SUCCEED_PR_HEAD=$(fm_meta_get "$STATE/$ID.meta" pr_head)
 fi
@@ -2183,17 +2187,12 @@ CONTRIB_VENUE=
 CONTRIB_VENUE_URL=
 POLICY_REF=
 POLICY_GENERATION=
+PUBLICATION_REPO=
 if [ "$KIND" != secondmate ]; then
   if task_base_resolve "$PROJ_ABS"; then
     SLOT_BASE=$TASK_BASE_SLOT
     CONTRIB_TARGET=$TASK_BASE_CONTRIB
     BASE_STATE=$TASK_BASE_STATE
-    # Which ref at the venue owns policy, recorded rather than left to be
-    # guessed later. Without it, whether a venue's declaration is current is a
-    # question nothing downstream can answer, and bin/fm-attest.sh reports
-    # could-not-observe rather than substituting the venue's HEAD for it.
-    POLICY_REF=$(task_base_policy_ref_for "$TASK_BASE_CONTRIB_REF") || POLICY_REF=
-    [ -z "$POLICY_REF" ] || POLICY_GENERATION=$TASK_BASE_CONTRIB
   else
     echo "warning: $ID base references unresolved for $PROJ_ABS ($TASK_BASE_ERROR); the worktree is left at whatever commit the pool last used" >&2
     BASE_STATE=unresolved
@@ -2219,6 +2218,8 @@ if [ "$KIND" != secondmate ]; then
     [ -z "$SUCCEED_SLOT_BASE" ] || SLOT_BASE=$SUCCEED_SLOT_BASE
     [ -z "$SUCCEED_CONTRIB_TARGET" ] || CONTRIB_TARGET=$SUCCEED_CONTRIB_TARGET
     [ -z "$SUCCEED_BASE_STATE" ] || BASE_STATE=$SUCCEED_BASE_STATE
+    POLICY_REF=$SUCCEED_POLICY_REF
+    POLICY_GENERATION=$SUCCEED_POLICY_GENERATION
   fi
   if [ "$CONTRIB_SET" -eq 1 ]; then
     CONTRIB_TARGET=$(git -C "$PROJ_ABS" rev-parse --verify --quiet "$CONTRIB_ARG^{commit}" 2>/dev/null) || {
@@ -2252,6 +2253,10 @@ if [ "$KIND" != secondmate ]; then
     if task_base_venue "$PROJ_ABS" "$CONTRIB_TARGET"; then
       CONTRIB_VENUE=$TASK_BASE_VENUE
       CONTRIB_VENUE_URL=$TASK_BASE_VENUE_URL
+      if [ "$SUCCEED_EXECUTION" -eq 0 ]; then
+        POLICY_REF=$TASK_BASE_VENUE_REF
+        POLICY_GENERATION=$CONTRIB_TARGET
+      fi
     else
       # Recorded as unresolved rather than omitted: a venue nothing derived is a
       # venue no later guard may quietly treat as agreeing with whatever it sees.
@@ -2265,6 +2270,10 @@ if [ "$KIND" != secondmate ]; then
   if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
     [ -z "$SUCCEED_CONTRIB_VENUE" ] || CONTRIB_VENUE=$SUCCEED_CONTRIB_VENUE
     [ -z "$SUCCEED_CONTRIB_VENUE_URL" ] || CONTRIB_VENUE_URL=$SUCCEED_CONTRIB_VENUE_URL
+  fi
+  if [ "$KIND" != scout ]; then
+    PUBLICATION_URL=$(fm_landed_push_url "$PROJ_ABS" 2>/dev/null || true)
+    PUBLICATION_REPO=$(task_base_venue_identity "$PUBLICATION_URL" 2>/dev/null || true)
   fi
 fi
 
@@ -3280,6 +3289,7 @@ fi
   # non-forge venue has when the identity is empty.
   [ -z "$CONTRIB_VENUE" ] || echo "contribution_venue=$CONTRIB_VENUE"
   [ -z "$CONTRIB_VENUE_URL" ] || echo "contribution_venue_url=$CONTRIB_VENUE_URL"
+  [ -z "$PUBLICATION_REPO" ] || echo "publication_repo=$PUBLICATION_REPO"
   # The policy ROLE, which is a different axis from the contribution target
   # even where the two resolve to the same commit today: policy_ref names what
   # owns current policy at that venue, policy_generation the commit it resolved
