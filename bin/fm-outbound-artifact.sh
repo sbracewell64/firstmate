@@ -40,7 +40,24 @@
 #   fm-outbound-artifact.sh resume --request <id>
 #       Record that the waiting item resumed on that ruling.
 #   fm-outbound-artifact.sh close --request <id> --disposition <text>
-#       Complete the correlation with the outcome.
+#                                 [--authorization <id> --target-ref <ref>
+#                                  --target-generation <sha>]
+#       Complete the correlation with the outcome. When a landing authorization
+#       was minted for this request, closure MUST name it and the generation the
+#       effect produced: the authority is checked to have been spent for this
+#       exact request and head, and the target ref is READ AGAIN in the governed
+#       clone and bound into the record at the generation it is actually at. A
+#       disposition sentence alone would record a landing nobody observed.
+#   fm-outbound-artifact.sh correct --request <id>
+#       Retire a request whose ruling demanded a corrected candidate. The record
+#       is preserved and becomes terminal, so no wait rests on it and no fresh
+#       emit adopts it. The correction is a different head and therefore a new
+#       request, which inherits nothing from this ruling.
+#   fm-outbound-artifact.sh declare <item-id> --gate <gate> --head <sha>
+#       Enter the wait state for one item, and REFUSE to enter it unless a
+#       durable, valid, applicable request already backs that exact gate and
+#       head. This is the only point at which a bare wait can still be
+#       prevented rather than merely reported by a later sweep.
 #   fm-outbound-artifact.sh quarantine --request <id> --ruling <ref>
 #       Retire a MALFORMED request as non-actionable under the ruling that said
 #       so. The record is preserved unchanged and stays diagnostic; it simply
@@ -1985,6 +2002,20 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
   # closed list in bin/fm-landing-authorization-lib.sh does, and a word outside
   # it - HOLD included - is unrecognized there and stops the act.
   verdict=$(printf '%s\n' "$body" | sed -n "s/^$verdict_key: //p")
+  # A REPLAY OF THE SAME RULING WRITES NOTHING. A wake can arrive twice - a
+  # re-poll, a retried check, a restart mid-drain - and rejoining the identical
+  # comment used to rewrite `observed` and `updated` each time. That is a
+  # durable change with no new information in it, so the record's own bytes
+  # stopped being a reliable answer to "has anything happened since?", and
+  # anything comparing the record across a replay saw movement that was purely
+  # the clock. Converging silently here is what makes the replay idempotent
+  # rather than merely harmless.
+  if [ "$state" = ruled ] \
+    && printf '%s' "$rec" | jq -e --arg c "$comment" --arg v "$verdict" \
+      '.ruling.comment_id == $c and .ruling.verdict == $v' >/dev/null 2>&1; then
+    printf 'ruled: %s already carries this exact ruling; nothing was written\n' "$rid"
+    return 0
+  fi
   rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg v "$verdict" --arg n "$(now_iso)" \
     '.ruling = {comment_id:$c, verdict:$v, observed:$n} | .state = "ruled" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
@@ -2066,12 +2097,25 @@ cmd_poll() {
 }
 
 cmd_resume() {  # <request-id>
-  local rid=$1 rec state
+  local rid=$1 rec state verdict
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   if [ "$state" != "ruled" ]; then
     printf '%s: request %s is %s; only a ruled request can resume its item\n' \
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
+    exit 3
+  fi
+  # A REVISION IS NOT A RESUMPTION. `ruled` says a verdict arrived, never that
+  # the verdict let the work continue, and resuming on the strength of the state
+  # alone is how a body that said "change this" clears the wait it should have
+  # extended. The item goes back to work on a CORRECTED candidate, which is a
+  # different head, so it is a different identity and a different request - and
+  # this one is retired through `correct` rather than resumed here.
+  verdict=$(printf '%s' "$rec" | jq -r '.ruling.verdict // ""')
+  if fm_outbound_verdict_revising "$verdict"; then
+    printf '%s: the ruling on %s returned "%s", which demands a corrected candidate rather than resuming this one\n' \
+      "$FM_OUTBOUND_TOKEN_REVISION_REQUIRED" "$rid" "$verdict" >&2
+    printf 'Retire it for correction, then emit the corrected candidate. It inherits nothing from this ruling.\n' >&2
     exit 3
   fi
   require_record_applicable_now "$rid" "$rec"
@@ -2081,8 +2125,208 @@ cmd_resume() {  # <request-id>
   printf 'resumed: %s\n' "$(printf '%s' "$rec" | jq -r '.identity.item')"
 }
 
-cmd_close() {  # <request-id> <disposition>
-  local rid=$1 disp=$2 rec state
+# --- entering the wait state -------------------------------------------------
+#
+# THE ONLY MOMENT A BARE WAIT CAN STILL BE PREVENTED. Everything else in this
+# file reports the condition after it exists: the sweep finds an item waiting
+# with no artifact and calls it a defect, which is a repair notice rather than a
+# guard. Seven items reached that state and stayed in it, because nothing was
+# ever asked at the point the wait was CREATED.
+#
+# So the declaration that puts an item into a wait state is written HERE, and
+# only after a durable request that backs that exact gate and head is found to
+# exist. The order is the whole mechanism: ask first, then wait. An item cannot
+# enter AWAITING_BROWSER_SOL because somebody wrote a hold sentence saying it
+# is waiting - it enters because a question was demonstrably asked.
+#
+# THIS IS A PROMOTION, WHICH IS WHY IT DOES NOT TYPE THE GATE ITSELF. A row that
+# has not been asked yet is recognised by its hold PROSE, and that prose is what
+# lets the request be emitted in the first place. This command turns that
+# recognised-by-prose wait into a TYPED declaration, and the typed form is
+# exactly the one an emit reads as authoritative - so promoting a wait that
+# nothing backs would manufacture the authoritative form of a question nobody
+# asked. It never invents a gate and never rewrites prose; it refuses, and the
+# prose row stays exactly as it was for a later sweep to report.
+#
+# A TERMINAL REQUEST BACKS NOTHING. Quarantined, revised, superseded and closed
+# records are preserved as evidence and are deliberately not applicable, so a
+# wait may not rest on one. That is the case worth naming: a request retired as
+# malformed is exactly the shape that would otherwise look like an artifact and
+# hold an item waiting forever on a question that was never validly asked.
+cmd_declare() {  # <item> <gate> <head>
+  local item=$1 gate=$2 head=$3 f other raw subject rec read_rc state backing dir tmp
+  if ! fm_outbound_gate_valid "$gate"; then
+    printf '%s: %s is not a gate this mechanism recognises\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$gate" >&2
+    exit 3
+  fi
+  # SHAPE ONLY, and both object widths. The head's real width belongs to the
+  # target repository's object format, which emit already established against
+  # the clone - this declaration is not the place to re-derive it, and the
+  # binding check below is the strong test anyway: a head no live request names
+  # is refused whatever it looks like.
+  if ! fm_outbound_is_sha "$head" 40 && ! fm_outbound_is_sha "$head" 64; then
+    printf '%s: %s cannot be an exact head\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$head" >&2
+    exit 3
+  fi
+
+  # An unreadable store is could-not-observe, never "no backing request exists".
+  # Reading it the other way would let an unreadable directory authorize the
+  # very wait this refuses.
+  if [ -d "$RECORD_DIR" ] && { [ ! -r "$RECORD_DIR" ] || [ ! -x "$RECORD_DIR" ]; }; then
+    printf '%s: the request store could not be read, so it is unknown whether %s is backed\n' \
+      "$FM_OUTBOUND_TOKEN_UNREADABLE" "$item" >&2
+    exit 4
+  fi
+  backing=
+  if [ -d "$RECORD_DIR" ]; then
+    for f in "$RECORD_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      other=${f##*/}; other=${other%.json}
+      raw=$(cat "$f" 2>/dev/null) || {
+        printf '%s: %s could not be read, so it is unknown whether %s is backed\n' \
+          "$FM_OUTBOUND_TOKEN_UNREADABLE" "$other" "$item" >&2
+        exit 4
+      }
+      subject=$(fm_outbound_record_subject "$raw") || continue
+      [ "$subject" = "$item" ] || continue
+      rec=$(record_read "$other"); read_rc=$?
+      # A record filed for THIS item that cannot be validated is not passed
+      # over: it is the one record whose unreadability decides this answer.
+      if [ "$read_rc" -ne 0 ]; then
+        printf '%s: %s is filed for %s and could not be validated, so it is unknown whether the wait is backed\n' \
+          "$FM_OUTBOUND_TOKEN_UNREADABLE" "$other" "$item" >&2
+        exit 4
+      fi
+      printf '%s' "$rec" | jq -e --arg g "$gate" --arg h "$head" \
+        '.identity.gate == $g and .identity.head == $h' >/dev/null 2>&1 || continue
+      state=$(printf '%s' "$rec" | jq -r '.state')
+      fm_outbound_state_terminal "$state" && continue
+      backing=$other
+      break
+    done
+  fi
+
+  if [ -z "$backing" ]; then
+    printf '%s: %s has no live request at %s for head %s, so it may not enter that wait\n' \
+      "$FM_OUTBOUND_TOKEN_WAIT_UNBACKED" "$item" "$gate" "$head" >&2
+    printf 'Emit the request first. A wait with nothing to wait for is the condition this refuses to create.\n' >&2
+    exit 3
+  fi
+
+  dir="$DATA/$item"
+  mkdir -p "$dir" || die "could not create the declaration directory for $item" 4
+  tmp="$dir/.outbound-gate.json.$$"
+  jq -n --arg gate "$gate" --arg head "$head" --arg r "$backing" \
+    '{gate:$gate, head:$head, request:$r}' > "$tmp" \
+    || { rm -f "$tmp"; die "could not write the declaration for $item" 4; }
+  mv -f "$tmp" "$(gate_file "$item")" \
+    || { rm -f "$tmp"; die "could not install the declaration for $item" 4; }
+  printf 'declared: %s waits at %s on %s\n' "$item" "$gate" "$backing"
+}
+
+# THE CORRECTION ROUTE. A revision is the one ruling that answers the question
+# and still leaves the item waiting, so it needs a terminal of its own: the
+# request was well formed and was ruled, and what must change is the CANDIDATE.
+#
+# Retiring it here is what stops the correction being silently dropped. While
+# the record stands `ruled` it is still applicable, so a sweep sees a live
+# request, a fresh emit adopts it, and the item waits on a question that was
+# already answered. `revised` is terminal, so applicability says inapplicable
+# once and every one of those paths follows without a second rule.
+#
+# NOTHING TRANSFERS. The corrected candidate is a different head, so it computes
+# a different identity and a different request id, and the ruling recorded here
+# stays attached to the head it actually judged. That is the whole reason the
+# successor is left to an ordinary `emit` rather than minted here: a successor
+# this command wrote would be a request nobody asked, carrying an approval
+# nobody gave for a head nobody reviewed.
+cmd_correct() {  # <request-id>
+  local rid=$1 rec state verdict
+  require_record "$rid"; rec=$RECORD
+  state=$(printf '%s' "$rec" | jq -r '.state')
+  if [ "$state" != "ruled" ]; then
+    printf '%s: request %s is %s; only a ruled request can be retired for correction\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
+    exit 3
+  fi
+  verdict=$(printf '%s' "$rec" | jq -r '.ruling.verdict // ""')
+  # ONLY a revision is retired this way. A request whose ruling approved or
+  # declined it has a different ending, and letting this command retire one
+  # would turn a correction route into a way to discard an inconvenient verdict.
+  if ! fm_outbound_verdict_revising "$verdict"; then
+    printf '%s: the ruling on %s returned "%s", which is not a demand for a corrected candidate\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$verdict" >&2
+    printf 'Only a revising verdict is retired for correction. Nothing was written.\n' >&2
+    exit 3
+  fi
+  rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
+    '.state = "revised" | .updated = $n')
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+  printf 'revised: %s retired for correction - emit the corrected candidate to ask a new question\n' "$rid"
+}
+
+# --- post-effect closure -----------------------------------------------------
+#
+# CLOSURE IS AN OBSERVATION, NOT AN ANNOUNCEMENT. A disposition sentence is
+# whatever the caller typed, so a correlation that closes on prose alone records
+# that somebody BELIEVED the effect landed. That is exactly the evidence class
+# this fleet keeps mistaking for a measurement: a merge command exits 0 for a
+# merge that was queued, superseded, or performed against another head.
+#
+# So when an effect was actually authorized for this request, closure re-reads
+# the world: the authority is checked to have been spent for THIS request and
+# THIS head, and the target ref is observed again in the governed clone and
+# bound into the record at the generation it is actually at.
+#
+# WHAT IS AND IS NOT PROVEN HERE, stated because the strength differs by effect
+# and a uniform claim would be false. A fast-forward landing is exactly
+# checkable: ff-only makes the target BECOME the authorized head, so anything
+# else at the ref means something other than the authorized act moved it. A
+# squash or rebase merge produces a forge-authored commit that no local rule
+# predicts, so for those this binds the observed generation and does NOT claim
+# the head is contained in it. The record says which was achieved rather than
+# letting the stronger reading be assumed.
+auth_store_dir() {
+  printf '%s\n' "${FM_LANDING_AUTH_DIR:-$DATA/landing-authorizations}"
+}
+
+# The authorization this request had minted for it, if any. Prints its id, or
+# nothing. A store that exists and cannot be read is could-not-observe and is
+# reported by the caller rather than being read as "no authority was minted".
+#
+# THIS REFUSES ON ANY UNREADABLE RECORD, and that is deliberately not the same
+# call as `supersede_other_heads`, which scopes to one item and passes over
+# records positively identified as another item's. The difference is what the
+# unreadable record could be. There, a record whose subject reads cleanly as
+# another item is provably outside the decision. Here, an authorization is
+# named by a digest over its own identity, so a record that cannot be read
+# cannot be shown to belong to another request either - it might be this
+# request's spent landing authority, and passing over it would close an effect
+# by failing to see it. The blast radius is real and the repair is one named
+# file, which is why the caller prints the file it could not read.
+auth_for_request() {  # <request-id> -> auth-id
+  local dir f id
+  dir=$(auth_store_dir)
+  [ -d "$dir" ] || return 0
+  if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then return 2; fi
+  for f in "$dir"/*.json; do
+    [ -e "$f" ] || continue
+    [ -r "$f" ] || return 2
+    id=$(jq -r --arg r "$1" 'select(.request_id == $r) | .authorization_id // empty' "$f" 2>/dev/null) || return 2
+    [ -n "$id" ] || continue
+    printf '%s\n' "$id"
+    return 0
+  done
+  return 0
+}
+
+cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<target-generation>]
+  local rid=$1 disp=$2 auth_id=${3:-} target_ref=${4:-} target_gen=${5:-}
+  local rec state minted rc auth_json dir head item plan_kind plan_mode plan_head
+  local clone project observed verification
+
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   if [ "$state" != "resumed" ]; then
@@ -2090,8 +2334,106 @@ cmd_close() {  # <request-id> <disposition>
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
     exit 3
   fi
+
+  # A CLOSURE MAY NOT OMIT AN EFFECT IT HAD. Naming the authority is not a
+  # courtesy flag: if it were optional, every post-effect closure could become
+  # an effect-free one by leaving it out, and the verification below would be
+  # skipped precisely when it matters. So the store is asked, not the caller.
+  minted=$(auth_for_request "$rid"); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s: the landing authorization store could not be read, so it is unknown whether %s had an effect authorized\n' \
+      "$FM_OUTBOUND_TOKEN_UNREADABLE" "$rid" >&2
+    exit 4
+  fi
+  if [ -n "$minted" ] && [ -z "$auth_id" ]; then
+    printf '%s: %s had landing authorization %s minted for it, so this closure must name it and the generation the effect produced\n' \
+      "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$rid" "$minted" >&2
+    printf 'Closing on a disposition sentence alone would record a landing nobody observed.\n' >&2
+    exit 3
+  fi
+
+  if [ -n "$auth_id" ]; then
+    [ -n "$target_ref" ] && [ -n "$target_gen" ] \
+      || die "--authorization needs --target-ref and --target-generation naming what the effect produced" 2
+    dir=$(auth_store_dir)
+    [ -r "$dir/$auth_id.json" ] \
+      || { printf '%s: authorization %s could not be read\n' \
+             "$FM_OUTBOUND_TOKEN_UNREADABLE" "$auth_id" >&2; exit 4; }
+    auth_json=$(jq -e . "$dir/$auth_id.json" 2>/dev/null) \
+      || { printf '%s: authorization %s is not readable JSON\n' \
+             "$FM_OUTBOUND_TOKEN_UNREADABLE" "$auth_id" >&2; exit 4; }
+
+    # THE CHAIN, not the caller's word about it. An authority for another
+    # request, another item, or another head is foreign to this closure however
+    # valid it is in its own right.
+    head=$(printf '%s' "$rec" | jq -r '.identity.head')
+    item=$(printf '%s' "$rec" | jq -r '.identity.item')
+    printf '%s' "$auth_json" | jq -e --arg r "$rid" --arg h "$head" --arg i "$item" \
+      '.request_id == $r and .grant.head == $h and .grant.item == $i' >/dev/null 2>&1 \
+      || { printf '%s: authorization %s does not belong to request %s at head %s\n' \
+             "$FM_OUTBOUND_TOKEN_AUTHORITY_FOREIGN" "$auth_id" "$rid" "$head" >&2
+           printf 'Nothing was written.\n' >&2; exit 3; }
+
+    # SPENT AND APPLIED. A granted authority is permission that was never used,
+    # and a spend that failed or is still in flight is not a landing.
+    printf '%s' "$auth_json" | jq -e \
+      '.state == "spent" and .spend.outcome == "applied"' >/dev/null 2>&1 \
+      || { printf '%s: authorization %s is %s and its act is %s; only a spent, applied authority closes an effect\n' \
+             "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$auth_id" \
+             "$(printf '%s' "$auth_json" | jq -r '.state // "unreadable"')" \
+             "$(printf '%s' "$auth_json" | jq -r '.spend.outcome // "unrecorded"')" >&2
+           exit 3; }
+
+    # RE-OBSERVE THE TARGET. This is the step the disposition sentence was
+    # standing in for.
+    project=$(printf '%s' "$rec" | jq -r '.identity.project')
+    clone=$(project_dir "$project")
+    [ -n "$clone" ] && [ -d "$clone" ] \
+      || { printf '%s: the governed clone for %s could not be located, so the generation %s reports could not be observed\n' \
+             "$FM_OUTBOUND_TOKEN_CLONE_UNREADABLE" "$project" "$target_ref" >&2; exit 4; }
+    observed=$(obs git --no-optional-locks -C "$clone" rev-parse --verify "$target_ref^{commit}") || observed=''
+    [ -n "$observed" ] \
+      || { printf '%s: %s could not be read in the governed clone, so this closure cannot say where the effect landed\n' \
+             "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "$target_ref" >&2; exit 4; }
+    if [ "$observed" != "$target_gen" ]; then
+      printf '%s: %s is at %s, not the %s this closure claims the effect produced\n' \
+        "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "$observed" "$target_gen" >&2
+      printf 'Nothing was written.\n' >&2
+      exit 3
+    fi
+
+    # THE STRICT CASE. A fast-forward landing makes the target exactly the head
+    # it landed, so here the generation is checkable against the authority and
+    # is not merely observed.
+    plan_kind=$(printf '%s' "$auth_json" | jq -r '.effect.kind // ""')
+    plan_mode=$(printf '%s' "$auth_json" | jq -r '.effect.mode // ""')
+    plan_head=$(printf '%s' "$auth_json" | jq -r '.grant.head // ""')
+    verification=observed
+    if [ "$plan_kind" = local-fast-forward ] || [ "$plan_mode" = ff-only ]; then
+      if [ "$target_gen" != "$plan_head" ]; then
+        printf '%s: a fast-forward landing of %s must leave %s at that head, and it is at %s\n' \
+          "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$plan_head" "$target_ref" "$target_gen" >&2
+        printf 'Something other than the authorized act moved this ref. Nothing was written.\n' >&2
+        exit 3
+      fi
+      verification=exact
+    fi
+
+    rec=$(printf '%s' "$rec" | jq --arg d "$disp" --arg n "$(now_iso)" \
+      --arg a "$auth_id" --arg r "$target_ref" --arg g "$target_gen" --arg v "$verification" \
+      '.disposition = {outcome:$d, at:$n,
+                       effect:{authorization:$a, target_ref:$r,
+                               target_generation:$g, verification:$v}}
+       | .state = "closed" | .updated = $n')
+    record_write "$rid" "$rec" || die "could not write the correlation record" 4
+    printf 'closed: %s - %s (%s at %s, %s)\n' "$rid" "$disp" "$target_ref" "$target_gen" "$verification"
+    return 0
+  fi
+
+  # No effect was authorized for this request, and the record says so explicitly
+  # rather than leaving an absent field to be read either way.
   rec=$(printf '%s' "$rec" | jq --arg d "$disp" --arg n "$(now_iso)" \
-    '.disposition = {outcome:$d, at:$n} | .state = "closed" | .updated = $n')
+    '.disposition = {outcome:$d, at:$n, effect:null} | .state = "closed" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
   printf 'closed: %s - %s\n' "$rid" "$disp"
 }
@@ -2217,16 +2559,44 @@ case $CMD in
     cmd_resume "$RID"
     ;;
   close)
-    RID=; DISP=
+    RID=; DISP=; AUTH=; TREF=; TGEN=
     while [ $# -gt 0 ]; do
       case $1 in
         --request) RID=${2:-}; shift 2 ;;
         --disposition) DISP=${2:-}; shift 2 ;;
+        --authorization) AUTH=${2:-}; shift 2 ;;
+        --target-ref) TREF=${2:-}; shift 2 ;;
+        --target-generation) TGEN=${2:-}; shift 2 ;;
         *) die "unknown option '$1'" ;;
       esac
     done
     [ -n "$RID" ] && [ -n "$DISP" ] || die "close needs --request and --disposition"
-    cmd_close "$RID" "$DISP"
+    cmd_close "$RID" "$DISP" "$AUTH" "$TREF" "$TGEN"
+    ;;
+  correct)
+    RID=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --request) RID=${2:-}; shift 2 ;;
+        *) die "unknown option '$1'" ;;
+      esac
+    done
+    [ -n "$RID" ] || die "correct needs --request"
+    cmd_correct "$RID"
+    ;;
+  declare)
+    ITEM=; GATE=; HEAD=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --gate) GATE=${2:-}; shift 2 ;;
+        --head) HEAD=${2:-}; shift 2 ;;
+        -*) die "unknown option '$1'" ;;
+        *) [ -z "$ITEM" ] || die "unexpected argument '$1'"; ITEM=$1; shift ;;
+      esac
+    done
+    [ -n "$ITEM" ] && [ -n "$GATE" ] && [ -n "$HEAD" ] \
+      || die "declare needs <item-id> --gate <gate> --head <sha>"
+    cmd_declare "$ITEM" "$GATE" "$HEAD"
     ;;
   quarantine)
     RID=; RULING=

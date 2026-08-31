@@ -244,3 +244,79 @@ $ FM_HOME=<home> FM_OUTBOUND_DIR=<scratch> bin/fm-outbound-artifact.sh check
 
 The mutation rows are refreshed by re-applying each single edit in the table, confirming `bash -n` still passes, running the suite, and recording which case failed.
 A mutation that produces no failure is a vacuous control and must be repaired before the row is restored, exactly as control 6 was.
+
+## The typed autonomous return path, and the seam proof
+
+Captain directive 2026-08-30 (`SOL-FM-AUTOMATION-001`) closed the remaining gaps between a joined ruling and a landed effect.
+This section records the evidence for the increment that added them; the clauses it does not mention were already held by the controls above.
+
+### Why a suite was not enough, and what the seam proof adds
+
+Every control in `tests/fm-outbound-artifact.test.sh` starts from a fixture, which is the right shape for proving a control can fail and fails for its own reason.
+It is deliberately not a proof that the stages compose: a stage handed a hand-written predecessor still passes when it could never have consumed the real one.
+`bin/fm-outbound-seam-proof.sh` walks the whole return path once, forward, with each stage consuming the previous stage's real output - envelope, wait admission, stale ruling refused, exact ruling joined, replay, mint, freshness refusal, the real effect, one-use replay, exact-main closure, and the revision path.
+
+The landing it performs is real and moves a branch, because an authorization that is never spent proves nothing about spending one.
+It moves a branch in a throwaway repository the script creates and deletes, on a ref no protection applies to, so a real mutation is observed without manufacturing one against protected work.
+Nothing in the run touches the operational home, a registered project, or a remote; the pull-request reference the fixture carries is answered by the forge shim and is never contacted.
+
+The focused suites were run on 2026-08-30 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1, each exiting 0: `tests/fm-outbound-artifact.test.sh` executed 107 cases, and `tests/fm-landing-authorization.test.sh`, `tests/fm-dead-predicate-check.test.sh`, `tests/fm-wrong-subject.test.sh` and `tests/fm-bootstrap.test.sh` executed 32, 36, 13 and 39 cases respectively, all with zero failures.
+The suite grew from 101 cases to 107: six controls were added, and one existing control was repaired rather than rewritten after typed effect plans made `mint` require an `--effect`, which had been refusing the `HOLD` case one step before the verdict it exists to classify.
+
+The seam proof was run on the same date and host, twice, both exiting 0:
+
+```sh
+$ bash bin/fm-outbound-seam-proof.sh | tail -1
+SEAM PROOF HELD: 12 stages, effect observed on a scratch subject only
+```
+
+The observed effect in one run was the scratch target moving `e8498e34d667c0fcaf704c86ec67f5bccce7c636 -> 4192ff65f237820ba864658c7f56f1033b2c5ca4`, and the closure recorded `verification: exact` against that generation.
+
+### What the walk found that the fixtures did not
+
+Two defects surfaced only because the stages were composed, and each now has its own control.
+
+**Replaying a ruling rewrote the record.**
+Rejoining the identical comment rewrote `observed` and `updated` every time, so the record's own bytes stopped answering "has anything happened since?", and anything comparing the record across a replay saw movement that was only the clock.
+The fixtures missed it because both writes landed in the same second until the walk got slower.
+An identical ruling now converges and writes nothing, while a different one still joins; `test_replaying_the_same_ruling_writes_nothing` pins both halves.
+
+**A one-use authority converges rather than refusing.**
+The first version of the walk asserted that a second spend fails.
+It does not, and should not: a wake that arrives twice must not perform the act twice and must not report a failure for work already done, so an already-spent authority reports what it is and performs no act.
+What makes it one-use is the absence of a second effect, so the stage now measures the target being unchanged rather than an exit status.
+
+### Watched-red evidence for the new controls
+
+Each control below was driven RED by a targeted mutation of the shipped implementation, syntax-checked with `bash -n` before the suite ran, and the implementation restored afterwards.
+
+Each mutation was applied to a scratch copy of `bin/` and `tests/` rather than to the working tree, because sibling lanes were running the same suites concurrently and an in-place mutation would have raced them.
+An earlier run of this suite proved that hazard is real rather than theoretical: a background suite launched while the implementation was being edited reported a syntax error and one unrelated failure, both artifacts of reading a half-written file, and neither reproduced on a clean re-run.
+
+| Mutation | Control that caught it | Observed failure |
+| --- | --- | --- |
+| the backing-request requirement in `cmd_declare` bypassed | a wait may not be declared unbacked | `declare RED: an unbacked wait was declared: declared: waiting-item waits at AWAITING_BROWSER_SOL on ` |
+| the terminal-state skip removed, so a retired request is a candidate | a retired request backs no wait | `terminal RED: a quarantined request backed a wait: declared: waiting-item waits at AWAITING_BROWSER_SOL on fm-ob-d1e3c2b13d5e` |
+| `resume` no longer classifies a revising verdict | a revision never resumes | `revise RED: a REVISE ruling resumed the item it rejected: resumed: waiting-item` |
+| `correct` accepts any verdict, not only a revising one | correction is not a way to discard a verdict | `correct RED: an approved request was retired as revised: revised: fm-ob-2e1d84fd0eea retired for correction` |
+| closure no longer demands the authority the request had | a closure may not omit an effect it had | `closure RED: a spent landing authority closed on prose alone: closed: fm-ob-41ea8cc37b74 - landed, all good` |
+| the chain predicate replaced by `true` | a foreign authority cannot close this request | `chain RED: a foreign authority closed this request: closed: fm-ob-e46a15d237c6 - landed` |
+| the spent-and-applied predicate replaced by `true` | an unspent authority closes no effect | `chain RED: an unspent authority closed an effect: closed: fm-ob-45b0550a7433 - landed` |
+| the observed-versus-claimed generation comparison disabled | the target ref is re-observed, not trusted | `chain RED: a generation the ref is not at was accepted: closed: fm-ob-33777757525f - landed (master at 0da270fb..., observed)` |
+| the `exact-tree` line dropped from the request body | a request states the generation it is bound to | `wire: the request does not state the tree it is bound to` |
+| the identical-ruling convergence disabled | replaying a ruling writes nothing | `replay: rejoining the same ruling changed the record: ruled: fm-ob-7b8bf0e40863 wakes waiting-item` |
+
+One mutation was recorded as passing and then re-run, which is why it appears here as a red.
+The chain-predicate edit was first applied through a shell-quoted one-liner that mangled its own escaping, so the replacement never matched, the file was unchanged, and the control reported `ok`.
+A mutation that does not apply and a control that does not fire produce the same output, so the run was only trustworthy once the replacement was asserted to have matched exactly once before the suite ran.
+
+Two of those controls were themselves wrong on first run, and both are recorded because a control that passes by agreeing with the implementation is the failure mode this document exists to catch.
+The foreign-authority case built its second authority from an identical fixture, and the request identity is DERIVED from the governed subject, so the two fixtures were not two requests - they were the same request id computed twice, and the "foreign" authority belonged to the request under test.
+The wrong-generation case named a head that the scratch clone's branch happened to already be at, so it asserted the ref was wrong while handing it the right answer.
+Both now derive their adversarial value from what was actually observed rather than from a fixture constant.
+
+### What the closure does and does not prove
+
+A fast-forward landing is exactly checkable, because `ff-only` makes the target BECOME the authorized head, so anything else at that ref means something other than the authorized act moved it; the record stores `verification: exact`.
+A squash or rebase merge produces a forge-authored commit that no local rule predicts, so for those the closure binds the generation the target ref is OBSERVED at and stores `verification: observed`, without claiming the reviewed head is contained in it.
+The record states which was achieved rather than letting the stronger reading be assumed, because a uniform claim across both would be false for one of them.

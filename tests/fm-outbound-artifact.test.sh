@@ -3086,7 +3086,13 @@ test_a_hold_ruling_never_becomes_a_landing_authority() {
   write_typed_ruling "$dir" "$rid" waiting-item "$head" 64 HOLD
   run_ob "$dir" ruling --request "$rid" --comment 64 --issue 2 >/dev/null 2>&1 \
     || fail "hold: the HOLD ruling did not join"
-  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" 2>&1); rc=$?
+  # THE PLAN IS COMPLETE AND VALID, so the refusal below is the VERDICT being
+  # classified rather than a missing effect plan stopping the act one step
+  # earlier. A landing authority now permits an exact ACT, and an authority with
+  # no effect plan authorizes nothing - so a mint with no `--effect` is refused
+  # for that reason and would never reach the verdict this case is controlling.
+  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" \
+    --effect pr-merge --method squash 2>&1); rc=$?
   [ "$rc" -ne 0 ] \
     || fail "hold: a HOLD ruling minted a landing authority: $out"
   printf '%s' "$out" | grep -q 'FM_AUTH_VERDICT_UNRECOGNIZED' \
@@ -3104,7 +3110,8 @@ test_a_hold_ruling_never_becomes_a_landing_authority() {
   write_typed_ruling "$dir" "$rid" waiting-item "$head" 65 approved
   run_ob "$dir" ruling --request "$rid" --comment 65 --issue 2 >/dev/null 2>&1 \
     || fail "hold GREEN: the approving ruling did not join"
-  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" 2>&1); rc=$?
+  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" \
+    --effect pr-merge --method squash 2>&1); rc=$?
   [ "$rc" -eq 0 ] \
     || fail "hold GREEN: an approving ruling failed to mint, exit $rc: $out"
   pass "hold: a joined HOLD is recorded and refused as authority, while an approving verdict still mints"
@@ -3683,6 +3690,391 @@ test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
 test_every_declared_token_has_an_emit_site
 
+
+# --- clause 6: an exact ruling wakes once, and a replay writes nothing -------
+
+test_replaying_the_same_ruling_writes_nothing() {
+  local dir rid head before after out rc
+  dir=$(new_case rulingreplay)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "replay: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 90 approved
+  run_ob "$dir" ruling --request "$rid" --comment 90 --issue 2 >/dev/null 2>&1 \
+    || fail "replay: the ruling did not join"
+  before=$(jq -S . "$dir/home/data/outbound-artifacts/$rid.json")
+
+  # A wake can arrive twice - a re-poll, a retried check, a restart mid-drain.
+  # Rejoining the identical comment rewrote `observed` and `updated` every time,
+  # so the record's own bytes stopped answering "has anything happened since?"
+  # and anything comparing it across a replay saw movement that was only the
+  # clock. This was caught by an end-to-end walk of the seam, not by a fixture:
+  # the two writes landed in the same second until the walk got slower.
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 90 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "replay: rejoining the same ruling failed, exit $rc: $out"
+  after=$(jq -S . "$dir/home/data/outbound-artifacts/$rid.json")
+  [ "$before" = "$after" ] \
+    || fail "replay: rejoining the same ruling changed the record: $out"
+
+  # PAIRED: a DIFFERENT verdict on the same request is not a replay and must
+  # still be able to move the record, so the convergence above is recognition
+  # of sameness rather than a second ruling being ignored.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 91 approved
+  run_ob "$dir" ruling --request "$rid" --comment 91 --issue 2 >/dev/null 2>&1 \
+    || fail "replay GREEN: a different ruling comment did not join"
+  [ "$(jq -r '.ruling.comment_id' "$dir/home/data/outbound-artifacts/$rid.json")" = 91 ] \
+    || fail "replay GREEN: a different ruling comment was ignored as a replay"
+  pass "replay: an identical ruling writes nothing, while a different one still joins"
+}
+
+# --- clause 1: the generation a request is bound to is ON THE WIRE ------------
+
+test_a_request_states_the_generation_it_is_bound_to() {
+  local dir body tree
+  dir=$(new_case wiregen)
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  tree=$(git -C "$dir/home/projects/demo" rev-parse "$HEAD_A^{tree}")
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n --arg gate AWAITING_BROWSER_SOL --arg head "$HEAD_A" \
+        --arg tree "$tree" --arg pol gen-7 \
+    '{gate:$gate,head:$head,tree:$tree,policy_generation:$pol}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "wire: emit failed"
+  body=$(cat "$dir/forge/last_request_body")
+
+  # A REVIEWER MUST BE ABLE TO SEE WHICH GENERATION THEY ARE ANSWERING. The
+  # tree and the policy generation already join the request IDENTITY, so a
+  # request under a moved generation is a different question and gets a
+  # different id - but only the digest knew that. A ruling that cannot name the
+  # generation it rests on cannot be checked against a later movement by
+  # anything a human or a reviewer can read.
+  printf '%s' "$body" | grep -q "^exact-tree: $tree\$" \
+    || fail "wire: the request does not state the tree it is bound to: $body"
+  printf '%s' "$body" | grep -q '^policy-generation: gen-7$' \
+    || fail "wire: the request does not state the policy generation it is bound to: $body"
+
+  # PAIRED: a request carrying no governed generation keeps exactly the body it
+  # has always had, so this is an addition and not a wire change for everyone.
+  local dir2 body2
+  dir2=$(new_case wirebare)
+  declare_gate "$dir2/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir2/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir2" emit waiting-item >/dev/null 2>&1 || fail "wire bare: emit failed"
+  body2=$(cat "$dir2/forge/last_request_body")
+  printf '%s' "$body2" | grep -q '^exact-tree:' \
+    && fail "wire bare: a request with no governed tree still stated one: $body2"
+  printf '%s' "$body2" | grep -q '^policy-generation:' \
+    && fail "wire bare: a request with no policy generation still stated one: $body2"
+  printf '%s' "$body2" | grep -q "^exact-head: $HEAD_A\$" \
+    || fail "wire bare: the unchanged body lost its exact head: $body2"
+  pass "wire: a request states the generation it is bound to, and omits it when it has none"
+}
+
+# --- clause 10: closure is an observation, not an announcement ---------------
+
+# Drive one request all the way to `resumed` with a landing authority minted for
+# it, and hand back "<case-dir> <rid> <head> <auth-id>".
+#
+# THE MINT IS REAL; ONLY THE ACT IS NOT. Performing an actual merge here would
+# test the forge, not this closure, so the authority is minted through its own
+# owner and then moved to the state a completed act would have left it in. That
+# keeps the thing under test - whether closure CHECKS the chain and re-observes
+# the target - separate from the thing being simulated.
+resumed_with_authority() {  # <name> [<head>] -> "<dir> <rid> <head> <auth>"
+  local name=$1 want=${2:-$HEAD_A} dir rid head auth_bin auth_id f
+  auth_bin="$ROOT/bin/fm-landing-authorization.sh"
+  dir=$(new_case "$name")
+  # THE HEAD IS A PARAMETER because the request identity is DERIVED from the
+  # governed subject, so two fixtures built the same way are not two requests -
+  # they are the same request id computed twice. A control that needs a foreign
+  # authority has to make the subject genuinely different, and the head is the
+  # load-bearing member of that identity.
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n --arg gate AWAITING_BROWSER_SOL --arg head "$want" '{gate:$gate,head:$head}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || return 1
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 80 approved
+  run_ob "$dir" ruling --request "$rid" --comment 80 --issue 2 >/dev/null 2>&1 || return 1
+  PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth_bin" mint "$rid" \
+    --effect pr-merge --method squash >/dev/null 2>&1 || return 1
+  run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 || return 1
+  for f in "$dir/home/data/landing-authorizations"/*.json; do
+    [ -f "$f" ] || continue
+    auth_id=$(jq -r '.authorization_id' "$f") || return 1
+    jq '.state = "spent"
+        | .spend = {started:"2026-08-30T00:00:00Z", act_digest:"x",
+                    observed_head:.grant.head, outcome:"applied",
+                    finished:"2026-08-30T00:00:01Z", evidence:null}' \
+      "$f" > "$f.tmp" && mv "$f.tmp" "$f" || return 1
+    break
+  done
+  [ -n "$auth_id" ] || return 1
+  printf '%s %s %s %s\n' "$dir" "$rid" "$head" "$auth_id"
+}
+
+test_a_closure_may_not_omit_an_effect_it_had() {
+  local dir rid head auth out rc
+  read -r dir rid head auth <<< "$(resumed_with_authority closeomit)" \
+    || fail "closure: the fixture could not reach a resumed request with an authority"
+
+  # RED: a landing authority was minted and spent for this request, and the
+  # closure says only that somebody believes it went well. If naming the
+  # authority were optional, every post-effect closure could become an
+  # effect-free one by leaving it out - and the verification would be skipped
+  # exactly when it matters.
+  out=$(run_ob "$dir" close --request "$rid" --disposition 'landed, all good' 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "closure RED: a spent landing authority closed on prose alone: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "closure RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = resumed ] \
+    || fail "closure RED: the refused closure still moved the record"
+  pass "closure: a request that had an effect authorized may not close on a disposition sentence"
+}
+
+test_a_closure_checks_the_chain_and_re_observes_the_target() {
+  local dir rid head auth out rc clone ref gen other
+  read -r dir rid head auth <<< "$(resumed_with_authority closechain)" \
+    || fail "chain: the fixture could not reach a resumed request with an authority"
+  clone="$dir/home/projects/demo"
+  ref=$(git -C "$clone" rev-parse --abbrev-ref HEAD)
+  gen=$(git -C "$clone" rev-parse HEAD)
+
+  # RED 1: an authority that is real, valid and belongs to ANOTHER request is
+  # foreign to this closure however good it is in its own right.
+  local orid
+  read -r _ orid _ other <<< "$(resumed_with_authority closeother "$HEAD_B")" \
+    || fail "chain: the second fixture failed"
+  [ "$orid" != "$rid" ] \
+    || fail "chain: the foreign fixture produced this same request, so it controls nothing"
+  cp "$TMP_ROOT/closeother/home/data/landing-authorizations/$other.json" \
+     "$dir/home/data/landing-authorizations/$other.json"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$other" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: a foreign authority closed this request: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_AUTHORITY_FOREIGN' \
+    || fail "chain RED: refused for the wrong reason: $out"
+
+  # RED 2: a generation the target ref is NOT actually at. This is the step the
+  # disposition sentence was standing in for - a merge command exits 0 for a
+  # merge that was queued, superseded, or performed against another head.
+  #
+  # The wrong value is chosen against what the ref is OBSERVED at rather than
+  # picked from the fixture's two heads: the clone's branch happens to sit at
+  # HEAD_B, so naming HEAD_B here would have asserted the ref was wrong while
+  # handing it the right answer, and the control would have passed by agreeing.
+  local wrong=$HEAD_A
+  [ "$wrong" != "$gen" ] || wrong=$HEAD_B
+  [ "$wrong" != "$gen" ] \
+    || fail "chain: no generation distinct from the observed ref was available"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$wrong" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: a generation the ref is not at was accepted: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "chain RED: refused for the wrong reason: $out"
+
+  # RED 3: an authority that was granted but never spent is permission, not a
+  # landing.
+  jq '.state = "granted" | .spend = null' \
+    "$dir/home/data/landing-authorizations/$auth.json" > "$dir/g.json" \
+    && cp "$dir/g.json" "$dir/home/data/landing-authorizations/$auth.json"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: an unspent authority closed an effect: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "chain RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = resumed ] \
+    || fail "chain RED: a refused closure still moved the record"
+
+  # GREEN: the spent authority for this exact request, and the generation the
+  # ref is genuinely observed at.
+  jq '.state = "spent"
+      | .spend = {started:"2026-08-30T00:00:00Z", act_digest:"x",
+                  observed_head:.grant.head, outcome:"applied",
+                  finished:"2026-08-30T00:00:01Z", evidence:null}' \
+    "$dir/home/data/landing-authorizations/$auth.json" > "$dir/s.json" \
+    && cp "$dir/s.json" "$dir/home/data/landing-authorizations/$auth.json"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "chain GREEN: a correct post-effect closure was refused, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = closed ] \
+    || fail "chain GREEN: the closure did not complete"
+  [ "$(jq -r '.disposition.effect.target_generation' "$dir/home/data/outbound-artifacts/$rid.json")" = "$gen" ] \
+    || fail "chain GREEN: the closure is not bound to the generation it observed"
+  [ "$(jq -r '.disposition.effect.authorization' "$dir/home/data/outbound-artifacts/$rid.json")" = "$auth" ] \
+    || fail "chain GREEN: the closure is not bound to the authority it consumed"
+  pass "closure: the consumed chain is checked and the target generation is re-observed"
+}
+
+# --- clause 3: a wait may not be entered without a request backing it --------
+
+test_a_wait_may_not_be_declared_without_a_backing_request() {
+  local dir out rc rid head
+  dir=$(new_case declareunbacked)
+  # A PROSE row, deliberately: this is the state an item is in BEFORE anything
+  # was asked. `declare` is the promotion to a typed declaration, and it is that
+  # promotion which must refuse while nothing backs it.
+  write_snapshot "$dir/snap.json" external 'awaiting browser sol'
+
+  # RED: nothing has been asked, so the item may not enter the wait. This is the
+  # condition seven real items sat in - waiting with no artifact - and it is
+  # refused HERE rather than reported by a later sweep.
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_A" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "declare RED: an unbacked wait was declared: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "declare RED: refused for the wrong reason: $out"
+  [ ! -e "$dir/home/data/waiting-item/outbound-gate.json" ] \
+    || fail "declare RED: a refused declaration still wrote the wait"
+
+  # GREEN: the same call once the question has actually been asked.
+  out=$(run_ob "$dir" emit waiting-item 2>&1) || fail "declare: emit failed: $out"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "declare GREEN: a backed wait was refused, exit $rc: $out"
+  [ "$(jq -r '.request' "$dir/home/data/waiting-item/outbound-gate.json")" = "$rid" ] \
+    || fail "declare GREEN: the declaration does not name the request backing it"
+
+  # RED: a DIFFERENT head is a different question, and the request that exists
+  # does not back it.
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_B" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "declare head RED: a wait on an unasked head was declared: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "declare head RED: refused for the wrong reason: $out"
+  pass "declare: a wait is refused until a live request backs that exact gate and head"
+}
+
+test_a_retired_request_backs_no_wait() {
+  local dir out rc rid head
+  dir=$(new_case declareterminal)
+  write_snapshot "$dir/snap.json" external 'awaiting browser sol'
+  out=$(run_ob "$dir" emit waiting-item 2>&1) || fail "terminal: emit failed: $out"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+
+  # GREEN half first: while the request is live it backs the wait.
+  run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" >/dev/null 2>&1 \
+    || fail "terminal GREEN: a live request did not back the wait"
+  rm -f "$dir/home/data/waiting-item/outbound-gate.json"
+
+  # RED: retiring it as malformed must not leave something a wait can rest on.
+  # A quarantined request is preserved as evidence precisely because it is NOT
+  # an artifact, and this is the path where that distinction is load-bearing.
+  run_ob "$dir" quarantine --request "$rid" --ruling 'https://example.invalid/c/1' >/dev/null 2>&1 \
+    || fail "terminal: quarantine failed"
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "terminal RED: a quarantined request backed a wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "terminal RED: refused for the wrong reason: $out"
+  [ ! -e "$dir/home/data/waiting-item/outbound-gate.json" ] \
+    || fail "terminal RED: a refused declaration still wrote the wait"
+  pass "declare: a retired request is evidence and never backs a wait"
+}
+
+# --- clause 7: REVISE routes to correction, and transfers nothing ------------
+
+test_a_revision_never_resumes_the_candidate_it_judged() {
+  local dir out rc rid head
+  dir=$(new_case revise)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "revise: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 70 REVISE
+  run_ob "$dir" ruling --request "$rid" --comment 70 --issue 2 >/dev/null 2>&1 \
+    || fail "revise: the REVISE ruling did not join"
+
+  # RED: `ruled` says a verdict arrived, never that it let the work continue.
+  # Resuming here is how a body that said "change this" clears the wait it
+  # should have extended.
+  out=$(run_ob "$dir" resume --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "revise RED: a REVISE ruling resumed the item it rejected: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_REVISION_REQUIRED' \
+    || fail "revise RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = ruled ] \
+    || fail "revise RED: the refused resume still moved the record"
+
+  # PAIRED GREEN: the same path with a non-revising verdict still resumes, so
+  # the refusal above is the verdict being classified and not resume breaking.
+  local dir2 rid2 head2
+  dir2=$(new_case reviseok)
+  declare_gate "$dir2/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir2/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir2" emit waiting-item >/dev/null 2>&1 || fail "revise GREEN: emit failed"
+  read -r rid2 head2 <<< "$(emitted_rid_and_head "$dir2")"
+  write_typed_ruling "$dir2" "$rid2" waiting-item "$head2" 71 approved
+  run_ob "$dir2" ruling --request "$rid2" --comment 71 --issue 2 >/dev/null 2>&1 \
+    || fail "revise GREEN: the approving ruling did not join"
+  out=$(run_ob "$dir2" resume --request "$rid2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "revise GREEN: a non-revising verdict failed to resume, exit $rc: $out"
+  pass "revise: a revising verdict refuses to resume, while another verdict still does"
+}
+
+test_a_revision_is_retired_for_correction_and_transfers_nothing() {
+  local dir out rc rid head auth
+  dir=$(new_case revisecorrect)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correct: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 72 REVISE
+  run_ob "$dir" ruling --request "$rid" --comment 72 --issue 2 >/dev/null 2>&1 \
+    || fail "correct: the REVISE ruling did not join"
+
+  # A REVISE RULING IS NOT AUTHORITY. The closed list in the authorization owner
+  # cannot classify it, so it grants nothing - checked here rather than assumed,
+  # because "REVISE authorizes nothing" is a claim about a different module.
+  auth="$ROOT/bin/fm-landing-authorization.sh"
+  if [ -x "$auth" ]; then
+    out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" \
+      --effect pr-merge --method squash 2>&1); rc=$?
+    [ "$rc" -ne 0 ] || fail "correct: a REVISE ruling minted a landing authority: $out"
+  fi
+
+  out=$(run_ob "$dir" correct --request "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "correct: retiring a revised request failed, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = revised ] \
+    || fail "correct: the record was not retired for correction"
+  # THE EVIDENCE SURVIVES. A revision retires the request; it never erases the
+  # ruling that demanded it.
+  [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = REVISE ] \
+    || fail "correct: retiring the request lost the ruling that demanded it"
+
+  # NOTHING TRANSFERS: the retired request backs no wait and is adopted by no
+  # fresh emit, so the corrected candidate must ask its own question.
+  rm -f "$dir/home/data/waiting-item/outbound-gate.json"
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "correct: a revised request still backed a wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "correct: the revised request was refused for the wrong reason: $out"
+
+  # RED: correction is not a way to discard an inconvenient verdict.
+  local dir2 rid2 head2
+  dir2=$(new_case correctwrong)
+  declare_gate "$dir2/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir2/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir2" emit waiting-item >/dev/null 2>&1 || fail "correct RED: emit failed"
+  read -r rid2 head2 <<< "$(emitted_rid_and_head "$dir2")"
+  write_typed_ruling "$dir2" "$rid2" waiting-item "$head2" 73 approved
+  run_ob "$dir2" ruling --request "$rid2" --comment 73 --issue 2 >/dev/null 2>&1 \
+    || fail "correct RED: the approving ruling did not join"
+  out=$(run_ob "$dir2" correct --request "$rid2" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "correct RED: an approved request was retired as revised: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RULING_IDENTITY_MISMATCH' \
+    || fail "correct RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir2/home/data/outbound-artifacts/$rid2.json")" = ruled ] \
+    || fail "correct RED: the refused correction still moved the record"
+  pass "revise: a revision is retired for correction, keeps its evidence, and hands on no authority"
+}
+
+test_a_wait_may_not_be_declared_without_a_backing_request
+test_replaying_the_same_ruling_writes_nothing
+test_a_request_states_the_generation_it_is_bound_to
+test_a_closure_may_not_omit_an_effect_it_had
+test_a_closure_checks_the_chain_and_re_observes_the_target
+test_a_retired_request_backs_no_wait
+test_a_revision_never_resumes_the_candidate_it_judged
+test_a_revision_is_retired_for_correction_and_transfers_nothing
 test_a_request_refuses_before_it_can_name_a_transport_venue_as_its_subject
 test_a_moved_policy_generation_is_a_different_question
 test_a_malformed_request_is_retired_through_the_owner_and_never_resurrected

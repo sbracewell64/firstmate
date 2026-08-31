@@ -153,16 +153,26 @@ ruled
 resumed
 closed
 superseded
-quarantined'
+quarantined
+revised'
 
 # The states in which a record is FINISHED. A finished record is preserved and
 # stays readable - it is evidence - but it can never be applicable, never be
 # adopted by a fresh emit, and never sustain a wait. `quarantined` is the one
 # reached by ruling rather than by completion: a request that was malformed at
 # birth, retired through this owner instead of hand-edited into validity.
+#
+# `revised` is the OTHER ruling-reached terminal, and the two are kept apart
+# because they describe opposite defects. A quarantined request was malformed:
+# the QUESTION could not be asked. A revised request was well formed, was asked,
+# and was answered - the CANDIDATE is what must change. Collapsing them would
+# lose that, and a revision is the one terminal whose successor is expected to
+# exist: the corrected candidate is a different head, so it is a different
+# identity, a different request, and it inherits no ruling from this one.
 FM_OUTBOUND_TERMINAL_STATES='closed
 superseded
-quarantined'
+quarantined
+revised'
 
 fm_outbound_state_terminal() {  # <state>
   printf '%s\n' "$FM_OUTBOUND_TERMINAL_STATES" | grep -qxF "$1"
@@ -214,6 +224,55 @@ FM_OUTBOUND_TOKEN_WORK_STATE_UNOBSERVED=FM_OUTBOUND_WORK_STATE_UNOBSERVED
 FM_OUTBOUND_TOKEN_WORK_LIFECYCLE_CONFLICT=FM_OUTBOUND_WORK_LIFECYCLE_CONFLICT
 FM_OUTBOUND_TOKEN_ARCHIVE_UNREADABLE=FM_OUTBOUND_DONE_ARCHIVE_UNREADABLE
 FM_OUTBOUND_TOKEN_SENDER_INVALID=FM_OUTBOUND_SENDER_INVALID
+# A ruling that demands a correction. Not a refusal of the request and not an
+# approval of it: the question was answered, and the answer is that the
+# CANDIDATE must change. It authorizes nothing and resumes nothing.
+FM_OUTBOUND_TOKEN_REVISION_REQUIRED=FM_OUTBOUND_REVISION_REQUIRED
+# An item was asked to enter a wait state with no durable applicable request
+# backing it. Refused BEFORE the wait exists, which is the only point at which
+# a bare wait can still be prevented rather than merely reported.
+FM_OUTBOUND_TOKEN_WAIT_UNBACKED=FM_OUTBOUND_WAIT_UNBACKED
+# A closure was offered without the evidence that the effect actually reached
+# the target. Command success is not closure.
+FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN=FM_OUTBOUND_CLOSURE_UNPROVEN
+# An authorization was offered for a closure it does not belong to. The chain
+# is checked rather than the caller's word about which authority was spent.
+FM_OUTBOUND_TOKEN_AUTHORITY_FOREIGN=FM_OUTBOUND_AUTHORITY_FOREIGN
+}
+
+# --- the revising verdict class ----------------------------------------------
+#
+# THIS MODULE STILL DECIDES NOTHING ABOUT AUTHORITY. bin/fm-landing-authorization-lib.sh
+# owns the approving and declining lists, and a word outside both is
+# unrecognized there and stops the act - REVISE included, which is exactly the
+# behaviour a revision needs and is deliberately not changed here.
+#
+# What this list adds is the TRANSPORT consequence, which that owner cannot see:
+# a revision is a ruling that answered the question and demands a different
+# candidate. Without it, a REVISE body reaching `resume` looks like any other
+# joined ruling and the item resumes on a verdict that asked it to change - the
+# request satisfied, the wait cleared, and the correction silently dropped.
+#
+# Compared case-insensitively and whole, like the authority lists, because the
+# ruling corpus writes both `REVISE` and `changes-requested`.
+FM_OUTBOUND_VERDICTS_REVISING='revise
+revised
+revision
+changes-requested
+request-changes
+needs-revision'
+
+# Is this verdict a demand for a corrected candidate? Whole-value and
+# case-insensitive; a verdict that merely CONTAINS one of these words is not one.
+fm_outbound_verdict_revising() {  # <verdict>
+  local want line
+  want=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  [ -n "$want" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$want" = "$line" ] && return 0
+  done <<< "$FM_OUTBOUND_VERDICTS_REVISING"
+  return 1
 }
 
 # The closed sender enum. A `from:` value is compared WHOLE against this list,
@@ -998,6 +1057,15 @@ fm_outbound_request_body() {  # <record-json> [<rationale-file>]
   local rec=$1 rationale=${2:-}
   printf '%s %s\n\n' "$FM_OUTBOUND_BODY_MARKER" \
     "$(printf '%s' "$rec" | jq -r '.request_id')"
+  #
+  # THE GENERATION IS ON THE WIRE, not only in the identity digest. `tree` and
+  # `policy-generation` already join the request identity, so a request under a
+  # moved generation is a different question - but a reviewer reading the body
+  # could not SEE which generation they were answering, and a ruling that cannot
+  # name the generation it rests on cannot be checked against a later movement
+  # by anything except the digest. They are emitted only when the request
+  # carries them, so a request with no governed tree or policy generation keeps
+  # exactly the body it has always had.
   printf '%s\n' "$(printf '%s' "$rec" | jq -r '
     "from: firstmate",
     "gate: " + .identity.gate,
@@ -1006,6 +1074,8 @@ fm_outbound_request_body() {  # <record-json> [<rationale-file>]
     "item: " + .identity.item,
     "pull-request: " + (.identity.pr // "-"),
     "exact-head: " + .identity.head,
+    (if .identity.tree == null then empty else "exact-tree: " + .identity.tree end),
+    (if .identity.policy == null then empty else "policy-generation: " + .identity.policy end),
     "requested: " + .created')"
   printf '\nThis request is bound to the exact head above.\n'
   printf 'A ruling on any other head is not applicable to it and will not be applied.\n'
