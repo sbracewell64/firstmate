@@ -46,7 +46,7 @@ Re-measuring means running the subjects again.
 There is no path anywhere in this module that stamps a fresh digest onto an existing record, and adding one would recreate exactly the failure this artifact was rebuilt to prevent.
 `bin/fm-test-run.sh`'s serial-lane budget carries the same lesson from a sibling incident, and its comment cross-references this one.
 
-The harness run currently takes about twelve minutes and must be allowed to finish; a run cut short writes no artifact and changes nothing.
+The harness run currently takes about ten minutes and must be allowed to finish; a run cut short writes no artifact and changes nothing.
 
 One run is the whole procedure, whichever subject moved.
 `bin/fm-test-isolation-proof.sh` executes every candidate first, publishes only from a run that observed every one of them good, and then asks `bin/fm-test-run.sh --check-coverage` whether the artifact it just wrote is accepted.
