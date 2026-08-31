@@ -43,6 +43,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    Do not add a follow-up commit merely to restart the failed check; validate that new head through no-mistakes first, then publish its attestation.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
    It publishes to the push target of `origin`, which step 3 pointed at your fork, and prints the repository it reached.
+   That remote-changing push is subject to the publication guard documented in [`docs/no-mistakes-attestation.md`](docs/no-mistakes-attestation.md), including any publication identity policy configured for the active Firstmate home.
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
    If your `origin` pushes to the parent rather than your fork, name the fork explicitly: `bin/fm-attest.sh write --remote <your-fork-remote>`.
    Repeat this after any later push, because the attestation names one commit and a new commit is a new head.

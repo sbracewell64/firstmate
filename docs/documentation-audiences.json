@@ -395,6 +395,10 @@
       "audience": "maintainer-verification"
     },
     {
+      "path": "docs/verification/candidate-publication-effect-guard.md",
+      "audience": "maintainer-verification"
+    },
+    {
       "path": "docs/verification/execution-attempt-replacement.md",
       "audience": "maintainer-verification"
     },
