@@ -4164,6 +4164,51 @@ test_workflow_subscribes_the_governed_event_and_checks_out_its_generation() {
   pass "fm-attest.sh: the workflow subscribes the governed event and checks out its generation"
 }
 
+test_governed_workflow_resolves_and_dispatches_its_own_verifier() {
+  local dir env_file resolve_script verify_script verifier gate policy_sha out rc
+  dir="$TMP_ROOT/governed-workflow-dispatch"
+  mkdir -p "$dir/bin" "$dir/.github/workflows"
+  cp "$WORKFLOW" "$dir/.github/workflows/no-mistakes-required.yml"
+  cp "$ROOT/bin/fm-attest-gate.sh" "$dir/bin/fm-attest-gate.sh"
+  printf '#!/usr/bin/env bash\ncase "${1:-}" in --supports) exit 0 ;; --print-format) echo fmt ;; *) exit 1 ;; esac\n' \
+    > "$dir/bin/fm-attest.sh"
+  chmod +x "$dir/bin/fm-attest-gate.sh" "$dir/bin/fm-attest.sh"
+  git -C "$dir" init -q .
+  git -C "$dir" add -A
+  git -C "$dir" -c user.email=t@e -c user.name=t commit -qm policy
+  policy_sha=$(git -C "$dir" rev-parse HEAD)
+
+  resolve_script="$dir/resolve-step.sh"
+  workflow_step_script_from "$dir/.github/workflows/no-mistakes-required.yml" \
+    'Resolve the authoritative verifier from the governed policy generation' > "$resolve_script"
+  env_file="$dir/github-env"
+  : > "$env_file"
+  out=$(cd "$dir" && GITHUB_ENV="$env_file" EVENT_NAME=pull_request_target \
+    BASE_REPO=owner/venue POLICY_REF=refs/heads/main bash "$resolve_script" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the governed resolve step failed (exit $rc): $out"
+  verifier=$(sed -n 's/^POLICY_VERIFIER=//p' "$env_file")
+  gate=$(sed -n 's/^POLICY_GATE=//p' "$env_file")
+  [ "$verifier" = "$dir/bin/fm-attest.sh" ] \
+    || fail "the governed resolve step did not select its own verifier: $verifier"
+  [ "$gate" = "$dir/bin/fm-attest-gate.sh" ] \
+    || fail "the governed resolve step did not select its own gate: $gate"
+
+  verify_script="$dir/verify-step.sh"
+  workflow_step_script_from "$dir/.github/workflows/no-mistakes-required.yml" \
+    'Verify the head-bound no-mistakes attestation' > "$verify_script"
+  out=$(cd "$dir" && POLICY_VERIFIER="$verifier" POLICY_GATE="$gate" POLICY_SHA="$policy_sha" \
+    HEAD_SHA=0123456789012345678901234567890123456789 HEAD_REPO_FULL=owner/fork \
+    BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone bash "$verify_script" 2>&1)
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "the governed workflow did not dispatch its refusing gate (exit $rc): $out"
+  assert_contains "$out" "carries no verified no-mistakes attestation" \
+    "the governed workflow did not reach its gate's refusal"
+  assert_not_contains "$out" "could not obtain the authoritative" \
+    "the governed workflow stopped at the missing-verifier guard"
+  pass "fm-attest.sh: the governed workflow resolves and dispatches its own verifier"
+}
+
 test_wrapper_tampering_is_real_under_the_preceding_law() {
   local dir tamper file
   # The RED half. Each tamper, were the candidate's file still the acceptance
@@ -4322,6 +4367,7 @@ test_gate_script_owns_the_error_model_and_never_leaves_its_generation() {
 
 test_cases='
 test_workflow_subscribes_the_governed_event_and_checks_out_its_generation
+test_governed_workflow_resolves_and_dispatches_its_own_verifier
 test_wrapper_tampering_is_real_under_the_preceding_law
 test_wrapper_tampering_cannot_reach_the_governed_acceptance_program
 test_gate_script_owns_the_error_model_and_never_leaves_its_generation

@@ -183,6 +183,7 @@ jobs:
               exit 0
             fi
             echo "POLICY_GATE=${PWD}/bin/fm-attest-gate.sh" >> "$GITHUB_ENV"
+            echo "POLICY_VERIFIER=${PWD}/bin/fm-attest.sh" >> "$GITHUB_ENV"
             echo "POLICY_SHA=${policy_sha}" >> "$GITHUB_ENV"
             echo "Judging with ${BASE_REPO} ${POLICY_REF} at ${policy_sha}, whose file and program both came from the governed branch."
             exit 0
