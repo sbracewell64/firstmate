@@ -891,7 +891,8 @@ test_write_publishes_a_first_attestation_to_a_push_target_with_no_ref() {
 publish_out_home() {  # <repo> <home>
   ( cd "$1" && PATH="$1/stub/bin:$PATH" \
     FM_HOME="$2" FM_CONFIG_OVERRIDE="$2/config" FM_DATA_OVERRIDE="$2/data" \
-    "$ATTEST" write --no-recheck 2>&1 )
+    "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$1")" \
+      --publish-notes-ref "$NOTES_REF" 2>&1 )
 }
 
 test_write_publishes_ungoverned_and_says_so() {
@@ -983,7 +984,8 @@ test_write_refuses_an_unintended_attestation_evidence_ref() {
   install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
   out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" \
     FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
-    "$ATTEST" write --no-recheck --notes-ref "$unintended" 2>&1)
+    "$ATTEST" write --no-recheck --publish-repo "$(publish_target "$repo")" \
+      --publish-notes-ref "$unintended" --notes-ref "$unintended" 2>&1)
   rc=$?
   [ "$rc" -ne 0 ] || fail "an unintended attestation evidence ref was published: $out"
   assert_contains "$out" 'FM_PUB_EFFECT_CLASS_MISMATCH' \
