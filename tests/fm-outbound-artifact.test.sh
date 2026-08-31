@@ -94,9 +94,9 @@ configure_venue() {  # <home>
   printf '{"repo":"o/control","issue":2}\n' > "$1/config/sol-control.json"
 }
 
-declare_gate() {  # <home> <gate>
+declare_gate() {  # <home> <gate> [<head>]
   mkdir -p "$1/data/waiting-item"
-  jq -n --arg gate "$2" --arg head "$HEAD_A" '{gate:$gate,head:$head}' \
+  jq -n --arg gate "$2" --arg head "${3:-$HEAD_A}" '{gate:$gate,head:$head}' \
     > "$1/data/waiting-item/outbound-gate.json"
 }
 
@@ -4048,7 +4048,7 @@ test_a_revision_never_resumes_the_candidate_it_judged() {
 }
 
 test_a_revision_is_retired_for_correction_and_transfers_nothing() {
-  local dir out rc rid head auth
+  local dir out rc rid head auth before successor
   dir=$(new_case revisecorrect)
   declare_gate "$dir/home" AWAITING_BROWSER_SOL
   write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
@@ -4076,6 +4076,17 @@ test_a_revision_is_retired_for_correction_and_transfers_nothing() {
   # ruling that demanded it.
   [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = REVISE ] \
     || fail "correct: retiring the request lost the ruling that demanded it"
+
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  set_head "$dir" "$HEAD_B"
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL "$HEAD_B"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "correct: emitting the corrected candidate failed, exit $rc: $out"
+  successor=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ -n "$successor" ] && [ "$successor" != "$rid" ] \
+    || fail "correct: the corrected candidate did not ask a new question: $out"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "correct: emitting the corrected candidate rewrote the revised record"
 
   # NOTHING TRANSFERS: the retired request backs no wait and is adopted by no
   # fresh emit, so the corrected candidate must ask its own question.

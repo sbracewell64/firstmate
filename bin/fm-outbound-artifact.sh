@@ -1428,7 +1428,7 @@ sweep_exit() {
 # decision. Narrowing this would mean indexing the store, which is a change to
 # the record format rather than to this loop.
 supersede_other_heads() {  # <item> <current-request-id> <current-head> <current-gate>
-  local item=$1 rid=$2 head=$3 gate=$4 f other rec read_rc raw subject reason
+  local item=$1 rid=$2 head=$3 gate=$4 f other rec read_rc raw subject reason state
   [ -d "$RECORD_DIR" ] || return 0
   for f in "$RECORD_DIR"/*.json; do
     [ -f "$f" ] || continue
@@ -1469,13 +1469,13 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head> <current
     # its predecessor stayed live beside it, which is the two-applicable-request
     # state this linkage exists to make impossible.
     #
-    # TERMINAL RECORDS ARE PRESERVED, not rewritten. A closed, superseded or
-    # quarantined predecessor is finished history and the jq below excludes it,
-    # so this linkage only ever retires something still live.
+    # TERMINAL RECORDS ARE PRESERVED, not rewritten. A finished predecessor is
+    # history and this linkage only ever retires something still live.
+    state=$(printf '%s' "$rec" | jq -r '.state') || continue
+    fm_outbound_state_terminal "$state" && continue
     printf '%s' "$rec" | jq -e --arg i "$item" --arg r "$rid" \
       '.identity.item == $i
-       and .request_id != $r
-       and (.state | IN("closed","superseded","quarantined") | not)' \
+       and .request_id != $r' \
       >/dev/null 2>&1 || continue
     # Name WHICH binding moved, because "superseded" alone does not say whether
     # the work changed or only the question did.
