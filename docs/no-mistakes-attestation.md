@@ -33,9 +33,9 @@ It never rewrites the branch, so producing one cannot disturb the pipeline's cus
 It reaches the forge as an ordinary ref, so a `pull_request` workflow can read it with `contents: read` and nothing more.
 
 Git notes do not travel with `refs/pull/*`, so the ref is read from the repository the branch was pushed to.
-The workflow addresses that repository, and the base repository holding `refs/pull/*`, as two named remotes and performs no read itself; the verifier reads them, once before its verdict and again for as long as the window below is open.
+The governed acceptance program addresses that repository, and the base repository holding `refs/pull/*`, as two named remotes and performs no read itself; its sibling verifier reads them, once before its verdict and again for as long as the window below is open.
 One program doing all of that is what keeps the first read and the re-reads from coming to disagree about what an unreachable repository means.
-What stays in the workflow is what a pull request's own copy of anything must not decide: which repositories are addressed, and how the job's token is put into a URL.
+The governed workflow passes the two repository identities and the job token to that program, while the program owns how they become remote URLs.
 The base repository is addressed through an explicit token URL and a fork through its plain `https` URL, which still carries the job's token because `actions/checkout` persists it in the workspace's git configuration.
 Neither read is anonymous; both are read-only and both go to the host that issued the token, and the token is written where `actions/checkout` has already written it.
 A read that fails for any reason other than "the ref is not there" stops the job, so an unreachable head repository is never resolved as either an absent or a present attestation.
@@ -43,9 +43,10 @@ Every remote call is made with its output suppressed, because a URL embedding th
 Actions redacts that token from logs, which makes the suppression defence in depth rather than the only thing between the token and the log.
 The verifier names the repository it could not read by resolving the remote's URL back out and passing it through the same scrubber every other line it prints goes through, because "the remote 'attestation-source' would not serve it" sends nobody anywhere.
 
-The workflow reads the verifier's exit status rather than only its success, because `bin/fm-attest.sh` separates a refusal from a failure and collapsing the two would have the check report evidence it never examined as absent evidence.
+The acceptance program reads the verifier's exit status rather than only its success, because `bin/fm-attest.sh` separates a refusal from a failure and collapsing the two would have the check report evidence it never examined as absent evidence.
 Exit 1 is a verdict and is reported as no attestation for this head.
-Any other non-zero exit reached no verdict, and is reported as the check being unable to evaluate this head, naming the status and the two families of causes that reach it: repository or ref state the verifier could not read, or a verifier unavailable because the head predates this check, `bin/fm-attest.sh` is missing, or it has lost its executable bit.
+Any other non-zero verifier exit reached no verdict and is reported as the check being unable to evaluate this head, naming the status and the repository or ref state the verifier could not read.
+An acceptance program with no usable sibling verifier also reaches the no-verdict path and never searches for another copy.
 Both outcomes fail the check, because a check that could not look must never report a pass; what differs is what the contributor is sent to repair.
 
 ## The format
@@ -115,7 +116,6 @@ What this check removes is the far weaker property it replaced, where the eviden
 `.github/workflows/ci.yml` owns tests, lint and platform coverage on the same head.
 This check is a provenance gate, not a quality one, and a passing attestation on a red pull request is still a red pull request.
 
-**That the workflow itself was not edited.**
 ## Who supplies the acceptance runner
 
 On `pull_request`, GitHub runs the workflow file from the pull request's own head, so everything that file says - which steps exist, what they resolve, whether the verifier is called at all - is candidate-controlled.
@@ -133,8 +133,6 @@ On that transitional leg the wrapper file is still the candidate's, but the fetc
 
 If the governed program cannot be obtained, the check reaches no verdict and says so.
 It never falls back to the candidate's copy, because a fallback that runs the candidate whenever authority is unreachable is the same self-ratification with a step in front of it.
-
-**Bootstrap is two-generation, never self-ratifying.**
 
 The program that reaches the verdict is therefore never the candidate's.
 An evidence generation the authoritative verifier does not understand is refused by it, on its own terms, rather than worked around.
