@@ -213,6 +213,13 @@ fm_landing_seam_venue_read() {  # <config-dir>
   return 0
 }
 
+# The publication seam asks only whether a usable control venue exists.
+# Keep that projection here so both consumers share the schema validation above.
+fm_landing_seam_venue_configured() {  # <config-dir>
+  fm_landing_seam_venue_read "${1:-}"
+  [ "$FM_LANDING_SEAM_VENUE_STATE" = valid ]
+}
+
 # --- the governed landing domain ---------------------------------------------
 #
 # WHY A DECLARED DOMAIN, AND WHY IT IS THE THING THAT MAKES NOT-APPLICABLE REAL.

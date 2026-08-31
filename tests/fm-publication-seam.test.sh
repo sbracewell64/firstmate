@@ -170,7 +170,8 @@ fixture() {  # <name>
   FX_AUTHOR=$(git -C "$FX_REPO" log -1 --format='%an <%ae>' "$FX_HEAD") \
     || fail "fixture: the fixture commit's own author could not be read"
   [ -n "$FX_AUTHOR" ] || fail "fixture: the fixture commit reported no author"
-  printf '{"repo":"fixture/sol-control","issue":2}\n' > "$FX_CONFIG/sol-control.json"
+  printf '{"repo":"fixture/sol-control","issue":2,"landing_domain":{"repos":[]}}\n' \
+    > "$FX_CONFIG/sol-control.json"
 }
 
 # The identity policy, written as the whole file so a case that perturbs one axis
