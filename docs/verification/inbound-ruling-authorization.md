@@ -460,9 +460,8 @@ not ok - real-path: spending the authority: FM_AUTH_ACT_ASSERTION_MISMATCH: the 
 The same invariant applies to every mechanism in this fleet that authorizes an irreversible outward effect.
 Two others exist, and neither is changed by this record; they are inventoried here so a reader is not left assuming the property is fleet-wide.
 
-**FirstMate candidate publication**, `bin/fm-publication-guard.sh`, open for independent review as pull request #133 at head `a5db4d0cb5d11811fa0762a3e11a762815f4464a`.
-It satisfies the invariant on every axis this record covers: it constructs `git push <remote> refs/heads/<branch>:refs/heads/<branch>` from the authority's own fields rather than running a caller command, resolves a trusted `git` from a fixed executable set to a path and a content digest, binds the remote by a credential-free URL digest and remote identity, and re-observes both at consume, refusing on any mismatch.
-Its conformance credit belongs to the exact generation that passes its own review and landing gates, so it is inventoried as conforming and not yet credited.
+**FirstMate candidate publication**, `bin/fm-publication-guard.sh`, constructs the push from the authority's own fields, pins the trusted Git executable and remote identity, and re-observes both at consume.
+[`candidate-publication-effect-guard.md`](candidate-publication-effect-guard.md) owns its current claims and verification evidence.
 
 **no-mistakes `PushStep`**, `internal/pubauth` plus `internal/pipeline/steps/push.go`, at that project's local `main` `0d96d8c`.
 Its effect subject is typed and closed - repository, run, push generation, ref, branch, candidate head and tree, expected and observed remote tips, target kind and credential-free target fingerprint, and effect kind - and `Subject.Equal` compares every field exactly, so an `ALLOW_EXACT` echoing any other subject is refused and the push is built from those fields rather than from a caller command.

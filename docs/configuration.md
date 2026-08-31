@@ -186,7 +186,7 @@ The seam reports `wiring: not-wired` until the platform projection resolves this
 Detecting that condition needs no configuration and always runs.
 Creating the missing artifact on the `sol-control` channel needs to know where to address it, and that is what this optional local, gitignored file holds.
 
-The file is one JSON object with exactly the three fields shown below when used by a landing path.
+The file is one JSON object with exactly the three fields shown below.
 
 ```json
 { "repo": "owner/name", "issue": 2, "landing_domain": { "repos": ["owner/product"] } }
@@ -204,8 +204,9 @@ Omitting `landing_domain` entirely is NOT the same as declaring it empty.
 A home that configured Sol control and never said what it governs has an invalid venue configuration, so both landing paths report `FM_LANDING_VENUE_INVALID` and refuse rather than reading the silence as permission.
 A home with no `config/sol-control.json` at all has placed nothing under Sol control and is unaffected, which is the shipped default.
 
-An absent or incomplete file does not make a waiting item clear.
+An absent file does not make a waiting item clear.
 It makes that item's artifact state could-not-observe - reported as `FM_OUTBOUND_TRANSPORT_UNCONFIGURED`, exit 4 - because the sweep genuinely cannot see the venue it would have to look at.
+An unreadable, malformed, incomplete, or otherwise invalid file instead reports `FM_LANDING_VENUE_INVALID`, exit 4, and refuses both polling and landing rather than being treated as absent.
 Detection and emission are separated exactly so an unconfigured venue can never read as a satisfied invariant.
 The `pull-request` channel ignores this file entirely: it resolves each project's venue from that clone's own push remote, and it never creates the artifact at all.
 
