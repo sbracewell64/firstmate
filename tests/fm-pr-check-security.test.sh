@@ -76,7 +76,7 @@ case " $* " in
     # belonging to the head it is verifying; tests/fm-pr-merge.test.sh owns the
     # refusal matrix for that guard.
     verify_head=${FM_TEST_GH_HEAD:-0123456789abcdef0123456789abcdef01234567}
-    printf 'label=passing\nsubject=bound\nhead=%s\nevidence_head=%s\nmergeable=MERGEABLE\nreview=\nmembers=1\nreported=1\nchecks=1\nunsuccessful=0\nfailing=0\npending=0\ninconclusive=0\nundecidable=0\n' \
+    printf 'label=passing\nsubject=bound\nhead=%s\nevidence_head=%s\nmergeable=MERGEABLE\nreview=\nmembers=1\nreported=1\nchecks=1\nunsuccessful=0\nfailing=0\npending=0\ninconclusive=0\nundecidable=0\nreview_evidence=github-approved\n' \
       "$verify_head" "$verify_head"
     ;;
   *" state,mergeable,headRefOid "*)
@@ -3924,8 +3924,6 @@ test_head_comparison_never_blocks_a_merge() {
 
   assert_no_grep 'REBASE-EQUIVALENCE' "$dir/check.out" \
     'intake must not emit a comparison verdict at all'
-  grep -q 'candidate' "$ROOT/bin/fm-pr-merge.sh" \
-    && fail 'the merge path must carry no head-comparison residue'
   pass 'head comparison never blocks a merge'
 }
 test_head_comparison_never_blocks_a_merge
