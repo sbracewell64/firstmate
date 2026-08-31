@@ -113,6 +113,33 @@ test_coincident_when_there_is_no_distinct_upstream() {
   pass "fm-task-base: a project with no distinct upstream resolves both references to one commit"
 }
 
+test_credential_bearing_remote_refused_query() {
+  local url='https://host/repo.git?access_token=x'
+  task_base_remote_url_is_credential_bearing "$url" \
+    || fail "credential-bearing remote query was accepted"
+  task_base_remote_safe_url "$url" >/dev/null 2>&1 \
+    && fail "credential-bearing remote query was canonicalized"
+  pass "credential-bearing remote refused (query)"
+}
+
+test_credential_bearing_remote_refused_userinfo() {
+  local url='https://user:pw@host/repo.git'
+  task_base_remote_url_is_credential_bearing "$url" \
+    || fail "credential-bearing remote userinfo was accepted"
+  pass "credential-bearing remote refused (userinfo)"
+}
+
+test_credential_bearing_remote_refused_fragment() {
+  local url='https://host/repo.git#frag'
+  task_base_remote_url_is_credential_bearing "$url" \
+    || fail "credential-bearing remote fragment was accepted"
+  task_base_remote_safe_url "$url" >/dev/null 2>&1 \
+    && fail "credential-bearing remote fragment was canonicalized"
+  [ "$(task_base_remote_safe_url 'https://host/repo.git')" = 'https://host/repo' ] \
+    || fail "credential-free remote no longer canonicalizes"
+  pass "credential-bearing remote refused (fragment)"
+}
+
 # An upstream relationship exists but its trunk was never fetched. Guessing here
 # would cut the branch at the fork trunk and carry fleet-only commits into the
 # PR, so it is refused rather than silently degraded onto the slot base.
@@ -1057,6 +1084,9 @@ test_spawn_records_the_fork_venue_for_a_retargeted_task() {
 
 test_resolves_two_distinct_references_on_a_fork
 test_coincident_when_there_is_no_distinct_upstream
+test_credential_bearing_remote_refused_query
+test_credential_bearing_remote_refused_userinfo
+test_credential_bearing_remote_refused_fragment
 test_unresolved_when_the_upstream_trunk_is_unreadable
 test_unread_push_url_never_collapses_the_two_references
 test_unread_push_url_never_names_the_fetch_url_as_the_venue

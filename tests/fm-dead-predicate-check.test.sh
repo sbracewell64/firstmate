@@ -197,6 +197,47 @@ test_function_keyword_definition_is_scanned() {
   pass "function-keyword definitions are reported unchecked"
 }
 
+test_quoted_awk_function_is_not_shell_syntax() {
+  local dir out rc
+  dir=$(fixture quoted-awk-function 'live_one() { return 0; }
+live_one
+awk '\''
+  function helper(value) { return value }
+  BEGIN { print helper("ok") }
+'\''')
+  out=$(FM_ROOT_OVERRIDE="$dir" "$CHECK" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a quoted awk function was interpreted as shell syntax, exit $rc: $out"
+  pass "quoted awk functions are excluded before shell construct classification"
+}
+
+# A TRAP HANDLER NAMED ONLY INSIDE QUOTES is a call site and needs no mark.
+# Stripping quotes before classifying constructs is correct, but it also removes
+# the handler of `trap 'fn args' SIG`, which left a genuinely live function
+# reading dead and invited an `indirect-call:` mark to paper over it. A mark
+# declares a call the control cannot see; this one IS visible in accepted syntax,
+# so the control reads it rather than being told about it.
+test_quoted_trap_handler_is_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-trap 'live_one() { return 0; }' "trap 'live_one INT' INT")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a trap handler named inside quotes read dead without a mark, exit $rc: $out"
+  pass "a trap handler named inside a quoted trap string reads alive without a mark"
+}
+
+# THE ANCHOR, asserted so the rule above cannot quietly become "any quoted first
+# word is a call". The name sits at the head of a quoted string exactly as it
+# would in a trap handler, but the command is not `trap`, so it stays dead. This
+# is what keeps the quoted-handler rule from re-widening what quote stripping
+# deliberately narrowed.
+test_quoted_first_word_outside_trap_is_not_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-first-word 'dead_one() { return 0; }' "printf '%s\\n' 'dead_one INT'")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a quoted first word outside a trap command counted as a call, exit $rc: $out"
+  pass "a quoted first word outside a trap command is not a call site"
+}
+
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
@@ -317,25 +358,6 @@ test_outbound_library_stays_enrolled() {
   grep -qF "$MARKER" "$ROOT/bin/fm-outbound-artifact-lib.sh" \
     || fail "bin/fm-outbound-artifact-lib.sh is no longer enrolled in the dead-predicate control"
   pass "the outbound library is enrolled, and cannot be quietly un-enrolled"
-}
-
-test_repository_has_no_dead_predicates_under_the_control() {
-  # This asserts the SAME outcome the CI invariants job asserts by running the
-  # same command with no arguments over the real repository. Accepting exit 4
-  # here as well as 0 would have made the test pass while CI went red, and would
-  # have let the repository drift into a state where no predicate resolves at
-  # all - which is what the control's own header says must never read as clean.
-  local out rc
-  out=$("$CHECK" 2>&1); rc=$?
-  [ "$rc" -ne 3 ] \
-    || fail "the real repository has an unconsulted guard: $out"
-  [ "$rc" -ne 4 ] \
-    || fail "the real repository has an unresolved predicate; that is not a pass: $out"
-  [ "$rc" -eq 0 ] \
-    || fail "the real repository produced an unexpected verdict, exit $rc: $out"
-  printf '%s' "$out" | grep -q 'fm-dead-predicate-check: ok ' \
-    || fail "the repository run did not report its alive/could-not-observe counts: $out"
-  pass "the real repository passes the control the CI invariants job runs"
 }
 
 test_control_is_wired_into_the_automatic_check_path() {
@@ -498,6 +520,9 @@ test_punctuated_heredoc_does_not_hide_later_functions
 test_escaped_heredoc_payload_is_not_code
 test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
+test_quoted_awk_function_is_not_shell_syntax
+test_quoted_trap_handler_is_a_call_site
+test_quoted_first_word_outside_trap_is_not_a_call_site
 test_explicit_indirect_call_counts
 test_call_in_quoted_substitution_counts
 test_multiline_double_quoted_command_shape_is_not_a_call
@@ -510,6 +535,4 @@ test_mark_must_be_adjacent_to_the_definition
 test_no_enrolled_file_is_could_not_observe
 test_outbound_library_stays_enrolled
 test_control_is_wired_into_the_automatic_check_path
-test_repository_has_no_dead_predicates_under_the_control
-
 printf '\nall fm-dead-predicate-check tests passed\n'

@@ -29,15 +29,16 @@
 #
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
-# bin/fm-landing-authorization.sh owns the authority itself. What this file adds
-# is that the fast-forward RUNS INSIDE the spend when one governs, so an
-# applicable candidate cannot reach `git merge --ff-only` without consuming a
-# valid, head-bound, one-use authorization. A candidate PROVEN outside the
-# declared governed landing domain lands through exactly the guards above and says
-# so with a reported not-applicable observation, because silence is
-# indistinguishable from authorisation. A candidate inside that
-# domain with no live review request covering it REFUSES: the seam owns why an
-# absent record is the refusal rather than the permission.
+# bin/fm-landing-authorization.sh owns the authority itself, and
+# bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
+# What this file adds is that the fast-forward RUNS INSIDE the spend when one
+# governs, so an applicable candidate cannot reach `git merge --ff-only` without
+# consuming a valid, head-bound, one-use authorization. A candidate PROVEN
+# outside the declared governed landing domain lands through exactly the guards
+# above and says so with a reported not-applicable observation, because a silent
+# ungoverned landing is indistinguishable from an authorised one. A candidate
+# inside that domain with no live review request covering it REFUSES: the seam
+# owns why an absent record is the refusal rather than the permission.
 #
 # A local-only item under Sol review is governed by a ruling on a PUBLISHED head,
 # because a published head is the only one an outside reviewer could ever have
@@ -460,22 +461,35 @@ fi
 printf '%s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON"
 
 before=$(git -C "$PROJ" rev-parse --short "$DEFAULT")
-# The fast-forward is written once and performed by exactly one of the two paths
-# below, so a governed landing runs the byte-identical command an ungoverned one
-# does. A governed landing reaches it only from inside the spend: there is no
-# branch here that lands a governed candidate without one.
+PROJECT_IDENTITY=$(cd "$PROJ" 2>/dev/null && pwd -P) || {
+  echo "REFUSED: the project identity for $PROJ could not be resolved" >&2
+  exit 1
+}
+# An UNGOVERNED fast-forward is performed here, exactly as it always was, behind
+# this file's own guards.
 #
-# --quiet rather than a stdout redirection, because the act is passed to the
-# spend as an argv and a redirection is not part of one. It leaves this command's
-# own reporting exactly as it was: silent on success, and its stderr on failure.
-merge_command=(git -C "$PROJ" merge --ff-only --quiet "$LANDING_HEAD")
+# A GOVERNED one is not performed here at all. The authority performs the act its
+# own effect plan names, and what this gate passes is the act it BELIEVES it
+# authorised - an assertion the authority compares element by element and refuses
+# on any difference, before any mutation.
+#
+# --quiet rather than a stdout redirection, because the act is an argv and a
+# redirection is not part of one. It leaves this command's own reporting exactly
+# as it was: silent on success, and its stderr on failure.
+merge_command=(git -C "$PROJECT_IDENTITY" merge --ff-only --quiet "$LANDING_HEAD")
 
 case "$FM_LANDING_SEAM_VERDICT" in
   not-applicable)
     "${merge_command[@]}"
     ;;
   governed)
-    if ! fm_landing_seam_mint "$SCRIPT_DIR/fm-landing-authorization.sh" "$FM_LANDING_SEAM_REQUEST"; then
+    # Only the project directory and the ref this fast-forward advances are
+    # declared: the ruling names neither, because neither is visible to an
+    # outside reviewer. The head is asserted rather than supplied, and
+    # bin/fm-landing-authorization.sh derives it from the ruling's own record.
+    if ! fm_landing_seam_mint "$SCRIPT_DIR/fm-landing-authorization.sh" \
+      "$FM_LANDING_SEAM_REQUEST" --effect local-fast-forward \
+      --project "$PROJ" --target-branch "$DEFAULT" --assert-head "$LANDING_HEAD"; then
       printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
       exit 1
     fi

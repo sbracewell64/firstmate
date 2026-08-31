@@ -18,16 +18,34 @@
 # bin/fm-landing-authorization-lib.sh's header for the full boundary and for the
 # fourth-state hazard the spend sequence is shaped around.
 #
-# USAGE
-#   fm-landing-authorization.sh mint <request-id>
-#       Mint (or return) the authorization the ruled request grants. Idempotent
-#       on the authorization identity: the same ruling for the same head always
-#       reproduces the same id, so a duplicate wake converges on one authority.
+# bin/fm-landing-authorization-lib.sh's header is the single owner of the typed
+# effect-plan contract, including its act vocabulary and caller boundary.
 #
-#   fm-landing-authorization.sh spend <auth-id> --head <sha> -- <command> [args...]
-#       Perform <command> at most once under this authority. Refuses unless the
-#       head the ruling approved, the head the caller states, and the head the
-#       forge currently reports are all the same value.
+# USAGE
+#   fm-landing-authorization.sh mint <request-id> --effect pr-merge
+#                                    --method squash|merge|rebase [--delete-branch]
+#                                    [--assert-repo <owner/name>] [--assert-pr <n>]
+#                                    [--assert-head <sha>]
+#   fm-landing-authorization.sh mint <request-id> --effect local-fast-forward
+#                                    --project <path> --target-branch <name>
+#                                    [--assert-head <sha>]
+#       Mint (or return) the authorization the ruled request grants for exactly
+#       that act. Idempotent on the authorization identity: the same ruling, the
+#       same head, and the same plan always reproduce the same id, so a duplicate
+#       wake converges on one authority. Every `--assert-*` value is a redundant
+#       assertion: it must equal the value this owner derived, and it can only
+#       agree or refuse - it never chooses.
+#
+#   fm-landing-authorization.sh spend <auth-id> --head <sha> [--receipt <path>]
+#                                     [--assert-act -- <command> [args...]]
+#       Perform this authority's own act at most once. Refuses unless the head the
+#       ruling approved, the head the caller states, and the head the forge
+#       currently reports are all the same value, and unless the effect plan still
+#       re-observes as the act it names. `--assert-act` states the act the caller
+#       believes it is authorizing; a difference from the authority-derived act
+#       refuses before any mutation. `--receipt` names a file this owner writes
+#       immediately before the act, so a caller can tell an act that ran from an
+#       authority that was already spent.
 #
 #   fm-landing-authorization.sh status <auth-id>
 #       Print one token: granted | spent | indeterminate | void | unreadable |
@@ -75,6 +93,8 @@ CORRELATION_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 . "$SCRIPT_DIR/fm-wake-lib.sh"
 
 CLAIM=
+RULING_RESERVATION=
+RULING_RESERVATION_RELEASE_ON_EXIT=0
 
 usage() { sed -n '2,/^set -u$/p' "$0" | sed -e '$d' -e 's/^# \{0,1\}//'; }
 
@@ -97,36 +117,49 @@ now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 # --- store -------------------------------------------------------------------
 
+# Both delegate to bin/fm-landing-authorization-lib.sh, which owns where a record
+# lives and how it is written for every effect that mints one.
 auth_path() {
-  fm_auth_id_valid "${1:-}" || return 1
-  printf '%s/%s.json\n' "$AUTH_DIR" "$1"
+  fm_auth_store_path "$AUTH_DIR" "${1:-}"
 }
 
-auth_claim_path() {
-  fm_auth_id_valid "${1:-}" || return 1
-  printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
+ruling_reservation_key() {  # <request-id> <head>
+  local sum key
+  sum=$(printf 'request_id=%s\nhead=%s\n' "$1" "$2" | fm_auth_digest) || return 1
+  key="${FM_AUTH_ID_PREFIX}${sum:0:$FM_AUTH_ID_HEX_WIDTH}"
+  fm_auth_id_valid "$key" || return 1
+  printf '%s\n' "$key"
 }
 
-# Atomic by rename, so a reader never sees a half-written record and a crash
-# leaves either the previous record or the new one - never a torn one. The spend
-# sequence depends on this: an intent record that could be half-written would put
-# the fourth state back.
+ruling_reservation_path() {  # <request-id> <head>
+  local key
+  key=$(ruling_reservation_key "$1" "$2") || return 1
+  printf '%s/.%s.ruling-reservation\n' "$AUTH_DIR" "$key"
+}
+
 auth_write() {  # <auth-id> <json>
-  local path tmp
-  path=$(auth_path "$1") || return 1
-  mkdir -p "$AUTH_DIR" || return 1
-  tmp="$path.tmp.$$"
-  printf '%s\n' "$2" > "$tmp" || { rm -f "$tmp"; return 1; }
-  mv -f "$tmp" "$path" || { rm -f "$tmp"; return 1; }
+  fm_auth_store_write "$AUTH_DIR" "$1" "$2"
 }
 
-# Three-valued, and the caller must keep the three apart:
+# Four-valued, and the caller must keep the four apart:
 #   0 and RECORD set   readable
 #   3                  no such file - genuinely absent
 #   4                  present and unreadable, or not this schema
+#   5                  readable as a record, but its effect plan does not
+#                      determine an act - AUTH_PLAN_DEFECT names why
+#
+# The plan is parsed here rather than at the act, so no path in this file can
+# reach a mutation holding a record whose plan was never validated.
 AUTH_RECORD=
+AUTH_RAW=
+AUTH_PLAN_DEFECT=
+AUTH_PLAN_RC=0
 auth_read() {  # <auth-id>
   local expected=$1 path raw schema stored request comment verdict item project repo pr head computed
+  local plan plan_rc stored_effect computed_effect
+  AUTH_PLAN_DEFECT=
+  AUTH_PLAN_RC=0
+  AUTH_RAW=
   path=$(auth_path "$expected") || return 4
   if [ ! -e "$path" ]; then
     AUTH_RECORD=
@@ -162,7 +195,7 @@ auth_read() {  # <auth-id>
        (.spend.observed_head | type == "string") and
        (.spend.outcome == null or .spend.outcome == "failed") and
        ((.spend.finished == null) or (.spend.finished | type == "string" and length > 0)) and
-       (.spend.evidence == null)
+       ((.spend.evidence == null) or (.spend.evidence | type == "string" and length > 0))
      else
        (.void_reason == null) and (.spend | type == "object") and
        (.spend.started | type == "string" and length > 0) and
@@ -183,7 +216,32 @@ auth_read() {  # <auth-id>
   pr=$(printf '%s' "$raw" | jq -r '.grant.pr // "-"')
   head=$(printf '%s' "$raw" | jq -r '.grant.head')
   fm_auth_head_shape_valid "$head" || return 4
-  computed=$(fm_auth_id "$request" "$comment" "$verdict" "$item" "$project" "$repo" "$pr" "$head") \
+  # Everything above is the record's SHAPE, and it passed. AUTH_RAW is published
+  # from here on so a caller that reaches the plan defect below can still read
+  # what the record claims - see ruling_unspent, the one caller that needs it.
+  AUTH_RAW=$raw
+
+  # The effect plan is deliberately NOT part of the shape check above. A record
+  # carrying none is not malformed; it is a record from before the effect plan
+  # existed, and calling that unreadable would hide the one repair that fixes it.
+  # It is validated and re-digested here instead, so a record whose plan no longer
+  # determines an act is reported as that rather than as a generic identity
+  # mismatch: the two are different repairs.
+  plan=$(printf '%s' "$raw" | jq -c '.effect') || return 4
+  # Parsed OUTSIDE a command substitution on purpose: the parse records the defect
+  # in a global, and a subshell would discard it, leaving a refusal that names
+  # nothing to repair.
+  fm_auth_plan_parse "$plan"; plan_rc=$?
+  if [ "$plan_rc" -ne 0 ]; then
+    AUTH_PLAN_DEFECT=$FM_AUTH_PLAN_DEFECT
+    AUTH_PLAN_RC=$plan_rc
+    return 5
+  fi
+  computed_effect=$(fm_auth_plan_canonical_digest) || return 4
+  stored_effect=$(printf '%s' "$raw" | jq -r '.effect.digest')
+  [ "$stored_effect" = "$computed_effect" ] || return 4
+
+  computed=$(fm_auth_id "$request" "$comment" "$verdict" "$item" "$project" "$repo" "$pr" "$head" "$computed_effect") \
     || return 4
   [ "$computed" = "$expected" ] || return 4
   AUTH_RECORD=$raw
@@ -241,6 +299,48 @@ observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
   printf '%s\n' "$out"
 }
 
+POST_EFFECT_EVIDENCE=
+post_effect_observe() {
+  local out merged head
+  POST_EFFECT_EVIDENCE=
+  case $FM_AUTH_PLAN_KIND in
+    local-fast-forward)
+      out=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT_IDENTITY" \
+        rev-parse --verify --quiet "$FM_AUTH_PLAN_TARGET_REF^{commit}" 2>/dev/null) || {
+        POST_EFFECT_EVIDENCE="local-fast-forward target_ref=$FM_AUTH_PLAN_TARGET_REF head=unobserved"
+        return 1
+      }
+      POST_EFFECT_EVIDENCE="local-fast-forward target_ref=$FM_AUTH_PLAN_TARGET_REF head=$out"
+      [ "$out" = "$FM_AUTH_PLAN_HEAD" ]
+      ;;
+    pr-merge)
+      # fm-retrieval-audit: not-a-collection - this reads the one pull request named by the closed effect plan.
+      out=$(gh api "repos/$FM_AUTH_PLAN_REPO/pulls/$FM_AUTH_PLAN_PR" \
+        --jq '[.merged, .head.sha] | @tsv' 2>/dev/null) || {
+        POST_EFFECT_EVIDENCE="pr-merge merged=unobserved head=unobserved"
+        return 1
+      }
+      # Split without a here-document. The two fields come out of one tab, and
+      # parameter expansion does that in stock Bash 3.2 exactly as a heredoc
+      # would - while staying a construct bin/fm-dead-predicate-check.sh can
+      # parse, so this file remains readable as a consumer and the library's
+      # call sites stay observable. A response carrying no tab leaves both
+      # fields holding the whole string, which then fails the `true` comparison
+      # and the head-shape check below, so the failure direction is unchanged.
+      merged=${out%%$'\t'*}
+      head=${out#*$'\t'}
+      POST_EFFECT_EVIDENCE="pr-merge merged=${merged:-unobserved} head=${head:-unobserved}"
+      [ "$merged" = true ] || return 1
+      fm_auth_head_shape_valid "$head" || return 1
+      [ "$head" = "$FM_AUTH_PLAN_HEAD" ]
+      ;;
+    *)
+      POST_EFFECT_EVIDENCE="effect=$FM_AUTH_PLAN_KIND observation=unsupported"
+      return 1
+      ;;
+  esac
+}
+
 # --- claim -------------------------------------------------------------------
 #
 # Serializes concurrent live spends of one authority. mkdir is the atomic
@@ -252,43 +352,113 @@ observe_head() {  # <owner/repo> <number> -> prints sha, or returns 1
 # would let the next caller past the one guard that is telling the truth.
 # `reconcile` clears both together, which is the only path that has an
 # observation to justify it.
-claim_acquire() {  # <auth-id>
-  local dir pid identity group
-  dir=$(auth_claim_path "$1") || return 1
-  pid=${BASHPID:-$$}
-  group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 1
-  [ "$group" = "$pid" ] || return 1
-  identity=$(fm_pid_identity "$pid") || return 1
-  mkdir -p "$AUTH_DIR" || return 1
-  mkdir "$dir" 2>/dev/null || return 1
-  if printf '%s\n' "$pid" > "$dir/owner-pid" \
-    && printf '%s\n' "$identity" > "$dir/owner-identity" \
-    && printf '%s\n' "$group" > "$dir/owner-group"; then
-    :
-  else
-    rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"
-    rmdir "$dir" 2>/dev/null
-    return 1
+ruling_reservation_release() {
+  local holder
+  [ -n "$RULING_RESERVATION" ] || return 0
+  if [ ! -e "$RULING_RESERVATION" ]; then
+    RULING_RESERVATION=
+    RULING_RESERVATION_RELEASE_ON_EXIT=0
+    return 0
   fi
-  CLAIM=$dir
-  trap claim_release EXIT
-  trap 'claim_terminate INT' INT
-  trap 'claim_terminate TERM' TERM
-  return 0
+  holder=$(cat "$RULING_RESERVATION/holder-id" 2>/dev/null) || return 1
+  [ "$holder" = "$1" ] || return 1
+  rm -f "$RULING_RESERVATION/holder-id" || return 1
+  rmdir "$RULING_RESERVATION" 2>/dev/null || return 1
+  RULING_RESERVATION=
+  RULING_RESERVATION_RELEASE_ON_EXIT=0
 }
 
-claim_terminate() {  # <signal>
+spend_release() {
+  local status=$? reservation='' release_failed=0
+  trap - EXIT
+  # Ordinary exits release only before intent; after intent, explicit outcome or
+  # reconciliation paths decide whether an act may have happened.
+  if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ] && [ -n "$RULING_RESERVATION" ]; then
+    reservation=$RULING_RESERVATION
+    ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}" || release_failed=1
+  fi
+  claim_release
+  if [ "$release_failed" -eq 1 ]; then
+    printf '%s: the ruling reservation at %s could not be released; no act was performed\n' \
+      "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "$reservation" >&2
+    exit 4
+  fi
+  exit "$status"
+}
+
+spend_terminate() {  # <signal>
   local signal=$1 group=${BASHPID:-$$}
   trap - EXIT INT TERM
+  # Before intent, the reservation and claim protect no possible effect and a
+  # signal must release both before it terminates the owned process group.
+  if [ "$RULING_RESERVATION_RELEASE_ON_EXIT" -eq 1 ]; then
+    ruling_reservation_release "${RULING_RESERVATION_HOLDER:-}" || true
+    claim_release
+  fi
   kill -s "$signal" -- "-$group" 2>/dev/null || exit 4
   exit 4
 }
 
-claim_release() {
-  [ -n "$CLAIM" ] || return 0
-  rm -f "$CLAIM/owner-pid" "$CLAIM/owner-identity" "$CLAIM/owner-group"
-  rmdir "$CLAIM" 2>/dev/null || true
-  CLAIM=
+ruling_reservation_release_or_unobserved() {  # <auth-id> <detail>
+  local reservation=$RULING_RESERVATION
+  ruling_reservation_release "$1" \
+    || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
+      "$2; the ruling reservation at $reservation could not be released"
+}
+
+ruling_reservation_acquire() {  # <request-id> <head> <auth-id>
+  local dir
+  dir=$(ruling_reservation_path "$1" "$2") || return 1
+  mkdir -p "$AUTH_DIR" || return 1
+  mkdir "$dir" 2>/dev/null || return 1
+  if ! printf '%s\n' "$3" > "$dir/holder-id"; then
+    rm -f "$dir/holder-id"
+    rmdir "$dir" 2>/dev/null
+    return 1
+  fi
+  RULING_RESERVATION=$dir
+  RULING_RESERVATION_HOLDER=$3
+  RULING_RESERVATION_RELEASE_ON_EXIT=1
+  trap spend_release EXIT
+  trap 'spend_terminate INT' INT
+  trap 'spend_terminate TERM' TERM
+}
+
+RULING_RESERVATION_HOLDER=
+RULING_RESERVATION_STATE=
+ruling_reservation_state() {  # <request-id> <head>
+  local dir holder rc state
+  RULING_RESERVATION_HOLDER=
+  dir=$(ruling_reservation_path "$1" "$2") || { RULING_RESERVATION_STATE=unobserved; return; }
+  holder=$(cat "$dir/holder-id" 2>/dev/null) \
+    || { RULING_RESERVATION_STATE=unobserved; return; }
+  fm_auth_id_valid "$holder" \
+    || { RULING_RESERVATION_STATE=unobserved; return; }
+  RULING_RESERVATION_HOLDER=$holder
+  auth_read "$holder"; rc=$?
+  if [ "$rc" -eq 0 ]; then
+    state=$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')
+    case $state in
+      spent) RULING_RESERVATION_STATE=held; return ;;
+      granted|spending)
+        case $(claim_owner_state "$holder") in
+          live) RULING_RESERVATION_STATE=held ;;
+          *) RULING_RESERVATION_STATE=unobserved ;;
+        esac
+        return ;;
+    esac
+  fi
+  RULING_RESERVATION_STATE=unobserved
+}
+
+ruling_reservation_refuse() {  # <request-id> <head>
+  ruling_reservation_state "$1" "$2"
+  if [ "$RULING_RESERVATION_STATE" = held ]; then
+    refuse "$FM_AUTH_TOKEN_RULING_EXHAUSTED" \
+      "the ruling on $1 at $2 is reserved by $RULING_RESERVATION_HOLDER; one approval grants one landing"
+  fi
+  unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+    "the ruling on $1 at $2 is reserved by ${RULING_RESERVATION_HOLDER:-an unobservable authorization}, so whether its landing happened is unknown"
 }
 
 claim_group_state() {  # <process-group>
@@ -350,11 +520,211 @@ claim_reclaim_gone() {  # <auth-id>
   claim_acquire "$1"
 }
 
+# --- the executable an effect kind is performed by ----------------------------
+#
+# Resolved ONCE, here, at the owning boundary, and pinned into the plan as an
+# absolute path plus a content digest. The name comes from the contract, never
+# from a caller, and the containing directory is resolved so a later symlink
+# change cannot move the pinned path. The digest is what carries identity: a
+# different file at the same path refuses at effect time rather than running.
+EXEC_PATH=
+EXEC_DIGEST=
+resolve_executable() {  # <name>
+  local name=$1 found dir base digest
+  EXEC_PATH=
+  EXEC_DIGEST=
+  found=$(command -v "$name" 2>/dev/null) || return 1
+  case $found in
+    /*) ;;
+    *) return 1 ;;
+  esac
+  base=${found##*/}
+  dir=${found%/*}
+  [ -n "$dir" ] || dir=/
+  dir=$(cd "$dir" 2>/dev/null && pwd -P) || return 1
+  case $dir in
+    */) found="$dir$base" ;;
+    *) found="$dir/$base" ;;
+  esac
+  [ -f "$found" ] && [ -x "$found" ] || return 1
+  digest=$(fm_auth_digest < "$found") || return 1
+  fm_auth_plan_digest_valid "$digest" || return 1
+  EXEC_PATH=$found
+  EXEC_DIGEST=$digest
+  return 0
+}
+
+# A caller-supplied value is admitted only as a redundant assertion. It is
+# compared to the value this owner derived and can only agree or refuse.
+assert_equal() {  # <asserted-or-empty> <derived> <what>
+  [ -n "${1:-}" ] || return 0
+  fm_auth_credential_bearing "$1" \
+    && refuse "$FM_AUTH_TOKEN_CREDENTIAL" \
+      "the asserted $3 carries credential-bearing input, which is refused before it can reach a landing act"
+  [ "$1" = "$2" ] || refuse "$FM_AUTH_TOKEN_ACT_MISMATCH" \
+    "the caller asserts $3 '$1'; this authority derives '$2', and an assertion may only agree"
+  return 0
+}
+
 # --- mint --------------------------------------------------------------------
 
-cmd_mint() {  # <request-id>
-  local rid=$1 state comment verdict class item project repo pr head id rec now existing rc
+# The plan a mint declares, built from what the ruling establishes plus the
+# closed, mutation-significant choices the chokepoint makes at mint time. Nothing
+# here is re-openable at spend: the plan is digested into the authorization
+# identity, so a different plan is a different authority.
+MINT_EFFECT=
+mint_plan() {  # <kind> <repo> <pr-number> <head> <method> <delete-branch> <project> <target-branch>
+  local kind=$1 repo=$2 number=$3 head=$4 method=$5 delete=$6 project=$7 branch=$8
+  local exec_name identity target_head plan digest rc=0
+  MINT_EFFECT=
+  exec_name=$(fm_auth_effect_executable_name "$kind") \
+    || unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" \
+      "'$kind' is not an effect this authority contract performs"
+  resolve_executable "$exec_name" \
+    || unobserved "$FM_AUTH_TOKEN_EXEC_UNOBSERVED" \
+      "'$exec_name' could not be resolved to one exact executable, so the act this authority would permit could not be pinned"
+
+  case $kind in
+    pr-merge)
+      plan=$(jq -n --arg kind "$kind" --arg repo "$repo" --arg pr "$number" \
+        --arg head "$head" --arg method "$method" --arg delete "$delete" \
+        --arg name "$exec_name" --arg path "$EXEC_PATH" --arg digest "$EXEC_DIGEST" \
+        '{kind:$kind,venue:"github",repo:$repo,pr:$pr,head:$head,method:$method,
+          delete_branch:($delete == "yes"),force:false,
+          executable_name:$name,executable_path:$path,executable_digest:$digest}') \
+        || die "the effect plan could not be constructed" 4
+      ;;
+    local-fast-forward)
+      identity=$(cd "$project" 2>/dev/null && pwd -P) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "the project at '$project' could not be resolved to one exact directory, so the act this authority would permit could not be pinned"
+      target_head=$("$EXEC_PATH" -C "$identity" rev-parse --verify --quiet "refs/heads/$branch^{commit}" 2>/dev/null) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "the target ref refs/heads/$branch in $identity could not be resolved to one exact commit, so the act this authority would permit could not be pinned"
+      plan=$(jq -n --arg kind "$kind" --arg project "$project" --arg identity "$identity" \
+        --arg ref "refs/heads/$branch" --arg target_head "$target_head" --arg head "$head" \
+        --arg name "$exec_name" --arg path "$EXEC_PATH" --arg digest "$EXEC_DIGEST" \
+        '{kind:$kind,venue:"local",project:$project,project_identity:$identity,
+          target_ref:$ref,target_head:$target_head,head:$head,mode:"ff-only",force:false,
+          executable_name:$name,executable_path:$path,executable_digest:$digest}') \
+        || die "the effect plan could not be constructed" 4
+      ;;
+    *)
+      unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" \
+        "'$kind' is not an effect this authority contract performs" ;;
+  esac
+
+  fm_auth_plan_parse "$plan"; rc=$?
+  case $rc in
+    0) ;;
+    3) refuse "$FM_AUTH_TOKEN_CREDENTIAL" \
+         "this landing plan carries credential-bearing input: $FM_AUTH_PLAN_DEFECT" ;;
+    2) unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" "$FM_AUTH_PLAN_DEFECT" ;;
+    *) unobserved "$FM_AUTH_TOKEN_PLAN_INCOMPLETE" "$FM_AUTH_PLAN_DEFECT" ;;
+  esac
+  digest=$(fm_auth_plan_canonical_digest) \
+    || die "the effect plan's identity could not be computed" 4
+  MINT_EFFECT=$(printf '%s' "$plan" | jq -c --arg d "$digest" '. + {digest:$d}') \
+    || die "the effect plan could not be recorded" 4
+  MINT_EFFECT_DIGEST=$digest
+}
+
+MINT_EFFECT_DIGEST=
+
+# ONE RULING AUTHORIZES ONE LANDING, and this is where that is larger than
+# one-use. The exactly-once guarantee lives on a RECORD, and the effect plan is
+# part of a record's identity, so a second plan for the same ruling and head is a
+# second record with its own single use. That is right for identity and would be
+# wrong for authority, so an approval whose landing already happened - or may
+# have happened - grants nothing further and spends nothing further.
+#
+# Asked at BOTH the mint and the act, because a sibling minted before the first
+# landing would pass a mint-only check and still be granted afterwards.
+#
+# It reads other authorization records, which resets the parsed-plan globals, so
+# every caller runs it before building its own act.
+ruling_unspent() {  # <request-id> <head> <this-id>
+  local rid=$1 head=$2 self=$3 f other state rc record
+  [ -d "$AUTH_DIR" ] || return 0
+  if [ ! -r "$AUTH_DIR" ] || [ ! -x "$AUTH_DIR" ]; then
+    unobserved "$FM_AUTH_TOKEN_ENUM_UNOBSERVED" \
+      "the authorization store could not be enumerated, so whether this ruling already landed could not be observed"
+  fi
+  for f in "$AUTH_DIR"/*.json; do
+    [ -e "$f" ] || continue
+    other=${f##*/}
+    other=${other%.json}
+    [ "$other" != "$self" ] || continue
+    auth_read "$other"; rc=$?
+    case $rc in
+      0) record=$AUTH_RECORD ;;
+      # A record whose SHAPE is intact and whose effect plan is not is a record
+      # from before this contract, and this file's own refusals make it
+      # unspendable, so it can never itself perform a landing. What it can still
+      # answer is the only question asked here - whether this ruling was landed
+      # under it - and reading that from the record's own claim is the safe
+      # direction: it can produce a refusal and never a landing. Treating every
+      # such record as could-not-observe instead would stop every governed
+      # landing in a home that holds one, which is a repair to demand of an
+      # operator, not a state to wedge them in.
+      #
+      # The claim is not identity-verified, and it does not need to be: a store
+      # an attacker can edit is a store they can delete from, which this guard
+      # never claimed to survive. What it survives is ordinary duplication.
+      5) record=$AUTH_RAW ;;
+      *)
+        unobserved "$FM_AUTH_TOKEN_ENUM_UNOBSERVED" \
+          "authorization $other could not be read, so whether this ruling already landed could not be observed; repair or retire that record before landing anything in this home" ;;
+    esac
+    [ "$(printf '%s' "$record" | jq -r '.request_id')" = "$rid" ] || continue
+    [ "$(printf '%s' "$record" | jq -r '.grant.head')" = "$head" ] || continue
+    state=$(printf '%s' "$record" | jq -r '.state')
+    case $state in
+      spent|spending)
+        refuse "$FM_AUTH_TOKEN_RULING_EXHAUSTED" \
+          "the ruling on $rid at $head has already been landed under $other ($(fm_auth_reported_status "$state")); one approval grants one landing" ;;
+    esac
+  done
+  return 0
+}
+
+cmd_mint() {  # <request-id> --effect <kind> [...]
+  local rid=$1; shift
+  local kind='' method='' delete=no project='' branch=''
+  local assert_repo='' assert_pr='' assert_head='' assert_project=''
+  local state comment verdict class item project_name repo pr head id rec now existing rc
+  local locator owner_repo number declared
   [ -n "$rid" ] || die "mint needs a request id" 2
+
+  while [ $# -gt 0 ]; do
+    case $1 in
+      --effect) kind=${2:-}; shift 2 || die "--effect needs a value" 2 ;;
+      --method) method=${2:-}; shift 2 || die "--method needs a value" 2 ;;
+      --delete-branch) delete=yes; shift ;;
+      --project) project=${2:-}; shift 2 || die "--project needs a value" 2 ;;
+      --target-branch) branch=${2:-}; shift 2 || die "--target-branch needs a value" 2 ;;
+      --assert-repo) assert_repo=${2:-}; shift 2 || die "--assert-repo needs a value" 2 ;;
+      --assert-pr) assert_pr=${2:-}; shift 2 || die "--assert-pr needs a value" 2 ;;
+      --assert-head) assert_head=${2:-}; shift 2 || die "--assert-head needs a value" 2 ;;
+      --assert-project) assert_project=${2:-}; shift 2 || die "--assert-project needs a value" 2 ;;
+      *) die "unexpected argument '$1'" 2 ;;
+    esac
+  done
+  [ -n "$kind" ] \
+    || die "mint needs --effect naming the act this authority permits; an authority with no effect plan authorizes no act" 2
+
+  # Credential-bearing mechanism input is refused HERE, before any of it is used
+  # to resolve a directory, quoted into a refusal, or written to a record. A
+  # value that had to be handled carefully to be safe was never a landing
+  # mechanism field this owner should be holding.
+  for declared in "$kind" "$method" "$project" "$branch" \
+    "$assert_repo" "$assert_pr" "$assert_head" "$assert_project"; do
+    [ -n "$declared" ] || continue
+    if fm_auth_credential_bearing "$declared"; then
+      refuse "$FM_AUTH_TOKEN_CREDENTIAL" \
+        "a landing effect plan was declared with credential-bearing input, which is refused before it can reach a landing act"
+    fi
+  done
 
   correlation_read "$rid"
 
@@ -384,7 +754,7 @@ cmd_mint() {  # <request-id>
   esac
 
   item=$(printf '%s' "$CORRELATION" | jq -r '.identity.item // ""')
-  project=$(printf '%s' "$CORRELATION" | jq -r '.identity.project // ""')
+  project_name=$(printf '%s' "$CORRELATION" | jq -r '.identity.project // ""')
   repo=$(printf '%s' "$CORRELATION" | jq -r '.identity.repo // ""')
   pr=$(printf '%s' "$CORRELATION" | jq -r '.identity.pr // "-"')
   head=$(printf '%s' "$CORRELATION" | jq -r '.identity.head // ""')
@@ -398,11 +768,45 @@ cmd_mint() {  # <request-id>
   # A landing is performed against a pull request, so an authorization with no
   # pull request to observe could never have its head re-checked at the moment of
   # use. Refusing at mint keeps that from surfacing as a surprise at spend.
-  fm_auth_pr_locator "$pr" >/dev/null \
+  locator=$(fm_auth_pr_locator "$pr") \
     || refuse "$FM_AUTH_TOKEN_NO_PR" \
       "request $rid names no pull request to land, so its head could not be observed at use"
+  owner_repo=${locator%% *}
+  number=${locator##* }
 
-  id=$(fm_auth_id "$rid" "$comment" "$verdict" "$item" "$project" "$repo" "$pr" "$head") \
+  # THE PLAN'S VENUE, TARGET, AND HEAD COME FROM THE RULING, NOT FROM THE CALLER.
+  # Only the choices a ruling cannot express - which merge method, which local
+  # project directory and branch - are declared here, each against a closed
+  # vocabulary, and every caller-supplied value is checked as a redundant
+  # assertion rather than used as the source.
+  assert_equal "$assert_head" "$head" "landing head"
+  case $kind in
+    pr-merge)
+      assert_equal "$assert_repo" "$owner_repo" "landing repository"
+      assert_equal "$assert_pr" "$number" "pull request number"
+      [ -z "$project" ] && [ -z "$branch" ] \
+        || die "--project and --target-branch describe a local fast-forward, not a pull-request merge" 2
+      [ -n "$method" ] \
+        || die "a pr-merge effect plan needs --method squash|merge|rebase; the merge method changes what lands" 2
+      fm_auth_plan_member_of "$method" "$FM_AUTH_MERGE_METHODS" \
+        || die "--method must be one of: $(printf '%s' "$FM_AUTH_MERGE_METHODS" | tr '\n' ' ')" 2
+      ;;
+    local-fast-forward)
+      [ -z "$method" ] \
+        || die "--method describes a pull-request merge, not a local fast-forward" 2
+      [ -n "$project" ] \
+        || die "a local-fast-forward effect plan needs --project naming the checkout it lands in" 2
+      [ -n "$branch" ] \
+        || die "a local-fast-forward effect plan needs --target-branch naming the ref it advances" 2
+      assert_equal "$assert_project" "$project" "landing project"
+      ;;
+    *)
+      unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" \
+        "'$kind' is not an effect this authority contract performs" ;;
+  esac
+  mint_plan "$kind" "$owner_repo" "$number" "$head" "$method" "$delete" "$project" "$branch"
+
+  id=$(fm_auth_id "$rid" "$comment" "$verdict" "$item" "$project_name" "$repo" "$pr" "$head" "$MINT_EFFECT_DIGEST") \
     || die "the authorization identity could not be computed" 4
 
   claim_acquire "$id" \
@@ -422,11 +826,16 @@ cmd_mint() {  # <request-id>
     4)
       unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
         "an authorization already exists at $id and could not be read" ;;
+    5) plan_defect_stop "$id" ;;
   esac
 
+  # Only reached when this exact plan has no record yet, which is the one moment
+  # a second authority against an already-landed approval could be created.
+  ruling_unspent "$rid" "$head" "$id"
+
   now=$(now_iso)
-  rec=$(fm_auth_record_new "$id" "$rid" "$comment" "$verdict" "$item" "$project" \
-    "$repo" "$pr" "$head" "$now") \
+  rec=$(fm_auth_record_new "$id" "$rid" "$comment" "$verdict" "$item" "$project_name" \
+    "$repo" "$pr" "$head" "$now" "$MINT_EFFECT") \
     || die "the authorization record could not be constructed" 4
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
@@ -448,24 +857,147 @@ auth_void() {  # <auth-id> <record> <reason>
   auth_write "$1" "$rec" || return 1
 }
 
-cmd_spend() {  # <auth-id> --head <sha> -- <command>...
+# A record whose plan does not determine an act, reported as the defect it is.
+# Unknown, malformed, unsupported, and credential-bearing are kept apart because
+# they are different repairs: one closes a vocabulary gap, one repairs a record,
+# and one is a security refusal.
+plan_defect_stop() {  # <auth-id>
+  local id=$1
+  case $AUTH_PLAN_RC in
+    3) refuse "$FM_AUTH_TOKEN_CREDENTIAL" \
+         "authorization $id carries credential-bearing input: $AUTH_PLAN_DEFECT" ;;
+    2) unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" \
+         "authorization $id does not determine an act: $AUTH_PLAN_DEFECT" ;;
+    *) unobserved "$FM_AUTH_TOKEN_PLAN_INCOMPLETE" \
+         "authorization $id does not determine an act: $AUTH_PLAN_DEFECT" ;;
+  esac
+}
+
+# --- the plan, re-read at effect time ----------------------------------------
+#
+# Everything in the plan that can move between mint and use is read again here,
+# as late as the sequence allows and always before the intent record. What could
+# not be read stops the act as could-not-observe; what was read and disagrees is
+# a refusal. Neither silently retargets the act at whatever is there now.
+plan_reobserve() {  # <auth-id>
+  local id=$1 digest branch identity present target_head ancestor
+  if [ ! -f "$FM_AUTH_PLAN_EXEC_PATH" ] || [ ! -x "$FM_AUTH_PLAN_EXEC_PATH" ]; then
+    refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+      "authorization $id performs its act with $FM_AUTH_PLAN_EXEC_PATH, which is no longer an executable file"
+  fi
+  digest=$(fm_auth_digest < "$FM_AUTH_PLAN_EXEC_PATH") \
+    || unobserved "$FM_AUTH_TOKEN_EXEC_UNOBSERVED" \
+      "the executable $FM_AUTH_PLAN_EXEC_PATH could not be read, so whether it is the one this authority pinned could not be observed"
+  [ "$digest" = "$FM_AUTH_PLAN_EXEC_DIGEST" ] \
+    || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+      "the file at $FM_AUTH_PLAN_EXEC_PATH is not the executable authorization $id pinned; it now digests to $digest"
+
+  case $FM_AUTH_PLAN_KIND in
+    local-fast-forward)
+      identity=$(cd "$FM_AUTH_PLAN_PROJECT" 2>/dev/null && pwd -P) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "the project at $FM_AUTH_PLAN_PROJECT could not be resolved, so the target of authorization $id could not be observed"
+      [ "$identity" = "$FM_AUTH_PLAN_PROJECT_IDENTITY" ] \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "$FM_AUTH_PLAN_PROJECT now resolves to $identity, not the $FM_AUTH_PLAN_PROJECT_IDENTITY authorization $id was bound to"
+      branch=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT" symbolic-ref --quiet --short HEAD 2>/dev/null) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "which branch $FM_AUTH_PLAN_PROJECT has checked out could not be observed, so the ref this act advances could not be confirmed"
+      [ "refs/heads/$branch" = "$FM_AUTH_PLAN_TARGET_REF" ] \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "authorization $id advances $FM_AUTH_PLAN_TARGET_REF, but $FM_AUTH_PLAN_PROJECT has refs/heads/$branch checked out"
+      target_head=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT" rev-parse --verify --quiet "$FM_AUTH_PLAN_TARGET_REF^{commit}" 2>/dev/null) \
+        || unobserved "$FM_AUTH_TOKEN_TARGET_UNOBSERVED" \
+          "$FM_AUTH_PLAN_TARGET_REF in $FM_AUTH_PLAN_PROJECT could not be resolved at effect time"
+      [ "$target_head" = "$FM_AUTH_PLAN_TARGET_HEAD" ] \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "$FM_AUTH_PLAN_TARGET_REF now resolves to $target_head, not the $FM_AUTH_PLAN_TARGET_HEAD authorization $id pinned"
+      present=$("$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT" rev-parse --verify --quiet "$FM_AUTH_PLAN_HEAD^{commit}" 2>/dev/null) \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "the commit $FM_AUTH_PLAN_HEAD authorization $id lands is not present in $FM_AUTH_PLAN_PROJECT"
+      [ "$present" = "$FM_AUTH_PLAN_HEAD" ] \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "$FM_AUTH_PLAN_HEAD resolves to $present in $FM_AUTH_PLAN_PROJECT, so it is not the object this authority names"
+      ancestor=0
+      "$FM_AUTH_PLAN_EXEC_PATH" -C "$FM_AUTH_PLAN_PROJECT" merge-base --is-ancestor \
+        "$FM_AUTH_PLAN_TARGET_REF" "$FM_AUTH_PLAN_HEAD" 2>/dev/null || ancestor=$?
+      [ "$ancestor" -eq 0 ] \
+        || refuse "$FM_AUTH_TOKEN_PLAN_STALE" \
+          "$FM_AUTH_PLAN_TARGET_REF is no longer an ancestor of $FM_AUTH_PLAN_HEAD in $FM_AUTH_PLAN_PROJECT, so the act authorization $id names is not a fast-forward"
+      ;;
+  esac
+}
+
+# The caller's asserted act, admitted only as a redundant assertion. It is
+# compared element by element against the act this owner derived; a difference
+# refuses before the intent record, so a substituted executable, venue, ref, or
+# mode performs nothing at all.
+assert_act() {  # <auth-id> <asserted...>
   local id=$1; shift
-  local want_head=''
+  local i=0 asserted derived
+  for asserted in "$@"; do
+    if fm_auth_credential_bearing "$asserted"; then
+      refuse "$FM_AUTH_TOKEN_CREDENTIAL" \
+        "the act asserted for $id carries credential-bearing input at element $i, which is refused before it can reach a landing act"
+    fi
+    i=$((i + 1))
+  done
+  if [ "$#" -ne "${#FM_AUTH_ACT[@]}" ]; then
+    refuse "$FM_AUTH_TOKEN_ACT_MISMATCH" \
+      "the caller asserts an act of $# argument(s); authorization $id derives one of ${#FM_AUTH_ACT[@]} from its effect plan"
+  fi
+  i=0
+  for asserted in "$@"; do
+    derived=${FM_AUTH_ACT[$i]}
+    if [ "$asserted" != "$derived" ]; then
+      # The executable is named by its pinned path, and the caller is allowed to
+      # have named it by the name this plan recorded - that name is the
+      # authority's own value, not an ambient resolution of it.
+      if [ "$i" -eq 0 ] && [ "$asserted" = "$FM_AUTH_PLAN_EXEC_NAME" ]; then
+        i=$((i + 1))
+        continue
+      fi
+      refuse "$FM_AUTH_TOKEN_ACT_MISMATCH" \
+        "the caller asserts '$asserted' at element $i; authorization $id derives '$derived' from its effect plan, and an assertion may only agree"
+    fi
+    i=$((i + 1))
+  done
+}
+
+cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <command>...]
+  local id=$1; shift
+  local want_head='' receipt='' asserted=0
   local rec state admit outcome_state recorded
   local rid corr_state corr_comment pr locator owner number observed
-  local grant_head act_digest now rc
+  local grant_head act_digest now rc plan proof_rc
+  local -a assertion=()
 
   while [ $# -gt 0 ]; do
     case $1 in
       --head) want_head=${2:-}; shift 2 || die "--head needs a value" 2 ;;
-      --) shift; break ;;
-      *) die "unexpected argument '$1' before --" 2 ;;
+      --receipt) receipt=${2:-}; shift 2 || die "--receipt needs a value" 2 ;;
+      --assert-act)
+        shift
+        [ "${1:-}" = -- ] \
+          || die "--assert-act must be followed by -- and the act the caller expects" 2
+        shift
+        asserted=1
+        assertion=("$@")
+        break ;;
+      # The withdrawn form. A caller-supplied command is no longer the act: the
+      # authority builds its own from its effect plan. Reinterpreting the old
+      # argv as an assertion silently would let a stale caller believe it still
+      # chooses the act, so this refuses and names the replacement.
+      --)
+        die "spend no longer performs a caller-supplied command; the authority performs the act its own effect plan names, and the act you expected is stated as '--assert-act -- <command>...'" 2 ;;
+      *) die "unexpected argument '$1'" 2 ;;
     esac
   done
   [ -n "$id" ] || die "spend needs an authorization id" 2
   [ -n "$want_head" ] || die "spend needs --head, the head the caller intends to land" 2
-  [ $# -gt 0 ] || refuse "$FM_AUTH_TOKEN_NO_ACT" \
-    "spend was given no command to perform, so there is nothing to authorize"
+  [ "$asserted" -eq 0 ] || [ "${#assertion[@]}" -gt 0 ] \
+    || refuse "$FM_AUTH_TOKEN_NO_ACT" \
+      "--assert-act was given no act to assert, so there is nothing to compare against this authority"
 
   if ! claim_acquire "$id"; then
     auth_read "$id"; rc=$?
@@ -483,6 +1015,7 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
          "authorization $id could not be read, so whether it is spent is unknown" ;;
+    5) plan_defect_stop "$id" ;;
   esac
   rec=$AUTH_RECORD
   state=$(printf '%s' "$rec" | jq -r '.state // ""')
@@ -559,11 +1092,81 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
       "authorization $id approves $grant_head but $owner#$number is now at $observed"
   fi
 
+  if ! ruling_reservation_acquire "$rid" "$grant_head" "$id"; then
+    ruling_reservation_refuse "$rid" "$grant_head"
+  fi
+
+  # ONE APPROVAL, ONE LANDING. The effect plan is part of the identity, so a
+  # different plan is a different authorization id - correct for identity, and
+  # wrong for authority if it let one approval be landed twice. This is the same
+  # question the mint asks, asked again at the act, because an authority minted
+  # before the sibling landed would otherwise still be granted.
+  #
+  # It reads other records, which resets the parsed-plan globals, so it runs
+  # BEFORE this authority's own act is built below.
+  ruling_unspent "$rid" "$grant_head" "$id"
+
+  # THE ACT IS BUILT HERE, from this authority's own plan, and from the record
+  # this spend already read rather than from anything a caller offered.
+  plan=$(printf '%s' "$rec" | jq -c '.effect') \
+    || unobserved "$FM_AUTH_TOKEN_PLAN_INCOMPLETE" \
+      "the effect plan of $id could not be re-read before the act"
+  fm_auth_plan_parse "$plan"; rc=$?
+  case $rc in
+    0) ;;
+    3) refuse "$FM_AUTH_TOKEN_CREDENTIAL" \
+         "authorization $id carries credential-bearing input: $FM_AUTH_PLAN_DEFECT" ;;
+    2) unobserved "$FM_AUTH_TOKEN_PLAN_UNSUPPORTED" "$FM_AUTH_PLAN_DEFECT" ;;
+    *) unobserved "$FM_AUTH_TOKEN_PLAN_INCOMPLETE" "$FM_AUTH_PLAN_DEFECT" ;;
+  esac
+  [ "${#FM_AUTH_ACT[@]}" -gt 0 ] \
+    || unobserved "$FM_AUTH_TOKEN_PLAN_INCOMPLETE" \
+      "the effect plan of $id determined no act to perform"
+
+  # The plan must still describe the grant it was minted against. A record whose
+  # plan and grant disagree names two different landings, and neither of them is
+  # the one this authority is.
+  [ "$FM_AUTH_PLAN_HEAD" = "$grant_head" ] \
+    || refuse "$FM_AUTH_TOKEN_PLAN_FOREIGN" \
+      "authorization $id approves $grant_head and its effect plan lands $FM_AUTH_PLAN_HEAD"
+
+  # A pull-request plan addresses the same pull request the grant does, or it is
+  # a plan for somebody else's landing carried under this approval.
+  if [ "$FM_AUTH_PLAN_KIND" = pr-merge ]; then
+    { [ "$FM_AUTH_PLAN_REPO" = "$owner" ] && [ "$FM_AUTH_PLAN_PR" = "$number" ]; } \
+      || refuse "$FM_AUTH_TOKEN_PLAN_FOREIGN" \
+        "authorization $id is granted for $owner#$number and its effect plan merges $FM_AUTH_PLAN_REPO#$FM_AUTH_PLAN_PR"
+  fi
+
+  # The caller's assertion is checked before the intent record, so a substituted
+  # executable, venue, ref, or mode performs nothing and leaves the authority
+  # unspent.
+  if [ "$asserted" -eq 1 ]; then
+    assert_act "$id" "${assertion[@]}"
+  fi
+
+  # Everything the plan pinned that could have moved, read again at the last
+  # moment before the act.
+  plan_reobserve "$id"
+
+  # The receipt is proven writable BEFORE the intent record, so a caller whose
+  # receipt path is unusable learns that from an authority that is still granted
+  # rather than from one that is indeterminate.
+  if [ -n "$receipt" ]; then
+    : > "$receipt" 2>/dev/null \
+      || unobserved "$FM_AUTH_TOKEN_RECEIPT_UNOBSERVED" \
+        "the act receipt at $receipt could not be created, so whether the act ran could not have been observed"
+    [ ! -s "$receipt" ] \
+      || unobserved "$FM_AUTH_TOKEN_RECEIPT_UNOBSERVED" \
+        "the act receipt at $receipt could not be emptied before the act, so a stale receipt could be read as this act"
+  fi
+
   # INTENT BEFORE ACT. Everything after this point may crash, and the durable
   # record must already say a spend began, because the alternative is a landing
-  # nothing remembers.
+  # nothing remembers. The digest recorded is of the act this AUTHORITY derived,
+  # which is the only act that can run.
   now=$(now_iso)
-  act_digest=$(printf '%s\n' "$@" | fm_auth_digest) || act_digest=
+  act_digest=$(printf '%s\n' "${FM_AUTH_ACT[@]}" | fm_auth_digest) || act_digest=
   rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg d "$act_digest" --arg h "$observed" \
     '.state = "spending"
      | .spend = {started:$n, act_digest:$d, observed_head:$h, outcome:null, finished:null, evidence:null}
@@ -572,8 +1175,22 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
       "the spend of $id could not be recorded before the act, so no act was performed"
+  RULING_RESERVATION_RELEASE_ON_EXIT=0
 
-  "$@"
+  # Written immediately before the act and never after it: a receipt written
+  # afterwards could not tell an act that never ran from one that ran and could
+  # not report. A receipt that cannot be written stops the act rather than
+  # performing a landing whose outcome nothing could have recorded.
+  if [ -n "$receipt" ]; then
+    if ! printf 'entered\n' > "$receipt" 2>/dev/null; then
+      ruling_reservation_release_or_unobserved "$id" \
+        "the act receipt at $receipt could not be written, so no act was performed under $id"
+      unobserved "$FM_AUTH_TOKEN_RECEIPT_UNOBSERVED" \
+        "the act receipt at $receipt could not be written, so no act was performed under $id; reconcile it as not-applied"
+    fi
+  fi
+
+  "${FM_AUTH_ACT[@]}"
   rc=$?
 
   # A non-zero act is NOT "nothing happened". It is could-not-observe about an
@@ -581,10 +1198,21 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
   # rather than returning to the pool for a blind retry.
   now=$(now_iso)
   if [ "$rc" -eq 0 ]; then
-    outcome_state=spent
-    rec=$(printf '%s' "$rec" | jq --arg n "$now" \
-      '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
-       | .updated = $n | .history += [{at:$n, event:"spent", detail:"applied"}]')
+    proof_rc=0
+    post_effect_observe || proof_rc=$?
+    if [ "$proof_rc" -eq 0 ]; then
+      outcome_state=spent
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$POST_EFFECT_EVIDENCE" \
+        '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
+         | .spend.evidence = $e | .updated = $n
+         | .history += [{at:$n, event:"spent", detail:"applied"}]')
+    else
+      outcome_state=spending
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$POST_EFFECT_EVIDENCE" \
+        '.state = "spending" | .spend.outcome = null | .spend.finished = $n
+         | .spend.evidence = $e | .updated = $n
+         | .history += [{at:$n, event:"effect-unconfirmed", detail:$e}]')
+    fi
   else
     outcome_state=spending
     rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg c "$rc" \
@@ -592,15 +1220,31 @@ cmd_spend() {  # <auth-id> --head <sha> -- <command>...
        | .updated = $n
        | .history += [{at:$n, event:"act-failed", detail:("exit " + $c)}]')
   fi
-  auth_write "$id" "$rec" \
-    || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
+  if ! auth_write "$id" "$rec"; then
+    ruling_reservation_release_or_unobserved "$id" \
       "the act ran and its outcome could not be recorded for $id"
+    unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" \
+      "the act ran and its outcome could not be recorded for $id"
+  fi
+  if [ "$outcome_state" != spent ]; then
+    if [ "$rc" -eq 0 ]; then
+      ruling_reservation_release_or_unobserved "$id" \
+        "the act under $id exited successfully, but post-effect observation did not confirm it: $POST_EFFECT_EVIDENCE"
+    else
+      ruling_reservation_release_or_unobserved "$id" \
+        "the act under $id exited $rc, which does not establish that it had no effect"
+    fi
+  fi
   claim_release
 
   if [ "$outcome_state" = spent ]; then
     printf 'spent: %s landed %s at %s\n' "$id" \
       "$(printf '%s' "$rec" | jq -r '.grant.item')" "$grant_head"
     return 0
+  fi
+  if [ "$rc" -eq 0 ]; then
+    unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+      "the act under $id exited successfully, but post-effect observation did not confirm it; reconcile it from the recorded evidence: $POST_EFFECT_EVIDENCE"
   fi
   unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
     "the act under $id exited $rc, which does not establish that it had no effect; reconcile it from an observation"
@@ -620,7 +1264,12 @@ cmd_status() {  # <auth-id>
   auth_read "$id"; rc=$?
   case $rc in
     3) printf '%s\n' "$FM_AUTH_STATUS_ABSENT"; exit 4 ;;
+    # A record whose effect plan does not determine an act cannot say what it
+    # would authorize, so it is unreadable AS AN AUTHORITY. The defect is named
+    # on stderr so the repair is not left to guesswork.
     4) printf '%s\n' "$FM_AUTH_STATUS_UNREADABLE"; exit 4 ;;
+    5) printf '%s\n' "$FM_AUTH_STATUS_UNREADABLE"
+       plan_defect_stop "$id" ;;
   esac
   reported=$(fm_auth_reported_status "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')")
   printf '%s\n' "$reported"
@@ -634,7 +1283,7 @@ cmd_status() {  # <auth-id>
 cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   local id=$1; shift
   local observed='' evidence=''
-  local rec state rc now
+  local rec state initial_state rc now rid head reservation holder
   while [ $# -gt 0 ]; do
     case $1 in
       --observed) observed=${2:-}; shift 2 || die "--observed needs a value" 2 ;;
@@ -652,7 +1301,40 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   # everywhere else.
   [ -n "$evidence" ] || die "reconcile needs --evidence naming what was observed" 2
 
-  if ! claim_acquire "$id"; then
+  auth_read "$id"; rc=$?
+  case $rc in
+    3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
+    4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be read" ;;
+    5) plan_defect_stop "$id" ;;
+  esac
+  rec=$AUTH_RECORD
+  initial_state=$(printf '%s' "$rec" | jq -r '.state // ""')
+  rid=$(printf '%s' "$rec" | jq -r '.request_id')
+  head=$(printf '%s' "$rec" | jq -r '.grant.head')
+  reservation=$(ruling_reservation_path "$rid" "$head") \
+    || unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "the ruling reservation identity for $id could not be derived"
+
+  if [ "$initial_state" = granted ]; then
+    holder=$(cat "$reservation/holder-id" 2>/dev/null) \
+      || refuse "$FM_AUTH_TOKEN_VOID" \
+        "authorization $id is granted and has no held ruling reservation to reconcile"
+    [ "$holder" = "$id" ] \
+      || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "the ruling reservation at $reservation names $holder rather than $id"
+    CLAIM_OWNER_STATE=$(claim_owner_state "$id")
+    case $CLAIM_OWNER_STATE in
+      live)
+        unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "the spender process group for $id still exists" ;;
+      gone) ;;
+      *)
+        unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "the spender process group for $id could not be observed as gone" ;;
+    esac
+    claim_reclaim_gone "$id" \
+      || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+        "the spender process group for $id could not be reclaimed after it was observed gone"
+  elif ! claim_acquire "$id"; then
     if ! claim_reclaim_gone "$id"; then
       if [ "$CLAIM_OWNER_STATE" = live ]; then
         unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
@@ -665,21 +1347,39 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
 
   auth_read "$id"; rc=$?
   case $rc in
+    0) ;;
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be read" ;;
+    5) plan_defect_stop "$id" ;;
   esac
   rec=$AUTH_RECORD
   state=$(printf '%s' "$rec" | jq -r '.state // ""')
-  [ "$state" = spending ] \
-    || refuse "$FM_AUTH_TOKEN_VOID" \
-      "authorization $id is $state; only an indeterminate spend needs reconciling"
+  case $state in
+    spending) ;;
+    granted)
+      [ "$initial_state" = granted ] \
+        || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
+          "authorization $id changed to granted while reconciliation acquired its claim" ;;
+    *)
+      refuse "$FM_AUTH_TOKEN_VOID" \
+        "authorization $id is $state; only an indeterminate spend needs reconciling" ;;
+  esac
 
   now=$(now_iso)
+  RULING_RESERVATION=$reservation
   if [ "$observed" = applied ]; then
-    rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
-      '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
-       | .spend.evidence = $e | .updated = $n
-       | .history += [{at:$n, event:"reconciled", detail:("applied: " + $e)}]')
+    if [ "$state" = granted ]; then
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" --arg h "$head" \
+        '.state = "spent"
+         | .spend = {started:$n, act_digest:"", observed_head:$h, outcome:"applied", finished:$n, evidence:$e}
+         | .updated = $n
+         | .history += [{at:$n, event:"reconciled", detail:("applied from reserved grant: " + $e)}]')
+    else
+      rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
+        '.state = "spent" | .spend.outcome = "applied" | .spend.finished = $n
+         | .spend.evidence = $e | .updated = $n
+         | .history += [{at:$n, event:"reconciled", detail:("applied: " + $e)}]')
+    fi
   else
     rec=$(printf '%s' "$rec" | jq --arg n "$now" --arg e "$evidence" \
       '.state = "granted" | .spend = null | .updated = $n
@@ -687,6 +1387,12 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   fi
   auth_write "$id" "$rec" \
     || unobserved "$FM_AUTH_TOKEN_WRITE_UNOBSERVED" "the reconciliation of $id could not be recorded"
+  if [ "$observed" = not-applied ]; then
+    ruling_reservation_release_or_unobserved "$id" \
+      "the reconciliation of $id recorded that no act was applied"
+  else
+    RULING_RESERVATION=
+  fi
   claim_release
   printf 'reconciled: %s is now %s\n' "$id" \
     "$(fm_auth_reported_status "$(printf '%s' "$rec" | jq -r '.state')")"
@@ -751,7 +1457,8 @@ if [ "$CMD" = mint ] || [ "$CMD" = spend ] || [ "$CMD" = reconcile ]; then
   unset FM_AUTH_OWNED_GROUP
 fi
 case $CMD in
-  mint) cmd_mint "${1:-}" ;;
+  mint) [ $# -gt 0 ] || die "mint needs a request id" 2
+        cmd_mint "$@" ;;
   spend) [ $# -gt 0 ] || die "spend needs an authorization id" 2
          cmd_spend "$@" ;;
   status) cmd_status "${1:-}" ;;

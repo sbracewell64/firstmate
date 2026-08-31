@@ -302,6 +302,61 @@ task_base_venue_identity_alias() {  # <url>
   printf '%s/%s\n' "$resolved" "${identity#*/}" | tr '[:upper:]' '[:lower:]'
 }
 
+task_base_remote_safe_url() {  # <url>
+  local url=${1-} base scheme rest authority path host
+  case $url in ''|*[[:space:]]*|*[[:cntrl:]]*) return 1 ;; esac
+  task_base_remote_url_is_credential_bearing "$url" && return 1
+  base=$url
+  [ -n "$base" ] || return 1
+  case $base in
+    file:///*)
+      path=${base#file://}
+      [ -n "$path" ] || return 1
+      printf 'file://%s\n' "$(fm_landed_normalize_url "$path")"
+      ;;
+    https://*|http://*|ssh://*|git://*)
+      scheme=${base%%://*}
+      rest=${base#*://}
+      authority=${rest%%/*}
+      path=${rest#*/}
+      [ "$path" != "$rest" ] || return 1
+      authority=${authority##*@}
+      case $authority in ''|*@*|*'/'*) return 1 ;; esac
+      [ -n "$path" ] || return 1
+      printf '%s://%s/%s\n' "$scheme" "$authority" "$(fm_landed_normalize_url "$path")"
+      ;;
+    /*|./*|../*)
+      printf '%s\n' "$(fm_landed_normalize_url "$base")"
+      ;;
+    *:*)
+      rest=${base##*@}
+      host=${rest%%:*}
+      path=${rest#*:}
+      case $host in ''|*'/'*|*@*) return 1 ;; esac
+      [ -n "$path" ] && [ "$path" != "$rest" ] || return 1
+      printf '%s:%s\n' "$host" "$(fm_landed_normalize_url "$path")"
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+task_base_remote_url_is_credential_bearing() {  # <url>
+  local url=${1-} rest authority
+  case $url in *\?*|*\#*) return 0 ;; esac
+  case $url in
+    https://*|http://*|ssh://*|git://*)
+      rest=${url#*://}
+      authority=${rest%%/*}
+      case $authority in *@*) return 0 ;; esac
+      ;;
+    *:*)
+      rest=${url%%:*}
+      case $rest in *@*) return 0 ;; esac
+      ;;
+  esac
+  return 1
+}
+
 # The venue a contribution target names, set into TASK_BASE_VENUE_URL (the
 # remote URL) and TASK_BASE_VENUE (its comparable forge identity, empty when the
 # URL names no forge).

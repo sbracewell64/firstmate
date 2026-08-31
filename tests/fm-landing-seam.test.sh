@@ -192,6 +192,11 @@ if [ "${1:-}" = api ]; then
       exit $?
       ;;
     */pulls/*)
+      case " $* " in
+        *" [.merged, .head.sha] | @tsv "*)
+          printf 'true\t'
+          ;;
+      esac
       cat "$FM_TEST_FORGE_HEAD"
       exit 0
       ;;

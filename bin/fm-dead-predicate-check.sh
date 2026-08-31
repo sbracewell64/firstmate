@@ -23,7 +23,9 @@
 # ACCEPTED SYNTAX. Definitions are unindented `name() {` lines. Calls begin a
 # command after indentation and optional shell control words, follow an unquoted
 # command boundary, occur in a command substitution, begin a canonical one-line
-# function body, name a trap handler, or use an `indirect-call: name` mark. A
+# function body, name a trap handler - written bare as `trap fn SIG` or as the
+# first word of a quoted handler, `trap 'fn args' SIG` - or use an
+# `indirect-call: name` mark. A
 # `printf` command is accepted only as opaque data and never as call evidence.
 # Heredocs and every other function definition or function-name use are UNCHECKED
 # rather than interpreted or skipped.
@@ -128,14 +130,27 @@ function_definitions() {  # <file>
 }
 
 function_has_call_site() {  # <function>
-  local fn=$1 f
-  for f in "${SCANNABLE[@]}"; do
+  local fn=$1
+  # Call identity does not depend on which consumer contains the call. Search
+  # each precomputed corpus once per function instead of launching a pipeline
+  # for every (function x file) pair.
+  grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$RAW_CALL_SITE_CORPUS" && return 0
+  grep -Eq "^[[:space:]]*trap[[:space:]]+['\"][[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$RAW_CALL_SITE_CORPUS" && return 0
     # The indirect-call mark is deliberately a COMMENT, so it must be read from
     # the raw file: the stripped text has comments removed, which is correct for
     # call detection and would silently discard the one call form that is
     # declared rather than written.
-    grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
-    if strip_cached "$f" | awk -v fn="$fn" '
+    # A TRAP HANDLER WRITTEN AS A QUOTED STRING is the second call form the
+    # stripped text cannot carry, for the same reason and with the same remedy.
+    # `trap fn SIG` survives stripping and the battery below matches it;
+    # `trap 'fn args' SIG` does not, because the handler lives inside the quotes
+    # that stripping removes. Naming a trap handler has always been accepted
+    # syntax, so reading this form from the raw file RESTORES a declared call
+    # form rather than widening the list to excuse a file - the distinction this
+    # control's whitelist exists to hold. The match is anchored to a trap command
+    # AND to the handler's first word, so a name that merely appears somewhere
+    # inside some other quoted string is still not a call site.
+  if awk -v fn="$fn" '
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
@@ -166,10 +181,9 @@ function_has_call_site() {  # <function>
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       $0 ~ ("#[[:space:]]*indirect-call:[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
       END { exit(found ? 0 : 1) }
-    '; then
-      return 0
-    fi
-  done
+    ' "$STRIPPED_CALL_SITE_CORPUS"; then
+    return 0
+  fi
   return 1
 }
 
@@ -298,19 +312,18 @@ strip_cached() {  # <file> - stripped text on stdout, exit status of strip_quote
 # "<line>:<text>" on stdout and 1 when the file is outside the accepted syntax.
 file_parse_refusal() {  # <file>
   local f=$1 hit strip_rc
-  hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
-          grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
-        } | head -1)
-  if [ -z "$hit" ]; then
-    strip_cached "$f" >/dev/null
-    strip_rc=$?
-    case $strip_rc in
-      0) ;;
-      1) hit="0:unterminated quoted string" ;;
-      2) hit="0:legacy backtick substitution" ;;
-      *) hit="0:quote walk failed" ;;
-    esac
-  fi
+  strip_cached "$f" >/dev/null
+  strip_rc=$?
+  case $strip_rc in
+    0)
+      hit=$({ strip_cached "$f" | grep -nF '<<' | grep -vF '<<<'
+              strip_cached "$f" | grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]'
+            } | head -1)
+      ;;
+    1) hit="0:unterminated quoted string" ;;
+    2) hit="0:legacy backtick substitution" ;;
+    *) hit="0:quote walk failed" ;;
+  esac
   [ -z "$hit" ] && return 0
   printf '%s\n' "$hit"
   return 1
@@ -352,9 +365,9 @@ fi
 for f in "${FILES[@]}"; do
   [ -r "$f" ] || die "target is unreadable: $f" 4
   grep -qxF "$ENROL_MARKER" "$f" 2>/dev/null || die "target is not enrolled: $f" 4
-  unsupported=$({ grep -nF '<<' "$f" | grep -vF '<<<'; grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"; } | head -1)
-  [ -z "$unsupported" ] \
-    || die "UNCHECKED $f:${unsupported%%:*} unsupported construct: ${unsupported#*:}" 4
+  if ! refusal=$(file_parse_refusal "$f"); then
+    die "UNCHECKED $f:${refusal%%:*} unsupported construct: ${refusal#*:}" 4
+  fi
 done
 
 # Partition every consumer into those this control can reason about and those it
@@ -375,52 +388,63 @@ while IFS= read -r cf; do
   fi
 done < <(consumer_files)
 
+RAW_CALL_SITE_CORPUS="$STRIP_DIR/raw-call-sites"
+STRIPPED_CALL_SITE_CORPUS="$STRIP_DIR/stripped-call-sites"
+: > "$RAW_CALL_SITE_CORPUS"
+: > "$STRIPPED_CALL_SITE_CORPUS"
+for cf in "${SCANNABLE[@]}"; do
+  cat "$cf" >> "$RAW_CALL_SITE_CORPUS"
+  strip_cached "$cf" >> "$STRIPPED_CALL_SITE_CORPUS"
+done
+
 FUNCTIONS=()
 for f in "${FILES[@]}"; do
   while IFS= read -r line; do FUNCTIONS+=("${line#*:}"); done < <(function_definitions "$f")
 done
 VALIDATED_SCANNABLE=()
+FUNCTION_WORDS=$(printf '%s ' "${FUNCTIONS[@]}")
 for f in "${SCANNABLE[@]}"; do
-  unsupported=''
-  for fn in "${FUNCTIONS[@]}"; do
-    grep -Eq "#[[:space:]]*indirect-call:[[:space:]]*$fn([^A-Za-z0-9_]|$)" "$f" && continue
-    unsupported=$(strip_cached "$f" | awk -v fn="$fn" '
+  unsupported=$(strip_cached "$f" | awk -v functions="$FUNCTION_WORDS" '
+    BEGIN { count = split(functions, names, " ") }
+    {
+      text = $0
+      for (i = 1; i <= count; i++) {
+        fn = names[i]
+        if (fn == "") continue
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
       # narrowing of the accepted syntax, and it is what makes a repo-wide run
       # cheap enough to sit on the automatic check path.
-      index($0, fn) == 0 { next }
-      $0 ~ "^[[:space:]]*#" { next }
-      $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
-      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      # A CONTINUATION LINE that opens with || or && , optionally negated. This is
-      # a genuine call site and a common idiom - measured at 65 occurrences across
-      # bin/ - so its absence was the whitelist being under-specified rather than
-      # the code being unusual. Added on that measurement, NOT to make a file pass:
-      # widening an accepted-syntax list to silence a refusal is shaping a control
-      # around its own answer, which is the failure this whitelist exists to avoid.
-      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
-      $0 ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)") { print NR ":" $0; exit }
+        if (index(text, fn) == 0) continue
+        if (text ~ "^[[:space:]]*#") continue
+        if (text ~ ("^" fn "\\(\\)[[:space:]]*\\{")) continue
+        if (text ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)")) continue
+        if (text ~ /^[[:space:]]*printf[[:space:]]/) continue
+        if (text ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)")) { print NR ":" fn ":" text; exit }
+      }
+    }
     ')
-    [ -z "$unsupported" ] || break
-  done
   if [ -n "$unsupported" ]; then
-    UNCHECKED_CONSUMERS+=("$f:${unsupported%%:*} unsupported call-site form for $fn: ${unsupported#*:}")
+    unsupported_line=${unsupported%%:*}
+    unsupported_rest=${unsupported#*:}
+    unsupported_fn=${unsupported_rest%%:*}
+    unsupported_text=${unsupported_rest#*:}
+    UNCHECKED_CONSUMERS+=("$f:$unsupported_line unsupported call-site form for $unsupported_fn: $unsupported_text")
     UNCHECKED_FILES+=("$f")
   else
     VALIDATED_SCANNABLE+=("$f")

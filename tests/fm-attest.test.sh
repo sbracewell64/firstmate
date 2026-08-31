@@ -24,6 +24,11 @@ TMP_ROOT=$(fm_test_tmproot fm-attest)
 ATTEST="$ROOT/bin/fm-attest.sh"
 WORKFLOW="$ROOT/.github/workflows/no-mistakes-required.yml"
 NOTES_REF=refs/notes/no-mistakes
+FM_ATTEST_TEST_HOME="$TMP_ROOT/home"
+mkdir -p "$FM_ATTEST_TEST_HOME/config" "$FM_ATTEST_TEST_HOME/data"
+export FM_HOME="$FM_ATTEST_TEST_HOME"
+export FM_CONFIG_OVERRIDE="$FM_ATTEST_TEST_HOME/config"
+export FM_DATA_OVERRIDE="$FM_ATTEST_TEST_HOME/data"
 
 # A repository with one commit and no attestation ref.
 new_repo() {
@@ -425,8 +430,11 @@ write_out() {
 # recheck section owns that step, and one case there proves write still performs
 # it by default, so switching it off here cannot hide it going missing.
 publish_out() {
-  local repo=$1
-  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" "$ATTEST" write --no-recheck 2>&1 )
+  local repo=$1 home=$1/fm-home
+  mkdir -p "$home/config" "$home/data" || return 1
+  ( cd "$repo" && PATH="$repo/stub/bin:$PATH" \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
+    "$ATTEST" write --no-recheck 2>&1 )
 }
 
 test_write_refuses_a_run_head_absent_from_this_checkout() {
@@ -763,6 +771,122 @@ test_write_publishes_a_first_attestation_to_a_push_target_with_no_ref() {
   published=$(git -C "$fork" ls-tree -r --name-only "$NOTES_REF" | tr -d '/')
   assert_contains "$published" "$head" "the first attestation never reached the push target"
   pass "fm-attest.sh: a push target with no attestation ref yet still receives the note"
+}
+
+# --- the publication guard, reached through this real path --------------------
+#
+# bin/fm-publication-seam-lib.sh decides whether a publication may happen, and
+# these two cases are the only evidence that THIS command reaches that decision
+# rather than pushing beside it. They are a pair on one perturbation: the same
+# fixture publishes when the home declares no publication governance and refuses
+# when it declares governance this push target cannot be placed under.
+#
+# The refusal is asserted from the push target's own state, not from an exit
+# code, because a command that refused everything would produce the same code.
+
+publish_out_home() {  # <repo> <home>
+  ( cd "$1" && PATH="$1/stub/bin:$PATH" \
+    FM_HOME="$2" FM_CONFIG_OVERRIDE="$2/config" FM_DATA_OVERRIDE="$2/data" \
+    "$ATTEST" write --no-recheck 2>&1 )
+}
+
+test_write_publishes_ungoverned_and_says_so() {
+  local repo fork home head out rc
+  repo="$TMP_ROOT/write-ungoverned"
+  fork="$TMP_ROOT/write-ungoverned-fork.git"
+  home="$TMP_ROOT/write-ungoverned-home"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  mkdir -p "$home/config" "$home/data"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(publish_out_home "$repo" "$home")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "an ungoverned publication was refused: $out"
+  # REPORTED, not silent. The failure this replaces is a home that looks
+  # authorised because nothing spoke.
+  assert_contains "$out" "ungoverned" \
+    "an ungoverned publication did not say that it was ungoverned: $out"
+  assert_contains "$(git -C "$fork" ls-tree -r --name-only "$NOTES_REF" | tr -d '/')" "$head" \
+    "the ungoverned publication never reached the push target"
+  pass "fm-attest.sh: an ungoverned publication proceeds and reports that it was ungoverned"
+}
+
+test_write_refuses_to_publish_when_governance_cannot_be_established() {
+  local repo fork home head out rc
+  repo="$TMP_ROOT/write-governed"
+  fork="$TMP_ROOT/write-governed-fork.git"
+  home="$TMP_ROOT/write-governed-home"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  mkdir -p "$home/config" "$home/data"
+  # THE ONE PERTURBATION: this home has opted into publication governance, and
+  # the policy does not name this push target. Once governance is declared, a
+  # target nobody can place is could-not-observe rather than a way around it.
+  printf '{"generation":"pol-1","venues":{"github.com/declared/elsewhere":{}}}\n' \
+    > "$home/config/publication-identity.json"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(publish_out_home "$repo" "$home")
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "a publication that could not be placed under this home's governance was published: $out"
+  assert_contains "$out" "attestation-not-published" \
+    "the refusal was not reported as a publication that did not happen: $out"
+  # THE PUSH TARGET'S OWN STATE, which is the only thing that settles it.
+  git -C "$fork" rev-parse --verify --quiet "$NOTES_REF" >/dev/null 2>&1 \
+    && fail "the push target received $NOTES_REF although the publication was refused"
+  pass "fm-attest.sh: a publication this home's governance cannot place is refused, and the push target is unchanged"
+}
+
+test_write_publishes_attestation_evidence_to_a_governed_venue() {
+  local repo fork home head out rc
+  repo="$TMP_ROOT/write-governed-attestation"
+  fork="$TMP_ROOT/write-governed-attestation-fork.git"
+  home="$TMP_ROOT/write-governed-attestation-home"
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  mkdir -p "$home/config" "$home/data"
+  printf '{"generation":"pol-1","venues":{"-":{}}}\n' \
+    > "$home/config/publication-identity.json"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(publish_out_home "$repo" "$home")
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "governed attestation evidence was refused: $out"
+  assert_contains "$out" "under a spent publication authority" \
+    "governed attestation evidence did not report its authority: $out"
+  assert_contains "$(git -C "$fork" ls-tree -r --name-only "$NOTES_REF" | tr -d '/')" "$head" \
+    "governed attestation evidence never reached the trusted target"
+  pass "fm-attest.sh: governed attestation evidence publishes through an exact one-use authority"
+}
+
+test_write_refuses_an_unintended_attestation_evidence_ref() {
+  local repo fork home head out rc unintended
+  repo="$TMP_ROOT/write-governed-unintended"
+  fork="$TMP_ROOT/write-governed-unintended-fork.git"
+  home="$TMP_ROOT/write-governed-unintended-home"
+  unintended=refs/notes/unintended
+  new_repo "$repo"
+  head=$(git -C "$repo" rev-parse HEAD)
+  git init -q --bare "$fork"
+  git -C "$repo" remote add origin "$fork"
+  mkdir -p "$home/config" "$home/data"
+  printf '{"generation":"pol-1","venues":{"-":{}}}\n' \
+    > "$home/config/publication-identity.json"
+  install_pipeline_stub "$repo/stub" "$(run_status_toon fm/demo "${head:0:8}" completed)"
+  out=$(cd "$repo" && PATH="$repo/stub/bin:$PATH" \
+    FM_HOME="$home" FM_CONFIG_OVERRIDE="$home/config" FM_DATA_OVERRIDE="$home/data" \
+    "$ATTEST" write --no-recheck --notes-ref "$unintended" 2>&1)
+  rc=$?
+  [ "$rc" -ne 0 ] || fail "an unintended attestation evidence ref was published: $out"
+  assert_contains "$out" 'FM_PUB_EFFECT_CLASS_MISMATCH' \
+    "the unintended ref refusal did not identify the effect mismatch: $out"
+  git -C "$fork" rev-parse --verify --quiet "$unintended" >/dev/null 2>&1 \
+    && fail "the unintended attestation evidence ref reached the remote"
+  pass "fm-attest.sh: attestation evidence cannot publish an unintended ref"
 }
 
 test_write_reports_the_rejection_reason_with_credentials_redacted() {
@@ -3024,6 +3148,10 @@ test_write_reports_a_record_with_no_head_as_a_record_fault
 test_write_attests_on_a_host_with_no_timeout_utility
 test_write_publishes_to_the_push_target_it_reconciled_against
 test_write_reports_the_rejection_reason_with_credentials_redacted
+test_write_publishes_ungoverned_and_says_so
+test_write_refuses_to_publish_when_governance_cannot_be_established
+test_write_publishes_attestation_evidence_to_a_governed_venue
+test_write_refuses_an_unintended_attestation_evidence_ref
 test_write_publishes_a_first_attestation_to_a_push_target_with_no_ref
 test_write_refuses_an_unreadable_push_target_without_leaking_credentials
 test_write_emits_only_positively_safe_urls

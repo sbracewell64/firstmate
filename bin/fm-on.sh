@@ -17,6 +17,13 @@
 # transport or unknown remote completion and must be reconciled by the semantic
 # caller, never blindly repeated by this layer.
 #
+# Exit 75 with a "no execution verdict" diagnostic on stderr is the remote
+# entrypoint's own classification: the request never reached the boundary that
+# runs the command, so no exit status of that command exists. Read the
+# diagnostic rather than the status alone, because a command that genuinely
+# exits 75 is indistinguishable from it otherwise; bin/fm-remote-job-lib.sh
+# owns the outcome vocabulary.
+#
 # The SSH alias keeps normal public-key and strict host-key policy in ~/.ssh.
 # This command explicitly disables agent forwarding, forwarding setup, and
 # configured SendEnv patterns. The remote entrypoint executes the selected
@@ -42,7 +49,7 @@ PROTOCOL=1
 . "$SCRIPT_DIR/fm-secondmate-registry-lib.sh"
 
 die() { printf 'error: %s\n' "$1" >&2; exit 1; }
-usage() { sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
+usage() { sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'; exit 2; }
 
 encode_base64() {
   base64 | tr -d '\n'

@@ -108,13 +108,14 @@
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints -
 # including which repositories are inside the declared governed landing domain -
-# and bin/fm-landing-authorization.sh owns the authority itself. What this file adds
-# is that the merge command RUNS INSIDE the spend when one governs, so an
-# applicable pull request cannot reach `gh-axi pr merge` without consuming a
-# valid, head-bound, one-use authorization. A pull request proven outside the
-# declared governed domain lands through exactly the gates above and says so
-# with a reported not-applicable observation, because silence is
-# indistinguishable from authorisation.
+# and bin/fm-landing-authorization.sh owns the authority itself, while
+# bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
+# What this file adds is that the merge command RUNS INSIDE the spend when one
+# governs, so an applicable pull request cannot reach `gh-axi pr merge` without
+# consuming a valid, head-bound, one-use authorization. A pull request proven
+# outside the declared governed domain lands through exactly the gates above and
+# says so with a reported not-applicable observation, because a silent ungoverned
+# landing is indistinguishable from an authorised one.
 #
 # One vocabulary constraint applies to THIS FILE ONLY, and it is not a style
 # preference. A source grep in tests/fm-pr-check-security.test.sh pins a
@@ -230,6 +231,33 @@ caller_has_merge_method() {
   done
   return 1
 }
+
+# What a governed landing's effect plan can carry, read out of the extra merge
+# arguments. Anything left in UNPLANNED_ARGS is an argument no effect plan can
+# express, which a governed landing refuses and an ungoverned one still passes
+# through exactly as before.
+MERGE_METHOD=squash
+DELETE_BRANCH=0
+UNPLANNED_ARGS=()
+classify_merge_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --squash) MERGE_METHOD=squash ;;
+      --merge) MERGE_METHOD=merge ;;
+      --rebase) MERGE_METHOD=rebase ;;
+      --method)
+        shift
+        MERGE_METHOD=${1:-}
+        [ "$#" -gt 0 ] || break
+        ;;
+      --method=*) MERGE_METHOD=${1#--method=} ;;
+      --delete-branch) DELETE_BRANCH=1 ;;
+      *) UNPLANNED_ARGS+=("$1") ;;
+    esac
+    shift
+  done
+}
+classify_merge_args "$@"
 
 reject_repo_overrides() {
   local arg
@@ -571,6 +599,7 @@ LANDING_AUTH_ID=
 LANDING_AUTHORIZATION=
 resolve_landing_authority() {  # <head>
   local head=$1
+  local plan=()
   # The repository this merge would write, taken from the pull request's own
   # parsed identity rather than from anything the caller supplies separately, so
   # the domain is asked about the repository the merge command actually addresses.
@@ -591,7 +620,24 @@ resolve_landing_authority() {  # <head>
         "$head" "$FM_LANDING_SEAM_VERDICT" >&2
       return 1 ;;
   esac
-  if ! fm_landing_seam_mint "$SCRIPT_DIR/fm-landing-authorization.sh" "$FM_LANDING_SEAM_REQUEST"; then
+  # An argument the effect plan cannot carry would be a mechanism input outside
+  # the authority, so the governed landing stops here rather than performing an
+  # act the authorization does not describe.
+  if [ "${#UNPLANNED_ARGS[@]}" -gt 0 ]; then
+    printf 'error: refusing to merge head %s: a Browser Sol ruling governs this landing, and %s is not an argument its landing authority can bind; a governed merge carries only the merge method and --delete-branch\n' \
+      "$head" "${UNPLANNED_ARGS[0]}" >&2
+    return 1
+  fi
+  # The plan the authority is asked to bind. Repository, number, and head are
+  # asserted rather than supplied: bin/fm-landing-authorization.sh derives each of
+  # them from the ruling's own record and refuses an assertion that disagrees.
+  plan=(--effect pr-merge --method "$MERGE_METHOD"
+    --assert-repo "$PR_OWNER/$PR_REPO" --assert-pr "$PR_NUMBER" --assert-head "$head")
+  if [ "$DELETE_BRANCH" = 1 ]; then
+    plan+=(--delete-branch)
+  fi
+  if ! fm_landing_seam_mint "$SCRIPT_DIR/fm-landing-authorization.sh" \
+    "$FM_LANDING_SEAM_REQUEST" "${plan[@]}"; then
     printf 'error: refusing to merge head %s: %s: %s\n' \
       "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
     return 1
@@ -712,10 +758,16 @@ if ! caller_has_merge_method "$@"; then
   merge_args=(--squash)
 fi
 
-# The merge command is built once and performed by exactly one of the two paths
-# below, so the argv a governed landing performs is byte-identical to the argv an
-# ungoverned one performs. A governed landing reaches it only from inside the
-# spend: there is no branch here that lands a governed pull request without one.
+# An UNGOVERNED merge is performed here, exactly as it always was: the caller's
+# extra arguments pass through and this gate's own guards above are what stood in
+# front of it.
+#
+# A GOVERNED merge is not performed here at all. The authority performs the act
+# its own effect plan names, and what this gate passes is the act it BELIEVES it
+# authorised - an assertion the authority compares element by element and refuses
+# on any difference, before any mutation. That is the difference between a gate
+# that runs a command under an authorization and one whose command the
+# authorization defines.
 # fm-retrieval-audit: write - the merge itself, which is an action and has no observation type
 merge_command=(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "${merge_args[@]+"${merge_args[@]}"}" "$@")
 
@@ -724,12 +776,17 @@ case "$LANDING_AUTHORIZATION" in
     "${merge_command[@]}"
     ;;
   fm-auth-*)
+    # fm-retrieval-audit: not-a-read - this constructs the redundant act assertion and does not invoke the forge command.
+    asserted_act=(gh-axi pr merge "$PR_NUMBER" --repo "$PR_OWNER/$PR_REPO" "--$MERGE_METHOD")
+    if [ "$DELETE_BRANCH" = 1 ]; then
+      asserted_act+=(--delete-branch)
+    fi
     LANDING_RECEIPT=$(mktemp "${TMPDIR:-/tmp}/fm-landing-act.XXXXXX") || {
       echo "error: refusing to merge: the landing act receipt could not be created" >&2
       exit 1
     }
     fm_landing_seam_spend "$SCRIPT_DIR/fm-landing-authorization.sh" \
-      "$LANDING_AUTH_ID" "$LANDING_HEAD" "$LANDING_RECEIPT" "${merge_command[@]}" || {
+      "$LANDING_AUTH_ID" "$LANDING_HEAD" "$LANDING_RECEIPT" "${asserted_act[@]}" || {
       printf 'error: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
       exit 1
     }
