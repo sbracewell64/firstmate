@@ -1162,10 +1162,18 @@ fm_pub_seam_resolve() {  # <record-dir> <auth-dir> <config-dir> <repo-dir> <item
 
   # Live governance with no venue to resolve it against is a contradiction in
   # this home's own configuration, not an answer about this candidate.
-  if [ "$FM_PUB_SEAM_LIVE" -gt 0 ] && ! fm_landing_seam_venue_configured "$config"; then
-    fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_VENUE_UNCONFIGURED" \
-      "$FM_PUB_SEAM_LIVE live Browser Sol request(s) hold $item while no control venue is configured in this home, so whether their rulings apply could not be observed"
-    return $?
+  if [ "$FM_PUB_SEAM_LIVE" -gt 0 ]; then
+    fm_landing_seam_venue_configured "$config" || true
+    if [ "$FM_LANDING_SEAM_VENUE_STATE" = invalid ]; then
+      fm_pub_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_VENUE_INVALID" \
+        "config/sol-control.json is present but unreadable, malformed, or incomplete, so the Browser Sol control venue could not be observed"
+      return $?
+    fi
+    if [ "$FM_LANDING_SEAM_VENUE_STATE" = absent ]; then
+      fm_pub_seam_set unobserved "$FM_PUB_SEAM_TOKEN_VENUE_UNCONFIGURED" \
+        "$FM_PUB_SEAM_LIVE live Browser Sol request(s) hold $item while no control venue is configured in this home, so whether their rulings apply could not be observed"
+      return $?
+    fi
   fi
   # EVERY LIVE REQUEST THAT IS NOT ITSELF THE APPROVAL IS A HOLD. Asking only
   # whether ANY approval exists let one approving ruling cover for every other
