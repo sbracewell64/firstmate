@@ -1193,6 +1193,7 @@ cmd_reconcile() {
 
 cmd_retire() {
   local id=${1:-}; shift || true
+  local claim_rc
   local reason='' now record state
   [ -n "$id" ] || die "retire requires an authorization id"
   while [ $# -gt 0 ]; do
@@ -1203,8 +1204,15 @@ cmd_retire() {
   done
   [ -n "$reason" ] || die "retire requires --reason naming why this authority must never be spent"
 
-  claim_acquire "$id" serial \
-    || refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim"
+  # Three-valued, like every other claim outcome here: a claim this process could
+  # not take is only "another operation holds it" when the holder was OBSERVED.
+  claim_acquire "$id" serial; claim_rc=$?
+  case $claim_rc in
+    0) ;;
+    1) refuse FM_PUB_IN_FLIGHT "another operation on $id holds the claim" ;;
+    *) cno FM_PUB_CLAIM_OWNER_UNOBSERVED \
+         "the claim on $id was neither taken nor ruled out, so what retiring it would interrupt could not be established: $FM_AUTH_CLAIM_DEFECT" ;;
+  esac
   auth_read "$id" || case $? in
     3) refuse FM_PUB_NO_AUTHORIZATION "no publication authority $id exists to retire" ;;
     *) cno "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "publication authority $id could not be read, so what retiring it would discard could not be established" ;;

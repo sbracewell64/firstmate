@@ -506,6 +506,89 @@ FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 Re-run the red calibration - not just the green suite - after any change to the plan vocabulary, the act construction, the assertion comparison, or the effect-time re-observation.
 Those are the four places where this control can go quietly vacuous while staying green: a plan that stops covering a mutation-significant field, an act rebuilt from something other than the plan, an assertion that stops comparing, and a freshness check that stops looking.
 
+## Predicate silence and the three-valued claim
+
+Added 2026-08-31, after trunk went red on `Behavior portable serial 3` at `6dde2417`.
+
+### What the reported failure actually was
+
+```
+not ok - nonvacuity: fresh authorization reported '/home/runner/work/firstmate/firstmate/bin/fm-landing-authorization-lib.sh: line 687: printf: write error: Broken pipe
+granted', not granted
+```
+
+The authorization was correct: `granted` is what the mechanism said, and the mint and spend path did exactly what it should have.
+What failed was a PREDICATE, and it failed by writing.
+
+`fm_auth_plan_member_of` was `printf '%s\n' "$set" | grep -qxF "$candidate"`.
+`grep -q` closes the pipe the moment it matches, by design, so whenever the writer had not finished, its next write got `EPIPE`.
+A CI runner starts its steps with SIGPIPE **ignored**, so the writer did not die quietly on the signal - bash reported the failed write on stderr.
+The caller was reading the command's combined output, so a predicate's diagnostic became part of the answer and an exact comparison saw the two as one string.
+
+That the environment matters here is not a guess: with SIGPIPE at its default the same broken pipe kills the writer and prints nothing, and only with SIGPIPE ignored does `printf: write error: Broken pipe` appear.
+The same class was hit independently in the same lane by `bin/fm-test-run.sh: line 403: printf: write error: Broken pipe`, which is outside this owner and is not repaired here.
+
+Nine other predicates in `bin/fm-landing-authorization-lib.sh` had the identical shape, so repairing line 687 alone would have left the same red available from a different line.
+All ten were converted: eight to a here-string, where bash holds the whole input before the reader exists, and the two membership tests to `fm_auth_set_member`, which needs no process at all.
+A here-string is not equivalent for the membership pair - their input already ended in a newline, so a here-string would add an empty trailing line and an EMPTY candidate would begin matching it.
+
+### What could not be observed
+
+The exact scheduling that made the reader's end close before a 28-byte write completed was NOT reproduced.
+37 local runs of the suite, pinned to two CPUs to imitate the runner, produced neither reported shape.
+The CI logs are the evidence for the trigger; the local runs establish only that the trigger is rarer than 37 runs here, which is why the repair is aimed at the class rather than at a timing window.
+
+### The second defect: a refusal that named the wrong thing
+
+`claim_acquire` returned a single failure code for two unlike outcomes: another operation holds the claim, and this process could not read what it needs in order to hold the claim safely.
+Both callers reported the pair as `FM_AUTH_SPEND_IN_FLIGHT`.
+Observed at `6dde2417`, with one lone mint, no competitor, and no store on disk at all:
+
+```
+FM_AUTH_SPEND_IN_FLIGHT: another operation on fm-auth-6a9623614becc36754ec67000efcb1eb holds the claim
+```
+
+Nothing held the claim.
+Two racers hitting that at once produce two confident, false refusals and no authorization, which is what `concurrent-mint: neither mint produced an authorization` looked like from outside on 2026-08-30.
+The `ps` call it depended on was also unable to report its own failure: `ps -o pgid= -p "$pid" | tr -d '[:space:]'` reports `tr`'s status, so a failed `ps` was read as "my process group is the empty string".
+The process group is now read from `/proc` with no subprocess at all where that is available, which removes the fork from the path most likely to fail on a starved runner, and the `ps` fallback no longer hides its own exit status.
+
+### Red calibration
+
+Date: 2026-08-31.
+Command shape: `git archive 6dde2417 | tar -x -C <scratch>`, copy in only the new test file, run the case.
+
+| # | Control | Observed at `6dde2417` |
+| - | ------- | ---------------------- |
+| 31 | a predicate answers without writing anything | `not ok - predicate-silence: a predicate wrote to stdout or stderr:` followed by the `printf: write error: Broken pipe` lines |
+| 32 | an unobservable process group is not another holder | `not ok - claim-unobservable: an unreadable process group was reported as another operation holding the claim: FM_AUTH_SPEND_IN_FLIGHT: another operation on fm-auth-31888c493a78706f8b1cf3729e85889b holds the claim` |
+| 33 | racing mints grant one authorization | GREEN at `6dde2417` - see below |
+
+Case 31 carries its own negative control inside the test: it first runs the retired piped shape under the same conditions and requires it to emit, so a silent library is distinguishable from a probe that never ran.
+
+Case 33 does **not** go red on the reported code, and it is recorded that way rather than presented as a reproduction.
+With the process group observable, the race already held; the zero-winner shape needed the condition case 32 now pins.
+It was kept because the law had no N-way statement anywhere, and it was watched failing under one injected defect - a claim nobody can ever hold:
+
+```
+not ok - racing-mints: six racing mints granted no authorization at all
+```
+
+### What this repair does NOT cover
+
+`bin/fm-publication-guard.sh` consumes the same `claim_acquire`, and its `retire` path was flattening the new distinction back into `FM_PUB_IN_FLIGHT`; that one call site now reports a claim it could not observe as `FM_PUB_CLAIM_OWNER_UNOBSERVED`.
+Its `spend` and `reconcile` paths already degraded to `cno` and were left alone.
+`publication_claim_reclaim_dead` still sets `CLAIM_OWNER_STATE=raced` for any failure to re-acquire, so a could-not-observe inside that reclaim can still surface as an in-flight refusal.
+That is unchanged from `6dde2417` rather than introduced here, it is the same class as the defect above, and it is recorded as remaining rather than described as clean.
+
+`bin/fm-test-run.sh` line 403 emitted the identical broken-pipe diagnostic in the same CI lane.
+It is outside this owner and is not repaired here.
+
+### Refreshing this record
+
+Re-run the red calibration after any change to the predicates in this library, to `claim_acquire`, or to how either caller reports a claim it did not get.
+A predicate that becomes a writer again, and a claim outcome that collapses back into one code, are both changes that keep the suite green while removing what these three cases exist to hold.
+
 ## The restart window, stated precisely
 
 The spend writes its intent before the act and its outcome after, so a process killed between them leaves a durable record that says a spend began and does not say how it ended.
