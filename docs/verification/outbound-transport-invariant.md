@@ -260,8 +260,9 @@ The landing it performs is real and moves a branch, because an authorization tha
 It moves a branch in a throwaway repository the script creates and deletes, on a ref no protection applies to, so a real mutation is observed without manufacturing one against protected work.
 Nothing in the run touches the operational home, a registered project, or a remote; the pull-request reference the fixture carries is answered by the forge shim and is never contacted.
 
-The focused suites were run on 2026-08-30 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1, each exiting 0: `tests/fm-outbound-artifact.test.sh` executed 107 cases, and `tests/fm-landing-authorization.test.sh`, `tests/fm-dead-predicate-check.test.sh`, `tests/fm-wrong-subject.test.sh` and `tests/fm-bootstrap.test.sh` executed 32, 36, 13 and 39 cases respectively, all with zero failures.
-The suite grew from 101 cases to 107: six controls were added, and one existing control was repaired rather than rewritten after typed effect plans made `mint` require an `--effect`, which had been refusing the `HOLD` case one step before the verdict it exists to classify.
+The focused suites were run on 2026-08-30 on Linux 6.18.33.2-microsoft-standard-WSL2 with jq 1.8.1, each exiting 0: `tests/fm-landing-authorization.test.sh`, `tests/fm-dead-predicate-check.test.sh`, `tests/fm-wrong-subject.test.sh` and `tests/fm-bootstrap.test.sh` executed 32, 36, 13 and 39 cases respectively, all with zero failures.
+`tests/fm-outbound-artifact.test.sh` was re-run on 2026-08-31 after the isolation and revised-record preservation controls landed; its 108 cases exited 0 with zero failures.
+The suite grew from 101 cases to 108: seven controls were added, and one existing control was repaired rather than rewritten after typed effect plans made `mint` require an `--effect`, which had been refusing the `HOLD` case one step before the verdict it exists to classify.
 
 The seam proof was run on the same date and host, twice, both exiting 0:
 
