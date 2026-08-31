@@ -374,6 +374,35 @@ dispatch value validate_one'
   pass "a mark naming a bare pass-by-name dispatch site counts as consulted"
 }
 
+test_arbitrary_command_arguments_are_refused_and_dead() {
+  local command dir out rc
+  for command in 'grep dead_one FILE' 'cp dead_one target' 'logger dead_one'; do
+    dir=$(fixture "mark-argument-${command%% *}" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "# indirect-call: dead_one bin/plain-consumer.sh:3
+$command"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "$command was accepted as dispatch, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "$command was not refused by name: $out"
+    printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "$command kept the predicate alive: $out"
+  done
+  pass "arguments to non-dispatching commands cannot manufacture call evidence"
+}
+
+test_data_mark_does_not_suppress_another_unsupported_use() {
+  local dir out rc
+  dir=$(fixture mark-data-and-unsupported 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+grep dead_one FILE
+unknown_consumer --callback dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "the refused mark did not retain exit 3, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'CNO.*dead_one' || fail "the separate unsupported use did not yield CNO: $out"
+  printf '%s' "$out" | grep -q 'unsupported call-site form for dead_one.*unknown_consumer' \
+    || fail "the separate observation gap was not named: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' && fail "the observation gap collapsed to DEAD: $out"
+  pass "a refused data mark suppresses only its exact classified source line"
+}
+
 test_assignment_site_is_refused_and_dead() {
   local dir out rc
   dir=$(fixture mark-assignment 'dead_one() { return 0; }')
@@ -768,6 +797,8 @@ test_mark_site_that_is_the_definition_is_refused
 test_mark_site_inside_a_multiline_string_is_refused
 test_mark_site_handing_the_name_to_an_output_command_is_refused
 test_mark_naming_a_bare_pass_by_name_dispatch_counts
+test_arbitrary_command_arguments_are_refused_and_dead
+test_data_mark_does_not_suppress_another_unsupported_use
 test_assignment_site_is_refused_and_dead
 test_comparison_site_is_refused_and_dead
 test_trap_trailing_comment_site_is_refused_and_dead

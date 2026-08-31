@@ -54,9 +54,10 @@
 #     When a consumer becomes unreadable the repair is the construct that made it
 #     unreadable, never a mark that hides the gap.
 #   - BARE DISPATCH. The function begins a command after indentation and optional
-#     shell control words, begins a command substitution, begins a canonical
-#     one-line function body, or is a bare argument to a command that can dispatch
-#     it by name. Assignments, test expressions, and output commands are data.
+#     shell control words, begins a command substitution, or begins a canonical
+#     one-line function body. A bare argument counts only when the named callee's
+#     own canonical definition binds that argument to a command-head parameter.
+#     Assignments, test expressions, output commands, and other arguments are data.
 #   - HANDLER DISPATCH. The function is the quoted handler operand of `trap`.
 #
 # Everything else is REFUSED and named: a mark with no site, an unparseable or
@@ -403,10 +404,43 @@ site_file_parseable() {  # <path-as-written>
   return 1
 }
 
+pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
+  local f=$1 raw=$2 fn=$3 callee arg_index=0 i def_line end_line body param_var
+  local -a words=()
+  read -r -a words <<<"$raw"
+  [ "${#words[@]}" -gt 1 ] || return 1
+  callee=${words[0]}
+  case $callee in
+    ''|[0-9]*|*[!A-Za-z0-9_]*) return 1 ;;
+  esac
+  for ((i = 1; i < ${#words[@]}; i++)); do
+    [ "${words[$i]}" = "$fn" ] || continue
+    arg_index=$i
+    break
+  done
+  [ "$arg_index" -gt 0 ] || return 1
+  def_line=$(grep -nE "^${callee}\\(\\)[[:space:]]*\\{" "$f" | sed -n '1{s/:.*//;p;}')
+  [ -n "$def_line" ] || return 1
+  end_line=$(awk -v start="$def_line" 'NR > start && /^}/ { print NR; exit }' "$f")
+  if [ -z "$end_line" ]; then
+    body=$(sed -n "${def_line}p" "$f")
+  else
+    body=$(sed -n "${def_line},${end_line}p" "$f")
+  fi
+  printf '%s\n' "$body" | grep -Eq "(^|\\{)[[:space:]]*(![[:space:]]*)?\\\"?\\\\?\\\$${arg_index}\\\"?([^A-Za-z0-9_]|$)" \
+    && return 0
+  param_var=$(printf '%s\n' "$body" \
+    | sed -nE "s/.*[[:space:]]([A-Za-z_][A-Za-z0-9_]*)=\\\\?\\\$\\{${arg_index}:-[^}]*\\}.*/\\1/p" \
+    | sed -n '1p')
+  [ -n "$param_var" ] || return 1
+  printf '%s\n' "$body" \
+    | grep -Eq "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?\\\"\\\\?\\\$${param_var}\\\"([^A-Za-z0-9_]|$)"
+}
+
 # Why a mark's site does not establish the call. Prints the reason and returns 1
 # when the site cannot carry the mark, and returns 0 silently when it does.
 mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
-  local fn=$1 site=$2 resolved=$3 lineno total raw stripped reason
+  local fn=$1 site=$2 resolved=$3 lineno total raw stripped reason pass_by_name=0
   [ -n "$site" ] || { printf 'names no <file>:<line> dispatch site\n'; return 1; }
   case $site in
     *:*) ;;
@@ -429,6 +463,7 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
   fi
   raw=$(sed -n "${lineno}p" "$resolved")
   stripped=$(strip_cached "$resolved" | sed -n "${lineno}p")
+  pass_by_name_dispatches "$resolved" "$raw" "$fn" && pass_by_name=1
   # The two readings answer different halves of the question and neither is
   # sufficient alone. The STRIPPED line is the file-context truth about what the
   # shell executes there, so it is what a bare dispatch must survive; reading the
@@ -436,7 +471,7 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
   # The RAW line is the only place a quoted handler's text still exists, so it is
   # what a handler dispatch is read from, and the dispatcher word that makes that
   # text executable is required OUTSIDE the quotes.
-  reason=$(FM_SITE_RAW=$raw FM_SITE_STRIPPED=$stripped awk -v fn="$fn" '
+  reason=$(FM_SITE_RAW=$raw FM_SITE_STRIPPED=$stripped awk -v fn="$fn" -v pass_by_name="$pass_by_name" '
     BEGIN {
       raw = ENVIRON["FM_SITE_RAW"]
       stripped = ENVIRON["FM_SITE_STRIPPED"]
@@ -459,8 +494,12 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
           print "hands " fn " to an output command, which is opaque data and never call evidence"
         else if (stripped ~ /^[[:space:]]*(test|\[)([[:space:]]|$)/)
           print "places " fn " in data, not in an executable dispatch position"
-        else
+        else if (stripped ~ /^[[:space:]]*(grep|cp|logger)([[:space:]]|$)/)
+          print "hands " fn " to a non-dispatching command"
+        else if (pass_by_name)
           exit
+        else
+          print "hands " fn " to a callee with no proven command-head dispatch for that argument"
         exit
       }
       if (raw ~ ("^[[:space:]]*trap[[:space:]]+\\047" fn "\\047[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
@@ -503,12 +542,12 @@ collect_marks() {
       resolved=$(site_file_parseable "$path") || resolved=''
       if reason=$(mark_site_refusal "$fn" "${site:-}" "$resolved"); then
         MARK_VERIFIED+=("$fn")
-        MARK_VERIFIED_SITE+=("$fn|$resolved")
+        MARK_VERIFIED_SITE+=("$fn|$resolved|${site##*:}")
       else
         REFUSED_MARKS+=("$f"$'\t'"$lineno"$'\t'"$fn"$'\t'"${site:-}"$'\t'"$reason")
         case $reason in
-          *'opaque data'*|*'places '*"$fn"*' in data'*)
-            [ -z "$resolved" ] || MARK_CLASSIFIED_DATA_SITE+=("$fn|$resolved")
+          *'opaque data'*|*'places '*"$fn"*' in data'*|*'non-dispatching command'*)
+            [ -z "$resolved" ] || MARK_CLASSIFIED_DATA_SITE+=("$fn|$resolved|${site##*:}")
             ;;
         esac
       fi
@@ -532,20 +571,21 @@ mark_verified() {  # <function>
   return 1
 }
 
-mark_verified_in_file() {  # <function> <file>
-  local key="$1|$2" entry
-  for entry in "${MARK_VERIFIED_SITE[@]:-}"; do
-    [ "$entry" = "$key" ] && return 0
+mark_observed_lines() {  # <function> <file>
+  local prefix="$1|$2|" entry
+  for entry in "${MARK_VERIFIED_SITE[@]:-}" "${MARK_CLASSIFIED_DATA_SITE[@]:-}"; do
+    case $entry in
+      "$prefix"*) printf '%s ' "${entry##*|}" ;;
+    esac
   done
-  return 1
 }
 
-mark_classified_data_in_file() {  # <function> <file>
-  local key="$1|$2" entry
-  for entry in "${MARK_CLASSIFIED_DATA_SITE[@]:-}"; do
-    [ "$entry" = "$key" ] && return 0
-  done
-  return 1
+proven_pass_by_name_lines() {  # <function> <file>
+  local fn=$1 f=$2 lineno raw
+  while IFS=: read -r lineno raw; do
+    [ -n "$lineno" ] || continue
+    pass_by_name_dispatches "$f" "$raw" "$fn" && printf '%s ' "$lineno"
+  done < <(grep -nF "$fn" "$f")
 }
 
 # Every shell file a call site could live in. The scan is REPO-WIDE because the
@@ -623,15 +663,15 @@ for f in "${PARSEABLE[@]}"; do
     # suppression follows the site rather than the comment: a mark that names no
     # dispatch here suppresses nothing, and the file goes unchecked as it would
     # have with no mark at all.
-    mark_verified_in_file "$fn" "$f" && continue
-    mark_classified_data_in_file "$fn" "$f" && continue
-    unsupported=$(strip_cached "$f" | awk -v fn="$fn" '
+    observed_lines="$(mark_observed_lines "$fn" "$f")$(proven_pass_by_name_lines "$fn" "$f")"
+    unsupported=$(strip_cached "$f" | awk -v fn="$fn" -v observed_lines="$observed_lines" '
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
       # narrowing of the accepted syntax, and it is what makes a repo-wide run
       # cheap enough to sit on the automatic check path.
       index($0, fn) == 0 { next }
+      index(" " observed_lines, " " NR " ") { next }
       $0 ~ "^[[:space:]]*#" { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
       $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }
