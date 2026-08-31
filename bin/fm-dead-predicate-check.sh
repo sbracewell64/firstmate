@@ -186,6 +186,7 @@ function_has_call_site() {  # <function>
   mark_verified "$fn" && return 0
   for f in "${SCANNABLE[@]}"; do
     if strip_cached "$f" | awk -v fn="$fn" '
+      BEGIN { term = "([[:space:];|&(){}<>]|$)" }
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
@@ -193,27 +194,27 @@ function_has_call_site() {  # <function>
       # cheap enough to sit on the automatic check path.
       index($0, fn) == 0 { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
-      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn term) { found = 1 }
+      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("\\$\\(" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn term) { found = 1 }
+      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn term) { found = 1 }
       # A CONTINUATION LINE that opens with || or && , optionally negated. This is
       # a genuine call site and a common idiom - measured at 65 occurrences across
       # bin/ - so its absence was the whitelist being under-specified rather than
       # the code being unusual. Added on that measurement, NOT to make a file pass:
       # widening an accepted-syntax list to silence a refusal is shaping a control
       # around its own answer, which is the failure this whitelist exists to avoid.
-      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
-      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { found = 1 }
+      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn term) { found = 1 }
+      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn term) { found = 1 }
       END { exit(found ? 0 : 1) }
     '; then
       return 0
@@ -267,6 +268,13 @@ strip_quoted() {  # <file>; FM_STRIP_EMIT_COMMENTS=1 emits only real comments
             mode = "sub"
             out = out "$("
             i++
+            continue
+          }
+          if (c == "$" && nextc ~ /[A-Za-z_0-9]/) {
+            out = out c
+            for (j = i + 1; j <= n && substr($0, j, 1) ~ /[A-Za-z_0-9]/; j++)
+              out = out substr($0, j, 1)
+            i = j - 1
             continue
           }
           if (c == "`") saw_backtick = 1
@@ -405,7 +413,7 @@ site_file_parseable() {  # <path-as-written>
 }
 
 pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
-  local f=$1 raw=$2 fn=$3 callee arg_index=0 i def_line end_line body param_var
+  local f=$1 raw=$2 fn=$3 callee arg_index=0 i def_line end_line body param_var executable
   local -a words=()
   read -r -a words <<<"$raw"
   [ "${#words[@]}" -gt 1 ] || return 1
@@ -419,22 +427,26 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
     break
   done
   [ "$arg_index" -gt 0 ] || return 1
-  def_line=$(grep -nE "^${callee}\\(\\)[[:space:]]*\\{" "$f" | sed -n '1{s/:.*//;p;}')
+  executable=$(strip_cached "$f")
+  def_line=$(printf '%s\n' "$executable" \
+    | grep -nE "^${callee}\\(\\)[[:space:]]*\\{" \
+    | sed -n '${s/:.*//;p;}')
   [ -n "$def_line" ] || return 1
-  end_line=$(awk -v start="$def_line" 'NR > start && /^}/ { print NR; exit }' "$f")
+  end_line=$(printf '%s\n' "$executable" \
+    | awk -v start="$def_line" 'NR > start && /^}/ { print NR; exit }')
   if [ -z "$end_line" ]; then
-    body=$(sed -n "${def_line}p" "$f")
+    body=$(printf '%s\n' "$executable" | sed -n "${def_line}p")
   else
-    body=$(sed -n "${def_line},${end_line}p" "$f")
+    body=$(printf '%s\n' "$executable" | sed -n "${def_line},${end_line}p")
   fi
-  printf '%s\n' "$body" | grep -Eq "(^|\\{)[[:space:]]*(![[:space:]]*)?\\\"?\\\\?\\\$${arg_index}\\\"?([^A-Za-z0-9_]|$)" \
+  printf '%s\n' "$body" | grep -Eq "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?\\\$${arg_index}([[:space:];|&(){}<>]|$)" \
     && return 0
   param_var=$(printf '%s\n' "$body" \
-    | sed -nE "s/.*[[:space:]]([A-Za-z_][A-Za-z0-9_]*)=\\\\?\\\$\\{${arg_index}:-[^}]*\\}.*/\\1/p" \
+    | sed -nE "s/.*[[:space:]]([A-Za-z_][A-Za-z0-9_]*)=\\\$\\{${arg_index}:-[^}]*\\}.*/\\1/p" \
     | sed -n '1p')
   [ -n "$param_var" ] || return 1
   printf '%s\n' "$body" \
-    | grep -Eq "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?\\\"\\\\?\\\$${param_var}\\\"([^A-Za-z0-9_]|$)"
+    | grep -Eq "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?\\\$${param_var}([[:space:];|&(){}<>]|$)"
 }
 
 # Why a mark's site does not establish the call. Prints the reason and returns 1
@@ -477,14 +489,23 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
       stripped = ENVIRON["FM_SITE_STRIPPED"]
       dq = sprintf("%c", 34)
       word = "(^|[^A-Za-z0-9_])" fn "([^A-Za-z0-9_]|$)"
+      term = "([[:space:];|&(){}<>]|$)"
       controls = "((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*"
       if (stripped ~ ("^[[:space:]]*(function[[:space:]]+)?" fn "[[:space:]]*(\\(\\)|\\{)")) {
         print "is the definition of " fn ", not a call to it"
         exit
       }
-      if (stripped ~ ("^[[:space:]]*" controls fn "([^A-Za-z0-9_]|$)")) exit
-      if (stripped ~ ("\\$\\([[:space:]]*" fn "([^A-Za-z0-9_]|$)")) exit
-      if (stripped ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)")) exit
+      if (stripped ~ ("^[[:space:]]*" controls fn "=")) {
+        print "uses " fn " as an assignment, not a command word"
+        exit
+      }
+      if (stripped ~ ("\\$\\([[:space:]]*" fn "=") || stripped ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "=")) {
+        print "uses " fn " as an assignment, not a command word"
+        exit
+      }
+      if (stripped ~ ("^[[:space:]]*" controls fn term)) exit
+      if (stripped ~ ("\\$\\([[:space:]]*" fn term)) exit
+      if (stripped ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn term)) exit
       if (stripped ~ /^[[:space:]]*(test|\[\[?)([[:space:]]|$)/ && stripped ~ word) {
         print "places " fn " in data, not in an executable dispatch position"
         exit
@@ -665,6 +686,7 @@ for f in "${PARSEABLE[@]}"; do
     # have with no mark at all.
     observed_lines="$(mark_observed_lines "$fn" "$f")$(proven_pass_by_name_lines "$fn" "$f")"
     unsupported=$(strip_cached "$f" | awk -v fn="$fn" -v observed_lines="$observed_lines" '
+      BEGIN { term = "([[:space:];|&(){}<>]|$)" }
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
       # Skipping the regex battery for those lines is a pure prefilter, not a
@@ -674,27 +696,27 @@ for f in "${PARSEABLE[@]}"; do
       index(" " observed_lines, " " NR " ") { next }
       $0 ~ "^[[:space:]]*#" { next }
       $0 ~ ("^" fn "\\(\\)[[:space:]]*\\{") { next }
-      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("\\$\\(" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*" fn term) { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\"?\\$\\(" fn term) { next }
+      $0 ~ ("^[A-Za-z_][A-Za-z0-9_]*\\(\\)[[:space:]]*\\{[[:space:]]*" fn term) { next }
+      $0 ~ ("^[^\"\047`]*([;|&(){}])[[:space:]]*" fn term) { next }
+      $0 ~ ("\\$\\(" fn term) { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=\\$\\(.*[[:space:]]\\|[[:space:]]*" fn term) { next }
+      $0 ~ ("^[[:space:]]*(if|while|until)[[:space:]].*[[:space:]](\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn term) { next }
+      $0 ~ ("^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=.*[[:space:]](\\|\\||&&)[[:space:]]*" fn term) { next }
+      $0 ~ ("^[[:space:]]*.*[[:space:]](\\|\\||&&)[[:space:]]*" fn term) { next }
+      $0 ~ ("^[[:space:]]*if[[:space:]].*[[:space:]]\\|[[:space:]]*" fn term) { next }
+      $0 ~ ("^[[:space:]]*\\{.*[[:space:]](&&|\\|\\|)[[:space:]]*!?[[:space:]]*" fn term) { next }
+      $0 ~ ("[[:space:]]\\|\\|[[:space:]]*\\{[[:space:]]*" fn term) { next }
       # A CONTINUATION LINE that opens with || or && , optionally negated. This is
       # a genuine call site and a common idiom - measured at 65 occurrences across
       # bin/ - so its absence was the whitelist being under-specified rather than
       # the code being unusual. Added on that measurement, NOT to make a file pass:
       # widening an accepted-syntax list to silence a refusal is shaping a control
       # around its own answer, which is the failure this whitelist exists to avoid.
-      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
-      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn "([^A-Za-z0-9_]|$)") { next }
+      $0 ~ ("^[[:space:]]*(\\|\\||&&)[[:space:]]*(![[:space:]]*)?" fn term) { next }
+      $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn term) { next }
+      $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn term) { next }
       $0 ~ /^[[:space:]]*printf[[:space:]]/ { next }
       $0 ~ ("(^|[[:space:];|&(){}])" fn "([[:space:];|&(){}]|$)") { print NR ":" $0; exit }
     ')

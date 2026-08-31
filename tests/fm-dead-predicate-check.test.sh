@@ -415,6 +415,73 @@ value=dead_one'
   pass "an assignment cannot manufacture indirect-call evidence"
 }
 
+test_function_named_assignment_tokens_are_refused() {
+  local body dir out rc
+  for body in 'dead_one=value' 'env dead_one=value true'; do
+    dir=$(fixture "named-assignment-${body%%=*}" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "# indirect-call: dead_one bin/plain-consumer.sh:3
+$body"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "$body was accepted as a command head, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*assignment' || fail "$body lacked a named refusal: $out"
+    printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "$body kept the predicate alive: $out"
+  done
+  pass "function-named assignment tokens are never command heads"
+}
+
+test_real_command_head_with_argument_counts() {
+  local dir out rc
+  dir=$(fixture real-command-head 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+dead_one --flag'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a genuine command head was refused, exit $rc: $out"
+  pass "a genuine command head followed by an argument counts"
+}
+
+test_pass_by_name_ignores_definition_inside_quoted_data() {
+  local dir out rc
+  dir=$(fixture quoted-callee-definition 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'message="start
+dispatch() { $2; }
+end"
+# indirect-call: live_one bin/plain-consumer.sh:6
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a quoted callee definition proved dispatch, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the quoted callee definition lacked a named refusal: $out"
+  pass "a callee definition inside quoted data proves nothing"
+}
+
+test_pass_by_name_ignores_quoted_dispatch_data() {
+  local dir out rc
+  dir=$(fixture quoted-callee-dispatch 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() {
+  printf '\''%s\n'\'' '\''; "$2"'\''
+}
+# indirect-call: live_one bin/plain-consumer.sh:6
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "quoted dispatch data proved a call, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the quoted dispatch data lacked a named refusal: $out"
+  pass "quoted text inside a callee body cannot prove parameter dispatch"
+}
+
+test_pass_by_name_requires_the_exact_argument_position() {
+  local dir out rc
+  dir=$(fixture mismatched-callee-position 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() { "$1"; }
+# indirect-call: live_one bin/plain-consumer.sh:4
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mismatched positional dispatch was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the mismatched position lacked a named refusal: $out"
+  pass "pass-by-name proof binds the exact positional argument"
+}
+
 test_comparison_site_is_refused_and_dead() {
   local dir out rc
   dir=$(fixture mark-comparison 'dead_one() { return 0; }')
@@ -800,6 +867,11 @@ test_mark_naming_a_bare_pass_by_name_dispatch_counts
 test_arbitrary_command_arguments_are_refused_and_dead
 test_data_mark_does_not_suppress_another_unsupported_use
 test_assignment_site_is_refused_and_dead
+test_function_named_assignment_tokens_are_refused
+test_real_command_head_with_argument_counts
+test_pass_by_name_ignores_definition_inside_quoted_data
+test_pass_by_name_ignores_quoted_dispatch_data
+test_pass_by_name_requires_the_exact_argument_position
 test_comparison_site_is_refused_and_dead
 test_trap_trailing_comment_site_is_refused_and_dead
 test_quoted_marker_string_is_not_discovered
