@@ -3778,9 +3778,21 @@ resumed_with_authority() {  # <name> [<head>] -> "<dir> <rid> <head> <auth>"
 }
 
 test_a_closure_may_not_omit_an_effect_it_had() {
-  local dir rid head auth out rc
+  local dir rid head auth out rc auth_file saved_auth
   read -r dir rid head auth <<< "$(resumed_with_authority closeomit)" \
     || fail "closure: the fixture could not reach a resumed request with an authority"
+
+  auth_file="$dir/home/data/landing-authorizations/$auth.json"
+  saved_auth=$(jq -c . "$auth_file")
+  jq '.request_id = "fm-ob-aaaaaaaaaaaa"' "$auth_file" > "$dir/substituted-omission.json"
+  mv "$dir/substituted-omission.json" "$auth_file"
+  out=$(run_ob "$dir" close --request "$rid" --disposition 'landed, all good' 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "closure omission RED: an invalid store record returned $rc: $out"
+  printf '%s' "$out" | grep -q "FM_AUTH_RECORD_UNREADABLE.*$auth" \
+    || fail "closure omission RED: the canonical refusal did not name $auth: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = resumed ] \
+    || fail "closure omission RED: an unvalidated store record still closed the request"
+  printf '%s\n' "$saved_auth" > "$auth_file"
 
   # RED: a landing authority was minted and spent for this request, and the
   # closure says only that somebody believes it went well. If naming the

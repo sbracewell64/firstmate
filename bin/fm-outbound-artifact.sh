@@ -2328,15 +2328,18 @@ auth_store_dir() {
 # by failing to see it. The blast radius is real and the repair is one named
 # file, which is why the caller prints the file it could not read.
 auth_for_request() {  # <request-id> -> auth-id
-  local dir f id
+  local dir f id auth_json request
   dir=$(auth_store_dir)
   [ -d "$dir" ] || return 0
   if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then return 2; fi
   for f in "$dir"/*.json; do
     [ -e "$f" ] || continue
-    [ -r "$f" ] || return 2
-    id=$(jq -r --arg r "$1" 'select(.request_id == $r) | .authorization_id // empty' "$f" 2>/dev/null) || return 2
-    [ -n "$id" ] || continue
+    id=${f##*/}
+    id=${id%.json}
+    auth_json=$(FM_HOME="$FM_HOME" FM_LANDING_AUTH_DIR="$dir" \
+      "$SCRIPT_DIR/fm-landing-authorization.sh" inspect "$id") || return 2
+    request=$(printf '%s' "$auth_json" | jq -r '.request_id') || return 2
+    [ "$request" = "$1" ] || continue
     printf '%s\n' "$id"
     return 0
   done
