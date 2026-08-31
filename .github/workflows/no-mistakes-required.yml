@@ -256,6 +256,7 @@ jobs:
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           HEAD_REPO_FULL: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
           # The gate re-states the two remotes itself, exactly as the
@@ -281,7 +282,8 @@ jobs:
           # head: an old candidate is judged by current policy, which is the
           # point. The only thing that reaches the no-verdict path now is an
           # authority that could not be obtained at all.
-          if [ "${POLICY_UNRESOLVED:-0}" = 1 ] || [ -z "${POLICY_VERIFIER:-}" ]; then
+          if [ "${POLICY_UNRESOLVED:-0}" = 1 ] \
+            || { [ -z "${POLICY_GATE:-}" ] && [ -z "${POLICY_VERIFIER:-}" ]; }; then
             {
               echo "::error::This check could not obtain the authoritative no-mistakes verifier, so it reached no verdict."
               echo

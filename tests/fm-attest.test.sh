@@ -4197,7 +4197,7 @@ test_governed_workflow_resolves_and_dispatches_its_own_verifier() {
   verify_script="$dir/verify-step.sh"
   workflow_step_script_from "$dir/.github/workflows/no-mistakes-required.yml" \
     'Verify the head-bound no-mistakes attestation' > "$verify_script"
-  out=$(cd "$dir" && POLICY_VERIFIER="$verifier" POLICY_GATE="$gate" POLICY_SHA="$policy_sha" \
+  out=$(cd "$dir" && POLICY_GATE="$gate" POLICY_SHA="$policy_sha" \
     HEAD_SHA=0123456789012345678901234567890123456789 HEAD_REPO_FULL=owner/fork \
     BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone bash "$verify_script" 2>&1)
   rc=$?
@@ -4205,7 +4205,7 @@ test_governed_workflow_resolves_and_dispatches_its_own_verifier() {
   assert_contains "$out" "carries no verified no-mistakes attestation" \
     "the governed workflow did not reach its gate's refusal"
   assert_not_contains "$out" "could not obtain the authoritative" \
-    "the governed workflow stopped at the missing-verifier guard"
+    "the governed workflow required a transitional verifier beside its gate"
   pass "fm-attest.sh: the governed workflow resolves and dispatches its own verifier"
 }
 
