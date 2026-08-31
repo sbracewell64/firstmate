@@ -3742,30 +3742,44 @@ test_a_request_states_the_generation_it_is_bound_to() {
 # owner and then moved to the state a completed act would have left it in. That
 # keeps the thing under test - whether closure CHECKS the chain and re-observes
 # the target - separate from the thing being simulated.
-resumed_with_authority() {  # <name> [<head>] -> "<dir> <rid> <head> <auth>"
-  local name=$1 want=${2:-$HEAD_A} dir rid head auth_bin auth_id f
+FIXTURE_DIR=
+FIXTURE_RID=
+FIXTURE_HEAD=
+FIXTURE_AUTH=
+resumed_with_authority() {  # <name> [<head>] -> FIXTURE_{DIR,RID,HEAD,AUTH}
+  local name=$1 want=${2:-$HEAD_A} auth_bin f out
+  FIXTURE_DIR=
+  FIXTURE_RID=
+  FIXTURE_HEAD=
+  FIXTURE_AUTH=
   auth_bin="$ROOT/bin/fm-landing-authorization.sh"
-  dir=$(new_case "$name")
-  git -C "$dir/home/projects/demo" symbolic-ref --short HEAD > "$dir/forge/base_ref"
+  FIXTURE_DIR=$(new_case "$name") || return 1
+  git -C "$FIXTURE_DIR/home/projects/demo" symbolic-ref --short HEAD \
+    > "$FIXTURE_DIR/forge/base_ref" || return 1
   # THE HEAD IS A PARAMETER because the request identity is DERIVED from the
   # governed subject, so two fixtures built the same way are not two requests -
   # they are the same request id computed twice. A control that needs a foreign
   # authority has to make the subject genuinely different, and the head is the
   # load-bearing member of that identity.
-  mkdir -p "$dir/home/data/waiting-item"
+  mkdir -p "$FIXTURE_DIR/home/data/waiting-item"
   jq -n --arg gate AWAITING_BROWSER_SOL --arg head "$want" '{gate:$gate,head:$head}' \
-    > "$dir/home/data/waiting-item/outbound-gate.json"
-  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || return 1
-  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
-  write_typed_ruling "$dir" "$rid" waiting-item "$head" 80 approved
-  run_ob "$dir" ruling --request "$rid" --comment 80 --issue 2 >/dev/null 2>&1 || return 1
-  PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth_bin" mint "$rid" \
-    --effect pr-merge --method squash >/dev/null 2>&1 || return 1
-  run_ob "$dir" resume --request "$rid" >/dev/null 2>&1 || return 1
-  for f in "$dir/home/data/landing-authorizations"/*.json; do
+    > "$FIXTURE_DIR/home/data/waiting-item/outbound-gate.json" || return 1
+  write_snapshot "$FIXTURE_DIR/snap.json" outbound 'awaiting browser sol' || return 1
+  out=$(run_ob "$FIXTURE_DIR" emit waiting-item 2>&1) \
+    || fail "closure fixture $name: emit failed: $out"
+  read -r FIXTURE_RID FIXTURE_HEAD <<< "$(emitted_rid_and_head "$FIXTURE_DIR")" \
+    || return 1
+  write_typed_ruling "$FIXTURE_DIR" "$FIXTURE_RID" waiting-item "$FIXTURE_HEAD" 80 approved
+  out=$(run_ob "$FIXTURE_DIR" ruling --request "$FIXTURE_RID" --comment 80 --issue 2 2>&1) \
+    || fail "closure fixture $name: ruling failed: $out"
+  out=$(PATH="$FIXTURE_DIR/bin:$PATH" FM_HOME="$FIXTURE_DIR/home" \
+    "$auth_bin" mint "$FIXTURE_RID" --effect pr-merge --method squash 2>&1) \
+    || fail "closure fixture $name: mint failed: $out"
+  out=$(run_ob "$FIXTURE_DIR" resume --request "$FIXTURE_RID" 2>&1) \
+    || fail "closure fixture $name: resume failed: $out"
+  for f in "$FIXTURE_DIR/home/data/landing-authorizations"/*.json; do
     [ -f "$f" ] || continue
-    auth_id=$(jq -r '.authorization_id' "$f") || return 1
+    FIXTURE_AUTH=$(jq -r '.authorization_id' "$f") || return 1
     jq '.state = "spent"
         | .spend = {started:"2026-08-30T00:00:00Z", act_digest:"x",
                     observed_head:.grant.head, outcome:"applied",
@@ -3773,16 +3787,14 @@ resumed_with_authority() {  # <name> [<head>] -> "<dir> <rid> <head> <auth>"
       "$f" > "$f.tmp" && mv "$f.tmp" "$f" || return 1
     break
   done
-  [ -n "$auth_id" ] || return 1
-  printf '%s %s %s %s\n' "$dir" "$rid" "$head" "$auth_id"
+  [ -n "$FIXTURE_AUTH" ] || return 1
 }
 
 test_a_closure_may_not_omit_an_effect_it_had() {
-  local dir rid head auth out rc auth_file saved_auth fixture_result
-  fixture_result=$(resumed_with_authority closeomit) \
+  local dir rid head auth out rc auth_file saved_auth
+  resumed_with_authority closeomit \
     || fail "closure: the fixture could not reach a resumed request with an authority"
-  read -r dir rid head auth <<< "$fixture_result" \
-    || fail "closure: the fixture returned no resumed request with an authority"
+  dir=$FIXTURE_DIR rid=$FIXTURE_RID head=$FIXTURE_HEAD auth=$FIXTURE_AUTH
 
   auth_file="$dir/home/data/landing-authorizations/$auth.json"
   saved_auth=$(jq -c . "$auth_file")
@@ -3811,11 +3823,10 @@ test_a_closure_may_not_omit_an_effect_it_had() {
 }
 
 test_a_closure_checks_the_chain_and_re_observes_the_target() {
-  local dir rid head auth out rc clone ref gen other auth_file saved_auth fixture_result
-  fixture_result=$(resumed_with_authority closechain) \
+  local dir rid head auth out rc clone ref gen other auth_file saved_auth
+  resumed_with_authority closechain \
     || fail "chain: the fixture could not reach a resumed request with an authority"
-  read -r dir rid head auth <<< "$fixture_result" \
-    || fail "chain: the fixture returned no resumed request with an authority"
+  dir=$FIXTURE_DIR rid=$FIXTURE_RID head=$FIXTURE_HEAD auth=$FIXTURE_AUTH
   clone="$dir/home/projects/demo"
   ref="refs/heads/$(git -C "$clone" rev-parse --abbrev-ref HEAD)"
   gen=$(git -C "$clone" rev-parse HEAD)
@@ -3834,10 +3845,9 @@ test_a_closure_checks_the_chain_and_re_observes_the_target() {
   # RED 1: an authority that is real, valid and belongs to ANOTHER request is
   # foreign to this closure however good it is in its own right.
   local orid
-  fixture_result=$(resumed_with_authority closeother "$HEAD_B") \
+  resumed_with_authority closeother "$HEAD_B" \
     || fail "chain: the second fixture failed"
-  read -r _ orid _ other <<< "$fixture_result" \
-    || fail "chain: the second fixture returned no authority"
+  orid=$FIXTURE_RID other=$FIXTURE_AUTH
   [ "$orid" != "$rid" ] \
     || fail "chain: the foreign fixture produced this same request, so it controls nothing"
   cp "$TMP_ROOT/closeother/home/data/landing-authorizations/$other.json" \
