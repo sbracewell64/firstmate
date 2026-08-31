@@ -3094,6 +3094,27 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
   pass "AFK changed paused panes hand off plain stale identities for daemon-owned pause triage"
 }
 
+test_completed_check_pgid_mismatch_is_not_signalled() {
+  local dir=$TMP_ROOT/completed-check-pgid-mismatch out rc
+  mkdir -p "$dir/state"
+  set +e
+  out=$(FM_STATE_OVERRIDE="$dir/state" WATCH="$WATCH" KILL_LOG="$dir/kill.log" bash -c '
+    set -u
+    . "$WATCH"
+    run_check_process() { printf "%s\n" complete; }
+    ps() { sleep 0.1; printf "%s\n" 999999; }
+    kill() { printf "%s\n" "$*" >> "$KILL_LOG"; command kill "$@"; }
+    run_check_capture ignored
+    printf "result=%s\n" "$FM_CHECK_RESULT"
+  ' 2>&1)
+  rc=$?
+  set -e
+  [ "$rc" -eq 0 ] || fail "completed check pgid mismatch failed: $out"
+  [ "$out" = "result=complete" ] || fail "completed check result was lost: $out"
+  [ ! -s "$dir/kill.log" ] || fail "completed check pgid mismatch signalled a recycled group: $(cat "$dir/kill.log")"
+  pass "a completed check pgid mismatch cannot signal a recycled group"
+}
+
 test_signal_reason_is_actionable_classifier
 test_stale_is_terminal_classifier
 test_scan_captain_relevant_statuses_classifier
@@ -3161,6 +3182,7 @@ test_heartbeat_backstop_surfaces_unsurfaced_status
 test_beacon_stays_fresh_while_absorbing
 test_afk_present_reverts_watcher_to_one_shot
 test_afk_paused_changed_pane_hands_off_plain_stale
+test_completed_check_pgid_mismatch_is_not_signalled
 test_free_text_arm_retirement_is_red_capable
 test_status_event_envelope
 test_worker_cannot_declare_blocking_on
