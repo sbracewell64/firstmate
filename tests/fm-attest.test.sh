@@ -4258,7 +4258,7 @@ test_wrapper_tampering_is_real_under_the_preceding_law() {
 }
 
 test_wrapper_tampering_cannot_reach_the_governed_acceptance_program() {
-  local dir venue tamper out rc marker
+  local dir venue tamper out rc marker policy_sha
   # The GREEN half, and the ruling's watched reds (a) through (e) in one
   # mechanism: on the governed leg both the workflow file and the acceptance
   # program come from the governed generation, so the acceptance run is built
@@ -4282,6 +4282,7 @@ test_wrapper_tampering_cannot_reach_the_governed_acceptance_program() {
   chmod +x "$dir/venue/bin/fm-attest-gate.sh" "$dir/venue/bin/fm-attest.sh"
   ( cd "$dir/venue" && git init -q . && git add -A \
     && git -c user.email=t@e -c user.name=t commit -qm policy )
+  policy_sha=$(git -C "$dir/venue" rev-parse HEAD)
 
   for tamper in $wrapper_tampers; do
     rm -rf "$dir/candidate"; mkdir -p "$dir/candidate/bin"
@@ -4298,12 +4299,14 @@ test_wrapper_tampering_cannot_reach_the_governed_acceptance_program() {
     out=$( cd "$dir/venue" \
       && HEAD_SHA=0123456789012345678901234567890123456789 \
         HEAD_REPO=owner/fork BASE_REPO=owner/venue PR_NUMBER=1 PR_AUTHOR=someone \
-        FM_GATE_POLICY_SHA=venuegeneration bash bin/fm-attest-gate.sh 2>&1 )
+        FM_GATE_POLICY_SHA="$policy_sha" bash bin/fm-attest-gate.sh 2>&1 )
     rc=$?
     [ "$rc" -eq 1 ] \
       || fail "tamper $tamper changed the governed verdict (exit $rc): $out"
     printf '%s\n' "$out" | grep -q 'carries no verified no-mistakes attestation' \
       || fail "tamper $tamper turned the governed refusal into something else: $out"
+    printf '%s\n' "$out" | grep -q "policy generation $policy_sha" \
+      || fail "tamper $tamper detached the gate from the governed policy generation: $out"
     [ ! -e "$marker" ] \
       || fail "tamper $tamper got candidate bytes executed by the governed acceptance run"
     # And the program judging is provably the venue's: the file the platform
