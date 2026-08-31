@@ -4207,6 +4207,8 @@ test_governed_workflow_resolves_and_dispatches_its_own_verifier() {
   [ "$rc" -eq 1 ] || fail "the governed workflow did not dispatch its refusing gate (exit $rc): $out"
   assert_contains "$out" "carries no verified no-mistakes attestation" \
     "the governed workflow did not reach its gate's refusal"
+  assert_contains "$out" "policy generation $policy_sha" \
+    "the governed workflow did not bind its gate to the resolved policy generation"
   assert_not_contains "$out" "could not obtain the authoritative" \
     "the governed workflow required a transitional verifier beside its gate"
   pass "fm-attest.sh: the governed workflow resolves and dispatches its own verifier"
