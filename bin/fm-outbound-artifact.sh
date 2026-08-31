@@ -523,6 +523,8 @@ ruling_field_aliases() {  # <binding> -> the envelope keys that state it
     project) printf 'expected_project\n' ;;
     repo)    printf 'expected_repo\n' ;;
     pr)      printf 'expected_pull_request\n' ;;
+    tree)    printf 'expected_tree_sha\n' ;;
+    policy)  printf 'expected_policy_generation\n' ;;
   esac
 }
 
@@ -534,12 +536,9 @@ ruling_field_aliases() {  # <binding> -> the envelope keys that state it
 # second store, parser or transport - the typed reader is the module's own
 # field primitive from bin/fm-outbound-artifact-lib.sh.
 #
-# EVERY AVAILABLE BINDING IS JOINED, and "available" is decided by the body.
-# request, item and exact head are required, because without all three the body
-# has not said which work at which head it rules. gate, project, repo and pull
-# request are checked WHEN THE BODY CARRIES THEM: a body that omits one has not
-# contradicted anything, and a body that states one wrongly has. Silence and
-# disagreement are different answers and are kept that way.
+# EVERY APPLICABILITY BINDING IS JOINED. Request, gate, project, repository,
+# item, pull request and exact head are required. Tree and policy generation are
+# required when the request identity carries them.
 #
 # Nothing here is resolved by position or precedence. A required field that is
 # absent, duplicated, or malformed refuses, and so does a body whose form is
@@ -575,10 +574,14 @@ ruling_identity_join() {  # <body> <record-json> [<form>]
   # genuine rulings for a naming choice. Where an envelope states BOTH, they must
   # agree - two spellings disagreeing is a contradiction inside one envelope and
   # is refused rather than resolved by preferring either.
-  for key in request item head; do
+  for key in request gate project repo item pr head; do
     case $key in
       request) want=$(printf '%s' "$rec" | jq -r '.request_id') ;;
+      gate)    want=$(printf '%s' "$rec" | jq -r '.identity.gate') ;;
+      project) want=$(printf '%s' "$rec" | jq -r '.identity.project') ;;
+      repo)    want=$(printf '%s' "$rec" | jq -r '.identity.repo') ;;
       item)    want=$(printf '%s' "$rec" | jq -r '.identity.item') ;;
+      pr)      want=$(printf '%s' "$rec" | jq -r '.identity.pr // "-"') ;;
       head)    want=$(printf '%s' "$rec" | jq -r '.identity.head') ;;
     esac
     found=0
@@ -598,22 +601,23 @@ ruling_identity_join() {  # <body> <record-json> [<form>]
     fi
   done
 
-  # Optional bindings, joined only where the envelope supplies them.
-  for key in gate project repo pr; do
+  for key in tree policy; do
     case $key in
-      gate)    want=$(printf '%s' "$rec" | jq -r '.identity.gate') ;;
-      project) want=$(printf '%s' "$rec" | jq -r '.identity.project') ;;
-      repo)    want=$(printf '%s' "$rec" | jq -r '.identity.repo') ;;
-      pr)      want=$(printf '%s' "$rec" | jq -r '.identity.pr // "-"') ;;
+      tree)   want=$(printf '%s' "$rec" | jq -r '.identity.tree // ""') ;;
+      policy) want=$(printf '%s' "$rec" | jq -r '.identity.policy // ""') ;;
     esac
+    [ -n "$want" ] || continue
+    found=0
     for alias in $(ruling_field_aliases "$key"); do
       value=$(fm_outbound_envelope_field "$envelope" "$alias"); rc=$?
       case $rc in
-        1) continue ;;          # not supplied: nothing to contradict
+        1) continue ;;
         2) RULING_JOIN_DETAIL="its envelope states $alias more than once"; return 2 ;;
       esac
       [ "$value" = "$want" ] || { RULING_JOIN_DETAIL="its $alias names $value, not $want"; return 1; }
+      found=1
     done
+    [ "$found" -eq 1 ] || { RULING_JOIN_DETAIL="its envelope states no $key"; return 2; }
   done
   return 0
 }
@@ -1830,7 +1834,7 @@ subject_repo_for() {  # <item> <project> -> owner/name or project name
 
 require_record_applicable_now() {  # <request-id> <record-json>
   local rid=$1 rec=$2 item current gate channel project repo pr_url pr_ref head_observation head head_source missing
-  local stored_identity current_identity stored_venue current_venue
+  local stored_identity current_identity stored_venue current_venue tree policy successor
   item=$(printf '%s' "$rec" | jq -r '.identity.item')
   read_snapshot || die "fleet backlog could not be read while validating $rid" 4
   require_unique_backlog_record "$item"
@@ -1844,6 +1848,8 @@ require_record_applicable_now() {  # <request-id> <record-json>
   head_observation=$(observe_head "$item" "$pr_url" "$project")
   head=$(printf '%s' "$head_observation" | cut -f1)
   head_source=$(printf '%s' "$head_observation" | cut -f2)
+  tree=$(declared_field "$item" tree)
+  policy=$(declared_field "$item" policy_generation)
   if [ "$channel" = "pull-request" ]; then
     repo=$(project_venue "$project" \
       "$(printf '%s' "$current" | jq -r '.contribution_venue // ""')")
@@ -1866,19 +1872,21 @@ require_record_applicable_now() {  # <request-id> <record-json>
   # exactly as it stands rather than being retired by an unread comparison.
   if [ "$channel" != "pull-request" ]; then
     missing=$(fm_outbound_subject_missing "$repo" "$SOL_REPO" "$(project_dir "$project")" \
-      "$(declared_field "$item" tree)" "$head" "$(declared_field "$item" repo)" || true)
+      "$tree" "$head" "$(declared_field "$item" repo)" || true)
     [ -z "$missing" ] || die \
       "$FM_OUTBOUND_TOKEN_SUBJECT_UNRESOLVED: $item has no validated governed subject - $(printf '%s' "$missing" | tr '\n' ',' | sed 's/,$//'); $rid was left untouched" 4
   fi
   stored_identity=$(printf '%s' "$rec" | jq -r \
-    '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head] | @tsv')
-  current_identity=$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
-    "$gate" "$project" "$repo" "$item" "$pr_ref" "$head")
+    '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head,(.identity.tree // ""),(.identity.policy // "")] | @tsv')
+  current_identity=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+    "$gate" "$project" "$repo" "$item" "$pr_ref" "$head" "$tree" "$policy")
   stored_venue=$(printf '%s' "$rec" | jq -r '.venue // ""')
   if [ "$current_identity" != "$stored_identity" ] \
     || { [ "$channel" = "sol-control" ] && [ "$current_venue" != "$stored_venue" ]; }; then
-    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
-      '.state = "superseded" | .updated = $n')
+    successor=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr_ref" "$head" "$tree" "$policy") \
+      || die "the successor identity for $item could not be compiled" 4
+    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" --arg s "$successor" \
+      '.state = "superseded" | .superseded_by = $s | .updated = $n')
     record_write "$rid" "$rec" || die "could not invalidate stale request $rid" 4
     printf '%s: request %s no longer matches the complete current identity\n' \
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" >&2
@@ -2324,7 +2332,7 @@ auth_for_request() {  # <request-id> -> auth-id
 
 cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<target-generation>]
   local rid=$1 disp=$2 auth_id=${3:-} target_ref=${4:-} target_gen=${5:-}
-  local rec state minted rc auth_json dir head item plan_kind plan_mode plan_head
+  local rec state minted rc auth_json dir head item plan_kind plan_mode plan_head plan_ref
   local clone project observed verification
 
   require_record "$rid"; rec=$RECORD
@@ -2384,6 +2392,17 @@ cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<t
              "$(printf '%s' "$auth_json" | jq -r '.spend.outcome // "unrecorded"')" >&2
            exit 3; }
 
+    plan_kind=$(printf '%s' "$auth_json" | jq -r '.effect.kind // ""')
+    plan_mode=$(printf '%s' "$auth_json" | jq -r '.effect.mode // ""')
+    plan_head=$(printf '%s' "$auth_json" | jq -r '.grant.head // ""')
+    if [ "$plan_kind" = local-fast-forward ]; then
+      plan_ref=$(printf '%s' "$auth_json" | jq -r '.effect.target_ref // ""')
+      [ -n "$plan_ref" ] && [ "$target_ref" = "$plan_ref" ] \
+        || { printf '%s: closure target %s is not the authorized effect target %s\n' \
+               "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "${plan_ref:-unobserved}" >&2
+             printf 'Nothing was written.\n' >&2; exit 3; }
+    fi
+
     # RE-OBSERVE THE TARGET. This is the step the disposition sentence was
     # standing in for.
     project=$(printf '%s' "$rec" | jq -r '.identity.project')
@@ -2405,9 +2424,6 @@ cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<t
     # THE STRICT CASE. A fast-forward landing makes the target exactly the head
     # it landed, so here the generation is checkable against the authority and
     # is not merely observed.
-    plan_kind=$(printf '%s' "$auth_json" | jq -r '.effect.kind // ""')
-    plan_mode=$(printf '%s' "$auth_json" | jq -r '.effect.mode // ""')
-    plan_head=$(printf '%s' "$auth_json" | jq -r '.grant.head // ""')
     verification=observed
     if [ "$plan_kind" = local-fast-forward ] || [ "$plan_mode" = ff-only ]; then
       if [ "$target_gen" != "$plan_head" ]; then

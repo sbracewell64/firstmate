@@ -2357,7 +2357,7 @@ test_a_request_refuses_before_it_can_name_a_transport_venue_as_its_subject() {
 }
 
 test_a_moved_policy_generation_is_a_different_question() {
-  local dir first second
+  local dir first second out rc expected
   # STALE POLICY OR TREE CANNOT ANSWER A SUCCESSOR. Both are part of the
   # identity, so a request under a superseded policy generation is a different
   # request - which is what stops a finished one being handed back.
@@ -2366,6 +2366,14 @@ test_a_moved_policy_generation_is_a_different_question() {
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "policy: first emit failed"
   first=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
   declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "" pol-g2
+  write_typed_ruling "$dir" "$first" waiting-item "$HEAD_A" 74 approved
+  out=$(run_ob "$dir" ruling --request "$first" --comment 74 --issue 2 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "policy: a ruling joined after its policy generation moved: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$first.json")" = superseded ] \
+    || fail "policy: ruling-time freshness left the old policy request live"
+  expected=$(jq -r '.superseded_by' "$dir/home/data/outbound-artifacts/$first.json")
+  [ -n "$expected" ] && [ "$expected" != null ] \
+    || fail "policy: ruling-time freshness did not link the successor identity"
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "policy: second emit failed"
   second=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
   [ -n "$first" ] && [ "$first" != "$second" ] \
@@ -2373,6 +2381,8 @@ test_a_moved_policy_generation_is_a_different_question() {
   # And the predecessor is retired rather than left applicable beside it.
   [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$first.json")" = superseded ] \
     || fail "policy: the previous policy generation's request stayed live"
+  [ "$expected" = "$second" ] \
+    || fail "policy: freshness linked $expected but the canonical successor is $second"
   pass "policy: a moved policy generation asks its own question and retires its predecessor"
 }
 
@@ -2742,6 +2752,14 @@ verdict: approved')"
 # below also carries the substring trap.
 write_typed_ruling() {  # <case-dir> <request-id> <item> <head> <comment-id> [<decision>]
   local dir=$1 rid=$2 item=$3 head=$4 comment=$5 decision=${6:-HOLD}
+  local rec gate project repo pr tree policy
+  rec="$dir/home/data/outbound-artifacts/$rid.json"
+  gate=$(jq -r '.identity.gate' "$rec")
+  project=$(jq -r '.identity.project' "$rec")
+  repo=$(jq -r '.identity.repo' "$rec")
+  pr=$(jq -r '.identity.pr // "-"' "$rec")
+  tree=$(jq -r '.identity.tree // ""' "$rec")
+  policy=$(jq -r '.identity.policy // ""' "$rec")
   cat > "$dir/forge/ruling_body" <<TYPED
 protocol: fm-sol-control/v1
 kind: ruling
@@ -2753,8 +2771,14 @@ decision: $decision
 authority: captain-delegated-browser-sol
 captain_required: false
 
+expected_gate: $gate
+expected_project: $project
+expected_repo: $repo
 expected_item: $item
+expected_pull_request: $pr
 expected_head_sha: $head
+$(if [ -n "$tree" ]; then printf 'expected_tree_sha: %s' "$tree"; fi)
+$(if [ -n "$policy" ]; then printf 'expected_policy_generation: %s' "$policy"; fi)
 
 observed:
   - The prior HOLD for 25427e9e39931d25984227943c892d59edf5c072 does not transfer.
@@ -2926,13 +2950,8 @@ test_a_ruling_without_a_top_level_head_refuses_without_writing() {
   read -r rid head <<< "$(emitted_rid_and_head "$dir")"
   [ -n "$rid" ] || fail "nested head: the fixture recorded no request"
   before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
-  {
-    printf 'protocol: fm-sol-control/v1\nkind: ruling\n\n'
-    printf 'in_reply_to: %s\nfrom: browser-sol\n\n' "$rid"
-    printf 'item: waiting-item\ndecision: REVISE\n\n'
-    printf 'exact_subject:\n  head: %s\n\nobserved:\n  - nested.\n' "$head"
-  } > "$dir/forge/ruling_body"
-  printf '71\n' > "$dir/forge/ruling_id"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 71 REVISE
+  sed -i "s/^expected_head_sha: .*/exact_subject:\n  head: $head/" "$dir/forge/ruling_body"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 71 --issue 2 2>&1); rc=$?
   [ "$rc" -ne 0 ] \
     || fail "nested head: a ruling stating no top-level head was joined: $out"
@@ -2943,12 +2962,7 @@ test_a_ruling_without_a_top_level_head_refuses_without_writing() {
 
   # PAIRED GREEN: the same ruling with the head lifted into its envelope joins,
   # so the refusal is the missing top-level identity and not the fixture.
-  {
-    printf 'protocol: fm-sol-control/v1\nkind: ruling\n\n'
-    printf 'in_reply_to: %s\nfrom: browser-sol\n\n' "$rid"
-    printf 'item: waiting-item\nhead: %s\ndecision: REVISE\n\n' "$head"
-    printf 'observed:\n  - lifted.\n'
-  } > "$dir/forge/ruling_body"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 71 REVISE
   out=$(run_ob "$dir" ruling --request "$rid" --comment 71 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 0 ] \
     || fail "nested head GREEN: the same ruling with a top-level head was refused, exit $rc: $out"
@@ -2995,7 +3009,7 @@ test_typed_ruling_refuses_every_unjoinable_shape() {
   # EVERY WAY THE JOIN CAN FAIL TO BE UNIQUE AND NON-CONTRADICTORY. Each one must
   # refuse with the record byte-identical afterwards, because a ruling this end
   # could not join must leave no trace that it did.
-  for shape in wrong-item wrong-head wrong-request missing-head duplicate-head \
+  for shape in wrong-item wrong-head wrong-request missing-gate missing-head duplicate-head \
                contradicting-project malformed-request both-forms both-verdicts; do
     dir=$(new_case "typedbad-$shape")
     declare_gate "$dir/home" AWAITING_BROWSER_SOL
@@ -3010,12 +3024,13 @@ test_typed_ruling_refuses_every_unjoinable_shape() {
       wrong-item)    sed -i "s/^expected_item: .*/expected_item: another-item/" "$dir/forge/ruling_body" ;;
       wrong-head)    sed -i "s/^expected_head_sha: .*/expected_head_sha: $HEAD_B/" "$dir/forge/ruling_body" ;;
       wrong-request) sed -i "s/^in_reply_to: .*/in_reply_to: fm-ob-000000000000/" "$dir/forge/ruling_body" ;;
+      missing-gate)  sed -i "/^expected_gate: /d" "$dir/forge/ruling_body" ;;
       missing-head)  sed -i "/^expected_head_sha: /d" "$dir/forge/ruling_body" ;;
       # INSIDE the envelope, not appended. A field repeated after the content
       # sections is a quotation the envelope rule deliberately ignores, so
       # appending would test the opposite of what this case is named for.
       duplicate-head) sed -i "/^expected_head_sha: /a expected_head_sha: $HEAD_B" "$dir/forge/ruling_body" ;;
-      contradicting-project) sed -i "/^expected_item: /a expected_project: not-the-project" "$dir/forge/ruling_body" ;;
+      contradicting-project) sed -i "s/^expected_project: .*/expected_project: not-the-project/" "$dir/forge/ruling_body" ;;
       malformed-request) sed -i "s/^in_reply_to: .*/in_reply_to: not-a-request-id/" "$dir/forge/ruling_body" ;;
       both-forms)    sed -i "/^in_reply_to: /a FM-SOL-RULING $rid" "$dir/forge/ruling_body" ;;
       # The verdict is read from the whole body, not the envelope: a legacy
@@ -3034,12 +3049,6 @@ test_typed_ruling_refuses_every_unjoinable_shape() {
 
     # PAIRED GREEN, so no shape can pass by the fixture never joining anything.
     write_typed_ruling "$dir" "$rid" waiting-item "$head" 62
-    case $shape in
-      contradicting-project)
-        # The same optional binding, stated correctly and in the same place.
-        sed -i "/^expected_item: /a expected_project: $(jq -r '.identity.project' \
-          "$dir/home/data/outbound-artifacts/$rid.json")" "$dir/forge/ruling_body" ;;
-    esac
     out=$(run_ob "$dir" ruling --request "$rid" --comment 62 --issue 2 2>&1); rc=$?
     [ "$rc" -eq 0 ] \
       || fail "typed refusal/$shape: the paired joinable ruling was refused, exit $rc: $out"

@@ -229,6 +229,14 @@ declare_subject() {  # <head>
     '{gate:$g,head:$h,repo:$r,tree:$t}' > "$HOME_DIR/data/$ITEM/outbound-gate.json"
 }
 typed_ruling() {  # <request> <head> <decision> [<comment-id>]
+  local rec gate project repo pr tree policy
+  rec="$HOME_DIR/data/outbound-artifacts/$1.json"
+  gate=$(jq -r '.identity.gate' "$rec")
+  project=$(jq -r '.identity.project' "$rec")
+  repo=$(jq -r '.identity.repo' "$rec")
+  pr=$(jq -r '.identity.pr // "-"' "$rec")
+  tree=$(jq -r '.identity.tree // ""' "$rec")
+  policy=$(jq -r '.identity.policy // ""' "$rec")
   printf '%s\n' "${4:-201}" > "$ROOT_DIR/forge/ruling_id"
   cat > "$ROOT_DIR/forge/ruling_body" <<TYPED
 protocol: fm-sol-control/v1
@@ -239,8 +247,14 @@ from: browser-sol
 
 decision: $3
 
+expected_gate: $gate
+expected_project: $project
+expected_repo: $repo
 expected_item: $ITEM
+expected_pull_request: $pr
 expected_head_sha: $2
+$(if [ -n "$tree" ]; then printf 'expected_tree_sha: %s' "$tree"; fi)
+$(if [ -n "$policy" ]; then printf 'expected_policy_generation: %s' "$policy"; fi)
 TYPED
 }
 
@@ -375,6 +389,11 @@ if out=$(run_ob close --request "$RID" --disposition landed --authorization "$AU
   --target-ref refs/heads/target --target-generation "$TARGET_BEFORE" 2>&1); then
   broke "a closure naming a generation the ref is not at was accepted: $out"
 fi
+git -C "$SUBJECT" branch closure-decoy "$TARGET_AFTER"
+if out=$(run_ob close --request "$RID" --disposition landed --authorization "$AUTH_ID" \
+  --target-ref refs/heads/closure-decoy --target-generation "$TARGET_AFTER" 2>&1); then
+  broke "a closure observing an unbound ref was accepted: $out"
+fi
 out=$(run_ob close --request "$RID" --disposition landed --authorization "$AUTH_ID" \
   --target-ref refs/heads/target --target-generation "$TARGET_AFTER" 2>&1) \
   || broke "the correct post-effect closure was refused: $out"
@@ -408,10 +427,26 @@ out=$(run_ob correct --request "$RID2" 2>&1) || broke "the revision could not be
 [ "$(jq -r '.state' "$HOME_DIR/data/outbound-artifacts/$RID2.json")" = revised ] \
   || broke "the revised request was not retired"
 rm -f "$HOME_DIR/data/$ITEM/outbound-gate.json"
-declare_subject "$MOVED"
 if out=$(run_ob declare "$ITEM" --gate "$GATE" --head "$MOVED" 2>&1); then
   broke "a retired revision still backed a wait: $out"
 fi
-held 'retired, granted nothing, and backs no wait'
+git -C "$SUBJECT" branch -f candidate "$MOVED"
+git -C "$SUBJECT" checkout -q candidate
+printf 'corrected\n' >> "$SUBJECT/f"
+git -C "$SUBJECT" add f
+git -C "$SUBJECT" -c commit.gpgsign=false commit -qm corrected
+CORRECTED=$(git -C "$SUBJECT" rev-parse candidate)
+git -C "$SUBJECT" checkout -q target
+sed -i "s/$MOVED/$CORRECTED/" "$SNAP" 2>/dev/null || true
+declare_subject "$CORRECTED"
+out=$(run_ob emit "$ITEM" 2>&1) || broke "the post-REVISE correction could not emit a fresh envelope: $out"
+RID3=$(awk '{print $2}' "$ROOT_DIR/forge/comments" | tail -1)
+[ -n "$RID3" ] && [ "$RID3" != "$RID2" ] \
+  || broke "the post-REVISE correction reused the retired request"
+[ "$(jq -r '.state' "$HOME_DIR/data/outbound-artifacts/$RID3.json")" = emitted ] \
+  || broke "the post-REVISE correction left no live fresh envelope"
+run_ob declare "$ITEM" --gate "$GATE" --head "$CORRECTED" >/dev/null 2>&1 \
+  || broke "the fresh corrected envelope did not back its wait"
+held "retired, granted nothing, and correction $CORRECTED has fresh envelope $RID3"
 
 printf '\nSEAM PROOF HELD: %s stages, effect observed on a scratch subject only\n' "$STAGE"
