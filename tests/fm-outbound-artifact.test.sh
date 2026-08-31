@@ -3797,12 +3797,23 @@ test_a_closure_may_not_omit_an_effect_it_had() {
 }
 
 test_a_closure_checks_the_chain_and_re_observes_the_target() {
-  local dir rid head auth out rc clone ref gen other
+  local dir rid head auth out rc clone ref gen other auth_file saved_auth
   read -r dir rid head auth <<< "$(resumed_with_authority closechain)" \
     || fail "chain: the fixture could not reach a resumed request with an authority"
   clone="$dir/home/projects/demo"
   ref="refs/heads/$(git -C "$clone" rev-parse --abbrev-ref HEAD)"
   gen=$(git -C "$clone" rev-parse HEAD)
+
+  auth_file="$dir/home/data/landing-authorizations/$auth.json"
+  saved_auth=$(jq -c . "$auth_file")
+  jq '.effect.digest = ("0" * 64)' "$auth_file" > "$dir/substituted.json"
+  mv "$dir/substituted.json" "$auth_file"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "chain RED: a substituted authorization returned $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_AUTH_RECORD_UNREADABLE' \
+    || fail "chain RED: canonical authorization refusal was not named: $out"
+  printf '%s\n' "$saved_auth" > "$auth_file"
 
   # RED 1: an authority that is real, valid and belongs to ANOTHER request is
   # foreign to this closure however good it is in its own right.

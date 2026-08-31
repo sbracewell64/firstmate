@@ -2377,12 +2377,9 @@ cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<t
     [ -n "$target_ref" ] && [ -n "$target_gen" ] \
       || die "--authorization needs --target-ref and --target-generation naming what the effect produced" 2
     dir=$(auth_store_dir)
-    [ -r "$dir/$auth_id.json" ] \
-      || { printf '%s: authorization %s could not be read\n' \
-             "$FM_OUTBOUND_TOKEN_UNREADABLE" "$auth_id" >&2; exit 4; }
-    auth_json=$(jq -e . "$dir/$auth_id.json" 2>/dev/null) \
-      || { printf '%s: authorization %s is not readable JSON\n' \
-             "$FM_OUTBOUND_TOKEN_UNREADABLE" "$auth_id" >&2; exit 4; }
+    auth_json=$(FM_HOME="$FM_HOME" FM_LANDING_AUTH_DIR="$dir" \
+      "$SCRIPT_DIR/fm-landing-authorization.sh" inspect "$auth_id"); rc=$?
+    [ "$rc" -eq 0 ] || exit "$rc"
 
     # THE CHAIN, not the caller's word about it. An authority for another
     # request, another item, or another head is foreign to this closure however
