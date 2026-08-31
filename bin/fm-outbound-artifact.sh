@@ -2420,6 +2420,7 @@ cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<t
       [ -n "$plan_repo" ] && [ -n "$plan_pr" ] \
         || { printf '%s: the consumed merge plan does not identify its pull request\n' \
                "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" >&2; exit 4; }
+      # fm-retrieval-audit: not-a-collection - the repository and pull request number select exactly one pull request object.
       base_ref=$(obs gh api "repos/$plan_repo/pulls/$plan_pr" --jq '.base.ref') || base_ref=''
       [ -n "$base_ref" ] && [ "$(printf '%s\n' "$base_ref" | wc -l | tr -d ' ')" -eq 1 ] \
         || { printf '%s: the base ref for %s#%s could not be observed exactly once\n' \

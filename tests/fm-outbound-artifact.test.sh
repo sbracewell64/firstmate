@@ -3778,9 +3778,11 @@ resumed_with_authority() {  # <name> [<head>] -> "<dir> <rid> <head> <auth>"
 }
 
 test_a_closure_may_not_omit_an_effect_it_had() {
-  local dir rid head auth out rc auth_file saved_auth
-  read -r dir rid head auth <<< "$(resumed_with_authority closeomit)" \
+  local dir rid head auth out rc auth_file saved_auth fixture_result
+  fixture_result=$(resumed_with_authority closeomit) \
     || fail "closure: the fixture could not reach a resumed request with an authority"
+  read -r dir rid head auth <<< "$fixture_result" \
+    || fail "closure: the fixture returned no resumed request with an authority"
 
   auth_file="$dir/home/data/landing-authorizations/$auth.json"
   saved_auth=$(jq -c . "$auth_file")
@@ -3809,9 +3811,11 @@ test_a_closure_may_not_omit_an_effect_it_had() {
 }
 
 test_a_closure_checks_the_chain_and_re_observes_the_target() {
-  local dir rid head auth out rc clone ref gen other auth_file saved_auth
-  read -r dir rid head auth <<< "$(resumed_with_authority closechain)" \
+  local dir rid head auth out rc clone ref gen other auth_file saved_auth fixture_result
+  fixture_result=$(resumed_with_authority closechain) \
     || fail "chain: the fixture could not reach a resumed request with an authority"
+  read -r dir rid head auth <<< "$fixture_result" \
+    || fail "chain: the fixture returned no resumed request with an authority"
   clone="$dir/home/projects/demo"
   ref="refs/heads/$(git -C "$clone" rev-parse --abbrev-ref HEAD)"
   gen=$(git -C "$clone" rev-parse HEAD)
@@ -3830,8 +3834,10 @@ test_a_closure_checks_the_chain_and_re_observes_the_target() {
   # RED 1: an authority that is real, valid and belongs to ANOTHER request is
   # foreign to this closure however good it is in its own right.
   local orid
-  read -r _ orid _ other <<< "$(resumed_with_authority closeother "$HEAD_B")" \
+  fixture_result=$(resumed_with_authority closeother "$HEAD_B") \
     || fail "chain: the second fixture failed"
+  read -r _ orid _ other <<< "$fixture_result" \
+    || fail "chain: the second fixture returned no authority"
   [ "$orid" != "$rid" ] \
     || fail "chain: the foreign fixture produced this same request, so it controls nothing"
   cp "$TMP_ROOT/closeother/home/data/landing-authorizations/$other.json" \
