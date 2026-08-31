@@ -3754,6 +3754,8 @@ resumed_with_authority() {  # <name> [<head>] -> FIXTURE_{DIR,RID,HEAD,AUTH}
   FIXTURE_AUTH=
   auth_bin="$ROOT/bin/fm-landing-authorization.sh"
   FIXTURE_DIR=$(new_case "$name") || return 1
+  cp "$FIXTURE_DIR/bin/gh" "$FIXTURE_DIR/bin/gh-axi" || return 1
+  chmod +x "$FIXTURE_DIR/bin/gh-axi" || return 1
   git -C "$FIXTURE_DIR/home/projects/demo" symbolic-ref --short HEAD \
     > "$FIXTURE_DIR/forge/base_ref" || return 1
   # THE HEAD IS A PARAMETER because the request identity is DERIVED from the
