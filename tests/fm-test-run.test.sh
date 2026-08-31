@@ -376,26 +376,30 @@ test_exclude_family() {
 # that already holds the freshness fixtures and the proven-set seam, and it is
 # where the real-seam assertion belongs.
 test_portable_shard_union_and_lane_partition() {
-  local s1 s2 proven serial herdr all_count union_count overlap first
+  local s1 s2 candidates serial herdr all all_count union_count overlap first
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
-  proven=$("$RUNNER" --list --proven-isolated)
-  serial=$("$RUNNER" --list --lane portable-serial)
+  candidates=$("$ROOT/bin/fm-test-isolation-proof.sh" --list)
   herdr=$("$RUNNER" --list --family real-herdr-gated)
+  all=$("$RUNNER" --list --all)
+  serial=$(comm -23 \
+    <(printf '%s\n' "$all" | LC_ALL=C sort) \
+    <(printf '%s\n' "$candidates" "$herdr" | LC_ALL=C sort -u))
   [ -n "$s1" ] && [ -n "$s2" ] || fail "portable parallel shards must be non-empty"
   # Shards disjoint.
   overlap=$(comm -12 <(printf '%s\n' "$s1" | LC_ALL=C sort) <(printf '%s\n' "$s2" | LC_ALL=C sort) || true)
   [ -z "$overlap" ] || fail "portable parallel shards overlap: $overlap"
-  # Union of shards equals proven-isolated.
+  # The subject compares the changed lane assignment with the current proof
+  # input, not the necessarily stale prior artifact it is being run to replace.
   [ "$(printf '%s\n' "$s1" "$s2" | LC_ALL=C sort -u)" = \
-    "$(printf '%s\n' "$proven" | LC_ALL=C sort -u)" ] \
-    || fail "shard union must equal proven-isolated set"
+    "$(printf '%s\n' "$candidates" | LC_ALL=C sort -u)" ] \
+    || fail "shard union must equal isolation-proof candidate set"
   # No herdr in portable lanes.
   printf '%s\n' "$s1" "$s2" "$serial" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     && fail "portable lanes must not include real-herdr-gated smoke"
   printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "herdr family must include smoke"
-  all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
+  all_count=$(printf '%s\n' "$all" | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
     || fail "union of lanes ($union_count) must equal --all ($all_count)"

@@ -893,6 +893,14 @@ FIXTURE
   pass "a real regression stays a failure when the proof is also stale"
 }
 
+test_portable_serial_inventory_matches_the_calibrated_basis() {
+  local count
+  count=$("$RUNNER" --list --lane portable-serial | wc -l | tr -d ' ')
+  [ "$count" = "136" ] \
+    || fail "portable serial inventory must remain 136 scripts, got $count"
+  pass "portable serial inventory matches the calibrated basis"
+}
+
 test_list_candidates_nonempty_and_stable
 test_candidates_exclude_serial_classes
 test_extra_hermetic_candidates_present
@@ -912,6 +920,7 @@ test_coverage_guard_refuses_a_proven_subject_that_moved
 test_coverage_guard_refuses_a_lane_wider_than_the_proof
 test_coverage_guard_reports_an_unreadable_proof_as_could_not_observe
 test_canonical_coverage_seam_consumes_the_installed_proof
+test_portable_serial_inventory_matches_the_calibrated_basis
 test_a_complete_passing_run_may_replace_the_evidence
 test_a_run_that_did_not_observe_every_candidate_may_not
 test_a_failed_write_leaves_the_previous_artifact_intact

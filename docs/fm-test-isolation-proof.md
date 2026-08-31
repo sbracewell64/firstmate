@@ -46,7 +46,7 @@ Re-measuring means running the subjects again.
 There is no path anywhere in this module that stamps a fresh digest onto an existing record, and adding one would recreate exactly the failure this artifact was rebuilt to prevent.
 `bin/fm-test-run.sh`'s serial-lane budget carries the same lesson from a sibling incident, and its comment cross-references this one.
 
-The harness run currently takes about ten minutes and must be allowed to finish; a run cut short writes no artifact and changes nothing.
+The harness run currently takes about twelve minutes and must be allowed to finish; a run cut short writes no artifact and changes nothing.
 
 One run is the whole procedure, whichever subject moved.
 `bin/fm-test-isolation-proof.sh` executes every candidate first, publishes only from a run that observed every one of them good, and then asks `bin/fm-test-run.sh --check-coverage` whether the artifact it just wrote is accepted.
@@ -108,18 +108,18 @@ Without the first half, publishing correctly is not enough either, because the s
 
 - Date: 2026-08-31
 - Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json docs/fm-test-isolation-proof.json`
-- Artifact: `run_id fm-isolation-1788138299781-531855`
+- Artifact: `run_id fm-isolation-1788141647181-750745`
 - Result, one pass, exit 0:
 
 ```
-FM_ISOLATION_SUMMARY total=24 failed=0 concurrency=4 duration_ms=569704
-FM_ISOLATION_ARTIFACT WRITTEN path=docs/fm-test-isolation-proof.json subjects=24 candidates=24
+FM_ISOLATION_SUMMARY total=25 failed=0 concurrency=4 duration_ms=695298
+FM_ISOLATION_ARTIFACT WRITTEN path=docs/fm-test-isolation-proof.json subjects=25 candidates=25
 FM_ISOLATION_SEAM PROVEN consumer=bin/fm-test-run.sh check=--check-coverage
 ```
 
 - Consumer: `bin/fm-test-run.sh --check-coverage` then exits 0 and reports
-  `FM_ISOLATION_FRESHNESS PROVEN subjects=24 proven=24 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=0`
-  followed by `FM_TEST_COVERAGE ok total=171 parallel=24 serial=136 serial_shards=8 herdr=11 proven=24`.
+  `FM_ISOLATION_FRESHNESS PROVEN subjects=25 proven=25 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=0`
+  followed by `FM_TEST_COVERAGE ok total=172 parallel=25 serial=136 serial_shards=8 herdr=11 proven=25`.
 - `bin/fm-test-isolation-proof.sh --list` and `--list-proven` are identical, so the artifact enumerates the exact candidate universe and records only subjects that actually passed.
 
 ### The withheld-artifact control

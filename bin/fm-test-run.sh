@@ -529,6 +529,7 @@ tests/fm-arm-pretool-check.test.sh
 tests/fm-crew-state.test.sh
 tests/fm-herdr-lab.test.sh
 tests/fm-pr-merge.test.sh
+tests/fm-publication-seam.test.sh
 tests/fm-send-popup-settle.test.sh
 tests/fm-tmux-submit-busy.test.sh
 tests/fm-send-settle.test.sh
