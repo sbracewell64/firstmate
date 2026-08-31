@@ -4170,6 +4170,7 @@ test_governed_workflow_resolves_and_dispatches_its_own_verifier() {
   mkdir -p "$dir/bin" "$dir/.github/workflows"
   cp "$WORKFLOW" "$dir/.github/workflows/no-mistakes-required.yml"
   cp "$ROOT/bin/fm-attest-gate.sh" "$dir/bin/fm-attest-gate.sh"
+  # shellcheck disable=SC2016 # Expansion is deliberately deferred to the stub.
   printf '#!/usr/bin/env bash\ncase "${1:-}" in --supports) exit 0 ;; --print-format) echo fmt ;; *) exit 1 ;; esac\n' \
     > "$dir/bin/fm-attest.sh"
   chmod +x "$dir/bin/fm-attest-gate.sh" "$dir/bin/fm-attest.sh"
