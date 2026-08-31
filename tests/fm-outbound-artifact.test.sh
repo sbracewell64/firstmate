@@ -120,6 +120,7 @@ make_gh() {  # <dir>
   : > "$1/forge/foreign_ruling_body"
   : > "$1/forge/foreign_ruling_id"
   : > "$1/forge/poll_prefix"
+  printf 'main\n' > "$1/forge/base_ref"
   printf '0\n' > "$1/forge/lose_response_remaining"
   cat > "$1/bin/gh" <<'SH'
 #!/usr/bin/env bash
@@ -133,6 +134,7 @@ case " $* " in *" --input "*) is_post=1 ;; esac
 
 case "$path" in
   */pulls/4|*/pulls/5)
+    case " $* " in *" .base.ref "*) cat "$F/base_ref"; exit 0 ;; esac
     cat "$F/head"; exit 0 ;;
   */issues/comments/*)
     id=${path##*/}
@@ -227,19 +229,16 @@ SH
 # itself invalid.
 write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>] [<sender>]
   local dir=$1 rid=$2 comment=$3 verdict=${4:-approved} sender=${5:-browser-sol}
-  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
-    | grep -v '^from:' > "$dir/forge/ruling_body"
-  printf 'from: %s\n' "$sender" >> "$dir/forge/ruling_body"
-  printf 'verdict: %s\n' "$verdict" >> "$dir/forge/ruling_body"
-  printf '%s\n' "$comment" > "$dir/forge/ruling_id"
+  write_typed_ruling "$dir" "$rid" waiting-item \
+    "$(jq -r '.identity.head' "$dir/home/data/outbound-artifacts/$rid.json")" \
+    "$comment" "$verdict"
+  sed -i "s/^from: .*/from: $sender/" "$dir/forge/ruling_body"
 }
 
 write_foreign_ruling() {  # <case-dir> <request-id> <comment-id>
   local dir=$1 rid=$2 comment=$3
-  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
-    | grep -v '^from:' > "$dir/forge/foreign_ruling_body"
-  printf 'from: browser-sol\n' >> "$dir/forge/foreign_ruling_body"
-  printf 'verdict: rejected\n' >> "$dir/forge/foreign_ruling_body"
+  printf 'protocol: fm-sol-control/v1\nkind: ruling\n\nin_reply_to: %s\nfrom: browser-sol\n\ndecision: rejected\n' \
+    "$rid" > "$dir/forge/foreign_ruling_body"
   printf '%s\n' "$comment" > "$dir/forge/foreign_ruling_id"
 }
 
@@ -1191,10 +1190,10 @@ test_quoted_prior_verdict_makes_the_ruling_ambiguous() {
   # A ruling that QUOTES a prior ruling before stating its own. On this control
   # plane that is the ordinary shape, not an attack: rulings cite rulings. Taking
   # the first verdict line would adopt the quoted one silently.
-  printf 'verdict: rejected\n' >> "$dir/forge/ruling_body"
+  printf 'decision: rejected\n' >> "$dir/forge/ruling_body"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 561 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "verdict: an ambiguous body was resolved rather than refused, exit $rc: $out"
-  printf '%s' "$out" | grep -q '2 verdict lines' \
+  printf '%s' "$out" | grep -q '2 decision lines' \
     || fail "verdict: the refusal did not name the count: $out"
   [ "$(run_ob "$dir" show "$rid" | jq -r '.state')" = "emitted" ] \
     || fail "verdict: an ambiguous ruling advanced the request anyway"
@@ -1218,11 +1217,11 @@ test_single_verdict_is_read_and_no_verdict_refuses() {
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "verdict: emit failed"
   rid=$(emitted_request_id "$dir")
   write_ruling "$dir" "$rid" 563 approved
-  grep -v '^verdict: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.x"
+  grep -v '^decision: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.x"
   mv "$dir/forge/ruling_body.x" "$dir/forge/ruling_body"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "verdict: a body with no verdict was accepted, exit $rc: $out"
-  printf '%s' "$out" | grep -q '0 verdict lines' \
+  printf '%s' "$out" | grep -q '0 decision lines' \
     || fail "verdict: the zero-verdict refusal did not name the count: $out"
   pass "verdict: exactly one verdict is read, and zero refuses while naming the count"
 }
@@ -1309,70 +1308,23 @@ test_poll_requires_exactly_one_ruling_marker() {
   dir=$(new_case poll-marker-count)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: emit failed"
   rid=$(emitted_request_id "$dir")
-  # TWO DECLARATIONS IN ONE ENVELOPE. Both markers sit in the canonical region,
-  # so which request this body rules cannot be chosen without choosing for the
-  # sender. A marker quoted LATER, after the envelope, is a different case and
-  # is covered below.
-  write_ruling "$dir" "$rid" 570 accepted
-  {
-    printf 'FM-SOL-RULING fm-ob-deadbeefcafe\n'
-    cat "$dir/forge/ruling_body"
-  } > "$dir/forge/ruling_body.two"
-  mv "$dir/forge/ruling_body.two" "$dir/forge/ruling_body"
+  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
+    | grep -v '^from:' > "$dir/forge/ruling_body"
+  printf 'from: browser-sol\nverdict: accepted\n' >> "$dir/forge/ruling_body"
+  printf '570\n' > "$dir/forge/ruling_id"
   out=$(run_ob "$dir" poll 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "poll marker count: two envelope markers returned $rc: $out"
-  printf '%s' "$out" | grep -q '2 ruling marker lines' \
-    || fail "poll marker count: refusal did not name the count: $out"
-  # AMBIGUITY, not a mismatch. A mismatch says the one candidate found is not
-  # about this work; ambiguity says several were found and none can be chosen.
-  # Told it was a mismatch, an operator asks why a ruling was misaddressed.
-  printf '%s' "$out" | grep -q 'FM_OUTBOUND_AMBIGUOUS_CANDIDATES' \
-    || fail "poll marker count: several candidates were not classified as ambiguous: $out"
-  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RULING_IDENTITY_MISMATCH' \
-    && fail "poll marker count: ambiguity was reported as a misaddressed ruling: $out"
+  [ "$rc" -eq 3 ] || fail "legacy ruling: non-authoritative rendering returned $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_LEGACY_NONAUTHORITATIVE' \
+    || fail "legacy ruling: refusal was not explicit and named: $out"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "emitted" ] || fail "poll marker count: ambiguous marker advanced state to $state"
+  [ "$state" = "emitted" ] || fail "legacy ruling: marker rendering advanced state to $state"
 
   write_ruling "$dir" "$rid" 570 accepted
   run_ob "$dir" poll >/dev/null 2>&1 \
-    || fail "poll marker count: exactly one marker was refused"
+    || fail "legacy ruling: paired typed envelope was refused"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "ruled" ] || fail "poll marker count: one marker left state $state"
-
-  # A MARKER QUOTED AFTER THE ENVELOPE IS NOT A SECOND DECLARATION. Rulings on
-  # this control plane quote their predecessors as a matter of course, and a
-  # body-wide count turned every one of those into an ambiguity report - which
-  # is what made a real full poll unusable.
-  dir=$(new_case poll-marker-quoted-later)
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: quoted-marker emit failed"
-  rid=$(emitted_request_id "$dir")
-  write_ruling "$dir" "$rid" 575 accepted
-  printf '\nFor reference the earlier ruling said:\n\nFM-SOL-RULING fm-ob-deadbeefcafe\n' \
-    >> "$dir/forge/ruling_body"
-  out=$(run_ob "$dir" poll 2>&1); rc=$?
-  [ "$rc" -eq 0 ] || fail "poll marker count: a quoted marker made a valid ruling ambiguous, exit $rc: $out"
-  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "ruled" ] || fail "poll marker count: a quoted marker blocked the join, state $state"
-
-  dir=$(new_case poll-marker-malformed-and-valid)
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: malformed companion emit failed"
-  rid=$(emitted_request_id "$dir")
-  write_ruling "$dir" "$rid" 573 accepted
-  printf 'FM-SOL-RULING fm-ob-\nFM-SOL-RULING fm-ob-deadbeef\n' >> "$dir/forge/ruling_body"
-  run_ob "$dir" poll >/dev/null 2>&1 \
-    || fail "poll marker count: malformed markers blocked one complete identity"
-  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "ruled" ] || fail "poll marker count: malformed companions left state $state"
-
-  dir=$(new_case poll-marker-none)
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: second emit failed"
-  rid=$(emitted_request_id "$dir")
-  printf 'FM-SOL-RULING fm-ob-\nFM-SOL-RULING fm-ob-deadbeef\n' > "$dir/forge/ruling_body"
-  printf '571\n' > "$dir/forge/ruling_id"
-  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll marker count: malformed-only markers were not ignored"
-  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "emitted" ] || fail "poll marker count: malformed marker advanced state to $state"
-  pass "poll: exactly one complete ruling identity is required and ambiguity names its count"
+  [ "$state" = "ruled" ] || fail "legacy ruling: typed envelope left state $state"
+  pass "legacy ruling: marker rendering is diagnosed but cannot transition, while typed input can"
 }
 
 test_duplicate_backlog_ids_refuse_identity_joins() {
@@ -3794,6 +3746,7 @@ resumed_with_authority() {  # <name> [<head>] -> "<dir> <rid> <head> <auth>"
   local name=$1 want=${2:-$HEAD_A} dir rid head auth_bin auth_id f
   auth_bin="$ROOT/bin/fm-landing-authorization.sh"
   dir=$(new_case "$name")
+  git -C "$dir/home/projects/demo" symbolic-ref --short HEAD > "$dir/forge/base_ref"
   # THE HEAD IS A PARAMETER because the request identity is DERIVED from the
   # governed subject, so two fixtures built the same way are not two requests -
   # they are the same request id computed twice. A control that needs a foreign
@@ -3848,7 +3801,7 @@ test_a_closure_checks_the_chain_and_re_observes_the_target() {
   read -r dir rid head auth <<< "$(resumed_with_authority closechain)" \
     || fail "chain: the fixture could not reach a resumed request with an authority"
   clone="$dir/home/projects/demo"
-  ref=$(git -C "$clone" rev-parse --abbrev-ref HEAD)
+  ref="refs/heads/$(git -C "$clone" rev-parse --abbrev-ref HEAD)"
   gen=$(git -C "$clone" rev-parse HEAD)
 
   # RED 1: an authority that is real, valid and belongs to ANOTHER request is
@@ -3883,6 +3836,13 @@ test_a_closure_checks_the_chain_and_re_observes_the_target() {
   [ "$rc" -ne 0 ] || fail "chain RED: a generation the ref is not at was accepted: $out"
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
     || fail "chain RED: refused for the wrong reason: $out"
+
+  git -C "$clone" branch closure-decoy "$gen"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref refs/heads/closure-decoy --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: an unbound PR target ref closed the merge: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "chain RED: the unbound PR target was refused for the wrong reason: $out"
 
   # RED 3: an authority that was granted but never spent is permission, not a
   # landing.
@@ -3952,6 +3912,33 @@ test_a_wait_may_not_be_declared_without_a_backing_request() {
   printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
     || fail "declare head RED: refused for the wrong reason: $out"
   pass "declare: a wait is refused until a live request backs that exact gate and head"
+}
+
+test_declare_preserves_the_generation_binding() {
+  local dir rid out rc tree
+  dir=$(prepare_subject_case declare-generation)
+  tree=$(git -C "$dir/home/projects/demo" rev-parse "$HEAD_A^{tree}")
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "$tree" pol-g1
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "declare generation: emit failed"
+  rid=$(emitted_request_id "$dir")
+
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "$tree" pol-g2
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_A" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "declare generation RED: a request for another policy backed this wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "declare generation RED: refused for the wrong reason: $out"
+
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "$tree" pol-g1
+  run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_A" >/dev/null 2>&1 \
+    || fail "declare generation GREEN: the exact generation did not admit its wait"
+  jq -e --arg r "$rid" --arg t "$tree" \
+    '.repo == "o/demo" and .tree == $t and .policy_generation == "pol-g1" and .request == $r' \
+    "$dir/home/data/waiting-item/outbound-gate.json" >/dev/null \
+    || fail "declare generation GREEN: adding the request erased an applicability field"
+  write_typed_ruling "$dir" "$rid" waiting-item "$HEAD_A" 81 approved
+  run_ob "$dir" ruling --request "$rid" --comment 81 --issue 2 >/dev/null 2>&1 \
+    || fail "declare generation GREEN: the preserved generation read as stale at ruling time"
+  pass "declare generation: mismatched policy refuses and exact fields survive promotion"
 }
 
 test_a_retired_request_backs_no_wait() {
@@ -4077,6 +4064,7 @@ test_a_revision_is_retired_for_correction_and_transfers_nothing() {
 }
 
 test_a_wait_may_not_be_declared_without_a_backing_request
+test_declare_preserves_the_generation_binding
 test_replaying_the_same_ruling_writes_nothing
 test_a_request_states_the_generation_it_is_bound_to
 test_a_closure_may_not_omit_an_effect_it_had

@@ -528,13 +528,11 @@ ruling_field_aliases() {  # <binding> -> the envelope keys that state it
   esac
 }
 
-# THE RULING-IDENTITY JOIN, for both wire forms.
+# THE RULING-IDENTITY JOIN.
 #
-# One join with two readers, not two joins. The legacy branch delegates to the
-# echoed-binding matcher below, unchanged; the typed branch reads the governed
-# fields. Both answer the same question about the same record, and neither is a
-# second store, parser or transport - the typed reader is the module's own
-# field primitive from bin/fm-outbound-artifact-lib.sh.
+# The typed reader uses the module's own field primitive from
+# bin/fm-outbound-artifact-lib.sh. The legacy form remains readable for
+# diagnosis but is not an acceptance-bearing input.
 #
 # EVERY APPLICABILITY BINDING IS JOINED. Request, gate, project, repository,
 # item, pull request and exact head are required. Tree and policy generation are
@@ -545,7 +543,8 @@ ruling_field_aliases() {  # <binding> -> the envelope keys that state it
 # itself ambiguous - and every one of those refusals happens before any record
 # is written, so a refused ruling mutates nothing.
 #
-# Returns 0 joined · 1 the body names other work · 2 ambiguous or unreadable.
+# Returns 0 joined · 1 the body names other work · 2 ambiguous or unreadable ·
+# 3 legacy rendering that cannot carry authority.
 # Set by ruling_identity_join to name the binding that stopped it, so a refusal
 # points at the repair. "no exact head" and "two items" are different fixes, and
 # a single ambiguity sentence sends an operator looking for the wrong one.
@@ -555,9 +554,7 @@ ruling_identity_join() {  # <body> <record-json> [<form>]
   RULING_JOIN_DETAIL=
   [ -n "$form" ] || form=$(fm_outbound_ruling_form "$body")
   case $form in
-    legacy)
-      artifact_body_matches_identity "$body" "$rec" "$FM_OUTBOUND_RULING_MARKER" || return 1
-      return 0 ;;
+    legacy) RULING_JOIN_DETAIL="legacy marker rulings are non-authoritative rendering"; return 3 ;;
     typed) ;;
     both) RULING_JOIN_DETAIL="its envelope declares more than one ruling form"; return 2 ;;
     *) RULING_JOIN_DETAIL="it declares no ruling form"; return 1 ;;
@@ -1936,6 +1933,12 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
   body=$(printf '%s' "$artifact" | jq -r '.body')
   form=$(fm_outbound_ruling_form "$body")
   ruling_identity_join "$body" "$rec" "$form"; join_rc=$?
+  if [ "$join_rc" -eq 3 ]; then
+    printf '%s: comment %s uses the legacy marker form, which cannot drive a ruling transition\n' \
+      "$FM_OUTBOUND_TOKEN_LEGACY_NONAUTHORITATIVE" "$comment" >&2
+    printf 'Submit a complete typed RulingEnvelope. Nothing was written.\n' >&2
+    exit 3
+  fi
   if [ "$join_rc" -eq 2 ]; then
     # AMBIGUOUS, not MISMATCH. The body may well be this request's ruling; what
     # we could not do is read WHICH request it names once. Reporting that as a
@@ -2043,11 +2046,8 @@ cmd_poll() {
       || { failed=4; continue; }
     body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') \
       || { failed=4; continue; }
-    # DISCOVERY READS BOTH WIRE FORMS. Reading only the legacy marker is how a
-    # real typed ruling went unseen: the poll never selected the comment at all,
-    # so nothing was mismatched and nothing was reported - the join simply never
-    # happened. A form this poll cannot read is skipped, but it must not be
-    # skipped merely for being the other supported form.
+    # DISCOVERY READS BOTH WIRE FORMS so legacy rendering is diagnosed rather
+    # than silently disappearing, while only the typed form can transition.
     form=$(fm_outbound_ruling_form "$body")
     case $form in
       both)
@@ -2163,6 +2163,7 @@ cmd_resume() {  # <request-id>
 # hold an item waiting forever on a question that was never validly asked.
 cmd_declare() {  # <item> <gate> <head>
   local item=$1 gate=$2 head=$3 f other raw subject rec read_rc state backing dir tmp
+  local declaration declared_repo declared_tree declared_policy
   if ! fm_outbound_gate_valid "$gate"; then
     printf '%s: %s is not a gate this mechanism recognises\n' \
       "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$gate" >&2
@@ -2187,6 +2188,14 @@ cmd_declare() {  # <item> <gate> <head>
       "$FM_OUTBOUND_TOKEN_UNREADABLE" "$item" >&2
     exit 4
   fi
+  declaration='{}'
+  if [ -e "$(gate_file "$item")" ]; then
+    declaration=$(jq -e 'select(type == "object")' "$(gate_file "$item")" 2>/dev/null) \
+      || die "the existing declaration for $item could not be read" 4
+  fi
+  declared_repo=$(printf '%s' "$declaration" | jq -r '.repo // ""')
+  declared_tree=$(printf '%s' "$declaration" | jq -r '.tree // ""')
+  declared_policy=$(printf '%s' "$declaration" | jq -r '.policy_generation // ""')
   backing=
   if [ -d "$RECORD_DIR" ]; then
     for f in "$RECORD_DIR"/*.json; do
@@ -2208,7 +2217,11 @@ cmd_declare() {  # <item> <gate> <head>
         exit 4
       fi
       printf '%s' "$rec" | jq -e --arg g "$gate" --arg h "$head" \
-        '.identity.gate == $g and .identity.head == $h' >/dev/null 2>&1 || continue
+        --arg r "$declared_repo" --arg t "$declared_tree" --arg p "$declared_policy" \
+        '.identity.gate == $g and .identity.head == $h
+         and ($r == "" or .identity.repo == $r)
+         and ($t == "" or .identity.tree == $t)
+         and ($p == "" or .identity.policy == $p)' >/dev/null 2>&1 || continue
       state=$(printf '%s' "$rec" | jq -r '.state')
       fm_outbound_state_terminal "$state" && continue
       backing=$other
@@ -2226,8 +2239,8 @@ cmd_declare() {  # <item> <gate> <head>
   dir="$DATA/$item"
   mkdir -p "$dir" || die "could not create the declaration directory for $item" 4
   tmp="$dir/.outbound-gate.json.$$"
-  jq -n --arg gate "$gate" --arg head "$head" --arg r "$backing" \
-    '{gate:$gate, head:$head, request:$r}' > "$tmp" \
+  printf '%s' "$declaration" | jq --arg gate "$gate" --arg head "$head" --arg r "$backing" \
+    '. + {gate:$gate, head:$head, request:$r}' > "$tmp" \
     || { rm -f "$tmp"; die "could not write the declaration for $item" 4; }
   mv -f "$tmp" "$(gate_file "$item")" \
     || { rm -f "$tmp"; die "could not install the declaration for $item" 4; }
@@ -2332,7 +2345,7 @@ auth_for_request() {  # <request-id> -> auth-id
 
 cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<target-generation>]
   local rid=$1 disp=$2 auth_id=${3:-} target_ref=${4:-} target_gen=${5:-}
-  local rec state minted rc auth_json dir head item plan_kind plan_mode plan_head plan_ref
+  local rec state minted rc auth_json dir head item plan_kind plan_mode plan_head plan_ref plan_repo plan_pr base_ref
   local clone project observed verification
 
   require_record "$rid"; rec=$RECORD
@@ -2401,6 +2414,28 @@ cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<t
         || { printf '%s: closure target %s is not the authorized effect target %s\n' \
                "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "${plan_ref:-unobserved}" >&2
              printf 'Nothing was written.\n' >&2; exit 3; }
+    elif [ "$plan_kind" = pr-merge ]; then
+      plan_repo=$(printf '%s' "$auth_json" | jq -r '.effect.repo // ""')
+      plan_pr=$(printf '%s' "$auth_json" | jq -r '.effect.pr // ""')
+      [ -n "$plan_repo" ] && [ -n "$plan_pr" ] \
+        || { printf '%s: the consumed merge plan does not identify its pull request\n' \
+               "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" >&2; exit 4; }
+      base_ref=$(obs gh api "repos/$plan_repo/pulls/$plan_pr" --jq '.base.ref') || base_ref=''
+      [ -n "$base_ref" ] && [ "$(printf '%s\n' "$base_ref" | wc -l | tr -d ' ')" -eq 1 ] \
+        || { printf '%s: the base ref for %s#%s could not be observed exactly once\n' \
+               "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "$plan_repo" "$plan_pr" >&2; exit 4; }
+      plan_ref="refs/heads/$base_ref"
+      git check-ref-format "$plan_ref" >/dev/null 2>&1 \
+        || { printf '%s: the observed merge target %s is not a valid ref\n' \
+               "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "$plan_ref" >&2; exit 4; }
+      [ "$target_ref" = "$plan_ref" ] \
+        || { printf '%s: closure target %s is not the merge plan target %s\n' \
+               "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "$plan_ref" >&2
+             printf 'Nothing was written.\n' >&2; exit 3; }
+    else
+      printf '%s: authorization %s carries unsupported effect kind %s\n' \
+        "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$auth_id" "${plan_kind:-unobserved}" >&2
+      exit 4
     fi
 
     # RE-OBSERVE THE TARGET. This is the step the disposition sentence was
