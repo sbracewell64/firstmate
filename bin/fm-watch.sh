@@ -693,7 +693,11 @@ run_check_capture() {
   set +m
   pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null | tr -d '[:space:]')
   trap 'exit 1' HUP INT TERM
-  if [ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ]; then
+  # A very short check can exit between launch and ps. Its pid may then be
+  # reused by an unrelated process whose group must not be mistaken for the
+  # check's; refuse only while Bash still owns that pid as a running job.
+  if [ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ] \
+    && jobs -pr | grep -Fxq "$FM_ACTIVE_CHECK_PID"; then
     fm_active_check_stop || true
     fm_check_output_cleanup
     return 1
