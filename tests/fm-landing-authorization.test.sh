@@ -46,6 +46,10 @@
 #  29. successful exit requires post-effect proof
 #  30. the real path end to end: a ruled correlation record mints a plan, the
 #      spend constructs the act, and a scratch repository proves it happened
+#  31. a foreign-class record in the shared store neither wedges the landing
+#      enumerations nor becomes spendable as a landing
+#  32. a landing record with no request id is still unreadable, and still stops
+#      the enumerations that might have needed it
 #
 # CONTROL 1 IS NOT OPTIONAL AND IS NOT DECORATION. Every other control here is a
 # refusal, and a mechanism that refuses everything satisfies all of them at once.
@@ -1494,6 +1498,201 @@ SH
   pass "the whole path lands one real fast-forward and proves it from the repository"
 }
 
+# --- 31: a foreign-class record in the shared store ---------------------------
+
+# The subject of one publication-class authority. Values are shaped like the real
+# ones and are otherwise arbitrary: nothing here is compared against a forge.
+EFFECT_VENUE=github.com/owner/demo
+EFFECT_REMOTE=https://github.com/owner/demo
+EFFECT_URL_DIGEST=fb181bd945eade0690e1c1ac97ced5e96b0b7675829f7bae27622beb5d94fb48
+EFFECT_REF=refs/notes/no-mistakes
+EFFECT_TREE=3333333333333333333333333333333333333333
+EFFECT_TIP=4444444444444444444444444444444444444444
+EFFECT_GENERATION=35d35731da3701fe4baeeab5cdff81b6d43808f716a958592064ec600427c003
+EFFECT_SUBJECT=0170163cc9cc7ef693ea693524b970ccdcb2ef3788b77eb0068ae205b385df78
+
+# The store holds four authority classes, and only one of them is a landing. An
+# effect-class record is written by bin/fm-publication-guard.sh through the same
+# library, so it is built here through that same writer rather than hand-rolled:
+# a fixture that spelled the shape out itself would keep passing after the writer
+# changed, which is the second schema statement this control exists to prevent.
+plant_effect_record() {  # <dir> <effect> <state> [<request-id>]
+  local dir=$1 effect=$2 state=$3 request=${4:-} id record now
+  now=2026-09-01T06:20:26Z
+  case $state in
+    granted|spent) ;;
+    *) return 1 ;;
+  esac
+  ( set -u
+    # shellcheck source=bin/fm-landing-authorization-lib.sh
+    . "$ROOT/bin/fm-landing-authorization-lib.sh" || exit 1
+    id=$(fm_auth_effect_id "$effect" "$EFFECT_VENUE" "$EFFECT_REMOTE" "$EFFECT_REMOTE" \
+      "$EFFECT_URL_DIGEST" "$EFFECT_VENUE" "$EFFECT_REF" - "$HEAD_B" "$EFFECT_TREE" \
+      "$EFFECT_TIP" "$EFFECT_GENERATION" 1) || exit 1
+    record=$(fm_auth_effect_record_new "$effect" "$id" "$request" "$EFFECT_VENUE" \
+      "$EFFECT_REMOTE" "$EFFECT_REMOTE" "$EFFECT_URL_DIGEST" "$EFFECT_VENUE" \
+      "$EFFECT_REF" - "$HEAD_B" "$EFFECT_TREE" "$EFFECT_TIP" "$EFFECT_GENERATION" \
+      1 "$EFFECT_SUBJECT" "$now") || exit 1
+    # Spent, because that is the state the fifteen real records were in: an
+    # attestation this fleet already published and can never publish again.
+    if [ "$state" = spent ]; then
+      record=$(printf '%s' "$record" | jq --arg now "$now" \
+        '.state="spent"
+         | .updated=$now
+         | .spend={intent:$now,by:"1",outcome:"applied",
+                   evidence:"remote tip observed",
+                   executable:{path:"/usr/bin/git",digest:"deadbeef"},
+                   output:"pushed",exit_code:0}
+         | .history=[{at:$now,event:"intent-recorded"},
+                     {at:$now,event:"effect-confirmed"}]') || exit 1
+    fi
+    fm_auth_store_write "$dir/home/data/landing-authorizations" "$id" "$record" || exit 1
+    printf '%s\n' "$id" )
+}
+
+# A second ruled request in an existing case, so a mint for a DIFFERENT ruling can
+# be driven without a second case directory. Derived from the record new_case
+# already wrote, so both stay one shape.
+add_ruled_correlation() {  # <dir> <request-id>
+  local dir=$1 rid=$2
+  jq --arg rid "$rid" '.request_id=$rid' "$(corr_path "$dir")" \
+    > "$(corr_path "$dir" "$rid")"
+}
+
+test_a_foreign_class_record_does_not_block_the_landing_enumeration() {
+  local dir id planted custody matching out rc
+  dir=$(new_case foreign-class) || fail "foreign-class: fixture failed"
+  add_ruled_correlation "$dir" fm-ob-bbbbbb222222 \
+    || fail "foreign-class: second correlation record failed"
+
+  # Non-vacuity first, on the unperturbed fixture: this store mints.
+  id=$(mint_id "$dir")
+  fm_auth_id_shape "$id" \
+    || fail "foreign-class: the unperturbed fixture did not mint: $id"
+
+  # THE PERTURBATION. One spent attestation-evidence authorization, carrying the
+  # null request_id its class is written with, lands in the shared store. It is
+  # not a landing authority and never was; it must not be able to stop one.
+  planted=$(plant_effect_record "$dir" attestation-evidence spent) \
+    || fail "foreign-class: the attestation record could not be planted"
+  fm_auth_id_shape "$planted" \
+    || fail "foreign-class: planted record has no authorization id: $planted"
+  [ "$(jq -r '.request_id' "$dir/home/data/landing-authorizations/$planted.json")" = null ] \
+    || fail "foreign-class: the planted record does not carry the null request_id under test"
+
+  # Custody is the fourth class in this shared store. Exercise it separately so
+  # the class gate stays closed over the complete writer vocabulary.
+  custody=$(plant_effect_record "$dir" custody granted fm-ob-custody123456) \
+    || fail "foreign-class: the custody record could not be planted"
+  fm_auth_id_shape "$custody" \
+    || fail "foreign-class: custody record has no authorization id: $custody"
+
+  # RED 1: minting a landing for a DIFFERENT ruling must still reach a verdict.
+  # Before the class gate this bailed could-not-observe, wedging every governed
+  # landing in the home.
+  out=$(mint_plan "$dir" fm-ob-bbbbbb222222 2>&1); rc=$?
+  expect_code 0 "$rc" "foreign-class: a foreign-class record must not wedge the mint: $out"
+
+  # THE POSITIVE. The enumeration still ANSWERS. Spend the landing, then re-mint
+  # the same ruling at the same head: the already-landed refusal must still fire
+  # with the attestation record sitting in the store beside it.
+  run_auth "$dir" spend "$id" --head "$HEAD_A" >/dev/null 2>&1 \
+    || fail "foreign-class: the landing authority did not spend"
+  [ "$(act_count "$dir")" = 1 ] || fail "foreign-class: the landing did not happen once"
+
+  out=$(mint_plan "$dir" fm-ob-abcdef123456 --method rebase 2>&1); rc=$?
+  expect_code 3 "$rc" "foreign-class: re-minting after a landing must still refuse: $out"
+  assert_contains "$out" "FM_AUTH_RULING_ALREADY_LANDED" \
+    "foreign-class: the already-landed answer was lost, not just unwedged"
+
+  # AND THE CASE THAT PROVES THE SKIP IS BY CLASS. A foreign-class record whose
+  # request_id and head are exactly the landing's own would satisfy every field
+  # comparison in the already-landed check. If it were skipped by anything other
+  # than its class - a non-matching field, a lucky null - this record would be
+  # read as a landing that already happened, and would refuse the ruling's real
+  # landing forever. A publication is a push; it is not a landing.
+  matching=$(plant_effect_record "$dir" publication spent fm-ob-cccccc333333) \
+    || fail "foreign-class: the matching-identity record could not be planted"
+  if ! jq --arg h "$HEAD_A" --arg r fm-ob-cccccc333333 '.request_id=$r | .grant.head=$h' \
+    "$dir/home/data/landing-authorizations/$matching.json" > "$dir/matching.json"; then
+    fail "foreign-class: the matching-identity record could not be rewritten"
+  fi
+  mv "$dir/matching.json" "$dir/home/data/landing-authorizations/$matching.json" \
+    || fail "foreign-class: the matching-identity record could not be bound to the landing"
+  add_ruled_correlation "$dir" fm-ob-cccccc333333 \
+    || fail "foreign-class: third correlation record failed"
+  out=$(mint_plan "$dir" fm-ob-cccccc333333 2>&1); rc=$?
+  expect_code 0 "$rc" \
+    "foreign-class: a spent publication on this ruling and head must not read as a landing: $out"
+
+  # The listing is the store's other enumeration and wedged on the same record.
+  out=$(run_auth "$dir" list 2>&1); rc=$?
+  expect_code 0 "$rc" "foreign-class: a foreign-class record must not wedge the listing: $out"
+  assert_contains "$out" "$planted"$'\tspent\tattestation-evidence' \
+    "foreign-class: the attestation record was not listed with its class"
+  assert_contains "$out" "$custody"$'\tgranted\tcustody' \
+    "foreign-class: the custody record was not listed with its class"
+
+  # Addressing it with the landing commands still refuses: unwedging the
+  # enumeration must not make a publication authority spendable as a landing.
+  out=$(run_auth "$dir" status "$planted" 2>&1); rc=$?
+  expect_code 3 "$rc" "foreign-class: status of a foreign-class record must refuse: $out"
+  assert_contains "$out" "FM_AUTH_NOT_A_LANDING_AUTHORIZATION" \
+    "foreign-class: the refusal did not name the class"
+  case $out in
+    *granted*|*spent*|*indeterminate*|*void*)
+      fail "foreign-class: status spoke a landing lifecycle word for another class: $out" ;;
+  esac
+  out=$(run_auth "$dir" spend "$planted" --head "$HEAD_B" 2>&1); rc=$?
+  [ "$rc" != 0 ] \
+    || fail "foreign-class: a publication authority was spendable as a landing"
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "foreign-class: addressing a foreign-class record performed an act"
+  pass "a foreign-class record does not block the landing enumeration"
+}
+
+# --- 32: the landing schema's own axes are not weakened -----------------------
+
+test_a_landing_record_with_no_request_id_is_still_unreadable() {
+  local dir id record out rc planted
+  dir=$(new_case null-request) || fail "null-request: fixture failed"
+  id=$(mint_id "$dir")
+  record="$dir/home/data/landing-authorizations/$id.json"
+
+  # Non-vacuity: unperturbed, this record reads.
+  out=$(run_auth "$dir" status "$id" 2>&1); rc=$?
+  expect_code 0 "$rc" "null-request: the unperturbed record must read: $out"
+
+  # RED 2. A LANDING-class record with a null request_id is malformed, and the
+  # class gate must not have bought it an exemption: null is legitimate for the
+  # effect classes and never for this one.
+  #
+  # WHAT REFUSES IT IS NOT ASSERTED, deliberately. Both the shape axis and the
+  # identity recomputation reject this record - relaxing either one alone still
+  # leaves it unreadable - so a case that named one of them would credit that
+  # axis with a refusal the other also produces. The assertion is the verdict.
+  printf '%s\n' "$(jq '.request_id=null' "$record")" > "$record"
+  out=$(run_auth "$dir" status "$id" 2>&1); rc=$?
+  expect_code 4 "$rc" "null-request: a landing record with no request id must not read: $out"
+  [ "$out" = unreadable ] \
+    || fail "null-request: a landing record with no request id reported '$out', not unreadable"
+
+  # AND THE AXIS THE CLASS GATE COULD ACTUALLY WEAKEN. A gate that skipped every
+  # record the landing schema rejects - rather than only the records that belong
+  # to another class - would drop a corrupt LANDING authority from the
+  # already-landed enumeration silently. That record is exactly the one that
+  # might hold the answer, so it must still stop both enumerations.
+  out=$(run_auth "$dir" list 2>&1); rc=$?
+  expect_code 4 "$rc" "null-request: an unreadable landing record must make the listing could-not-observe: $out"
+
+  add_ruled_correlation "$dir" fm-ob-bbbbbb222222 \
+    || fail "null-request: second correlation record failed"
+  planted=$(mint_plan "$dir" fm-ob-bbbbbb222222 2>&1); rc=$?
+  expect_code 4 "$rc" "null-request: an unreadable landing record must stop the mint: $planted"
+  assert_contains "$planted" "FM_AUTH_ENUMERATION_UNOBSERVED" \
+    "null-request: the mint did not report the unreadable record as could-not-observe"
+  pass "a landing record with no request id is still unreadable"
+}
 # --- run ---------------------------------------------------------------------
 
 run_test_batch() {  # <test-function>...
@@ -1557,5 +1756,8 @@ run_test_batch \
   test_a_target_ref_moved_after_mint_performs_no_act \
   test_successful_exit_requires_post_effect_proof \
   test_the_whole_path_lands_one_real_fast_forward_and_proves_it
+run_test_batch \
+  test_a_foreign_class_record_does_not_block_the_landing_enumeration \
+  test_a_landing_record_with_no_request_id_is_still_unreadable
 
 fm_test_contract "$0"

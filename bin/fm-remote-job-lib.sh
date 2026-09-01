@@ -894,7 +894,10 @@ fm_remote_job_probe() { # <account-home>; a fresh worker heartbeat or active job
 
 fm_remote_job_wait_for_probe() { # <remote-root> <account-home>
   local root=$1 account_home=$2 i=0
-  while [ "$i" -lt 200 ]; do
+  # The worker may spend 15 seconds inside its bounded ownership-reclaim loop.
+  # Keep this caller's bound strictly outside that whole window, with enough
+  # room for startup and identity publication after reclamation completes.
+  while [ "$i" -lt 300 ]; do
     fm_remote_job_probe "$account_home" && fm_remote_job_worker_identity_matches "$root" "$account_home" && return 0
     i=$((i + 1))
     sleep 0.1

@@ -190,6 +190,13 @@ publication
 custody
 attestation-evidence'
 
+# The class name a landing record carries. It is not written into the record,
+# because a landing record spends `.effect` on its effect PLAN; it is the class a
+# record with no effect string resolves to. Named here so no reader spells it as
+# a literal.
+# shellcheck disable=SC2034  # contract constant consumed by sourcing callers
+FM_AUTH_CLASS_LANDING='landing'
+
 # Authorization lifecycle.
 #
 #   granted   minted, unspent, and fresh as far as the last check could observe
@@ -251,6 +258,10 @@ FM_AUTH_TOKEN_CREDENTIAL=FM_AUTH_CREDENTIAL_BEARING_INPUT
 FM_AUTH_TOKEN_PLAN_STALE=FM_AUTH_EFFECT_PLAN_STALE
 FM_AUTH_TOKEN_PLAN_FOREIGN=FM_AUTH_EFFECT_PLAN_FOREIGN
 FM_AUTH_TOKEN_RULING_EXHAUSTED=FM_AUTH_RULING_ALREADY_LANDED
+# A REFUSAL, not a could-not-observe: the record was read well enough to say
+# what it is, and what it is is another class's authority. An operator told only
+# "unreadable" would go looking for a corrupt record and find a healthy one.
+FM_AUTH_TOKEN_FOREIGN_CLASS=FM_AUTH_NOT_A_LANDING_AUTHORIZATION
 
 # could-not-observe: no verdict was reached
 FM_AUTH_TOKEN_UNREADABLE=FM_AUTH_CORRELATION_UNREADABLE
@@ -360,6 +371,49 @@ fm_auth_id_valid() {  # <candidate>
 
 fm_auth_effect_valid() {  # <candidate>
   printf '%s\n' "$FM_AUTH_EFFECTS" | grep -qxF "${1:-}"
+}
+
+# --- which class a record belongs to -----------------------------------------
+#
+# ONE STORE, FOUR AUTHORITY CLASSES, and a reader must know which one it is
+# holding BEFORE it applies a schema to it. All four declare
+# `fm-landing-authorization.v1`, all four live in the same directory, and their
+# records share every lifecycle field - so the schema alone cannot tell a landing
+# authority from a publication one.
+#
+# STATED ONCE, HERE, because this is the rule that tells the two writers in this
+# file apart, and a reader that decided it for itself would be the second schema
+# statement: the writers would move and the reader would not.
+# docs/vocabulary-collisions.md already rules that `effect=` in the identity is
+# what a reader distinguishes these four by; this is that ruling in code.
+#
+# The discriminator is `.effect`, which each writer fills differently.
+# fm_auth_effect_record_new names its class there as a string from
+# FM_AUTH_EFFECTS. fm_auth_record_new puts its effect PLAN there as an object, or
+# leaves it null for a record minted before the plan existed.
+#
+# THREE-VALUED, like everything else that reads a record: a class name, or a
+# non-zero return for a record whose class cannot be determined. Indeterminable
+# is NOT landing, and defaulting it to landing is the tempting mistake: it would
+# hand the landing schema a record nobody classified and report the resulting
+# mismatch as a corrupt landing authority, naming the wrong repair for a record
+# that may be neither class.
+fm_auth_record_class() {  # <record-json> -> prints class | 1 indeterminable
+  local raw=${1:-} effect kind
+  kind=$(printf '%s' "$raw" | jq -r '.effect | type' 2>/dev/null) || return 1
+  case $kind in
+    # An effect plan, or a record from before plans existed. Either way the
+    # record does not name a class, and only landing records are written that way.
+    object|null) printf '%s\n' "$FM_AUTH_CLASS_LANDING" ;;
+    string)
+      effect=$(printf '%s' "$raw" | jq -r '.effect') || return 1
+      # A string outside the closed vocabulary was written by something that does
+      # not share it. That is indeterminable, not landing.
+      fm_auth_effect_valid "$effect" || return 1
+      printf '%s\n' "$effect"
+      ;;
+    *) return 1 ;;
+  esac
 }
 
 # --- the publication subject -------------------------------------------------
@@ -863,6 +917,22 @@ fm_auth_record_new() {  # <id> <request> <comment> <verdict> <item> <project> <r
 # a real, reportable state rather than a gap: an ungoverned publication still
 # mints an authority, so it is still one-use, still head-bound and still
 # crash-recoverable. What governance adds is the ruling, not the exactly-once.
+#
+# NULL, AND NOT A LITERAL LIKE `not-applicable`. The distinction a reader needs
+# is the record's CLASS, which fm_auth_record_class already answers from
+# `.effect`; spelling the same fact a second time in `request_id` would put two
+# statements of one contract on disk, and the fifteen attestation-evidence
+# records this fleet has already written carry the null. A landing record's
+# `request_id` is still required to be a non-empty string, and that is not a
+# second rule: it is the same rule read through the class, because a landing
+# authority derives its identity from the ruling it rests on and an effect
+# record derives its identity from the subject it moves.
+#
+# `attestation-evidence` is the class that ALWAYS carries the null, because
+# publishing no-mistakes evidence to a notes ref has no semantic work identity to
+# name. That is why a home that ships through no-mistakes accumulates these, and
+# why a reader that judged them by the landing schema stopped every governed
+# landing in it.
 
 fm_auth_effect_record_new() {  # <effect> <id> <request-or-empty> <venue> <remote> <safe-url> <url-digest> <remote-identity> <ref> <item> <head> <tree> <tip> <generation> <epoch> <subject> <now>
   local effect=$1

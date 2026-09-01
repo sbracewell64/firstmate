@@ -254,8 +254,9 @@ A second collision was ruled with it and needs no row of its own, because one ow
 [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh) now owns the one-use authority for four effects, `landing`, `publication`, `custody` and `attestation-evidence`, so its file name is narrower than its contents.
 That is deliberate: a second authorization owner would bring a second store and a second idea of what `spent` means.
 The file keeps its name, its header states the widening, and `effect=` in the identity is what a reader distinguishes them by.
+`fm_auth_record_class` is that rule in code, and it is the only place a reader of this store may decide which class it is holding.
 
-**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `landing-authorizations/` row and section 7's publication chokepoint paragraph; the headers of [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh); the publish path of [`bin/fm-attest.sh`](../bin/fm-attest.sh); [`docs/no-mistakes-attestation.md`](no-mistakes-attestation.md); [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
+**Where it bites:** [`AGENTS.md`](../AGENTS.md) section 2's `landing-authorizations/` row and section 7's publication chokepoint paragraph; the headers of [`bin/fm-publication-seam-lib.sh`](../bin/fm-publication-seam-lib.sh) and [`bin/fm-landing-authorization-lib.sh`](../bin/fm-landing-authorization-lib.sh); the class gate in [`bin/fm-landing-authorization.sh`](../bin/fm-landing-authorization.sh)'s `auth_read`, which reads one of the four and skips the rest; the publish path of [`bin/fm-attest.sh`](../bin/fm-attest.sh); [`docs/no-mistakes-attestation.md`](no-mistakes-attestation.md); [`docs/verification/candidate-publication-effect-guard.md`](verification/candidate-publication-effect-guard.md).
 
 ### `custody`
 

@@ -464,8 +464,7 @@ auth_read() {  # <auth-id> -> 0 readable | 3 absent | 4 unreadable
   # share this vocabulary; a known effect that is not publication means the
   # caller addressed a landing authority with the publication guard. Neither is
   # a record this command may act on.
-  effect=$(printf '%s' "$raw" | jq -r '.effect // ""')
-  fm_auth_effect_valid "$effect" || return 4
+  effect=$(fm_auth_record_class "$raw") || return 4
   case $effect in publication|custody|attestation-evidence) ;; *) return 4 ;; esac
   AUTH_EFFECT=$effect
   # LOCATION IS NOT IDENTITY: a record adopted from its filename can be moved
