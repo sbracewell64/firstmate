@@ -596,6 +596,45 @@ test_the_repository_channel_clearly_refuses_distinct_roles() {
   pass "the repository channel clearly refuses distinct roles before writing or committing"
 }
 
+test_concurrent_worktree_config_enablement_is_idempotent() {
+  local root fakebin real_git out rc
+  root=$(make_case concurrent-worktree-config) || fail "fixture setup failed"
+  fakebin=$(fm_fakebin "$root") || fail "fakebin setup failed"
+  real_git=$(command -v git) || fail "git lookup failed"
+  cat > "$fakebin/git" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *" config extensions.worktreeConfig true")
+    if [ "${FM_TEST_CONCURRENT_ENABLE:-}" = 1 ]; then
+      "$FM_TEST_REAL_GIT" "$@" || exit 1
+    fi
+    exit 1
+    ;;
+esac
+exec "$FM_TEST_REAL_GIT" "$@"
+SH
+  chmod +x "$fakebin/git" || fail "fake git setup failed"
+
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" FM_TEST_CONCURRENT_ENABLE=1 \
+    FM_CI_STATE_VALIDATED=1 FM_CI_STATE_AUTHOR="$AUTHORITATIVE" FM_CI_STATE_COMMITTER="$AUTHORITATIVE" \
+    FM_CI_STATE_AUTHOR_NAME='Shane Bracewell' FM_CI_STATE_AUTHOR_EMAIL='sbracewell64@gmail.com' \
+    FM_CI_STATE_COMMITTER_NAME='Shane Bracewell' FM_CI_STATE_COMMITTER_EMAIL='sbracewell64@gmail.com' \
+    "$CMD" install-worktree "$root/checkout" 2>&1) || fail "a losing concurrent enablement must accept the observed true state: $out"
+  assert_contains "$out" "checkout : bound" "the concurrent loser must finish the worktree binding"
+
+  "$real_git" -C "$root/checkout" config --unset extensions.worktreeConfig || fail "extension reset failed"
+  rc=0
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" \
+    FM_CI_STATE_VALIDATED=1 FM_CI_STATE_AUTHOR="$AUTHORITATIVE" FM_CI_STATE_COMMITTER="$AUTHORITATIVE" \
+    FM_CI_STATE_AUTHOR_NAME='Shane Bracewell' FM_CI_STATE_AUTHOR_EMAIL='sbracewell64@gmail.com' \
+    FM_CI_STATE_COMMITTER_NAME='Shane Bracewell' FM_CI_STATE_COMMITTER_EMAIL='sbracewell64@gmail.com' \
+    "$CMD" install-worktree "$root/checkout" 2>&1) || rc=$?
+  [ "$rc" -ne 0 ] || fail "a failed enablement with no observed true state must refuse"
+  assert_contains "$out" "FM_CI_INSTALL_FAILED" "the unresolved enablement failure must retain the installation refusal"
+  pass "concurrent worktree-config enablement accepts only an observed true winner"
+}
+
 # --- the launch owner is the admission, not the brief ------------------------
 #
 # THE CONTROL THE PREVIOUS CANDIDATE FAILED. Its binder worked, but the only
@@ -1156,6 +1195,7 @@ FM_CONTROLS=(
   test_the_env_verb_emits_the_channel_that_outranks_everything
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
+  test_concurrent_worktree_config_enablement_is_idempotent
   test_a_launch_whose_identity_cannot_bind_is_mechanically_refused
   test_distinct_roles_refuse_before_any_launch_allocation
   test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation
