@@ -616,6 +616,7 @@ tests/fm-classify.test.sh 4936
 tests/fm-claude-stop-autoarm-live-e2e.test.sh 15
 tests/fm-claude-stop-autoarm.test.sh 60625
 tests/fm-codex-continuity-live-e2e.test.sh 21
+tests/fm-commit-identity.test.sh 32661
 tests/fm-commitment-register.test.sh 23684
 tests/fm-conflict-marker-check.test.sh 275
 tests/fm-context-statusline.test.sh 585

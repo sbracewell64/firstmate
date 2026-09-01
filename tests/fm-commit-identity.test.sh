@@ -150,6 +150,7 @@ gate_commit_identity() {  # <root> [env-assignments...]
 
 SPAWN="$ROOT/bin/fm-spawn.sh"
 LAUNCH_VENUE='example.invalid/sbracewell64/firstmate'
+LAUNCH_CASE_REC=
 
 # Every launch-path invocation is BOUNDED. The subject of these controls is what
 # the launch owner binds, not whether a stand-in terminal completes its
@@ -157,10 +158,13 @@ LAUNCH_VENUE='example.invalid/sbracewell64/firstmate'
 # rather than a hung suite.
 FM_CI_LAUNCH_TIMEOUT=${FM_CI_LAUNCH_TIMEOUT:-90}
 
-# Echoes "<home>|<project>|<worktree>|<fakebin>". The project carries the
-# poisoned global identity through HOME, exactly as the real defect did.
+# Sets LAUNCH_CASE_REC to "<home>|<project>|<worktree>|<fakebin>". The project
+# carries the poisoned global identity through HOME, exactly as the real defect
+# did. Call this directly: its daemon must register with the suite's reaper in
+# this shell, not in a command-substitution subshell that loses the registration.
 make_launch_case() {  # <name> [<policy>]
   local name=${1:?} policy=${2:-default} case_dir home proj wt fakebin gate
+  LAUNCH_CASE_REC=
   case_dir="$TMP_ROOT/launch-$name"
   home="$case_dir/home"
   proj="$case_dir/project"
@@ -214,7 +218,7 @@ SH
   esac
   printf '  repo:  %s\n  gate:  %s\n' "$proj" "$gate" > "$case_dir/nm-status" || return 1
   start_daemon "$case_dir" >/dev/null || return 1
-  printf '%s|%s|%s|%s\n' "$home" "$proj" "$wt" "$fakebin"
+  LAUNCH_CASE_REC="$home|$proj|$wt|$fakebin"
 }
 
 run_launch() {  # <case-dir> <home> <wt> <fakebin> <spawn-args...>
@@ -601,8 +605,9 @@ test_the_repository_channel_clearly_refuses_distinct_roles() {
 test_a_launch_whose_identity_cannot_bind_is_mechanically_refused() {
   local rec home proj wt fakebin case_dir out rc id
   id=unbindable
-  rec=$(make_launch_case "$id" '{"generation":"g","venues":{"example.invalid/sbracewell64/firstmate":{"identities":{"author":"Test <test@example.com>","committer":"Test <test@example.com>"}}}}') \
+  make_launch_case "$id" '{"generation":"g","venues":{"example.invalid/sbracewell64/firstmate":{"identities":{"author":"Test <test@example.com>","committer":"Test <test@example.com>"}}}}' \
     || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj wt fakebin <<EOF
 $rec
 EOF
@@ -628,7 +633,8 @@ test_distinct_roles_refuse_before_any_launch_allocation() {
   policy=$(jq -n --arg a "$author" --arg c "$committer" '{generation:"g",venues:{
     "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$c}}
   }}') || fail "policy setup failed"
-  rec=$(make_launch_case "$id" "$policy") || fail "launch fixture setup failed"
+  make_launch_case "$id" "$policy" || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj wt fakebin <<EOF
 $rec
 EOF
@@ -657,7 +663,8 @@ test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses() {
     "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$a}},
     "example.invalid/target/project":{identities:{author:$b,committer:$b}}
   }}') || fail "policy setup failed"
-  rec=$(make_launch_case "$id" "$policy") || fail "launch fixture setup failed"
+  make_launch_case "$id" "$policy" || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj wt fakebin <<EOF
 $rec
 EOF
@@ -674,7 +681,8 @@ EOF
   [ "$identity" = "$target_identity|$target_identity" ] || fail "the launch bound origin instead of the contribution venue: $identity"
 
   id=unresolved-venue
-  rec=$(make_launch_case "$id" "$policy") || fail "unresolved fixture setup failed"
+  make_launch_case "$id" "$policy" || fail "unresolved fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj wt fakebin <<EOF
 $rec
 EOF
@@ -698,7 +706,8 @@ test_two_same_project_launches_keep_worktree_identities_isolated() {
     "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$a}},
     "example.invalid/upstream/project":{identities:{author:$b,committer:$b}}
   }}') || fail "policy setup failed"
-  rec=$(make_launch_case concurrent-a "$policy") || fail "launch fixture setup failed"
+  make_launch_case concurrent-a "$policy" || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj first_wt fakebin <<EOF
 $rec
 EOF
@@ -743,7 +752,8 @@ EOF
 test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step() {
   local rec home proj wt fakebin case_dir out id identity gate
   id=ordinary
-  rec=$(make_launch_case "$id") || fail "launch fixture setup failed"
+  make_launch_case "$id" || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj wt fakebin <<EOF
 $rec
 EOF
@@ -788,7 +798,8 @@ EOF
 test_an_ungoverned_home_launches_and_says_so() {
   local rec home proj wt fakebin case_dir out id
   id=ungoverned
-  rec=$(make_launch_case "$id" none) || fail "launch fixture setup failed"
+  make_launch_case "$id" none || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj wt fakebin <<EOF
 $rec
 EOF
