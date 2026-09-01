@@ -873,26 +873,37 @@ SH
 # one perturbation - a claim nobody can ever hold - which produces exactly the
 # outcome the law forbids: `six racing mints granted no authorization at all`.
 test_racing_mints_grant_one_authorization_and_type_every_other_outcome() {
-  local dir i out first records distinct untyped ready
+  local dir i out first records distinct untyped ready deadline pid state line
   local -a pids=()
   dir=$(new_case racing-mints) || fail "racing-mints: fixture failed"
-  mkdir "$dir/mint-ready" || fail "racing-mints: readiness barrier could not be created"
   for i in 1 2 3 4 5 6; do
-    ( : > "$dir/mint-ready/$i"
-      while [ ! -e "$dir/mints-go" ]; do sleep 0.01; done
+    ( kill -STOP "$BASHPID"
       mint_plan "$dir" fm-ob-abcdef123456 ) >"$dir/mint-$i.out" 2>&1 &
     pids+=("$!")
     fm_test_reap "$!"
   done
-  for _ in $(seq 1 300); do
+  deadline=$((SECONDS + 3))
+  while :; do
     ready=0
-    for i in "$dir"/mint-ready/*; do [ -e "$i" ] && ready=$((ready + 1)); done
+    for pid in "${pids[@]}"; do
+      state=
+      if [ -r "/proc/$pid/status" ]; then
+        while IFS= read -r line; do
+          case $line in State:*) state=$line; break ;; esac
+        done < "/proc/$pid/status"
+      else
+        state=$(ps -o state= -p "$pid" 2>/dev/null)
+      fi
+      case $state in *T*) ready=$((ready + 1)) ;; esac
+    done
     [ "$ready" -eq 6 ] && break
-    sleep 0.01
+    [ "$SECONDS" -lt "$deadline" ] || break
   done
-  [ "${ready:-0}" -eq 6 ] \
-    || fail "racing-mints: only ${ready:-0} of 6 callers reached the race barrier"
-  : > "$dir/mints-go"
+  if [ "${ready:-0}" -ne 6 ]; then
+    for i in "${pids[@]}"; do kill -CONT "$i" 2>/dev/null || true; done
+    fail "racing-mints: only ${ready:-0} of 6 callers reached the race barrier"
+  fi
+  for i in "${pids[@]}"; do kill -CONT "$i"; done
   for i in "${pids[@]}"; do wait "$i" || true; done
 
   distinct=
