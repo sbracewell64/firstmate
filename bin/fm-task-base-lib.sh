@@ -150,10 +150,12 @@ TASK_BASE_POLICY_TARGET_EQUIVALENCE=contribution-target
 task_base_policy_ref_for() {  # <contribution-ref>
   local ref=${1-} name
   case $ref in
-    '' | unresolved) return 1 ;;
+    '' | unresolved | *[[:space:]]* | *[[:cntrl:]]* | -*) return 1 ;;
     refs/*) printf '%s\n' "$ref"; return 0 ;;
+    origin/*) name=${ref#origin/} ;;
+    upstream/*) name=${ref#upstream/} ;;
+    *) name=$ref ;;
   esac
-  name=${ref##*/}
   case $name in
     '' | *[[:space:]]* | *[[:cntrl:]]* | -*) return 1 ;;
   esac

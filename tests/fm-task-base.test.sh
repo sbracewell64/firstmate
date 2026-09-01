@@ -1144,6 +1144,12 @@ test_policy_ref_is_placed_at_the_venue_rather_than_in_this_checkout() {
   [ "$got" = refs/heads/main ] || fail "upstream/main -> '$got', want refs/heads/main"
   got=$(task_base_policy_ref_for main) || fail "a bare local branch yielded no policy ref"
   [ "$got" = refs/heads/main ] || fail "main -> '$got', want refs/heads/main"
+  got=$(task_base_policy_ref_for origin/release/1.0) || fail "a slashed origin ref yielded no policy ref"
+  [ "$got" = refs/heads/release/1.0 ] || fail "origin/release/1.0 -> '$got'"
+  got=$(task_base_policy_ref_for upstream/release/1.0) || fail "a slashed upstream ref yielded no policy ref"
+  [ "$got" = refs/heads/release/1.0 ] || fail "upstream/release/1.0 -> '$got'"
+  got=$(task_base_policy_ref_for release/1.0) || fail "a slashed local branch yielded no policy ref"
+  [ "$got" = refs/heads/release/1.0 ] || fail "release/1.0 -> '$got'"
   # An already-qualified ref is passed through rather than re-qualified.
   got=$(task_base_policy_ref_for refs/heads/release) || fail "a qualified ref yielded nothing"
   [ "$got" = refs/heads/release ] || fail "refs/heads/release -> '$got'"
