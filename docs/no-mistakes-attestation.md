@@ -194,8 +194,9 @@ It applies the declaration contract under "What the check reads," so publication
 
 That predicate is what makes an unconditional publication step correct everywhere, and two call sites now invoke it:
 
-- The worker that ran the pipeline publishes at the moment its run reaches CI-ready, from the worktree holding the run record, with `bin/fm-attest.sh write --only-if-required` and the task's recorded contribution venue, venue URL, and contribution target.
+- The worker that ran the pipeline publishes at the moment its run reaches CI-ready, from the worktree holding the run record, with `bin/fm-attest.sh write --only-if-required`, the task's recorded contribution venue, venue URL, and contribution target, and `--expect-head` bound to the final pull request head just observed from the forge.
   `bin/fm-brief.sh` puts that call in the `no-mistakes` delivery contract, which is the document a worker executes; the two modes that run no pipeline have no evidence to publish and are told nothing.
+  The forge lookup, head validation, and publication are one standalone shell command, so no separately executed span can lose or replace the `final_head` binding before the publication effect.
   The flag makes the call safe to run in any project: where no check reads the result, nothing is recorded, nothing is pushed, and the pipeline tool is never even consulted.
   Successful publication, nothing to publish, or the owner's explicit refusal completes that contract; a result the worker could not observe leaves it blocked and cannot be reported as done.
 - `bin/fm-pr-check.sh` publishes at the fleet's own chokepoint, after the merge watch is armed, which is the first point at which the fleet holds the task's local copy, the request, and the request's head together.
