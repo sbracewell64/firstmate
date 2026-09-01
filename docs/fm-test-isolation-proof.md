@@ -108,18 +108,18 @@ Without the first half, publishing correctly is not enough either, because the s
 
 - Date: 2026-09-01
 - Command: `bin/fm-test-isolation-proof.sh --jobs 4 --json docs/fm-test-isolation-proof.json`
-- Artifact: `run_id fm-isolation-1788290648174-2743407`
+- Artifact: `run_id fm-isolation-1788292625891-3931134`
 - Result, one pass, exit 0:
 
 ```
-FM_ISOLATION_SUMMARY total=25 failed=0 concurrency=4 duration_ms=740358
-FM_ISOLATION_ARTIFACT WRITTEN path=docs/fm-test-isolation-proof.json subjects=25 candidates=25
+FM_ISOLATION_SUMMARY total=26 failed=0 concurrency=4 duration_ms=641005
+FM_ISOLATION_ARTIFACT WRITTEN path=docs/fm-test-isolation-proof.json subjects=26 candidates=26
 FM_ISOLATION_SEAM PROVEN consumer=bin/fm-test-run.sh check=--check-coverage
 ```
 
 - Consumer: `bin/fm-test-run.sh --check-coverage` then exits 0 and reports
-  `FM_ISOLATION_FRESHNESS PROVEN subjects=25 proven=25 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=0`
-  followed by `FM_TEST_COVERAGE ok total=172 parallel=25 serial=136 serial_shards=8 herdr=11 proven=25`.
+  `FM_ISOLATION_FRESHNESS PROVEN subjects=26 proven=26 stale=0 unobservable=0 dependencies_stale=0 dependencies_unobservable=0`
+  followed by `FM_TEST_COVERAGE ok total=173 parallel=26 serial=136 serial_shards=8 herdr=11 proven=26`.
 - `bin/fm-test-isolation-proof.sh --list` and `--list-proven` are identical, so the artifact enumerates the exact candidate universe and records only subjects that actually passed.
 
 ### The withheld-artifact control
