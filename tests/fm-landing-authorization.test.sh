@@ -873,14 +873,24 @@ SH
 # one perturbation - a claim nobody can ever hold - which produces exactly the
 # outcome the law forbids: `six racing mints granted no authorization at all`.
 test_racing_mints_grant_one_authorization_and_type_every_other_outcome() {
-  local dir i out first records distinct untyped
+  local dir i out first records distinct untyped ready
   local -a pids=()
   dir=$(new_case racing-mints) || fail "racing-mints: fixture failed"
   for i in 1 2 3 4 5 6; do
-    mint_plan "$dir" fm-ob-abcdef123456 >"$dir/mint-$i.out" 2>&1 &
+    ( : > "$dir/mint-$i.ready"
+      while [ ! -e "$dir/mints-go" ]; do sleep 0.01; done
+      mint_plan "$dir" fm-ob-abcdef123456 ) >"$dir/mint-$i.out" 2>&1 &
     pids+=("$!")
     fm_test_reap "$!"
   done
+  for _ in $(seq 1 300); do
+    ready=$(find "$dir" -maxdepth 1 -name 'mint-*.ready' | wc -l)
+    [ "$ready" -eq 6 ] && break
+    sleep 0.01
+  done
+  [ "${ready:-0}" -eq 6 ] \
+    || fail "racing-mints: only ${ready:-0} of 6 callers reached the race barrier"
+  : > "$dir/mints-go"
   for i in "${pids[@]}"; do wait "$i" || true; done
 
   distinct=
