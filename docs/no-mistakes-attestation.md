@@ -201,7 +201,7 @@ That predicate is what makes an unconditional publication step correct everywher
 - `bin/fm-pr-check.sh` publishes at the fleet's own chokepoint, after the merge watch is armed, which is the first point at which the fleet holds the task's local copy, the request, and the request's head together.
   It reads the repository that will receive the note FROM THE FORGE - the request's head repository - and passes it as the bound publication target, because on a fork layout that repository is neither the venue nor necessarily where any local remote points.
   It delegates rather than deciding: `bin/fm-attest.sh` remains the only thing that reads a run record, binds a note to the head that run validated, publishes it, and asks for the verdict to be re-derived.
-  It reports one three-valued `attestation:` line - published, refused with the owner's own reason, not required, or could-not-observe - and never changes its own exit status, because a provenance answer must not undo an armed watch.
+  It reports one `attestation:` line - published, refused with the owner's own reason, not required, or could-not-observe - and never changes its own exit status, because a provenance answer must not undo an armed watch.
 
 ### Where the note is published
 

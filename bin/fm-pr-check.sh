@@ -29,7 +29,7 @@
 # bin/fm-attest.sh is delegated to publish the evidence its own pipeline run
 # produced and to have that head's verdict re-derived;
 # where no such gate is declared, nothing is touched. It reports one
-# three-valued `attestation:` line and never changes this script's exit status,
+# `attestation:` line and never changes this script's exit status,
 # because a provenance answer must not undo an armed watch.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
