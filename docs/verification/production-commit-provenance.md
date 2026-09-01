@@ -6,7 +6,7 @@ This record holds reusable evidence for one active guarantee of [`../../bin/fm-c
 [`../../bin/fm-commit-identity-lib.sh`](../../bin/fm-commit-identity-lib.sh)'s header owns the channel precedence and the honest limits, that command's header owns the verb contract and exit statuses, and [`../configuration.md`](../configuration.md) "Publication identity policy" owns the schema the authoritative identity is declared in.
 
 Verified on 2026-09-01 on Linux 6.18.33.2-microsoft-standard-WSL2 with git 2.51.0, jq 1.8.1, shellcheck 0.11.0, and no-mistakes v1.40.3.
-The controls below were exercised at implementation head `dc503f07b3a6cd97fca27c3c989b85819361670c` after the launch admission, shared-gate custody, canonical locking, atomic task-record replacement, and portable serial-test isolation refinements were added.
+The controls below were exercised at implementation head `aeacc382a006cb7e2abf97d90b6cc7b5c01271e6` after the launch admission, shared-gate custody, canonical locking, atomic task-record replacement, portable serial-test isolation, pipeline-lane scoping, and concurrent worktree-config enablement refinements were added.
 
 ## The defect this record is built from
 
@@ -84,7 +84,7 @@ $ bash tests/fm-commit-identity.test.sh | tail -1
 FM_TEST_CONTRACT suite=fm-commit-identity.test.sh status=pass
 ```
 
-Thirty-one controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
+Thirty-three controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
 
 ## Watched reds
 
@@ -122,6 +122,7 @@ The brief keeps its call as projection, and it earns its place for a reason a la
 
 `test_a_launch_whose_identity_cannot_bind_is_mechanically_refused` drives the real launch path with no brief instruction anywhere and a policy whose identity cannot be bound, and requires that no task record is published and no endpoint exists.
 `test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation` makes the worktree-scoped channel unreadable and requires refusal before a task record, slot, or endpoint exists.
+`test_concurrent_worktree_config_enablement_is_idempotent` delays a concurrent winner beyond the first losing read and requires the binder to retry until it observes the enabled worktree-config channel, while retaining the installation refusal when no winner appears.
 `test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step` starts through the ordinary lifecycle with nothing invoking the binder, then makes real commits both ways production commits are actually made - by the worker in its slot and by a pipeline stage in the gate repository - and requires the authoritative author and committer on both.
 A home that declares no publication identity policy launches and says so, which is this fleet's existing reading of that absent file at the publication seam rather than an exception opened here.
 
@@ -157,7 +158,7 @@ That defect mattered beyond its own correctness: an unidentifiable daemon is cou
 
 ## The shared validation repository, and the option that was rejected
 
-That repository is shared per project and holds ONE identity pair, so two same-project lanes governed by different venues cannot both be served by it.
+That repository is shared per project and holds ONE identity pair, so two same-project pipeline lanes governed by different venues cannot both be served by it concurrently.
 Lane A binds it, lane B later binds it to a different identity, and lane A's pipeline stages then commit as B - with nothing wrong in either lane.
 
 Two remedies were available and they produce different fleets.
@@ -169,12 +170,13 @@ It was rejected because the last moment this fleet owns is the launch and the wo
 A remedy that narrows a hole is not the same as one that closes it, and the difference is invisible in a green test run.
 
 **Adopted: refuse the contended interval.**
-A lane is admitted only when no other live lane holds that same repository under a different identity.
+A pipeline lane is admitted only when no other live pipeline lane holds that same repository under a different identity.
 The refusal is a WAIT and not a failure - nothing is allocated, no attempt is spent, no task record is written, and the dispatch becomes admissible again as soon as the holder is released, through the ordinary re-evaluation of queued work.
 It reads only the task records this home already keeps, so no second registry exists and nothing outlives those records.
 
-The cost is real and bounded: two same-project lanes with different governed venues no longer run at once.
-That is exactly the cone the ruling permits constraining, and `test_same_identity_lanes_on_one_project_are_not_contended` holds the boundary by requiring that same-identity lanes on one project still run together.
+The cost is real and bounded: two same-project pipeline lanes with different governed venues no longer run at once.
+That is exactly the cone the ruling permits constraining, and `test_same_identity_lanes_on_one_project_are_not_contended` holds the boundary by requiring that same-identity pipeline lanes on one project still run together.
+`test_non_pipeline_lanes_do_not_claim_or_rebind_the_shared_gate` holds the other boundary by requiring direct-PR and local-only lanes to bind only their worktree identity, publish no gate-custody claim, and leave the shared gate unchanged.
 
 Ordering matters as much as the check.
 Validation deliberately does NOT write to that repository; the write happens after custody is settled.
