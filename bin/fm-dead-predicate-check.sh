@@ -59,7 +59,10 @@
 #     own canonical definition dispatches that positional parameter directly, or
 #     binds it exactly once in a local or plain assignment and uses the bound name
 #     only through expansions before dispatching it at a command head. The whole
-#     body must contain no `shift` or `set` command.
+#     body must contain no `shift` or `set` command. A body containing `eval`,
+#     `source`, or `.` is could-not-observe because this control does not interpret
+#     the payload those commands execute, and its mark is refused rather than
+#     credited as a dispatch.
 #     Assignments, test expressions, output commands, and other arguments are data.
 #   - HANDLER DISPATCH. The function is the quoted handler operand of `trap`.
 #
@@ -421,7 +424,7 @@ site_file_parseable() {  # <path-as-written>
 }
 
 pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
-  local f=$1 raw=$2 fn=$3 callee arg_index=0 i def_line end_line body param_var executable
+  local f=$1 raw=$2 fn=$3 callee arg_index=0 i def_line end_line body param_var executable payload
   local -a words=()
   read -r -a words <<<"$raw"
   [ "${#words[@]}" -gt 1 ] || return 1
@@ -446,6 +449,19 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
     body=$(printf '%s\n' "$executable" | sed -n "${def_line}p")
   else
     body=$(printf '%s\n' "$executable" | sed -n "${def_line},${end_line}p")
+  fi
+  payload=$(printf '%s\n' "$body" | awk '
+    { text = text " " $0 }
+    END {
+      boundary = "(^|[;&|{}])[;&|]?[[:space:]]*"
+      controls = "((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*"
+      term = "([[:space:];|&(){}<>]|$)"
+      if (text ~ (boundary controls "(eval|source|[.])" term)) print "eval/source"
+    }
+  ')
+  if [ -n "$payload" ]; then
+    PASS_BY_NAME_CNO_REASON="hands $fn to a callee whose pass-by-name relation is could-not-observe because its body executes an $payload payload"
+    return 2
   fi
   param_var=$(printf '%s\n' "$body" \
     | sed -nE "s/.*[[:space:]]([A-Za-z_][A-Za-z0-9_]*)=(\\\$${arg_index}([[:space:];]|$)|\\\$\\{${arg_index}:-[^}]*\\}).*/\\1/p" \
@@ -494,7 +510,7 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
 # Why a mark's site does not establish the call. Prints the reason and returns 1
 # when the site cannot carry the mark, and returns 0 silently when it does.
 mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
-  local fn=$1 site=$2 resolved=$3 lineno total raw stripped reason pass_by_name=0
+  local fn=$1 site=$2 resolved=$3 lineno total raw stripped reason pass_by_name=0 pass_by_name_cno=
   [ -n "$site" ] || { printf 'names no <file>:<line> dispatch site\n'; return 1; }
   case $site in
     *:*) ;;
@@ -517,7 +533,12 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
   fi
   raw=$(sed -n "${lineno}p" "$resolved")
   stripped=$(strip_cached "$resolved" | sed -n "${lineno}p")
-  pass_by_name_dispatches "$resolved" "$raw" "$fn" && pass_by_name=1
+  PASS_BY_NAME_CNO_REASON=
+  if pass_by_name_dispatches "$resolved" "$raw" "$fn"; then
+    pass_by_name=1
+  elif [ "$?" -eq 2 ]; then
+    pass_by_name_cno=$PASS_BY_NAME_CNO_REASON
+  fi
   # The two readings answer different halves of the question and neither is
   # sufficient alone. The STRIPPED line is the file-context truth about what the
   # shell executes there, so it is what a bare dispatch must survive; reading the
@@ -525,7 +546,7 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
   # The RAW line is the only place a quoted handler's text still exists, so it is
   # what a handler dispatch is read from, and the dispatcher word that makes that
   # text executable is required OUTSIDE the quotes.
-  reason=$(FM_SITE_RAW=$raw FM_SITE_STRIPPED=$stripped awk -v fn="$fn" -v pass_by_name="$pass_by_name" '
+  reason=$(FM_SITE_RAW=$raw FM_SITE_STRIPPED=$stripped awk -v fn="$fn" -v pass_by_name="$pass_by_name" -v pass_by_name_cno="$pass_by_name_cno" '
     BEGIN {
       raw = ENVIRON["FM_SITE_RAW"]
       stripped = ENVIRON["FM_SITE_STRIPPED"]
@@ -559,6 +580,8 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
           print "places " fn " in data, not in an executable dispatch position"
         else if (stripped ~ /^[[:space:]]*(grep|cp|logger)([[:space:]]|$)/)
           print "hands " fn " to a non-dispatching command"
+        else if (pass_by_name_cno != "")
+          print pass_by_name_cno
         else if (pass_by_name)
           exit
         else

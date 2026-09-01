@@ -530,6 +530,27 @@ dispatch value dead_one"
   pass "pass-by-name proof admits only non-mutating bound-name expansions"
 }
 
+test_pass_by_name_refuses_payload_executing_bodies() {
+  local body dir out rc variant=0
+  for body in \
+    'dispatch() { local check=${2:-}; eval '\''check=echo'\''; "$check"; }' \
+    'dispatch() { local check=${2:-}; source /dev/null; "$check"; }' \
+    'dispatch() { local check=${2:-}; . /dev/null; "$check"; }'; do
+    variant=$((variant + 1))
+    dir=$(fixture "payload-executing-body-$variant" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "$body
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "a payload-executing callee was accepted, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*pass-by-name relation is could-not-observe' \
+      || fail "the payload-executing callee lacked a named could-not-observe refusal: $out"
+    printf '%s' "$out" | grep -q 'ALIVE.*dead_one' \
+      && fail "the payload-executing callee promoted an unobservable relation to ALIVE: $out"
+  done
+  pass "payload-executing callees are refused as could-not-observe"
+}
+
 test_pass_by_name_accepts_unmutated_local_binding() {
   local dir out rc
   dir=$(fixture unmutated-local-binding 'live_one() { return 0; }')
@@ -965,6 +986,7 @@ test_pass_by_name_requires_the_exact_argument_position
 test_pass_by_name_rejects_bound_variable_reassignment
 test_pass_by_name_rejects_positional_mutation
 test_pass_by_name_rejects_unadmitted_bound_name_uses
+test_pass_by_name_refuses_payload_executing_bodies
 test_pass_by_name_accepts_unmutated_local_binding
 test_pass_by_name_accepts_production_shaped_body
 test_dynamic_local_helper_mutation_is_a_declared_limit
