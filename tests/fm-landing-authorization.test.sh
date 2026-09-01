@@ -1628,8 +1628,10 @@ test_a_foreign_class_record_does_not_block_the_landing_enumeration() {
   # The listing is the store's other enumeration and wedged on the same record.
   out=$(run_auth "$dir" list 2>&1); rc=$?
   expect_code 0 "$rc" "foreign-class: a foreign-class record must not wedge the listing: $out"
-  assert_contains "$out" "$planted" "foreign-class: the foreign-class record was not listed"
-  assert_contains "$out" "$custody" "foreign-class: the custody record was not listed"
+  assert_contains "$out" "$planted"$'\tspent\tattestation-evidence' \
+    "foreign-class: the attestation record was not listed with its class"
+  assert_contains "$out" "$custody"$'\tgranted\tcustody' \
+    "foreign-class: the custody record was not listed with its class"
 
   # Addressing it with the landing commands still refuses: unwedging the
   # enumeration must not make a publication authority spendable as a landing.
