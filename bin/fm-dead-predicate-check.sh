@@ -190,15 +190,14 @@ function_definitions() {  # <file>
 }
 
 function_has_call_site() {  # <function>
-  local fn=$1 f
+  local fn=$1
   # A VERIFIED mark, never the mark's text. The mark itself is a comment and the
   # stripped text has comments removed, which is correct: a declared call is
   # counted because this control re-read the site the mark named and saw the
   # function dispatched there, not because the comment exists.
   mark_verified "$fn" && return 0
-  for f in "${SCANNABLE[@]}"; do
-    grep -Eq "^[[:space:]]*trap[[:space:]]+['\"][[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
-    if strip_cached "$f" | awk -v fn="$fn" '
+  grep -Eq "^[[:space:]]*trap[[:space:]]+['\"][[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$RAW_CALL_SITE_CORPUS" && return 0
+  if awk -v fn="$fn" '
       BEGIN { term = "([[:space:];|&(){}<>]|$)" }
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
@@ -229,10 +228,9 @@ function_has_call_site() {  # <function>
       $0 ~ ("^[[:space:]]*trap[[:space:]]+" fn term) { found = 1 }
       $0 ~ ("^[[:space:]]*(if|elif)[[:space:]].*;[[:space:]]*then[[:space:]]+" fn term) { found = 1 }
       END { exit(found ? 0 : 1) }
-    '; then
-      return 0
-    fi
-  done
+    ' "$STRIPPED_CALL_SITE_CORPUS"; then
+    return 0
+  fi
   return 1
 }
 
@@ -744,14 +742,22 @@ collect_marks
 VALIDATED_SCANNABLE=()
 for f in "${PARSEABLE[@]}"; do
   unsupported=''
+  executable=$(strip_cached "$f")
   for fn in "${FUNCTIONS[@]}"; do
+    # Most consumers mention none of the enrolled functions. Avoid launching
+    # the per-function classifier unless this file can actually contribute a
+    # use of that name.
+    case $executable in
+      *"$fn"*) ;;
+      *) continue ;;
+    esac
     # A mark whose VERIFIED site is in this file explains this file's use of that
     # name, so the unsupported-form complaint below is not raised for it. The
     # suppression follows the site rather than the comment: a mark that names no
     # dispatch here suppresses nothing, and the file goes unchecked as it would
     # have with no mark at all.
     observed_lines="$(mark_observed_lines "$fn" "$f")$(proven_pass_by_name_lines "$fn" "$f")"
-    unsupported=$(strip_cached "$f" | awk -v fn="$fn" -v observed_lines="$observed_lines" '
+    unsupported=$(printf '%s\n' "$executable" | awk -v fn="$fn" -v observed_lines="$observed_lines" '
       BEGIN { term = "([[:space:];|&(){}<>]|$)" }
       # A line that does not contain the name as a SUBSTRING cannot match any
       # rule below, because every rule that concludes anything embeds the name.
@@ -796,6 +802,19 @@ for f in "${PARSEABLE[@]}"; do
   fi
 done
 SCANNABLE=("${VALIDATED_SCANNABLE[@]}")
+
+# Call identity does not depend on which parseable consumer contains the call.
+# Build each corpus once so the verdict scan is functions + files rather than
+# functions x files. Indirect-call comments are deliberately absent from the
+# proof path: mark_verified above counts only marks whose exact site was re-read.
+RAW_CALL_SITE_CORPUS="$STRIP_DIR/raw-call-sites"
+STRIPPED_CALL_SITE_CORPUS="$STRIP_DIR/stripped-call-sites"
+: > "$RAW_CALL_SITE_CORPUS"
+: > "$STRIPPED_CALL_SITE_CORPUS"
+for f in "${SCANNABLE[@]}"; do
+  cat "$f" >> "$RAW_CALL_SITE_CORPUS"
+  strip_cached "$f" >> "$STRIPPED_CALL_SITE_CORPUS"
+done
 
 # WHAT THE COMPLETENESS CLAIM COVERS, AND WHERE IT STOPS.
 #
