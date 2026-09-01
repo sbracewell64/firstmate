@@ -91,7 +91,8 @@ write_snapshot() {  # <path> [<hold-kind>] [<hold-reason>]
 }
 
 configure_venue() {  # <home>
-  printf '{"repo":"o/control","issue":2}\n' > "$1/config/sol-control.json"
+  printf '{"repo":"o/control","issue":2,"landing_domain":{"repos":["o/r"]}}\n' \
+    > "$1/config/sol-control.json"
 }
 
 declare_gate() {  # <home> <gate> [<head>]
@@ -863,6 +864,41 @@ test_no_request_is_red() {
   pass "control 1 RED: a review-required item with no request is a defect"
 }
 
+test_invalid_sol_control_schema_refuses_emission() {
+  local dir out rc config label
+  while IFS='|' read -r label config; do
+    dir=$(new_case "sol-schema-$label")
+    printf '%s\n' "$config" > "$dir/home/config/sol-control.json"
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -eq 4 ] || fail "sol schema $label: invalid configuration returned $rc: $out"
+    printf '%s\n' "$out" | grep -qF FM_LANDING_VENUE_INVALID \
+      || fail "sol schema $label: invalid configuration omitted FM_LANDING_VENUE_INVALID: $out"
+    [ ! -s "$dir/forge/post_log" ] \
+      || fail "sol schema $label: invalid configuration emitted a request"
+    out=$(run_ob "$dir" poll 2>&1); rc=$?
+    [ "$rc" -eq 4 ] || fail "sol schema $label: poll returned $rc: $out"
+    printf '%s\n' "$out" | grep -qF FM_LANDING_VENUE_INVALID \
+      || fail "sol schema $label: poll omitted FM_LANDING_VENUE_INVALID: $out"
+  done <<'EOF'
+repo-object|{"repo":{},"issue":2,"landing_domain":{"repos":[]}}
+issue-boolean|{"repo":"owner/control","issue":true,"landing_domain":{"repos":[]}}
+repo-extra-component|{"repo":"host/owner/control","issue":2,"landing_domain":{"repos":[]}}
+domain-non-string|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[7]}}
+unknown-key|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[]},"extra":true}
+EOF
+  pass "invalid sol-control schemas refuse outbound emission"
+}
+
+test_poll_without_sol_control_is_a_noop() {
+  local dir out rc
+  dir=$(new_case poll-no-venue)
+  rm -f "$dir/home/config/sol-control.json"
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "poll absent venue: expected no-op, got $rc: $out"
+  [ -z "$out" ] || fail "poll absent venue: expected no output, got: $out"
+  pass "poll treats an absent sol-control venue as an intentional no-op"
+}
+
 test_request_present_is_green() {
   local dir out rc
   dir=$(new_case c1n)
@@ -1418,7 +1454,8 @@ test_complete_identity_is_rechecked_at_ruling_and_resume() {
   write_ruling "$dir" "$rid" 563 accepted
   run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 >/dev/null 2>&1 \
     || fail "identity resume config: ruling failed"
-  printf '{"repo":"o/control","issue":3}\n' > "$dir/home/config/sol-control.json"
+  printf '{"repo":"o/control","issue":3,"landing_domain":{"repos":["o/r"]}}\n' \
+    > "$dir/home/config/sol-control.json"
   out=$(run_ob "$dir" resume --request "$rid" 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "identity resume config: changed config returned $rc: $out"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
@@ -3592,6 +3629,8 @@ test_home_repository_never_displaces_an_ordinary_clone() {
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
+test_invalid_sol_control_schema_refuses_emission
+test_poll_without_sol_control_is_a_noop
 test_branch_inventory_finds_an_unannotated_unsubmitted_branch
 test_branch_inventory_dedupes_only_complete_identity
 test_branch_inventory_dedupes_duplicate_refs_before_probing

@@ -170,7 +170,8 @@ fixture() {  # <name>
   FX_AUTHOR=$(git -C "$FX_REPO" log -1 --format='%an <%ae>' "$FX_HEAD") \
     || fail "fixture: the fixture commit's own author could not be read"
   [ -n "$FX_AUTHOR" ] || fail "fixture: the fixture commit reported no author"
-  printf '{"repo":"fixture/sol-control","issue":2}\n' > "$FX_CONFIG/sol-control.json"
+  printf '{"repo":"fixture/sol-control","issue":2,"landing_domain":{"repos":[]}}\n' \
+    > "$FX_CONFIG/sol-control.json"
 }
 
 # The identity policy, written as the whole file so a case that perturbs one axis
@@ -1084,6 +1085,25 @@ test_refuses_a_candidate_under_an_active_publication_hold() {
   after=$(tip) || fail "hold: the remote tip could not be observed"
   [ "$after" = '-' ] || fail "hold: the remote moved to $after under an active hold"
   pass "an active publication hold refuses an otherwise valid candidate before the remote moves"
+}
+
+test_reports_an_invalid_control_venue_distinctly() {
+  local out rc=0 after
+  fixture invalid-venue
+  policy
+  record fm-ob-invalid-venue emitted
+  printf '{"repo":"fixture/sol-control","issue":2}\n' > "$FX_CONFIG/sol-control.json"
+  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "invalid-venue: malformed venue configuration exited $rc: $out"
+  assert_contains "$out" 'FM_LANDING_VENUE_INVALID' \
+    "invalid-venue: malformed configuration was not reported distinctly: $out"
+  assert_not_contains "$out" 'FM_PUB_VENUE_UNCONFIGURED' \
+    "invalid-venue: malformed configuration was collapsed into absence: $out"
+  after=$(tip) || fail "invalid-venue: the remote tip could not be observed"
+  [ "$after" = '-' ] || fail "invalid-venue: the remote moved to $after"
+  pass "an invalid control venue remains distinct from an absent venue"
 }
 
 # --- (c) commissioned eligible, then a newer hold --------------------------------
@@ -2060,6 +2080,7 @@ test_unknown_reclaim_marker_is_could_not_observe
 test_concurrent_dead_claim_reclaimers_execute_exactly_one_push
 test_a_refusal_relays_its_reason_rather_than_its_shape
 test_refuses_a_candidate_under_an_active_publication_hold
+test_reports_an_invalid_control_venue_distinctly
 test_refuses_once_a_newer_hold_arrives_after_the_authority_was_granted
 test_refuses_a_restarted_run_whose_ruling_was_revoked
 test_cannot_observe_a_hold_when_the_record_store_is_unreadable

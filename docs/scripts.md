@@ -143,7 +143,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-merge.sh`         | Forge-verify landing identity, re-verify a PR's current head, then merge a task's canonical full GitHub URL |
 | `fm-landing-authorization.sh` | Mint a one-use landing authorization carrying a typed effect plan from a ruled Browser Sol request, and perform that plan's own act exactly once against the exact head it names |
 | `fm-landing-authorization-lib.sh` | Shared landing, candidate-publication, custody-replication and attestation-evidence authorization identity, state vocabulary, typed effect-plan contract, and pure mint and spend predicates |
-| `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is Browser-Sol-governed, which request grants its authority, and the spend that performs the authority's own act |
+| `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is inside the declared Browser Sol landing domain, which request grants its authority, and the spend that performs the authority's own act |
 | `fm-publication-guard.sh` | Compile the eligibility verdict and effect class for one exact remote-changing act, mint the one-use authority it must spend, run the effect inside that spend, and project candidate state where applicable |
 | `fm-publication-seam-lib.sh` | Single owner of whether a guarded candidate or attestation-evidence publication may proceed, and the only wiring FirstMate's own publication paths reach it through |
 | `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |

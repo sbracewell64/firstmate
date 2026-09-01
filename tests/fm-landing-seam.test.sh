@@ -80,6 +80,9 @@ TMP_ROOT=$(fm_test_tmproot fm-landing-seam) || exit 1
 
 TASK_ID=seam-1
 PR_URL='https://github.com/owner/demo/pull/7'
+# The same pull request addressed in another case, which is all a hand-typed url
+# takes. Used only by the candidate half of the domain comparison.
+MIXED_CASE_PR_URL='https://github.com/Owner/Demo/pull/7'
 HEAD_A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 HEAD_B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
 REQUEST_ID=fm-ob-0123456789ab
@@ -101,9 +104,36 @@ new_home() {  # <name>
   printf '%s\n' "$dir"
 }
 
-configure_venue() {  # <dir>
+# The venue, plus this home's DECLARED governed landing domain.
+#
+# The default declares a domain that does not contain either fixture repository,
+# so every case that lands with no live correlation lands on POSITIVE
+# out-of-domain grounds. That distinction is the whole subject of the applicability
+# half of this suite: before the domain was declared, those same cases landed
+# because no record was found, which is an absence rather than an answer.
+PR_REPO_PATH='owner/demo'
+LOCAL_REPO_PATH='owner/local-demo'
+
+configure_venue() {  # <dir> [<repos-json>]
+  local dir=$1 repos=${2:-'["owner/elsewhere"]'}
+  printf '{ "repo": "owner/control", "issue": 2, "landing_domain": { "repos": %s } }\n' \
+    "$repos" > "$dir/home/config/sol-control.json"
+}
+
+# A venue that declares no domain at all, which is not an empty one.
+configure_venue_without_domain() {  # <dir>
   printf '%s\n' '{ "repo": "owner/control", "issue": 2 }' \
     > "$1/home/config/sol-control.json"
+}
+
+# A venue whose domain declaration is present and malformed.
+configure_venue_with_raw_domain() {  # <dir> <json>
+  printf '{ "repo": "owner/control", "issue": 2, "landing_domain": %s }\n' \
+    "$2" > "$1/home/config/sol-control.json"
+}
+
+configure_raw_venue() {  # <dir> <contents>
+  printf '%s\n' "$2" > "$1/home/config/sol-control.json"
 }
 
 # <dir> <state> <verdict> <head> [<gate>] [<item>] [<request-id>]
@@ -224,8 +254,8 @@ new_pr_case() {  # <name> [<head>]
 }
 
 RC=0
-run_pr_merge() {  # <dir> [args...]
-  local dir=$1; shift
+run_pr_merge_at() {  # <dir> <pr-url> [args...]
+  local dir=$1 url=$2; shift 2
   set +e
   ( cd "$dir" || exit 9
     FM_HOME="$dir/home" \
@@ -234,9 +264,14 @@ run_pr_merge() {  # <dir> [args...]
     FM_TEST_ROLLUP_FIXTURE="$dir/rollup.json" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
     PATH="$dir/fakebin:$PATH" \
-      "$PR_MERGE" "$TASK_ID" "$PR_URL" "$@" ) > "$dir/stdout" 2> "$dir/stderr"
+      "$PR_MERGE" "$TASK_ID" "$url" "$@" ) > "$dir/stdout" 2> "$dir/stderr"
   RC=$?
   set -e
+}
+
+run_pr_merge() {  # <dir> [args...]
+  local dir=$1; shift
+  run_pr_merge_at "$dir" "$PR_URL" "$@"
 }
 
 # The number of merges the forge was actually asked to perform. Reported rather
@@ -270,17 +305,188 @@ assert_output_has() {  # <dir> <needle> <label>
 
 # --- bin/fm-pr-merge.sh ------------------------------------------------------
 
-test_pr_merge_lands_an_ungoverned_candidate_and_reports_it() {
+test_pr_merge_lands_a_candidate_proven_outside_the_domain() {
   local dir merges
-  dir=$(new_pr_case ungoverned)
+  # The home declares a governed landing domain and this repository is not in it.
+  # That is the ONLY thing that makes this landing ungoverned: no record was found
+  # either, and before the domain was declared that absence is what let it merge.
+  dir=$(new_pr_case out-of-domain)
   run_pr_merge "$dir"
-  [ "$RC" -eq 0 ] || fail "ungoverned: expected the merge to proceed, got exit $RC: $(cat "$dir/stderr")"
+  [ "$RC" -eq 0 ] || fail "out-of-domain: expected the merge to proceed, got exit $RC: $(cat "$dir/stderr")"
   merges=$(merge_count "$dir")
-  [ "$merges" -eq 1 ] || fail "ungoverned: the forge was asked to merge $merges times, expected exactly 1"
-  assert_output_has "$dir" FM_LANDING_NOT_APPLICABLE ungoverned
+  [ "$merges" -eq 1 ] || fail "out-of-domain: the forge was asked to merge $merges times, expected exactly 1"
+  assert_output_has "$dir" FM_LANDING_NOT_APPLICABLE out-of-domain
+  assert_output_has "$dir" 'is not in this home'"'"'s declared Browser Sol landing domain' out-of-domain
   grep -qxF 'landing_authorization=not-applicable' "$dir/home/state/$TASK_ID.meta" \
-    || fail "ungoverned: the merge record does not say the landing was ungoverned"
-  pass "an ungoverned pull request lands through fm-pr-merge and reports not-applicable (merges executed: $merges)"
+    || fail "out-of-domain: the merge record does not say the landing was ungoverned"
+  pass "a pull request proven outside the declared landing domain lands through fm-pr-merge and reports not-applicable (merges executed: $merges)"
+}
+
+test_pr_merge_refuses_an_in_domain_candidate_with_no_correlation() {
+  local dir merges
+  # THE REPAIR, at the real mutation path. One perturbation from the case above:
+  # the same home, the same empty correlation store, the same green rollup, and
+  # this repository named in the declared domain. An absent record must now be the
+  # refusal rather than the permission.
+  dir=$(new_pr_case in-domain-missing)
+  configure_venue "$dir" "[\"$PR_REPO_PATH\"]"
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "in-domain-missing: a governed repository with no review request must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "in-domain-missing: the forge was asked to merge $merges times with no authority in existence"
+  assert_output_has "$dir" FM_LANDING_APPLICABLE_MISSING in-domain-missing
+  [ "$(auth_count "$dir")" -eq 0 ] \
+    || fail "in-domain-missing: an authorization was minted for a landing no request covers"
+  pass "a governed-domain pull request with no review request refuses the real fm-pr-merge path (merges executed: 0)"
+}
+
+test_pr_merge_refuses_when_the_landing_domain_is_undeclared() {
+  local dir merges
+  # A home that configured Sol control and never said what it governs cannot
+  # answer this question. An undeclared domain is could-not-observe, never an
+  # empty one, because reading it as empty is the silence this control replaces.
+  dir=$(new_pr_case domain-undeclared)
+  configure_venue_without_domain "$dir"
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "domain-undeclared: an undeclared landing domain must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "domain-undeclared: the forge was asked to merge $merges times without knowing whether the landing was governed"
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID domain-undeclared
+  pass "a configured venue with no declared landing domain refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_an_unreadable_landing_domain() {
+  local dir merges
+  dir=$(new_pr_case domain-unreadable)
+  # Present and malformed. A declaration that cannot be read is a defect in the
+  # declaration, not an answer about this candidate.
+  configure_venue_with_raw_domain "$dir" '"everything"'
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "domain-unreadable: a malformed landing domain must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "domain-unreadable: the forge was asked to merge $merges times under an unreadable domain declaration"
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID domain-unreadable
+  pass "a malformed landing domain declaration refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_malformed_venue_configuration() {
+  local dir merges
+  dir=$(new_pr_case venue-malformed)
+  configure_raw_venue "$dir" '{not-json'
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "venue-malformed: malformed venue configuration must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "venue-malformed: the forge was asked to merge $merges times under malformed configuration"
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID venue-malformed
+  pass "malformed sol-control configuration refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_venue_configuration_missing_repo() {
+  local dir merges
+  dir=$(new_pr_case venue-missing-repo)
+  configure_raw_venue "$dir" '{"issue":2,"landing_domain":{"repos":[]}}'
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "venue-missing-repo: incomplete venue configuration must refuse the merge, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "venue-missing-repo: the forge was asked to merge $merges times under incomplete configuration"
+  assert_output_has "$dir" FM_LANDING_VENUE_INVALID venue-missing-repo
+  pass "sol-control configuration missing repo refuses fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_multi_segment_domain_repositories() {
+  local dir merges repo
+  for repo in github.com/owner/repo owner/repo/extra; do
+    dir=$(new_pr_case "domain-shape-${repo//\//-}")
+    configure_venue "$dir" "[\"$repo\"]"
+    run_pr_merge "$dir"
+    [ "$RC" -ne 0 ] || fail "domain-shape: $repo must be rejected as malformed, got exit 0"
+    merges=$(merge_count "$dir")
+    [ "$merges" -eq 0 ] || fail "domain-shape: the forge was asked to merge $merges times with malformed repository $repo"
+    assert_output_has "$dir" FM_LANDING_VENUE_INVALID domain-shape
+  done
+  pass "multi-segment landing-domain repositories refuse fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_refuses_invalid_venue_field_types() {
+  local dir merges config label
+  while IFS='|' read -r label config; do
+    dir=$(new_pr_case "venue-schema-$label")
+    configure_raw_venue "$dir" "$config"
+    run_pr_merge "$dir"
+    [ "$RC" -ne 0 ] || fail "venue-schema-$label: invalid venue configuration must refuse the merge, got exit 0"
+    merges=$(merge_count "$dir")
+    [ "$merges" -eq 0 ] || fail "venue-schema-$label: the forge was asked to merge $merges times under invalid configuration"
+    assert_output_has "$dir" FM_LANDING_VENUE_INVALID "venue-schema-$label"
+  done <<'EOF'
+repo-object|{"repo":{},"issue":2,"landing_domain":{"repos":[]}}
+issue-boolean|{"repo":"owner/control","issue":true,"landing_domain":{"repos":[]}}
+repo-extra-component|{"repo":"host/owner/control","issue":2,"landing_domain":{"repos":[]}}
+domain-non-string|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[7]}}
+unknown-key|{"repo":"owner/control","issue":2,"landing_domain":{"repos":[]},"extra":true}
+EOF
+  pass "invalid typed and extended venue configurations refuse fm-pr-merge (merges executed: 0)"
+}
+
+test_pr_merge_lands_when_the_landing_domain_is_declared_empty() {
+  local dir merges
+  # An empty domain is a complete positive answer on its own: it contains nothing,
+  # so no candidate can be inside it. This is how a home keeps a Sol venue for
+  # review correspondence without placing any landing under it.
+  dir=$(new_pr_case domain-empty)
+  configure_venue "$dir" '[]'
+  run_pr_merge "$dir"
+  [ "$RC" -eq 0 ] || fail "domain-empty: an empty landing domain must not block, got exit $RC: $(cat "$dir/stderr")"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 1 ] || fail "domain-empty: the forge was asked to merge $merges times, expected exactly 1"
+  assert_output_has "$dir" 'declares an empty Browser Sol landing domain' domain-empty
+  pass "an explicitly empty landing domain lands through fm-pr-merge (merges executed: $merges)"
+}
+
+test_pr_merge_matches_the_landing_domain_case_insensitively() {
+  local dir merges
+  # A forge path is case-insensitive, so a case difference that read as a
+  # different repository would shed the domain by renaming nothing at all.
+  dir=$(new_pr_case domain-case)
+  configure_venue "$dir" '["Owner/Demo"]'
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "domain-case: a case difference must not shed the declared domain, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "domain-case: the forge was asked to merge $merges times after a case difference shed the domain"
+  assert_output_has "$dir" FM_LANDING_APPLICABLE_MISSING domain-case
+  pass "a case difference does not put a candidate outside the declared landing domain (merges executed: 0)"
+}
+
+test_pr_merge_matches_a_mixed_case_candidate_against_the_domain() {
+  local dir merges
+  # The other half of the comparison. The case above varies the DECLARATION's
+  # case; this varies the CANDIDATE's, which is what a hand-typed pull request
+  # url actually supplies. Both directions have to fold to the same repository or
+  # the domain is shed by how somebody typed a link.
+  dir=$(new_pr_case domain-case-candidate)
+  configure_venue "$dir" "[\"$PR_REPO_PATH\"]"
+  run_pr_merge_at "$dir" "$MIXED_CASE_PR_URL"
+  [ "$RC" -ne 0 ] || fail "domain-case-candidate: a mixed-case candidate must not shed the declared domain, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "domain-case-candidate: the forge was asked to merge $merges times after a mixed-case candidate shed the domain"
+  assert_output_has "$dir" FM_LANDING_APPLICABLE_MISSING domain-case-candidate
+  pass "a mixed-case candidate repository is still matched against the declared landing domain (merges executed: 0)"
+}
+
+test_pr_merge_lands_an_in_domain_candidate_under_a_valid_ruling() {
+  local dir merges auths
+  # Non-vacuity INSIDE the domain. Every refusal above is satisfied by a gate that
+  # refuses everything in a governed repository; this is the case that is not.
+  dir=$(new_pr_case in-domain-ruled)
+  configure_venue "$dir" "[\"$PR_REPO_PATH\"]"
+  write_correlation "$dir" ruled accepted "$HEAD_A"
+  run_pr_merge "$dir"
+  [ "$RC" -eq 0 ] || fail "in-domain-ruled: an approved ruling in the governed domain must land, got exit $RC: $(cat "$dir/stderr")"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 1 ] || fail "in-domain-ruled: the forge was asked to merge $merges times, expected exactly 1"
+  auths=$(auth_states "$dir")
+  [ "$(printf '%s\n' "$auths" | grep -c ' spent$')" -eq 1 ] \
+    || fail "in-domain-ruled: expected exactly one spent authorization, got [$auths]"
+  pass "an approved ruling inside the declared landing domain lands and spends its authority (merges executed: $merges, authorizations spent: 1)"
 }
 
 test_pr_merge_lands_when_no_control_venue_is_configured() {
@@ -504,18 +710,56 @@ test_pr_merge_lands_under_a_gate_that_does_not_govern_landing() {
   pass "a gate outside the landing-governing set does not block a landing (merges executed: $merges)"
 }
 
+test_pr_merge_refuses_an_in_domain_closed_request() {
+  local dir merges
+  # Governance ENDING is not the same as never having applied. Inside the declared
+  # domain a closed request stops granting and does not become permission: the
+  # landing needs a live request, and the refusal names the missing one rather than
+  # the closed one.
+  dir=$(new_pr_case in-domain-closed)
+  configure_venue "$dir" "[\"$PR_REPO_PATH\"]"
+  write_correlation "$dir" closed accepted "$HEAD_A"
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "in-domain-closed: a closed request must not authorise a governed-domain landing, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "in-domain-closed: the forge was asked to merge $merges times on a closed request"
+  assert_output_has "$dir" FM_LANDING_APPLICABLE_MISSING in-domain-closed
+  pass "a closed request does not authorise a governed-domain landing (merges executed: 0)"
+}
+
+test_pr_merge_refuses_an_in_domain_nongoverning_gate() {
+  local dir merges
+  # The gate exclusion decides which gates govern, not which repositories are in
+  # the domain. A record under a non-landing gate leaves the item uncovered, and
+  # inside the domain an uncovered item refuses rather than reading as outside it.
+  dir=$(new_pr_case in-domain-nongoverning)
+  configure_venue "$dir" "[\"$PR_REPO_PATH\"]"
+  write_correlation "$dir" emitted '' "$HEAD_A" ARCHITECTURE_RULING_REQUIRED
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "in-domain-nongoverning: a non-landing gate must not authorise a governed-domain landing, got exit 0"
+  merges=$(merge_count "$dir")
+  [ "$merges" -eq 0 ] || fail "in-domain-nongoverning: the forge was asked to merge $merges times under a gate that grants nothing"
+  assert_output_has "$dir" FM_LANDING_APPLICABLE_MISSING in-domain-nongoverning
+  pass "a gate outside the landing-governing set does not authorise a governed-domain landing (merges executed: 0)"
+}
+
 # --- bin/fm-merge-local.sh ---------------------------------------------------
 
 # A local-only task whose project is a two-commit repo: main at the base, and the
 # task branch one commit ahead. The correlation record's head is that branch head,
 # because that is the commit a reviewer would have been shown.
-new_local_case() {  # <name>
-  local name=$1 dir proj
+new_local_case() {  # <name> [no-remote]
+  local name=$1 remote=${2:-} dir proj
   dir=$(new_home "$name") || return 1
   proj="$dir/project"
   mkdir -p "$proj"
   git -C "$proj" init -q
   git -C "$proj" symbolic-ref HEAD refs/heads/main
+  # A real clone names the repository it pushes to, and the landing gate reads
+  # that remote to ask the declared domain about the right repository. `no-remote`
+  # is the deliberate opposite: a clone whose repository cannot be established.
+  [ "$remote" = no-remote ] \
+    || git -C "$proj" remote add origin "https://github.com/$LOCAL_REPO_PATH.git"
   git -C "$proj" config user.name 'Firstmate Tests'
   git -C "$proj" config user.email 'tests@example.invalid'
   printf 'base\n' > "$proj/tracked.txt"
@@ -557,15 +801,67 @@ run_merge_local() {  # <dir>
   set -e
 }
 
-test_merge_local_lands_an_ungoverned_candidate_and_reports_it() {
+test_merge_local_lands_a_candidate_proven_outside_the_domain() {
   local dir
-  dir=$(new_local_case local-ungoverned)
+  # The clone names the repository it pushes to, the home declares a domain that
+  # does not contain it, and that positive non-membership is what makes this
+  # landing ungoverned.
+  dir=$(new_local_case local-out-of-domain)
   run_merge_local "$dir"
-  [ "$RC" -eq 0 ] || fail "local-ungoverned: expected the fast-forward to proceed, got exit $RC: $(cat "$dir/stderr")"
+  [ "$RC" -eq 0 ] || fail "local-out-of-domain: expected the fast-forward to proceed, got exit $RC: $(cat "$dir/stderr")"
   [ "$(local_main_head "$dir")" = "$(local_branch_head "$dir")" ] \
-    || fail "local-ungoverned: main was not fast-forwarded to the task branch"
-  assert_output_has "$dir" FM_LANDING_NOT_APPLICABLE local-ungoverned
-  pass "an ungoverned local-only task lands through fm-merge-local and reports not-applicable (fast-forwards executed: 1)"
+    || fail "local-out-of-domain: main was not fast-forwarded to the task branch"
+  assert_output_has "$dir" FM_LANDING_NOT_APPLICABLE local-out-of-domain
+  assert_output_has "$dir" "$LOCAL_REPO_PATH is not in this home" local-out-of-domain
+  pass "a local-only task proven outside the declared landing domain lands through fm-merge-local (fast-forwards executed: 1)"
+}
+
+test_merge_local_refuses_an_in_domain_candidate_with_no_correlation() {
+  local dir before
+  # THE REPAIR, at the local mutation path. One perturbation from the case above:
+  # this clone's repository is named in the declared domain.
+  dir=$(new_local_case local-in-domain-missing)
+  configure_venue "$dir" "[\"$LOCAL_REPO_PATH\"]"
+  before=$(local_main_head "$dir")
+  run_merge_local "$dir"
+  [ "$RC" -ne 0 ] || fail "local-in-domain-missing: a governed repository with no review request must refuse the fast-forward, got exit 0"
+  [ "$(local_main_head "$dir")" = "$before" ] \
+    || fail "local-in-domain-missing: main moved with no authority in existence"
+  assert_output_has "$dir" FM_LANDING_APPLICABLE_MISSING local-in-domain-missing
+  [ "$(auth_count "$dir")" -eq 0 ] \
+    || fail "local-in-domain-missing: an authorization was minted for a landing no request covers"
+  pass "a governed-domain local-only task with no review request refuses the real fm-merge-local path (fast-forwards executed: 0)"
+}
+
+test_merge_local_refuses_when_its_repository_cannot_be_established() {
+  local dir before
+  # A clone naming no remote cannot be shown to be outside a non-empty domain, and
+  # removing a remote is exactly the shape a bypass would take. Could-not-observe,
+  # never an answer.
+  dir=$(new_local_case local-no-repo no-remote)
+  configure_venue "$dir" "[\"$LOCAL_REPO_PATH\"]"
+  before=$(local_main_head "$dir")
+  run_merge_local "$dir"
+  [ "$RC" -ne 0 ] || fail "local-no-repo: an unestablished repository must refuse under a declared domain, got exit 0"
+  [ "$(local_main_head "$dir")" = "$before" ] \
+    || fail "local-no-repo: main moved without establishing which repository was being written"
+  assert_output_has "$dir" FM_LANDING_CANDIDATE_REPOSITORY_UNOBSERVED local-no-repo
+  pass "a local landing whose repository cannot be established refuses under a declared domain (fast-forwards executed: 0)"
+}
+
+test_merge_local_lands_with_no_repository_under_an_empty_domain() {
+  local dir
+  # The paired non-vacuity for the case above: an empty domain contains nothing,
+  # so it needs no repository identity and the same clone lands. Without this, the
+  # refusal above would be evidence about a gate that refuses remoteless clones.
+  dir=$(new_local_case local-no-repo-empty no-remote)
+  configure_venue "$dir" '[]'
+  run_merge_local "$dir"
+  [ "$RC" -eq 0 ] || fail "local-no-repo-empty: an empty domain must not need a repository identity, got exit $RC: $(cat "$dir/stderr")"
+  [ "$(local_main_head "$dir")" = "$(local_branch_head "$dir")" ] \
+    || fail "local-no-repo-empty: main was not fast-forwarded under an empty landing domain"
+  assert_output_has "$dir" 'declares an empty Browser Sol landing domain' local-no-repo-empty
+  pass "an empty landing domain lands a clone whose repository is unestablished (fast-forwards executed: 1)"
 }
 
 test_merge_local_refuses_a_governed_candidate_with_no_ruling() {
@@ -624,25 +920,63 @@ test_merge_local_refuses_a_second_landing_under_a_spent_authority() {
 }
 
 # --- run ---------------------------------------------------------------------
+#
+# The declared control set, in order. Naming it once lets a measurement run a
+# SINGLE control against a defect build, which is what a complete red matrix
+# needs: this suite stops at its first failing control, so a defect that reddens
+# several of them would otherwise only ever be seen reddening the earliest.
+# tests/landing-seam-red-matrix.py is that measurement.
+FM_CONTROLS=(
+  test_pr_merge_lands_a_candidate_proven_outside_the_domain
+  test_pr_merge_refuses_an_in_domain_candidate_with_no_correlation
+  test_pr_merge_refuses_when_the_landing_domain_is_undeclared
+  test_pr_merge_refuses_an_unreadable_landing_domain
+  test_pr_merge_refuses_malformed_venue_configuration
+  test_pr_merge_refuses_venue_configuration_missing_repo
+  test_pr_merge_refuses_multi_segment_domain_repositories
+  test_pr_merge_refuses_invalid_venue_field_types
+  test_pr_merge_lands_when_the_landing_domain_is_declared_empty
+  test_pr_merge_matches_the_landing_domain_case_insensitively
+  test_pr_merge_matches_a_mixed_case_candidate_against_the_domain
+  test_pr_merge_lands_an_in_domain_candidate_under_a_valid_ruling
+  test_pr_merge_refuses_an_in_domain_closed_request
+  test_pr_merge_refuses_an_in_domain_nongoverning_gate
+  test_pr_merge_lands_when_no_control_venue_is_configured
+  test_pr_merge_refuses_a_governed_candidate_with_no_ruling
+  test_pr_merge_lands_a_governed_candidate_under_a_valid_ruling
+  test_pr_merge_refuses_a_second_landing_under_a_spent_authority
+  test_pr_merge_refuses_a_head_the_ruling_never_approved
+  test_pr_merge_refuses_a_declining_ruling
+  test_pr_merge_refuses_a_verdict_it_cannot_classify
+  test_pr_merge_refuses_an_unreadable_correlation_record
+  test_pr_merge_refuses_live_governance_with_no_configured_venue
+  test_pr_merge_keeps_its_red_head_refusal_under_a_valid_authority
+  test_pr_merge_reobserves_the_head_at_the_moment_of_use
+  test_pr_merge_refuses_two_requests_claiming_the_same_head
+  test_pr_merge_lands_when_the_only_request_is_closed
+  test_pr_merge_lands_under_a_gate_that_does_not_govern_landing
+  test_merge_local_lands_a_candidate_proven_outside_the_domain
+  test_merge_local_refuses_an_in_domain_candidate_with_no_correlation
+  test_merge_local_refuses_when_its_repository_cannot_be_established
+  test_merge_local_lands_with_no_repository_under_an_empty_domain
+  test_merge_local_refuses_a_governed_candidate_with_no_ruling
+  test_merge_local_lands_a_governed_candidate_under_a_valid_ruling
+  test_merge_local_refuses_a_second_landing_under_a_spent_authority
+)
 
-test_pr_merge_lands_an_ungoverned_candidate_and_reports_it
-test_pr_merge_lands_when_no_control_venue_is_configured
-test_pr_merge_refuses_a_governed_candidate_with_no_ruling
-test_pr_merge_lands_a_governed_candidate_under_a_valid_ruling
-test_pr_merge_refuses_a_second_landing_under_a_spent_authority
-test_pr_merge_refuses_a_head_the_ruling_never_approved
-test_pr_merge_refuses_a_declining_ruling
-test_pr_merge_refuses_a_verdict_it_cannot_classify
-test_pr_merge_refuses_an_unreadable_correlation_record
-test_pr_merge_refuses_live_governance_with_no_configured_venue
-test_pr_merge_keeps_its_red_head_refusal_under_a_valid_authority
-test_pr_merge_reobserves_the_head_at_the_moment_of_use
-test_pr_merge_refuses_two_requests_claiming_the_same_head
-test_pr_merge_lands_when_the_only_request_is_closed
-test_pr_merge_lands_under_a_gate_that_does_not_govern_landing
-test_merge_local_lands_an_ungoverned_candidate_and_reports_it
-test_merge_local_refuses_a_governed_candidate_with_no_ruling
-test_merge_local_lands_a_governed_candidate_under_a_valid_ruling
-test_merge_local_refuses_a_second_landing_under_a_spent_authority
-
-fm_test_contract "${BASH_SOURCE[0]}"
+if [ -n "${FM_LANDING_SEAM_ONLY:-}" ]; then
+  # Refused rather than silently running nothing: a measurement that selects a
+  # control which does not exist would report a clean run having observed
+  # nothing at all.
+  for control in "${FM_CONTROLS[@]}"; do
+    [ "$control" = "$FM_LANDING_SEAM_ONLY" ] && break
+    control=
+  done
+  [ -n "$control" ] || fail "FM_LANDING_SEAM_ONLY names no declared control: $FM_LANDING_SEAM_ONLY"
+  "$FM_LANDING_SEAM_ONLY"
+else
+  for control in "${FM_CONTROLS[@]}"; do
+    "$control"
+  done
+  fm_test_contract "${BASH_SOURCE[0]}"
+fi

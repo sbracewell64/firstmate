@@ -175,19 +175,32 @@ Regression owner: `tests/fm-landing-seam.test.sh`.
 
 ### What is claimed
 
-A Browser-Sol-governed landing candidate cannot reach either mutation path's merge command without consuming a valid, head-bound, one-use authorization, and a candidate no ruling governs lands through the ordinary gates and says so.
+A candidate inside the declared Browser Sol landing domain cannot reach either mutation path's merge command without a live request covering its exact head and consumption of that request's valid, head-bound, one-use authorization, while a candidate proven outside the domain lands through the ordinary gates and says so.
 
 1. A governed candidate with no approving ruling is refused by the real `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`, and no merge is performed.
 2. A spent authority presented again is refused, and the second attempt performs no merge.
 3. Non-vacuity, landing: a governed candidate under an approving ruling lands, and the authority is recorded spent.
-4. Non-vacuity, not-applicable: an ungoverned candidate lands normally, and the not-applicable observation is reported on the command's own output.
+4. Non-vacuity, not-applicable: a candidate proven outside the declared governed landing domain lands normally, and the not-applicable observation is reported on the command's own output.
 5. Governance survives a moved head. A ruling bound to another head refuses rather than falling through as ungoverned, because falling through would make moving the head the cheapest way to shed a ruling.
 6. The seam composes with the pre-existing merge guards and never replaces them: a red check rollup still refuses under a valid authority, and leaves that authority unspent.
 7. Two live requests claiming the same item at the same head are ambiguous and refuse, rather than one of them being picked.
-8. Governance ends. A closed request no longer governs, and a gate outside the landing-governing set never did, so neither can make an item permanently unlandable.
+8. Governance ends OUTSIDE the declared domain. A closed request no longer governs, and a gate outside the landing-governing set never did, so neither can make an ungoverned item permanently unlandable.
+9. Applicability is positive and closed. Inside the declared governed landing domain, a landing with no live request covering it REFUSES; `not-applicable` is reached only from a declaration, never from an absent record.
+10. An undeclared domain is could-not-observe, and a malformed one is too. Neither reads as an empty domain, because reading a silence as permission is the defect claim 9 closes.
+11. The domain is compared case-insensitively in BOTH directions, so neither a declaration nor a hand-typed pull request url sheds it by case alone.
+12. A candidate whose repository could not be established cannot be shown to be outside a non-empty domain, and refuses; an explicitly empty domain needs no repository identity and lands.
 
-Claims 3, 4, and 8 are not courtesies.
-Claims 1, 2, 5, 6, and 7 are all refusals, and a merge gate that refused everything would satisfy every one of them at once.
+Claims 3, 4, 8, and the landing half of 12 are not courtesies.
+Claims 1, 2, 5, 6, 7, 9, 10, 11, and the refusing half of 12 are all refusals, and a merge gate that refused everything would satisfy every one of them at once.
+
+### Why claim 9 replaced an earlier reading
+
+Claim 4 originally read "an ungoverned candidate lands", and the seam established "ungoverned" by finding no live correlation record for the item.
+That is an ABSENCE read as an answer, and it is the same shape as the defect the seam itself was built to close: a landing obligation that is real but was never written into one exact local record disappeared into the same clean `not-applicable` as work no ruling was ever going to cover.
+A record that was never written, a store that was never populated, and a review that was promised and never emitted were all indistinguishable from genuinely ungoverned work.
+
+`landing_domain` in `config/sol-control.json` is the declaration that makes the answer positive, and [`configuration.md`](../configuration.md) owns its schema.
+The consequence is deliberate and is the point: inside the declared domain, a landing needs a live request every time, and a past or non-governing record is not a substitute for one.
 
 ### What is NOT claimed
 
@@ -199,8 +212,16 @@ Both are owned by `bin/fm-outbound-artifact.sh`.
 
 It establishes nothing about whether a head is green, mergeable, or unblocked by review.
 
+It compares the correlation record's ITEM and HEAD and nothing else about the subject.
+The record's project and repository fields are deliberately not compared, because the two surfaces name projects differently - a correlation record carries a registry name while a merge gate holds a clone path - so comparing them would refuse correct landings on a naming mismatch while adding nothing the item and the exact head do not already establish.
+A record whose base or working tree has moved under an unchanged head is likewise outside what this observes: the authority binds to a commit, and a commit is the only thing an outside reviewer was shown.
+
 Which gates govern a landing is a decision, not an observation: every `sol-control` gate governs except `ARCHITECTURE_RULING_REQUIRED`, whose subject is a design question rather than this head's fitness to land.
 The exclusion is stated as an exclusion so that a gate added to the outbound vocabulary later governs a landing until somebody decides otherwise.
+
+Which repositories are inside the governed landing domain is also a decision rather than an observation, and the seam reads it rather than deriving it.
+The seam therefore establishes nothing about whether a declared domain is the RIGHT one: a home that omits a repository it meant to govern gets an ungoverned landing that says so, and no control here can tell that apart from a repository deliberately left out.
+The refusal on an undeclared domain is what keeps that decision from being made by default.
 
 ### The act is counted, never assumed
 
@@ -213,44 +234,117 @@ The suite counts the same way. A merge is observed by counting the `pr merge` in
 
 ### Red calibration
 
-Every control was observed failing for its intended reason.
-Each run stages a copy of `bin/` and `tests/`, injects exactly one defect, and runs `bash tests/fm-landing-seam.test.sh`.
-`00-no-defect` is the harness's own control: an unpatched staged copy must be green, or a red below would be evidence about the staging rather than about the defect it names.
-`passed=` is how many cases reported success before the suite stopped at its first failure.
+Date: 2026-08-26.
+Every control was observed failing for its intended reason, and the defect that made it fail is tracked rather than described.
 
-| # | Injected defect | Observed result |
-| - | --------------- | --------------- |
-| 00 | none - the staging control | `GREEN (passed=19)` |
-| 01 | the pull-request merge site ignores the seam and always merges | `not ok - governed-ruled: expected exactly one spent authorization, got [fm-auth-a5062494976aa3f7c0e0583bb85b1885 granted]` |
-| 02 | the governed branch lands directly instead of inside the spend | `not ok - governed-ruled: expected exactly one spent authorization, got [fm-auth-a5062494976aa3f7c0e0583bb85b1885 granted]` |
-| 03 | the local merge site lands outside the spend | `not ok - local-governed-unruled: an unruled review gate must refuse the fast-forward, got exit 0` |
-| 04 | not-applicable is decided and never reported | `not ok - ungoverned: expected 'FM_LANDING_NOT_APPLICABLE' in the command's own output` |
-| 05 | a head no ruling approved is reported as ungoverned | `not ok - governed-moved-head: a head the ruling never approved must refuse, got exit 0` |
-| 06 | the spend's exit status is read without the act receipt | `not ok - governed-replay: a spent authority must refuse the second landing, got exit 0` |
-| 07 | an unreadable correlation record is skipped instead of refusing | `not ok - unreadable-record: an unreadable record must refuse, got exit 0` |
-| 08 | live governance with no configured venue reads as ungoverned | `not ok - governed-no-venue: live governance with no venue must refuse, got exit 0` |
-| 09 | the caller's head replaces the forge's re-observed one | `not ok - reobserved-head: a moved forge head must refuse, got exit 0` |
-| 10 | an unruled request is allowed to grant an authorization | `not ok - governed-unruled: expected 'FM_LANDING_AUTHORIZATION_REFUSED' in the command's own output` |
-| 11 | LA-1 as found: the pull-request gate asks and does not enforce the answer | `not ok - governed-unruled: an unruled review gate must refuse the merge, got exit 0` |
-| 12 | LA-1 as found: the local gate never asks | `not ok - local-governed-unruled: an unruled review gate must refuse the fast-forward, got exit 0` |
-| 13 | a closed request keeps governing | `not ok - closed-request: a closed request must not govern, got exit 1: ... FM_LANDING_AUTHORIZATION_REFUSED` |
-| 14 | the non-landing gate exclusion is emptied, so every gate governs | `not ok - nongoverning-gate: a non-landing gate must not block, got exit 1: ... FM_LANDING_AUTHORIZATION_REFUSED` |
-| 15 | two claims on one head resolve to the last one seen | `not ok - ambiguous-authority: two claims on one head must refuse, got exit 0` |
+The catalogue lives in [`tests/landing-seam-red-matrix.py`](../../tests/landing-seam-red-matrix.py), so every row below is replayable by somebody who did not run it:
 
-Defects 11 and 12 are the finding this work closes, reproduced deliberately: the authority layer is present and correct in both copies, and the landing path routes around it.
-Defect 11 keeps the not-applicable report intact so its red is attributable to the unenforced answer rather than to a missing observation, which defect 04 covers on its own.
+```
+tests/landing-seam-red-matrix.py matrix [--defects D01,D02] [--json <out>]
+tests/landing-seam-red-matrix.py replay <defect> [<control>]
+tests/landing-seam-red-matrix.py list
+```
 
-Defect 09 is the one the head binding rests on, and it is injected into `bin/fm-landing-authorization.sh` rather than into the seam on purpose: it proves the seam actually reaches the authority layer's independent head observation, and is not satisfied by the head the merge gate itself verified.
+Each build stages `bin/` and `tests/` into a temporary root, applies exactly one exact-substring patch, and runs the STAGED suite, which drives the real `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh` end to end.
+A patch whose anchor no longer matches is a hard error rather than a skip, because an unmodified build reddens nothing and the control would look witnessed while measuring a defect that was never injected.
 
-Defects 13 and 14 are the inverse direction, and they matter as much as the refusals.
-Both decision sets - which record states are live, and which gates govern a landing - are stated positively so they can be over-applied, and an over-applied set makes an item permanently unlandable.
-Those two defects are what keeps this control from being repaired into a different failure.
+`D00` is the harness's own control: an unpatched staged copy must redden NOTHING, or every row below is evidence about the staging rather than about the defect it names.
+Every defect is run against every declared control separately through `FM_LANDING_SEAM_ONLY`, because the suite stops at its first failure and a defect that reddens several controls would otherwise only ever be seen reddening the earliest.
+
+This table supersedes the untracked 2026-08-19 calibration of defects 00-15.
+Those rows measured the same controls through a scratch harness that no longer exists, and keeping a describable-but-unreproducible table beside a replayable one would leave two records of one fact.
+
+| # | Injected defect | Controls reddened |
+| - | --------------- | ----------------- |
+| D00 `df9c51b07a01` | none - the staging control, which must be GREEN. | **0 - the staging control must redden nothing** |
+| D01 `4b993112b994` | LA-1's successor as found: an absent correlation is read as not-applicable instead of consulting the declared governed landing domain. | 11 of 35 |
+| D02 `c7a228c28800` | An undeclared landing domain is read as an empty one. | 6 of 35 |
+| D03 `c7a228c28800` | A malformed landing domain declaration is read as an empty one. | 6 of 35 |
+| D04 `2d3170df636c` | The DECLARATION side of the comparison becomes case-sensitive, so a domain entry written in another case stops matching the repository it names. | 1 of 35 |
+| D05 `e84d57787ac5` | A candidate whose repository could not be established is read as being outside the domain rather than as could-not-observe. | 1 of 35 |
+| D06 `cf1f5c9f3cf5` | An explicitly empty landing domain refuses instead of landing, which is the non-vacuity direction: it proves the empty-domain landings are real. | 2 of 35 |
+| D07 `082674016cf4` | The pull-request gate stops telling the seam which repository it writes. | 8 of 35 |
+| D08 `eafd357748dc` | The local gate stops telling the seam which repository it writes. | 2 of 35 |
+| D09 `5fefad22ee9a` | The pull-request merge site ignores the seam's answer and always merges. | 4 of 35 |
+| D10 `c142fdad824e` | The local merge site lands outside the spend. | 3 of 35 |
+| D11 `5137f240c272` | The spend's exit status is read without the act receipt, so a spent authority reports success while merging nothing. | 2 of 35 |
+| D12 `21c64a645b14` | The CANDIDATE side of the comparison becomes case-sensitive, so the domain is shed by how somebody typed a pull request url. | 1 of 35 |
+| D13 `cd51daafebb3` | A home with no control venue is refused instead of landing, which is the non-vacuity direction for the shipped default. | 1 of 35 |
+| D14 `f198824150cf` | An emitted-but-unruled request stops counting as live, so a review that was asked for and never answered no longer governs. | 2 of 35 |
+| D15 `f592e90696e8` | A head no live request approved falls through as ungoverned instead of refusing, which makes moving the head the cheapest way to shed a ruling. | 1 of 35 |
+| D16 `2fa647caea92` | Two live requests claiming one head resolve to the last one seen instead of refusing, so the authority a landing consumes is picked on no evidence. | 1 of 35 |
+| D17 `0ce0b970c426` | A declining or unclassifiable ruling is treated as authorizing. | 2 of 35 |
+| D18 `12e7cdc22c64` | An unreadable correlation record is skipped instead of refusing, so the one record that might have governed reads as an absence of rulings. | 1 of 35 |
+| D19 `c8e95de75bd3` | Live governance with no configured control venue reads as ungoverned rather than as the configuration contradiction it is. | 1 of 35 |
+| D20 `a56c7e950064` | The pull-request gate stops enforcing its own check rollup, so a valid landing authority is all that stands between a red head and the forge. The seam must COMPOSE with the pre-existing guards, never replace them. | 1 of 35 |
+| D21 `0eb539dc0665` | The forge's re-observed head is accepted whenever it differs from the approved one, so a pull request that moved after approval still lands. | 1 of 35 |
+| D22 `c7a228c28800` | Invalid venue configuration is treated as absent and permits landing. | 6 of 35 |
+| D23 `e33868e6b0a4` | Repository schema validation accepts paths with extra components. | 1 of 35 |
+
+Every declared control has at least one red witness, and the run reports that count rather than leaving it to be inferred:
+
+```
+$ tests/landing-seam-red-matrix.py matrix
+controls declared: 35
+...
+every defect was witnessed by a control, and the staging control is green
+CONTROLS WITH NO RED WITNESS: 0
+```
+
+| Control | Witnessed by |
+| ------- | ------------ |
+| `test_pr_merge_keeps_its_red_head_refusal_under_a_valid_authority` | D20 |
+| `test_pr_merge_lands_a_candidate_proven_outside_the_domain` | D01, D07 |
+| `test_pr_merge_lands_a_governed_candidate_under_a_valid_ruling` | D09 |
+| `test_pr_merge_lands_an_in_domain_candidate_under_a_valid_ruling` | D09 |
+| `test_pr_merge_lands_under_a_gate_that_does_not_govern_landing` | D07 |
+| `test_pr_merge_lands_when_no_control_venue_is_configured` | D13 |
+| `test_pr_merge_lands_when_the_landing_domain_is_declared_empty` | D01, D06 |
+| `test_pr_merge_lands_when_the_only_request_is_closed` | D07 |
+| `test_pr_merge_matches_a_mixed_case_candidate_against_the_domain` | D01, D07, D12 |
+| `test_pr_merge_matches_the_landing_domain_case_insensitively` | D01, D04, D07 |
+| `test_pr_merge_refuses_a_declining_ruling` | D17 |
+| `test_pr_merge_refuses_a_governed_candidate_with_no_ruling` | D14 |
+| `test_pr_merge_refuses_a_head_the_ruling_never_approved` | D15 |
+| `test_pr_merge_refuses_a_second_landing_under_a_spent_authority` | D09, D11 |
+| `test_pr_merge_refuses_a_verdict_it_cannot_classify` | D17 |
+| `test_pr_merge_refuses_an_in_domain_candidate_with_no_correlation` | D01, D07 |
+| `test_pr_merge_refuses_an_in_domain_closed_request` | D01, D07 |
+| `test_pr_merge_refuses_an_in_domain_nongoverning_gate` | D01, D07 |
+| `test_pr_merge_refuses_an_unreadable_correlation_record` | D18 |
+| `test_pr_merge_refuses_an_unreadable_landing_domain` | D02, D03, D22 |
+| `test_pr_merge_refuses_invalid_venue_field_types` | D02, D03, D22 |
+| `test_pr_merge_refuses_live_governance_with_no_configured_venue` | D19 |
+| `test_pr_merge_refuses_malformed_venue_configuration` | D02, D03, D22 |
+| `test_pr_merge_refuses_multi_segment_domain_repositories` | D02, D03, D22, D23 |
+| `test_pr_merge_refuses_two_requests_claiming_the_same_head` | D16 |
+| `test_pr_merge_refuses_venue_configuration_missing_repo` | D02, D03, D22 |
+| `test_pr_merge_refuses_when_the_landing_domain_is_undeclared` | D02, D03, D22 |
+| `test_pr_merge_reobserves_the_head_at_the_moment_of_use` | D09, D21 |
+| `test_merge_local_lands_a_candidate_proven_outside_the_domain` | D01, D08 |
+| `test_merge_local_lands_a_governed_candidate_under_a_valid_ruling` | D10 |
+| `test_merge_local_lands_with_no_repository_under_an_empty_domain` | D01, D06 |
+| `test_merge_local_refuses_a_governed_candidate_with_no_ruling` | D10, D14 |
+| `test_merge_local_refuses_a_second_landing_under_a_spent_authority` | D10, D11 |
+| `test_merge_local_refuses_an_in_domain_candidate_with_no_correlation` | D01, D08 |
+| `test_merge_local_refuses_when_its_repository_cannot_be_established` | D01, D05 |
 
 ### Green run
 
+Date: 2026-08-22.
+
 ```
 $ bash tests/fm-landing-seam.test.sh
-ok - an ungoverned pull request lands through fm-pr-merge and reports not-applicable (merges executed: 1)
+ok - a pull request proven outside the declared landing domain lands through fm-pr-merge and reports not-applicable (merges executed: 1)
+ok - a governed-domain pull request with no review request refuses the real fm-pr-merge path (merges executed: 0)
+ok - a configured venue with no declared landing domain refuses fm-pr-merge (merges executed: 0)
+ok - a malformed landing domain declaration refuses fm-pr-merge (merges executed: 0)
+ok - an explicitly empty landing domain lands through fm-pr-merge (merges executed: 1)
+ok - a case difference does not put a candidate outside the declared landing domain (merges executed: 0)
+ok - a mixed-case candidate repository is still matched against the declared landing domain (merges executed: 0)
+ok - an approved ruling inside the declared landing domain lands and spends its authority (merges executed: 1, authorizations spent: 1)
+ok - a closed request does not authorise a governed-domain landing (merges executed: 0)
+ok - a gate outside the landing-governing set does not authorise a governed-domain landing (merges executed: 0)
 ok - a home with no control venue lands and names the missing venue (merges executed: 1)
 ok - an unruled Browser Sol review gate refuses the real fm-pr-merge path (merges executed: 0)
 ok - an approved ruling lands through fm-pr-merge and spends its authority (merges executed: 1, authorizations spent: 1)
@@ -265,26 +359,32 @@ ok - the head is re-observed at the moment of use and a moved one refuses (merge
 ok - two live requests claiming one head refuse rather than one being picked (merges executed: 0)
 ok - a closed Browser Sol request no longer governs, and the item lands (merges executed: 1)
 ok - a gate outside the landing-governing set does not block a landing (merges executed: 1)
-ok - an ungoverned local-only task lands through fm-merge-local and reports not-applicable (fast-forwards executed: 1)
+ok - a local-only task proven outside the declared landing domain lands through fm-merge-local (fast-forwards executed: 1)
+ok - a governed-domain local-only task with no review request refuses the real fm-merge-local path (fast-forwards executed: 0)
+ok - a local landing whose repository cannot be established refuses under a declared domain (fast-forwards executed: 0)
+ok - an empty landing domain lands a clone whose repository is unestablished (fast-forwards executed: 1)
 ok - an unruled Browser Sol review gate refuses the real fm-merge-local path (fast-forwards executed: 0)
 ok - an approved ruling lands through fm-merge-local and spends its authority (fast-forwards executed: 1, authorizations spent: 1)
 ok - a spent landing authority refuses a replayed fm-merge-local (fast-forwards executed across two attempts: 1)
 FM_TEST_CONTRACT suite=fm-landing-seam.test.sh status=pass
 ```
 
-The pre-existing suites for both landing paths were re-run unchanged on the same tree, because the seam must not have altered any refusal they already owned:
+The pre-existing suites for both landing paths were re-run unchanged on the same tree, because the applicability change must not have altered any refusal they already owned:
 
 ```
 $ bash tests/fm-pr-merge.test.sh | grep -c '^ok'
 45
 $ bash tests/fm-merge-local.test.sh | grep -c '^ok'
 27
+$ bash tests/fm-landing-authorization.test.sh | grep -c '^ok'
+17
 ```
 
 ### Refreshing this record
 
-Re-run both suites after any change to the seam, either merge gate's merge site, or the authority layer.
-Re-run the red calibration - not just the green suites - after any change to the applicability rule, the governing-gate set, the live-state set, or the act receipt, because those are the four places where this control can go quietly vacuous while staying green.
+Re-run all four suites after any change to the seam, either merge gate's merge site, or the authority layer.
+Re-run the red calibration - not just the green suites - after any change to the applicability rule, the declared-domain reader, the governing-gate set, the live-state set, or the act receipt, because those are the five places where this control can go quietly vacuous while staying green.
+`tests/landing-seam-red-matrix.py matrix` is that calibration, and it fails rather than reports when a defect goes unwitnessed or the staging control reddens anything.
 
 ## Effect-plan verification
 
@@ -360,9 +460,8 @@ not ok - real-path: spending the authority: FM_AUTH_ACT_ASSERTION_MISMATCH: the 
 The same invariant applies to every mechanism in this fleet that authorizes an irreversible outward effect.
 Two others exist, and neither is changed by this record; they are inventoried here so a reader is not left assuming the property is fleet-wide.
 
-**FirstMate candidate publication**, `bin/fm-publication-guard.sh`, open for independent review as pull request #133 at head `a5db4d0cb5d11811fa0762a3e11a762815f4464a`.
-It satisfies the invariant on every axis this record covers: it constructs `git push <remote> refs/heads/<branch>:refs/heads/<branch>` from the authority's own fields rather than running a caller command, resolves a trusted `git` from a fixed executable set to a path and a content digest, binds the remote by a credential-free URL digest and remote identity, and re-observes both at consume, refusing on any mismatch.
-Its conformance credit belongs to the exact generation that passes its own review and landing gates, so it is inventoried as conforming and not yet credited.
+**FirstMate candidate publication**, `bin/fm-publication-guard.sh`, constructs the push from the authority's own fields, pins the trusted Git executable and remote identity, and re-observes both at consume.
+[`candidate-publication-effect-guard.md`](candidate-publication-effect-guard.md) owns its current claims and verification evidence.
 
 **no-mistakes `PushStep`**, `internal/pubauth` plus `internal/pipeline/steps/push.go`, at that project's local `main` `0d96d8c`.
 Its effect subject is typed and closed - repository, run, push generation, ref, branch, candidate head and tree, expected and observed remote tips, target kind and credential-free target fingerprint, and effect kind - and `Subject.Equal` compares every field exactly, so an `ALLOW_EXACT` echoing any other subject is refused and the push is built from those fields rather than from a caller command.
