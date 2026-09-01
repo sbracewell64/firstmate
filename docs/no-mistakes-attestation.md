@@ -138,7 +138,7 @@ The program that reaches the verdict is therefore never the candidate's.
 An evidence generation the authoritative verifier does not understand is refused by it, on its own terms, rather than worked around.
 
 **Bootstrap is two-generation, never self-ratifying.**
-A pull request that changes the verifier is qualified and landed under the PREVIOUSLY authoritative policy plus every existing gate and independent review; only after it lands and the governed branch has settled does the new policy generation become authoritative, and only then can a fresh descendant reconciled onto that generation by the pipeline's ordinary rebase step prove the new production path.
+A pull request that changes the verifier is qualified and landed under the PREVIOUSLY authoritative policy plus every existing gate and independent review; only after it lands and the governed branch has settled does the new policy generation become authoritative, and only then can a fresh descendant reconciled onto that generation by the pipeline's ordinary rebase step, validated at that exact rebased head, and published with an attestation for that head prove the new production path.
 A candidate cannot establish its own acceptance semantics by passing itself.
 The same rule governs this declaration format: the `policy-ref:` directive is parsed by the reader before any venue adopts it, so a home still running the older reader is never handed a declaration it would call invalid.
 
