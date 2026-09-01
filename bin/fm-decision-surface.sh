@@ -795,9 +795,9 @@ check_landing_authority() {
         "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || rc=$?
       [ "$seam_rc" -eq 0 ] || [ "$rc" -ne 0 ] || rc=4
     else
-      fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
+      fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
         "$TARGET candidate could not be observed: $FM_LANDING_CANDIDATE_REASON" "candidate=live"
-      rc=3
+      rc=4
     fi
   else
     fm_landing_authority_resolve "$FM_HOME" "$TARGET" "" || rc=$?

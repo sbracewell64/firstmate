@@ -551,6 +551,25 @@ test_decision_surface_uses_live_pr_head() {
   pass "the decision surface refuses stale recorded PR heads against the live head"
 }
 
+test_decision_surface_keeps_an_unobservable_candidate_unevaluable() {
+  local dir
+  dir=$(new_pr_case surface-candidate-unobservable) || fail "fixture failed"
+  rm "$dir/rollup.json"
+
+  run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 4 ] \
+    || fail "an unobservable live candidate was not unevaluable (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'verdict: unevaluable' >/dev/null \
+    || fail "the surface did not render the unobservable candidate as unevaluable: $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'LANDING_AUTHORITY_COULD_NOT_OBSERVE' >/dev/null \
+    || fail "the surface did not name the unobserved authority result: $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'live pull request candidate and review identities could not be read' >/dev/null \
+    || fail "the surface did not name the candidate read that failed: $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
+    && fail "the surface fabricated captain-required authority from an unobservable candidate: $SURFACE_OUT"
+  pass "an unobservable live candidate stays unevaluable and is never routed to the captain"
+}
+
 # --- (5) a decision the fleet typed as the captain's --------------------------
 
 test_a_captain_reserved_decision_requires_the_captain() {
@@ -914,6 +933,7 @@ test_independent_pipeline_review_allows_null_github_decision
 test_approved_review_allows_an_ungoverned_landing
 test_decision_surface_never_delegates_an_unreviewed_candidate
 test_decision_surface_uses_live_pr_head
+test_decision_surface_keeps_an_unobservable_candidate_unevaluable
 test_a_captain_reserved_decision_requires_the_captain
 test_standing_posture_cannot_waive_an_engineering_gate
 test_local_only_landing_is_delegated_on_the_same_terms
