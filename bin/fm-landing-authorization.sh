@@ -497,8 +497,9 @@ claim_owner_state() {  # <auth-id>
   [ -n "$identity" ] || { printf 'unobserved\n'; return; }
   if current=$(fm_pid_identity "$pid" 2>/dev/null); then
     if [ "$current" = "$identity" ]; then
-      current_group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') \
+      fm_auth_process_group "$pid" \
         || { printf 'unobserved\n'; return; }
+      current_group=$FM_AUTH_PROCESS_GROUP
       if [ "$current_group" = "$group" ]; then printf 'live\n'; else printf 'unobserved\n'; fi
       return
     fi
@@ -693,6 +694,7 @@ ruling_unspent() {  # <request-id> <head> <this-id>
 
 cmd_mint() {  # <request-id> --effect <kind> [...]
   local rid=$1; shift
+  local claim_rc
   local kind='' method='' delete=no project='' branch=''
   local assert_repo='' assert_pr='' assert_head='' assert_project=''
   local state comment verdict class item project_name repo pr head id rec now existing rc
@@ -812,9 +814,14 @@ cmd_mint() {  # <request-id> --effect <kind> [...]
   id=$(fm_auth_id "$rid" "$comment" "$verdict" "$item" "$project_name" "$repo" "$pr" "$head" "$MINT_EFFECT_DIGEST") \
     || die "the authorization identity could not be computed" 4
 
-  claim_acquire "$id" \
-    || refuse "$FM_AUTH_TOKEN_IN_FLIGHT" \
-      "another operation on $id holds the claim"
+  claim_acquire "$id"; claim_rc=$?
+  case $claim_rc in
+    0) ;;
+    1) refuse "$FM_AUTH_TOKEN_IN_FLIGHT" \
+         "another operation on $id holds the claim" ;;
+    *) unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+         "the claim on $id was neither taken nor ruled out, so whether an authorization may be granted is unknown: $FM_AUTH_CLAIM_DEFECT" ;;
+  esac
 
   # Idempotent on identity. The same ruling for the same head reproduces the same
   # id, so a second mint returns the first authorization rather than granting a
@@ -969,6 +976,7 @@ assert_act() {  # <auth-id> <asserted...>
 
 cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <command>...]
   local id=$1; shift
+  local claim_rc
   local want_head='' receipt='' asserted=0
   local rec state admit outcome_state recorded
   local rid corr_state corr_comment pr locator owner number observed
@@ -1002,13 +1010,16 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
     || refuse "$FM_AUTH_TOKEN_NO_ACT" \
       "--assert-act was given no act to assert, so there is nothing to compare against this authority"
 
-  if ! claim_acquire "$id"; then
+  claim_acquire "$id"; claim_rc=$?
+  if [ "$claim_rc" -ne 0 ]; then
     auth_read "$id"; rc=$?
     if [ "$rc" -eq 0 ] \
       && [ "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')" = spending ]; then
       unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
         "a spend of $id began and recorded no outcome, so whether the act happened is unknown; reconcile it from an observation before any further attempt"
     fi
+    [ "$claim_rc" -eq 1 ] || unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+      "the claim on $id was neither taken nor ruled out, so whether another caller is spending it is unknown: $FM_AUTH_CLAIM_DEFECT"
     refuse "$FM_AUTH_TOKEN_IN_FLIGHT" \
       "another spend of $id holds the claim; one authority is spent by one caller"
   fi
@@ -1297,6 +1308,7 @@ cmd_inspect() {  # <auth-id>
 
 cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   local id=$1; shift
+  local claim_rc reclaim_rc
   local observed='' evidence=''
   local rec state initial_state rc now rid head reservation holder
   while [ $# -gt 0 ]; do
@@ -1346,11 +1358,27 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
         unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
           "the spender process group for $id could not be observed as gone" ;;
     esac
-    claim_reclaim_gone "$id" \
+    claim_reclaim_gone "$id"; reclaim_rc=$?
+    [ "$reclaim_rc" -ne 2 ] || unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+      "the old claim on $id was removed, but its replacement could not be observed safely: $FM_AUTH_CLAIM_DEFECT"
+    [ "$reclaim_rc" -eq 0 ] \
       || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
         "the spender process group for $id could not be reclaimed after it was observed gone"
-  elif ! claim_acquire "$id"; then
-    if ! claim_reclaim_gone "$id"; then
+  else
+    claim_acquire "$id"; claim_rc=$?
+    if [ "$claim_rc" -eq 2 ]; then
+      unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+        "the claim on $id was neither taken nor ruled out, so nothing about its spender was established: $FM_AUTH_CLAIM_DEFECT"
+    fi
+    reclaim_rc=0
+    if [ "$claim_rc" -ne 0 ]; then
+      claim_reclaim_gone "$id"; reclaim_rc=$?
+    fi
+    if [ "$reclaim_rc" -eq 2 ]; then
+      unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+        "the old claim on $id was removed, but its replacement could not be observed safely: $FM_AUTH_CLAIM_DEFECT"
+    fi
+    if [ "$claim_rc" -ne 0 ] && [ "$reclaim_rc" -ne 0 ]; then
       if [ "$CLAIM_OWNER_STATE" = live ]; then
         unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
           "the spender process group for $id still exists"

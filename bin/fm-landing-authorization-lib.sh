@@ -265,6 +265,11 @@ FM_AUTH_TOKEN_PLAN_UNSUPPORTED=FM_AUTH_EFFECT_KIND_UNSUPPORTED
 FM_AUTH_TOKEN_EXEC_UNOBSERVED=FM_AUTH_EFFECT_EXECUTABLE_UNOBSERVED
 FM_AUTH_TOKEN_TARGET_UNOBSERVED=FM_AUTH_EFFECT_TARGET_UNOBSERVED
 FM_AUTH_TOKEN_RECEIPT_UNOBSERVED=FM_AUTH_ACT_RECEIPT_UNRECORDABLE
+# Kept apart from IN_FLIGHT for the reason this whole block exists: one says
+# a competitor was seen holding the claim, this one says nothing about any
+# competitor could be established. An operator told the first looks for the
+# other caller; an operator told the second looks at this host.
+FM_AUTH_TOKEN_CLAIM_UNOBSERVED=FM_AUTH_CLAIM_UNOBSERVED
 }
 
 # --- the effect-plan vocabulary ----------------------------------------------
@@ -353,13 +358,49 @@ fm_auth_id() {  # <same arguments as fm_auth_identity_canonical> -> id
   printf '%s%s\n' "$FM_AUTH_ID_PREFIX" "${sum:0:$FM_AUTH_ID_HEX_WIDTH}"
 }
 
+# --- how the predicates below read their input --------------------------------
+#
+# Every predicate here is pure: it answers a question and writes nothing.
+# A writer piped into `grep -q` can receive EPIPE after an early match and emit a
+# diagnostic when SIGPIPE is ignored, corrupting a caller's captured answer.
+# The calibration and regression evidence are in
+# docs/verification/inbound-ruling-authorization.md.
+#
+# Two forms are used below, and neither can write anything:
+#
+#   - a here-string, `grep -Eq RE <<<"$value"`, where bash has the whole input
+#     ready before grep exists, so there is no concurrent writer to break. grep
+#     matches LINE CONTENT, so the newline a here-string appends is a terminator
+#     and not content, and every pattern below needs at least one character -
+#     which is what makes this exactly equivalent to the `printf '%s'` it
+#     replaces, including for the empty candidate.
+#   - fm_auth_set_member for the two membership tests, which needs no process at
+#     all. The here-string form is NOT equivalent for those: their input already
+#     ended in a newline, so a here-string would add an empty trailing line and
+#     an EMPTY candidate would start matching it.
+
+# Exact membership of one line in a newline-separated set, with no subprocess.
+# Stricter than the `grep -qxF` it replaces in one way that is deliberate: grep
+# reads a pattern containing newlines as SEVERAL patterns, so a candidate like
+# `pr-merge<newline>anything` used to be a member. Here it is one candidate and
+# it is not.
+fm_auth_set_member() {  # <candidate> <newline-separated set>
+  local candidate=${1:-} set=${2:-} nl='
+'
+  [ -n "$candidate" ] || return 1
+  case $candidate in *"$nl"*) return 1 ;; esac
+  case "$nl$set$nl" in
+    *"$nl$candidate$nl"*) return 0 ;;
+  esac
+  return 1
+}
+
 fm_auth_id_valid() {  # <candidate>
-  printf '%s' "${1:-}" \
-    | grep -Eq "^${FM_AUTH_ID_PREFIX}[0-9a-f]{${FM_AUTH_ID_HEX_WIDTH}}\$"
+  grep -Eq "^${FM_AUTH_ID_PREFIX}[0-9a-f]{${FM_AUTH_ID_HEX_WIDTH}}\$" <<<"${1:-}"
 }
 
 fm_auth_effect_valid() {  # <candidate>
-  printf '%s\n' "$FM_AUTH_EFFECTS" | grep -qxF "${1:-}"
+  fm_auth_set_member "${1:-}" "$FM_AUTH_EFFECTS"
 }
 
 # --- the publication subject -------------------------------------------------
@@ -469,7 +510,7 @@ fm_auth_verdict_class() {  # <verdict>
 # because the equality carries the property and this only screens the inputs.
 
 fm_auth_head_shape_valid() {  # <candidate>
-  printf '%s' "${1:-}" | grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$'
+  grep -Eq '^([0-9a-f]{40}|[0-9a-f]{64})$' <<<"${1:-}"
 }
 
 # --- pull request locator ----------------------------------------------------
@@ -529,13 +570,13 @@ fm_auth_plain_value() {  # <candidate>
 # and it refuses rather than redacting, because a value that had to be redacted
 # to be safe was never a mechanism field this owner should be holding.
 fm_auth_credential_bearing() {  # <candidate>
-  printf '%s' "${1-}" | grep -Eqi \
+  grep -Eqi \
     -e '(^|[^[:alnum:]])--?(token|password|passwd|secret|api[-_]?key|apikey|credential|netrc|bearer|authorization)([=[:space:]]|$)' \
     -e '(token|password|passwd|secret|api[-_]?key|apikey|credential|bearer|authorization)[[:space:]]*[=:][^[:space:]]' \
     -e 'gh[pousr]_[[:alnum:]]{16,}' \
     -e 'github_pat_[[:alnum:]_]{20,}' \
     -e '-----BEGIN[[:space:]]' \
-    -e '://[^/@[:space:]]*@'
+    -e '://[^/@[:space:]]*@' <<<"${1-}"
 }
 
 # --- effect plan -------------------------------------------------------------
@@ -649,11 +690,11 @@ fm_auth_plan_read() {  # <plan-json> <field> [<validator> [<validator-arg>]]
 }
 
 fm_auth_plan_repo_valid() {  # <candidate>
-  printf '%s' "${1:-}" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+  grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' <<<"${1:-}"
 }
 
 fm_auth_plan_number_valid() {  # <candidate>
-  printf '%s' "${1:-}" | grep -Eq '^[0-9]+$'
+  grep -Eq '^[0-9]+$' <<<"${1:-}"
 }
 
 fm_auth_plan_absolute_path_valid() {  # <candidate>
@@ -668,15 +709,15 @@ fm_auth_plan_absolute_path_valid() {  # <candidate>
 }
 
 fm_auth_plan_exec_name_valid() {  # <candidate>
-  printf '%s' "${1:-}" | grep -Eq '^[A-Za-z0-9._-]+$'
+  grep -Eq '^[A-Za-z0-9._-]+$' <<<"${1:-}"
 }
 
 fm_auth_plan_digest_valid() {  # <candidate>
-  printf '%s' "${1:-}" | grep -Eq '^[0-9a-f]{64}$'
+  grep -Eq '^[0-9a-f]{64}$' <<<"${1:-}"
 }
 
 fm_auth_plan_target_ref_valid() {  # <candidate>
-  printf '%s' "${1:-}" | grep -Eq '^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$' || return 1
+  grep -Eq '^refs/heads/[A-Za-z0-9][A-Za-z0-9._/-]*$' <<<"${1:-}" || return 1
   case ${1:-} in
     *..*|*/.*|*.lock|*//*|*/) return 1 ;;
   esac
@@ -684,7 +725,7 @@ fm_auth_plan_target_ref_valid() {  # <candidate>
 }
 
 fm_auth_plan_member_of() {  # <candidate> <newline-separated set>
-  printf '%s\n' "${2:-}" | grep -qxF "${1:-}"
+  fm_auth_set_member "${1:-}" "${2:-}"
 }
 
 fm_auth_plan_literal() {  # <candidate> <required literal>
@@ -923,15 +964,78 @@ auth_claim_path() {
   printf '%s/.%s.claim\n' "$AUTH_DIR" "$1"
 }
 
+# This process's own process group, read WITHOUT a subprocess where /proc can
+# answer. That is not a micro-optimisation: `ps -o pgid=` costs a fork, and the
+# runners where a claim fails to be taken are exactly the ones already short of
+# processes, so the reader was most likely to fail precisely when it mattered.
+# The `ps` fallback stays for platforms with no /proc, and its exit status is no
+# longer swallowed - the old form piped `ps` into `tr`, so the pipeline reported
+# `tr`'s success and a FAILED `ps` was read as "my group is the empty string".
+FM_AUTH_PROCESS_GROUP=
+fm_auth_process_group() {  # <pid>; sets FM_AUTH_PROCESS_GROUP
+  local pid=${1:-} stat_line group='' root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  local -a stat_fields=()
+  FM_AUTH_PROCESS_GROUP=
+  case $pid in ''|*[!0-9]*) return 1 ;; esac
+  if [ -r "$root/$pid/stat" ] && read -r stat_line < "$root/$pid/stat"; then
+    # The same read fm_pid_identity does: comm is stepped past first because it
+    # can itself contain spaces and parentheses. After that final delimiter,
+    # index 2 is proc stat field 5, pgrp.
+    read -r -a stat_fields <<<"${stat_line##*)}"
+    group=${stat_fields[2]:-}
+    case $group in ''|*[!0-9]*) group= ;; esac
+  fi
+  if [ -z "$group" ]; then
+    group=$(ps -o pgid= -p "$pid" 2>/dev/null) || return 1
+    group=${group//[[:space:]]/}
+  fi
+  case $group in ''|*[!0-9]*) return 1 ;; esac
+  FM_AUTH_PROCESS_GROUP=$group
+}
+
+# Taking a claim is THREE-VALUED: failure can establish that another operation
+# holds the claim, or it can leave the holder unobserved.
+# Callers must preserve that distinction; the regression evidence is in
+# docs/verification/inbound-ruling-authorization.md.
+#
+#   0  acquired
+#   1  another operation holds the claim - OBSERVED, the directory already exists
+#   2  could not observe; FM_AUTH_CLAIM_DEFECT names what could not be observed
+FM_AUTH_CLAIM_DEFECT=
+# shellcheck disable=SC2034  # FM_AUTH_CLAIM_DEFECT is read by sourcing callers
 claim_acquire() {  # <auth-id> [serial]
   local dir pid identity group mode=${2:-group}
-  dir=$(auth_claim_path "$1") || return 1
+  FM_AUTH_CLAIM_DEFECT=
+  if ! dir=$(auth_claim_path "$1"); then
+    FM_AUTH_CLAIM_DEFECT="'${1:-}' does not address the claim store"
+    return 2
+  fi
   pid=${BASHPID:-$$}
-  group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') || return 1
-  [ "$mode" = serial ] || [ "$group" = "$pid" ] || return 1
-  identity=$(fm_pid_identity "$pid") || return 1
-  mkdir -p "$AUTH_DIR" || return 1
-  mkdir "$dir" 2>/dev/null || return 1
+  if ! fm_auth_process_group "$pid"; then
+    FM_AUTH_CLAIM_DEFECT="this process could not read its own process group"
+    return 2
+  fi
+  group=$FM_AUTH_PROCESS_GROUP
+  if [ "$mode" != serial ] && [ "$group" != "$pid" ]; then
+    FM_AUTH_CLAIM_DEFECT="this process does not lead its own process group, so a claim it took could not be released with the act it owns"
+    return 2
+  fi
+  if ! identity=$(fm_pid_identity "$pid"); then
+    FM_AUTH_CLAIM_DEFECT="this process could not read its own identity"
+    return 2
+  fi
+  if ! mkdir -p "$AUTH_DIR"; then
+    FM_AUTH_CLAIM_DEFECT="the authorization store could not be created"
+    return 2
+  fi
+  if ! mkdir "$dir" 2>/dev/null; then
+    # The ONE outcome that is a verdict about a competitor, and it is only that
+    # when the directory is there to be seen. Any other reason mkdir refused is
+    # a fact about this process's storage, not about another caller.
+    [ -d "$dir" ] && return 1
+    FM_AUTH_CLAIM_DEFECT="the claim directory for $1 could not be created and does not exist"
+    return 2
+  fi
   if printf '%s\n' "$pid" > "$dir/owner-pid" \
     && printf '%s\n' "$identity" > "$dir/owner-identity" \
     && printf '%s\n' "$group" > "$dir/owner-group"; then
@@ -939,7 +1043,8 @@ claim_acquire() {  # <auth-id> [serial]
   else
     rm -f "$dir/owner-pid" "$dir/owner-identity" "$dir/owner-group"
     rmdir "$dir" 2>/dev/null
-    return 1
+    FM_AUTH_CLAIM_DEFECT="the claim on $1 was taken but its owner identity could not be recorded, so it was released"
+    return 2
   fi
   CLAIM=$dir
   trap claim_release EXIT

@@ -46,6 +46,11 @@
 #  29. successful exit requires post-effect proof
 #  30. the real path end to end: a ruled correlation record mints a plan, the
 #      spend constructs the act, and a scratch repository proves it happened
+#  31. a predicate answers without writing anything, even when its reader stops
+#      early and a failed write would be reported rather than fatal
+#  32. a claim that could not be observed is reported as could-not-observe, never
+#      as another operation holding it
+#  33. racing mints grant one authorization and type every other outcome
 #
 # CONTROL 1 IS NOT OPTIONAL AND IS NOT DECORATION. Every other control here is a
 # refusal, and a mechanism that refuses everything satisfies all of them at once.
@@ -706,6 +711,235 @@ test_concurrent_mints_cannot_replace_a_spent_record() {
   [ "$(run_auth "$dir" status "$id" 2>&1)" = spent ] \
     || fail "concurrent-mint: spent record was replaced"
   pass "concurrent mints cannot replace a spent record"
+}
+
+# --- 31: a predicate answers, and writes nothing -----------------------------
+
+# THE CONTROL THIS SUITE DID NOT HAVE WHEN TRUNK WENT RED. Every predicate in the
+# library is pure: it returns a verdict and produces no output. One of them was
+# also a WRITER - `printf ... | grep -q ...` - and `grep -q` closes the pipe the
+# moment it matches, by design. Whenever the writer had not finished, its next
+# write got EPIPE; and because a CI runner starts its steps with SIGPIPE IGNORED,
+# the writer did not die quietly on the signal - bash reported the failed write
+# on stderr. That line landed inside a caller's captured output:
+#
+#   not ok - nonvacuity: fresh authorization reported '...lib.sh: line 687:
+#   printf: write error: Broken pipe
+#   granted', not granted
+#
+# The authorization in that run was correct: `granted` is what the mechanism
+# said. A predicate's diagnostic was mixed into the answer, and a caller
+# comparing the whole captured value saw the two as one string. So the property
+# to hold is SILENCE, and it is asserted under the two conditions that made the
+# violation visible: SIGPIPE ignored, and an input whose FIRST line already
+# decides the verdict, so a reader that stops at the first match stops while a
+# writer would still be writing.
+#
+# The negative control runs FIRST and is not optional. "No output" is the same
+# observation as "the probe never ran", so this watches the piped form actually
+# emit under these conditions before it trusts the library's silence.
+test_a_predicate_writes_nothing_even_when_its_reader_stops_early() {
+  local dir probe noise quiet verdicts
+  dir=$(new_case predicate-silence) || fail "predicate-silence: fixture failed"
+  probe=$dir/probe.sh
+  cat > "$probe" <<'SH'
+#!/usr/bin/env bash
+# The runner's condition: a failed write is REPORTED, not fatal.
+trap '' PIPE
+lib=$1; mode=$2
+big=$(seq 1 200000)
+if [ "$mode" = control ]; then
+  # The shape the library used to have, kept here as the negative control so a
+  # silent library is distinguishable from a probe that never ran.
+  printf '%s\n' "pr-merge
+$big" | grep -qxF pr-merge
+  printf 'control_verdict=%s\n' "$?" >&3
+  exit 0
+fi
+. "$lib" || exit 9
+fm_auth_plan_member_of pr-merge "pr-merge
+$big"
+printf 'member_first_line=%s\n' "$?" >&3
+fm_auth_plan_member_of local-fast-forward "$big
+local-fast-forward"
+printf 'member_last_line=%s\n' "$?" >&3
+fm_auth_plan_member_of absent-kind "$big"
+printf 'member_absent=%s\n' "$?" >&3
+fm_auth_head_shape_valid "1111111111111111111111111111111111111111
+$big"
+printf 'head_shape=%s\n' "$?" >&3
+SH
+  chmod +x "$probe" || fail "predicate-silence: probe not writable"
+
+  # Negative control: the retired shape must be seen breaking here.
+  noise=$(bash "$probe" "$ROOT/bin/fm-landing-authorization-lib.sh" control 2>&1 3>"$dir/control.verdicts")
+  assert_contains "$noise" "Broken pipe" \
+    "predicate-silence: the negative control did not reproduce a broken pipe, so this case cannot tell a silent predicate from a probe that never ran"
+  [ "$(cat "$dir/control.verdicts")" = "control_verdict=0" ] \
+    || fail "predicate-silence: the negative control did not even reach its verdict"
+
+  # The real check: same conditions, same early-stopping decision, no output.
+  quiet=$(bash "$probe" "$ROOT/bin/fm-landing-authorization-lib.sh" live 2>&1 3>"$dir/live.verdicts")
+  [ -z "$quiet" ] \
+    || fail "predicate-silence: a predicate wrote to stdout or stderr:"$'\n'"$quiet"
+
+  # Silence is only worth having if the verdicts are still right.
+  verdicts=$(cat "$dir/live.verdicts")
+  assert_contains "$verdicts" "member_first_line=0" \
+    "predicate-silence: a member on the first line was not found"
+  assert_contains "$verdicts" "member_last_line=0" \
+    "predicate-silence: a member on the last line was not found"
+  assert_contains "$verdicts" "member_absent=1" \
+    "predicate-silence: a non-member was reported as a member"
+  assert_contains "$verdicts" "head_shape=0" \
+    "predicate-silence: a well-shaped head was rejected"
+  pass "a predicate answers without writing anything, even when its reader stops early"
+}
+
+# --- 32: taking a claim is three-valued --------------------------------------
+
+# Acquiring a claim can fail two ways that a caller must not be told are one.
+# Another operation holding it is a verdict about a competitor that was actually
+# observed. Being unable to read what this process needs in order to hold the
+# claim safely is no verdict about anybody. Those shared a return code, and both
+# callers reported the pair as FM_AUTH_SPEND_IN_FLIGHT - so a mint that merely
+# could not read its own process group announced that another operation held the
+# claim while NOTHING held it and no store existed at all. Two racers hitting
+# that at once produce two confident, false refusals and no authorization, which
+# is what "neither mint produced an authorization" looked like from outside.
+#
+# The perturbation is exactly one thing: this process cannot observe its own
+# process group. The unperturbed fixture is driven first, so the refusal below is
+# attributable to that and not to a mechanism that never works.
+test_an_unobservable_process_group_is_not_reported_as_another_holder() {
+  local dir out rc id
+  dir=$(new_case claim-unobservable) || fail "claim-unobservable: fixture failed"
+
+  # Control: unperturbed, the same fixture mints.
+  id=$(mint_id "$dir")
+  fm_auth_id_shape "$id" \
+    || fail "claim-unobservable: the unperturbed fixture did not mint: $id"
+  rm -rf "$dir/home/data/landing-authorizations"
+
+  # The one perturbation: neither /proc nor ps can answer for this process.
+  cat > "$dir/fakebin/ps" <<'SH'
+#!/usr/bin/env bash
+exit 1
+SH
+  chmod +x "$dir/fakebin/ps" || fail "claim-unobservable: ps stub not writable"
+
+  out=$( cd "$dir" || exit 9
+    PATH="$dir/fakebin:$PATH" \
+    FM_HOME="$dir/home" \
+    FM_PROC_ROOT_OVERRIDE="$dir/no-proc" \
+    FM_TEST_FORGE_HEAD="$dir/forge_head" \
+    FM_TEST_FORGE_MERGED="$dir/forge_merged" \
+    "$AUTH" mint fm-ob-abcdef123456 --effect pr-merge --method squash 2>&1 ); rc=$?
+
+  # Nothing held the claim: the store was removed above and no competitor exists.
+  [ ! -d "$dir/home/data/landing-authorizations" ] \
+    || [ -z "$(ls -A "$dir/home/data/landing-authorizations" 2>/dev/null)" ] \
+    || fail "claim-unobservable: something held a claim, so this case proves nothing"
+  case $out in
+    *FM_AUTH_SPEND_IN_FLIGHT*)
+      fail "claim-unobservable: an unreadable process group was reported as another operation holding the claim: $out" ;;
+  esac
+  assert_contains "$out" "FM_AUTH_CLAIM_UNOBSERVED" \
+    "claim-unobservable: the refusal did not name itself could-not-observe"
+  assert_contains "$out" "process group" \
+    "claim-unobservable: the refusal did not name what could not be observed"
+  expect_code 4 "$rc" "claim-unobservable: could-not-observe exits 4, never a refusal's 3"
+  pass "a claim that could not be observed is not reported as another operation holding it"
+}
+
+# --- 33: racing mints, counted ------------------------------------------------
+
+# The two-racer control above asks whether a winner exists. This one asks the
+# whole law: ONE eligible subject grants ONE authorization, no matter how many
+# callers arrive at once. Every outcome must therefore be either that same
+# authorization or a TYPED refusal - never a second authorization, never a
+# silent nothing, and never zero winners.
+#
+# "Exactly one winner" can mean one exit-0 process or one authorization. The
+# second is the law here because the mint is idempotent on identity: a racer
+# arriving after the winner released the claim legitimately returns the SAME id
+# rather than granting a second authorization. That is why this counts DISTINCT
+# ids and stored records rather than counting successes.
+#
+# HONEST ABOUT WHAT IT IS. Unlike 31 and 32, this case does NOT go red on the
+# code that produced the reported failure: with the process group observable,
+# the race already held. It is a law guard, not a reproduction, and it was kept
+# because the law had no N-way statement anywhere. It was watched failing under
+# one perturbation - a claim nobody can ever hold - which produces exactly the
+# outcome the law forbids: `six racing mints granted no authorization at all`.
+test_racing_mints_grant_one_authorization_and_type_every_other_outcome() {
+  local dir i out first records distinct untyped ready deadline pid state line
+  local -a pids=()
+  dir=$(new_case racing-mints) || fail "racing-mints: fixture failed"
+  for i in 1 2 3 4 5 6; do
+    ( kill -STOP "$BASHPID"
+      mint_plan "$dir" fm-ob-abcdef123456 ) >"$dir/mint-$i.out" 2>&1 &
+    pids+=("$!")
+    fm_test_reap "$!"
+  done
+  deadline=$((SECONDS + 3))
+  while :; do
+    ready=0
+    for pid in "${pids[@]}"; do
+      state=
+      if [ -r "/proc/$pid/status" ]; then
+        while IFS= read -r line; do
+          case $line in State:*) state=$line; break ;; esac
+        done < "/proc/$pid/status"
+      else
+        state=$(ps -o state= -p "$pid" 2>/dev/null)
+      fi
+      case $state in *T*) ready=$((ready + 1)) ;; esac
+    done
+    [ "$ready" -eq 6 ] && break
+    [ "$SECONDS" -lt "$deadline" ] || break
+  done
+  if [ "${ready:-0}" -ne 6 ]; then
+    for i in "${pids[@]}"; do kill -CONT "$i" 2>/dev/null || true; done
+    fail "racing-mints: only ${ready:-0} of 6 callers reached the race barrier"
+  fi
+  for i in "${pids[@]}"; do kill -CONT "$i"; done
+  for i in "${pids[@]}"; do wait "$i" || true; done
+
+  distinct=
+  untyped=
+  for i in 1 2 3 4 5 6; do
+    out=$(cat "$dir/mint-$i.out")
+    first=$(printf '%s\n' "$out" | awk 'NR == 1 { print $1 }')
+    if fm_auth_id_shape "$first"; then
+      case "$distinct" in
+        '') distinct=$first ;;
+        "$first") ;;
+        *) fail "racing-mints: two different authorizations were granted for one ruling: $distinct and $first" ;;
+      esac
+      continue
+    fi
+    # Not an authorization, so it must SAY what it was instead.
+    case "$out" in
+      FM_AUTH_*:*) ;;
+      *) untyped="$untyped"$'\n'"mint-$i: $out" ;;
+    esac
+  done
+  [ -z "$untyped" ] \
+    || fail "racing-mints: an outcome was neither an authorization nor a typed refusal:$untyped"
+  fm_auth_id_shape "$distinct" \
+    || fail "racing-mints: six racing mints granted no authorization at all"
+
+  records=$(find "$dir/home/data/landing-authorizations" -maxdepth 1 -name 'fm-auth-*.json' 2>/dev/null | wc -l)
+  [ "$records" -eq 1 ] \
+    || fail "racing-mints: the store holds $records authorizations for one ruling, not 1"
+
+  # The one authorization the race produced is still a real, spendable authority.
+  run_auth "$dir" spend "$distinct" --head "$HEAD_A" >/dev/null 2>&1 \
+    || fail "racing-mints: the authorization the race granted could not be spent"
+  [ "$(act_count "$dir")" = 1 ] \
+    || fail "racing-mints: the act ran $(act_count "$dir") times, not once"
+  pass "racing mints grant one authorization and type every other outcome"
 }
 
 # --- 12: enumeration is three-valued -----------------------------------------
@@ -1557,5 +1791,9 @@ run_test_batch \
   test_a_target_ref_moved_after_mint_performs_no_act \
   test_successful_exit_requires_post_effect_proof \
   test_the_whole_path_lands_one_real_fast_forward_and_proves_it
+run_test_batch \
+  test_a_predicate_writes_nothing_even_when_its_reader_stops_early \
+  test_an_unobservable_process_group_is_not_reported_as_another_holder \
+  test_racing_mints_grant_one_authorization_and_type_every_other_outcome
 
 fm_test_contract "$0"
