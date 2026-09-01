@@ -456,9 +456,9 @@ fm_commit_identity_daemon_pid() {  # <nm-root>
 }
 
 # 0 clean, 1 an overriding variable was found (printed), 2 could not observe.
-fm_commit_identity_daemon_env() {  # <pid>
+fm_commit_identity_daemon_env() {  # <pid> [<proc-root>]
   local pid=${1:-} raw='' var hit=0 line observed=0 proc_root
-  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  proc_root=${2:-/proc}
   if [ -r "$proc_root/$pid/environ" ]; then
     if raw=$(tr '\0' '\n' < "$proc_root/$pid/environ" 2>/dev/null); then
       observed=1
@@ -472,7 +472,7 @@ fm_commit_identity_daemon_env() {  # <pid>
   [ "$observed" -eq 1 ] || return 2
   while IFS= read -r var; do
     [ -n "$var" ] || continue
-    line=$(printf '%s\n' "$raw" | grep -m1 -e "^$var=." 2>/dev/null) || continue
+    line=$(printf '%s\n' "$raw" | grep -m1 -e "^$var=" 2>/dev/null) || continue
     [ -n "$line" ] || continue
     printf '%s\n' "$line"
     hit=1

@@ -352,6 +352,22 @@ test_a_pipeline_daemon_carrying_an_identity_variable_refuses() {
   pass "a pipeline daemon carrying an identity variable refuses, because it would outrank the gate binding"
 }
 
+test_a_pipeline_daemon_carrying_empty_or_matching_variables_refuses() {
+  local root out rc
+  root=$(make_case daemon-empty-override) || fail "fixture setup failed"
+  start_daemon "$root" GIT_AUTHOR_EMAIL= >/dev/null || fail "daemon fixture failed"
+  out=$(run_cmd "$root" bind); rc=$?
+  expect_code 1 "$rc" "an empty daemon identity assignment must refuse: $out"
+  assert_contains "$out" "GIT_AUTHOR_EMAIL=" "the refusal must name the empty daemon variable"
+
+  root=$(make_case daemon-matching-override) || fail "fixture setup failed"
+  start_daemon "$root" GIT_COMMITTER_NAME='Shane Bracewell' >/dev/null || fail "daemon fixture failed"
+  out=$(run_cmd "$root" bind); rc=$?
+  expect_code 1 "$rc" "a matching daemon identity assignment must refuse: $out"
+  assert_contains "$out" "GIT_COMMITTER_NAME=Shane" "the refusal must name the matching daemon variable"
+  pass "empty and policy-matching daemon identity assignments both refuse by presence"
+}
+
 test_an_unidentifiable_daemon_is_could_not_observe() {
   local root out rc
   root=$(make_case daemon-absent) || fail "fixture setup failed"
@@ -388,10 +404,24 @@ case " $* " in
 esac
 FAKE
   chmod +x "$root/bin/ps" || fail "ps fixture failed"
-  out=$(run_cmd "$root" bind FM_PROC_ROOT_OVERRIDE="$fake_proc"); rc=$?
+  out=$(PATH="$root/bin:$PATH" bash -c '. "$1"; fm_commit_identity_daemon_env "$2" "$3"' \
+    _ "$ROOT/bin/fm-commit-identity-lib.sh" "$pid" "$fake_proc" 2>&1); rc=$?
   expect_code 2 "$rc" "ps metadata without environment fields must be unobservable: $out"
-  assert_contains "$out" "environment of pid $pid could not be read" "metadata must not be folded into a clean environment"
   pass "ps process metadata alone cannot certify the daemon environment clean"
+}
+
+test_production_cannot_redirect_daemon_environment_observation() {
+  local root fake_proc out rc pid
+  root=$(make_case daemon-proc-redirect) || fail "fixture setup failed"
+  start_daemon "$root" GIT_AUTHOR_NAME=DaemonPoison >/dev/null || fail "daemon fixture failed"
+  pid=$(jq -r .pid "$root/nm/daemon.pid") || fail "pid read failed"
+  fake_proc="$root/fabricated-proc"
+  mkdir -p "$fake_proc/$pid" || fail "proc fixture failed"
+  printf 'PATH=/fabricated\0' > "$fake_proc/$pid/environ" || fail "proc fixture failed"
+  out=$(run_cmd "$root" bind FM_PROC_ROOT_OVERRIDE="$fake_proc"); rc=$?
+  expect_code 1 "$rc" "production bind must ignore a proc-root redirection: $out"
+  assert_contains "$out" "GIT_AUTHOR_NAME=DaemonPoison" "bind must inspect the real daemon environment"
+  pass "the production command cannot redirect daemon observation to fabricated proc data"
 }
 
 # --- the strongest channel, for processes this fleet runs -------------------
@@ -465,9 +495,11 @@ FM_CONTROLS=(
   test_an_uninitialized_pipeline_is_not_applicable_rather_than_unobserved
   test_an_unreadable_gate_report_is_could_not_observe
   test_a_pipeline_daemon_carrying_an_identity_variable_refuses
+  test_a_pipeline_daemon_carrying_empty_or_matching_variables_refuses
   test_an_unidentifiable_daemon_is_could_not_observe
   test_a_reused_daemon_pid_is_could_not_observe
   test_ps_metadata_without_environment_is_could_not_observe
+  test_production_cannot_redirect_daemon_environment_observation
   test_the_env_verb_emits_the_channel_that_outranks_everything
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
