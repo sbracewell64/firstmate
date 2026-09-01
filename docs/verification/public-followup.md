@@ -1,5 +1,7 @@
 # Promised public reply verification
 
+This record cites no commit ids. The long digit string in it is a nanosecond timing measurement, not a commit reference.
+
 Audience: maintainer verification.
 
 This record supports two active guarantees for promised public replies made through the myfirstmate relay:

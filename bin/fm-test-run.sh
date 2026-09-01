@@ -338,6 +338,7 @@ family_for_basename() {
     fm-task-base.test.sh|fm-task-delivery.test.sh|\
     fm-tmux-submit-busy.test.sh|fm-trace-context-lib.test.sh|\
     fm-review-exec.test.sh|fm-review-mutation.test.sh|\
+    fm-review-envelope.test.sh|\
     fm-transition-lib.test.sh|fm-verify.test.sh|\
     fm-worker-initiated-validation.test.sh|\
     fm-test-run.test.sh|fm-test-isolation-proof.test.sh)
@@ -1606,6 +1607,14 @@ families_for_changed_path() {
       # rule and asserts on the label it produces.
       printf '%s\n' pure-contract-unit
       printf '%s\n' snapshot-bearings
+      ;;
+    bin/fm-review-envelope.sh|bin/fm-review-envelope-lib.sh)
+      # The review-envelope contract, its compiler and its classifier.
+      # bin/fm-verify.sh's review-envelope adapter transports this script's
+      # result, so a change here reaches tests/fm-verify.test.sh as well as its
+      # own suite; both are in the same family, named once here so the
+      # dependency is not left to the basename scan.
+      printf '%s\n' pure-contract-unit
       ;;
     bin/fm-review-exec.sh)
       # The review execution and capture substrate. bin/fm-verify.sh's

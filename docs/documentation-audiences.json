@@ -267,6 +267,10 @@
       "audience": "operator-current"
     },
     {
+      "path": "docs/contracts/review-envelope.md",
+      "audience": "maintainer-architecture"
+    },
+    {
       "path": "docs/decision-hold-lifecycle.md",
       "audience": "maintainer-architecture"
     },
@@ -424,6 +428,10 @@
     },
     {
       "path": "docs/verification/rebase-equivalence.md",
+      "audience": "maintainer-verification"
+    },
+    {
+      "path": "docs/verification/review-envelope-controls.md",
       "audience": "maintainer-verification"
     },
     {

@@ -1,5 +1,7 @@
 # Verification: the one-use, head-bound landing authorization
 
+This record cites no commit ids. The hex-shaped strings in it are `fm-auth-` request-id fragments, a calibration directory dated by day, and a deliberately fabricated head inside a control's captured output - none of them commit references.
+
 Audience: maintainer-verification.
 Subject: `bin/fm-landing-authorization.sh` and `bin/fm-landing-authorization-lib.sh`, and the seam that consumes them - `bin/fm-landing-seam-lib.sh` inside `bin/fm-pr-merge.sh` and `bin/fm-merge-local.sh`.
 Regression owners: `tests/fm-landing-authorization.test.sh` for the authority layer, `tests/fm-landing-seam.test.sh` for the seam.

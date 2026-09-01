@@ -80,6 +80,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-project-mode.sh`     | Resolve a project's registered delivery and autonomy posture from `data/projects.md`, with optional source attribution |
 | `fm-merge-local.sh`      | Compile landing authority and guardedly fast-forward a `local-only` project's local default branch |
 | `fm-review-diff.sh`      | Review a crewmate branch or resolved PR head against the authoritative base          |
+| `fm-review-envelope.sh`  | Compile, inspect and classify a `review-envelope/v1` candidate statement ([contract](contracts/review-envelope.md), [verification](verification/review-envelope-controls.md)) |
+| `fm-review-envelope-lib.sh` | Single owner of the review-envelope contract: bound facts, canonical form, digest, and three-valued classification |
 | `fm-review-exec.sh`      | Launch and capture a reviewer in a disposable pinned clone, and own that review's execution evidence ([verification](verification/review-execution-evidence.md)) |
 | `fm-review-mutation.sh`  | Prove from execution, not from a label, that a named target assertion ran and what it concluded ([verification](verification/review-mutation-proof.md)) |
 | `fm-research-scan.sh`    | Model-free prefilter over `data/**/report.md` plus the separate approval, implementation, and delivery evidence provers |
