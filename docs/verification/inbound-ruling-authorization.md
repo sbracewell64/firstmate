@@ -589,7 +589,10 @@ It is outside this owner and is not repaired here.
 
 ### Delivery revalidation
 
-Date: 2026-08-31.
+Date: 2026-09-01.
+The six-way mint control now stops those same six workers immediately before minting, observes all six stopped, and continues them together.
+On Linux the observation reads `/proc/<pid>/status` with shell builtins, so the barrier adds no process or pipe pressure to the mint race it measures.
+The portable `ps` fallback is synchronous and therefore completes every observation before any worker is released.
 The complete authority suite was run five consecutive times against the delivered tree, rather than isolating case 33 or replacing its concurrent callers with a serial fixture:
 
 ```sh
