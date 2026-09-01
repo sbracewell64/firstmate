@@ -3113,6 +3113,7 @@ test_completed_check_pgid_mismatch_is_not_signalled() {
     }
     kill() { printf "%s\n" "$*" >> "$KILL_LOG"; command kill "$@"; }
     run_check_capture ignored
+    [ -z "$(jobs -pr)" ] || { printf "job=running\n"; exit 1; }
     printf "result=%s\n" "$FM_CHECK_RESULT"
   ' 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "completed check pgid mismatch failed: $out"
