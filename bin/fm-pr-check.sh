@@ -22,6 +22,15 @@
 # the absence of a record is never read as agreement. A recorded venue addressed
 # through an SSH host alias is the same venue spelled differently, so the alias
 # is resolved before anything is called a contradiction.
+#
+# Once the watch is armed, this is also the fleet's publication chokepoint for
+# the head-bound no-mistakes attestation. Where the governed contribution venue
+# declares at the task's recorded policy generation that its CI reads one,
+# bin/fm-attest.sh is delegated to publish the evidence its own pipeline run
+# produced and to have that head's verdict re-derived;
+# where no such gate is declared, nothing is touched. It reports one
+# three-valued `attestation:` line and never changes this script's exit status,
+# because a provenance answer must not undo an armed watch.
 # Usage: fm-pr-check.sh <task-id> <pr-url>
 set -eu
 
@@ -123,16 +132,18 @@ fi
 # resolution reads the local ssh configuration, so it runs only in the one
 # branch that needs it - never for a task with no venue, the unresolved
 # sentinel, or a venue that already matches literally.
-VENUE=$(grep '^contribution_venue=' "$RECORD" | tail -1 | cut -d= -f2- || true)
-VENUE_URL=$(grep '^contribution_venue_url=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+VENUE_STATUS=0
+VENUE=$(task_base_metadata_field "$RECORD" contribution_venue) || VENUE_STATUS=$?
+VENUE_URL_STATUS=0
+VENUE_URL=$(task_base_metadata_field "$RECORD" contribution_venue_url) || VENUE_URL_STATUS=$?
 PR_VENUE=$(printf '%s/%s' "$HOST" "$PROJECT_PATH" | tr '[:upper:]' '[:lower:]')
-if [ -z "$VENUE" ]; then
+if [ "$VENUE_STATUS" -ne 0 ]; then
   printf 'venue: unchecked (task %s records no contribution venue)\n' "$ID"
 elif [ "$VENUE" = unresolved ]; then
   printf 'venue: unchecked (task %s recorded its contribution venue as unresolved)\n' "$ID"
 elif [ "$VENUE" = "$PR_VENUE" ]; then
   printf 'venue: %s matches the recorded contribution venue\n' "$PR_VENUE"
-elif [ -n "$VENUE_URL" ] \
+elif [ "$VENUE_URL_STATUS" -eq 0 ] && [ -n "$VENUE_URL" ] \
   && VENUE_ALIAS=$(task_base_venue_identity_alias "$VENUE_URL") \
   && [ "$VENUE_ALIAS" = "$PR_VENUE" ]; then
   printf 'venue: %s matches the recorded contribution venue %s, whose host is an ssh alias for it\n' \
@@ -173,16 +184,29 @@ fi
 # bin/fm-teardown.sh reads the head from the forge at teardown rather than from
 # metadata and falls back to its provider-agnostic content check, and
 # bin/fm-review-diff.sh resolves the head from the remote when none is recorded.
-WT=$(grep '^worktree=' "$RECORD" | tail -1 | cut -d= -f2- || true)
+WT_STATUS=0
+WT=$(task_base_metadata_field "$RECORD" worktree) || WT_STATUS=$?
+[ "$WT_STATUS" -eq 0 ] || WT=
 PR_HEAD=
 if [ "$RECONSTRUCTED" = 1 ]; then
   # The rebuild above already asked the forge for this exact pull request.
   PR_HEAD=$RECONSTRUCTED_HEAD
 elif [ "$PROVIDER" = github ] && [ -n "$WT" ] && [ -d "$WT" ] && command -v gh >/dev/null 2>&1; then
-  # fm-retrieval-audit: not-a-collection - one pull request's head oid
-  if REMOTE_HEAD=$(cd "$WT" && gh pr view "$URL" --json headRefOid -q .headRefOid 2>/dev/null) \
-    && fm_pr_head_valid "$REMOTE_HEAD"; then
-    PR_HEAD=$REMOTE_HEAD
+  # The head oid and the head REPOSITORY come back from ONE read, because they
+  # are two fields of one pull request and asking twice would make a second
+  # forge query per ready event out of a question the first answer already
+  # carries. The repository is what the attestation chokepoint below publishes
+  # to; it is read here so that read is not a separate one.
+  # fm-retrieval-audit: not-a-collection - one pull request's head oid and head repository
+  if REMOTE_VIEW=$(cd "$WT" && gh pr view "$URL" \
+    --json headRefOid,headRepositoryOwner,headRepository \
+    -q '.headRefOid + " " + (.headRepositoryOwner.login // "") + "/" + (.headRepository.name // "")' \
+    2>/dev/null); then
+    REMOTE_HEAD=${REMOTE_VIEW%% *}
+    REMOTE_HEAD_REPO=${REMOTE_VIEW#* }
+    if fm_pr_head_valid "$REMOTE_HEAD"; then
+      PR_HEAD=$REMOTE_HEAD
+    fi
   fi
 elif fm_pr_forge_view "$URL"; then
   # A released task has no worktree left to resolve the request from, so the
@@ -245,3 +269,106 @@ fm_pr_poll_publish_prepared || {
   exit 1
 }
 printf 'armed: state/%s.check.sh\n' "$ID"
+
+# PROVENANCE CHOKEPOINT - publish the head-bound evidence the delivery boundary
+# itself demands, at the one moment a validated candidate is known to exist.
+#
+# Where a repository's CI reads a head-bound attestation, the evidence is
+# produced by the pipeline and published by bin/fm-attest.sh. Publication had no
+# owner: nothing in this repository invoked it, so it happened only when someone
+# remembered a line of prose. Every lane where nobody did left a candidate whose
+# pipeline had completed review, test, lint and push for that exact commit
+# sitting red at the boundary, indistinguishable from one that was never
+# validated at all, and the repair needed a person. This is the step that closes
+# it, and it runs here because this is the first point at which the fleet holds
+# all three of the task's local copy, the request, and the request's exact head.
+#
+# It DELEGATES rather than deciding. bin/fm-attest.sh remains the only thing
+# that reads the pipeline's run record, binds a note to the head that run
+# validated, publishes it, and asks GitHub to re-derive the verdict; nothing
+# here manufactures, transfers, relabels or infers an attestation, and a
+# candidate whose run never covered this head is refused by that owner exactly
+# as it would be anywhere else. The gate is not weakened by publishing evidence
+# it would have accepted anyway.
+#
+# Three-valued, and never fatal. Arming the watch has already succeeded above
+# and a provenance answer must not be able to undo it, so every outcome is
+# reported and none changes this script's exit status. The bound below covers
+# both the declaration predicate and publication, because neither an unreadable
+# checkout nor a forge that will not answer may hold a supervision turn.
+FM_PR_ATTEST_BOUND=180
+# shellcheck source=bin/fm-timeout-lib.sh
+. "$SCRIPT_DIR/fm-timeout-lib.sh"
+
+# The reason token from bin/fm-attest.sh's own error model, which carries one
+# machine-readable reason per distinct condition. Reading that token is why the
+# outcome below can be reported without a second opinion about what happened.
+fm_pr_attest_reason() {
+  printf '%s\n' "$1" \
+    | sed -n 's/^fm-attest: [^(]*(\([a-z0-9-]*\)).*$/\1/p' \
+    | tail -1
+}
+
+# WHICH REPOSITORY THE EVIDENCE IS PUBLISHED TO IS READ FROM THE FORGE.
+#
+# The note is evidence only on the repository holding this request's head, and
+# on a fork layout that is not the venue the request was raised at and not
+# necessarily where any local remote points. The forge is the one place that
+# knows it, so it is asked, and an answer it will not give leaves publication
+# unbound rather than falling back to a remote name - the fallback would aim a
+# protected write with this checkout's configuration.
+FM_PR_ATTEST_PUBLISH_REPO=
+case ${REMOTE_HEAD_REPO-} in
+  '' | */*/* | /* | */) ;;
+  *[!A-Za-z0-9._/-]*) ;;
+  */*) FM_PR_ATTEST_PUBLISH_REPO=$(printf 'github.com/%s\n' "$REMOTE_HEAD_REPO" | tr '[:upper:]' '[:lower:]') ;;
+esac
+
+if [ -z "$WT" ] || [ ! -d "$WT" ]; then
+  printf 'attestation: could-not-observe (task %s has no reachable local copy, so whether this head needs published evidence is unknown)\n' "$ID"
+elif [ -z "$PR_HEAD" ]; then
+  printf 'attestation: could-not-observe (the forge supplied no request head to bind publication to)\n'
+else
+  # The target is passed when the forge named one and omitted when it did not.
+  # Omitting it is NOT a fallback to the ambient remote: bin/fm-attest.sh
+  # refuses to push with no bound target, so an unknown target becomes a stated
+  # refusal at the moment publication would happen. What it must not become is a
+  # pre-emptive could-not-observe here, because a venue that reads no
+  # attestation publishes nothing and needs no target at all - answering
+  # "unknown" for it would report a question as unanswered when it was answered.
+  ATTEST_TARGET_ARGS=()
+  [ -z "$FM_PR_ATTEST_PUBLISH_REPO" ] \
+    || ATTEST_TARGET_ARGS=(--publish-repo "$FM_PR_ATTEST_PUBLISH_REPO")
+  ATTEST_RC=0
+  ATTEST_OUT=$(
+    cd "$WT" \
+      && FM_ATTEST_RECHECK_WAIT=0 fm_run_timed "$FM_PR_ATTEST_BOUND" \
+        "$SCRIPT_DIR/fm-attest.sh" write --only-if-required \
+          --policy-meta "$RECORD" \
+          "${ATTEST_TARGET_ARGS[@]+"${ATTEST_TARGET_ARGS[@]}"}" \
+          --publish-notes-ref refs/notes/no-mistakes \
+          --expect-head "$PR_HEAD" 2>&1
+  ) || ATTEST_RC=$?
+  ATTEST_REASON=$(fm_pr_attest_reason "$ATTEST_OUT")
+  case "$ATTEST_RC" in
+    0)
+      if printf '%s\n' "$ATTEST_OUT" | grep -q '^fm-attest: nothing published -'; then
+        printf 'attestation: not-required (this repository reads no head-bound attestation)\n'
+      else
+        printf 'attestation: published for task %s\n' "$ID"
+        printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+      fi
+      ;;
+    1)
+      printf 'attestation: refused (%s)\n' "${ATTEST_REASON:-unstated}"
+      printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+      ;;
+    124)
+      printf 'attestation: could-not-observe (attestation handling did not finish within %ss)\n' "$FM_PR_ATTEST_BOUND"
+      ;;
+    *)
+      printf 'attestation: could-not-observe (%s)\n' "${ATTEST_REASON:-unstated}"
+      printf '%s\n' "$ATTEST_OUT" | sed 's/^/  /'
+      ;;
+  esac
+fi

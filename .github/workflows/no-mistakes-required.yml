@@ -1,21 +1,42 @@
 name: Require no-mistakes
 run-name: "PR #${{ github.event.pull_request.number }} attestation - ${{ github.event.action }} - event ${{ github.run_number }} (run ${{ github.run_id }})"
 
+# TWO TRIGGERS, ONE LAW, AND A LADDER BETWEEN THEM.
+#
+# On `pull_request`, GitHub executes this FILE from the pull request's own
+# head, so whatever it says is candidate-controlled - the wrapper that selects,
+# sequences, or could bypass the verifier belongs to the change being judged.
+# On `pull_request_target`, GitHub executes this file FROM THE GOVERNED
+# BRANCH, by platform rule, and a candidate's edits to it are proposal-only
+# until they land. That platform rule is what the exact-head REVISE on PR #134
+# (applying Browser Sol 19/5431020714) requires: the acceptance runner's
+# control flow, not only the verifier payload, must come from the policy
+# generation.
+#
+# The `pull_request` subscription below is the PRECEDING law's trigger, kept
+# for one generation so the candidate that introduces this law can itself be
+# judged under the law that preceded it - the two-generation rule applied to
+# this file. The NEXT descendant generation removes it, after which only the
+# governed `pull_request_target` run exists. While both exist, both legs run
+# the same acceptance program taken from the governed generation; the
+# transitional leg differs only in who supplies this wrapper file.
+#
+# `pull_request_target` here never checks out or executes candidate code: the
+# checkout is the governed branch, the candidate head crosses in as a sha, and
+# permissions stay contents: read - which is the least-privilege condition
+# that makes this event safe to hold the gate.
 on:
   pull_request:
-    # This check reads evidence bound to the head commit, so editing the pull
-    # request text can neither satisfy nor invalidate it. `edited` is subscribed
-    # for a reason that has nothing to do with the body: it is the activity type
-    # GitHub fires when a pull request's base branch changes, so without it a
-    # pull request retargeted onto main never runs this check at all and sits
-    # waiting for a status that can no longer be reported.
-    #
-    # It is NOT how an unchanged head is re-evaluated after its attestation is
-    # published. `bin/fm-attest.sh write` re-runs the run that judged that head,
-    # which replays this same event against the same head.sha and re-derives the
-    # verdict from the evidence now present. Editing a pull request to nudge a
-    # check is the manual step that mechanism exists to remove; do not restore
-    # it here or in what this check tells a contributor.
+    # `edited` is subscribed because it is the activity type GitHub fires when
+    # a pull request's base branch changes; without it a request retargeted
+    # onto main never runs this check at all. It is NOT how an unchanged head
+    # is re-evaluated after its attestation is published - `bin/fm-attest.sh
+    # write` re-runs the run that judged that head. Editing a pull request to
+    # nudge a check is the manual step that mechanism exists to remove.
+    types: [opened, synchronize, reopened, edited]
+    branches:
+      - main
+  pull_request_target:
     types: [opened, synchronize, reopened, edited]
     branches:
       - main
@@ -23,10 +44,12 @@ on:
 permissions:
   contents: read
 
-# One group per head commit, so a check for one head can never replace or cancel
-# the check for another. Re-running the same head coalesces as usual.
+# One group per event kind per head commit, so a check for one head can never
+# replace or cancel the check for another, and the transitional pull_request
+# leg can never cancel the governed pull_request_target leg or vice versa.
+# Re-running the same head on the same leg coalesces as usual.
 concurrency:
-  group: no-mistakes-required-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+  group: no-mistakes-required-${{ github.event_name }}-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: true
 
 jobs:
@@ -37,11 +60,18 @@ jobs:
       github.event.pull_request.user.login != 'github-actions[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     steps:
-      # The head commit itself, not the merge commit: the attestation names this
-      # exact sha, and bin/fm-attest.sh must be the copy under review.
+      # WHAT IS CHECKED OUT DEPENDS ON WHICH LEG THIS IS, and the difference is
+      # the whole point. On the governed pull_request_target leg the checkout
+      # is the BASE branch - the policy generation itself - and no candidate
+      # code is checked out at all: the head under judgment crosses in as a
+      # sha. On the transitional pull_request leg the checkout is the head
+      # commit (not the merge commit, because the attestation names the exact
+      # sha), which supplies the repository the notes are read into and the
+      # head under judgment - never the program that judges it. See "Resolve
+      # the authoritative verifier" below.
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
           fetch-depth: 1
 
       # Git notes do not travel with refs/pull/*, so the attestation ref is read
@@ -108,11 +138,132 @@ jobs:
           # the only thing between the token and the log.
           echo "Reading the attestation from ${HEAD_REPO} and the pull request head from ${BASE_REPO}."
 
+      # THE CANDIDATE DOES NOT SUPPLY THE PROGRAM THAT JUDGES THE CANDIDATE.
+      #
+      # This job used to run bin/fm-attest.sh out of the pull request's own
+      # checkout, which made every contribution the author of its own acceptance
+      # semantics: a change to the verifier took effect on the very check that
+      # was deciding whether to accept that change. A candidate could widen what
+      # counts as evidence, or delete the judge and turn a refusal into a
+      # could-not-look, and in both cases the gate would be reporting on rules
+      # the candidate wrote.
+      #
+      # So the verifier is resolved from the GOVERNED VENUE's policy generation
+      # instead - the base repository's policy ref, resolved to an exact commit
+      # here and now, with both recorded in this log. The candidate's own bytes
+      # are still a legitimate PROPOSAL for the next policy generation; they are
+      # simply not authority until they have landed under the previous one.
+      # That is the two-generation rule, and it is what stops a pull request
+      # from ratifying itself.
+      #
+      # If the authoritative verifier cannot be obtained, this job reaches no
+      # verdict and says so. It never falls back to the candidate's copy: a
+      # fallback that runs the candidate whenever the authority is unreachable
+      # is the same self-ratification with an extra step in front of it.
+      - name: Resolve the authoritative verifier from the governed policy generation
+        env:
+          BASE_REPO: ${{ github.repository }}
+          POLICY_REF: refs/heads/${{ github.event.pull_request.base.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -eu
+
+          # THE GOVERNED LEG. On pull_request_target the checkout IS the
+          # policy generation - the platform took both this file and the tree
+          # from the governed branch - so the acceptance program is simply this
+          # checkout's own bin/, and the generation judging is this checkout's
+          # own head, recorded here. There is no candidate tree on this leg to
+          # fall back to, and no fetch to fail: an acceptance gate this
+          # checkout does not carry is a no-verdict, never a search elsewhere.
+          if [ "${EVENT_NAME:-}" = pull_request_target ]; then
+            policy_sha=$(git rev-parse HEAD)
+            if [ ! -f bin/fm-attest-gate.sh ] || [ ! -f bin/fm-attest.sh ]; then
+              echo "::error::The governed policy generation ${policy_sha} carries no acceptance gate beside its verifier." >&2
+              echo "POLICY_UNRESOLVED=1" >> "$GITHUB_ENV"
+              exit 0
+            fi
+            echo "POLICY_GATE=${PWD}/bin/fm-attest-gate.sh" >> "$GITHUB_ENV"
+            echo "POLICY_VERIFIER=${PWD}/bin/fm-attest.sh" >> "$GITHUB_ENV"
+            echo "POLICY_SHA=${policy_sha}" >> "$GITHUB_ENV"
+            echo "Judging with ${BASE_REPO} ${POLICY_REF} at ${policy_sha}, whose file and program both came from the governed branch."
+            exit 0
+          fi
+
+          policy_dir="${RUNNER_TEMP}/policy-generation"
+          rm -rf "$policy_dir"
+          mkdir -p "$policy_dir"
+
+          # Resolved from the base repository, which is the venue this
+          # contribution is governed by, and never from the head repository:
+          # on a fork the head repository is the contributor's, and letting it
+          # name the policy generation restores the same self-ratification one
+          # level out.
+          if ! git fetch --quiet --no-tags --force pullrequest-source \
+            "${POLICY_REF}:refs/fm-attest/policy-generation" 2>/dev/null; then
+            echo "::error::The governed policy generation could not be resolved, so this check has no authoritative verifier to judge with." >&2
+            echo "POLICY_UNRESOLVED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          policy_sha=$(git rev-parse --verify --quiet 'refs/fm-attest/policy-generation^{commit}' 2>/dev/null) || policy_sha=
+          if [ -z "$policy_sha" ]; then
+            echo "::error::The governed policy generation did not resolve to one commit." >&2
+            echo "POLICY_UNRESOLVED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          # The whole bin/ of that generation, because the verifier sources its
+          # libraries from beside itself and a verifier assembled from two
+          # generations is a third generation nobody reviewed.
+          if ! git archive "$policy_sha" bin | tar -x -C "$policy_dir" 2>/dev/null; then
+            echo "::error::The governed policy generation ${policy_sha} carries no readable bin/, so there is no authoritative verifier." >&2
+            echo "POLICY_UNRESOLVED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          if [ ! -f "$policy_dir/bin/fm-attest.sh" ]; then
+            echo "::error::The governed policy generation ${policy_sha} carries no bin/fm-attest.sh." >&2
+            echo "POLICY_UNRESOLVED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          chmod +x "$policy_dir/bin/fm-attest.sh" || true
+
+          # The compatibility contract. The authoritative verifier states what
+          # it can do; an evidence generation it does not understand is refused
+          # BY IT, on its own terms, rather than worked around here. A verifier
+          # that cannot even state its capabilities is unusable, and unusable is
+          # could-not-observe - never a pass and never a reason to run the
+          # candidate's copy instead.
+          if ! "$policy_dir/bin/fm-attest.sh" --supports reconcile >/dev/null 2>&1; then
+            echo "::error::The governed policy generation ${policy_sha} does not support the reconcile contract this check requires." >&2
+            echo "POLICY_UNRESOLVED=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+
+          echo "POLICY_VERIFIER=${policy_dir}/bin/fm-attest.sh" >> "$GITHUB_ENV"
+          echo "POLICY_SHA=${policy_sha}" >> "$GITHUB_ENV"
+
+          # When the governed generation carries the acceptance gate itself,
+          # its CONTROL FLOW judges too - the fetched generation's program, not
+          # the remainder of this candidate-supplied step. A generation from
+          # before the gate existed falls through to the inline flow below,
+          # which is the preceding law those generations were judged under.
+          if [ -f "$policy_dir/bin/fm-attest-gate.sh" ]; then
+            chmod +x "$policy_dir/bin/fm-attest-gate.sh" || true
+            echo "POLICY_GATE=${policy_dir}/bin/fm-attest-gate.sh" >> "$GITHUB_ENV"
+          fi
+          echo "Judging with ${BASE_REPO} ${POLICY_REF} at ${policy_sha}; the candidate's own bin/fm-attest.sh is not authority here."
+
       - name: Verify the head-bound no-mistakes attestation
         env:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REPO_FULL: ${{ github.event.pull_request.head.repo.full_name }}
+          BASE_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
+          # The gate re-states the two remotes itself, exactly as the
+          # addressing step does, so it needs the same token the addressing
+          # step put into their URLs - without it, dispatching the gate would
+          # quietly replace those URLs with anonymous ones.
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           # A genuinely pipeline-raised head is pushed before its attestation
@@ -125,34 +276,62 @@ jobs:
           # unreadable is refused on the first look, and a head nobody has
           # attested is still refused, at the end of the window.
           #
-          # The verifier runs from the pull request's own head, so a head raised
-          # before `reconcile` existed does not carry it. Such a head is verified
-          # without a window, exactly as it was before, rather than being failed
-          # for the age of its checkout. This fallback can go once no open pull
-          # request predates the subcommand.
-          verifier=verify
-          if bin/fm-attest.sh --supports reconcile >/dev/null 2>&1; then
-            verifier=reconcile
+          # The verifier is the governed policy generation's, resolved in the
+          # previous step. A head that predates `reconcile` no longer needs a
+          # fallback here, because the program is no longer taken from that
+          # head: an old candidate is judged by current policy, which is the
+          # point. The only thing that reaches the no-verdict path now is an
+          # authority that could not be obtained at all.
+          if [ "${POLICY_UNRESOLVED:-0}" = 1 ] \
+            || { [ -z "${POLICY_GATE:-}" ] && [ -z "${POLICY_VERIFIER:-}" ]; }; then
+            {
+              echo "::error::This check could not obtain the authoritative no-mistakes verifier, so it reached no verdict."
+              echo
+              echo "The verifier is resolved from this repository's own policy generation, not from"
+              echo "the pull request. The lines above name what could not be resolved. Nothing here"
+              echo "says anything about whether this head carries an attestation, and this check"
+              echo "will not fall back to the copy of bin/fm-attest.sh in the pull request: a"
+              echo "candidate may not supply the program that decides whether to accept it."
+              echo
+              echo "Re-run this run once the repository is readable again."
+              echo
+              echo "PR author: ${PR_AUTHOR}"
+            } >&2
+            exit 1
           fi
+          # THE GOVERNED ACCEPTANCE PROGRAM RUNS WHEN THE POLICY GENERATION
+          # CARRIES ONE. bin/fm-attest-gate.sh out of that generation owns the
+          # addressing, the policy identity statement, the verify/reconcile
+          # sequencing, and the contributor-facing error model - the control
+          # flow the REVISE on PR #134 found still candidate-controlled here.
+          # Everything below this dispatch is the PRECEDING law's inline flow,
+          # reached only for policy generations from before the gate existed;
+          # it goes when the last such generation does.
+          if [ -n "${POLICY_GATE:-}" ]; then
+            HEAD_REPO="$HEAD_REPO_FULL" FM_GATE_POLICY_SHA="${POLICY_SHA:-}" \
+              bash "$POLICY_GATE"
+            exit 0
+          fi
+          verifier=reconcile
           # The verifier's two non-zero exits are two different statements and
           # this check must not collapse them, because collapsing evidence it
           # never examined into "no evidence" is the defect this whole check
           # exists to remove. Exit 1 is a refusal: the evidence was examined and
           # found absent, unbound or invalid, which is a verdict. Anything else
           # is a failure to reach a verdict at all, and it says nothing about
-          # the evidence either way; a head that predates this check, or one
-          # where bin/fm-attest.sh is absent or has lost its executable bit,
-          # lands there. Both outcomes still fail the check, because a check
+          # the evidence either way; a repository or ref the authoritative
+          # verifier could not read lands there. Both outcomes still fail the
+          # check, because a check
           # that could not look must never report a pass. What differs is what
           # the contributor is told to go and repair.
           verify_rc=0
           case "$verifier" in
             reconcile)
-              bin/fm-attest.sh reconcile --head "$HEAD_SHA" \
+              "$POLICY_VERIFIER" reconcile --head "$HEAD_SHA" \
                 --remote attestation-source \
                 --pr "$PR_NUMBER" --pr-remote pullrequest-source || verify_rc=$?
               ;;
-            *) bin/fm-attest.sh verify --head "$HEAD_SHA" || verify_rc=$? ;;
+            *) "$POLICY_VERIFIER" verify --head "$HEAD_SHA" || verify_rc=$? ;;
           esac
           if [ "$verify_rc" -eq 0 ]; then
             exit 0
@@ -166,13 +345,15 @@ jobs:
               echo "an attestation: it says the check was unable to look. Do not read it as an"
               echo "absent attestation, and do not publish one expecting it to clear this."
               echo
-              echo "The lines above name the cause in the verifier's own words. Two families"
-              echo "reach here. One is a repository or a ref this job could not read, which is"
-              echo "a question that went unanswered rather than an answer, and re-running this"
-              echo "run is the repair. The other is the verifier itself: it runs from this pull"
-              echo "request's own head, so bin/fm-attest.sh may be missing at this head, have"
-              echo "lost its executable bit, or the head may predate the check entirely. Rebase"
-              echo "onto the base branch so the head carries the verifier, then re-run this check."
+              echo "The lines above name the cause in the verifier's own words. What reaches"
+              echo "here is a repository or a ref this job could not read, which is a question"
+              echo "that went unanswered rather than an answer, and re-running this run is the"
+              echo "repair."
+              echo
+              echo "It is not something to repair in the pull request. The verifier is resolved"
+              echo "from this repository's policy generation (${POLICY_SHA:-unresolved}), so"
+              echo "neither the age of this head nor anything it does to bin/fm-attest.sh can"
+              echo "cause or clear this outcome."
               echo
               echo "The check fails, because a check that could not look must not report a pass."
               echo
@@ -189,11 +370,16 @@ jobs:
             echo "which reviews, tests and lints the change before it is pushed. The proof of"
             echo "that is a git note on refs/notes/no-mistakes naming the exact commit it covers:"
             echo
-            bin/fm-attest.sh --print-format | sed 's/^/    /'
+            "$POLICY_VERIFIER" --print-format | sed 's/^/    /'
             echo
             echo "Publish it for the head under review with:"
             echo
-            echo "    bin/fm-attest.sh write"
+            echo "    bin/fm-attest.sh write --publish-repo github.com/${HEAD_REPO_FULL}"
+            echo
+            echo "--publish-repo names the repository the note is published to. It is required"
+            echo "because the attestation is evidence only on the repository holding this head,"
+            echo "and a remote name in a local checkout is configuration rather than authority"
+            echo "over which repository that is."
             echo
             echo "It reads the pipeline's own run record and refuses unless that run validated"
             echo "this exact commit, so it cannot be satisfied by editing text. A new commit is"

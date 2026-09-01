@@ -452,6 +452,8 @@ jobs:
       # purpose: an unresolved predicate is not a clean repository.
       - name: Every enrolled fail-closed predicate must be consulted
         run: bin/fm-dead-predicate-check.sh
+      - name: Attestation consumers must declare publication
+        run: bin/fm-attest.sh declaration-check
       - name: Personal fleet paths must not be tracked
         run: |
           set -eu

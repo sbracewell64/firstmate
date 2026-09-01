@@ -169,6 +169,7 @@ cat > "$fakebin/gh" <<'SH'
 #!/usr/bin/env bash
 printf '%s\n' "$*" >> "${FM_TEST_GH_LOG:?}"
 case " $* " in
+  *'headRefOid,headRepositoryOwner,headRepository'*) printf '0123456789abcdef0123456789abcdef01234567 o/r\n' ;;
   *' --json headRefOid '*) printf '0123456789abcdef0123456789abcdef01234567\n' ;;
   *' --json state,headRefOid '*) printf 'OPEN\t0123456789abcdef0123456789abcdef01234567\n' ;;
   *) exit 1 ;;

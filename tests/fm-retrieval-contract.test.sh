@@ -1062,6 +1062,20 @@ SH
   pass "a pull request selected by repository and number is classified as one object"
 }
 
+test_check_treats_the_attestation_declaration_as_inert_data() {
+  local dir out rc=0
+  dir="$TMP_ROOT/check-attestation-declaration"
+  mkdir -p "$dir/.github"
+  printf 'fm-attest.v1 required\n' > "$dir/.github/no-mistakes-attestation"
+  out=$("$CHECK" --check --root "$dir" 2>&1) || rc=$?
+  expect_code 0 "$rc" "the attestation declaration is not executable retrieval logic"
+  assert_contains "$out" "scanned=0" \
+    "the attestation declaration was scanned as retrieval logic"
+  assert_contains "$out" "out_of_scope=1" \
+    "the attestation declaration was not counted as inert data"
+  pass "the check classifies the attestation declaration as inert data"
+}
+
 test_check_does_not_inherit_a_neighboring_classification() {
   local dir out rc=0
   dir="$TMP_ROOT/check-neighbor"
@@ -1348,6 +1362,7 @@ run test_indeterminate_is_not_coercible_by_a_consumer
 run test_check_rejects_an_unannotated_remote_collection_read
 run test_check_accepts_a_classified_read
 run test_check_accepts_a_named_pull_request_object_read
+run test_check_treats_the_attestation_declaration_as_inert_data
 run test_check_does_not_inherit_a_neighboring_classification
 run test_check_requires_language_comment_syntax
 run test_check_rejects_an_unchecked_non_shell_file

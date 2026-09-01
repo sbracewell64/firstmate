@@ -48,7 +48,7 @@ brief_starts_its_own_run() {  # <brief>
 # The retired shape: stop after the implementation commit and be restarted from
 # outside. Either half is the defect.
 brief_hands_the_transition_back() {  # <brief>
-  grep -qF 'instruct you to run' "$1" || grep -qF '/no-mistakes' "$1"
+  grep -qF 'instruct you to run' "$1" || grep -qF 'run /no-mistakes' "$1"
 }
 
 # The shared daemon serves every lane at once, so a worker must never restart it.

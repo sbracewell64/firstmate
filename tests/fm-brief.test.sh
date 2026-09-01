@@ -221,6 +221,68 @@ test_ship_modes_generate_clean_briefs() {
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 
+# The pipeline produces the head-bound evidence a delivery boundary's own check
+# reads, and nothing else publishes it. A worker that stops at `done:` therefore
+# leaves a validated candidate with no evidence, which is the state that kept
+# recurring, so the publication step belongs in the contract the worker actually
+# executes rather than in prose it may never load. It is paired with the two
+# modes that run no pipeline: neither has evidence to publish, and a step that
+# appeared in all three would be a step nobody had thought about.
+test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
+  local home id mode brief
+  home="$TMP_ROOT/attest-step-home"
+  write_registry "$home"
+
+  for id_mode in "brief-attest-a1:no-mistakes" "brief-attest-a2:direct-PR" "brief-attest-a3:local-only"; do
+    id=${id_mode%%:*}
+    mode=${id_mode##*:}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1 \
+      || fail "$id: scaffold for mode $mode failed"
+    brief="$home/data/$id/brief.md"
+    if [ "$mode" = no-mistakes ]; then
+      assert_grep 'bin/fm-attest.sh" write --only-if-required' "$brief" \
+        "$id: the pipeline contract does not publish the head-bound evidence"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
+      assert_grep '--publish-repo "$(fm_meta_get' "$brief" \
+        "$id: the pipeline contract does not bind the publication repository"
+      assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
+        "$id: the pipeline contract does not bind the publication notes ref"
+      grep -q 'Run it unconditionally' "$brief" \
+        || fail "$id: the publication step is left to the worker to judge"
+    else
+      assert_no_grep "fm-attest.sh" "$brief" \
+        "$id: a mode that runs no pipeline was told to publish pipeline evidence"
+    fi
+  done
+  pass "fm-brief.sh: the pipeline contract publishes the evidence its own check reads"
+}
+
+test_no_mistakes_brief_quotes_policy_metadata_paths() {
+  local home id brief root_with_space command args
+  home="$TMP_ROOT/attest path home"
+  root_with_space="$TMP_ROOT/firstmate root"
+  id='brief-attest-space'
+  mkdir -p "$root_with_space/bin" "$root_with_space/state" "$home/data"
+  write_registry "$home"
+  args="$TMP_ROOT/attest-space-args"
+  # shellcheck disable=SC2016 # This fixture must preserve literal runtime expansions.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
+  printf '%s\n' 'fm_meta_get() { printf '\''github.com/example/repo\n'\''; }' \
+    > "$root_with_space/bin/fm-backend.sh"
+  chmod +x "$root_with_space/bin/fm-attest.sh"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root_with_space" "$ROOT/bin/fm-brief.sh" \
+    "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "brief with a spaced Firstmate root did not scaffold"
+  brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
+  command=$(sed -n '/fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
+  FM_TEST_ARGS="$args" bash -c "$command" || fail "the generated publication command did not execute"
+  assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
+    "the generated command split the policy metadata path"
+  pass "fm-brief.sh: policy metadata paths round-trip as one argument"
+}
+
 # A ship task's delivery mode is firstmate's per-task decision, so a missing or
 # unusable value must stop the scaffold instead of silently defaulting. The
 # no-mistakes-prod-only row is the conditional registry policy: it is never a task
@@ -1036,6 +1098,8 @@ test_help_includes_entire_header
 test_crewmate_scaffolds_carry_who_is_speaking
 test_secondmate_charter_keeps_its_own_marker_consequence
 test_ship_modes_generate_clean_briefs
+test_no_mistakes_brief_requires_publishing_the_head_bound_evidence
+test_no_mistakes_brief_quotes_policy_metadata_paths
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply
