@@ -75,7 +75,8 @@ Never relay the first three as "no model can do this", and never ask for a floor
 `bin/fm-landing-seam-lib.sh` owns the compile; the check composes it.
 It answers who may authorize a landing, never whether the work is fit to land: every test, validator, review, head binding and one-use authorization still refuses on its own terms at the merge gate, and no posture and no ruling can waive one of them.
 
-It compiles from four typed sources: the task's own delivery record, the captain's standing posture at its canonical owner, the disposition of every decision still open on the task, and the governing ruling where one applies.
+It compiles from five typed inputs: the task's commission record, the captain's effective standing posture, every decision still open on the task, the governing Browser Sol ruling where one applies, and the exact-head review gate.
+`bin/fm-landing-seam-lib.sh` owns the detailed source and precedence contract.
 Whether a captain message named the merge is not among them and cannot be.
 An instruction's transport is not an authority source, and a gate that waits for one holds every ordinary reversible landing by default, which is the defect this compile replaces.
 

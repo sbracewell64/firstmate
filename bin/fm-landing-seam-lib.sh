@@ -629,6 +629,9 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
 # Captain-private ruling record at the home's
 # data/captain-rulings-2026-08-26-standing-landing-authority.md; that record is
 # private evidence by design, not a tracked documentation surface.
+# Browser Sol ruling
+# SOL-FM-PR132-DELEGATED-LANDING-COMPILER-AUTHORITY-REVIEW-20260901-G2,
+# outcome-lattice ruling 19/5488261106, governs the engineering-refusal branch.
 #
 # WHAT THIS REPLACES. On 2026-08-26 a pull request whose landing merits an
 # outside reviewer had already approved was held, and the only thing holding it
@@ -654,6 +657,9 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
 #                 Sol holds captain-delegated approval over landing MERITS, so an
 #                 approving ruling is a delegation source - never a way to clear a
 #                 decision the captain reserved.
+#   landing gate  the exact candidate and assignment-distinct review evidence.
+#                 An observed insufficiency is LANDING_REVIEW_GATE_REFUSED;
+#                 missing or unreadable evidence is could-not-observe.
 #
 # THERE IS NO INPUT FOR AN UTTERANCE, which is the property this file exists to
 # have. `CAPTAIN_REQUIRED` is reachable only from a typed reserved decision: not
