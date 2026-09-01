@@ -152,7 +152,31 @@ emitted
 ruled
 resumed
 closed
-superseded'
+superseded
+quarantined
+revised'
+
+# The states in which a record is FINISHED. A finished record is preserved and
+# stays readable - it is evidence - but it can never be applicable, never be
+# adopted by a fresh emit, and never sustain a wait. `quarantined` is the one
+# reached by ruling rather than by completion: a request that was malformed at
+# birth, retired through this owner instead of hand-edited into validity.
+#
+# `revised` is the OTHER ruling-reached terminal, and the two are kept apart
+# because they describe opposite defects. A quarantined request was malformed:
+# the QUESTION could not be asked. A revised request was well formed, was asked,
+# and was answered - the CANDIDATE is what must change. Collapsing them would
+# lose that, and a revision is the one terminal whose successor is expected to
+# exist: the corrected candidate is a different head, so it is a different
+# identity, a different request, and it inherits no ruling from this one.
+FM_OUTBOUND_TERMINAL_STATES='closed
+superseded
+quarantined
+revised'
+
+fm_outbound_state_terminal() {  # <state>
+  printf '%s\n' "$FM_OUTBOUND_TERMINAL_STATES" | grep -qxF "$1"
+}
 
 # Stable classification and refusal tokens. Callers and tests match these rather
 # than prose, so wording can improve without breaking a consumer.
@@ -181,6 +205,10 @@ FM_OUTBOUND_TOKEN_HEAD_UNOBSERVED=FM_OUTBOUND_HEAD_UNOBSERVED
 FM_OUTBOUND_TOKEN_ARTIFACT_UNOBSERVED=FM_OUTBOUND_ARTIFACT_UNOBSERVED
 FM_OUTBOUND_TOKEN_CLONE_UNREADABLE=FM_OUTBOUND_CLONE_UNREADABLE
 FM_OUTBOUND_TOKEN_VENUE_UNRESOLVED=FM_OUTBOUND_VENUE_UNRESOLVED
+# The read SUCCEEDED and cannot name one governed subject - distinct from
+# VENUE_UNRESOLVED, which is about where the question is asked rather than what
+# it is about, and from INCOMPLETE_BINDING, which is a positive contradiction.
+FM_OUTBOUND_TOKEN_SUBJECT_UNRESOLVED=FM_OUTBOUND_SUBJECT_UNRESOLVED
 FM_OUTBOUND_TOKEN_REGISTRY_UNREADABLE=FM_OUTBOUND_PROJECT_REGISTRY_UNREADABLE
 FM_OUTBOUND_TOKEN_LANDING_UNOBSERVED=FM_OUTBOUND_LANDING_TARGET_UNOBSERVED
 FM_OUTBOUND_TOKEN_POSTURE_UNOBSERVED=FM_OUTBOUND_PROJECT_POSTURE_UNOBSERVED
@@ -196,6 +224,56 @@ FM_OUTBOUND_TOKEN_WORK_STATE_UNOBSERVED=FM_OUTBOUND_WORK_STATE_UNOBSERVED
 FM_OUTBOUND_TOKEN_WORK_LIFECYCLE_CONFLICT=FM_OUTBOUND_WORK_LIFECYCLE_CONFLICT
 FM_OUTBOUND_TOKEN_ARCHIVE_UNREADABLE=FM_OUTBOUND_DONE_ARCHIVE_UNREADABLE
 FM_OUTBOUND_TOKEN_SENDER_INVALID=FM_OUTBOUND_SENDER_INVALID
+FM_OUTBOUND_TOKEN_LEGACY_NONAUTHORITATIVE=FM_OUTBOUND_LEGACY_NONAUTHORITATIVE
+# A ruling that demands a correction. Not a refusal of the request and not an
+# approval of it: the question was answered, and the answer is that the
+# CANDIDATE must change. It authorizes nothing and resumes nothing.
+FM_OUTBOUND_TOKEN_REVISION_REQUIRED=FM_OUTBOUND_REVISION_REQUIRED
+# An item was asked to enter a wait state with no durable applicable request
+# backing it. Refused BEFORE the wait exists, which is the only point at which
+# a bare wait can still be prevented rather than merely reported.
+FM_OUTBOUND_TOKEN_WAIT_UNBACKED=FM_OUTBOUND_WAIT_UNBACKED
+# A closure was offered without the evidence that the effect actually reached
+# the target. Command success is not closure.
+FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN=FM_OUTBOUND_CLOSURE_UNPROVEN
+# An authorization was offered for a closure it does not belong to. The chain
+# is checked rather than the caller's word about which authority was spent.
+FM_OUTBOUND_TOKEN_AUTHORITY_FOREIGN=FM_OUTBOUND_AUTHORITY_FOREIGN
+}
+
+# --- the revising verdict class ----------------------------------------------
+#
+# THIS MODULE STILL DECIDES NOTHING ABOUT AUTHORITY. bin/fm-landing-authorization-lib.sh
+# owns the approving and declining lists, and a word outside both is
+# unrecognized there and stops the act - REVISE included, which is exactly the
+# behaviour a revision needs and is deliberately not changed here.
+#
+# What this list adds is the TRANSPORT consequence, which that owner cannot see:
+# a revision is a ruling that answered the question and demands a different
+# candidate. Without it, a REVISE body reaching `resume` looks like any other
+# joined ruling and the item resumes on a verdict that asked it to change - the
+# request satisfied, the wait cleared, and the correction silently dropped.
+#
+# Compared case-insensitively and whole, like the authority lists, because the
+# ruling corpus writes both `REVISE` and `changes-requested`.
+FM_OUTBOUND_VERDICTS_REVISING='revise
+revised
+revision
+changes-requested
+request-changes
+needs-revision'
+
+# Is this verdict a demand for a corrected candidate? Whole-value and
+# case-insensitive; a verdict that merely CONTAINS one of these words is not one.
+fm_outbound_verdict_revising() {  # <verdict>
+  local want line
+  want=$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  [ -n "$want" ] || return 1
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    [ "$want" = "$line" ] && return 0
+  done <<< "$FM_OUTBOUND_VERDICTS_REVISING"
+  return 1
 }
 
 # The closed sender enum. A `from:` value is compared WHOLE against this list,
@@ -235,6 +313,198 @@ fm_outbound_sender_valid() {  # <body> <expected-role>
   # malformed `from: browser-sol-recipient: firstmate` from the live incident
   # has `browser-sol` as a PREFIX and must still be refused.
   [ "$value" = "$expected" ]
+}
+
+# --- inbound ruling wire form ------------------------------------------------
+#
+# TWO WIRE FORMS REACH THIS FLEET, and only one of them was readable.
+#
+# The legacy form is the one this module wrote first: an `FM-SOL-RULING <id>`
+# marker plus the request's own binding lines echoed back verbatim. The governed
+# Browser Sol form declares itself instead - `protocol: fm-sol-control/v1`,
+# `kind: ruling` - and names what it is answering in its opening fields.
+#
+# A real ruling was lost to that gap. Comment 5383943043 carried a HOLD for
+# fm-ob-25c701e04893 in the typed form; the reader looked for a marker that was
+# not there and returned FM_OUTBOUND_RULING_IDENTITY_MISMATCH - a claim that the
+# ruling was about other work, when the truth was that this end could not read
+# the form it came in.
+#
+# THEN READING IT BODY-WIDE BROKE THE OTHER DIRECTION, and that is the failure
+# this parser is shaped around. A control issue is a CONVERSATION: rulings quote
+# earlier rulings, requests carry fenced examples of the wire format, and
+# operators paste protocol snippets while discussing them. Scanning a whole body
+# for `protocol:` or `in_reply_to:` therefore finds fields that were never the
+# body's own - a full poll reported dozens of ambiguous candidates from
+# legitimate rulings quoting their predecessors, and read two compatibility
+# REQUESTS as rulings because their fenced examples contained the legacy marker.
+#
+# So a ruling's identity is read from its ENVELOPE and nowhere else.
+#
+#   The envelope is the leading run of the body: unindented `key: value` lines
+#   and blank lines, starting at the first non-blank line, ending at the first
+#   line that is neither - a bare `key:` opening a block (`exact_subject:`), a
+#   content section (`observed:`, `ruling:`, `stale_state_protection:`), an
+#   indented line, a list item, or prose.
+#
+#   Fenced regions are removed before any of that, because a fenced block is by
+#   definition an EXAMPLE of the protocol rather than an instance of it.
+#
+# Everything after the envelope is discussion. It is never a field, never a
+# form declaration, and never an ambiguity - which is what lets a ruling quote
+# its predecessor without becoming unreadable.
+#
+# ACCEPTING THE FORM IS NOT ACCEPTING THE VERDICT. Everything here answers "which
+# request does this body speak about, and does its envelope say so once". What
+# the ruling DECIDED stays a string this module records verbatim; whether that
+# word authorizes anything is bin/fm-landing-authorization-lib.sh's closed list,
+# where a word outside it - HOLD included - is unrecognized and stops the act.
+
+# The typed form's kind, alongside the protocol constant it shares with the
+# request wire form.
+FM_OUTBOUND_RULING_KIND='ruling'
+
+# The envelope of a body: the canonical top-level region, fences removed.
+#
+# POSITION IS THE RULE, not search. A line qualifies only where an envelope can
+# still be running, so the first line that is not an unindented `key: value`,
+# not a canonical marker line, and not blank ends it for good.
+fm_outbound_ruling_envelope() {  # <body> -> the envelope's lines
+  # The id pattern is rebuilt here as an ERE. FM_OUTBOUND_REQUEST_ID_PATTERN is a
+  # BASIC regex - it spells its repeat `\{12\}` - and awk reads EXTENDED, where
+  # that is a literal brace and matches nothing. Passing it through unchanged
+  # silently stopped every legacy marker from being an envelope line.
+  printf '%s\n' "$1" | awk -v marker="$FM_OUTBOUND_RULING_MARKER" \
+    -v idpat="${FM_OUTBOUND_REQUEST_ID_PREFIX}[0-9a-f]{${FM_OUTBOUND_REQUEST_ID_HEX_WIDTH}}" '
+    BEGIN { fence = 0; ended = 0; seen = 0 }
+    {
+      line = $0
+      sub(/\r$/, "", line)
+      # A fenced region is an EXAMPLE of the protocol, never an instance of it.
+      if (line ~ /^[[:space:]]*(```|~~~)/) { fence = 1 - fence; next }
+      if (fence) next
+      if (ended) next
+      if (line ~ /^[[:space:]]*$/) { next }          # blanks never end an envelope
+      # The canonical legacy marker is an envelope line, so a body carrying both
+      # forms is visible as one envelope holding two declarations.
+      if (line ~ ("^" marker " " idpat "$")) { print line; seen = 1; next }
+      # An unindented key with a NON-EMPTY value. A bare `key:` opens a block and
+      # is where the envelope stops.
+      if (line ~ /^[A-Za-z_][A-Za-z0-9_.-]*:[[:space:]]+[^[:space:]]/) { print line; seen = 1; next }
+      ended = 1
+    }' 2>/dev/null || true
+}
+
+# Read ONE field from an envelope.
+#
+# Prints the trimmed value and returns 0 only when exactly one envelope line IS
+# that field. Returns 1 when absent and 2 when duplicated, because those are
+# different repairs: one envelope forgot to say, the other said twice and cannot
+# be resolved by taking either.
+#
+# The key is restricted to lowercase and underscore so it can never carry a
+# regex metacharacter into the patterns below. Every caller passes a literal
+# from this module; the guard is here so that stays true.
+fm_outbound_envelope_field() {  # <envelope> <key> -> value; 0 unique · 1 absent · 2 duplicated
+  local envelope=$1 key=$2 count value
+  case $key in
+    ''|*[!a-z_]*) return 2 ;;
+  esac
+  count=$(printf '%s\n' "$envelope" | grep -c "^$key:" || true)
+  case $count in ''|*[!0-9]*) count=0 ;; esac
+  [ "$count" -ne 0 ] || return 1
+  [ "$count" -eq 1 ] || return 2
+  value=$(printf '%s\n' "$envelope" | sed -n "s/^$key://p" | tr -d '\r')
+  value=$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+  printf '%s\n' "$value"
+}
+
+# Which wire form does this envelope declare, if either?
+#
+# Prints legacy | typed | both | none.
+#
+# The typed form must BEGIN with its preamble: the envelope's first two lines
+# are exactly the protocol and the ruling kind. The legacy form must begin with
+# its canonical marker line. Neither is discovered by search, so a quoted
+# example cannot promote a comment into a ruling.
+#
+# `both` is a real answer rather than a preference order: an envelope declaring
+# itself typed while also carrying a canonical legacy marker has two
+# declarations and no stated precedence, and choosing one would be choosing for
+# the sender.
+fm_outbound_ruling_form() {  # <body> -> legacy|typed|both|none
+  local body=$1 envelope first second legacy typed_present=0
+  envelope=$(fm_outbound_ruling_envelope "$body")
+  [ -n "$envelope" ] || { printf 'none\n'; return 0; }
+  first=$(printf '%s\n' "$envelope" | sed -n '1p')
+  second=$(printf '%s\n' "$envelope" | sed -n '2p')
+  legacy=$(printf '%s\n' "$envelope" | grep -c "^$FM_OUTBOUND_RULING_MARKER " || true)
+  case $legacy in ''|*[!0-9]*) legacy=0 ;; esac
+  if printf '%s\n' "$envelope" | grep -qxF "protocol: $FM_OUTBOUND_PROTOCOL" \
+     && printf '%s\n' "$envelope" | grep -qxF "kind: $FM_OUTBOUND_RULING_KIND"; then
+    typed_present=1
+  fi
+
+  # TWO DECLARATIONS IN ONE ENVELOPE, in either combination. The sender stated no
+  # precedence between them, so picking one would be picking for the sender.
+  if [ "$legacy" -gt 1 ]; then printf 'both\n'; return 0; fi
+  if [ "$typed_present" -eq 1 ] && [ "$legacy" -gt 0 ]; then printf 'both\n'; return 0; fi
+
+  # A FORM MUST BEGIN ITS ENVELOPE. A preamble or marker further down is a field
+  # the sender happened to include, not a declaration of what this body is, and
+  # promoting it is how quoted examples became rulings.
+  if [ "$first" = "protocol: $FM_OUTBOUND_PROTOCOL" ] \
+     && [ "$second" = "kind: $FM_OUTBOUND_RULING_KIND" ]; then
+    printf 'typed\n'; return 0
+  fi
+  case $first in
+    "$FM_OUTBOUND_RULING_MARKER "*) printf 'legacy\n'; return 0 ;;
+  esac
+  printf 'none\n'
+}
+
+# The request id a TYPED envelope says it answers.
+#
+# FOUR ANSWERS, and the fourth is the one that matters. `in_reply_to` may name a
+# request this mechanism does not correlate at all: measured on the live control
+# issue, 37 of 43 typed rulings answer a foreign identity - a bare comment id, or
+# an `FM-SOL-...` name - because this issue carries far more conversation than
+# this fleet's own correlation records.
+#
+# That is NOT AMBIGUITY. Reporting it as such is what turned one poll into dozens
+# of FM_OUTBOUND_AMBIGUOUS_CANDIDATES and drove the whole sweep to a failure
+# status, over rulings that were never addressed to a request in this store. A
+# ruling for someone else is simply not ours, and the honest handling is the same
+# as for a comment carrying no request at all: pass over it in silence.
+#
+# Ambiguity is kept for the one case that genuinely cannot be resolved - the same
+# field stated twice in one envelope - because there the body IS addressing us
+# and we still cannot tell what it said.
+#
+#   0 a well-formed request id in this store's scheme
+#   1 absent
+#   2 stated more than once in the envelope: ambiguous
+#   3 stated once, but naming an identity this mechanism does not correlate
+fm_outbound_typed_ruling_request() {  # <body> -> request id
+  local body=$1 value rc
+  value=$(fm_outbound_envelope_field "$(fm_outbound_ruling_envelope "$body")" in_reply_to); rc=$?
+  [ "$rc" -eq 0 ] || return "$rc"
+  printf '%s' "$value" | grep -q "^$FM_OUTBOUND_REQUEST_ID_PATTERN\$" || return 3
+  printf '%s\n' "$value"
+}
+
+# The request id a LEGACY envelope declares, from its canonical first line.
+fm_outbound_legacy_ruling_request() {  # <body> -> request id; 0 unique · 1 absent · 2 unusable
+  local body=$1 envelope lines value
+  envelope=$(fm_outbound_ruling_envelope "$body")
+  lines=$(printf '%s\n' "$envelope" | grep -c "^$FM_OUTBOUND_RULING_MARKER " || true)
+  case $lines in ''|*[!0-9]*) lines=0 ;; esac
+  [ "$lines" -ne 0 ] || return 1
+  [ "$lines" -eq 1 ] || return 2
+  value=$(printf '%s\n' "$envelope" \
+    | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \($FM_OUTBOUND_REQUEST_ID_PATTERN\)\$/\1/p")
+  [ -n "$value" ] || return 2
+  printf '%s\n' "$value"
 }
 
 # --- digest ------------------------------------------------------------------
@@ -287,9 +557,26 @@ fm_outbound_record_state_valid() {  # <state>
 # An absent optional field is the literal "-" rather than empty, so "no pull
 # request" and "pull request field omitted" cannot collide into one identity.
 
-fm_outbound_identity_canonical() {  # <gate> <project> <repo> <item> <pr> <head>
+# <gate> <project> <repo> <item> <pr> <head> [<tree>] [<policy>]
+#
+# TREE AND POLICY ARE APPENDED ONLY WHEN SUPPLIED, and that is a compatibility
+# decision rather than an oversight. Every stored record's id is a digest of this
+# text, and record_identity_verdict recomputes it to check the record against its
+# own filename - so adding an unconditional field would change every existing
+# id at once and turn the whole store adverse in a single release. A request that
+# carries no governed tree or policy generation therefore keeps exactly the
+# canonical form it has always had, and one that carries them gets a distinct
+# identity. Which is also the behaviour the ruling asks for: a request bound to a
+# different policy generation is a different question and must not be answerable
+# by its predecessor.
+#
+# An absent OPTIONAL field inside the fixed prefix stays the literal "-", so "no
+# pull request" and "pull request omitted" still cannot collide.
+fm_outbound_identity_canonical() {
   printf 'gate=%s\nproject=%s\nrepo=%s\nitem=%s\npr=%s\nhead=%s\n' \
     "$1" "${2:--}" "${3:--}" "$4" "${5:--}" "${6:--}"
+  [ -z "${7:-}" ] || printf 'tree=%s\n' "$7"
+  [ -z "${8:-}" ] || printf 'policy=%s\n' "$8"
 }
 
 fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
@@ -297,6 +584,100 @@ fm_outbound_request_id() {  # <gate> <project> <repo> <item> <pr> <head> -> id
   sum=$(fm_outbound_identity_canonical "$@" | fm_outbound_digest) || return 1
   [ -n "$sum" ] || return 1
   printf '%s%s\n' "$FM_OUTBOUND_REQUEST_ID_PREFIX" "$sum"
+}
+
+# --- the governed decision subject -------------------------------------------
+#
+# THE SUBJECT IS NOT THE VENUE, and conflating them produced three malformed
+# requests in a row. fm-ob-6267e1c729b9, fm-ob-26660534cd52 and
+# fm-ob-7804557b2dfe each persisted `repo: sbracewell64/firstmate-sol-control`
+# - the CONTROL issue's own repository - while binding a head that exists only
+# in the governed repository the work actually lives in. Browser Sol ruled all
+# three non-actionable for the same reason: a repository/head tuple that cannot
+# identify one real subject is not a request, whatever else it carries.
+#
+# So a request now compiles its subject from ONE validated declaration, and the
+# control repository and issue stay what they always were - the transport venue
+# the question is asked at, recorded as venue metadata and nothing else.
+#
+# WHY THE SUBJECT REPOSITORY IS DECLARED RATHER THAN DERIVED. A clone's remotes
+# look like an authority and are not one here: this fleet's own checkout carries
+# `upstream` at the maintainer's repository and `origin` at the captain's fork,
+# and the governed subject for its candidates is the FORK. Reading a remote by
+# preference would therefore name the wrong repository confidently - the exact
+# failure mode the ruling forbids - and a separate work item already owns that
+# resolver's fork posture. A missing declaration is could-not-observe and
+# refuses; it is never repaired from prose, path, config venue, or a reply.
+#
+# Prints the missing subject fields, one per line, and returns 1 when any is
+# missing - the same shape as fm_outbound_binding_missing, so callers refuse the
+# same way for both.
+fm_outbound_clone_repos() {  # <clone-dir> -> distinct owner/name remotes, one per line
+  [ -n "${1:-}" ] && [ -d "$1" ] || return 0
+  git --no-optional-locks -C "$1" remote -v 2>/dev/null \
+    | awk '{ print $2 }' \
+    | sed -e 's#\.git$##' -e 's#^git@[^:]*:##' -e 's#^[a-z+]*://[^/]*/##' \
+    | grep -E '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' \
+    | sort -u
+}
+
+fm_outbound_subject_missing() {  # <repo> <venue-repo> <clone-dir> <tree> <head> [<declared>]
+  local repo=$1 venue=$2 dir=$3 tree=$4 head=$5 declared=${6:-} missing=0 width
+  # THE RULE THAT ALWAYS APPLIES: the venue is never the subject. This is the
+  # ruled defect itself, and it is refused however the subject was arrived at.
+  if [ -n "$venue" ] && [ "$repo" = "$venue" ]; then
+    printf 'subject-repo-is-transport-venue\n'; missing=1
+  fi
+  if [ -z "$repo" ]; then
+    printf 'subject-repo\n'; missing=1
+  fi
+  if [ -z "$declared" ] && [ "$missing" -eq 0 ] && [ -n "$dir" ] && [ -d "$dir" ]; then
+    # A DERIVED subject is an OBSERVATION only while the clone names exactly one
+    # repository. A clone that names two - a fork and the upstream it was forked
+    # from - cannot say which one the review governs, and picking whichever the
+    # venue rule happens to prefer would emit a governed request against a
+    # repository nobody chose. That is an inference from the config venue, which
+    # is precisely what a governed subject may not be built from, so it refuses.
+    if [ "$(fm_outbound_clone_repos "$dir" | wc -l)" -gt 1 ]; then
+      printf 'subject-repo-ambiguous\n'; missing=1
+    fi
+  fi
+  # THE NAME-SHAPE AND KNOWN-TO-THE-CLONE RULES APPLY TO A DECLARED SUBJECT,
+  # because a declaration is a claim about a named GitHub repository and can be
+  # checked as one. Applying them to a derived subject would refuse every
+  # project whose clone speaks in local paths rather than forge names, which is
+  # a fleet-wide outage rather than a repair; the ambiguity rule above is what
+  # keeps a derived subject honest.
+  if [ -n "$declared" ] && [ "$missing" -eq 0 ]; then
+    if ! printf '%s' "$repo" | grep -Eq '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'; then
+      printf 'subject-repo-malformed\n'; missing=1
+    elif [ -n "$dir" ] && [ -d "$dir" ]; then
+      # REFERENTIAL INTEGRITY WITHOUT THE NETWORK. The candidate is
+      # intentionally unpublished and its remote branch is expected absent, so
+      # remote resolution would refuse a subject that is perfectly valid. What
+      # the clone CAN answer is whether it knows this repository at all, which
+      # is what separates a real subject from a plausible-looking name.
+      if ! git --no-optional-locks -C "$dir" remote -v 2>/dev/null \
+         | sed -e 's#\.git[[:space:]]*(.*)$##' -e 's#[[:space:]]*(.*)$##' \
+         | grep -qE "[:/]$(printf '%s' "$repo" | sed 's#[/.]#[/.]#g')\$"; then
+        printf 'subject-repo-unknown-to-clone\n'; missing=1
+      fi
+    fi
+  fi
+  # A declared tree must be the tree of the declared head, or the subject
+  # contradicts itself.
+  if [ -n "$tree" ]; then
+    width=$(fm_outbound_object_width "$dir")
+    if [ -z "$width" ] || ! fm_outbound_is_sha "$tree" "$width"; then
+      printf 'subject-tree-malformed\n'; missing=1
+    elif [ -n "$head" ] && [ -d "$dir" ]; then
+      if ! git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$head^{tree}" 2>/dev/null \
+         | grep -qxF "$tree"; then
+        printf 'subject-tree-not-of-head\n'; missing=1
+      fi
+    fi
+  fi
+  [ "$missing" -eq 0 ]
 }
 
 # --- binding completeness ----------------------------------------------------
@@ -409,6 +790,67 @@ FM_OUTBOUND_IDENTITY_MISMATCH='IDENTITY_MISMATCH'
 FM_OUTBOUND_IDENTITY_CNO='COULD_NOT_OBSERVE'
 }
 
+# --- record subject ----------------------------------------------------------
+#
+# WHICH WORK ITEM IS THIS RECORD ABOUT, when the record's own bytes settle it?
+#
+# This exists because "is this record valid" and "is this record even about the
+# work in front of me" are different questions, and answering the first in order
+# to reach the second is what let ONE preserved adverse record stop EVERY new
+# request in the fleet. A record filed for another item can be as broken as it
+# likes without saying anything at all about the item being requested now, so a
+# decision scoped to one item must be able to set that record aside WITHOUT
+# certifying it - which is exactly what this predicate does and all it does.
+#
+# It is deliberately the WEAKEST reading in this module, and it grants nothing.
+# It never certifies a record, never substitutes for a caller's own identity
+# verdict, and a subject it prints belongs to a record that remains unvalidated
+# in every other respect. Its ONLY licensed use is to skip a decision that
+# provably does not concern this record. Reading it as "this record is fine"
+# would rebuild, one level down, the collapse the identity vocabulary above
+# exists to prevent.
+#
+# TWO VALUES HERE, BY CONSTRUCTION. It answers "the subject is exactly this" or
+# "could not observe", and there is no third answer, because the caller that
+# could not observe a subject must behave exactly as if the record were its own.
+# Fail-closed lives in that asymmetry: an unobservable subject keeps the record
+# in scope, so nothing is ever skipped on a guess.
+#
+# COUNT, THEN COMPARE - the same rule fm_outbound_sender_valid applies to
+# `from:`, here for the same reason. jq resolves a duplicated object key to
+# whichever copy was written LAST, so a record carrying two subjects reads as a
+# record about one of them, chosen by write order. A record with two subjects is
+# not a record about the last one; it is a record whose subject is AMBIGUOUS,
+# and an ambiguous subject is could-not-observe rather than a value to pick
+# from. The same count refuses a file holding more than one top-level document,
+# where the paths collide and neither document owns the answer.
+#
+# The schema is counted the same way and required to match, because the meaning
+# of `.identity.item` is defined by this record schema and nothing else. A field
+# at that path in a document of some other shape is a string this module has no
+# grounds to read as a work item.
+#
+# Prints the item and returns 0 only when every one of those holds. Returns 1 -
+# could-not-observe - for unparsable JSON, more than one top-level document, an
+# unknown or duplicated schema, and a missing, empty, non-string, or duplicated
+# item.
+fm_outbound_record_subject() {  # <record-json> -> item, or non-zero
+  local raw=$1 item
+  # --stream emits one [path,value] event per OCCURRENCE, so a duplicated key
+  # arrives as two events rather than collapsing into the last one. That is the
+  # whole reason the check is built on it rather than on an ordinary read.
+  item=$(printf '%s' "$raw" | jq -rn --stream --arg s "$FM_OUTBOUND_RECORD_SCHEMA" '
+    [inputs | select(length == 2)] as $events
+    | [$events[] | select(.[0] == ["schema"]) | .[1]] as $schemas
+    | [$events[] | select(.[0] == ["identity","item"]) | .[1]] as $items
+    | if ($schemas | length) == 1 and $schemas[0] == $s
+         and ($items | length) == 1
+         and ($items[0] | type) == "string" and $items[0] != ""
+      then $items[0] else empty end' 2>/dev/null) || return 1
+  [ -n "$item" ] || return 1
+  printf '%s\n' "$item"
+}
+
 # --- the prose recognizer ----------------------------------------------------
 #
 # Tier 2's closed token set. Every token names a way this fleet has actually
@@ -516,7 +958,29 @@ fm_outbound_classify_record() {  # <record-json> [<declared-gate>]
     return 0
   fi
   if [ "$hold_kind" = "external" ] && fm_outbound_prose_matches "$hay"; then
-    gate=$(fm_outbound_gate_from_prose "$hay")
+    # A TYPED DECLARATION WINS OVER PROSE WHEREVER IT EXISTS, not only where the
+    # row's hold-kind has already been migrated to `outbound`.
+    #
+    # Prose is a MIGRATION surface and it goes stale: a hold sentence is written
+    # once and rarely rewritten, while the gate an item is actually at moves as
+    # the work moves. Reading the stale sentence in preference to a current
+    # declaration reproduced a PREDECESSOR's identity - measured on
+    # candidate-publication-effect-guard, whose declaration had moved to
+    # EXACT_HEAD_BROWSER_REVIEW_REQUIRED while its hold sentence still said
+    # "Awaiting Browser Sol". The recomputed identity was the closed
+    # AWAITING_BROWSER_SOL request, so a fresh gate silently adopted a finished
+    # one instead of asking its own question.
+    #
+    # The TIER still says prose, because prose is what recognised the row as
+    # waiting at all. Only the gate comes from the declaration, and only when
+    # that declaration is valid; an absent or invalid one leaves the prose gate
+    # exactly as it was.
+    gate=
+    if fm_outbound_gate_valid "$declared_gate"; then
+      gate=$declared_gate
+    else
+      gate=$(fm_outbound_gate_from_prose "$hay")
+    fi
     printf 'waiting\t%s\tprose\n' "$gate"
     return 0
   fi
@@ -534,9 +998,10 @@ fm_outbound_classify_record() {  # <record-json> [<declared-gate>]
 #
 # Prints applicable | inapplicable | unobservable.
 fm_outbound_applicability() {  # <stored-head> <observed-head> <record-state>
-  case $3 in
-    superseded|closed) printf 'inapplicable\n'; return 0 ;;
-  esac
+  # Every FINISHED state is inapplicable, quarantined included: a request
+  # retired as malformed answers nothing, which is the whole point of retiring
+  # it rather than hand-editing it.
+  if fm_outbound_state_terminal "$3"; then printf 'inapplicable\n'; return 0; fi
   if [ -z "$2" ]; then
     # The head could not be read. Never applicable-by-default: an unobservable
     # head is exactly when a silent pass would hide a moved one.
@@ -548,19 +1013,29 @@ fm_outbound_applicability() {  # <stored-head> <observed-head> <record-state>
 
 # --- record construction -----------------------------------------------------
 
-fm_outbound_record_new() {  # <id> <gate> <channel> <project> <repo> <item> <pr> <head> <venue> <now> [<head-source>]
+# <id> <gate> <channel> <project> <repo> <item> <pr> <head> <venue> <now>
+#   [<head-source>] [<tree>] [<policy>]
+#
+# `repo` is the GOVERNED SUBJECT repository - what the request is about - while
+# `venue` stays the transport location it is asked at. They were the same value
+# for three malformed requests, which is what the ruling calls a repository/head
+# tuple that cannot identify one real subject.
+fm_outbound_record_new() {
   jq -n \
     --arg schema "$FM_OUTBOUND_RECORD_SCHEMA" \
     --arg request_id "$1" --arg gate "$2" --arg channel "$3" \
     --arg project "$4" --arg repo "$5" --arg item "$6" \
     --arg pr "$7" --arg head "$8" --arg venue "$9" --arg now "${10}" \
     --arg head_source "${11:-}" \
+    --arg tree "${12:-}" --arg policy "${13:-}" \
     '{schema:$schema,
       request_id:$request_id,
       channel:$channel,
       identity:{gate:$gate,project:$project,repo:$repo,item:$item,
                 pr:(if $pr == "" or $pr == "-" then null else $pr end),
-                head:$head,head_source:$head_source},
+                head:$head,head_source:$head_source,
+                tree:(if $tree == "" then null else $tree end),
+                policy:(if $policy == "" then null else $policy end)},
       venue:$venue,
       state:"emitting",
       comment_id:null,
@@ -583,6 +1058,15 @@ fm_outbound_request_body() {  # <record-json> [<rationale-file>]
   local rec=$1 rationale=${2:-}
   printf '%s %s\n\n' "$FM_OUTBOUND_BODY_MARKER" \
     "$(printf '%s' "$rec" | jq -r '.request_id')"
+  #
+  # THE GENERATION IS ON THE WIRE, not only in the identity digest. `tree` and
+  # `policy-generation` already join the request identity, so a request under a
+  # moved generation is a different question - but a reviewer reading the body
+  # could not SEE which generation they were answering, and a ruling that cannot
+  # name the generation it rests on cannot be checked against a later movement
+  # by anything except the digest. They are emitted only when the request
+  # carries them, so a request with no governed tree or policy generation keeps
+  # exactly the body it has always had.
   printf '%s\n' "$(printf '%s' "$rec" | jq -r '
     "from: firstmate",
     "gate: " + .identity.gate,
@@ -591,6 +1075,8 @@ fm_outbound_request_body() {  # <record-json> [<rationale-file>]
     "item: " + .identity.item,
     "pull-request: " + (.identity.pr // "-"),
     "exact-head: " + .identity.head,
+    (if .identity.tree == null then empty else "exact-tree: " + .identity.tree end),
+    (if .identity.policy == null then empty else "policy-generation: " + .identity.policy end),
     "requested: " + .created')"
   printf '\nThis request is bound to the exact head above.\n'
   printf 'A ruling on any other head is not applicable to it and will not be applied.\n'

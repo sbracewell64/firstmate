@@ -193,6 +193,7 @@ The file is one JSON object with exactly the three fields shown below.
 ```
 
 `repo` is the control repository in exact `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
+This repository is only the transport venue; the governed repository the request is about comes from the item's typed outbound binding and is never inferred from this field.
 `issue` may be a JSON number or a non-empty string of digits; both are read the same way.
 
 `landing_domain.repos` names the repositories whose landings this home has placed under Browser Sol control, each as the venue's own `owner/name` path.

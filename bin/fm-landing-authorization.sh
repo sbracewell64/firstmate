@@ -53,6 +53,9 @@
 #       still exits 4 so that exit 0 from this command means strictly "a
 #       determinate answer" to a caller that reads only the status.
 #
+#   fm-landing-authorization.sh inspect <auth-id>
+#       Print the canonical-reader-validated authorization record as JSON.
+#
 #   fm-landing-authorization.sh reconcile <auth-id> --observed applied|not-applied
 #                                          --evidence <ref>
 #       Resolve an indeterminate spend from an OBSERVATION of whether the act
@@ -1278,6 +1281,18 @@ cmd_status() {  # <auth-id>
   esac
 }
 
+cmd_inspect() {  # <auth-id>
+  local id=$1 rc
+  [ -n "$id" ] || die "inspect needs an authorization id" 2
+  auth_read "$id"; rc=$?
+  case $rc in
+    0) printf '%s\n' "$AUTH_RECORD" ;;
+    3) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id is absent" ;;
+    4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be identity-validated" ;;
+    5) plan_defect_stop "$id" ;;
+  esac
+}
+
 # --- reconcile ---------------------------------------------------------------
 
 cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
@@ -1462,6 +1477,7 @@ case $CMD in
   spend) [ $# -gt 0 ] || die "spend needs an authorization id" 2
          cmd_spend "$@" ;;
   status) cmd_status "${1:-}" ;;
+  inspect) cmd_inspect "${1:-}" ;;
   reconcile) [ $# -gt 0 ] || die "reconcile needs an authorization id" 2
              cmd_reconcile "$@" ;;
   list) cmd_list ;;

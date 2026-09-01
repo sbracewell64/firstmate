@@ -95,9 +95,9 @@ configure_venue() {  # <home>
     > "$1/config/sol-control.json"
 }
 
-declare_gate() {  # <home> <gate>
+declare_gate() {  # <home> <gate> [<head>]
   mkdir -p "$1/data/waiting-item"
-  jq -n --arg gate "$2" --arg head "$HEAD_A" '{gate:$gate,head:$head}' \
+  jq -n --arg gate "$2" --arg head "${3:-$HEAD_A}" '{gate:$gate,head:$head}' \
     > "$1/data/waiting-item/outbound-gate.json"
 }
 
@@ -121,6 +121,7 @@ make_gh() {  # <dir>
   : > "$1/forge/foreign_ruling_body"
   : > "$1/forge/foreign_ruling_id"
   : > "$1/forge/poll_prefix"
+  printf 'main\n' > "$1/forge/base_ref"
   printf '0\n' > "$1/forge/lose_response_remaining"
   cat > "$1/bin/gh" <<'SH'
 #!/usr/bin/env bash
@@ -134,6 +135,7 @@ case " $* " in *" --input "*) is_post=1 ;; esac
 
 case "$path" in
   */pulls/4|*/pulls/5)
+    case " $* " in *" .base.ref "*) cat "$F/base_ref"; exit 0 ;; esac
     cat "$F/head"; exit 0 ;;
   */issues/comments/*)
     id=${path##*/}
@@ -221,6 +223,14 @@ SH
   chmod +x "$1/bin/gh"
 }
 
+# An inert effect executable for tests that mint a pr-merge authorization.
+# Mint must resolve the production-owned `gh-axi` name, while these tests never
+# perform the merge and must not inherit a developer installation from PATH.
+install_effect_gh_axi() {  # <case-dir>
+  printf '#!/bin/sh\nexit 0\n' > "$1/bin/gh-axi"
+  chmod +x "$1/bin/gh-axi"
+}
+
 # A ruling body is derived from the request it answers, so any sender the
 # REQUEST carried is stripped before the responder's own is added. A canonical
 # writer states its own role and never inherits the other side's - and leaving
@@ -228,19 +238,16 @@ SH
 # itself invalid.
 write_ruling() {  # <case-dir> <request-id> <comment-id> [<verdict>] [<sender>]
   local dir=$1 rid=$2 comment=$3 verdict=${4:-approved} sender=${5:-browser-sol}
-  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
-    | grep -v '^from:' > "$dir/forge/ruling_body"
-  printf 'from: %s\n' "$sender" >> "$dir/forge/ruling_body"
-  printf 'verdict: %s\n' "$verdict" >> "$dir/forge/ruling_body"
-  printf '%s\n' "$comment" > "$dir/forge/ruling_id"
+  write_typed_ruling "$dir" "$rid" waiting-item \
+    "$(jq -r '.identity.head' "$dir/home/data/outbound-artifacts/$rid.json")" \
+    "$comment" "$verdict"
+  sed -i "s/^from: .*/from: $sender/" "$dir/forge/ruling_body"
 }
 
 write_foreign_ruling() {  # <case-dir> <request-id> <comment-id>
   local dir=$1 rid=$2 comment=$3
-  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
-    | grep -v '^from:' > "$dir/forge/foreign_ruling_body"
-  printf 'from: browser-sol\n' >> "$dir/forge/foreign_ruling_body"
-  printf 'verdict: rejected\n' >> "$dir/forge/foreign_ruling_body"
+  printf 'protocol: fm-sol-control/v1\nkind: ruling\n\nin_reply_to: %s\nfrom: browser-sol\n\ndecision: rejected\n' \
+    "$rid" > "$dir/forge/foreign_ruling_body"
   printf '%s\n' "$comment" > "$dir/forge/foreign_ruling_id"
 }
 
@@ -1227,10 +1234,10 @@ test_quoted_prior_verdict_makes_the_ruling_ambiguous() {
   # A ruling that QUOTES a prior ruling before stating its own. On this control
   # plane that is the ordinary shape, not an attack: rulings cite rulings. Taking
   # the first verdict line would adopt the quoted one silently.
-  printf 'verdict: rejected\n' >> "$dir/forge/ruling_body"
+  printf 'decision: rejected\n' >> "$dir/forge/ruling_body"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 561 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "verdict: an ambiguous body was resolved rather than refused, exit $rc: $out"
-  printf '%s' "$out" | grep -q '2 verdict lines' \
+  printf '%s' "$out" | grep -q '2 decision lines' \
     || fail "verdict: the refusal did not name the count: $out"
   [ "$(run_ob "$dir" show "$rid" | jq -r '.state')" = "emitted" ] \
     || fail "verdict: an ambiguous ruling advanced the request anyway"
@@ -1254,11 +1261,11 @@ test_single_verdict_is_read_and_no_verdict_refuses() {
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "verdict: emit failed"
   rid=$(emitted_request_id "$dir")
   write_ruling "$dir" "$rid" 563 approved
-  grep -v '^verdict: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.x"
+  grep -v '^decision: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.x"
   mv "$dir/forge/ruling_body.x" "$dir/forge/ruling_body"
   out=$(run_ob "$dir" ruling --request "$rid" --comment 563 --issue 2 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "verdict: a body with no verdict was accepted, exit $rc: $out"
-  printf '%s' "$out" | grep -q '0 verdict lines' \
+  printf '%s' "$out" | grep -q '0 decision lines' \
     || fail "verdict: the zero-verdict refusal did not name the count: $out"
   pass "verdict: exactly one verdict is read, and zero refuses while naming the count"
 }
@@ -1345,47 +1352,23 @@ test_poll_requires_exactly_one_ruling_marker() {
   dir=$(new_case poll-marker-count)
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: emit failed"
   rid=$(emitted_request_id "$dir")
-  write_ruling "$dir" "$rid" 570 accepted
-  printf 'FM-SOL-RULING fm-ob-deadbeefcafe\n' >> "$dir/forge/ruling_body"
+  sed "1s/^.*$/FM-SOL-RULING $rid/" "$dir/forge/last_request_body" \
+    | grep -v '^from:' > "$dir/forge/ruling_body"
+  printf 'from: browser-sol\nverdict: accepted\n' >> "$dir/forge/ruling_body"
+  printf '570\n' > "$dir/forge/ruling_id"
   out=$(run_ob "$dir" poll 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "poll marker count: two markers returned $rc: $out"
-  printf '%s' "$out" | grep -q '2 ruling marker lines' \
-    || fail "poll marker count: refusal did not name the count: $out"
-  # AMBIGUITY, not a mismatch. A mismatch says the one candidate found is not
-  # about this work; ambiguity says several were found and none can be chosen.
-  # Told it was a mismatch, an operator asks why a ruling was misaddressed.
-  printf '%s' "$out" | grep -q 'FM_OUTBOUND_AMBIGUOUS_CANDIDATES' \
-    || fail "poll marker count: several candidates were not classified as ambiguous: $out"
-  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RULING_IDENTITY_MISMATCH' \
-    && fail "poll marker count: ambiguity was reported as a misaddressed ruling: $out"
+  [ "$rc" -eq 3 ] || fail "legacy ruling: non-authoritative rendering returned $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_LEGACY_NONAUTHORITATIVE' \
+    || fail "legacy ruling: refusal was not explicit and named: $out"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "emitted" ] || fail "poll marker count: ambiguous marker advanced state to $state"
+  [ "$state" = "emitted" ] || fail "legacy ruling: marker rendering advanced state to $state"
 
   write_ruling "$dir" "$rid" 570 accepted
   run_ob "$dir" poll >/dev/null 2>&1 \
-    || fail "poll marker count: exactly one marker was refused"
+    || fail "legacy ruling: paired typed envelope was refused"
   state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "ruled" ] || fail "poll marker count: one marker left state $state"
-
-  dir=$(new_case poll-marker-malformed-and-valid)
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: malformed companion emit failed"
-  rid=$(emitted_request_id "$dir")
-  write_ruling "$dir" "$rid" 573 accepted
-  printf 'FM-SOL-RULING fm-ob-\nFM-SOL-RULING fm-ob-deadbeef\n' >> "$dir/forge/ruling_body"
-  run_ob "$dir" poll >/dev/null 2>&1 \
-    || fail "poll marker count: malformed markers blocked one complete identity"
-  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "ruled" ] || fail "poll marker count: malformed companions left state $state"
-
-  dir=$(new_case poll-marker-none)
-  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "poll marker count: second emit failed"
-  rid=$(emitted_request_id "$dir")
-  printf 'FM-SOL-RULING fm-ob-\nFM-SOL-RULING fm-ob-deadbeef\n' > "$dir/forge/ruling_body"
-  printf '571\n' > "$dir/forge/ruling_id"
-  run_ob "$dir" poll >/dev/null 2>&1 || fail "poll marker count: malformed-only markers were not ignored"
-  state=$(run_ob "$dir" show "$rid" | jq -r '.state')
-  [ "$state" = "emitted" ] || fail "poll marker count: malformed marker advanced state to $state"
-  pass "poll: exactly one complete ruling identity is required and ambiguity names its count"
+  [ "$state" = "ruled" ] || fail "legacy ruling: typed envelope left state $state"
+  pass "legacy ruling: marker rendering is diagnosed but cannot transition, while typed input can"
 }
 
 test_duplicate_backlog_ids_refuse_identity_joins() {
@@ -2237,6 +2220,1412 @@ test_every_declared_token_has_an_emit_site() {
   pass "token vocabulary: all $count declared tokens have an emit site"
 }
 
+# --- the governed subject is not the transport venue -------------------------
+#
+# THE DEFECT, RULED THREE TIMES. Requests fm-ob-6267e1c729b9,
+# fm-ob-26660534cd52 and fm-ob-7804557b2dfe each persisted
+# `repo: sbracewell64/firstmate-sol-control` - the CONTROL issue's own
+# repository - while binding a head that exists only in the governed repository
+# the work lives in. Browser Sol ruled all three non-actionable in the same
+# words: a repository/head tuple that cannot identify one real subject is not a
+# request. The producer had been reading its transport venue as its subject.
+#
+# The controls below are built on that exact shape, and every refusal is
+# asserted to happen with the record store and the forge both untouched -
+# "refuse before durable actionable request and before waiting-state
+# transition" is the requirement, and a refusal that already wrote something
+# would not meet it.
+
+# A demo clone that knows one governed repository, distinct from the control
+# venue the fixtures already configure at o/control.
+declare_subject() {  # <case-dir> <gate> <head> [<repo>] [<tree>] [<policy>]
+  local dir=$1 gate=$2 head=$3 repo=${4:-} tree=${5:-} policy=${6:-}
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n --arg g "$gate" --arg h "$head" --arg r "$repo" --arg t "$tree" --arg p "$policy" \
+    '{gate:$g,head:$h}
+     + (if $r == "" then {} else {repo:$r} end)
+     + (if $t == "" then {} else {tree:$t} end)
+     + (if $p == "" then {} else {policy_generation:$p} end)' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+}
+
+prepare_subject_case() {  # <name> -> case dir
+  local dir
+  dir=$(new_case "$1")
+  # The clone is created by `git clone` from a local path, so its origin names a
+  # directory rather than a repository. Point it at the governed repository the
+  # cases declare, so the clone can actually answer whether it knows that
+  # subject; the remote-tracking refs the heads resolve against already exist.
+  git -C "$dir/home/projects/demo" remote set-url origin https://github.com/o/demo.git
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  printf '%s\n' "$dir"
+}
+
+store_size() {  # <case-dir>
+  find "$1/home/data/outbound-artifacts" -maxdepth 1 -name '*.json' 2>/dev/null | wc -l
+}
+
+test_a_request_refuses_before_it_can_name_a_transport_venue_as_its_subject() {
+  local dir shape out rc records posts head rid
+  # WATCHED RED ON THE HISTORICAL SHAPE ITSELF, plus every neighbouring way a
+  # subject can fail to identify one real thing. Each asserts the store and the
+  # forge are exactly as they were, because the ruling requires the refusal to
+  # land before any durable effect rather than after one.
+  for shape in venue-as-subject unknown-repository contradicting-remotes malformed-repository \
+               contradicting-tree; do
+    dir=$(prepare_subject_case "subject-$shape")
+    head=$HEAD_A
+    case $shape in
+      # THE EXACT DEFECT: the control repository named as the subject.
+      venue-as-subject)      declare_subject "$dir" AWAITING_BROWSER_SOL "$head" o/control ;;
+      unknown-repository)    declare_subject "$dir" AWAITING_BROWSER_SOL "$head" o/nothing-here ;;
+      # NOTHING DECLARED AND THE CLONE NAMES TWO REPOSITORIES. This is the live
+      # shape in the FirstMate home itself, which carries both a fork and the
+      # upstream it was forked from. The venue rule prefers upstream, so a
+      # producer that derived silently would have emitted a governed request
+      # against the maintainer's repository - a repository nobody chose.
+      contradicting-remotes)
+        git -C "$dir/home/projects/demo" remote add upstream https://github.com/o/other.git
+        declare_subject "$dir" AWAITING_BROWSER_SOL "$head" ;;
+      malformed-repository)  declare_subject "$dir" AWAITING_BROWSER_SOL "$head" 'not-a-slug' ;;
+      contradicting-tree)    declare_subject "$dir" AWAITING_BROWSER_SOL "$head" o/demo "$HEAD_B" ;;
+    esac
+    records=$(store_size "$dir"); posts=$(wc -l < "$dir/forge/post_log")
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -ne 0 ] \
+      || fail "subject/$shape: a request without a validated governed subject was emitted: $out"
+    [ "$(store_size "$dir")" -eq "$records" ] \
+      || fail "subject/$shape: a durable record was created by a refused request"
+    [ "$(wc -l < "$dir/forge/post_log")" -eq "$posts" ] \
+      || fail "subject/$shape: a refused request still reached the forge"
+    case $shape in
+      venue-as-subject)
+        printf '%s' "$out" | grep -q 'subject-repo-is-transport-venue' \
+          || fail "subject/$shape: the historical defect was not refused by name: $out" ;;
+      unknown-repository)
+        printf '%s' "$out" | grep -q 'subject-repo-unknown-to-clone' \
+          || fail "subject/$shape: an unresolvable repository was not named: $out" ;;
+      contradicting-remotes)
+        printf '%s' "$out" | grep -q 'subject-repo-ambiguous' \
+          || fail "subject/$shape: a clone naming two repositories was not refused by name: $out" ;;
+      malformed-repository)
+        printf '%s' "$out" | grep -q 'subject-repo-malformed' \
+          || fail "subject/$shape: a subject that is not a repository name was not named: $out" ;;
+      contradicting-tree)
+        printf '%s' "$out" | grep -q 'subject-tree-not-of-head' \
+          || fail "subject/$shape: a tree that is not the head's was not named: $out" ;;
+    esac
+  done
+
+  # PAIRED GREEN FOR THE AMBIGUITY RULE. The same undeclared case, with the
+  # clone naming exactly one repository, is an OBSERVATION rather than a guess,
+  # so it emits and records that repository as the subject. Without this half
+  # the rule above would be satisfied by refusing every derived subject.
+  dir=$(prepare_subject_case subject-derived)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A"
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "subject derived: one unambiguous remote was refused, exit $rc: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 1 ] \
+    || fail "subject derived: expected exactly one logical request"
+  rid=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ "$(jq -r '.identity.repo' "$dir/home/data/outbound-artifacts/$rid.json")" = o/demo ] \
+    || fail "subject derived: the clone's own repository was not recorded as the subject"
+
+  # PAIRED GREEN: the same fixture with a validated governed subject and a
+  # separate transport venue emits exactly one request, and the identity it
+  # records is the SUBJECT repository while the venue stays transport metadata.
+  dir=$(prepare_subject_case subject-valid)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo \
+    "$(git -C "$dir/home/projects/demo" rev-parse "$HEAD_A^{tree}")" pol-2026-08-23-g1
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "subject valid: a validated governed subject was refused, exit $rc: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 1 ] \
+    || fail "subject valid: expected exactly one logical request"
+  rid=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ "$(jq -r '.identity.repo' "$dir/home/data/outbound-artifacts/$rid.json")" = o/demo ] \
+    || fail "subject valid: the identity did not record the governed subject repository"
+  [ "$(jq -r '.venue' "$dir/home/data/outbound-artifacts/$rid.json")" = 'o/control#2' ] \
+    || fail "subject valid: the transport venue was not kept as venue metadata"
+  [ "$(jq -r '.identity.policy' "$dir/home/data/outbound-artifacts/$rid.json")" = pol-2026-08-23-g1 ] \
+    || fail "subject valid: the policy generation is not part of the recorded identity"
+  pass "subject: a venue, unknown, ambiguous, malformed or self-contradicting subject refuses before any durable effect, and a validated one emits once"
+}
+
+test_a_moved_policy_generation_is_a_different_question() {
+  local dir first second out rc expected
+  # STALE POLICY OR TREE CANNOT ANSWER A SUCCESSOR. Both are part of the
+  # identity, so a request under a superseded policy generation is a different
+  # request - which is what stops a finished one being handed back.
+  dir=$(prepare_subject_case subject-policy)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "" pol-g1
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "policy: first emit failed"
+  first=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "" pol-g2
+  write_typed_ruling "$dir" "$first" waiting-item "$HEAD_A" 74 approved
+  out=$(run_ob "$dir" ruling --request "$first" --comment 74 --issue 2 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "policy: a ruling joined after its policy generation moved: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$first.json")" = superseded ] \
+    || fail "policy: ruling-time freshness left the old policy request live"
+  expected=$(jq -r '.superseded_by' "$dir/home/data/outbound-artifacts/$first.json")
+  [ -n "$expected" ] && [ "$expected" != null ] \
+    || fail "policy: ruling-time freshness did not link the successor identity"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "policy: second emit failed"
+  second=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  [ -n "$first" ] && [ "$first" != "$second" ] \
+    || fail "policy: a moved policy generation reused the previous identity ($first)"
+  # And the predecessor is retired rather than left applicable beside it.
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$first.json")" = superseded ] \
+    || fail "policy: the previous policy generation's request stayed live"
+  [ "$expected" = "$second" ] \
+    || fail "policy: freshness linked $expected but the canonical successor is $second"
+  pass "policy: a moved policy generation asks its own question and retires its predecessor"
+}
+
+test_an_undecidable_subject_is_could_not_observe_rather_than_a_defect() {
+  local dir out rc
+  # THE THREE-VALUE RULE, ON THE SUBJECT. A subject that is positively wrong is
+  # a defect. A subject that is merely UNDECIDED is not: with two repositories
+  # named and nothing declaring which one the review governs, the sweep cannot
+  # compute the identity an artifact would carry, so it never looked for one.
+  # Calling that a defect would assert the invariant is violated on the strength
+  # of a read that did not happen - the exact conversion this module exists to
+  # remove.
+  dir=$(prepare_subject_case subject-undecidable)
+  git -C "$dir/home/projects/demo" remote add upstream https://github.com/o/other.git
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "undecidable subject: expected could-not-observe, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_SUBJECT_UNRESOLVED' \
+    || fail "undecidable subject: the unresolved subject was not named: $out"
+  printf '%s' "$out" | sed -n '/^DEFECT/,/^$/p' | grep -q 'waiting-item' \
+    && fail "undecidable subject: an unread question was reported as a violation: $out"
+
+  # PAIRED HALF: remove the ambiguity and the same fixture reaches a verdict.
+  # Without this the rule above is satisfied by never deciding anything.
+  git -C "$dir/home/projects/demo" remote remove upstream
+  out=$(run_ob "$dir" check 2>&1)
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_SUBJECT_UNRESOLVED' \
+    && fail "undecidable subject: one unambiguous remote still refused to decide: $out"
+  pass "subject: an undecidable subject is could-not-observe, and one unambiguous remote decides"
+}
+test_an_undecidable_subject_is_could_not_observe_rather_than_a_defect
+test_a_malformed_request_is_retired_through_the_owner_and_never_resurrected() {
+  local dir rid out rc before records posts
+  # THE OWNER RETIRES IT; NOTHING HAND-EDITS IT. The ruling forbids editing a
+  # malformed request into validity and equally forbids leaving it sustaining a
+  # wait, so the owner marks it terminal and records under which ruling.
+  dir=$(prepare_subject_case subject-quarantine)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "quarantine: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  [ -n "$rid" ] || fail "quarantine: no request was recorded"
+  before=$(jq -r '.identity.head + " " + (.comment_id // "-")' "$dir/home/data/outbound-artifacts/$rid.json")
+
+  out=$(run_ob "$dir" quarantine --request "$rid" --ruling comment/5387155383 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "quarantine: the owner could not retire the request, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = quarantined \
+    ] || fail "quarantine: the record was not retired"
+  # EVIDENCE PRESERVED. Retiring is not erasing: identity and artifact stay.
+  [ "$(jq -r '.identity.head + " " + (.comment_id // "-")' "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "quarantine: retiring the request altered its evidence"
+  printf '%s' "$(jq -r '.disposition' "$dir/home/data/outbound-artifacts/$rid.json")" \
+    | grep -q '5387155383' \
+    || fail "quarantine: the ruling that retired the request was not recorded"
+
+  # IT CANNOT SATISFY THE WAIT ANY MORE. The item goes back to having no
+  # applicable artifact, which is the honest red state - not a wait quietly
+  # resting on a request that was ruled non-actionable.
+  out=$(run_ob "$dir" check 2>&1)
+  printf '%s' "$out" | sed -n '/^SATISFIED/,$p' | grep -q 'waiting-item' \
+    && fail "quarantine: a retired request still satisfied the item: $out"
+
+  # RESTART CANNOT REBUILD IT. Replaying the emit converges on the same refusal
+  # rather than reconstructing a wait, and posts nothing.
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/control
+  records=$(store_size "$dir"); posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "quarantine restart: the malformed shape emitted again: $out"
+  [ "$(store_size "$dir")" -eq "$records" ] \
+    || fail "quarantine restart: a replay created a durable record"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq "$posts" ] \
+    || fail "quarantine restart: a replay reached the forge"
+
+  # IDEMPOTENT, and never a way to rewrite a completion.
+  out=$(run_ob "$dir" quarantine --request "$rid" --ruling comment/5387155383 2>&1) \
+    || fail "quarantine: a repeat retirement errored: $out"
+  printf '%s' "$out" | grep -q 'already quarantined' \
+    || fail "quarantine: a repeat retirement did not report the existing one: $out"
+  pass "quarantine: the owner retires a malformed request, preserves its evidence, and no restart rebuilds its wait"
+}
+
+test_a_finished_request_is_annotated_rather_than_relabelled() {
+  local dir rid out rc
+  # TWO OF THE THREE RULED REQUESTS WERE ALREADY SUPERSEDED. They apply to
+  # nothing already, so retiring them again would only overwrite the successor
+  # linkage that records which request replaced them. The ruling is recorded and
+  # the state is left alone.
+  dir=$(prepare_subject_case subject-annotate)
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "annotate: emit failed"
+  rid=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  # Move the head so the emit supersedes it, exactly as the live pair were.
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_B" o/demo
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "annotate: successor emit failed"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = superseded \
+    ] || fail "annotate: the fixture did not supersede the predecessor"
+
+  out=$(run_ob "$dir" quarantine --request "$rid" --ruling comment/5385612078 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "annotate: recording a ruling on a finished request failed: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = superseded ] \
+    || fail "annotate: a finished request was relabelled instead of annotated"
+  [ "$(jq -r '.superseded_by' "$dir/home/data/outbound-artifacts/$rid.json")" != null ] \
+    || fail "annotate: the successor linkage was destroyed"
+  printf '%s' "$(jq -r '.disposition' "$dir/home/data/outbound-artifacts/$rid.json")" \
+    | grep -q '5385612078' \
+    || fail "annotate: the ruling was not recorded"
+  pass "annotate: a already-finished request records its ruling without losing its successor linkage"
+}
+
+# --- a moved gate is a new question ------------------------------------------
+#
+# THE SHAPE THIS REPAIRS, from the live store. fm-ob-25c701e04893 asked
+# AWAITING_BROWSER_SOL for candidate-publication-effect-guard at head
+# cf4c640b..., was ruled HOLD, was self-handled by the evidence bundle, and was
+# CLOSED. The item then moved to EXACT_HEAD_BROWSER_REVIEW_REQUIRED at the SAME
+# head - a different question about the same bytes - and emit answered
+# "already requested: fm-ob-25c701e04893", handing back a finished correlation
+# instead of asking the new question.
+#
+# Two faults, and both are needed to produce it:
+#   the item's typed gate declaration was ignored while its hold-kind was still
+#   `external`, so the stale hold sentence recomputed the PREDECESSOR's identity;
+#   and the dedupe path adopted a `closed` record, which
+#   fm_outbound_applicability has always called inapplicable but which this path
+#   never asked about.
+
+prepare_gate_move_case() {  # <name> <declared-gate> <predecessor-state> -> case dir
+  local dir=$1 gate=$2 state=$3 rid head
+  dir=$(new_case "$1")
+  # The row stays `external` with a hold sentence naming the OLD gate, exactly
+  # as the live backlog row did.
+  write_snapshot "$dir/snap.json" external 'Awaiting Browser Sol exact-head publication ruling'
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "gate move: predecessor emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "gate move: no predecessor was recorded"
+  jq --arg s "$state" '.state = $s' "$dir/home/data/outbound-artifacts/$rid.json" > "$dir/tmp.json"
+  mv "$dir/tmp.json" "$dir/home/data/outbound-artifacts/$rid.json"
+  # The item's declaration moves; its prose does not.
+  jq -n --arg g "$gate" --arg h "$head" '{gate:$g,head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  printf '%s %s %s\n' "$dir" "$rid" "$head"
+}
+
+test_a_moved_gate_asks_its_own_question() {
+  local dir rid head out rc posts before successor live
+  # RED FIRST, from the opposite structured state: with the declaration still at
+  # the OLD gate, the identity is genuinely unchanged and the finished record
+  # must NOT be handed back as an answer.
+  read -r dir rid head <<< "$(prepare_gate_move_case gatemove-same AWAITING_BROWSER_SOL closed)"
+  [ -n "$dir" ] || fail "gate move: fixture produced no case"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "gate move RED: a closed request answered a fresh one: $out"
+  printf '%s' "$out" | grep -q 'closed and cannot answer a new request' \
+    || fail "gate move RED: refused for the wrong reason: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 0 ] \
+    || fail "gate move RED: a request was posted against a finished correlation"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "gate move RED: the finished record was rewritten"
+
+  # GREEN: the declaration moves to a new gate at the SAME item and head. That
+  # is a different question, so it gets its own request - and the closed
+  # predecessor is left exactly as it was.
+  read -r dir rid head <<< "$(prepare_gate_move_case gatemove-new EXACT_HEAD_BROWSER_REVIEW_REQUIRED closed)"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "gate move GREEN: the new gate was refused, exit $rc: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 1 ] \
+    || fail "gate move GREEN: expected exactly one posted request"
+  successor=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ -n "$successor" ] && [ "$successor" != "$rid" ] \
+    || fail "gate move GREEN: the successor reused the predecessor's identity: $out"
+  [ "$(jq -r '.identity.gate' "$dir/home/data/outbound-artifacts/$successor.json")" \
+    = EXACT_HEAD_BROWSER_REVIEW_REQUIRED ] \
+    || fail "gate move GREEN: the successor is not bound to the declared gate"
+  [ "$(jq -r '.identity.head' "$dir/home/data/outbound-artifacts/$successor.json")" = "$head" ] \
+    || fail "gate move GREEN: the successor moved the head as well as the gate"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "gate move GREEN: the closed predecessor was rewritten"
+
+  # REPLAY: the same gate, item and head stays idempotent.
+  posts=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1) \
+    || fail "gate move REPLAY: a repeat cycle errored: $out"
+  printf '%s' "$out" | grep -q 'already requested' \
+    || fail "gate move REPLAY: the repeat cycle did not report the existing request: $out"
+  [ "$(posts_since "$dir" "$posts")" -eq 0 ] \
+    || fail "gate move REPLAY: a second request was posted for one identity"
+  pass "gate move: a moved gate gets its own request, a finished one answers nothing, and a replay posts nothing"
+}
+
+test_a_live_predecessor_is_retired_before_its_successor() {
+  local dir rid head out rc successor live
+  # NEVER TWO APPLICABLE REQUESTS. When the old gate's request is still LIVE, it
+  # is superseded as part of the same emit, so the item is never left with two
+  # requests differing only in what they asked.
+  read -r dir rid head <<< "$(prepare_gate_move_case gatemove-live EXACT_HEAD_BROWSER_REVIEW_REQUIRED emitted)"
+  [ -n "$dir" ] || fail "live predecessor: fixture produced no case"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "live predecessor: the successor was refused, exit $rc: $out"
+  printf '%s' "$out" | grep -q "superseded: $rid" \
+    || fail "live predecessor: the live old-gate request was not retired: $out"
+  printf '%s' "$out" | grep -q 'gate that moved' \
+    || fail "live predecessor: the retirement did not name what moved: $out"
+  successor=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = superseded \
+    ] || fail "live predecessor: the predecessor is not superseded"
+  # LAWFUL LINKAGE, in both directions of reading: the retired record names the
+  # request that replaced it.
+  [ "$(jq -r '.superseded_by' "$dir/home/data/outbound-artifacts/$rid.json")" = "$successor" ] \
+    || fail "live predecessor: the predecessor does not name its successor"
+  live=$(grep -l '"item": "waiting-item"' "$dir/home/data/outbound-artifacts"/*.json 2>/dev/null \
+    | xargs -r jq -r 'select(.state != "closed" and .state != "superseded") | .request_id' | tr '\n' ' ')
+  [ "$(printf '%s' "$live" | wc -w)" -eq 1 ] \
+    || fail "live predecessor: the item was left with more than one live request: $live"
+  pass "live predecessor: a live old-gate request is retired and linked, leaving exactly one live request"
+}
+
+test_a_typed_gate_declaration_outranks_stale_hold_prose() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  # THE UPSTREAM HALF. A hold sentence is written once and rarely rewritten,
+  # while the gate an item is at moves as the work moves. Reading the sentence
+  # in preference to a current declaration is what recomputed a predecessor's
+  # identity in the first place.
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    row='{"structured":true,"state":"queued","hold_kind":"external","hold_reason":"Awaiting Browser Sol exact-head publication ruling","title":"t","raw":"r"}'
+    printf 'declared=%s\n' "$(fm_outbound_classify_record "$row" EXACT_HEAD_BROWSER_REVIEW_REQUIRED | cut -f2)"
+    printf 'tier=%s\n' "$(fm_outbound_classify_record "$row" EXACT_HEAD_BROWSER_REVIEW_REQUIRED | cut -f3)"
+    # With no declaration, the prose still decides exactly as before.
+    printf 'prose_only=%s\n' "$(fm_outbound_classify_record "$row" | cut -f2)"
+    # An INVALID declaration is not a licence to invent a gate.
+    printf 'invalid=%s\n' "$(fm_outbound_classify_record "$row" NOT_A_GATE | cut -f2)"
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -qx 'declared=EXACT_HEAD_BROWSER_REVIEW_REQUIRED' \
+    || fail "declaration: stale hold prose outranked the typed declaration: $out"
+  printf '%s' "$out" | grep -qx 'tier=prose' \
+    || fail "declaration: the recognition tier stopped naming what recognised the row: $out"
+  printf '%s' "$out" | grep -qx 'prose_only=AWAITING_BROWSER_SOL' \
+    || fail "declaration: prose stopped deciding when no declaration exists: $out"
+  printf '%s' "$out" | grep -qx 'invalid=AWAITING_BROWSER_SOL' \
+    || fail "declaration: an invalid declaration displaced the prose gate: $out"
+  printf '%s' "$out" | grep -qx 'done' \
+    || fail "declaration: the control did not run to completion: $out"
+  pass "declaration: a valid typed gate outranks stale hold prose, and absent or invalid leaves prose deciding"
+}
+
+# --- the governed typed ruling wire form -------------------------------------
+#
+# A REAL RULING WAS LOST TO THIS GAP. Browser Sol answered fm-ob-25c701e04893 in
+# control comment 5383943043 with `protocol: fm-sol-control/v1`, `kind: ruling`
+# and `in_reply_to`/`expected_item`/`expected_head_sha`. The reader accepted only
+# the legacy `FM-SOL-RULING` marker plus the request's echoed binding lines, so
+# `ruling` returned FM_OUTBOUND_RULING_IDENTITY_MISMATCH - a claim that the
+# comment was about other work - and `poll` never selected the comment at all.
+#
+# THE BODY ITSELF IS THE HARD PART, and these fixtures keep its exact hazards.
+# That comment quotes a DIFFERENT head (25427e9e...) in prose while explaining
+# that the prior hold does not transfer, quotes its own head three more times,
+# and carries `captain_required` TWICE. So a reader that searches the body for a
+# sha has several to choose from, and a reader that demands every key appear once
+# rejects a real ruling over a field it never needed. Both traps are asserted.
+
+# The literal body of control comment 5383943043, byte for byte.
+TYPED_RULING_REAL_BODY='protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: fm-ob-25c701e04893
+from: browser-sol
+
+decision: HOLD
+authority: captain-delegated-browser-sol
+captain_required: false
+
+expected_item: candidate-publication-effect-guard
+expected_head_sha: cf4c640bb1c7561b6c65f28cb1346c25ebe36d40
+expected_tree_sha: 7bea6e5ac64d76768e60decd5a22a0db66ca6b5e
+expected_policy_generation: pol-2026-08-23-g1
+
+observed:
+  - This is a fresh exact-head request; the prior HOLD for 25427e9e39931d25984227943c892d59edf5c072 does not transfer.
+  - Direct GitHub retrieval still cannot resolve FirstMate commit cf4c640bb1c7561b6c65f28cb1346c25ebe36d40, consistent with the request'"'"'s expected remote tip being absent.
+
+ruling:
+  - Until those artifacts are independently inspectable, APPROVE_EXACT is not available.
+
+stale_state_protection:
+  - This HOLD applies only to head cf4c640bb1c7561b6c65f28cb1346c25ebe36d40 / tree 7bea6e5ac64d76768e60decd5a22a0db66ca6b5e / policy pol-2026-08-23-g1.
+
+captain_required: false'
+
+test_typed_ruling_form_is_read_field_by_field() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    envelope=
+    body=$TYPED_RULING_REAL_BODY
+    envelope=$(fm_outbound_ruling_envelope "$body")
+    printf 'form=%s\n' "$(fm_outbound_ruling_form "$body")"
+    printf 'request=%s\n' "$(fm_outbound_typed_ruling_request "$body")"
+    printf 'item=%s\n' "$(fm_outbound_envelope_field "$envelope" expected_item)"
+    printf 'head=%s\n' "$(fm_outbound_envelope_field "$envelope" expected_head_sha)"
+    printf 'decision=%s\n' "$(fm_outbound_envelope_field "$envelope" decision)"
+    # A field the envelope never carries is ABSENT, which is not a contradiction.
+    fm_outbound_envelope_field "$envelope" expected_gate >/dev/null 2>&1
+    printf 'gate_rc=%s\n' "$?"
+    # THE ENVELOPE ENDS BEFORE THE PROSE, so the second `captain_required` -
+    # which sits after the content sections - is outside it and the field reads
+    # cleanly. Body-wide this was a duplicate; that is the whole difference.
+    fm_outbound_envelope_field "$envelope" captain_required >/dev/null 2>&1
+    printf 'captain_rc=%s\n' "$?"
+    # ...and must still not disqualify the ruling, or a real body is refused
+    # over a key the join never reads.
+    printf 'form_again=%s\n' "$(fm_outbound_ruling_form "$body")"
+    # Form boundaries.
+    # A marker appended AFTER the content sections is a quotation, not a second
+    # declaration - the case that made real rulings unreadable body-wide.
+    printf 'quoted_marker=%s\n' "$(fm_outbound_ruling_form "$body
+FM-SOL-RULING fm-ob-25c701e04893")"
+    printf 'legacy=%s\n' "$(fm_outbound_ruling_form 'FM-SOL-RULING fm-ob-25c701e04893
+verdict: approved')"
+    printf 'none=%s\n' "$(fm_outbound_ruling_form 'just some prose')"
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -qx 'form=typed' \
+    || fail "typed shape: the real comment was not read as the typed form: $out"
+  printf '%s' "$out" | grep -qx 'request=fm-ob-25c701e04893' \
+    || fail "typed shape: in_reply_to was not read: $out"
+  printf '%s' "$out" | grep -qx 'item=candidate-publication-effect-guard' \
+    || fail "typed shape: expected_item was not read: $out"
+  # THE SUBSTRING TRAP. The body names 25427e9e... in prose; only the field is
+  # the head, and any reader that searched the body could have taken the other.
+  printf '%s' "$out" | grep -qx 'head=cf4c640bb1c7561b6c65f28cb1346c25ebe36d40' \
+    || fail "typed shape: expected_head_sha was not read from its own field: $out"
+  printf '%s' "$out" | grep -q '25427e9e' \
+    && fail "typed shape: a head quoted in prose was read as a field: $out"
+  printf '%s' "$out" | grep -qx 'decision=HOLD' \
+    || fail "typed shape: the decision was not read: $out"
+  printf '%s' "$out" | grep -qx 'gate_rc=1' \
+    || fail "typed shape: an absent optional binding was not reported absent: $out"
+  printf '%s' "$out" | grep -qx 'captain_rc=0' \
+    || fail "typed shape: a key repeated only outside the envelope was still read as duplicated: $out"
+  printf '%s' "$out" | grep -qx 'form_again=typed' \
+    || fail "typed shape: a key repeated after the envelope disqualified a real ruling: $out"
+  printf '%s' "$out" | grep -qx 'quoted_marker=typed' \
+    || fail "typed shape: a marker quoted after the envelope changed the body's form: $out"
+  printf '%s' "$out" | grep -qx 'legacy=legacy' \
+    || fail "typed shape: the legacy marker stopped being recognised: $out"
+  printf '%s' "$out" | grep -qx 'none=none' \
+    || fail "typed shape: an unrelated body was claimed as a ruling: $out"
+  printf '%s' "$out" | grep -qx 'done' \
+    || fail "typed shape: the control did not run to completion: $out"
+  pass "typed shape: comment 5383943043's exact form is read field by field, and prose is never a field"
+}
+
+# The same shape as comment 5383943043, bound to whatever the fixture actually
+# emitted. The foreign head quoted in prose is kept, so every end-to-end case
+# below also carries the substring trap.
+write_typed_ruling() {  # <case-dir> <request-id> <item> <head> <comment-id> [<decision>]
+  local dir=$1 rid=$2 item=$3 head=$4 comment=$5 decision=${6:-HOLD}
+  local rec gate project repo pr tree policy
+  rec="$dir/home/data/outbound-artifacts/$rid.json"
+  gate=$(jq -r '.identity.gate' "$rec")
+  project=$(jq -r '.identity.project' "$rec")
+  repo=$(jq -r '.identity.repo' "$rec")
+  pr=$(jq -r '.identity.pr // "-"' "$rec")
+  tree=$(jq -r '.identity.tree // ""' "$rec")
+  policy=$(jq -r '.identity.policy // ""' "$rec")
+  cat > "$dir/forge/ruling_body" <<TYPED
+protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: $rid
+from: browser-sol
+
+decision: $decision
+authority: captain-delegated-browser-sol
+captain_required: false
+
+expected_gate: $gate
+expected_project: $project
+expected_repo: $repo
+expected_item: $item
+expected_pull_request: $pr
+expected_head_sha: $head
+$(if [ -n "$tree" ]; then printf 'expected_tree_sha: %s' "$tree"; fi)
+$(if [ -n "$policy" ]; then printf 'expected_policy_generation: %s' "$policy"; fi)
+
+observed:
+  - The prior HOLD for 25427e9e39931d25984227943c892d59edf5c072 does not transfer.
+
+captain_required: false
+TYPED
+  printf '%s\n' "$comment" > "$dir/forge/ruling_id"
+}
+
+emitted_rid_and_head() {  # <case-dir> -> prints "<rid> <head>"
+  local dir=$1 rid head
+  rid=$(awk '{print $2}' "$dir/forge/comments" | tail -1)
+  head=$(jq -r '.identity.head' "$dir/home/data/outbound-artifacts/$rid.json" 2>/dev/null)
+  [ -n "$rid" ] && [ -n "$head" ] || return 1
+  printf '%s %s\n' "$rid" "$head"
+}
+
+# Real shapes from the control issue that a body-wide reader got wrong. Each is
+# the exact envelope plus the exact hazard region of the comment it names; the
+# discussion in between is elided because it is precisely what must NOT be read.
+#
+#   5385768382  a compatibility REQUEST whose fenced ```text block contains the
+#               canonical legacy marker. Read body-wide it became a `legacy`
+#               ruling for fm-ob-25c701e04893 - a request re-read as its own
+#               answer.
+#   5351039509  a genuine typed ruling that later quotes `protocol:` at column 0
+#               while explaining the format. Read body-wide the duplicate made
+#               its form `both`, so a real ruling was refused.
+#   5301874460  a genuine typed ruling answering a FOREIGN identity. 37 of the
+#               43 typed rulings on this issue are like it, and calling each one
+#               ambiguous is what produced the report storm.
+#   5384189401  a genuine typed ruling for one of our requests whose exact head
+#               lives in a nested `exact_subject:` block, so its envelope states
+#               no top-level head at all.
+# shellcheck disable=SC2016  # a verbatim fixture: backticks are the comment's own markdown
+FIXTURE_5385768382='Browser Sol protocol compatibility follow-up for existing request `fm-ob-25c701e04893`.
+
+Please re-emit the same HOLD in a new comment that includes these exact standalone lines:
+
+```text
+FM-SOL-RULING fm-ob-25c701e04893
+gate: AWAITING_BROWSER_SOL
+project: kun-agent-workspace
+repo: sbracewell64/firstmate-sol-control
+item: candidate-publication-effect-guard
+pull-request: -
+exact-head: cf4c640bb1c7561b6c65f28cb1346c25ebe36d40
+```'
+
+FIXTURE_5351039509='protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: fm-ob-aaaaaaaaaaaa
+from: browser-sol
+
+decision: HOLD
+
+observed:
+  - Something worth recording.
+
+Continue using:
+
+sbracewell64/firstmate-sol-control
+protocol: fm-sol-control/v1
+
+For genuine BROWSER_SOL decisions:'
+
+FIXTURE_5301874460='protocol: fm-sol-control/v1
+kind: ruling
+
+in_reply_to: SOL-FM-AUTOMATION-001
+from: browser-sol
+
+decision: PROCEED_WITH_CONDITIONS
+authority: captain-delegated-browser-sol'
+
+FIXTURE_5384189401='protocol: fm-sol-control/v1
+kind: ruling
+
+id: SOL-FM-SSSF-LAUNCH1-R1-CURRENT-MAIN-REBASE-FIRST-20260823
+in_reply_to: fm-ob-badaf425089f
+from: browser-sol
+to: firstmate
+
+project: SSSF
+repository: sbracewell64/inkwell-agent-sandboxes-and-software-factory
+item: sssf-launch-1-r1
+authority: captain-delegated-browser-sol
+captain_required: false
+
+decision: REVISE_REBASE_BEFORE_SEMANTIC_REVIEW
+
+exact_subject:
+  pr: 19
+  head: 6f409ff111ddca747e76f1fde20645f98e09d7d2
+
+observed:
+  - GitHub exposes PR #19 open and mergeable at the exact head above.'
+
+test_ruling_form_is_bounded_by_the_envelope() {
+  local lib out
+  lib="$ROOT/bin/fm-outbound-artifact-lib.sh"
+  # A CONTROL ISSUE IS A CONVERSATION. Rulings quote their predecessors,
+  # requests carry worked examples of the wire format, and operators paste
+  # protocol snippets while discussing them. Every case below is a body whose
+  # DISCUSSION contains something a body-wide reader mistook for a declaration.
+  out=$(
+    # shellcheck disable=SC1090
+    . "$lib"
+    printf 'fenced_request_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5385768382")"
+    printf 'quoting_ruling_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5351039509")"
+    printf 'foreign_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5301874460")"
+    printf 'nested_head_form=%s\n' "$(fm_outbound_ruling_form "$FIXTURE_5384189401")"
+    # The quoting ruling still states its own request exactly once.
+    printf 'quoting_request=%s\n' "$(fm_outbound_typed_ruling_request "$FIXTURE_5351039509")"
+    # A foreign identity is NOT OURS (3), never ambiguity (2).
+    fm_outbound_typed_ruling_request "$FIXTURE_5301874460" >/dev/null 2>&1
+    printf 'foreign_rc=%s\n' "$?"
+    # The nested block is outside the envelope, so its head is not a field.
+    printf 'nested_envelope_head=[%s]\n' \
+      "$(fm_outbound_envelope_field "$(fm_outbound_ruling_envelope "$FIXTURE_5384189401")" head)"
+    printf 'nested_envelope_item=%s\n' \
+      "$(fm_outbound_envelope_field "$(fm_outbound_ruling_envelope "$FIXTURE_5384189401")" item)"
+    # An envelope declaring both forms has two declarations and no precedence.
+    printf 'mixed=%s\n' "$(fm_outbound_ruling_form 'FM-SOL-RULING fm-ob-aaaaaaaaaaaa
+protocol: fm-sol-control/v1
+kind: ruling')"
+    # The preamble must BEGIN the envelope, not merely appear in it.
+    printf 'late_preamble=%s\n' "$(fm_outbound_ruling_form 'id: SOL-X
+protocol: fm-sol-control/v1
+kind: ruling')"
+    printf 'done\n'
+  )
+  printf '%s' "$out" | grep -qx 'fenced_request_form=none' \
+    || fail "envelope: a fenced example promoted a REQUEST into a ruling: $out"
+  printf '%s' "$out" | grep -qx 'quoting_ruling_form=typed' \
+    || fail "envelope: a ruling quoting the protocol in prose was not read as itself: $out"
+  printf '%s' "$out" | grep -qx 'quoting_request=fm-ob-aaaaaaaaaaaa' \
+    || fail "envelope: the quoting ruling's own request was not read: $out"
+  printf '%s' "$out" | grep -qx 'foreign_form=typed' \
+    || fail "envelope: a genuine foreign-scheme ruling was not read as typed: $out"
+  printf '%s' "$out" | grep -qx 'foreign_rc=3' \
+    || fail "envelope: a foreign identity was not reported as not-ours: $out"
+  printf '%s' "$out" | grep -qx 'nested_head_form=typed' \
+    || fail "envelope: a ruling with a nested subject block was not read as typed: $out"
+  printf '%s' "$out" | grep -qx 'nested_envelope_head=\[\]' \
+    || fail "envelope: an indented value inside a nested block was read as an envelope field: $out"
+  printf '%s' "$out" | grep -qx 'nested_envelope_item=sssf-launch-1-r1' \
+    || fail "envelope: a bare top-level item was not read: $out"
+  printf '%s' "$out" | grep -qx 'mixed=both' \
+    || fail "envelope: an envelope declaring both forms was resolved instead of refused: $out"
+  printf '%s' "$out" | grep -qx 'late_preamble=none' \
+    || fail "envelope: a preamble that does not begin the envelope was accepted: $out"
+  printf '%s' "$out" | grep -qx 'done' \
+    || fail "envelope: the control did not run to completion: $out"
+  pass "envelope: form and fields come from the canonical envelope, never from quoted, fenced or nested text"
+}
+
+test_a_ruling_without_a_top_level_head_refuses_without_writing() {
+  local dir rid head out rc before
+  # 5384188549 and 5384189401 are genuine rulings for our own requests whose
+  # exact head lives in a nested block. Their envelope states no head, so the
+  # identity cannot be joined - and a ruling that cannot be joined must leave
+  # the record exactly as it found it.
+  dir=$(new_case nestedhead)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "nested head: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "nested head: the fixture recorded no request"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 71 REVISE
+  sed -i "s/^expected_head_sha: .*/exact_subject:\n  head: $head/" "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 71 --issue 2 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "nested head: a ruling stating no top-level head was joined: $out"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "nested head: a refused ruling mutated the record"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = emitted ] \
+    || fail "nested head: the record left its pre-ruling state"
+
+  # PAIRED GREEN: the same ruling with the head lifted into its envelope joins,
+  # so the refusal is the missing top-level identity and not the fixture.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 71 REVISE
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 71 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "nested head GREEN: the same ruling with a top-level head was refused, exit $rc: $out"
+  [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = REVISE \
+    ] || fail "nested head GREEN: the verdict was not recorded verbatim"
+  pass "nested head: an envelope with no top-level head refuses untouched; the same ruling stating one joins"
+}
+
+test_typed_ruling_joins_and_records_its_verdict_verbatim() {
+  local dir rid head out rc before after
+  dir=$(new_case typedjoin)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "typed join: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "typed join: the fixture recorded no request"
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+
+  # RED FIRST: the identical body with its protocol line removed is no longer a
+  # form this reader claims to understand, so it refuses and writes nothing.
+  # This is the pre-repair condition reproduced from the opposite direction.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 61
+  grep -v '^protocol: ' "$dir/forge/ruling_body" > "$dir/forge/ruling_body.tmp"
+  mv "$dir/forge/ruling_body.tmp" "$dir/forge/ruling_body"
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 61 --issue 2 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "typed join RED: an unreadable form was joined anyway: $out"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "typed join RED: a refused ruling mutated the record"
+
+  # GREEN: the governed shape, joined, with the verdict recorded VERBATIM.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 61
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 61 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "typed join GREEN: the governed ruling was refused, exit $rc: $out"
+  after=$(jq -r '.state + " " + .ruling.verdict + " " + .ruling.comment_id' \
+    "$dir/home/data/outbound-artifacts/$rid.json")
+  [ "$after" = "ruled HOLD 61" ] \
+    || fail "typed join GREEN: expected 'ruled HOLD 61', got '$after'"
+  pass "typed join: the governed form joins and its verdict is recorded verbatim"
+}
+
+test_typed_ruling_refuses_every_unjoinable_shape() {
+  local dir rid head shape out rc before
+  # EVERY WAY THE JOIN CAN FAIL TO BE UNIQUE AND NON-CONTRADICTORY. Each one must
+  # refuse with the record byte-identical afterwards, because a ruling this end
+  # could not join must leave no trace that it did.
+  for shape in wrong-item wrong-head wrong-request missing-gate missing-head duplicate-head \
+               contradicting-project malformed-request both-forms both-verdicts; do
+    dir=$(new_case "typedbad-$shape")
+    declare_gate "$dir/home" AWAITING_BROWSER_SOL
+    write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+    run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+      || fail "typed refusal/$shape: emit failed"
+    read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+    [ -n "$rid" ] || fail "typed refusal/$shape: the fixture recorded no request"
+    before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+    write_typed_ruling "$dir" "$rid" waiting-item "$head" 62
+    case $shape in
+      wrong-item)    sed -i "s/^expected_item: .*/expected_item: another-item/" "$dir/forge/ruling_body" ;;
+      wrong-head)    sed -i "s/^expected_head_sha: .*/expected_head_sha: $HEAD_B/" "$dir/forge/ruling_body" ;;
+      wrong-request) sed -i "s/^in_reply_to: .*/in_reply_to: fm-ob-000000000000/" "$dir/forge/ruling_body" ;;
+      missing-gate)  sed -i "/^expected_gate: /d" "$dir/forge/ruling_body" ;;
+      missing-head)  sed -i "/^expected_head_sha: /d" "$dir/forge/ruling_body" ;;
+      # INSIDE the envelope, not appended. A field repeated after the content
+      # sections is a quotation the envelope rule deliberately ignores, so
+      # appending would test the opposite of what this case is named for.
+      duplicate-head) sed -i "/^expected_head_sha: /a expected_head_sha: $HEAD_B" "$dir/forge/ruling_body" ;;
+      contradicting-project) sed -i "s/^expected_project: .*/expected_project: not-the-project/" "$dir/forge/ruling_body" ;;
+      malformed-request) sed -i "s/^in_reply_to: .*/in_reply_to: not-a-request-id/" "$dir/forge/ruling_body" ;;
+      both-forms)    sed -i "/^in_reply_to: /a FM-SOL-RULING $rid" "$dir/forge/ruling_body" ;;
+      # The verdict is read from the whole body, not the envelope: a legacy
+      # ruling states `verdict:` after its prose, so an envelope-only read would
+      # stop seeing legacy verdicts entirely. A typed body carrying the other
+      # form's verdict key anywhere is therefore still refused.
+      both-verdicts) printf 'verdict: approved\n' >> "$dir/forge/ruling_body" ;;
+    esac
+    out=$(run_ob "$dir" ruling --request "$rid" --comment 62 --issue 2 2>&1); rc=$?
+    [ "$rc" -ne 0 ] \
+      || fail "typed refusal/$shape: an unjoinable ruling was accepted: $out"
+    [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+      || fail "typed refusal/$shape: a refused ruling mutated the record"
+    [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = emitted ] \
+      || fail "typed refusal/$shape: the record left its pre-ruling state"
+
+    # PAIRED GREEN, so no shape can pass by the fixture never joining anything.
+    write_typed_ruling "$dir" "$rid" waiting-item "$head" 62
+    out=$(run_ob "$dir" ruling --request "$rid" --comment 62 --issue 2 2>&1); rc=$?
+    [ "$rc" -eq 0 ] \
+      || fail "typed refusal/$shape: the paired joinable ruling was refused, exit $rc: $out"
+  done
+  pass "typed refusal: wrong item, head, request, missing, duplicated, contradicting, malformed and both-form bodies all refuse with the record untouched"
+}
+
+test_typed_ruling_is_discovered_by_poll() {
+  local dir rid head out rc
+  dir=$(new_case typedpoll)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "typed poll: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "typed poll: the fixture recorded no request"
+
+  # THE SYMPTOM THAT HID THE REAL RULING. Discovery read only the legacy marker,
+  # so a typed comment was not selected at all: no join, no mismatch, no line -
+  # the fleet simply never saw it. Silence is the failure being controlled here,
+  # so the assertion is that the record MOVED, not that a message appeared.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 63
+  out=$(run_ob "$dir" poll 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "typed poll: poll reported a failure, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = ruled ] \
+    || fail "typed poll: the typed ruling was never selected by discovery: $out"
+  [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = HOLD ] \
+    || fail "typed poll: the joined verdict is not the one the body stated: $out"
+  pass "typed poll: discovery selects the governed form instead of skipping it in silence"
+}
+
+test_a_hold_ruling_never_becomes_a_landing_authority() {
+  local dir rid head out rc auth auth_file
+  auth="$ROOT/bin/fm-landing-authorization.sh"
+  [ -x "$auth" ] || { printf 'skip: %s is not executable\n' "$auth"; return 0; }
+  dir=$(new_case typedhold)
+  install_effect_gh_axi "$dir"
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "hold: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  [ -n "$rid" ] || fail "hold: the fixture recorded no request"
+
+  # JOINING A RULING IS NOT ACCEPTING ITS VERDICT. HOLD is recorded, and the
+  # authority owner's closed list refuses to read it as approval.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 64 HOLD
+  run_ob "$dir" ruling --request "$rid" --comment 64 --issue 2 >/dev/null 2>&1 \
+    || fail "hold: the HOLD ruling did not join"
+  # THE PLAN IS COMPLETE AND VALID, so the refusal below is the VERDICT being
+  # classified rather than a missing effect plan stopping the act one step
+  # earlier. A landing authority now permits an exact ACT, and an authority with
+  # no effect plan authorizes nothing - so a mint with no `--effect` is refused
+  # for that reason and would never reach the verdict this case is controlling.
+  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" \
+    --effect pr-merge --method squash 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "hold: a HOLD ruling minted a landing authority: $out"
+  printf '%s' "$out" | grep -q 'FM_AUTH_VERDICT_UNRECOGNIZED' \
+    || fail "hold: refused for the wrong reason: $out"
+  [ -z "$(ls -A "$dir/home/data/landing-authorizations" 2>/dev/null)" ] \
+    || fail "hold: a HOLD ruling left a landing authority behind"
+
+  # PAIRED GREEN: the same path with an approving verdict does mint, so the
+  # refusal above is the verdict being classified and not the fixture failing.
+  dir=$(new_case typedapprove)
+  install_effect_gh_axi "$dir"
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "hold GREEN: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 65 approved
+  run_ob "$dir" ruling --request "$rid" --comment 65 --issue 2 >/dev/null 2>&1 \
+    || fail "hold GREEN: the approving ruling did not join"
+  out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" \
+    --effect pr-merge --method squash 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "hold GREEN: an approving ruling failed to mint, exit $rc: $out"
+  auth_file=$(find "$dir/home/data/landing-authorizations" -type f -name '*.json' -print -quit)
+  [ -n "$auth_file" ] \
+    || fail "hold GREEN: mint reported success without writing an authorization"
+  [ "$(jq -r '.effect.executable_path' "$auth_file")" = "$dir/bin/gh-axi" ] \
+    || fail "hold GREEN: mint resolved gh-axi outside the fixture"
+  pass "hold: a joined HOLD is recorded and refused as authority, while an approving verdict still mints"
+}
+
+# --- record isolation: one broken record is not every item's blocker ---------
+#
+# THE DEFECT THESE CONTROL. Superseding an item's older heads is a decision
+# about THAT item, but reaching it validated every record in the store first, so
+# a single preserved adverse record refused every NEW request in the fleet. It
+# was measured on the live store: an exact, complete, well-bound request for
+# candidate-publication-effect-guard returned FM_OUTBOUND_RECORD_UNREADABLE
+# before transport because fm-ob-18a4c958c445.json - whose own identity names
+# ae-xp1-registered-external-target - could not be validated.
+#
+# The repair is a SCOPE test that runs before the validity test, and the whole
+# safety argument rests on its direction: unrelatedness must be POSITIVELY
+# established from the record's own bytes, and every other outcome keeps the
+# record in scope. So each control below is a PAIR over one fixture with one
+# field changed - the same store record, once naming another item and once not,
+# or once readable and once not - because a control that only ever answers one
+# way cannot tell the scope test from a mechanism that skips everything.
+
+# A home with two waiting items on two different projects. The second project's
+# record is the one driven adverse; the first item's request is the one that
+# must still be reachable.
+prepare_isolation_case() {  # <name> -> prints case dir
+  local dir
+  dir=$(new_case "$1")
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  printf -- '- other [no-mistakes] - other project (added 2026-08-16)\n' >> "$dir/home/data/projects.md"
+  git clone -q --no-hardlinks "$HEAD_REPO" "$dir/home/projects/other" 2>/dev/null
+  jq -n --arg h "$HEAD_A" '
+    {schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[
+      {order:1,state:"queued",structured:true,id:"waiting-item",
+       title:"needs independent review",hold_kind:"outbound",
+       hold_reason:"awaiting browser sol",repo:"demo",
+       pr_url:"https://github.com/o/r/pull/4",body_excerpt:null},
+      {order:2,state:"queued",structured:true,id:"other-item",
+       title:"a different work item entirely",hold_kind:"outbound",
+       hold_reason:"awaiting browser sol",repo:"other",
+       pr_url:null,body_excerpt:null},
+      {order:3,state:"queued",structured:true,id:"ordinary-item",
+       title:"ordinary queued work",hold_kind:null,hold_reason:null,
+       repo:"demo",pr_url:null,body_excerpt:null}]}}' > "$dir/snap.json"
+  mkdir -p "$dir/home/data/waiting-item" "$dir/home/data/other-item"
+  jq -n --arg h "$HEAD_A" '{gate:"INDEPENDENT_BROWSER_REVIEW_REQUIRED",head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  jq -n --arg h "$HEAD_A" '{gate:"INDEPENDENT_BROWSER_REVIEW_REQUIRED",head:$h}' \
+    > "$dir/home/data/other-item/outbound-gate.json"
+  printf '%s\n' "$dir"
+}
+
+# The store record another item owns, after one real emit for that item. It is
+# produced by the command under test rather than hand-authored, so its identity
+# digest, filename and content agree exactly as the live one does.
+other_item_record() {  # <case-dir> -> prints the record path
+  local dir=$1 rid
+  run_ob "$dir" emit other-item >/dev/null 2>&1 \
+    || fail "isolation fixture: the unrelated item's own emit failed"
+  rid=$(grep ' ' "$dir/forge/comments" | awk '$2 != "" {print $2}' | tail -1)
+  [ -n "$rid" ] || fail "isolation fixture: no request id was recorded for the unrelated item"
+  [ -f "$dir/home/data/outbound-artifacts/$rid.json" ] \
+    || fail "isolation fixture: the unrelated item left no correlation record"
+  printf '%s\n' "$dir/home/data/outbound-artifacts/$rid.json"
+}
+
+posts_since() {  # <case-dir> <before-count> -> prints posts added
+  printf '%s\n' "$(( $(wc -l < "$1/forge/post_log") - $2 ))"
+}
+
+# `fail` inside a command substitution kills only the subshell, so a fixture
+# that echoes its path hands the caller an empty string and sails on. Every
+# caller of other_item_record runs this, which is what turns that swallowed
+# refusal back into a failure instead of an empty path fed to jq and git.
+require_record_path() {  # <path> <label>
+  [ -n "$1" ] && [ -f "$1" ] \
+    || fail "$2: the fixture produced no correlation record path"
+}
+
+test_unrelated_broken_record_does_not_block_an_exact_request() {
+  local dir record before rc out bytes_before bytes_after posts
+  dir=$(prepare_isolation_case iso-unrelated)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "isolation"
+
+  # Drive the unrelated record adverse the way the live one is: its project's
+  # clone stops being readable, so the object format is undeterminable, so its
+  # own binding no longer resolves. Nothing about the record's bytes changes.
+  rm -rf "$dir/home/projects/other"
+  bytes_before=$(cksum < "$record")
+
+  # RED HALF. The identical record, differing only in the item it names. With
+  # this item as its subject it is in scope, it fails to validate, and the
+  # request must not be posted. This is the half that proves the green half is
+  # the scope test rather than a mechanism that skips every record.
+  jq '.identity.item = "waiting-item"' "$record" > "$record.red"
+  cp "$record" "$record.orig"
+  mv "$record.red" "$record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "isolation RED: a same-item record that does not validate still permitted an emit: $out"
+  printf '%s' "$out" | grep -qE 'FM_OUTBOUND_RECORD_UNREADABLE|FM_OUTBOUND_IDENTITY_REFUSED' \
+    || fail "isolation RED: refused for the wrong reason: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 0 ] \
+    || fail "isolation RED: $posts request(s) were posted while a same-item record was unvalidatable"
+
+  # GREEN HALF. One field back to what it was. The record is exactly as broken,
+  # and it is now provably about other work.
+  mv "$record.orig" "$record"
+  [ "$(cksum < "$record")" = "$bytes_before" ] \
+    || fail "isolation: the fixture failed to restore the unrelated record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "isolation GREEN: an exact request for unrelated work was refused, exit $rc: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 1 ] \
+    || fail "isolation GREEN: expected exactly one posted request, got $posts"
+
+  # PRESERVED BYTE FOR BYTE. Skipping a record is not touching it: a pass that
+  # quietly repaired, superseded or rewrote the adverse record would satisfy
+  # every assertion above while destroying the evidence it names.
+  bytes_after=$(cksum < "$record")
+  [ "$bytes_after" = "$bytes_before" ] \
+    || fail "isolation: the skipped record was rewritten rather than left alone"
+  pass "isolation: an unrelated unvalidatable record permits an exact request and is left untouched"
+}
+
+test_unrelated_identity_mismatch_does_not_block_an_exact_request() {
+  local dir record before out rc posts
+  # THE OTHER ADVERSE CLASS, kept apart on purpose. The case above is
+  # could-not-observe: the record's binding stops resolving. This one is a true
+  # IDENTITY MISMATCH - perfectly readable, its binding resolves, and its
+  # recomputed identity simply does not match the id it is filed under. The two
+  # need different repairs, so a control that only ever produced one of them
+  # would leave the other unmeasured.
+  dir=$(prepare_isolation_case iso-mismatch)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "mismatch"
+
+  # RED HALF: the mismatch names THIS item, so it is in scope and must refuse
+  # with the identity token rather than the unreadable one.
+  jq '.identity.item = "waiting-item"' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "mismatch RED: a same-item identity mismatch did not refuse with a verdict, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_IDENTITY_REFUSED' \
+    || fail "mismatch RED: refused for the wrong reason: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RECORD_UNREADABLE' \
+    && fail "mismatch RED: a readable foreign record was reported as unreadable: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 0 ] \
+    || fail "mismatch RED: $posts request(s) posted against a same-item identity mismatch"
+
+  # GREEN HALF: still a mismatch, still unrepaired, but its subject is once more
+  # provably another item. Mutating the HEAD keeps the record readable and its
+  # binding resolvable, so the adverse class here is mismatch and not absence.
+  jq --arg h "$HEAD_B" '.identity.item = "other-item" | .identity.head = $h' "$record" > "$record.tmp"
+  mv "$record.tmp" "$record"
+  before=$(wc -l < "$dir/forge/post_log")
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "mismatch GREEN: an exact request was blocked by another item's mismatch, exit $rc: $out"
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 1 ] \
+    || fail "mismatch GREEN: expected exactly one posted request, got $posts"
+  [ "$(jq -r '.identity.item' "$record")" = "other-item" ] \
+    || fail "mismatch GREEN: the skipped record was rewritten"
+  [ "$(jq -r '.identity.head' "$record")" = "$HEAD_B" ] \
+    || fail "mismatch GREEN: the skipped record's head was superseded by another item's emit"
+  [ "$(jq -r '.state' "$record")" != "superseded" ] \
+    || fail "mismatch GREEN: another item's emit superseded a record it does not own"
+  pass "mismatch: an unrelated identity mismatch permits an exact request; the same mismatch on this item refuses"
+}
+
+test_skipped_record_stays_adverse_everywhere_else() {
+  local dir record rid out rc
+  dir=$(prepare_isolation_case iso-adverse)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "adverse"
+  rid=$(basename "$record" .json)
+  rm -rf "$dir/home/projects/other"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+    || fail "adverse: the exact unrelated request was refused"
+
+  # THE SKIP IS SCOPED TO ONE DECISION AND GRANTS NOTHING. The record must still
+  # be adverse on every surface that reports it, or this repair would have
+  # converted a loud blocker into silence - which is the failure this whole
+  # module exists to refuse.
+  out=$(run_ob "$dir" show "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "adverse: show treated the skipped record as readable, exit $rc: $out"
+
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "adverse: the sweep did not stay could-not-observe, exit $rc: $out"
+  # Reported against the item it actually belongs to, which is where an operator
+  # repairs a correlation fault. Asserted by SECTION rather than by total count:
+  # the count also carries the project's own unreadable-clone row, and pinning
+  # it would make this control fail for a reason it is not about.
+  printf '%s' "$out" | sed -n '/^COULD NOT OBSERVE/,/^SATISFIED/p' | grep -q 'other-item' \
+    || fail "adverse: the broken record's item was not filed under could-not-observe: $out"
+  # And it can never read as satisfied - not the item holding it, and not by
+  # lending its presence to the item whose request did go through.
+  printf '%s' "$out" | grep -q 'SATISFIED (1)' \
+    || fail "adverse: the item that DID get its request is not reported satisfied: $out"
+  printf '%s' "$out" | sed -n '/^SATISFIED/,$p' | grep -q 'other-item' \
+    && fail "adverse: the item holding the broken record was reported satisfied: $out"
+  pass "adverse: a skipped record stays could-not-observe on show and in the sweep, and never satisfied"
+}
+
+test_unpositionable_subject_always_refuses() {
+  local dir record shape content before out rc posts good
+  # EVERY WAY A SUBJECT CAN FAIL TO BE ESTABLISHED. None of these records is
+  # about the item being requested, and every one of them must still refuse:
+  # the skip requires unrelatedness POSITIVELY established, so "cannot tell"
+  # keeps the record in scope. Each shape is paired with the same bytes made
+  # readable, so no shape can pass by being ignored.
+  for shape in malformed missing-item null-item empty-item duplicate-item \
+               duplicate-identity two-documents unknown-schema missing-schema; do
+    dir=$(prepare_isolation_case "iso-subject-$shape")
+    record=$(other_item_record "$dir")
+    require_record_path "$record" "subject/$shape"
+    good=$(cat "$record")
+    case $shape in
+      malformed)         content=$(printf '%s' "$good" | head -c 40) ;;
+      missing-item)      content=$(printf '%s' "$good" | jq 'del(.identity.item)') ;;
+      null-item)         content=$(printf '%s' "$good" | jq '.identity.item = null') ;;
+      empty-item)        content=$(printf '%s' "$good" | jq '.identity.item = ""') ;;
+      duplicate-item)    content=$(printf '%s' "$good" | jq -c '.' | sed 's/"item":"[^"]*"/"item":"alpha","item":"beta"/') ;;
+      duplicate-identity) content=$(printf '%s\n%s' \
+                            "$(printf '%s' "$good" | jq -c '.' | sed 's/}$//')" \
+                            "$(printf '%s' "$good" | jq -c '{identity:.identity}' | sed -e 's/^{/,/')") ;;
+      two-documents)     content=$(printf '%s\n%s' "$(printf '%s' "$good" | jq -c '.')" \
+                            "$(printf '%s' "$good" | jq -c '.identity.item = "second"')") ;;
+      unknown-schema)    content=$(printf '%s' "$good" | jq '.schema = "some-other-record.v9"') ;;
+      missing-schema)    content=$(printf '%s' "$good" | jq 'del(.schema)') ;;
+    esac
+    printf '%s\n' "$content" > "$record"
+    # NON-VACUITY: every shape but one must still be PARSABLE. Without this the
+    # first fixture that accidentally emitted unbalanced bytes would refuse for
+    # the malformed reason while wearing another shape's name, and the case
+    # would report a control it never ran. One of these did exactly that.
+    if [ "$shape" = malformed ]; then
+      jq -e . "$record" >/dev/null 2>&1 \
+        && fail "subject/$shape: the fixture produced parsable JSON, so nothing here is testing malformed bytes"
+    else
+      jq -e . "$record" >/dev/null 2>&1 \
+        || fail "subject/$shape: the fixture produced unparsable JSON, so this case is testing malformed bytes rather than $shape"
+    fi
+    before=$(wc -l < "$dir/forge/post_log")
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -ne 0 ] \
+      || fail "subject/$shape: a record with no establishable subject permitted an emit: $out"
+    posts=$(posts_since "$dir" "$before")
+    [ "$posts" -eq 0 ] \
+      || fail "subject/$shape: $posts request(s) posted while a subject could not be established"
+
+    # THE PAIRED GREEN. The same store, the same request, the same everything
+    # except that the record now says plainly whose it is. Without this half a
+    # shape could "pass" because the fixture never let any emit through.
+    printf '%s\n' "$good" > "$record"
+    before=$(wc -l < "$dir/forge/post_log")
+    out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+    [ "$rc" -eq 0 ] \
+      || fail "subject/$shape: the paired readable record refused the same request, exit $rc: $out"
+    posts=$(posts_since "$dir" "$before")
+    [ "$posts" -eq 1 ] \
+      || fail "subject/$shape: the paired readable case posted $posts requests, expected 1"
+  done
+  pass "subject: malformed, absent, empty, ambiguous and foreign-schema records all refuse, and their readable pairs do not"
+}
+
+test_isolation_preserves_head_and_idempotency() {
+  local dir record before out rc posts
+  dir=$(prepare_isolation_case iso-head)
+  record=$(other_item_record "$dir")
+  require_record_path "$record" "isolation head"
+  rm -rf "$dir/home/projects/other"
+
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 \
+    || fail "isolation head: the first exact request was refused"
+
+  # IDEMPOTENCY IS NOT WEAKENED BY THE SKIP. Five further cycles at the same
+  # identity, exactly as a repeating scheduler produces them.
+  before=$(wc -l < "$dir/forge/post_log")
+  for _ in 1 2 3 4 5; do
+    out=$(run_ob "$dir" emit waiting-item 2>&1) \
+      || fail "isolation head: a repeat cycle errored: $out"
+    printf '%s' "$out" | grep -q 'already requested' \
+      || fail "isolation head: a repeat cycle did not report the existing request: $out"
+  done
+  posts=$(posts_since "$dir" "$before")
+  [ "$posts" -eq 0 ] \
+    || fail "isolation head: five repeat cycles posted $posts further requests, expected 0"
+
+  # AND THE WRONG HEAD IS STILL THE WRONG HEAD. Exact-head binding is the one
+  # thing a scope test must never loosen: the request just made says nothing
+  # about a head it was not bound to.
+  #
+  # Moved at the DECLARATION, which is what a typed gate binds to. Moving the
+  # forge shim instead would leave the declared head standing and the item
+  # satisfied, and the control would then be measuring the fixture.
+  jq -n --arg h "$HEAD_B" '{gate:"INDEPENDENT_BROWSER_REVIEW_REQUIRED",head:$h}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  out=$(run_ob "$dir" check 2>&1); rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "isolation head: expected the sweep to stay could-not-observe alongside the broken record, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_STALE_HEAD' \
+    || fail "isolation head: a moved head no longer reports its previous request inapplicable: $out"
+  pass "isolation: repeat cycles still dedupe, and a moved head still invalidates the request"
+}
+
+# --- sweep size --------------------------------------------------------------
+
+test_sweep_survives_a_row_set_larger_than_one_argument() {
+  local dir repo out rc bytes rows limit=131072 i item base
+  # A ROW SET HAS NO BOUND THIS COMMAND CONTROLS - it is however many branches
+  # and waiting items a fleet has. The fold used to hand its result to a second
+  # jq as `--argjson rows "$row"`, and Linux caps ONE argument at
+  # MAX_ARG_STRLEN (128KB), far below the 2MB total, so past that size the
+  # sweep died with "Argument list too long" and printed no rows and no reason
+  # - a sweep that reports nothing while looking exactly like a quiet fleet.
+  #
+  # This was unreachable while firstmate's own repository could not be resolved
+  # and contributed one clone-unreadable row. It became reachable the moment it
+  # could: that repository alone carries a few hundred candidate branches.
+  dir=$(new_case sweepsize)
+  printf -- '- demo [no-mistakes] - demo project (added 2026-08-16)\n' > "$dir/home/data/projects.md"
+  repo="$dir/home/projects/demo"
+  git -C "$repo" remote add origin https://github.com/o/demo.git 2>/dev/null || true
+  git -C "$repo" branch -M main
+  # Unlanded work with no lifecycle record: each ref becomes one
+  # WORK_STATE_UNOBSERVED row and spends no forge probe, so the row set grows
+  # without the sweep going anywhere near the network.
+  git -C "$repo" checkout -q -b unlanded
+  printf 'unlanded\n' > "$repo/f"
+  git -C "$repo" add f
+  git -C "$repo" -c commit.gpgsign=false \
+    -c user.name=Fixture -c user.email=fixture@example.com \
+    commit -qm 'never landed'
+  base=$(git -C "$repo" rev-parse HEAD)
+  git -C "$repo" checkout -q main
+  # Long names so the byte target is reached with few refs; one batched update
+  # rather than several hundred git invocations.
+  item=$(printf 'w%.0s' $(seq 1 200))
+  {
+    for i in $(seq 1 350); do printf 'create refs/heads/fm/%s-%s %s\n' "$item" "$i" "$base"; done
+  } | git -C "$repo" update-ref --stdin \
+    || fail "sweep size: the fixture could not create its refs"
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[]}}' > "$dir/snap.json"
+
+  out=$(run_ob "$dir" check --json 2>"$dir/sweep.err"); rc=$?
+  grep -q 'Argument list too long' "$dir/sweep.err" \
+    && fail "sweep size: the sweep died on argument size: $(cat "$dir/sweep.err")"
+  [ "$rc" -eq 4 ] \
+    || fail "sweep size: expected could-not-observe over unrecorded work, exit $rc"
+  rows=$(printf '%s' "$out" | jq '.rows | length' 2>/dev/null) \
+    || fail "sweep size: the sweep produced no readable document"
+  [ "$rows" -ge 350 ] \
+    || fail "sweep size: expected at least 350 rows, got $rows"
+
+  # NON-VACUITY: the fixture has to actually reach the regime that used to fail.
+  # A row set comfortably under the cap would pass this case without exercising
+  # anything it is about.
+  bytes=$(printf '%s' "$out" | jq -c '.rows' | wc -c)
+  [ "$bytes" -gt "$limit" ] \
+    || fail "sweep size: the row set is only $bytes bytes, under the $limit-byte single-argument cap, so this control did not reach the failing regime"
+  pass "sweep size: a row set past the $limit-byte single-argument cap still reports every row"
+}
+
+# --- the operational home's own repository -----------------------------------
+
+# A home that IS the checkout of one registered project - firstmate's own shape,
+# and the only project whose clone is not under $PROJECTS.
+prepare_home_repo_case() {  # <name> <register:yes|no> -> prints case dir
+  local name=$1 register=$2 dir home head
+  dir="$TMP_ROOT/$name"
+  mkdir -p "$dir"
+  make_gh "$dir"
+  # The home directory's NAME is the project name, and the home is the top level
+  # of that repository.
+  home="$dir/selfrepo"
+  mkdir -p "$home/data" "$home/config" "$home/state" "$home/projects"
+  git -C "$home" init -q
+  git -C "$home" config user.email fixture@example.com
+  git -C "$home" config user.name Fixture
+  printf 'a\n' > "$home/f"
+  git -C "$home" add f
+  git -C "$home" -c commit.gpgsign=false commit -qm a
+  git -C "$home" checkout -q -b fm/self-item
+  printf 'b\n' > "$home/f"
+  git -C "$home" add f
+  git -C "$home" -c commit.gpgsign=false commit -qm 'work on firstmate itself'
+  head=$(git -C "$home" rev-parse HEAD)
+  : > "$home/data/projects.md"
+  if [ "$register" = yes ]; then
+    printf -- '- selfrepo [no-mistakes] - firstmate itself (added 2026-08-04)\n' \
+      > "$home/data/projects.md"
+  fi
+  configure_venue "$home"
+  mkdir -p "$home/data/self-item"
+  jq -n --arg gate INDEPENDENT_BROWSER_REVIEW_REQUIRED --arg head "$head" \
+    '{gate:$gate,head:$head}' > "$home/data/self-item/outbound-gate.json"
+  jq -n '{schema:"fm-fleet-snapshot.v1",backlog:{present:true,records:[
+    {order:1,state:"queued",structured:true,id:"self-item",
+     title:"work on firstmate itself",hold_kind:"outbound",
+     hold_reason:"awaiting browser sol",repo:"selfrepo",
+     pr_url:null,body_excerpt:null}]}}' > "$dir/snap.json"
+  printf '%s\n' "$dir"
+}
+
+run_home_repo() {  # <case-dir> <args...>
+  local dir=$1; shift
+  PATH="$dir/bin:$PATH" FORGE_DIR="$dir/forge" \
+    FM_HOME="$dir/selfrepo" FM_OUTBOUND_SNAPSHOT="$dir/snap.json" \
+    FM_OUTBOUND_BACKOFF_BASE=0 REAL_GIT="$(command -v git)" \
+    "$OB" "$@"
+}
+
+test_operational_home_repository_needs_no_environment_override() {
+  local dir out rc posts
+  # RED FIRST, and for the RIGHT reason. The identical home with the project
+  # absent from the registry: the resolution requires registry evidence, so the
+  # exact head is unreadable, the binding is incomplete, and nothing is posted.
+  # This is what makes the green half evidence of a registry-backed resolution
+  # rather than of a home path being adopted on sight.
+  dir=$(prepare_home_repo_case selfrepo-unregistered no)
+  out=$(run_home_repo "$dir" emit self-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "home repo RED: an unregistered project resolved to the home anyway: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_INCOMPLETE_BINDING' \
+    || fail "home repo RED: refused for the wrong reason: $out"
+  printf '%s' "$out" | grep -q 'missing head' \
+    || fail "home repo RED: the refusal did not name the unreadable head: $out"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+    || fail "home repo RED: a request was posted from an unresolvable binding"
+
+  # GREEN. Registered, and the home is that repository's top level. No
+  # FM_PROJECTS_OVERRIDE is set anywhere in run_home_repo - that variable is
+  # test isolation, and needing it to reach this project in production was the
+  # defect.
+  dir=$(prepare_home_repo_case selfrepo-registered yes)
+  [ -z "${FM_PROJECTS_OVERRIDE:-}" ] \
+    || fail "home repo: the environment already carried FM_PROJECTS_OVERRIDE, so this proves nothing"
+  out=$(run_home_repo "$dir" emit self-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] \
+    || fail "home repo GREEN: the home's own repository still could not be resolved, exit $rc: $out"
+  posts=$(wc -l < "$dir/forge/post_log")
+  [ "$posts" -eq 1 ] \
+    || fail "home repo GREEN: expected one posted request, got $posts"
+  out=$(run_home_repo "$dir" check 2>&1)
+  # THE RESOLUTION'S OWN SIGNATURE, asserted instead of the whole-sweep exit.
+  # Resolving this project also makes its branches visible to the inventory
+  # pass for the first time, so the sweep legitimately carries rows this
+  # control is not about; pinning the exit would make it fail for them.
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLONE_UNREADABLE' \
+    && fail "home repo GREEN: the project's clone is still unreadable, so nothing was resolved: $out"
+  printf '%s' "$out" | sed -n '/^SATISFIED/,$p' | grep -q 'self-item' \
+    || fail "home repo GREEN: the resolved request is not reported satisfied: $out"
+  pass "home repo: a registered project whose checkout IS the home resolves with no environment override"
+}
+
+test_home_repository_never_displaces_an_ordinary_clone() {
+  local dir out rc head_clone head_home
+  # ALL OTHER PROJECT RESOLUTION IS UNCHANGED, and the precedence is the reason.
+  # A real clone under $PROJECTS always wins, so a home that does keep one is
+  # untouched by this resolution. Driven by giving the clone and the home
+  # DIFFERENT heads for the same branch and asserting which one was read.
+  dir=$(prepare_home_repo_case selfrepo-clone-wins yes)
+  # Cloned from an UNRELATED repository on purpose. Cloning the home instead
+  # shares its objects, so the home's head resolves in the clone too and the
+  # case cannot tell which repository was read - it passes either way, which is
+  # no control at all.
+  git clone -q --no-hardlinks "$HEAD_REPO" "$dir/selfrepo/projects/selfrepo" 2>/dev/null \
+    || fail "clone precedence: the fixture clone could not be created"
+  head_home=$(git -C "$dir/selfrepo" rev-parse refs/heads/fm/self-item)
+  git -C "$dir/selfrepo/projects/selfrepo" rev-parse --verify --quiet "$head_home^{object}" >/dev/null 2>&1 \
+    && fail "clone precedence: the fixture clone already contains the home's head, so it proves nothing"
+  head_clone=$(git -C "$dir/selfrepo/projects/selfrepo" rev-parse HEAD)
+  [ "$head_clone" != "$head_home" ] \
+    || fail "clone precedence: the fixture failed to make the two repositories differ"
+
+  # The declared head is the home's, and it does NOT exist in the clone. If the
+  # clone is what gets read - which is the unchanged behaviour - that head does
+  # not resolve and the binding is refused.
+  out=$(run_home_repo "$dir" emit self-item 2>&1); rc=$?
+  [ "$rc" -ne 0 ] \
+    || fail "clone precedence: the home displaced a real clone under \$PROJECTS: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_INCOMPLETE_BINDING' \
+    || fail "clone precedence: refused for the wrong reason: $out"
+  [ "$(wc -l < "$dir/forge/post_log")" -eq 0 ] \
+    || fail "clone precedence: a request was posted against the wrong repository"
+  pass "clone precedence: an existing clone under \$PROJECTS still wins over the home"
+}
+
 # --- run ---------------------------------------------------------------------
 
 test_no_request_is_red
@@ -2317,5 +3706,503 @@ test_could_not_observe_has_its_own_section
 test_inbound_sender_must_be_exactly_one_closed_value
 test_inbound_ruling_with_wrong_sender_wakes_nothing
 test_every_declared_token_has_an_emit_site
+
+
+# --- clause 6: an exact ruling wakes once, and a replay writes nothing -------
+
+test_replaying_the_same_ruling_writes_nothing() {
+  local dir rid head before after out rc
+  dir=$(new_case rulingreplay)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "replay: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 90 approved
+  run_ob "$dir" ruling --request "$rid" --comment 90 --issue 2 >/dev/null 2>&1 \
+    || fail "replay: the ruling did not join"
+  before=$(jq -S . "$dir/home/data/outbound-artifacts/$rid.json")
+
+  # A wake can arrive twice - a re-poll, a retried check, a restart mid-drain.
+  # Rejoining the identical comment rewrote `observed` and `updated` every time,
+  # so the record's own bytes stopped answering "has anything happened since?"
+  # and anything comparing it across a replay saw movement that was only the
+  # clock. This was caught by an end-to-end walk of the seam, not by a fixture:
+  # the two writes landed in the same second until the walk got slower.
+  out=$(run_ob "$dir" ruling --request "$rid" --comment 90 --issue 2 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "replay: rejoining the same ruling failed, exit $rc: $out"
+  after=$(jq -S . "$dir/home/data/outbound-artifacts/$rid.json")
+  [ "$before" = "$after" ] \
+    || fail "replay: rejoining the same ruling changed the record: $out"
+
+  # PAIRED: a DIFFERENT verdict on the same request is not a replay and must
+  # still be able to move the record, so the convergence above is recognition
+  # of sameness rather than a second ruling being ignored.
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 91 approved
+  run_ob "$dir" ruling --request "$rid" --comment 91 --issue 2 >/dev/null 2>&1 \
+    || fail "replay GREEN: a different ruling comment did not join"
+  [ "$(jq -r '.ruling.comment_id' "$dir/home/data/outbound-artifacts/$rid.json")" = 91 ] \
+    || fail "replay GREEN: a different ruling comment was ignored as a replay"
+  pass "replay: an identical ruling writes nothing, while a different one still joins"
+}
+
+# --- clause 1: the generation a request is bound to is ON THE WIRE ------------
+
+test_a_request_states_the_generation_it_is_bound_to() {
+  local dir body tree
+  dir=$(new_case wiregen)
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  tree=$(git -C "$dir/home/projects/demo" rev-parse "$HEAD_A^{tree}")
+  mkdir -p "$dir/home/data/waiting-item"
+  jq -n --arg gate AWAITING_BROWSER_SOL --arg head "$HEAD_A" \
+        --arg tree "$tree" --arg pol gen-7 \
+    '{gate:$gate,head:$head,tree:$tree,policy_generation:$pol}' \
+    > "$dir/home/data/waiting-item/outbound-gate.json"
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "wire: emit failed"
+  body=$(cat "$dir/forge/last_request_body")
+
+  # A REVIEWER MUST BE ABLE TO SEE WHICH GENERATION THEY ARE ANSWERING. The
+  # tree and the policy generation already join the request IDENTITY, so a
+  # request under a moved generation is a different question and gets a
+  # different id - but only the digest knew that. A ruling that cannot name the
+  # generation it rests on cannot be checked against a later movement by
+  # anything a human or a reviewer can read.
+  printf '%s' "$body" | grep -q "^exact-tree: $tree\$" \
+    || fail "wire: the request does not state the tree it is bound to: $body"
+  printf '%s' "$body" | grep -q '^policy-generation: gen-7$' \
+    || fail "wire: the request does not state the policy generation it is bound to: $body"
+
+  # PAIRED: a request carrying no governed generation keeps exactly the body it
+  # has always had, so this is an addition and not a wire change for everyone.
+  local dir2 body2
+  dir2=$(new_case wirebare)
+  declare_gate "$dir2/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir2/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir2" emit waiting-item >/dev/null 2>&1 || fail "wire bare: emit failed"
+  body2=$(cat "$dir2/forge/last_request_body")
+  printf '%s' "$body2" | grep -q '^exact-tree:' \
+    && fail "wire bare: a request with no governed tree still stated one: $body2"
+  printf '%s' "$body2" | grep -q '^policy-generation:' \
+    && fail "wire bare: a request with no policy generation still stated one: $body2"
+  printf '%s' "$body2" | grep -q "^exact-head: $HEAD_A\$" \
+    || fail "wire bare: the unchanged body lost its exact head: $body2"
+  pass "wire: a request states the generation it is bound to, and omits it when it has none"
+}
+
+# --- clause 10: closure is an observation, not an announcement ---------------
+
+# Drive one request all the way to `resumed` with a landing authority minted for
+# it, and hand back "<case-dir> <rid> <head> <auth-id>".
+#
+# THE MINT IS REAL; ONLY THE ACT IS NOT. Performing an actual merge here would
+# test the forge, not this closure, so the authority is minted through its own
+# owner and then moved to the state a completed act would have left it in. That
+# keeps the thing under test - whether closure CHECKS the chain and re-observes
+# the target - separate from the thing being simulated.
+FIXTURE_DIR=
+FIXTURE_RID=
+FIXTURE_HEAD=
+FIXTURE_AUTH=
+resumed_with_authority() {  # <name> [<head>] -> FIXTURE_{DIR,RID,HEAD,AUTH}
+  local name=$1 want=${2:-$HEAD_A} auth_bin f out
+  FIXTURE_DIR=
+  FIXTURE_RID=
+  FIXTURE_HEAD=
+  FIXTURE_AUTH=
+  auth_bin="$ROOT/bin/fm-landing-authorization.sh"
+  FIXTURE_DIR=$(new_case "$name") || return 1
+  install_effect_gh_axi "$FIXTURE_DIR" || return 1
+  git -C "$FIXTURE_DIR/home/projects/demo" symbolic-ref --short HEAD \
+    > "$FIXTURE_DIR/forge/base_ref" || return 1
+  # THE HEAD IS A PARAMETER because the request identity is DERIVED from the
+  # governed subject, so two fixtures built the same way are not two requests -
+  # they are the same request id computed twice. A control that needs a foreign
+  # authority has to make the subject genuinely different, and the head is the
+  # load-bearing member of that identity.
+  mkdir -p "$FIXTURE_DIR/home/data/waiting-item"
+  jq -n --arg gate AWAITING_BROWSER_SOL --arg head "$want" '{gate:$gate,head:$head}' \
+    > "$FIXTURE_DIR/home/data/waiting-item/outbound-gate.json" || return 1
+  write_snapshot "$FIXTURE_DIR/snap.json" outbound 'awaiting browser sol' || return 1
+  out=$(run_ob "$FIXTURE_DIR" emit waiting-item 2>&1) \
+    || fail "closure fixture $name: emit failed: $out"
+  read -r FIXTURE_RID FIXTURE_HEAD <<< "$(emitted_rid_and_head "$FIXTURE_DIR")" \
+    || return 1
+  write_typed_ruling "$FIXTURE_DIR" "$FIXTURE_RID" waiting-item "$FIXTURE_HEAD" 80 approved
+  out=$(run_ob "$FIXTURE_DIR" ruling --request "$FIXTURE_RID" --comment 80 --issue 2 2>&1) \
+    || fail "closure fixture $name: ruling failed: $out"
+  out=$(PATH="$FIXTURE_DIR/bin:$PATH" FM_HOME="$FIXTURE_DIR/home" \
+    "$auth_bin" mint "$FIXTURE_RID" --effect pr-merge --method squash 2>&1) \
+    || fail "closure fixture $name: mint failed: $out"
+  out=$(run_ob "$FIXTURE_DIR" resume --request "$FIXTURE_RID" 2>&1) \
+    || fail "closure fixture $name: resume failed: $out"
+  for f in "$FIXTURE_DIR/home/data/landing-authorizations"/*.json; do
+    [ -f "$f" ] || continue
+    FIXTURE_AUTH=$(jq -r '.authorization_id' "$f") || return 1
+    [ "$(jq -r '.effect.executable_path' "$f")" = "$FIXTURE_DIR/bin/gh-axi" ] \
+      || fail "closure fixture $name: mint did not pin the fixture gh-axi"
+    jq '.state = "spent"
+        | .spend = {started:"2026-08-30T00:00:00Z", act_digest:"x",
+                    observed_head:.grant.head, outcome:"applied",
+                    finished:"2026-08-30T00:00:01Z", evidence:null}' \
+      "$f" > "$f.tmp" && mv "$f.tmp" "$f" || return 1
+    break
+  done
+  [ -n "$FIXTURE_AUTH" ] || return 1
+}
+
+test_a_closure_may_not_omit_an_effect_it_had() {
+  local dir rid head auth out rc auth_file saved_auth
+  resumed_with_authority closeomit \
+    || fail "closure: the fixture could not reach a resumed request with an authority"
+  dir=$FIXTURE_DIR rid=$FIXTURE_RID head=$FIXTURE_HEAD auth=$FIXTURE_AUTH
+
+  auth_file="$dir/home/data/landing-authorizations/$auth.json"
+  saved_auth=$(jq -c . "$auth_file")
+  jq '.request_id = "fm-ob-aaaaaaaaaaaa"' "$auth_file" > "$dir/substituted-omission.json"
+  mv "$dir/substituted-omission.json" "$auth_file"
+  out=$(run_ob "$dir" close --request "$rid" --disposition 'landed, all good' 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "closure omission RED: an invalid store record returned $rc: $out"
+  printf '%s' "$out" | grep -q "FM_AUTH_RECORD_UNREADABLE.*$auth" \
+    || fail "closure omission RED: the canonical refusal did not name $auth: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = resumed ] \
+    || fail "closure omission RED: an unvalidated store record still closed the request"
+  printf '%s\n' "$saved_auth" > "$auth_file"
+
+  # RED: a landing authority was minted and spent for this request, and the
+  # closure says only that somebody believes it went well. If naming the
+  # authority were optional, every post-effect closure could become an
+  # effect-free one by leaving it out - and the verification would be skipped
+  # exactly when it matters.
+  out=$(run_ob "$dir" close --request "$rid" --disposition 'landed, all good' 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "closure RED: a spent landing authority closed on prose alone: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "closure RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = resumed ] \
+    || fail "closure RED: the refused closure still moved the record"
+  pass "closure: a request that had an effect authorized may not close on a disposition sentence"
+}
+
+test_a_closure_checks_the_chain_and_re_observes_the_target() {
+  local dir rid head auth out rc clone ref gen other auth_file saved_auth
+  resumed_with_authority closechain \
+    || fail "chain: the fixture could not reach a resumed request with an authority"
+  dir=$FIXTURE_DIR rid=$FIXTURE_RID head=$FIXTURE_HEAD auth=$FIXTURE_AUTH
+  clone="$dir/home/projects/demo"
+  ref="refs/heads/$(git -C "$clone" rev-parse --abbrev-ref HEAD)"
+  gen=$(git -C "$clone" rev-parse HEAD)
+
+  auth_file="$dir/home/data/landing-authorizations/$auth.json"
+  saved_auth=$(jq -c . "$auth_file")
+  jq '.effect.digest = ("0" * 64)' "$auth_file" > "$dir/substituted.json"
+  mv "$dir/substituted.json" "$auth_file"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -eq 4 ] || fail "chain RED: a substituted authorization returned $rc: $out"
+  printf '%s' "$out" | grep -q 'FM_AUTH_RECORD_UNREADABLE' \
+    || fail "chain RED: canonical authorization refusal was not named: $out"
+  printf '%s\n' "$saved_auth" > "$auth_file"
+
+  # RED 1: an authority that is real, valid and belongs to ANOTHER request is
+  # foreign to this closure however good it is in its own right.
+  local orid
+  resumed_with_authority closeother "$HEAD_B" \
+    || fail "chain: the second fixture failed"
+  orid=$FIXTURE_RID other=$FIXTURE_AUTH
+  [ "$orid" != "$rid" ] \
+    || fail "chain: the foreign fixture produced this same request, so it controls nothing"
+  cp "$TMP_ROOT/closeother/home/data/landing-authorizations/$other.json" \
+     "$dir/home/data/landing-authorizations/$other.json"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$other" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: a foreign authority closed this request: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_AUTHORITY_FOREIGN' \
+    || fail "chain RED: refused for the wrong reason: $out"
+
+  # RED 2: a generation the target ref is NOT actually at. This is the step the
+  # disposition sentence was standing in for - a merge command exits 0 for a
+  # merge that was queued, superseded, or performed against another head.
+  #
+  # The wrong value is chosen against what the ref is OBSERVED at rather than
+  # picked from the fixture's two heads: the clone's branch happens to sit at
+  # HEAD_B, so naming HEAD_B here would have asserted the ref was wrong while
+  # handing it the right answer, and the control would have passed by agreeing.
+  local wrong=$HEAD_A
+  [ "$wrong" != "$gen" ] || wrong=$HEAD_B
+  [ "$wrong" != "$gen" ] \
+    || fail "chain: no generation distinct from the observed ref was available"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$wrong" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: a generation the ref is not at was accepted: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "chain RED: refused for the wrong reason: $out"
+
+  git -C "$clone" branch closure-decoy "$gen"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref refs/heads/closure-decoy --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: an unbound PR target ref closed the merge: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "chain RED: the unbound PR target was refused for the wrong reason: $out"
+
+  # RED 3: an authority that was granted but never spent is permission, not a
+  # landing.
+  jq '.state = "granted" | .spend = null' \
+    "$dir/home/data/landing-authorizations/$auth.json" > "$dir/g.json" \
+    && cp "$dir/g.json" "$dir/home/data/landing-authorizations/$auth.json"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "chain RED: an unspent authority closed an effect: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_CLOSURE_UNPROVEN' \
+    || fail "chain RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = resumed ] \
+    || fail "chain RED: a refused closure still moved the record"
+
+  # GREEN: the spent authority for this exact request, and the generation the
+  # ref is genuinely observed at.
+  jq '.state = "spent"
+      | .spend = {started:"2026-08-30T00:00:00Z", act_digest:"x",
+                  observed_head:.grant.head, outcome:"applied",
+                  finished:"2026-08-30T00:00:01Z", evidence:null}' \
+    "$dir/home/data/landing-authorizations/$auth.json" > "$dir/s.json" \
+    && cp "$dir/s.json" "$dir/home/data/landing-authorizations/$auth.json"
+  out=$(run_ob "$dir" close --request "$rid" --disposition landed \
+    --authorization "$auth" --target-ref "$ref" --target-generation "$gen" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "chain GREEN: a correct post-effect closure was refused, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = closed ] \
+    || fail "chain GREEN: the closure did not complete"
+  [ "$(jq -r '.disposition.effect.target_generation' "$dir/home/data/outbound-artifacts/$rid.json")" = "$gen" ] \
+    || fail "chain GREEN: the closure is not bound to the generation it observed"
+  [ "$(jq -r '.disposition.effect.authorization' "$dir/home/data/outbound-artifacts/$rid.json")" = "$auth" ] \
+    || fail "chain GREEN: the closure is not bound to the authority it consumed"
+  pass "closure: the consumed chain is checked and the target generation is re-observed"
+}
+
+# --- clause 3: a wait may not be entered without a request backing it --------
+
+test_a_wait_may_not_be_declared_without_a_backing_request() {
+  local dir out rc rid head
+  dir=$(new_case declareunbacked)
+  # A PROSE row, deliberately: this is the state an item is in BEFORE anything
+  # was asked. `declare` is the promotion to a typed declaration, and it is that
+  # promotion which must refuse while nothing backs it.
+  write_snapshot "$dir/snap.json" external 'awaiting browser sol'
+
+  # RED: nothing has been asked, so the item may not enter the wait. This is the
+  # condition seven real items sat in - waiting with no artifact - and it is
+  # refused HERE rather than reported by a later sweep.
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_A" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "declare RED: an unbacked wait was declared: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "declare RED: refused for the wrong reason: $out"
+  [ ! -e "$dir/home/data/waiting-item/outbound-gate.json" ] \
+    || fail "declare RED: a refused declaration still wrote the wait"
+
+  # GREEN: the same call once the question has actually been asked.
+  out=$(run_ob "$dir" emit waiting-item 2>&1) || fail "declare: emit failed: $out"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "declare GREEN: a backed wait was refused, exit $rc: $out"
+  [ "$(jq -r '.request' "$dir/home/data/waiting-item/outbound-gate.json")" = "$rid" ] \
+    || fail "declare GREEN: the declaration does not name the request backing it"
+
+  # RED: a DIFFERENT head is a different question, and the request that exists
+  # does not back it.
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_B" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "declare head RED: a wait on an unasked head was declared: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "declare head RED: refused for the wrong reason: $out"
+  pass "declare: a wait is refused until a live request backs that exact gate and head"
+}
+
+test_declare_preserves_the_generation_binding() {
+  local dir rid out rc tree
+  dir=$(prepare_subject_case declare-generation)
+  tree=$(git -C "$dir/home/projects/demo" rev-parse "$HEAD_A^{tree}")
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "$tree" pol-g1
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "declare generation: emit failed"
+  rid=$(emitted_request_id "$dir")
+
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "$tree" pol-g2
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_A" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "declare generation RED: a request for another policy backed this wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "declare generation RED: refused for the wrong reason: $out"
+
+  declare_subject "$dir" AWAITING_BROWSER_SOL "$HEAD_A" o/demo "$tree" pol-g1
+  run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$HEAD_A" >/dev/null 2>&1 \
+    || fail "declare generation GREEN: the exact generation did not admit its wait"
+  jq -e --arg r "$rid" --arg t "$tree" \
+    '.repo == "o/demo" and .tree == $t and .policy_generation == "pol-g1" and .request == $r' \
+    "$dir/home/data/waiting-item/outbound-gate.json" >/dev/null \
+    || fail "declare generation GREEN: adding the request erased an applicability field"
+  write_typed_ruling "$dir" "$rid" waiting-item "$HEAD_A" 81 approved
+  run_ob "$dir" ruling --request "$rid" --comment 81 --issue 2 >/dev/null 2>&1 \
+    || fail "declare generation GREEN: the preserved generation read as stale at ruling time"
+  pass "declare generation: mismatched policy refuses and exact fields survive promotion"
+}
+
+test_a_retired_request_backs_no_wait() {
+  local dir out rc rid head
+  dir=$(new_case declareterminal)
+  write_snapshot "$dir/snap.json" external 'awaiting browser sol'
+  out=$(run_ob "$dir" emit waiting-item 2>&1) || fail "terminal: emit failed: $out"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+
+  # GREEN half first: while the request is live it backs the wait.
+  run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" >/dev/null 2>&1 \
+    || fail "terminal GREEN: a live request did not back the wait"
+  rm -f "$dir/home/data/waiting-item/outbound-gate.json"
+
+  # RED: retiring it as malformed must not leave something a wait can rest on.
+  # A quarantined request is preserved as evidence precisely because it is NOT
+  # an artifact, and this is the path where that distinction is load-bearing.
+  run_ob "$dir" quarantine --request "$rid" --ruling 'https://example.invalid/c/1' >/dev/null 2>&1 \
+    || fail "terminal: quarantine failed"
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "terminal RED: a quarantined request backed a wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "terminal RED: refused for the wrong reason: $out"
+  [ ! -e "$dir/home/data/waiting-item/outbound-gate.json" ] \
+    || fail "terminal RED: a refused declaration still wrote the wait"
+  pass "declare: a retired request is evidence and never backs a wait"
+}
+
+# --- clause 7: REVISE routes to correction, and transfers nothing ------------
+
+test_a_revision_never_resumes_the_candidate_it_judged() {
+  local dir out rc rid head
+  dir=$(new_case revise)
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "revise: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 70 REVISE
+  run_ob "$dir" ruling --request "$rid" --comment 70 --issue 2 >/dev/null 2>&1 \
+    || fail "revise: the REVISE ruling did not join"
+
+  # RED: `ruled` says a verdict arrived, never that it let the work continue.
+  # Resuming here is how a body that said "change this" clears the wait it
+  # should have extended.
+  out=$(run_ob "$dir" resume --request "$rid" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "revise RED: a REVISE ruling resumed the item it rejected: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_REVISION_REQUIRED' \
+    || fail "revise RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = ruled ] \
+    || fail "revise RED: the refused resume still moved the record"
+
+  # PAIRED GREEN: the same path with a non-revising verdict still resumes, so
+  # the refusal above is the verdict being classified and not resume breaking.
+  local dir2 rid2 head2
+  dir2=$(new_case reviseok)
+  declare_gate "$dir2/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir2/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir2" emit waiting-item >/dev/null 2>&1 || fail "revise GREEN: emit failed"
+  read -r rid2 head2 <<< "$(emitted_rid_and_head "$dir2")"
+  write_typed_ruling "$dir2" "$rid2" waiting-item "$head2" 71 approved
+  run_ob "$dir2" ruling --request "$rid2" --comment 71 --issue 2 >/dev/null 2>&1 \
+    || fail "revise GREEN: the approving ruling did not join"
+  out=$(run_ob "$dir2" resume --request "$rid2" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "revise GREEN: a non-revising verdict failed to resume, exit $rc: $out"
+  pass "revise: a revising verdict refuses to resume, while another verdict still does"
+}
+
+test_a_revision_is_retired_for_correction_and_transfers_nothing() {
+  local dir out rc rid head auth before successor
+  dir=$(new_case revisecorrect)
+  install_effect_gh_axi "$dir"
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correct: emit failed"
+  read -r rid head <<< "$(emitted_rid_and_head "$dir")"
+  write_typed_ruling "$dir" "$rid" waiting-item "$head" 72 REVISE
+  run_ob "$dir" ruling --request "$rid" --comment 72 --issue 2 >/dev/null 2>&1 \
+    || fail "correct: the REVISE ruling did not join"
+
+  # A REVISE RULING IS NOT AUTHORITY. The closed list in the authorization owner
+  # cannot classify it, so it grants nothing - checked here rather than assumed,
+  # because "REVISE authorizes nothing" is a claim about a different module.
+  auth="$ROOT/bin/fm-landing-authorization.sh"
+  if [ -x "$auth" ]; then
+    out=$(PATH="$dir/bin:$PATH" FM_HOME="$dir/home" "$auth" mint "$rid" \
+      --effect pr-merge --method squash 2>&1); rc=$?
+    [ "$rc" -ne 0 ] || fail "correct: a REVISE ruling minted a landing authority: $out"
+  fi
+
+  out=$(run_ob "$dir" correct --request "$rid" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "correct: retiring a revised request failed, exit $rc: $out"
+  [ "$(jq -r '.state' "$dir/home/data/outbound-artifacts/$rid.json")" = revised ] \
+    || fail "correct: the record was not retired for correction"
+  # THE EVIDENCE SURVIVES. A revision retires the request; it never erases the
+  # ruling that demanded it.
+  [ "$(jq -r '.ruling.verdict' "$dir/home/data/outbound-artifacts/$rid.json")" = REVISE ] \
+    || fail "correct: retiring the request lost the ruling that demanded it"
+
+  before=$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")
+  set_head "$dir" "$HEAD_B"
+  declare_gate "$dir/home" AWAITING_BROWSER_SOL "$HEAD_B"
+  out=$(run_ob "$dir" emit waiting-item 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "correct: emitting the corrected candidate failed, exit $rc: $out"
+  successor=$(printf '%s' "$out" | sed -n 's/^requested: \([^ ]*\).*/\1/p')
+  [ -n "$successor" ] && [ "$successor" != "$rid" ] \
+    || fail "correct: the corrected candidate did not ask a new question: $out"
+  [ "$(cksum < "$dir/home/data/outbound-artifacts/$rid.json")" = "$before" ] \
+    || fail "correct: emitting the corrected candidate rewrote the revised record"
+
+  # NOTHING TRANSFERS: the retired request backs no wait and is adopted by no
+  # fresh emit, so the corrected candidate must ask its own question.
+  rm -f "$dir/home/data/waiting-item/outbound-gate.json"
+  out=$(run_ob "$dir" declare waiting-item --gate AWAITING_BROWSER_SOL --head "$head" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "correct: a revised request still backed a wait: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_WAIT_UNBACKED' \
+    || fail "correct: the revised request was refused for the wrong reason: $out"
+
+  # RED: correction is not a way to discard an inconvenient verdict.
+  local dir2 rid2 head2
+  dir2=$(new_case correctwrong)
+  declare_gate "$dir2/home" AWAITING_BROWSER_SOL
+  write_snapshot "$dir2/snap.json" outbound 'awaiting browser sol'
+  run_ob "$dir2" emit waiting-item >/dev/null 2>&1 || fail "correct RED: emit failed"
+  read -r rid2 head2 <<< "$(emitted_rid_and_head "$dir2")"
+  write_typed_ruling "$dir2" "$rid2" waiting-item "$head2" 73 approved
+  run_ob "$dir2" ruling --request "$rid2" --comment 73 --issue 2 >/dev/null 2>&1 \
+    || fail "correct RED: the approving ruling did not join"
+  out=$(run_ob "$dir2" correct --request "$rid2" 2>&1); rc=$?
+  [ "$rc" -ne 0 ] || fail "correct RED: an approved request was retired as revised: $out"
+  printf '%s' "$out" | grep -q 'FM_OUTBOUND_RULING_IDENTITY_MISMATCH' \
+    || fail "correct RED: refused for the wrong reason: $out"
+  [ "$(jq -r '.state' "$dir2/home/data/outbound-artifacts/$rid2.json")" = ruled ] \
+    || fail "correct RED: the refused correction still moved the record"
+  pass "revise: a revision is retired for correction, keeps its evidence, and hands on no authority"
+}
+
+test_a_wait_may_not_be_declared_without_a_backing_request
+test_declare_preserves_the_generation_binding
+test_replaying_the_same_ruling_writes_nothing
+test_a_request_states_the_generation_it_is_bound_to
+test_a_closure_may_not_omit_an_effect_it_had
+test_a_closure_checks_the_chain_and_re_observes_the_target
+test_a_retired_request_backs_no_wait
+test_a_revision_never_resumes_the_candidate_it_judged
+test_a_revision_is_retired_for_correction_and_transfers_nothing
+test_a_request_refuses_before_it_can_name_a_transport_venue_as_its_subject
+test_a_moved_policy_generation_is_a_different_question
+test_a_malformed_request_is_retired_through_the_owner_and_never_resurrected
+test_a_finished_request_is_annotated_rather_than_relabelled
+test_a_typed_gate_declaration_outranks_stale_hold_prose
+test_a_moved_gate_asks_its_own_question
+test_a_live_predecessor_is_retired_before_its_successor
+test_typed_ruling_form_is_read_field_by_field
+test_ruling_form_is_bounded_by_the_envelope
+test_a_ruling_without_a_top_level_head_refuses_without_writing
+test_typed_ruling_joins_and_records_its_verdict_verbatim
+test_typed_ruling_refuses_every_unjoinable_shape
+test_typed_ruling_is_discovered_by_poll
+test_a_hold_ruling_never_becomes_a_landing_authority
+test_unrelated_broken_record_does_not_block_an_exact_request
+test_unrelated_identity_mismatch_does_not_block_an_exact_request
+test_skipped_record_stays_adverse_everywhere_else
+test_unpositionable_subject_always_refuses
+test_isolation_preserves_head_and_idempotency
+test_sweep_survives_a_row_set_larger_than_one_argument
+test_operational_home_repository_needs_no_environment_override
+test_home_repository_never_displaces_an_ordinary_clone
 
 printf '\nall fm-outbound-artifact tests passed\n'
