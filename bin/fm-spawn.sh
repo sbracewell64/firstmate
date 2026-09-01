@@ -1038,7 +1038,10 @@ spawn_abort_cleanup() {
   release_slot_holder
   if [ "$status" -ne 0 ] && [ "$COMMIT_CUSTODY_CLAIM_PUBLISHED" = 1 ]; then
     if [ "$COMMIT_CUSTODY_PREVIOUS_META_PRESENT" = 1 ]; then
-      printf '%s\n' "$COMMIT_CUSTODY_PREVIOUS_META" > "$STATE/$ID.meta" 2>/dev/null || true
+      if ! printf '%s\n' "$COMMIT_CUSTODY_PREVIOUS_META" \
+        | fm_commit_identity_record_write "$STATE/$ID.meta"; then
+        echo "warning: could not restore the previous task record for $ID during abort cleanup" >&2
+      fi
     else
       rm -f "$STATE/$ID.meta"
     fi
@@ -1076,7 +1079,7 @@ spawn_abort_cleanup() {
       if ! fm_backend_remove_worktree orca "$ORCA_WORKTREE_ID" 2>/dev/null; then
         mkdir -p "$STATE" 2>/dev/null || true
         if [ -d "$STATE" ]; then
-          {
+          if ! {
             echo "window=$W"
             echo "worktree=${WT:-}"
             echo "project=$PROJ_ABS"
@@ -1091,7 +1094,9 @@ spawn_abort_cleanup() {
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
-          } > "$STATE/$ID.meta" 2>/dev/null || true
+          } | fm_commit_identity_record_write "$STATE/$ID.meta"; then
+            echo "warning: could not preserve the Orca task record for $ID during abort cleanup" >&2
+          fi
         fi
       fi
     fi

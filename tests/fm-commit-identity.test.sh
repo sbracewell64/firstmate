@@ -916,23 +916,21 @@ EOF
 }
 
 test_custody_claim_stays_observable_during_record_replacement() {
-  local root gate state project barrier staged target writer_pid contender_rc out
+  local root gate state project barrier target writer_pid contender_rc write_rc out
   root="$TMP_ROOT/custody-record-replacement"
   gate="$root/gate.git"
   state="$root/state"
   project="$root/project"
   barrier="$root/barrier"
   target="$state/holder.meta"
-  staged="$state/.holder.meta.staged"
   mkdir -p "$gate" "$state" "$project" || fail "record replacement fixture setup failed"
   printf 'project=%s\ncontribution_venue=venue/holder\ncommit_identity=Owner A <a@example.invalid>\ncommit_identity_gate=%s\n' "$project" "$gate" > "$target" || fail "custody claim setup failed"
-  printf 'window=full\nproject=%s\ncontribution_venue=venue/holder\ncommit_identity=Owner A <a@example.invalid>\ncommit_identity_gate=%s\n' "$project" "$gate" > "$staged" || fail "full record staging failed"
-  bash -c '
+  printf 'window=full\nproject=%s\ncontribution_venue=venue/holder\ncommit_identity=Owner A <a@example.invalid>\ncommit_identity_gate=%s\n' "$project" "$gate" | bash -c '
     set -u
-    root=$1 staged=$2 target=$3 barrier=$4
+    root=$1 target=$2 barrier=$3
     . "$root/bin/fm-commit-identity-lib.sh"
-    fm_commit_identity_record_replace "$staged" "$target" "$barrier"
-  ' _ "$CUSTODY_LIB_ROOT" "$staged" "$target" "$barrier" &
+    fm_commit_identity_record_write "$target" "$barrier"
+  ' _ "$CUSTODY_LIB_ROOT" "$target" "$barrier" &
   writer_pid=$!
   fm_test_reap "$writer_pid"
   fm_test_wait_file "$barrier/replace.arrived" 30 "$writer_pid" \
@@ -960,7 +958,21 @@ test_custody_claim_stays_observable_during_record_replacement() {
   [ "$contender_rc" -ne 0 ] || fail "a contender must not be admitted while a live custody record is replaced: $out"
   assert_grep 'window=full' "$target" "the complete record must replace the claim"
   assert_grep 'commit_identity=Owner A <a@example.invalid>' "$target" "the replacement must preserve the custody identity"
-  assert_absent "$staged" "the staged record must be consumed"
+  if find "$state" -maxdepth 1 -type f -name '.holder.meta.abort.*' | grep -q .; then
+    fail "the abort record writer must consume its staged file"
+  fi
+  : > "$root/blocked-barrier" || fail "blocked barrier setup failed"
+  printf 'replacement must fail\n' | bash -c '
+    set -u
+    root=$1 target=$2 barrier=$3
+    . "$root/bin/fm-commit-identity-lib.sh"
+    fm_commit_identity_record_write "$target" "$barrier"
+  ' _ "$CUSTODY_LIB_ROOT" "$target" "$root/blocked-barrier" 2>/dev/null
+  write_rc=$?
+  [ "$write_rc" -ne 0 ] || fail "an unusable replacement barrier must fail"
+  if find "$state" -maxdepth 1 -type f -name '.holder.meta.abort.*' | grep -q .; then
+    fail "a failed abort record write must remove its staged file"
+  fi
 
   : > "$state/unreadable.meta" || fail "unreadable record setup failed"
   out=$(bash -c '

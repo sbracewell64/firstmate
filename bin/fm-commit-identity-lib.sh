@@ -418,6 +418,21 @@ fm_commit_identity_record_replace() {
   mv -f "$staged" "$target"
 }
 
+fm_commit_identity_record_write() {
+  local target=${1:?} barrier=${2:-} target_dir staged
+  target_dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P) || return 1
+  staged="$target_dir/.${target##*/}.abort.${BASHPID:-$$}"
+  rm -f "$staged"
+  if ! cat > "$staged"; then
+    rm -f "$staged"
+    return 1
+  fi
+  if ! fm_commit_identity_record_replace "$staged" "$target" "$barrier"; then
+    rm -f "$staged"
+    return 1
+  fi
+}
+
 # --- ambient channels that outrank the binding -------------------------------
 #
 # Named, not counted: the caller has to repair a specific variable, and a bare
