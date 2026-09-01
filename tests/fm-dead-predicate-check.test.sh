@@ -198,6 +198,36 @@ test_function_keyword_definition_is_scanned() {
   pass "function-keyword definitions are reported unchecked"
 }
 
+test_quoted_awk_function_is_not_shell_syntax() {
+  local dir out rc
+  dir=$(fixture quoted-awk-function 'live_one() { return 0; }
+live_one
+awk '\''
+  function helper(value) { return value }
+  BEGIN { print helper("ok") }
+'\''')
+  out=$(FM_ROOT_OVERRIDE="$dir" "$CHECK" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "a quoted awk function was interpreted as shell syntax, exit $rc: $out"
+  pass "quoted awk functions are excluded before shell construct classification"
+}
+
+test_quoted_trap_handler_is_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-trap 'live_one() { return 0; }' "trap 'live_one INT' INT")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a trap handler named inside quotes read dead without a mark, exit $rc: $out"
+  pass "a trap handler named inside a quoted trap string reads alive without a mark"
+}
+
+test_quoted_first_word_outside_trap_is_not_a_call_site() {
+  local dir out rc
+  dir=$(fixture quoted-first-word 'dead_one() { return 0; }' "printf '%s\\n' 'dead_one INT'")
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a quoted first word outside a trap command counted as a call, exit $rc: $out"
+  pass "a quoted first word outside a trap command is not a call site"
+}
+
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
@@ -236,17 +266,9 @@ echo unrelated'
 
 test_quoted_trap_dispatch_named_by_a_site_counts() {
   local dir out rc
-  # The positive arm, and its own negative control in the same fixture shape. A
-  # single-quoted trap handler is a real call whose text this control's quote
-  # walk blanks by design, so it is exactly the case a mark exists for. The first
-  # arm proves the fixture is dead WITHOUT the mark, so the second arm's pass is
-  # attributable to the verified site rather than to the fixture being alive
-  # anyway.
-  dir=$(fixture trap-site-negative 'cleanup_handler() { return 0; }')
-  add_plain_consumer "$dir" 'trap '\''cleanup_handler'\'' EXIT'
-  out=$(run_check "$dir" 2>&1); rc=$?
-  [ "$rc" -eq 3 ] || fail "trap site: the unmarked control arm was not dead, exit $rc: $out"
-
+  # A quoted trap handler is already an admitted direct call form. The mark is
+  # still verified independently and must be accepted only when its pinned site
+  # names that executable handler dispatch.
   dir=$(fixture trap-site 'cleanup_handler() { return 0; }')
   add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
 trap '\''cleanup_handler'\'' EXIT'
@@ -254,7 +276,7 @@ trap '\''cleanup_handler'\'' EXIT'
   [ "$rc" -eq 0 ] || fail "a mark naming a real quoted-trap dispatch was refused, exit $rc: $out"
   printf '%s' "$out" | grep -q 'alive=1' \
     || fail "the verified mark did not resolve the predicate as consulted: $out"
-  pass "a mark naming a real quoted-trap dispatch counts, and the same fixture is dead without it"
+  pass "a mark naming a real quoted-trap dispatch is verified and counts"
 }
 
 test_mark_naming_a_wrong_line_is_refused() {
@@ -967,6 +989,9 @@ test_punctuated_heredoc_does_not_hide_later_functions
 test_escaped_heredoc_payload_is_not_code
 test_multiple_heredocs_are_reported_unchecked
 test_function_keyword_definition_is_scanned
+test_quoted_awk_function_is_not_shell_syntax
+test_quoted_trap_handler_is_a_call_site
+test_quoted_first_word_outside_trap_is_not_a_call_site
 test_explicit_indirect_call_counts
 test_fabricated_mark_with_no_dispatch_is_refused_and_dead
 test_quoted_trap_dispatch_named_by_a_site_counts

@@ -23,8 +23,9 @@
 # ACCEPTED SYNTAX. Definitions are unindented `name() {` lines. Calls begin a
 # command after indentation and optional shell control words, follow an unquoted
 # command boundary, occur in a command substitution, begin a canonical one-line
-# function body, name a trap handler, or are declared by a SITE-PINNED
-# `indirect-call:` mark this control re-reads and confirms. A `printf` command is
+# function body, name a trap handler - written bare as `trap fn SIG` or as the
+# first word of a quoted handler, `trap 'fn args' SIG` - or are declared by a
+# SITE-PINNED `indirect-call:` mark this control re-reads and confirms. A `printf` command is
 # accepted only as opaque data and never as call evidence.
 # Heredocs and every other function definition or function-name use are UNCHECKED
 # rather than interpreted or skipped.
@@ -196,6 +197,7 @@ function_has_call_site() {  # <function>
   # function dispatched there, not because the comment exists.
   mark_verified "$fn" && return 0
   for f in "${SCANNABLE[@]}"; do
+    grep -Eq "^[[:space:]]*trap[[:space:]]+['\"][[:space:]]*$fn([^A-Za-z0-9_]|\$)" "$f" && return 0
     if strip_cached "$f" | awk -v fn="$fn" '
       BEGIN { term = "([[:space:];|&(){}<>]|$)" }
       # A line that does not contain the name as a SUBSTRING cannot match any
@@ -379,19 +381,18 @@ strip_cached() {  # <file> - stripped text on stdout, exit status of strip_quote
 # "<line>:<text>" on stdout and 1 when the file is outside the accepted syntax.
 file_parse_refusal() {  # <file>
   local f=$1 hit strip_rc
-  hit=$({ grep -nF '<<' "$f" | grep -vF '<<<'
-          grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"
-        } | sed -n '1p')
-  if [ -z "$hit" ]; then
-    strip_cached "$f" >/dev/null
-    strip_rc=$?
-    case $strip_rc in
-      0) ;;
-      1) hit="0:unterminated quoted string" ;;
-      2) hit="0:legacy backtick substitution" ;;
-      *) hit="0:quote walk failed" ;;
-    esac
-  fi
+  strip_cached "$f" >/dev/null
+  strip_rc=$?
+  case $strip_rc in
+    0)
+      hit=$({ strip_cached "$f" | grep -nF '<<' | grep -vF '<<<'
+              strip_cached "$f" | grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]'
+            } | head -1)
+      ;;
+    1) hit="0:unterminated quoted string" ;;
+    2) hit="0:legacy backtick substitution" ;;
+    *) hit="0:quote walk failed" ;;
+  esac
   [ -z "$hit" ] && return 0
   printf '%s\n' "$hit"
   return 1
@@ -710,9 +711,9 @@ fi
 for f in "${FILES[@]}"; do
   [ -r "$f" ] || die "target is unreadable: $f" 4
   grep -qxF "$ENROL_MARKER" "$f" 2>/dev/null || die "target is not enrolled: $f" 4
-  unsupported=$({ grep -nF '<<' "$f" | grep -vF '<<<'; grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]' "$f"; } | sed -n '1p')
-  [ -z "$unsupported" ] \
-    || die "UNCHECKED $f:${unsupported%%:*} unsupported construct: ${unsupported#*:}" 4
+  if ! refusal=$(file_parse_refusal "$f"); then
+    die "UNCHECKED $f:${refusal%%:*} unsupported construct: ${refusal#*:}" 4
+  fi
 done
 
 # Partition every consumer into those this control can reason about and those it

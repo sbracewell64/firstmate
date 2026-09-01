@@ -606,15 +606,15 @@ fm_auth_plan_reset() {
 # exact line that passes that validator by name, and that control re-reads the
 # line rather than believing the mark, so a mark left behind when its dispatch
 # moved refuses instead of quietly keeping a dead predicate alive:
-#   indirect-call: fm_auth_head_shape_valid bin/fm-landing-authorization-lib.sh:639
-#   indirect-call: fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:635
-#   indirect-call: fm_auth_plan_number_valid bin/fm-landing-authorization-lib.sh:637
-#   indirect-call: fm_auth_plan_absolute_path_valid bin/fm-landing-authorization-lib.sh:624
-#   indirect-call: fm_auth_plan_exec_name_valid bin/fm-landing-authorization-lib.sh:618
-#   indirect-call: fm_auth_plan_digest_valid bin/fm-landing-authorization-lib.sh:626
-#   indirect-call: fm_auth_plan_target_ref_valid bin/fm-landing-authorization-lib.sh:664
-#   indirect-call: fm_auth_plan_member_of bin/fm-landing-authorization-lib.sh:641
-#   indirect-call: fm_auth_plan_literal bin/fm-landing-authorization-lib.sh:628
+#   indirect-call: fm_auth_head_shape_valid bin/fm-landing-authorization-lib.sh:734
+#   indirect-call: fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:730
+#   indirect-call: fm_auth_plan_number_valid bin/fm-landing-authorization-lib.sh:732
+#   indirect-call: fm_auth_plan_absolute_path_valid bin/fm-landing-authorization-lib.sh:719
+#   indirect-call: fm_auth_plan_exec_name_valid bin/fm-landing-authorization-lib.sh:713
+#   indirect-call: fm_auth_plan_digest_valid bin/fm-landing-authorization-lib.sh:721
+#   indirect-call: fm_auth_plan_target_ref_valid bin/fm-landing-authorization-lib.sh:759
+#   indirect-call: fm_auth_plan_member_of bin/fm-landing-authorization-lib.sh:736
+#   indirect-call: fm_auth_plan_literal bin/fm-landing-authorization-lib.sh:723
 #
 # Every mark above names a function this file really does call by name as an
 # argument. A mark is an assertion about how a call is written, so declaring one
@@ -949,7 +949,6 @@ claim_acquire() {  # <auth-id> [serial]
   if [ "$mode" = serial ]; then
     trap 'claim_release; exit 4' INT TERM
   else
-    # indirect-call: claim_terminate - dispatched by the quoted trap handlers.
     trap 'claim_terminate INT' INT
     trap 'claim_terminate TERM' TERM
   fi
