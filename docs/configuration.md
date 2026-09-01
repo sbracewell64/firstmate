@@ -268,7 +268,7 @@ Attestation-evidence publication uses the venue declaration only as destination 
 `work` maps each publishable ref to the semantic work identity it carries and its `role`; only `canonical` is actionable, so a retained predecessor stays readable and stays unable to publish.
 `placeholders` adds identities to the built-in list that is never a governed party whatever a policy says; that list is built in rather than configured because a placeholder a home could switch off is not a floor.
 
-The `author` and `committer` axes have a second consumer one step earlier in the same lifecycle: generated ship workflows require [`bin/fm-commit-identity.sh`](../bin/fm-commit-identity.sh) before the first commit so each reachable checkout and initialized pipeline repository resolves the party this file declares rather than whatever identity the machine happens to hold.
+The `author` and `committer` axes have a second consumer one step earlier in the same lifecycle: [`bin/fm-spawn.sh`](../bin/fm-spawn.sh) runs [`bin/fm-commit-identity.sh`](../bin/fm-commit-identity.sh) as a launch precondition, before allocating a task slot or backend endpoint, so each reachable checkout and required pipeline repository resolves the party this file declares rather than whatever identity the machine happens to hold.
 Because repository-local Git configuration exposes only one identity pair for both roles, `bind` refuses a policy whose author and committer differ when it must bind a repository commit channel; the `env` verb preserves distinct roles for callers that own the committing process.
 
 A GitHub email association is never maker proof: the mapping is what this file states, and an identity it does not state refuses.
