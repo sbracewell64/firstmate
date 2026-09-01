@@ -544,11 +544,17 @@ test_decision_surface_uses_live_pr_head() {
   sed -i "s/^pr_head=.*/pr_head=$HEAD_B/" "$dir/home/state/$TASK_ID.meta"
 
   run_surface_check "$dir"
-  [ "$SURFACE_RC" -eq 3 ] \
-    || fail "the surface compiled a stale recorded PR candidate (rc=$SURFACE_RC): $SURFACE_OUT"
+  [ "$SURFACE_RC" -eq 4 ] \
+    || fail "the surface did not keep a stale recorded PR candidate unevaluable (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'verdict: unevaluable' >/dev/null \
+    || fail "the stale-head candidate was not rendered as unevaluable: $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'LANDING_AUTHORITY_COULD_NOT_OBSERVE' >/dev/null \
+    || fail "the stale-head candidate did not produce an unobserved authority result: $SURFACE_OUT"
   printf '%s' "$SURFACE_OUT" | grep -F "live head=$HEAD_A differs from stale recorded head=$HEAD_B" >/dev/null \
     || fail "the surface refusal did not name the live and stale heads: $SURFACE_OUT"
-  pass "the decision surface refuses stale recorded PR heads against the live head"
+  printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
+    && fail "the stale-head candidate fabricated captain-required authority: $SURFACE_OUT"
+  pass "the decision surface keeps stale recorded PR heads unevaluable against the live head"
 }
 
 test_decision_surface_keeps_an_unobservable_candidate_unevaluable() {

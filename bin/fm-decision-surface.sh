@@ -790,10 +790,13 @@ check_landing_authority() {
     else
       fm_landing_candidate_resolve "$FM_HOME" "$TARGET" pr-live "$record" || seam_rc=$?
     fi
-    if [ -n "$FM_LANDING_CANDIDATE_HEAD" ]; then
+    if [ "$seam_rc" -ne 0 ]; then
+      fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+        "$TARGET candidate could not be observed: $FM_LANDING_CANDIDATE_REASON" "candidate=live"
+      rc=4
+    elif [ -n "$FM_LANDING_CANDIDATE_HEAD" ]; then
       fm_landing_authority_resolve "$FM_HOME" "$TARGET" "$FM_LANDING_SEAM_VERDICT" \
         "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || rc=$?
-      [ "$seam_rc" -eq 0 ] || [ "$rc" -ne 0 ] || rc=4
     else
       fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
         "$TARGET candidate could not be observed: $FM_LANDING_CANDIDATE_REASON" "candidate=live"
