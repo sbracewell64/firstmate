@@ -341,14 +341,14 @@ test_mark_with_trailing_fields_is_refused() {
   local dir out rc
   dir=$(fixture mark-trailing-fields 'cleanup_handler() { return 0; }')
   add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3 manufactured
-echo unrelated'
+trap '\''cleanup_handler'\'' EXIT'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 3 ] || fail "a mark outside the admitted grammar was accepted, exit $rc: $out"
   printf '%s' "$out" | grep -q 'REFUSED.*trailing fields outside the admitted' \
     || fail "the unparseable mark was not loudly refused: $out"
   printf '%s' "$out" | grep -q 'DEAD.*cleanup_handler' \
-    || fail "the unparseable mark kept its predicate alive: $out"
-  pass "a mark with trailing fields is refused as outside the admitted grammar"
+    && fail "the refused mark hid the independent quoted-trap dispatch: $out"
+  pass "a malformed mark is refused even when its named site is a real dispatch"
 }
 
 test_mark_site_in_an_unparseable_file_is_refused() {
