@@ -350,6 +350,16 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-pool-lib.sh
 . "$SCRIPT_DIR/fm-pool-lib.sh"
+# shellcheck source=bin/fm-nm-run-lib.sh
+. "$SCRIPT_DIR/fm-nm-run-lib.sh"
+# shellcheck source=bin/fm-outbound-artifact-lib.sh
+. "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
+# shellcheck source=bin/fm-landing-authorization-lib.sh
+. "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
+# shellcheck source=bin/fm-publication-seam-lib.sh
+. "$SCRIPT_DIR/fm-publication-seam-lib.sh"
+# shellcheck source=bin/fm-commit-identity-lib.sh
+. "$SCRIPT_DIR/fm-commit-identity-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -991,6 +1001,10 @@ CONFIG_INHERIT_LOCK_HELD=0
 SLOT_HOLDER_PID=
 WT_POOL_LOCK=
 WT_POOL_LOCK_HELD=0
+COMMIT_CUSTODY_CLAIM_PUBLISHED=0
+COMMIT_CUSTODY_PREVIOUS_META=
+COMMIT_CUSTODY_PREVIOUS_META_PRESENT=0
+SPAWN_META_REPLACE_TMP=
 
 # Stop occupying the chosen pool slot. Called as soon as the pane's own shell is
 # inside it, and again from the abort path so an aborted spawn never leaves the
@@ -1022,6 +1036,22 @@ parse_orca_worktree_result() {
 spawn_abort_cleanup() {
   local status=$?
   release_slot_holder
+  if [ "$status" -ne 0 ] && [ "$COMMIT_CUSTODY_CLAIM_PUBLISHED" = 1 ]; then
+    if [ "$COMMIT_CUSTODY_PREVIOUS_META_PRESENT" = 1 ]; then
+      if ! printf '%s\n' "$COMMIT_CUSTODY_PREVIOUS_META" \
+        | fm_commit_identity_record_write "$STATE/$ID.meta"; then
+        echo "warning: could not restore the previous task record for $ID during abort cleanup" >&2
+      fi
+    else
+      rm -f "$STATE/$ID.meta"
+    fi
+    COMMIT_CUSTODY_CLAIM_PUBLISHED=0
+  fi
+  fm_commit_identity_custody_release
+  if [ -n "$SPAWN_META_REPLACE_TMP" ]; then
+    rm -f "$SPAWN_META_REPLACE_TMP"
+    SPAWN_META_REPLACE_TMP=
+  fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
@@ -1049,7 +1079,7 @@ spawn_abort_cleanup() {
       if ! fm_backend_remove_worktree orca "$ORCA_WORKTREE_ID" 2>/dev/null; then
         mkdir -p "$STATE" 2>/dev/null || true
         if [ -d "$STATE" ]; then
-          {
+          if ! {
             echo "window=$W"
             echo "worktree=${WT:-}"
             echo "project=$PROJ_ABS"
@@ -1064,7 +1094,9 @@ spawn_abort_cleanup() {
             echo "backend=orca"
             echo "orca_worktree_id=$ORCA_WORKTREE_ID"
             [ -z "${ORCA_TERMINAL:-}" ] || echo "terminal=$ORCA_TERMINAL"
-          } > "$STATE/$ID.meta" 2>/dev/null || true
+          } | fm_commit_identity_record_write "$STATE/$ID.meta"; then
+            echo "warning: could not preserve the Orca task record for $ID during abort cleanup" >&2
+          fi
         fi
       fi
     fi
@@ -2298,6 +2330,178 @@ BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 # (docs/herdr-backend.md "Known gaps").
 PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_ABS"
 
+# --- production commit identity: a LAUNCH PRECONDITION, not an instruction ---
+#
+# WHY THIS IS HERE AND NOT ONLY IN THE BRIEF. bin/fm-commit-identity.sh is the
+# primitive that binds the authoritative production author and committer; this is
+# what makes running it MANDATORY. A generated brief sentence is not an
+# admission: a worker that skips it, a resumed session that never read it, and a
+# pipeline started by hand all reach commit creation in exactly the unbound state
+# the recurrence red reproduces, where identity falls through to whatever the
+# machine happens to declare. Nothing this fleet dispatches exists without
+# passing through this file, so this is where the precondition belongs. The brief
+# keeps its own call as the human-readable projection, and because that one runs
+# in the WORKER's process it also checks the worker's own environment - the one
+# channel a launch-time check cannot speak for.
+#
+# It binds this task's own worktree-scoped config, so concurrent tasks for
+# differently governed venues cannot overwrite one shared repository-local
+# identity. It also reaches the pipeline's gate repository in the same act, and
+# happens BEFORE any backend endpoint exists, so a refusal never hands an
+# unbound commit path to a worker.
+#
+# AN UNGOVERNED HOME PROCEEDS AND SAYS SO. That is this fleet's established
+# reading of an absent publication identity policy rather than a loophole opened
+# here: a home that declared no governance has no authoritative identity to bind,
+# and refusing its every dispatch would be a verdict about a promise nobody made.
+# docs/configuration.md "Publication identity policy" owns that rule, and
+# bin/fm-publication-seam-lib.sh already applies the same reading one step later.
+spawn_commit_identity_validate() {  # -> 0 validated or ungoverned, 1 refused
+  local binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0 init_out state
+  local -a venue_args=()
+
+  # A scout has no contribution venue because it opens no pull request, so only
+  # that role retains the binder's standalone origin derivation.
+  [ -z "$CONTRIB_VENUE" ] || venue_args=(--venue "$CONTRIB_VENUE")
+
+  if [ "$MODE" = no-mistakes ]; then
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" validate --emit-state --require-gate "${venue_args[@]}" "$PROJ_ABS" 2>&1) || rc=$?
+  else
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" validate --emit-state "${venue_args[@]}" "$PROJ_ABS" 2>&1) || rc=$?
+  fi
+
+  # A delivery mode that WILL run the pipeline needs the gate repository to
+  # exist before it can be bound, so ensure it once and re-bind. Creating it is
+  # the same step the brief already instructed the worker to take; doing it here
+  # moves it from prose into the owner, and a gate that still cannot be
+  # established refuses rather than launching into an unbound one.
+  if [ "$rc" -ne 0 ] && [ "$MODE" = no-mistakes ]; then
+    case $out in
+      *FM_CI_GATE_ABSENT*)
+        init_out=$(fm_nm_run_bounded "$PROJ_ABS" 120 init 2>&1) || true
+        rc=0
+        out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" validate --emit-state --require-gate "${venue_args[@]}" "$PROJ_ABS" 2>&1) || rc=$?
+        [ "$rc" -eq 0 ] || out="$out"$'\n'"pipeline initialization reported: $init_out"
+        ;;
+    esac
+  fi
+
+  if [ "$rc" -eq 0 ]; then
+    state=$(printf '%s\n' "$out" | sed -n '/^FM_CI_STATE_[A-Z_]*=/p')
+    [ -n "$state" ] || rc=2
+  fi
+  if [ "$rc" -eq 0 ]; then
+    eval "$state"
+    return 0
+  fi
+
+  echo "error: $ID is not launching: the authoritative production commit identity could not be validated for $PROJ_ABS, so this task could reach its first commit with whatever identity this machine happens to declare. Repair the reported channel and dispatch again." >&2
+  printf '%s\n' "$out" >&2
+  return 1
+}
+
+# --- shared gate custody, the one channel a sibling lane can redefine --------
+#
+# The validation pipeline's gate repository is SHARED per project and holds ONE
+# identity pair. Two lanes of the same project with different governed venues
+# therefore contend for it: lane A binds it to identity A, lane B later binds the
+# same repository to identity B, and lane A's pipeline stages then commit as B.
+# Nothing about lane A was wrong; its channel was redefined underneath it.
+#
+# This is closed by refusing the conflicting interval rather than by serializing
+# work: a lane is admitted only when no OTHER live lane holds that same gate
+# under a different identity. The cone is exactly the contended resource - lanes
+# on other projects, and lanes on this project resolving the SAME identity, are
+# untouched and still run in parallel.
+#
+# The live set is the task records this home already keeps: a record exists from
+# launch until teardown removes it, which is precisely the interval during which
+# a lane may still reach its commit-producing stages. No second registry is
+# introduced, and nothing here outlives the records it reads.
+spawn_commit_identity_claim_publish() {
+  mkdir -p "$STATE" || return 1
+  if [ -f "$STATE/$ID.meta" ]; then
+    COMMIT_CUSTODY_PREVIOUS_META=$(cat "$STATE/$ID.meta") || return 1
+    COMMIT_CUSTODY_PREVIOUS_META_PRESENT=1
+  fi
+  {
+    echo "project=$PROJ_ABS"
+    [ -z "$CONTRIB_VENUE" ] || echo "contribution_venue=$CONTRIB_VENUE"
+    echo "commit_identity=$FM_CI_STATE_AUTHOR"
+    echo "commit_identity_gate=$FM_CI_STATE_GATE"
+  } > "$STATE/$ID.meta" || return 1
+  COMMIT_CUSTODY_CLAIM_PUBLISHED=1
+}
+
+spawn_commit_identity_install() {  # <task-worktree> [<gate-repo>]
+  local checkout=${1:?} gate=${2:-} binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0
+  local -a gate_args=()
+  [ -z "$gate" ] || gate_args=(--gate "$gate")
+  out=$(FM_CI_STATE_VALIDATED="$FM_CI_STATE_VALIDATED" \
+    FM_CI_STATE_AUTHOR="$FM_CI_STATE_AUTHOR" FM_CI_STATE_COMMITTER="$FM_CI_STATE_COMMITTER" \
+    FM_CI_STATE_AUTHOR_NAME="$FM_CI_STATE_AUTHOR_NAME" FM_CI_STATE_AUTHOR_EMAIL="$FM_CI_STATE_AUTHOR_EMAIL" \
+    FM_CI_STATE_COMMITTER_NAME="$FM_CI_STATE_COMMITTER_NAME" FM_CI_STATE_COMMITTER_EMAIL="$FM_CI_STATE_COMMITTER_EMAIL" \
+    "$binder" install-worktree "${gate_args[@]}" "$checkout" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -eq 3 ]; then
+    echo "error: $ID is not launching: the worktree identity channel holds one pair and cannot carry both the validated author '$FM_CI_STATE_AUTHOR' and committer '$FM_CI_STATE_COMMITTER'." >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  echo "error: $ID is not launching: the already-validated production commit identity could not be installed and re-observed in $checkout." >&2
+  printf '%s\n' "$out" >&2
+  return 1
+}
+
+spawn_commit_identity_install_for_custody() {
+  spawn_commit_identity_install "$PROJ_ABS" "$FM_CI_STATE_GATE"
+}
+
+spawn_commit_identity_uses_gate() {
+  [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]
+}
+
+spawn_commit_identity_custody_refusal() {
+  if [ "$FM_CI_CUSTODY_UNOBSERVED" = 1 ]; then
+    if [ "$FM_CI_CUSTODY_UNOBSERVED_REASON" = record ]; then
+      echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID has a live task record, but its shared-repository custody claim could not be read, so whether rebinding the validation repository would change that lane's commit identity is unknown." >&2
+    else
+      echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID is a live lane for this project, but its governed identity could not be established from recorded venue ${FM_CI_CUSTODY_OTHER_VENUE:-<unrecorded>}, so whether rebinding the shared validation repository would change that lane's commit identity is unknown." >&2
+    fi
+  else
+    echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID already holds the shared validation repository for this project under a different governed identity, and that repository carries ONE identity for both lanes, so running them together would let one commit under the other's identity." >&2
+  fi
+  echo "  project:        $PROJ_ABS" >&2
+  echo "  repository:     $FM_CI_STATE_GATE" >&2
+  echo "  held by:        $FM_CI_CUSTODY_OTHER_ID, venue ${FM_CI_CUSTODY_OTHER_VENUE:-<unrecorded>}, identity ${FM_CI_CUSTODY_OTHER_IDENTITY:-<could-not-observe>}" >&2
+  echo "  this task:      $ID, venue ${CONTRIB_VENUE:-<unrecorded>}, identity $FM_CI_STATE_AUTHOR" >&2
+  echo "  This is a WAIT, not a failure: nothing was allocated, no attempt was spent, and no task record was written. The dispatch becomes admissible again as soon as $FM_CI_CUSTODY_OTHER_ID is released, and firstmate's ordinary re-evaluation of queued work will make it." >&2
+}
+
+# A secondmate provisioning spawn creates a HOME rather than project commits, so
+# it has no production commit path of its own to bind.
+if [ "$KIND" != secondmate ]; then
+  if [ ! -x "$FM_ROOT/bin/fm-commit-identity.sh" ]; then
+    echo "error: $ID is not launching: the production commit identity binder $FM_ROOT/bin/fm-commit-identity.sh is missing or not executable, so whether this task's commits would carry the authoritative identity could not be established" >&2
+    exit 1
+  fi
+  if [ -e "$CONFIG/publication-identity.json" ]; then
+    spawn_commit_identity_validate || exit 1
+    if spawn_commit_identity_uses_gate; then
+      if ! fm_commit_identity_custody_admit "$FM_CI_STATE_GATE" "$STATE" "$ID" "$PROJ_ABS_REAL" \
+        "$CONTRIB_VENUE" "$FM_CI_STATE_AUTHOR" "$CONFIG" \
+        'spawn_commit_identity_install_for_custody' 'spawn_commit_identity_claim_publish'; then
+        [ -z "$FM_CI_CUSTODY_OTHER_ID" ] || spawn_commit_identity_custody_refusal
+        exit 1
+      fi
+    else
+      spawn_commit_identity_install "$PROJ_ABS" || exit 1
+    fi
+  else
+    echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
+  fi
+fi
+
 real_path_or_raw() {  # <path>
   local path=$1 real
   if real=$(cd "$path" 2>/dev/null && pwd -P); then
@@ -2880,6 +3084,16 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
   fi
 fi
 
+if [ "$KIND" != secondmate ]; then
+  if [ -e "$CONFIG/publication-identity.json" ]; then
+    if spawn_commit_identity_uses_gate; then
+      spawn_commit_identity_install "$WT" "$FM_CI_STATE_GATE" || exit 1
+    else
+      spawn_commit_identity_install "$WT" || exit 1
+    fi
+  fi
+fi
+
 # Place the slot at the resolved slot base, so the worker reads the code the
 # fleet ACTUALLY RUNS instead of whatever commit the pool last left there. A
 # pooled slot is disposable, so this is a reset rather than the secondmate path's
@@ -3236,7 +3450,8 @@ if [ "$KIND" != secondmate ]; then
     exit 1
   fi
 fi
-{
+SPAWN_META_REPLACE_TMP="$STATE/.${ID}.meta.$$"
+if ! {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
@@ -3300,6 +3515,14 @@ fi
   [ -z "$QUALIFICATION_STATE" ] || echo "qualification_observed=$QUALIFICATION_STATE"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
+  # The governed worktree identity and, for a pipeline lane, the shared gate
+  # repository it holds. The gate field marks custody; the next pipeline launch
+  # reads it to decide whether admitting that lane would let either commit under
+  # the other's identity.
+  [ -z "${FM_CI_STATE_AUTHOR:-}" ] || echo "commit_identity=$FM_CI_STATE_AUTHOR"
+  if spawn_commit_identity_uses_gate; then
+    [ -z "${FM_CI_STATE_GATE:-}" ] || echo "commit_identity_gate=$FM_CI_STATE_GATE"
+  fi
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"
@@ -3339,7 +3562,19 @@ fi
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
   fi
-} > "$STATE/$ID.meta"
+} > "$SPAWN_META_REPLACE_TMP"; then
+  rm -f "$SPAWN_META_REPLACE_TMP"
+  SPAWN_META_REPLACE_TMP=
+  echo "error: could not stage task metadata for $ID" >&2
+  exit 1
+fi
+if ! fm_commit_identity_record_replace "$SPAWN_META_REPLACE_TMP" "$STATE/$ID.meta"; then
+  rm -f "$SPAWN_META_REPLACE_TMP"
+  SPAWN_META_REPLACE_TMP=
+  echo "error: could not publish task metadata for $ID" >&2
+  exit 1
+fi
+SPAWN_META_REPLACE_TMP=
 # Which execution attempt this launch is for, read back from the record that
 # owns it. It is marked ACTIVE only after the launch is confirmed, far below:
 # metadata publication is not a launch, and an execution that was published and
