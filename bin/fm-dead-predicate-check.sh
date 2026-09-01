@@ -589,8 +589,8 @@ mark_site_refusal() {  # <function> <site> <resolved-site-file-or-empty>
           print "hands " fn " to a callee with no proven command-head dispatch for that argument"
         exit
       }
-      if (raw ~ ("^[[:space:]]*trap[[:space:]]+\\047" fn "\\047[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
-      if (raw ~ ("^[[:space:]]*trap[[:space:]]+" dq fn dq "[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
+      if (stripped ~ /^[[:space:]]*trap[[:space:]]+/ && raw ~ ("^[[:space:]]*trap[[:space:]]+\\047[[:space:]]*" fn "([[:space:]][^\\047]*)?\\047[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
+      if (stripped ~ /^[[:space:]]*trap[[:space:]]+/ && raw ~ ("^[[:space:]]*trap[[:space:]]+" dq "[[:space:]]*" fn "([[:space:]][^" dq "]*)?" dq "[[:space:]]+[^#]+([[:space:]]+#.*)?$")) exit
       if (raw ~ word) { print "names " fn " only where the shell does not dispatch it"; exit }
       print "does not mention " fn
     }')

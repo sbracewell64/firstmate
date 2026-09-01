@@ -271,12 +271,26 @@ test_quoted_trap_dispatch_named_by_a_site_counts() {
   # names that executable handler dispatch.
   dir=$(fixture trap-site 'cleanup_handler() { return 0; }')
   add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
-trap '\''cleanup_handler'\'' EXIT'
+trap '\''cleanup_handler cleanup-argument'\'' EXIT'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "a mark naming a real quoted-trap dispatch was refused, exit $rc: $out"
   printf '%s' "$out" | grep -q 'alive=1' \
     || fail "the verified mark did not resolve the predicate as consulted: $out"
   pass "a mark naming a real quoted-trap dispatch is verified and counts"
+}
+
+test_mark_trap_shape_inside_a_multiline_string_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-multiline-trap-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:4
+message="first
+trap '\''cleanup_handler cleanup-argument'\'' EXIT
+last"'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a trap-shaped line in a multi-line string was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*cleanup_handler' \
+    || fail "the quoted trap-shaped data site was not refused: $out"
+  pass "a trap-shaped line inside a multi-line string cannot verify a mark"
 }
 
 test_mark_naming_a_wrong_line_is_refused() {
@@ -995,6 +1009,7 @@ test_quoted_first_word_outside_trap_is_not_a_call_site
 test_explicit_indirect_call_counts
 test_fabricated_mark_with_no_dispatch_is_refused_and_dead
 test_quoted_trap_dispatch_named_by_a_site_counts
+test_mark_trap_shape_inside_a_multiline_string_is_refused
 test_mark_naming_a_wrong_line_is_refused
 test_deleting_the_dispatch_while_keeping_the_mark_cannot_keep_it_alive
 test_mark_site_past_end_of_file_is_refused
