@@ -1343,7 +1343,7 @@ validate_worktree_teardown_safety() {
       echo "REFUSED: local-only worktree $WT has work not yet merged into $DEFAULT and not on any remote." >&2
       [ -n "$dirty" ] && echo "uncommitted changes present" >&2
       [ -n "$unmerged" ] && printf 'commits not yet on %s:\n%s\n' "$DEFAULT" "$unmerged" >&2
-      echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh after the captain approves), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
+      echo "Merge the branch into local $DEFAULT first (bin/fm-merge-local.sh, which compiles its own landing authority), or push to a fork/remote, or get the captain's explicit OK to discard, then --force." >&2
       return 1
     fi
   elif [ -n "$dirty" ]; then

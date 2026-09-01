@@ -36,7 +36,21 @@
 #
 # An unknown/missing project or unknown mode falls back to "no-mistakes off" and warns
 # to stderr, so a typo never silently drops the gate.
-# Usage: fm-project-mode.sh [--raw] <project-name>
+#
+# --with-source appends a THIRD word naming where the printed posture came from:
+#
+#   registered    the registry names this project; the posture is the captain's
+#                 own recorded standing choice for it
+#   unregistered  a registry exists and does not name this project
+#   no-registry   this home has no registry at all
+#
+# THREE ANSWERS, NOT TWO, and this flag is why the distinction exists. Without
+# it every one of those cases prints the same `off`, so a caller cannot tell a
+# posture the captain recorded from a posture nobody recorded - and a consumer
+# resolving a live task's EFFECTIVE posture has to tell them apart, because the
+# first outranks the value that task recorded at dispatch and the second does
+# not. The default output is unchanged for every existing caller.
+# Usage: fm-project-mode.sh [--raw] [--with-source] <project-name>
 set -eu
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -47,15 +61,29 @@ FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 REG="$DATA/projects.md"
 RAW=0
-if [ "${1:-}" = "--raw" ]; then
-  RAW=1
-  shift
-fi
-NAME=${1:?usage: fm-project-mode.sh [--raw] <project-name>}
+WITH_SOURCE=0
+while [ $# -gt 0 ]; do
+  case "${1:-}" in
+    --raw) RAW=1; shift ;;
+    --with-source) WITH_SOURCE=1; shift ;;
+    *) break ;;
+  esac
+done
+NAME=${1:?usage: fm-project-mode.sh [--raw] [--with-source] <project-name>}
+
+# The one place the printed line is assembled, so the optional third word cannot
+# drift from the two that precede it.
+emit() {  # <mode> <yolo> <source>
+  if [ "$WITH_SOURCE" -eq 1 ]; then
+    echo "$1 $2 $3"
+  else
+    echo "$1 $2"
+  fi
+}
 
 if [ ! -f "$REG" ]; then
   echo "warn: no registry at $REG; defaulting $NAME to no-mistakes off" >&2
-  echo "no-mistakes off"
+  emit no-mistakes off no-registry
   exit 0
 fi
 
@@ -77,25 +105,28 @@ parsed=$(awk -v n="$NAME" '
 
 if [ -z "$parsed" ]; then
   echo "warn: project \"$NAME\" not in registry; defaulting to no-mistakes off" >&2
-  echo "no-mistakes off"
+  emit no-mistakes off unregistered
   exit 0
 fi
 
 mode=${parsed%% *}
 yolo=${parsed##* }
+source=registered
 case "$mode" in
   no-mistakes|direct-PR|local-only|no-mistakes-prod-only) ;;
-  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off ;;
+  # An unparseable annotation is not a posture the captain recorded, so its
+  # source is reported as unregistered along with the conservative fallback.
+  *) echo "warn: unknown mode \"$mode\" for $NAME; defaulting to no-mistakes off" >&2; mode=no-mistakes; yolo=off; source=unregistered ;;
 esac
 # The vocabulary is bin/fm-autonomy-lib.sh's, so the standing posture this
 # prints is spelled the way the spawn that consumes it accepts. A value the
 # awk above could not produce falls back to the captain's side, matching the
 # unknown-mode fallback: this resolves a registry DEFAULT, and the conservative
 # default is that nothing granted standing routine authority.
-fm_autonomy_state_is_known "$yolo" || yolo=$FM_AUTONOMY_STATE_CAPTAIN
+fm_autonomy_state_is_known "$yolo" || { yolo=$FM_AUTONOMY_STATE_CAPTAIN; source=unregistered; }
 # A conditional policy is not a task mode. Mechanical callers get its most
 # rigorous leg; --raw callers get the annotation itself (see the header).
 if [ "$RAW" -eq 0 ] && [ "$mode" = no-mistakes-prod-only ]; then
   mode=no-mistakes
 fi
-echo "$mode $yolo"
+emit "$mode" "$yolo" "$source"

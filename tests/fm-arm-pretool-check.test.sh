@@ -14,6 +14,11 @@ set -u
 CHECK="$ROOT/bin/fm-arm-pretool-check.sh"
 POLICY="$ROOT/bin/fm-arm-command-policy.mjs"
 
+# The wrapper deliberately reads FM_HOME at decision time. Pin this suite to
+# its fixture root so an operator's unrelated active home cannot change which
+# absolute setup paths the cross-harness matrix considers blessed.
+export FM_HOME=$ROOT
+
 # --- full cross-harness acceptance matrix ----------------------------------
 
 MATRIX_IDS=()

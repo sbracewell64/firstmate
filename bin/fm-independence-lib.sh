@@ -253,6 +253,40 @@ fm_independence_db() {
   printf '%s' "${FM_PIPELINE_STATE_DB:-$HOME/.no-mistakes/state.sqlite}"
 }
 
+fm_independence_recorded_heads() {  # <repo> <branch>
+  local repo=${1:-} branch=${2:-} db
+  [ -n "$repo" ] && [ -n "$branch" ] || return 1
+  db=$(fm_independence_db)
+  [ -f "$db" ] || return 1
+  command -v python3 >/dev/null 2>&1 || return 1
+  python3 - "$db" "$repo" "$branch" 2>/dev/null <<'PY'
+import os
+import sqlite3
+import sys
+import urllib.parse
+
+db, repo, branch = sys.argv[1:]
+try:
+    conn = sqlite3.connect("file:%s?mode=ro" % urllib.parse.quote(db), uri=True, timeout=2)
+    wanted = os.path.realpath(repo)
+    ids = [row[0] for row in conn.execute("select id, working_path from repos")
+           if row[1] and os.path.realpath(row[1]) == wanted]
+    heads = set()
+    for repo_id in ids:
+        for row in conn.execute(
+            "select coalesce(last_pushed_sha, submitted_head_sha, head_sha)"
+            " from runs where repo_id = ? and branch = ? and status = 'completed'",
+            (repo_id, branch),
+        ):
+            if row[0]:
+                heads.add(row[0])
+    conn.close()
+except Exception:
+    sys.exit(1)
+print(",".join(sorted(heads)))
+PY
+}
+
 # --- identity capture ---------------------------------------------------------
 
 # fm_independence_steps_query <repo> <branch>
@@ -288,20 +322,20 @@ fm_independence_db() {
 # success. An empty result set with a readable database is likewise NOT a
 # success: the caller cannot tell "no reviewer ran" from "these bytes were never
 # validated here", so it stays could-not-observe.
-fm_independence_steps_query() {  # <repo> <branch>
-  local repo=${1:-} branch=${2:-} db out
+fm_independence_steps_query() {  # <repo> <branch> [<head>]
+  local repo=${1:-} branch=${2:-} head=${3:-} db out
   [ -n "$repo" ] && [ -n "$branch" ] || return 1
   db=$(fm_independence_db)
   [ -f "$db" ] || return 1
   command -v python3 >/dev/null 2>&1 || return 1
   out=$(
-    python3 - "$db" "$repo" "$branch" 2>/dev/null <<'PY'
+    python3 - "$db" "$repo" "$branch" "$head" 2>/dev/null <<'PY'
 import os
 import sqlite3
 import sys
 import urllib.parse
 
-db, repo, branch = sys.argv[1], sys.argv[2], sys.argv[3]
+db, repo, branch, head = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 
 try:
     uri = "file:%s?mode=ro" % urllib.parse.quote(db)
@@ -321,10 +355,13 @@ try:
     status_of = {}
     run_ids = []
     for repo_id in repo_ids:
-        for run_id, status in conn.execute(
-            "select id, status from runs where repo_id = ? and branch = ?",
+        for run_id, status, run_head in conn.execute(
+            "select id, status, coalesce(last_pushed_sha, submitted_head_sha, head_sha)"
+            " from runs where repo_id = ? and branch = ?",
             (repo_id, branch),
         ):
+            if head and run_head != head:
+                continue
             run_ids.append(run_id)
             status_of[run_id] = status or ""
     if not run_ids:
@@ -411,12 +448,12 @@ FM_INDEPENDENCE_STEPS_RC=1
 # variables of the shell that spawned it, so the derivation below finds the
 # block already there. Nothing may write the block from outside - it is set only
 # from fm_independence_steps_query, which is the authoritative read.
-fm_independence_steps_load() {  # <repo> <branch>
-  local key="${1:-}|${2:-}"
+fm_independence_steps_load() {  # <repo> <branch> [<head>]
+  local key="${1:-}|${2:-}|${3:-}"
   if [ "$key" = "$FM_INDEPENDENCE_STEPS_KEY" ]; then
     return "$FM_INDEPENDENCE_STEPS_RC"
   fi
-  if FM_INDEPENDENCE_STEPS_VAL=$(fm_independence_steps_query "${1:-}" "${2:-}"); then
+  if FM_INDEPENDENCE_STEPS_VAL=$(fm_independence_steps_query "${1:-}" "${2:-}" "${3:-}"); then
     FM_INDEPENDENCE_STEPS_RC=0
   else
     FM_INDEPENDENCE_STEPS_VAL=''
@@ -429,8 +466,8 @@ fm_independence_steps_load() {  # <repo> <branch>
 # fm_independence_steps <repo> <branch>: the step block for those bytes, read
 # once. Same contract as fm_independence_steps_query, including its non-zero
 # return for a read that could not be made.
-fm_independence_steps() {  # <repo> <branch>
-  fm_independence_steps_load "${1:-}" "${2:-}" || return 1
+fm_independence_steps() {  # <repo> <branch> [<head>]
+  fm_independence_steps_load "${1:-}" "${2:-}" "${3:-}" || return 1
   printf '%s' "$FM_INDEPENDENCE_STEPS_VAL"
 }
 
@@ -587,8 +624,8 @@ fm_independence_runs() {  # <member steps>
 # This function takes NO argument that could assert a result. Every value it
 # prints is read from the pipeline's invocation record or from this fleet's
 # declared routing config, which is what makes independence underivable by hand.
-fm_independence_dimensions() {  # <repo> <branch> <maker-harness> <maker-model>
-  local repo=${1:-} branch=${2:-} mharness=${3:-} mmodel=${4:-}
+fm_independence_dimensions() {  # <repo> <branch> <maker-harness> <maker-model> [<head>]
+  local repo=${1:-} branch=${2:-} mharness=${3:-} mmodel=${4:-} head=${5:-}
   local steps='' members='' dropped=0 dropped_why read_made=0 critic cvendor cmodel ccount
   local mkey mprovider mpool ckey cprovider cpool ckey_for=''
   local run rvendor rmodel rshared rsess rreviews rstatus r_rank runs_n=0
@@ -600,7 +637,7 @@ fm_independence_dimensions() {  # <repo> <branch> <maker-harness> <maker-model>
   local process_rank=-1 model_rank=-1 vendor_rank=-1 pool_rank=-1
   local process_why='' model_why='' vendor_why='' pool_why='' evidence overall
 
-  evidence="branch=${branch:-unknown}"
+  evidence="branch=${branch:-unknown}${head:+ head=$head}"
 
   # WHICH RUNS ARE MEMBERS, decided before any dimension is judged. A run the
   # pipeline cancelled or marked failed never finished verifying these bytes, so
@@ -611,7 +648,7 @@ fm_independence_dimensions() {  # <repo> <branch> <maker-harness> <maker-model>
   # same could-not-observe and DIFFERENT facts. Stating the first when the second
   # happened claims a read nobody made, which is the reporting half of the very
   # collapse this file refuses in its verdicts.
-  if steps=$(fm_independence_steps "$repo" "$branch"); then
+  if steps=$(fm_independence_steps "$repo" "$branch" "$head"); then
     read_made=1
     members=$(fm_independence_members "$steps")
     dropped=$(fm_independence_dropped "$steps")

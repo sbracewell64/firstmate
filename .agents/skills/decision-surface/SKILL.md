@@ -28,7 +28,7 @@ No firstmate prose may contradict its capacity, dependency, decision-status, in-
 Run `bin/fm-decision-surface.sh` for the fleet, or with a task id for one task.
 It is read-only: no lock, no wake drain, no mutation.
 
-## The four checks
+## The checks
 
 Each answers one question - does structured state contradict the claim - and nothing else.
 
@@ -39,6 +39,7 @@ Each answers one question - does structured state contradict the claim - and not
 | `check duplicate-dispatch <task-id>` | "dispatch this work" when the identity may already be live |
 | `check certified <task-id>` | "this work is certified" / "it passed review" / "it is verified" |
 | `check route-qualified <route-id>` | "no model can do this" / "this route needs a floor exception" / "there is nothing to run it on" |
+| `check landing-authority <task-id>` | "this landing is mine to make" / "this one is waiting on the captain" |
 
 Build the decision id with `bin/fm-decision-hold.sh id <origin-id> <decision-key>`.
 
@@ -68,6 +69,30 @@ What differs is the ACTION, and the evidence line carries it:
 
 Never relay the first three as "no model can do this", and never ask for a floor exception on the strength of them.
 [`role-qualification`](../role-qualification/SKILL.md) owns what to do with each.
+
+### Landing authority, and the one thing that reserves it
+
+`bin/fm-landing-seam-lib.sh` owns the compile; the check composes it.
+It answers who may authorize a landing, never whether the work is fit to land: every test, validator, review, head binding and one-use authorization still refuses on its own terms at the merge gate, and no posture and no ruling can waive one of them.
+
+It compiles from five typed inputs: the task's commission record, the captain's effective standing posture, every decision still open on the task, the governing Browser Sol ruling where one applies, and the exact-head review gate.
+`bin/fm-landing-seam-lib.sh` owns the detailed source and precedence contract.
+Whether a captain message named the merge is not among them and cannot be.
+An instruction's transport is not an authority source, and a gate that waits for one holds every ordinary reversible landing by default, which is the defect this compile replaces.
+
+- **not-contradicted** - the landing is firstmate's to make once its own gates pass.
+  Land it; do not park it waiting to be told again.
+- **contradicted** with `CAPTAIN_REQUIRED` - a decision on this work is typed as the captain's.
+  The evidence line names the decision key and its disposition.
+  Rule that decision first; landing is not the question in front of the captain.
+- **contradicted** with `LANDING_REVIEW_GATE_REFUSED` - the engineering review gate is unmet.
+  Satisfy it with an approving review from a non-maker identity or head-bound independent pipeline review evidence; never escalate it to the captain.
+- **unevaluable** - a durable record needed to answer could not be read.
+  Repair the record, and assert nothing about the landing in either direction meanwhile.
+
+Only a decision the fleet has TYPED as the captain's reserves a landing.
+Not the act being a merge, not the repository, not a local-only path, not a posture that used to be off, and never the absence of a sentence.
+Record a reservation the way [`decision-hold-lifecycle`](../decision-hold-lifecycle/SKILL.md) says, so it reaches this compile rather than living in prose.
 
 ### Certification, and the two ways it is not certified
 

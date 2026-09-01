@@ -105,16 +105,24 @@
 # and --subject and silently drops other flags. Adopting the precondition later
 # therefore requires changing the single gh-axi invocation at the end.
 #
+# THIS GATE DOES NOT DECIDE WHO MAY AUTHORIZE THE LANDING EITHER.
+# bin/fm-landing-seam-lib.sh compiles that from the task's own delivery record,
+# the captain's standing posture at its canonical owner, and the typed
+# disposition of every decision still open on the task. Whether a captain message
+# named this merge is not one of those inputs and cannot be: an instruction's
+# transport is not an authority source, and a gate that waits for one holds every
+# ordinary reversible landing by default. This file asks that compile before it
+# mints anything, reports the answer and its sources either way, and refuses a
+# landing the captain reserved or one whose reservation could not be read. The
+# compile decides only WHO may authorize; every refusal above and below still
+# refuses on its own terms, so no posture and no ruling can waive one.
+#
 # THIS GATE DOES NOT DECIDE WHETHER A BROWSER SOL RULING GOVERNS THE LANDING.
-# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints -
-# including which repositories are inside the declared governed landing domain -
-# and bin/fm-landing-authorization.sh owns the authority itself, while
+# bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
+# bin/fm-landing-authorization.sh owns the authority itself, and
 # bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
-# What this file adds is that the merge command RUNS INSIDE the spend when one
-# governs, so an applicable pull request cannot reach `gh-axi pr merge` without
-# consuming a valid, head-bound, one-use authorization. A pull request proven
-# outside the declared governed domain lands through exactly the gates above and
-# says so with a reported not-applicable observation, because a silent ungoverned
+# A pull request no ruling governs lands through exactly the gates above and says
+# so with a reported not-applicable observation, because a silent ungoverned
 # landing is indistinguishable from an authorised one.
 #
 # One vocabulary constraint applies to THIS FILE ONLY, and it is not a style
@@ -141,21 +149,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # shellcheck source=bin/fm-pr-lib.sh
 . "$SCRIPT_DIR/fm-pr-lib.sh"
 # shellcheck source=bin/fm-verify-lib.sh
 . "$SCRIPT_DIR/fm-verify-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$SCRIPT_DIR/fm-independence-lib.sh"
 # The landing seam needs the outbound gate register and the authorization
 # layer's own identity predicates; both are sourced here so it can consult its
 # owners rather than restate them.
 # shellcheck source=bin/fm-outbound-artifact-lib.sh
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
-# shellcheck source=bin/fm-sol-control-config-lib.sh
-. "$SCRIPT_DIR/fm-sol-control-config-lib.sh"
 # shellcheck source=bin/fm-landing-authorization-lib.sh
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
@@ -305,7 +311,8 @@ fi
 # waiver arithmetic, and the wording of its own refusals.
 PR_VERIFY_GRAPHQL=$FM_VERIFY_ROLLUP_GRAPHQL
 # shellcheck disable=SC2016
-PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | ($FM_VERIFY_ROLLUP_COUNTS)"
+PR_VERIFY_REVIEW_EVIDENCE='"review_evidence=" + ('"$FM_LANDING_REVIEW_EVIDENCE_JQ"')'
+PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (($FM_VERIFY_ROLLUP_COUNTS), $PR_VERIFY_REVIEW_EVIDENCE)"
 
 # Three further lines, asked for only when a check is waived, so a merge with no
 # override sends byte-identical query text and reads back the same lines it
@@ -326,10 +333,11 @@ if [ -n "$WAIVED_CHECK" ]; then
     exit 1
   }
   PR_VERIFY_QUERY="$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (($FM_VERIFY_ROLLUP_COUNTS),
-$PR_VERIFY_WAIVED_LINES)"
+$PR_VERIFY_WAIVED_LINES, $PR_VERIFY_REVIEW_EVIDENCE)"
 fi
 
 VERIFIED_HEAD=
+VERIFIED_REVIEW=
 
 # An empty rollup has more than one cause, and the two common ones need
 # different work from the captain: a repository with no CI configured for this
@@ -370,7 +378,7 @@ refuse_unreadable_rollup() {
 
 verify_current_head() {
   local output line joined remaining eff_failing eff_unrun rc
-  local head='' mergeable='' review='' checks='' failing='' unrun='' undecidable=''
+  local head='' mergeable='' review='' checks='' failing='' unrun='' undecidable='' review_evidence=''
   local rollup_head='' members='' reported=''
   local waived='' waived_failing='' waived_unrun=''
   local -a reasons=()
@@ -402,6 +410,9 @@ verify_current_head() {
   checks=$FM_VERIFY_ROLLUP_CHECKS
   failing=$FM_VERIFY_ROLLUP_FAILING
   undecidable=$FM_VERIFY_ROLLUP_UNDECIDABLE
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in review_evidence=*) review_evidence=${line#review_evidence=} ;; esac
+  done <<< "$output"
   # This gate reports one bucket for every current attempt that reached no
   # verdict, whether or not another may still arrive, so the library's two are
   # added back here. They are published separately because a consumer can merge
@@ -537,6 +548,7 @@ verify_current_head() {
     fi
   fi
   VERIFIED_HEAD=$head
+  VERIFIED_REVIEW=$review_evidence
 }
 
 MERGE_META_TMP=
@@ -584,7 +596,7 @@ record_merge_verification() {
   MERGE_META_TMP=
 }
 
-# --- the ruling-derived landing authority -------------------------------------
+# --- the compiled landing authority ------------------------------------------
 #
 # Resolved from the durable correlation store, never from anything the caller
 # asserts, and reported either way. `not-applicable` is printed to stdout as an
@@ -598,13 +610,29 @@ record_merge_verification() {
 LANDING_AUTH_ID=
 LANDING_AUTHORIZATION=
 resolve_landing_authority() {  # <head>
-  local head=$1
+  local head=$1 authority_rc=0 seam_rc=0
   local plan=()
-  # The repository this merge would write, taken from the pull request's own
-  # parsed identity rather than from anything the caller supplies separately, so
-  # the domain is asked about the repository the merge command actually addresses.
-  if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$head" "$URL" \
-    "$PR_OWNER/$PR_REPO"; then
+  # WHOSE landing this is, before anything is minted. Compiled from the task's
+  # own durable records by bin/fm-landing-seam-lib.sh and reported either way,
+  # because a home that says nothing about who authorised a landing is
+  # indistinguishable from one that never asked. It answers only who may
+  # authorize; every refusal above and below still applies unchanged.
+  fm_landing_candidate_resolve "$FM_HOME" "$ID" pr-snapshot "$RECORD" "$head" "$VERIFIED_REVIEW" || seam_rc=$?
+  head=$FM_LANDING_CANDIDATE_HEAD
+  fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
+    "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || authority_rc=$?
+  if [ "$authority_rc" -ne 0 ]; then
+    if [ "$seam_rc" -ne 0 ]; then
+      printf 'error: refusing to merge head %s: %s: %s\n' \
+        "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+    fi
+    printf 'error: refusing to merge head %s: %s: %s\n' \
+      "$head" "$FM_LANDING_AUTHORITY_TOKEN" "$FM_LANDING_AUTHORITY_REASON" >&2
+    return 1
+  fi
+  printf '%s: %s [%s]\n' "$FM_LANDING_AUTHORITY_TOKEN" \
+    "$FM_LANDING_AUTHORITY_REASON" "$FM_LANDING_AUTHORITY_SOURCES"
+  if [ "$seam_rc" -ne 0 ]; then
     printf 'error: refusing to merge head %s: %s: %s\n' \
       "$head" "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
     return 1

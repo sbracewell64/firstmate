@@ -153,26 +153,26 @@ ROWS
 # asserts the recorded value positively rather than the absence of a refusal: an
 # implementation that writes nothing at all would satisfy "was not refused".
 test_every_published_code_is_recorded() {
-  local rec home proj wt fakebin code out n=0 codes
+  local rec case_home proj wt fakebin code out n=0 codes
   rec=$(make_record_case published-codes)
-  IFS='|' read -r home proj wt fakebin <<EOF
+  IFS='|' read -r case_home proj wt fakebin <<EOF
 $rec
 EOF
   codes=$(. "$ROOT/bin/fm-reasoning-lib.sh"; printf '%s\n' "$FM_REASON_CODES")
   while IFS= read -r code; do
     [ -n "$code" ] || continue
     n=$((n + 1))
-    write_brief "$home" "published-$n" no-mistakes
+    write_brief "$case_home" "published-$n" no-mistakes
     if [ "$code" = TOOLING_GAP ]; then
-      out=$(run_record_spawn "$home" "$proj" "$wt" "$fakebin" "published-$n" "$proj" codex \
+      out=$(run_record_spawn "$case_home" "$proj" "$wt" "$fakebin" "published-$n" "$proj" codex \
         --mode no-mistakes --yolo off --reason-code "$code" \
         --tooling-gap-item fleet-view-exits-nonzero)
     else
-      out=$(run_record_spawn "$home" "$proj" "$wt" "$fakebin" "published-$n" "$proj" codex \
+      out=$(run_record_spawn "$case_home" "$proj" "$wt" "$fakebin" "published-$n" "$proj" codex \
         --mode no-mistakes --yolo off --reason-code "$code")
     fi
     expect_code 0 "$?" "published code $code was refused: $out"
-    assert_grep "reason_code=$code" "$home/state/published-$n.meta" \
+    assert_grep "reason_code=$code" "$case_home/state/published-$n.meta" \
       "published code $code did not reach the record"
   done <<EOF
 $codes
@@ -312,13 +312,13 @@ EOF
 # A real spawn against a real worktree, so the fields can be read back off the
 # meta rather than inferred from a refusal. Echoes "<home>|<project>|<worktree>|<fakebin>".
 make_record_case() {  # <name>
-  local name=$1 case_dir home proj wt fakebin
+  local name=$1 case_dir record_home proj wt fakebin
   case_dir="$TMP_ROOT/$name"
-  home="$case_dir/home"
+  record_home="$case_dir/home"
   proj="$case_dir/project"
   wt="$case_dir/wt"
   fakebin=$(fm_fakebin "$case_dir/fake")
-  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config"
+  mkdir -p "$record_home/data" "$record_home/projects" "$record_home/state" "$record_home/config"
   cat > "$fakebin/tmux" <<'SH'
 #!/bin/sh
 case "$1" in
@@ -332,10 +332,10 @@ SH
   chmod +x "$fakebin/tmux"
   fm_fake_exit0 "$fakebin" treehouse
   fm_git_worktree "$proj" "$wt" "wt-$name"
-  touch "$home/state/.last-watcher-beat"
-  write_dispatch_config "$home"
-  write_backlog "$home"
-  printf '%s\n' "$home|$proj|$wt|$fakebin"
+  touch "$record_home/state/.last-watcher-beat"
+  write_dispatch_config "$record_home"
+  write_backlog "$record_home"
+  printf '%s\n' "$record_home|$proj|$wt|$fakebin"
 }
 
 run_record_spawn() {  # <home> <project> <worktree> <fakebin> <spawn-args...>

@@ -104,10 +104,11 @@ fm_reasoning_required_for() {  # <code>
 # (AGENTS.md section 7), so the record cannot claim an authority the task does
 # not have. A scout produces a report and holds no merge authority at all.
 # The delivery mode is the other half of that contract: a local-only task never
-# reaches a PR merge gate, it lands through the guarded fast-forward path, so
-# with yolo off it records the local merge approval the captain actually owns
-# rather than a gate it never arrives at. With yolo on, firstmate decides
-# routine gates on either path, which is one posture rather than two.
+# reaches a PR merge gate and instead lands through the guarded fast-forward
+# path. The historical `captain-approves-local-merge` record below distinguishes
+# that escalation path; it does not decide landing authority, which hard rule 2
+# compiles from typed sources at the landing chokepoint. With yolo on, firstmate
+# decides routine gates on either path, which is one posture rather than two.
 # The autonomy comparison is bin/fm-autonomy-lib.sh's and is never spelled
 # here. Its third answer - a value outside the vocabulary - is NOT LIVE at this
 # site: both callers validate the posture against that same owner before

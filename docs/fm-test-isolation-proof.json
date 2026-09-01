@@ -1,6 +1,6 @@
 {
   "concurrency": 4,
-  "finished_at": "2026-08-30T22:24:23Z",
+  "finished_at": "2026-09-01T14:30:25Z",
   "fm_test_run_jobs_enabled": false,
   "isolation_contract": {
     "digest": "sha256:d995377e1f35ff66cb2271ba1ce0958a671cb7e1051354e13202bd0872d4bb5e"
@@ -22,16 +22,16 @@
     "runner_jobs_max": 4
   },
   "production_sharding_enabled": false,
-  "run_id": "fm-isolation-1788128033955-3257691",
+  "run_id": "fm-isolation-1788272489959-61287",
   "schema_version": 2,
   "scripts": [
     {
-      "digest": "sha256:49ab87eb6d004e9a8467ff42bd3c9b0eafabb541780ff12e1fa036a82eeea818",
-      "duration_ms": 120084,
+      "digest": "sha256:e09af258983da922a12b206d933828aac4975dc16572c332aa24a040eaf296f6",
+      "duration_ms": 81889,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -47,7 +47,7 @@
     },
     {
       "digest": "sha256:e74f87206503083790182934bdc8666fb44590c68cb4db3ac31d72fec0253f02",
-      "duration_ms": 36248,
+      "duration_ms": 26709,
       "exit": 0,
       "fixtures": [
         {
@@ -55,7 +55,7 @@
           "path": "tests/herdr-test-safety.sh"
         },
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -71,11 +71,11 @@
     },
     {
       "digest": "sha256:57fa5399f9fe03a245cb89b6cc0fba6210596f0368fa72d7233f92777a27efd3",
-      "duration_ms": 4110,
+      "duration_ms": 3777,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -89,11 +89,11 @@
     },
     {
       "digest": "sha256:2d3b856ac3b19b3b10fa776cc9df4e5c2ae4b901cdeb03439980845dd92bbed2",
-      "duration_ms": 59834,
+      "duration_ms": 42434,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -107,11 +107,11 @@
     },
     {
       "digest": "sha256:de5cacd07394e22e4285448d62abe006bdc7096cdbaf3183cf171cbee3ee8b23",
-      "duration_ms": 4556,
+      "duration_ms": 2553,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -126,11 +126,11 @@
     },
     {
       "digest": "sha256:a2ff98851bc17949c7a5f8561e1e68c9163d9c631eb291a501d7aa2ba2405633",
-      "duration_ms": 247,
+      "duration_ms": 165,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -143,11 +143,11 @@
     },
     {
       "digest": "sha256:cdd394e5e90e67fa9c4549bc527c6ba70463657a500b8ed978d9e02393a67677",
-      "duration_ms": 69574,
+      "duration_ms": 56897,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -160,11 +160,11 @@
     },
     {
       "digest": "sha256:03b27851706ef7b469289caf8ec27371880cea9e9109543da429bb50e2480675",
-      "duration_ms": 94593,
+      "duration_ms": 72272,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -178,11 +178,11 @@
     },
     {
       "digest": "sha256:c747ae60035b65430f5083ac887e1d4485b4becea68b1b020e73d891ebe9de11",
-      "duration_ms": 497,
+      "duration_ms": 334,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -195,11 +195,11 @@
     },
     {
       "digest": "sha256:ee3b9c776f8c844bd30ad78ef8fb66f90fcc033bb0d4809a690927f9e38980b4",
-      "duration_ms": 13351,
+      "duration_ms": 10558,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -212,11 +212,11 @@
     },
     {
       "digest": "sha256:6cee889411c9bf492faf27a75b4bf2deed77210591e06b6e158f950fb94ab167",
-      "duration_ms": 11779,
+      "duration_ms": 9865,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -230,11 +230,11 @@
     },
     {
       "digest": "sha256:7cb6667b8636591af9bc9a041f4b56eddbe490d23b85d4214b01e98018bda3be",
-      "duration_ms": 2828,
+      "duration_ms": 1907,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -247,7 +247,7 @@
     },
     {
       "digest": "sha256:e735e9ed1506d39ce4b374588153031c1c9bf2f0935bfeefdf92e7f1f8ee95f3",
-      "duration_ms": 192,
+      "duration_ms": 143,
       "exit": 0,
       "fixtures": [],
       "path": "tests/fm-pi-primary-types.test.sh",
@@ -258,12 +258,12 @@
       "worker": 13
     },
     {
-      "digest": "sha256:452e9b57fd0087df75508cec4e66b3a69b0027a674d0e619fb9894e38e2f5dc0",
-      "duration_ms": 63975,
+      "digest": "sha256:ff6578bddfa53e8675528d87ff77219b91ab8da2fb022f8484b72f1f66b1c2b5",
+      "duration_ms": 56758,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -276,11 +276,11 @@
     },
     {
       "digest": "sha256:c618c4e83fada59483f45ca5311d213d2489887786e1c20511b972a063149948",
-      "duration_ms": 7278,
+      "duration_ms": 4877,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -293,11 +293,11 @@
     },
     {
       "digest": "sha256:d1c2cda97878035fb755cf002ee6b35e1868a0de5f31acb9dbcaf0fc66577ef5",
-      "duration_ms": 9676,
+      "duration_ms": 6658,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -312,11 +312,11 @@
     },
     {
       "digest": "sha256:4330258558495c012190128c6308226cf052c336d0ff8cb0231cfcaf7528bcf0",
-      "duration_ms": 4164,
+      "duration_ms": 2887,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -330,11 +330,11 @@
     },
     {
       "digest": "sha256:0cdbb1d55f8022c95758b97a83d95351faf9eee4391a7387fbd313d01d51bd66",
-      "duration_ms": 5349,
+      "duration_ms": 3789,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -348,11 +348,11 @@
     },
     {
       "digest": "sha256:a9293dc6b821e91d1d47f51c6b2adb532784aa3e8a3d44ba7c76b9117f696b23",
-      "duration_ms": 4948,
+      "duration_ms": 3770,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -365,11 +365,11 @@
     },
     {
       "digest": "sha256:4061d5face721164258f5aebe5e6271081e901ab6a512e0f47fab7bccf941e99",
-      "duration_ms": 525,
+      "duration_ms": 429,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -382,11 +382,11 @@
     },
     {
       "digest": "sha256:05f8cf51845fc2368ce1a6d9aefb7137ed1218736eea6550d6cabc7b9e29fa90",
-      "duration_ms": 349506,
+      "duration_ms": 323253,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -399,11 +399,11 @@
     },
     {
       "digest": "sha256:72751d894273fcde160c6783c5bde2301c9de24ff72fa63710a531c6171f6bd7",
-      "duration_ms": 2210,
+      "duration_ms": 1993,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -417,11 +417,11 @@
     },
     {
       "digest": "sha256:1c53ed596e088343fd51d10e766d0935ce6ab0415f7816809e12b258d9f16e6d",
-      "duration_ms": 215,
+      "duration_ms": 169,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -434,11 +434,11 @@
     },
     {
       "digest": "sha256:d905c60ec14a27ef553e64210f544d70875b2177983e6e6c3852110b004cf258",
-      "duration_ms": 77461,
+      "duration_ms": 66080,
       "exit": 0,
       "fixtures": [
         {
-          "digest": "sha256:07dc53f435379316ba67b6dfe69433eeb73b6a775294b4a7695068d4e1d9fd94",
+          "digest": "sha256:dcc151afe6b1baa5153437278542cc688777e60b5a03fed77fc755917a4b98dc",
           "path": "tests/lib.sh"
         }
       ],
@@ -452,9 +452,9 @@
       "worker": 24
     }
   ],
-  "started_at": "2026-08-30T22:13:53Z",
+  "started_at": "2026-09-01T14:21:29Z",
   "summary": {
-    "duration_ms": 629873,
+    "duration_ms": 535540,
     "failed": 0,
     "total": 24
   }

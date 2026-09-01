@@ -220,8 +220,10 @@ write_rollup() {  # <dir> <head> <failing-count>
     '{data:{repository:{pullRequest:{
         headRefOid:$head,
         mergeable:"MERGEABLE",
-        reviewDecision:null,
-        commits:{nodes:[{commit:{oid:$head,statusCheckRollup:{contexts:{
+        reviewDecision:"APPROVED",
+        author:{login:"maker"},
+        reviews:{totalCount:1,nodes:[{state:"APPROVED",author:{login:"reviewer"},commit:{oid:$head}}]},
+        commits:{totalCount:1,nodes:[{commit:{oid:$head,author:{user:{login:"maker"}},committer:{user:{login:"maker"}},statusCheckRollup:{contexts:{
           totalCount:($ok + $failing),
           nodes:(
             [range($ok) | {__typename:"CheckRun",name:"ok",conclusion:"SUCCESS",
@@ -511,7 +513,7 @@ test_pr_merge_refuses_a_governed_candidate_with_no_ruling() {
   [ "$RC" -ne 0 ] || fail "governed-unruled: an unruled review gate must refuse the merge, got exit 0"
   merges=$(merge_count "$dir")
   [ "$merges" -eq 0 ] || fail "governed-unruled: the forge was asked to merge $merges times despite an unruled review gate"
-  assert_output_has "$dir" FM_LANDING_AUTHORIZATION_REFUSED governed-unruled
+  assert_output_has "$dir" LANDING_AUTHORITY_COULD_NOT_OBSERVE governed-unruled
   pass "an unruled Browser Sol review gate refuses the real fm-pr-merge path (merges executed: 0)"
 }
 
@@ -578,7 +580,7 @@ test_pr_merge_refuses_a_declining_ruling() {
   [ "$RC" -ne 0 ] || fail "governed-declined: a rejecting ruling must refuse, got exit 0"
   merges=$(merge_count "$dir")
   [ "$merges" -eq 0 ] || fail "governed-declined: the forge was asked to merge $merges times under a rejecting ruling"
-  assert_output_has "$dir" FM_AUTH_VERDICT_DECLINED governed-declined
+  assert_output_has "$dir" LANDING_AUTHORITY_COULD_NOT_OBSERVE governed-declined
   pass "a rejecting ruling refuses the real fm-pr-merge path (merges executed: 0)"
 }
 
@@ -594,7 +596,7 @@ test_pr_merge_refuses_a_verdict_it_cannot_classify() {
   [ "$RC" -ne 0 ] || fail "governed-revise: an unclassifiable verdict must refuse, got exit 0"
   merges=$(merge_count "$dir")
   [ "$merges" -eq 0 ] || fail "governed-revise: the forge was asked to merge $merges times on an unclassifiable verdict"
-  assert_output_has "$dir" FM_AUTH_VERDICT_UNRECOGNIZED governed-revise
+  assert_output_has "$dir" LANDING_AUTHORITY_COULD_NOT_OBSERVE governed-revise
   pass "a ruling verdict this fleet cannot classify refuses fm-pr-merge (merges executed: 0)"
 }
 
@@ -777,7 +779,12 @@ new_local_case() {  # <name> [no-remote]
     "worktree=$dir/wt" \
     "project=$proj" \
     "kind=ship" \
-    "mode=local-only"
+    "mode=local-only" \
+    "harness=claude" \
+    "model=opus"
+  fm_test_pipeline_db "$dir/pipeline.sqlite" "$proj" \
+    "fm/$TASK_ID|openai|gpt-5.6-sol|review||completed|$(git -C "$proj" rev-parse "refs/heads/fm/$TASK_ID")" || return 1
+  fm_test_model_registry "$dir/home/config/models.json"
   add_forge "$dir" "$(git -C "$proj" rev-parse "refs/heads/fm/$TASK_ID")"
   configure_venue "$dir"
   printf '%s\n' "$dir"
@@ -795,6 +802,7 @@ run_merge_local() {  # <dir>
     FM_TEST_GH_LOG="$dir/gh.log" \
     FM_TEST_ROLLUP_FIXTURE="$dir/rollup.json" \
     FM_TEST_FORGE_HEAD="$dir/forge_head" \
+    FM_PIPELINE_STATE_DB="$dir/pipeline.sqlite" \
     PATH="$dir/fakebin:$PATH" \
       "$MERGE_LOCAL" "$TASK_ID" ) > "$dir/stdout" 2> "$dir/stderr"
   RC=$?
@@ -873,7 +881,7 @@ test_merge_local_refuses_a_governed_candidate_with_no_ruling() {
   [ "$RC" -ne 0 ] || fail "local-governed-unruled: an unruled review gate must refuse the fast-forward, got exit 0"
   [ "$(local_main_head "$dir")" = "$before" ] \
     || fail "local-governed-unruled: main moved despite an unruled review gate"
-  assert_output_has "$dir" FM_LANDING_AUTHORIZATION_REFUSED local-governed-unruled
+  assert_output_has "$dir" LANDING_AUTHORITY_COULD_NOT_OBSERVE local-governed-unruled
   pass "an unruled Browser Sol review gate refuses the real fm-merge-local path (fast-forwards executed: 0)"
 }
 

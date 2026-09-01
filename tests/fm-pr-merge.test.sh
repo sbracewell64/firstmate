@@ -86,13 +86,16 @@ make_case() {
   local name=$1 case_dir fakebin
   case_dir="$TMP_ROOT/$name"
   fakebin="$case_dir/fakebin"
-  mkdir -p "$case_dir/state" "$fakebin" "$case_dir/emptybin"
+  mkdir -p "$case_dir/state" "$case_dir/config" "$fakebin" "$case_dir/emptybin"
   fm_write_meta "$case_dir/state/task-x1.meta" \
     "window=fm-task-x1" \
     "worktree=$case_dir/wt" \
     "project=$case_dir/project" \
     "kind=ship" \
-    "mode=no-mistakes"
+    "mode=no-mistakes" \
+    "harness=claude" \
+    "model=opus"
+  fm_test_model_registry "$case_dir/config/models.json"
   # No worktree/project on disk; fm-pr-check.sh tolerates a worktree it cannot
   # stat and simply skips the pr_head lookup via `gh` in that case, so give it
   # one that resolves for cases that want pr_head recorded.
@@ -152,6 +155,7 @@ write_verify_payload() {
     "$label" "$subject" "$head" "$evidence_head" "$mergeable" "$review" \
     "$members" "$reported" "$checks" "$unsuccessful" "$failing" "$unrun" \
     "$undecidable" > "$file"
+  printf 'review_evidence=github-approved\n' >> "$file"
 }
 
 # A green head: mergeable, no review blocking, ten check runs, none unsuccessful.
@@ -243,10 +247,15 @@ SH
 run_pr_merge() {
   local case_dir=$1 rc head; shift
   head=$(cat "$case_dir/head" 2>/dev/null || printf '%s' "$GREEN_HEAD")
+  rm -f "$case_dir/pipeline.sqlite"
+  fm_test_pipeline_db "$case_dir/pipeline.sqlite" "$case_dir/project" \
+    "fm/task-x1|openai|gpt-5.6-sol|review||completed|$head" \
+    || fail "pipeline fixture failed"
   FM_ROOT_OVERRIDE="$ROOT" \
   FM_STATE_OVERRIDE="$case_dir/state" \
   FM_DATA_OVERRIDE="$case_dir/data" \
   FM_CONFIG_OVERRIDE="$case_dir/config" \
+  FM_PIPELINE_STATE_DB="$case_dir/pipeline.sqlite" \
   FM_TEST_GH_AXI_LOG="$case_dir/gh-axi.log" \
   FM_TEST_GH_LOG="$case_dir/gh.log" \
   FM_TEST_GH_HEAD="$head" \
@@ -289,7 +298,7 @@ test_records_pr_and_head_before_merging() {
   rc=$?
   set -e
 
-  expect_code 0 "$rc" "records-before-merge: fm-pr-merge should succeed"
+  [ "$rc" -eq 0 ] || fail "records-before-merge: fm-pr-merge should succeed:"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep 'pr=https://github.com/example/repo/pull/9' "$case_dir/state/task-x1.meta" \
     "records-before-merge: pr= was not recorded"
   assert_grep 'pr_head=deadbeefcafefeed0000000000000000deadbeef' "$case_dir/state/task-x1.meta" \
@@ -1233,8 +1242,8 @@ write_rollup_fixture() {
     total=${FM_TEST_FIXTURE_TOTAL:-$(printf '%s' "$members" | jq 'length')}
     rollup="{\"contexts\":{\"totalCount\":$total,\"nodes\":$members}}"
   fi
-  printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","mergeable":"%s","reviewDecision":"%s","commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":%s}}]}}}}}\n' \
-    "$2" "$3" "$4" "${FM_TEST_FIXTURE_OID-$2}" "$rollup" > "$1"
+  printf '{"data":{"repository":{"pullRequest":{"headRefOid":"%s","mergeable":"%s","reviewDecision":"%s","author":{"login":"maker"},"reviews":{"totalCount":1,"nodes":[{"state":"APPROVED","author":{"login":"reviewer"},"commit":{"oid":"%s"}}]},"commits":{"totalCount":1,"nodes":[{"commit":{"oid":"%s","author":{"user":{"login":"maker"}},"committer":{"user":{"login":"maker"}},"statusCheckRollup":%s}}]}}}}}\n' \
+    "$2" "$3" "$4" "$2" "${FM_TEST_FIXTURE_OID-$2}" "$rollup" > "$1"
 }
 
 check_runs_json() {

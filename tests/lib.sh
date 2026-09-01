@@ -518,6 +518,7 @@ conn = sqlite3.connect(db)
 conn.executescript(
     "create table repos (id text primary key, working_path text);"
     "create table runs (id text primary key, repo_id text, branch text,"
+    "  head_sha text, submitted_head_sha text, last_pushed_sha text,"
     "  status text not null default 'completed');"
     "create table agent_invocations ("
     "  id text primary key, run_id text, step_name text, round integer,"
@@ -536,7 +537,11 @@ for n, spec in enumerate(specs):
     if status == "none":
         status = ""
     run = "run%d" % n
-    conn.execute("insert into runs values (?, 'r1', ?, ?)", (run, branch, status))
+    head = parts[6] if len(parts) > 6 and parts[6] else "a" * 40
+    conn.execute(
+        "insert into runs values (?, 'r1', ?, ?, ?, ?, ?)",
+        (run, branch, head, head, head, status),
+    )
     # A run that recorded no agent invocation at all: it touched these bytes and
     # never reached the review step. It has no invocation row and no session
     # rows, because there was nothing to hold either.

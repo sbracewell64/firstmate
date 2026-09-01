@@ -2,13 +2,25 @@
 # Perform the approved local merge for a local-only ship task: fast-forward the
 # project's default branch to the crewmate's fm/<id> branch.
 #
-# This is firstmate's merge gate-action (the captain's merge authority applied
-# locally instead of via a GitHub PR). It is the one sanctioned exception to hard
-# rule #1 "never run state-changing git in projects/", and it is narrow: it only
-# runs for mode=local-only tasks, only after the captain approves (or yolo=on
-# auto-approves), and only as a clean fast-forward - it refuses a diverged branch
-# and tells you to have the crewmate rebase. See AGENTS.md prime directives,
-# project management, and task lifecycle.
+# This is firstmate's merge gate-action, applied locally instead of via a GitHub
+# PR. It is the one sanctioned exception to hard rule #1 "never run state-changing
+# git in projects/", and it is narrow: it only runs for mode=local-only tasks,
+# only under a landing authority compiled from typed durable sources, and only as
+# a clean fast-forward - it refuses a diverged branch and tells you to have the
+# crewmate rebase. See AGENTS.md prime directives, project management, and task
+# lifecycle.
+#
+# THE AUTHORITY IS COMPILED, NOT RECALLED. bin/fm-landing-seam-lib.sh answers
+# whether the decision under this landing is one the captain reserved, from the
+# task's own delivery record, the captain's standing posture at its canonical
+# owner, and the typed disposition of every decision still open on the task.
+# Whether a captain message named this merge is not one of those inputs and
+# cannot be: an instruction's transport is not an authority source, and a gate
+# that waits for one holds every ordinary reversible landing by default. That
+# answer is reported on every run - a delegated landing says so and names its
+# sources - because a home that says nothing about who authorised a landing is
+# indistinguishable from one that never asked. It decides only WHO may authorize;
+# every refusal below still refuses on its own terms.
 #
 # Uncommitted work in the project blocks the merge only on a GENUINE COLLISION:
 # a path that is both uncommitted in the project checkout and rewritten by this
@@ -31,14 +43,9 @@
 # bin/fm-landing-seam-lib.sh owns that question for both landing chokepoints, and
 # bin/fm-landing-authorization.sh owns the authority itself, and
 # bin/fm-landing-authorization-lib.sh's header owns its effect-plan contract.
-# What this file adds is that the fast-forward RUNS INSIDE the spend when one
-# governs, so an applicable candidate cannot reach `git merge --ff-only` without
-# consuming a valid, head-bound, one-use authorization. A candidate PROVEN
-# outside the declared governed landing domain lands through exactly the guards
-# above and says so with a reported not-applicable observation, because a silent
-# ungoverned landing is indistinguishable from an authorised one. A candidate
-# inside that domain with no live review request covering it REFUSES: the seam
-# owns why an absent record is the refusal rather than the permission.
+# A candidate no ruling governs lands through exactly the guards above and says
+# so with a reported not-applicable observation, because a silent ungoverned
+# landing is indistinguishable from an authorised one.
 #
 # A local-only item under Sol review is governed by a ruling on a PUBLISHED head,
 # because a published head is the only one an outside reviewer could ever have
@@ -53,26 +60,19 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FM_ROOT="${FM_ROOT_OVERRIDE:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 FM_HOME="${FM_HOME:-${FM_ROOT_OVERRIDE:-$FM_ROOT}}"
 STATE="${FM_STATE_OVERRIDE:-$FM_HOME/state}"
-DATA="${FM_DATA_OVERRIDE:-$FM_HOME/data}"
 CONFIG="${FM_CONFIG_OVERRIDE:-$FM_HOME/config}"
-OUTBOUND_DIR="${FM_OUTBOUND_DIR:-$DATA/outbound-artifacts}"
 
 # The landing seam needs the outbound gate register and the authorization
 # layer's own identity predicates; both are sourced here so it can consult its
 # owners rather than restate them.
 # shellcheck source=bin/fm-outbound-artifact-lib.sh
 . "$SCRIPT_DIR/fm-outbound-artifact-lib.sh"
-# shellcheck source=bin/fm-sol-control-config-lib.sh
-. "$SCRIPT_DIR/fm-sol-control-config-lib.sh"
 # shellcheck source=bin/fm-landing-authorization-lib.sh
 . "$SCRIPT_DIR/fm-landing-authorization-lib.sh"
 # shellcheck source=bin/fm-landing-seam-lib.sh
 . "$SCRIPT_DIR/fm-landing-seam-lib.sh"
-# The seam asks which repository this landing writes, and bin/fm-task-base-lib.sh
-# already owns reducing a git remote url to a forge identity. Sourced rather than
-# restated, because a second url parser on the landing path is a second answer.
-# shellcheck source=bin/fm-task-base-lib.sh
-. "$SCRIPT_DIR/fm-task-base-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$SCRIPT_DIR/fm-independence-lib.sh"
 "$FM_ROOT/bin/fm-guard.sh" || true
 ID=${1:?usage: fm-merge-local.sh <task-id>}
 META="$STATE/$ID.meta"
@@ -418,7 +418,7 @@ if [ "${#COLLISIONS[@]}" -gt 0 ]; then
 fi
 guard_tmp_cleanup
 
-# --- the ruling-derived landing authority -------------------------------------
+# --- the compiled landing authority ------------------------------------------
 #
 # The head is read from the branch this fast-forward would land, never asserted
 # by the caller, and the answer is reported either way: `not-applicable` is an
@@ -428,33 +428,25 @@ LANDING_HEAD=$(git -C "$PROJ" rev-parse --verify --quiet "refs/heads/$BRANCH^{co
   echo "error: the head of $BRANCH in $PROJ could not be read, so whether a ruling governs this landing could not be asked" >&2
   exit 1
 }
-# The repository this fast-forward would land into, as the venue's own
-# `owner/name` path, read from the clone's own push remote rather than from the
-# task record: the declared domain must be asked about the repository the merge
-# command actually writes.
-#
-# Three-valued on purpose. A path when the remote resolves, and "-" when it does
-# not - which covers both an unreadable remote configuration and a clone naming no
-# remote at all. Neither is positive proof that this landing is outside a declared
-# domain, and a clone whose remote was removed is exactly the shape a bypass would
-# take, so both are handed to the seam as could-not-observe rather than as an
-# answer. A home that declares an empty domain is unaffected either way, because an
-# empty domain contains nothing whatever this landing turns out to write.
-landing_repository() {  # <dir>
-  local dir=$1 url identity
-  url=$(git --no-optional-locks -C "$dir" remote get-url --push origin 2>/dev/null) || return 1
-  [ -n "$url" ] || return 1
-  identity=$(task_base_venue_identity "$url") || return 1
-  # host/owner/name -> owner/name. The host is addressing rather than identity,
-  # and the seam compares the repository path for exactly that reason.
-  case $identity in
-    */*/*) printf '%s\n' "${identity#*/}" ;;
-    *) return 1 ;;
-  esac
-}
-LANDING_REPO=$(landing_repository "$PROJ") || LANDING_REPO=-
-
-if ! fm_landing_seam_resolve "$OUTBOUND_DIR" "$CONFIG" "$ID" "$LANDING_HEAD" - "$LANDING_REPO"; then
+# WHOSE landing this is, compiled by bin/fm-landing-seam-lib.sh from the task's
+# own durable records, and reported either way. It answers only who may
+# authorize this landing; every refusal above still applies unchanged.
+SEAM_RC=0
+fm_landing_candidate_resolve "$FM_HOME" "$ID" local "$META" || SEAM_RC=$?
+LANDING_HEAD=$FM_LANDING_CANDIDATE_HEAD
+AUTHORITY_RC=0
+fm_landing_authority_resolve "$FM_HOME" "$ID" "$FM_LANDING_SEAM_VERDICT" \
+  "$FM_LANDING_SEAM_REQUEST" "$FM_LANDING_SEAM_RULING" "$FM_LANDING_CANDIDATE_REVIEW" || AUTHORITY_RC=$?
+if [ "$AUTHORITY_RC" -ne 0 ]; then
+  if [ "$SEAM_RC" -ne 0 ]; then
+    printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
+  fi
+  printf 'REFUSED: %s: %s\n' "$FM_LANDING_AUTHORITY_TOKEN" "$FM_LANDING_AUTHORITY_REASON" >&2
+  exit 1
+fi
+printf '%s: %s [%s]\n' "$FM_LANDING_AUTHORITY_TOKEN" \
+  "$FM_LANDING_AUTHORITY_REASON" "$FM_LANDING_AUTHORITY_SOURCES"
+if [ "$SEAM_RC" -ne 0 ]; then
   printf 'REFUSED: %s: %s\n' "$FM_LANDING_SEAM_TOKEN" "$FM_LANDING_SEAM_REASON" >&2
   exit 1
 fi

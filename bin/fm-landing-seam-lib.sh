@@ -1,8 +1,16 @@
 # shellcheck shell=bash
-# fm-landing-seam-lib.sh - the single owner of ONE question, asked at the two
-# real landing chokepoints: is THIS landing candidate governed by a Browser Sol
-# ruling, and if so which durable request grants the authority the landing must
-# consume?
+# fm-landing-seam-lib.sh - the single owner of the two questions asked at the two
+# real landing chokepoints:
+#
+#   1. GOVERNANCE. Is THIS landing candidate governed by a Browser Sol ruling,
+#      and if so which durable request grants the authority the landing must
+#      consume? (fm_landing_seam_resolve, and the mint and spend below it.)
+#   2. AUTHORITY. Is this landing the captain's to authorize, or is it delegated?
+#      (fm_landing_authority_resolve.)
+#
+# They are one file because they are asked at one place about one candidate, and
+# because splitting them is how a landing ends up with two answers about who may
+# perform it.
 #
 # Source it; it defines and runs nothing on its own:
 #   # shellcheck source=bin/fm-landing-seam-lib.sh
@@ -11,7 +19,9 @@
 # It needs bin/fm-outbound-artifact-lib.sh for the gate register,
 # bin/fm-sol-control-config-lib.sh for the control venue schema, and
 # bin/fm-landing-authorization-lib.sh for the head prefilter and the
-# authorization id shape; source both before this one.
+# authorization id shape; source both before this one. It sources
+# bin/fm-classify-lib.sh itself, because the disposition fold is an owner it
+# CONSULTS rather than a shape its caller supplies.
 #
 # WHY THIS EXISTS.
 #
@@ -85,6 +95,37 @@ if [ -n "${FM_LANDING_SEAM_LIB_SOURCED:-}" ]; then
   return 0
 fi
 FM_LANDING_SEAM_LIB_SOURCED=1
+
+# Directory of this library, resolved at source time so the owners it consults
+# are found whether it is sourced by a bin/ script or directly by a test.
+_FM_LANDING_SEAM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _FM_LANDING_SEAM_LIB_DIR="."
+
+# The open-decision fold and, through it, the disposition fold and the autonomy
+# owner. The authority compile below asks THOSE what a decision is and whose it
+# is; nothing here restates either.
+# shellcheck source=bin/fm-classify-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-classify-lib.sh"
+# shellcheck source=bin/fm-pr-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-task-base-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-task-base-lib.sh"
+# shellcheck source=bin/fm-sol-control-config-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-sol-control-config-lib.sh"
+# shellcheck source=bin/fm-verify-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-verify-lib.sh"
+# shellcheck source=bin/fm-independence-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-independence-lib.sh"
+
+# shellcheck disable=SC2016  # This is a jq program; its variables are expanded by jq.
+FM_LANDING_REVIEW_EVIDENCE_JQ='(. as $v
+  | (([$v.pr_author] + $v.commit_makers) | map(select(length > 0) | ascii_downcase) | unique) as $makers
+  | ($v.approved_reviews | map(select((.head | ascii_downcase) == ($v.head | ascii_downcase)))) as $approvals
+  | if ($v.commits_reported == null or $v.commits_reported != $v.commits_read) then "commits-unread"
+    elif ($v.reviews_reported == null or $v.reviews_reported != $v.reviews_read) then "reviews-unread"
+    elif ($v.maker_identities_complete | not) then "maker-identities-unread"
+    elif any($approvals[]; . as $a | ($a.login | length) > 0 and (($makers | index($a.login | ascii_downcase)) == null)) then "github-approved"
+    elif ($approvals | length) > 0 then "maker-associated-approval"
+    else "none" end)'
 
 # --- contract constants ------------------------------------------------------
 
@@ -268,11 +309,12 @@ fm_landing_seam_domain_contains() {  # <repo-path>
 
 # --- resolution --------------------------------------------------------------
 #
-# Sets, always, all four:
+# Sets, always, all five:
 #   FM_LANDING_SEAM_VERDICT   governed | not-applicable | refused | unobserved
 #   FM_LANDING_SEAM_TOKEN     one stable token from the block above
 #   FM_LANDING_SEAM_REASON    one line naming what was observed
-#   FM_LANDING_SEAM_REQUEST   the granting request id, only when governed
+#   FM_LANDING_SEAM_REQUEST   the governing request id, only when governed
+#   FM_LANDING_SEAM_RULING    its raw ruling verdict, only when governed
 #
 # Returns 0 for governed and not-applicable, 3 for refused, 4 for unobserved, so
 # a caller that reads only the status still stops safely on both stopping values.
@@ -281,13 +323,15 @@ FM_LANDING_SEAM_VERDICT=
 FM_LANDING_SEAM_TOKEN=
 FM_LANDING_SEAM_REASON=
 FM_LANDING_SEAM_REQUEST=
+FM_LANDING_SEAM_RULING=
 
-# shellcheck disable=SC2034  # the four outputs are read by the sourcing merge gates
-fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>]
+# shellcheck disable=SC2034  # the five outputs are read by the sourcing merge gates
+fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>] [<ruling>]
   FM_LANDING_SEAM_VERDICT=$1
   FM_LANDING_SEAM_TOKEN=$2
   FM_LANDING_SEAM_REASON=$3
   FM_LANDING_SEAM_REQUEST=${4:-}
+  FM_LANDING_SEAM_RULING=${5:-}
   case $1 in
     governed|not-applicable) return 0 ;;
     refused) return 3 ;;
@@ -310,8 +354,8 @@ fm_landing_seam_set() {  # <verdict> <token> <reason> [<request>]
 # can never be shown to be outside a NON-empty one.
 fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-dash> <repo-or-dash>
   local dir=$1 config=$2 item=$3 head=$4 pr=$5 repo=$6
-  local f rid raw stored gate state rec_head rec_pr
-  local live=0 granting=0 granting_id='' others=''
+  local f rid raw stored gate state rec_head rec_pr ruling
+  local live=0 granting=0 granting_id='' granting_ruling='' others=''
   local venue_state store=present
 
   if ! fm_landing_seam_candidate_valid "$item" "$head"; then
@@ -386,6 +430,8 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
     fi
     granting=$((granting + 1))
     granting_id=$rid
+    ruling=$(printf '%s' "$raw" | jq -r '.ruling.verdict // ""')
+    granting_ruling=$ruling
   done
 
   if [ "$live" -gt 0 ]; then
@@ -418,7 +464,7 @@ fm_landing_seam_resolve() {  # <record-dir> <config-dir> <item> <head> <pr-or-da
       return $?
     fi
     fm_landing_seam_set governed "$FM_LANDING_SEAM_TOKEN_GOVERNED" \
-      "Browser Sol request $granting_id governs $item at $head" "$granting_id"
+      "Browser Sol request $granting_id governs $item at $head" "$granting_id" "$granting_ruling"
     return $?
   fi
 
@@ -573,6 +619,417 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
   fi
   fm_landing_seam_set unobserved "$FM_LANDING_SEAM_TOKEN_SPEND_UNOBSERVED" \
     "the act under landing authority $id exited $rc, which does not establish that it had no effect; reconcile it from an observation with bin/fm-landing-authorization.sh reconcile $id"
+  return $?
+}
+
+# --- the authority compile ----------------------------------------------------
+#
+# WHOSE LANDING IS THIS? Compiled from typed sources, and from nothing else.
+# This tracked header owns the compiled rule. Its governing specification is the
+# Captain-private ruling record at the home's
+# data/captain-rulings-2026-08-26-standing-landing-authority.md; that record is
+# private evidence by design, not a tracked documentation surface.
+# Browser Sol ruling
+# SOL-FM-PR132-DELEGATED-LANDING-COMPILER-AUTHORITY-REVIEW-20260901-G2,
+# outcome-lattice ruling 19/5488261106, governs the engineering-refusal branch.
+#
+# WHAT THIS REPLACES. On 2026-08-26 a pull request whose landing merits an
+# outside reviewer had already approved was held, and the only thing holding it
+# was that no chat message contained a merge word. Nothing in the fleet's
+# structured state said the captain owed a ruling, and the captain's own standing
+# posture said the opposite. An instruction's TRANSPORT - whether a sentence
+# happened to be typed - is not an authority source, and a rule that reads like
+# one turns every landing into the captain's by default.
+#
+# THE INPUTS, all of them typed and durable:
+#
+#   commission    the task's own delivery record: state/<id>.meta, or the landing
+#                 record a released task leaves behind. Work with no durable
+#                 record was never commissioned through this home, and whose
+#                 landing it is cannot be asked at all.
+#   posture       the captain's standing routine authority for the project, from
+#                 bin/fm-autonomy-lib.sh's EFFECTIVE resolution - the canonical
+#                 owner data/projects.md, not the snapshot the task recorded.
+#   decisions     every decision still open on the task, each carrying one
+#                 disposition from the closed vocabulary bin/fm-classify-lib.sh
+#                 owns. This is the ONLY carrier of "the captain reserved this".
+#   ruling        the Browser Sol resolution above, when the caller has asked it.
+#                 Sol holds captain-delegated approval over landing MERITS, so an
+#                 approving ruling is a delegation source - never a way to clear a
+#                 decision the captain reserved.
+#   landing gate  the exact candidate and assignment-distinct review evidence.
+#                 An observed insufficiency is LANDING_REVIEW_GATE_REFUSED;
+#                 missing or unreadable evidence is could-not-observe.
+#
+# THERE IS NO INPUT FOR AN UTTERANCE, which is the property this file exists to
+# have. `CAPTAIN_REQUIRED` is reachable only from a typed reserved decision: not
+# from the act being a merge, not from the project, not from a local-only landing,
+# not from a posture that used to be off, not from absent assignment-distinct
+# review evidence, and not from the absence of a sentence.
+#
+# WHAT IT DOES NOT DECIDE. Nothing about whether the work is fit to land. Every
+# test, validator, review, exact-head binding, mergeability and one-use
+# authorization gate stays exactly where it is and refuses on its own terms; a
+# delegated landing must still pass all of them. Delegation answers who may
+# authorize the landing, never whether the landing is sound, and a posture that
+# waived an engineering gate would be the failure this compile is meant to make
+# impossible to reach for.
+
+FM_LANDING_CANDIDATE_HEAD=
+FM_LANDING_CANDIDATE_REVIEW=
+FM_LANDING_CANDIDATE_REASON=
+
+fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <review>]
+  local home=$1 task=$2 route=$3 record=$4 head=${5:-} review=${6:-}
+  local project branch maker_harness maker_model independence recorded_heads recorded_head url output owner repo number repository remote identity seam_rc=0
+  local outbound=${FM_OUTBOUND_DIR:-${FM_DATA_OVERRIDE:-$home/data}/outbound-artifacts}
+  local config=${FM_CONFIG_OVERRIDE:-$home/config}
+  FM_LANDING_CANDIDATE_HEAD=
+  FM_LANDING_CANDIDATE_REVIEW=
+  FM_LANDING_CANDIDATE_REASON=
+  project=$(grep '^project=' "$record" | tail -1 | cut -d= -f2- || true)
+  url=$(grep '^pr=' "$record" | tail -1 | cut -d= -f2- || true)
+  branch="fm/$task"
+  maker_harness=$(grep '^harness=' "$record" | tail -1 | cut -d= -f2- || true)
+  maker_model=$(grep '^model=' "$record" | tail -1 | cut -d= -f2- || true)
+  case "$route" in
+    local)
+      [ -n "$project" ] && [ -d "$project" ] || { FM_LANDING_CANDIDATE_REASON='the local project could not be read'; return 4; }
+      head=$(git -C "$project" rev-parse --verify --quiet "refs/heads/$branch^{commit}") \
+        || { FM_LANDING_CANDIDATE_REASON="the live head of $branch could not be read"; return 4; }
+      remote=$(git --no-optional-locks -C "$project" remote get-url --push origin 2>/dev/null) || remote=
+      identity=$(task_base_venue_identity "$remote" 2>/dev/null) || identity=
+      case "$identity" in
+        */*/*) repository=${identity#*/} ;;
+        *) repository=- ;;
+      esac
+      ;;
+    pr-live)
+      fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ] \
+        || { FM_LANDING_CANDIDATE_REASON='the live pull request identity could not be read'; return 4; }
+      owner=$FM_PR_OWNER repo=$FM_PR_REPO number=$FM_PR_NUMBER
+      repository="$owner/$repo"
+      # fm-retrieval-audit: complete-source - the shared GraphQL normalizer compares every reviews, commits, and check-context totalCount with the nodes read
+      output=$(gh api graphql -f query="$FM_VERIFY_ROLLUP_GRAPHQL" -f owner="$owner" -f repo="$repo" -F number="$number" \
+        -q "$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (.head, $FM_LANDING_REVIEW_EVIDENCE_JQ)" 2>/dev/null) \
+        || { FM_LANDING_CANDIDATE_REASON='the live pull request candidate and review identities could not be read'; return 4; }
+      head=${output%%$'\n'*}
+      review=${output#*$'\n'}
+      recorded_head=$(grep '^pr_head=' "$record" | tail -1 | cut -d= -f2- || true)
+      if fm_pr_head_valid "$recorded_head" && [ "$recorded_head" != "$head" ]; then
+        FM_LANDING_CANDIDATE_HEAD=$head
+        FM_LANDING_CANDIDATE_REVIEW=$review
+        FM_LANDING_CANDIDATE_REASON="live head=$head differs from stale recorded head=$recorded_head"
+        return 4
+      fi
+      ;;
+    pr-snapshot)
+      if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ]; then
+        repository="$FM_PR_OWNER/$FM_PR_REPO"
+      else
+        repository=-
+      fi
+      ;;
+    *) FM_LANDING_CANDIDATE_REASON="the landing route '$route' is not classified"; return 4 ;;
+  esac
+  fm_pr_head_valid "$head" || { FM_LANDING_CANDIDATE_REASON='the live landing head could not be established'; return 4; }
+  if [ "$review" != github-approved ] && [ -n "$project" ] && [ -d "$project" ]; then
+    independence=$(fm_independence_dimensions "$project" "$branch" "$maker_harness" "$maker_model" "$head")
+    if [ "$(fm_independence_overall "$independence")" = PASS ]; then
+      review=independent
+    else
+      recorded_heads=$(fm_independence_recorded_heads "$project" "$branch" || true)
+      review="pipeline gaps:$(fm_independence_gaps "$independence" | paste -sd, -)${recorded_heads:+ stale-head=$recorded_heads expected=$head}"
+    fi
+  fi
+  # shellcheck disable=SC2034  # Output consumed by the merge-gate sourcing callers.
+  FM_LANDING_CANDIDATE_HEAD=$head
+  # shellcheck disable=SC2034  # Output consumed by the merge-gate sourcing callers.
+  FM_LANDING_CANDIDATE_REVIEW=$review
+  # shellcheck disable=SC2034  # Output consumed by the decision-surface sourcing caller.
+  FM_LANDING_CANDIDATE_REASON="candidate head=$head review=${review:-could-not-observe}"
+  fm_landing_seam_resolve "$outbound" "$config" "$task" "$head" "${url:--}" \
+    "${repository:--}" || seam_rc=$?
+  if [ "$seam_rc" -ne 0 ]; then
+    FM_LANDING_CANDIDATE_REASON="$FM_LANDING_CANDIDATE_REASON seam=$FM_LANDING_SEAM_TOKEN: $FM_LANDING_SEAM_REASON"
+  fi
+  return "$seam_rc"
+}
+
+# Reported observations and refusals, kept apart the same way the governance
+# tokens above are.
+# shellcheck disable=SC2034  # contract constants consumed by sourcing callers
+{
+FM_LANDING_AUTHORITY_TOKEN_DELEGATED=DELEGATED_LANDING_ALLOWED
+FM_LANDING_AUTHORITY_TOKEN_CAPTAIN=CAPTAIN_REQUIRED
+# An engineering gate said no on an observed candidate: review evidence is
+# absent or fails maker-checker separation. Its own class, because sending an
+# engineering repair to the captain and diluting CAPTAIN_REQUIRED are the same
+# defect from two directions (Sol outcome-lattice ruling 19/5488261106).
+FM_LANDING_AUTHORITY_TOKEN_REFUSED=LANDING_REVIEW_GATE_REFUSED
+FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED=LANDING_AUTHORITY_COULD_NOT_OBSERVE
+}
+
+# The dispositions that RESERVE a decision to the captain. Named positively, so a
+# disposition added to that vocabulary later does not silently become a delegated
+# one; the completeness check below refuses a member this file does not classify.
+FM_LANDING_AUTHORITY_RESERVED_DISPOSITIONS='CAPTAIN_REQUIRED_AND_BLOCKING
+CAPTAIN_REQUIRED_NONBLOCKING
+CAPTAIN_DEFERRED'
+
+# The dispositions that establish nothing about whose decision it is. They are
+# could-not-observe and stop the landing, because a decision nobody could read is
+# exactly the one that might be the captain's.
+FM_LANDING_AUTHORITY_UNREADABLE_DISPOSITIONS='CNO_DECISION_SUBJECT
+CNO_DECISION_UNIVERSE'
+
+# The dispositions that do not reserve the landing: the decision is firstmate's
+# own move, routed to the review channel, waiting on something outside the fleet,
+# or withdrawn.
+FM_LANDING_AUTHORITY_UNRESERVED_DISPOSITIONS='SELF_HANDLE
+BROWSER_SOL
+EXTERNAL_DEPENDENCY
+WITHDRAWN'
+
+# Four answers, because two different things stop a landing for two different
+# reasons and an operator told only "it did not work" repairs the wrong one:
+#   0  reserved to the captain
+#   1  not reserved
+#   2  the disposition says the owner could not be established
+#   3  a disposition this file has not classified, which is a gap in THIS file
+#      rather than a fact about the decision. It stops the landing exactly as 2
+#      does, and it says which of the two it is.
+fm_landing_authority_disposition_reserves() {  # <disposition>
+  local d=${1:-}
+  [ -n "$d" ] || return 3
+  if printf '%s\n' "$FM_LANDING_AUTHORITY_RESERVED_DISPOSITIONS" | grep -qxF "$d"; then
+    return 0
+  fi
+  if printf '%s\n' "$FM_LANDING_AUTHORITY_UNRESERVED_DISPOSITIONS" | grep -qxF "$d"; then
+    return 1
+  fi
+  if printf '%s\n' "$FM_LANDING_AUTHORITY_UNREADABLE_DISPOSITIONS" | grep -qxF "$d"; then
+    return 2
+  fi
+  return 3
+}
+
+# Split the open-decision fold arriving on stdin into the three lists the compile
+# acts on, printed as one TAB-separated line: reserved, unreadable, unclassified.
+#
+# It reads a PIPE rather than a heredoc on purpose. This file declares
+# fail-closed predicates, and bin/fm-dead-predicate-check.sh cannot parse a
+# heredoc-fed loop: a construct it cannot read makes every predicate in this file
+# could-not-observe, which is exactly the blindness the marker at the bottom
+# promises this file does not have.
+fm_landing_authority_classify() {
+  local key verb disposition note rc
+  local reserved='' unreadable='' unclassified=''
+  while IFS=$'\t' read -r key verb disposition note; do
+    [ -n "$key" ] || continue
+    rc=0
+    fm_landing_authority_disposition_reserves "$disposition" || rc=$?
+    case "$rc" in
+      0) reserved="$reserved $key($disposition/$verb)" ;;
+      2) unreadable="$unreadable $key($disposition)" ;;
+      3) unclassified="$unclassified $key(${disposition:-empty})" ;;
+    esac
+  done
+  printf '%s\t%s\t%s\n' "$reserved" "$unreadable" "$unclassified"
+}
+
+FM_LANDING_AUTHORITY_VERDICT=
+FM_LANDING_AUTHORITY_TOKEN=
+FM_LANDING_AUTHORITY_REASON=
+FM_LANDING_AUTHORITY_SOURCES=
+
+# shellcheck disable=SC2034  # the four outputs are read by the sourcing callers
+fm_landing_authority_set() {  # <verdict> <token> <reason> [<sources>]
+  FM_LANDING_AUTHORITY_VERDICT=$1
+  FM_LANDING_AUTHORITY_TOKEN=$2
+  FM_LANDING_AUTHORITY_REASON=$3
+  FM_LANDING_AUTHORITY_SOURCES=${4:-}
+  case $1 in
+    delegated) return 0 ;;
+    captain-required) return 3 ;;
+    refused) return 5 ;;
+    *) return 4 ;;
+  esac
+}
+
+# Sets, always, all four outputs. Returns 0 delegated, 3 captain-required, 5
+# refused (an engineering gate said no on an observed candidate), 4
+# could-not-observe, matching the governance resolution above so a caller that
+# reads only the status still stops safely on both stopping values.
+#
+# The optional seam inputs are the normalized answer, governing request, and raw
+# ruling verdict already observed for this candidate. They can add a delegation
+# source and withhold an answer; they can never clear a reserved decision.
+fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> <ruling> <review-evidence>]]
+  local home=$1 task=$2 seam=${3:-} request=${4:-} ruling=${5:-} review=${6:-} ruling_class
+  local state meta landing status posture posture_rc commission sources
+  local classified rest reserved='' unreadable='' unclassified=''
+  # The disposition fold resolves the home it reads from FM_HOME; naming it here
+  # keeps this answer about the home the caller asked about. The state directory
+  # comes through the same override every bin/ script honors, so a caller whose
+  # records are not under <home>/state is answered from its own records.
+  local FM_HOME=$home
+  state=${FM_STATE_OVERRIDE:-$home/state}
+
+  case "$task" in
+    ''|*[!A-Za-z0-9._-]*)
+      fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+        "'$task' is not a task identity, so whose landing this is could not be asked"
+      return $?
+      ;;
+  esac
+
+  # --- commission ------------------------------------------------------------
+  meta="$state/$task.meta"
+  landing="$state/$task.landing"
+  if [ -r "$meta" ]; then
+    commission='task-record'
+  elif [ -r "$landing" ]; then
+    commission='landing-record'
+  else
+    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+      "no durable delivery record for $task in this home, so the authority this landing would be performed under could not be observed"
+    return $?
+  fi
+  sources="commission=$commission"
+
+  # --- the captain's standing posture ---------------------------------------
+  #
+  # Absent is a real state and NOT could-not-observe: a task can legitimately
+  # record no posture. Unreadable is could-not-observe and stops.
+  if [ "$commission" = task-record ]; then
+    # Called in THIS shell, not in a command substitution: the resolution also
+    # publishes where its answer came from, and a subshell would discard that.
+    posture_rc=0
+    fm_autonomy_state_effective "$meta" "$home" >/dev/null || posture_rc=$?
+    posture=$FM_AUTONOMY_EFFECTIVE_STATE
+    case "$posture_rc" in
+      0) sources="$sources posture=$posture:$FM_AUTONOMY_EFFECTIVE_SOURCE${FM_AUTONOMY_EFFECTIVE_PROJECT:+:$FM_AUTONOMY_EFFECTIVE_PROJECT}" ;;
+      1) sources="$sources posture=none" ;;
+      *)
+        fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+          "the standing posture for $task could not be observed at its canonical owner, so whether this landing is delegated could not be established"
+        return $?
+        ;;
+    esac
+  else
+    sources="$sources posture=none"
+  fi
+
+  # --- decisions still open on this task ------------------------------------
+  #
+  # An ABSENT status log is a genuine absence: the task has appended no event, so
+  # it has raised no decision. A log that EXISTS and cannot be folded is
+  # could-not-observe, and the fold says so in band with CNO_DECISION_UNIVERSE.
+  status="$state/$task.status"
+  if [ -e "$status" ] || [ -L "$status" ]; then
+    classified=$(status_open_decisions "$status" | fm_landing_authority_classify)
+    reserved=${classified%%$'\t'*}
+    rest=${classified#*$'\t'}
+    unreadable=${rest%%$'\t'*}
+    unclassified=${rest#*$'\t'}
+    sources="$sources decisions=folded"
+  else
+    sources="$sources decisions=none-recorded"
+  fi
+
+  if [ -n "$reserved" ]; then
+    fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
+      "$task carries an open decision the fleet has typed as the captain's:$reserved" \
+      "$sources"
+    return $?
+  fi
+  if [ -n "$unreadable" ]; then
+    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+      "$task carries an open decision whose owner could not be established:$unreadable; an unreadable decision is exactly the one that might be the captain's" \
+      "$sources"
+    return $?
+  fi
+  if [ -n "$unclassified" ]; then
+    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+      "$task carries an open decision whose disposition this compile does not classify:$unclassified; repair bin/fm-landing-seam-lib.sh's disposition sets rather than reading an unclassified value as permission" \
+      "$sources"
+    return $?
+  fi
+
+  # --- the ruling, when the caller has one ----------------------------------
+  case "$seam" in
+    governed)
+      [ -n "$request" ] || {
+        fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+          "a Browser Sol ruling governs $task but its request identity could not be observed" "$sources ruling=could-not-observe"
+        return $?
+      }
+      [ -n "$ruling" ] || {
+        fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+          "Browser Sol request $request governs $task but carries no readable ruling verdict" "$sources ruling=could-not-observe:$request"
+        return $?
+      }
+      ruling_class=$(fm_auth_verdict_class "$ruling")
+      case "$ruling_class" in
+        authorizing) sources="$sources ruling=authorizing:$request:$ruling" ;;
+        declining)
+          fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+            "the ruling on Browser Sol request $request returned '$ruling', which does not delegate this landing" \
+            "$sources ruling=declining:$request:$ruling"
+          return $?
+          ;;
+        *)
+          fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+            "the ruling on Browser Sol request $request returned '$ruling', which this compile cannot classify" \
+            "$sources ruling=could-not-observe:$request:$ruling"
+          return $?
+          ;;
+      esac
+      ;;
+    not-applicable)
+      sources="$sources ruling=not-applicable"
+      ;;
+    '')
+      sources="$sources ruling=not-asked"
+      ;;
+    *)
+      fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+        "the governance resolution for $task answered '$seam', so the authority this landing would consume could not be established" \
+        "$sources"
+      return $?
+      ;;
+  esac
+
+  # --- the assignment-distinct review gate ---------------------------------
+  #
+  # A Browser Sol merits ruling is an authority source, not maker-checker
+  # evidence. Every observed candidate reaches the same review classifier,
+  # regardless of whether the landing seam is governed.
+  sources="$sources review=${review:-could-not-observe}"
+  case "$review" in
+    github-approved|independent) ;;
+    ''|none|maker-associated-approval)
+      # OBSERVED insufficiency, not an unobserved one: the candidate was fully
+      # read and the review gate is simply unmet. That is an engineering refusal
+      # with its own typed outcome - never a captain dependency, which only a
+      # typed reserved decision may produce.
+      fm_landing_authority_set refused "$FM_LANDING_AUTHORITY_TOKEN_REFUSED" \
+        "$task is fully observed and carries no qualifying assignment-distinct review evidence (${review:-no review record}); the review gate refuses - supply an approving review from a non-maker identity or head-bound independent pipeline review evidence" "$sources"
+      return $?
+      ;;
+    *)
+      fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+        "$task carries the review-evidence value '$review', which this compile cannot classify" "$sources"
+      return $?
+      ;;
+  esac
+
+  # --- the compile ----------------------------------------------------------
+  #
+  fm_landing_authority_set delegated "$FM_LANDING_AUTHORITY_TOKEN_DELEGATED" \
+    "no decision on $task is reserved to the captain, so this landing is firstmate's to perform once its own gates pass" \
+    "$sources"
   return $?
 }
 

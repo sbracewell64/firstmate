@@ -39,6 +39,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    Publish as soon as step 7 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.
    `Require no-mistakes` is one of the checks `checks-passed` waits on and it stays red until this note exists, so waiting for that outcome first waits on the check this step is what clears.
    The pipeline steps `bin/fm-attest.sh write` requires are the ones step 7 completed, and it attests the head that run validated rather than whatever `HEAD` happens to be, so it refuses instead of attesting the wrong commit.
+   Before treating publication as complete, compare the 40-character head reported by `bin/fm-attest.sh write` with the pull request's current head and require an exact match.
    Make no further commit before publishing, because a review or lint fix round or any later commit advances the head beyond the commit the completed run validated.
    Do not add a follow-up commit merely to restart the failed check; validate that new head through no-mistakes first, then publish its attestation.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
@@ -87,7 +88,7 @@ See the [no-mistakes quick start](https://kunchenguid.github.io/no-mistakes/star
 
 ## Development
 
-Tracked changes to firstmate's own shared material - every path [`AGENTS.md`](AGENTS.md) section 1 lists - ship through the `no-mistakes` pipeline on a feature branch and require an explicit merge approval.
+Tracked changes to firstmate's own shared material - every path [`AGENTS.md`](AGENTS.md) section 1 lists - ship through the `no-mistakes` pipeline on a feature branch and land under the authority compiled by [`AGENTS.md`](AGENTS.md) hard rule 2.
 Before making any such change, load the agent-only `firstmate-coding-guidelines` skill (`.agents/skills/firstmate-coding-guidelines/SKILL.md`).
 It has the knowledge-placement rules that keep `AGENTS.md` from regrowing after each diet pass.
 There is no reliable way for `bin/fm-brief.sh`'s scaffold to detect that a task's repo is firstmate itself, so firstmate adds this skill's load line to firstmate-repo briefs by hand.
