@@ -90,6 +90,9 @@ jobs:
           HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
           BASE_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -eu
           case "$HEAD_REPO" in
@@ -130,6 +133,36 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${BASE_REPO}.git" >/dev/null 2>&1 \
             || git remote set-url pullrequest-source \
               "https://x-access-token:${GH_TOKEN}@github.com/${BASE_REPO}.git" >/dev/null 2>&1
+
+          if [ "${EVENT_NAME:-}" = pull_request_target ]; then
+            case "${PR_NUMBER:-}" in
+              '' | *[!0-9]*)
+                echo "::error::The pull request number is unavailable, so its exact head cannot be obtained." >&2
+                exit 1
+                ;;
+            esac
+            case "${HEAD_SHA:-}" in
+              *[!0-9a-f]* | '')
+                echo "::error::The pull request head is not a full commit ID." >&2
+                exit 1
+                ;;
+            esac
+            if [ "${#HEAD_SHA}" -ne 40 ]; then
+              echo "::error::The pull request head is not a full commit ID." >&2
+              exit 1
+            fi
+            if ! git fetch --quiet --no-tags --force --depth=1 pullrequest-source \
+              "refs/pull/${PR_NUMBER}/head:refs/fm-attest/pull-request-head" 2>/dev/null; then
+              echo "::error::The exact pull request head could not be obtained from the governed venue." >&2
+              exit 1
+            fi
+            fetched_head=$(git rev-parse --verify --quiet \
+              'refs/fm-attest/pull-request-head^{commit}' 2>/dev/null) || fetched_head=
+            if [ "$fetched_head" != "$HEAD_SHA" ]; then
+              echo "::error::The fetched pull request head does not match the event head." >&2
+              exit 1
+            fi
+          fi
 
           # Every call above is made with its output suppressed, because a URL
           # embedding the job token is quoted back by git in its own errors and a

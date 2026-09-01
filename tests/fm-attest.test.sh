@@ -4166,6 +4166,46 @@ test_workflow_subscribes_the_governed_event_and_checks_out_its_generation() {
   pass "fm-attest.sh: the workflow subscribes the governed event and checks out its generation"
 }
 
+test_governed_workflow_fetches_only_the_exact_head_as_data() {
+  local dir venue script policy_sha head_sha out rc fetched url
+  dir="$TMP_ROOT/governed-workflow-head-data"
+  venue="$dir/venue.git"
+  mkdir -p "$dir/source" "$dir/governed"
+  git -C "$dir/source" init -q .
+  git -C "$dir/source" config user.email t@e
+  git -C "$dir/source" config user.name t
+  printf 'policy\n' > "$dir/source/policy"
+  git -C "$dir/source" add policy
+  git -C "$dir/source" commit -qm policy
+  policy_sha=$(git -C "$dir/source" rev-parse HEAD)
+  printf 'candidate\n' > "$dir/source/candidate"
+  git -C "$dir/source" add candidate
+  git -C "$dir/source" commit -qm candidate
+  head_sha=$(git -C "$dir/source" rev-parse HEAD)
+  git init -q --bare "$venue"
+  git -C "$dir/source" push -q "$venue" "$policy_sha:refs/heads/main"
+  git -C "$dir/source" push -q "$venue" "$head_sha:refs/pull/7/head"
+  git clone -q --branch main "$venue" "$dir/governed"
+  script="$dir/address-step.sh"
+  workflow_step_script 'Address the repositories the attestation is read from' > "$script"
+  url="https://x-access-token:test-token@github.com/owner/venue.git"
+  out=$(cd "$dir/governed" && \
+    GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0="url.$venue.insteadOf" GIT_CONFIG_VALUE_0="$url" \
+    HEAD_REPO=owner/fork BASE_REPO=owner/venue GH_TOKEN=test-token \
+    EVENT_NAME=pull_request_target PR_NUMBER=7 HEAD_SHA="$head_sha" bash "$script" 2>&1)
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "the governed leg could not obtain its exact head (exit $rc): $out"
+  fetched=$(git -C "$dir/governed" rev-parse 'refs/fm-attest/pull-request-head^{commit}')
+  [ "$fetched" = "$head_sha" ] || fail "the private head ref names $fetched instead of $head_sha"
+  [ "$(git -C "$dir/governed" rev-parse HEAD)" = "$policy_sha" ] \
+    || fail "obtaining the candidate head moved the governed checkout"
+  [ ! -e "$dir/governed/candidate" ] \
+    || fail "obtaining the candidate head checked out candidate code"
+  git -C "$dir/governed" cat-file -e "$head_sha^{commit}" \
+    || fail "the exact head commit is still unavailable to the governed verifier"
+  pass "fm-attest.sh: the governed workflow obtains the exact head only as data"
+}
+
 test_governed_workflow_resolves_and_dispatches_its_own_verifier() {
   local dir env_file resolve_script verify_script verifier gate policy_sha out rc
   dir="$TMP_ROOT/governed-workflow-dispatch"
@@ -4375,6 +4415,7 @@ test_gate_script_owns_the_error_model_and_never_leaves_its_generation() {
 
 test_cases='
 test_workflow_subscribes_the_governed_event_and_checks_out_its_generation
+test_governed_workflow_fetches_only_the_exact_head_as_data
 test_governed_workflow_resolves_and_dispatches_its_own_verifier
 test_wrapper_tampering_is_real_under_the_preceding_law
 test_wrapper_tampering_cannot_reach_the_governed_acceptance_program
