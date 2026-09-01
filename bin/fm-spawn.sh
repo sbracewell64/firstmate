@@ -2379,11 +2379,11 @@ spawn_commit_identity_install() {  # <task-worktree>
     "$binder" install-worktree "$checkout" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] && return 0
   if [ "$rc" -eq 3 ]; then
-    echo "error: $ID is not launching: the worktree identity channel holds one pair and cannot carry both the validated author '$FM_CI_STATE_AUTHOR' and committer '$FM_CI_STATE_COMMITTER'; aborting the allocated launch resources." >&2
+    echo "error: $ID is not launching: the worktree identity channel holds one pair and cannot carry both the validated author '$FM_CI_STATE_AUTHOR' and committer '$FM_CI_STATE_COMMITTER'." >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  echo "error: $ID is not launching: the already-validated production commit identity could not be installed and re-observed in $checkout; aborting the allocated launch resources." >&2
+  echo "error: $ID is not launching: the already-validated production commit identity could not be installed and re-observed in $checkout." >&2
   printf '%s\n' "$out" >&2
   return 1
 }
@@ -2397,6 +2397,7 @@ if [ "$KIND" != secondmate ]; then
   fi
   if [ -e "$CONFIG/publication-identity.json" ]; then
     spawn_commit_identity_validate || exit 1
+    spawn_commit_identity_install "$PROJ_ABS" || exit 1
   else
     echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
   fi

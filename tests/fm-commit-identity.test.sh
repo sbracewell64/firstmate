@@ -654,6 +654,28 @@ EOF
   pass "distinct roles refuse before any launch allocation"
 }
 
+test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation() {
+  local rec home proj wt fakebin case_dir out rc id
+  id=unobservable-preallocation
+  make_launch_case "$id" || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  mkdir "$proj/.git/config.worktree" || fail "unobservable worktree setup failed"
+  make_launch_brief "$home" "$id" local-only || fail "brief fixture failed"
+
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode local-only --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
+  [ "$rc" -ne 0 ] || fail "an unobservable worktree identity must refuse before allocation: $out"
+  assert_contains "$out" "could not be installed and re-observed" "the refusal must identify the unobservable binding"
+  assert_absent "$home/state/$id.meta" "the refusal must publish no task record"
+  assert_absent "$case_dir/endpoint-allocated" "the refusal must allocate no endpoint"
+  assert_absent "$case_dir/slot-allocated" "the refusal must allocate no slot"
+  pass "an unobservable worktree identity refuses before any launch allocation"
+}
+
 test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses() {
   local rec home proj wt fakebin case_dir out rc id target_identity origin_identity policy target identity
   id=retargeted
@@ -835,6 +857,7 @@ FM_CONTROLS=(
   test_the_repository_channel_clearly_refuses_distinct_roles
   test_a_launch_whose_identity_cannot_bind_is_mechanically_refused
   test_distinct_roles_refuse_before_any_launch_allocation
+  test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation
   test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses
   test_two_same_project_launches_keep_worktree_identities_isolated
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
