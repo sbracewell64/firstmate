@@ -33,7 +33,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 8. Publish the attestation for the head it pushed:
 
    ```sh
-   final_head="$(gh pr view <pull-request-url> --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-fA-F]{40}$ ]] && bin/fm-attest.sh write --publish-repo github.com/<your-fork-owner>/<repo> --expect-head "$final_head"
+   final_head="$(gh pr view <pull-request-url> --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-f]{40}$ ]] && bin/fm-attest.sh write --publish-repo github.com/<your-fork-owner>/<repo> --expect-head "$final_head"
    ```
 
    Publish as soon as step 7 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.

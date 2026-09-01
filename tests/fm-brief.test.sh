@@ -248,7 +248,7 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
       assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
         "$id: the pipeline contract does not bind the publication notes ref"
       # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
-      assert_grep 'final_head="$(gh pr view {url} --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-fA-F]{40}$ ]]' "$brief" \
+      assert_grep 'final_head="$(gh pr view {url} --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-f]{40}$ ]]' "$brief" \
         "$id: the pipeline contract does not fail closed while observing the final PR head"
       # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
       assert_grep '--expect-head "$final_head"' "$brief" \
@@ -307,6 +307,10 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
     bash -c "$command" >/dev/null 2>&1 \
     && fail "the generated publication command accepted a malformed final PR head"
   assert_absent "$args" "a malformed final PR head reached attestation publication"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="${expected_head^^}" PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command accepted a non-canonical final PR head"
+  assert_absent "$args" "a non-canonical final PR head reached attestation publication"
   FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_GH_STATUS=1 PATH="$root_with_space/bin:$PATH" \
     bash -c "$command" >/dev/null 2>&1 \
     && fail "the generated publication command ignored a failed forge observation"
