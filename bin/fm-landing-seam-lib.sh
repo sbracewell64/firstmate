@@ -932,6 +932,25 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
     sources="$sources decisions=none-recorded"
   fi
 
+  if [ -n "$reserved" ]; then
+    fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
+      "$task carries an open decision the fleet has typed as the captain's:$reserved" \
+      "$sources"
+    return $?
+  fi
+  if [ -n "$unreadable" ]; then
+    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+      "$task carries an open decision whose owner could not be established:$unreadable; an unreadable decision is exactly the one that might be the captain's" \
+      "$sources"
+    return $?
+  fi
+  if [ -n "$unclassified" ]; then
+    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+      "$task carries an open decision whose disposition this compile does not classify:$unclassified; repair bin/fm-landing-seam-lib.sh's disposition sets rather than reading an unclassified value as permission" \
+      "$sources"
+    return $?
+  fi
+
   # --- the ruling, when the caller has one ----------------------------------
   case "$seam" in
     governed)
@@ -1008,27 +1027,6 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
 
   # --- the compile ----------------------------------------------------------
   #
-  # Reserved first, because a decision the captain holds outranks every
-  # delegation source including an approving ruling: Sol's delegation is over
-  # landing merits, and a reserved decision is not a question about merits.
-  if [ -n "$reserved" ]; then
-    fm_landing_authority_set captain-required "$FM_LANDING_AUTHORITY_TOKEN_CAPTAIN" \
-      "$task carries an open decision the fleet has typed as the captain's:$reserved" \
-      "$sources"
-    return $?
-  fi
-  if [ -n "$unreadable" ]; then
-    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
-      "$task carries an open decision whose owner could not be established:$unreadable; an unreadable decision is exactly the one that might be the captain's" \
-      "$sources"
-    return $?
-  fi
-  if [ -n "$unclassified" ]; then
-    fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
-      "$task carries an open decision whose disposition this compile does not classify:$unclassified; repair bin/fm-landing-seam-lib.sh's disposition sets rather than reading an unclassified value as permission" \
-      "$sources"
-    return $?
-  fi
   fm_landing_authority_set delegated "$FM_LANDING_AUTHORITY_TOKEN_DELEGATED" \
     "no decision on $task is reserved to the captain, so this landing is firstmate's to perform once its own gates pass" \
     "$sources"

@@ -611,6 +611,27 @@ test_a_captain_reserved_decision_requires_the_captain() {
   pass "a decision the fleet typed as the captain's makes the landing CAPTAIN_REQUIRED and the merge gate refuses"
 }
 
+test_a_captain_reserved_decision_precedes_missing_review_evidence() {
+  local dir
+  dir=$(new_pr_case reserved-without-review) || fail "fixture failed"
+  write_rollup "$dir" "$HEAD_A" 0 ''
+  open_typed_decision "$dir" paid-tier CAPTAIN_REQUIRED_AND_BLOCKING blocked
+
+  run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 3 ] \
+    || fail "missing review evidence shadowed a typed captain-reserved decision (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
+    || fail "the reserved decision plus missing review evidence did not compile CAPTAIN_REQUIRED: $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'LANDING_REVIEW_GATE_REFUSED' >/dev/null \
+    && fail "the review gate shadowed the typed captain-reserved decision: $SURFACE_OUT"
+
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "a landing with a typed captain-reserved decision was performed"
+  [ "$(merge_count "$dir")" = 0 ] \
+    || fail "a merge ran while a captain-reserved decision was open: $(merge_count "$dir")"
+  pass "a typed captain-reserved decision precedes missing review evidence"
+}
+
 # --- (6) a posture cannot waive an engineering gate ---------------------------
 
 test_standing_posture_cannot_waive_an_engineering_gate() {
@@ -953,6 +974,7 @@ test_decision_surface_never_delegates_an_unreviewed_candidate
 test_decision_surface_uses_live_pr_head
 test_decision_surface_keeps_an_unobservable_candidate_unevaluable
 test_a_captain_reserved_decision_requires_the_captain
+test_a_captain_reserved_decision_precedes_missing_review_evidence
 test_standing_posture_cannot_waive_an_engineering_gate
 test_local_only_landing_is_delegated_on_the_same_terms
 test_the_compile_reads_the_home_it_was_asked_about
