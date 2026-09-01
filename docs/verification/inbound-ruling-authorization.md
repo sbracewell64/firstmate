@@ -589,6 +589,27 @@ Its other `spend` and `reconcile` outcomes already degraded to `cno` and were le
 `bin/fm-test-run.sh` line 403 emitted the identical broken-pipe diagnostic in the same CI lane.
 It is outside this owner and is not repaired here.
 
+### Delivery revalidation
+
+Date: 2026-08-31.
+The complete authority suite was run five consecutive times against the delivered tree, rather than isolating case 33 or replacing its concurrent callers with a serial fixture:
+
+```sh
+for i in $(seq 1 5); do
+  bash tests/fm-landing-authorization.test.sh >"/tmp/no-mistakes-evidence/landing-$i.log" 2>&1 || exit 1
+done
+tail -n 1 /tmp/no-mistakes-evidence/landing-5.log
+```
+
+The observed terminal line was:
+
+```text
+FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
+```
+
+All five logs carried that contract line, so the repeated pass includes the unchanged first thirty controls and all three added controls, including the load-bearing six-way concurrent mint.
+This is disconfirming evidence against a remaining mint race in the delivered tree; it does not reproduce the original scheduler timing, expand the uncovered scope above, or substitute for the red calibrations.
+
 ### Refreshing this record
 
 Re-run the red calibration after any change to the predicates in this library, to `claim_acquire`, or to how either caller reports a claim it did not get.
