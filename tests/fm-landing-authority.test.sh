@@ -399,6 +399,27 @@ test_governing_ruling_is_part_of_the_compile() {
   pass "the governing request and its ruling verdict are compiled before minting"
 }
 
+test_governing_ruling_cannot_waive_assignment_distinct_review() {
+  local dir
+  dir=$(new_pr_case governed-without-review) || fail "fixture failed"
+  write_correlation "$dir" ruled APPROVE "$HEAD_A"
+  write_rollup "$dir" "$HEAD_A" 0 ''
+
+  run_surface_check "$dir"
+  [ "$SURFACE_RC" -eq 3 ] \
+    || fail "the surface did not render the governed review refusal as a contradiction (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'LANDING_REVIEW_GATE_REFUSED' >/dev/null \
+    || fail "the governed review refusal did not name its typed engineering outcome: $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
+    && fail "the governed review refusal was misrouted to the captain: $SURFACE_OUT"
+
+  run_pr_merge "$dir"
+  [ "$RC" -ne 0 ] || fail "an approving ruling landed a candidate without assignment-distinct review"
+  [ "$(merge_count "$dir")" = 0 ] \
+    || fail "a governed candidate without assignment-distinct review was merged"
+  pass "an approving Browser Sol ruling cannot waive the assignment-distinct review gate"
+}
+
 # --- (2) restart --------------------------------------------------------------
 
 test_eligibility_survives_a_cold_restart() {
@@ -962,6 +983,7 @@ test_decision_disposition_honours_its_explicit_home() {
 test_ordinary_landing_is_eligible_with_no_captain_utterance
 test_one_use_authorization_is_minted_and_spent_through_its_owner
 test_governing_ruling_is_part_of_the_compile
+test_governing_ruling_cannot_waive_assignment_distinct_review
 test_eligibility_survives_a_cold_restart
 test_approval_bound_to_another_head_refuses
 test_missing_check_evidence_refuses

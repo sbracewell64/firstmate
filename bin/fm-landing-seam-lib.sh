@@ -988,45 +988,39 @@ fm_landing_authority_resolve() {  # <home> <task-id> [<seam-verdict> [<request> 
       esac
       ;;
     not-applicable)
-      sources="$sources ruling=not-applicable review=${review:-could-not-observe}"
-      case "$review" in
-        github-approved|independent) ;;
-        ''|none|maker-associated-approval)
-          # OBSERVED insufficiency, not an unobserved one: the candidate was
-          # fully read and the review gate is simply unmet. That is an
-          # engineering refusal with its own typed outcome - never a captain
-          # dependency, which only a typed reserved decision may produce.
-          fm_landing_authority_set refused "$FM_LANDING_AUTHORITY_TOKEN_REFUSED" \
-            "$task is fully observed and carries no qualifying assignment-distinct review evidence (${review:-no review record}); the review gate refuses - supply an approving review from a non-maker identity or head-bound independent pipeline review evidence" "$sources"
-          return $?
-          ;;
-        *)
-          fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
-            "$task carries the review-evidence value '$review', which this compile cannot classify" "$sources"
-          return $?
-          ;;
-      esac
+      sources="$sources ruling=not-applicable"
       ;;
     '')
-      sources="$sources ruling=not-asked review=${review:-could-not-observe}"
-      case "$review" in
-        github-approved|independent) ;;
-        ''|none|maker-associated-approval)
-          fm_landing_authority_set refused "$FM_LANDING_AUTHORITY_TOKEN_REFUSED" \
-            "$task has no resolved landing seam and carries no qualifying assignment-distinct review evidence (${review:-no review record}); the review gate refuses - supply an approving review from a non-maker identity or head-bound independent pipeline review evidence" "$sources"
-          return $?
-          ;;
-        *)
-          fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
-            "$task carries the review-evidence value '$review', which this compile cannot classify" "$sources"
-          return $?
-          ;;
-      esac
+      sources="$sources ruling=not-asked"
       ;;
     *)
       fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
         "the governance resolution for $task answered '$seam', so the authority this landing would consume could not be established" \
         "$sources"
+      return $?
+      ;;
+  esac
+
+  # --- the assignment-distinct review gate ---------------------------------
+  #
+  # A Browser Sol merits ruling is an authority source, not maker-checker
+  # evidence. Every observed candidate reaches the same review classifier,
+  # regardless of whether the landing seam is governed.
+  sources="$sources review=${review:-could-not-observe}"
+  case "$review" in
+    github-approved|independent) ;;
+    ''|none|maker-associated-approval)
+      # OBSERVED insufficiency, not an unobserved one: the candidate was fully
+      # read and the review gate is simply unmet. That is an engineering refusal
+      # with its own typed outcome - never a captain dependency, which only a
+      # typed reserved decision may produce.
+      fm_landing_authority_set refused "$FM_LANDING_AUTHORITY_TOKEN_REFUSED" \
+        "$task is fully observed and carries no qualifying assignment-distinct review evidence (${review:-no review record}); the review gate refuses - supply an approving review from a non-maker identity or head-bound independent pipeline review evidence" "$sources"
+      return $?
+      ;;
+    *)
+      fm_landing_authority_set unobserved "$FM_LANDING_AUTHORITY_TOKEN_UNOBSERVED" \
+        "$task carries the review-evidence value '$review', which this compile cannot classify" "$sources"
       return $?
       ;;
   esac
