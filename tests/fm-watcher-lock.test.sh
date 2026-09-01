@@ -157,7 +157,9 @@ test_guard_warnings() {
   mkdir -p "$dir/config"
   printf 'project=x\n' > "$state/task.meta"
   : > "$dir/config/x-mode.env"
-  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=1 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_HOME="$dir" FM_ROOT_OVERRIDE="$dir" \
+    FM_STATE_OVERRIDE="$state" FM_CONFIG_OVERRIDE="$dir/config" FM_GUARD_GRACE=1 \
+    "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
   grep -F "source '$dir/config/x-mode.env' first" "$err" >/dev/null || fail "guard repair line did not source the X-mode cadence config"
 
   # (2) live watcher plus fresh beacon, empty queue -> silence.
@@ -176,7 +178,9 @@ test_guard_warnings() {
   touch "$state/.last-watcher-beat"
   # Non-git FM_ROOT keeps the worktree-tangle check inert so "fresh watcher ->
   # total silence" stays a pure assertion about watcher state.
-  FM_ROOT_OVERRIDE="$dir" FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
+  CLAUDECODE=1 PI_CODING_AGENT='' GROK_AGENT='' FM_HOME="$dir" FM_ROOT_OVERRIDE="$dir" \
+    FM_STATE_OVERRIDE="$state" FM_GUARD_GRACE=300 \
+    "$ROOT/bin/fm-guard.sh" 2> "$err" >/dev/null || fail "guard failed"
   kill "$pid" 2>/dev/null || true
   wait "$pid" 2>/dev/null || true
   [ ! -s "$err" ] || fail "guard warned with a live watcher and fresh beacon: $(cat "$err")"
@@ -184,28 +188,34 @@ test_guard_warnings() {
 }
 
 test_lock_single_winner_under_concurrency() {
-  local dir state lockdir marker i pids pid wins
+  local dir state lockdir marker ready start i pids pid wins
   dir=$(make_case lock-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
-  : > "$marker"
+  ready="$dir/ready"
+  start="$dir/start"
+  : > "$marker"; : > "$ready"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
     FM_STATE_OVERRIDE="$state" bash -c '
       . "$1"
+      printf "." >> "$4"
+      while [ ! -e "$5" ]; do sleep 0.01; done
       if fm_lock_try_acquire "$2"; then
         printf "%s\n" "$$" >> "$3"
-        # Stay alive so the held lock names a live pid for the whole window;
-        # otherwise a late contender could legitimately reclaim a dead-pid lock.
+        # Every contender crossed the readiness barrier before this race, so
+        # the holder stays live until all losing lock attempts have completed.
         sleep 1
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$marker" "$ready" "$start" &
     pids="$pids $!"
     fm_test_reap "$!"
     i=$((i + 1))
   done
+  while [ "$(wc -c < "$ready")" -lt 40 ]; do sleep 0.01; done
+  : > "$start"
   for pid in $pids; do
     wait "$pid" 2>/dev/null || true
   done
@@ -234,29 +244,35 @@ test_lock_steals_dead_pid_lock() {
 }
 
 test_lock_stale_steal_single_winner_under_concurrency() {
-  local dir state lockdir dead marker i pids pid wins
+  local dir state lockdir dead marker ready start i pids pid wins
   dir=$(make_case lock-stale-concurrency)
   state="$dir/state"
   lockdir="$state/.contend.lock"
   marker="$dir/wins"
+  ready="$dir/ready"
+  start="$dir/start"
   dead=$(dead_pid)
   mkdir "$lockdir"
   printf '%s\n' "$dead" > "$lockdir/pid"
-  : > "$marker"
+  : > "$marker"; : > "$ready"
   pids=
   i=1
   while [ "$i" -le 40 ]; do
     FM_STATE_OVERRIDE="$state" bash -c '
       . "$1"
+      printf "." >> "$4"
+      while [ ! -e "$5" ]; do sleep 0.01; done
       if fm_lock_try_acquire "$2"; then
         printf "%s\n" "${BASHPID:-$$}" >> "$3"
         sleep 1
       fi
-    ' _ "$LIB" "$lockdir" "$marker" &
+    ' _ "$LIB" "$lockdir" "$marker" "$ready" "$start" &
     pids="$pids $!"
     fm_test_reap "$!"
     i=$((i + 1))
   done
+  while [ "$(wc -c < "$ready")" -lt 40 ]; do sleep 0.01; done
+  : > "$start"
   for pid in $pids; do
     wait "$pid" 2>/dev/null || true
   done

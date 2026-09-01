@@ -409,6 +409,9 @@ fm_commit_identity_custody_admit() {
 fm_commit_identity_record_replace() {
   local staged=${1:?} target=${2:?} barrier=${3:-} attempt=0 staged_dir target_dir
   [ -f "$staged" ] || return 1
+  if [ -e "$target" ] || [ -L "$target" ]; then
+    [ -f "$target" ] && [ ! -L "$target" ] || return 1
+  fi
   staged_dir=$(cd "$(dirname "$staged")" 2>/dev/null && pwd -P) || return 1
   target_dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P) || return 1
   [ "$staged_dir" = "$target_dir" ] || return 1
