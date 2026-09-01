@@ -133,7 +133,7 @@ Run `bin/fm-doc-audience-check.sh`; it enforces classification, README setup rou
 - Never add an agent name as a commit co-author.
 - `bin/*.sh` and `bin/backends/*.sh` must pass `shellcheck`.
 - Run `bin/fm-lint.sh` before treating a script change as done; it is the single owner of the lint definition (file set, config, and pinned shellcheck version) that CI and the no-mistakes pre-push gate both invoke, and it refuses to run under any other shellcheck version.
-- After the pipeline pushes the branch, follow the generated delivery contract's attestation-publication step; [`docs/no-mistakes-attestation.md`](../../../docs/no-mistakes-attestation.md) owns who publishes, when, and the condition that closes the recurrence of unpublished evidence.
+- After the pipeline pushes the branch, do not treat delivery or a CI repair as complete until the generated delivery contract's attestation-publication step succeeds or reports the owner's refusal; [`docs/no-mistakes-attestation.md`](../../../docs/no-mistakes-attestation.md) owns who publishes, when, and the condition that closes the recurrence of unpublished evidence.
 - Publication also re-runs the check for the head it published, so the check converges on its own; never close, reopen, or edit a pull request to nudge it, and act on what publication reports when it says it could not reach GitHub Actions.
 - Colocate tests with the existing pattern in `tests/`, name them `<subject>.test.sh`, and extend an existing script rather than inventing a new runner.
 - Tests must exercise behavior through an executable or public interface and must never assert implementation-source bytes, including through parsers, regexes, snapshots, or indirect wrappers.
