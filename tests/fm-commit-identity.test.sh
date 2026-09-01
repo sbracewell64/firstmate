@@ -606,26 +606,34 @@ test_concurrent_worktree_config_enablement_is_idempotent() {
 set -u
 case "$*" in
   *" config extensions.worktreeConfig true")
-    if [ "${FM_TEST_CONCURRENT_ENABLE:-}" = 1 ]; then
+    if [ "${FM_TEST_DELAYED_ENABLE:-}" = 1 ] && [ -f "$FM_TEST_RACE_STATE/read-before-publish" ]; then
       "$FM_TEST_REAL_GIT" "$@" || exit 1
     fi
     exit 1
+    ;;
+  *" config --bool --get extensions.worktreeConfig")
+    if [ "${FM_TEST_DELAYED_ENABLE:-}" = 1 ] && [ ! -f "$FM_TEST_RACE_STATE/read-before-publish" ]; then
+      : > "$FM_TEST_RACE_STATE/read-before-publish"
+    fi
     ;;
 esac
 exec "$FM_TEST_REAL_GIT" "$@"
 SH
   chmod +x "$fakebin/git" || fail "fake git setup failed"
+  mkdir -p "$root/race-state" || fail "race-state setup failed"
 
-  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" FM_TEST_CONCURRENT_ENABLE=1 \
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" FM_TEST_DELAYED_ENABLE=1 \
+    FM_TEST_RACE_STATE="$root/race-state" \
     FM_CI_STATE_VALIDATED=1 FM_CI_STATE_AUTHOR="$AUTHORITATIVE" FM_CI_STATE_COMMITTER="$AUTHORITATIVE" \
     FM_CI_STATE_AUTHOR_NAME='Shane Bracewell' FM_CI_STATE_AUTHOR_EMAIL='sbracewell64@gmail.com' \
     FM_CI_STATE_COMMITTER_NAME='Shane Bracewell' FM_CI_STATE_COMMITTER_EMAIL='sbracewell64@gmail.com' \
     "$CMD" install-worktree "$root/checkout" 2>&1) || fail "a losing concurrent enablement must accept the observed true state: $out"
   assert_contains "$out" "checkout : bound" "the concurrent loser must finish the worktree binding"
+  assert_present "$root/race-state/read-before-publish" "the winner must remain unpublished through a losing read"
 
   "$real_git" -C "$root/checkout" config --unset extensions.worktreeConfig || fail "extension reset failed"
   rc=0
-  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" \
+  out=$(PATH="$fakebin:$PATH" FM_TEST_REAL_GIT="$real_git" FM_TEST_RACE_STATE="$root/race-state" \
     FM_CI_STATE_VALIDATED=1 FM_CI_STATE_AUTHOR="$AUTHORITATIVE" FM_CI_STATE_COMMITTER="$AUTHORITATIVE" \
     FM_CI_STATE_AUTHOR_NAME='Shane Bracewell' FM_CI_STATE_AUTHOR_EMAIL='sbracewell64@gmail.com' \
     FM_CI_STATE_COMMITTER_NAME='Shane Bracewell' FM_CI_STATE_COMMITTER_EMAIL='sbracewell64@gmail.com' \

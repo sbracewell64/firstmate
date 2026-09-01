@@ -509,15 +509,19 @@ fm_commit_identity_install_repo() {  # <git-dir-or-worktree>
 }
 
 fm_commit_identity_install_worktree() {  # <worktree>
-  local worktree=${1:-} seen
+  local worktree=${1:-} seen enabled attempt=0
   if [ "$FM_COMMIT_IDENTITY_AUTHOR" != "$FM_COMMIT_IDENTITY_COMMITTER" ]; then
     fm_commit_identity_set "$FM_CI_TOKEN_REPO_DISTINCT" \
       "worktree-local git identity holds one pair for both roles and cannot bind author '$FM_COMMIT_IDENTITY_AUTHOR' separately from committer '$FM_COMMIT_IDENTITY_COMMITTER'"
     return 3
   fi
-  if ! git --no-optional-locks -C "$worktree" config extensions.worktreeConfig true 2>/dev/null; then
-    [ "$(git --no-optional-locks -C "$worktree" config --bool --get extensions.worktreeConfig 2>/dev/null)" = true ] || return 1
-  fi
+  while ! git --no-optional-locks -C "$worktree" config extensions.worktreeConfig true 2>/dev/null; do
+    enabled=$(git --no-optional-locks -C "$worktree" config --bool --get extensions.worktreeConfig 2>/dev/null || true)
+    [ "$enabled" != true ] || break
+    attempt=$((attempt + 1))
+    [ "$attempt" -lt 5 ] || return 1
+    sleep 0.05
+  done
   git --no-optional-locks -C "$worktree" config --worktree user.name "$FM_COMMIT_IDENTITY_AUTHOR_NAME" 2>/dev/null || return 1
   git --no-optional-locks -C "$worktree" config --worktree user.email "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL" 2>/dev/null || return 1
   seen=$(fm_commit_identity_effective "$worktree" author) || return 2
