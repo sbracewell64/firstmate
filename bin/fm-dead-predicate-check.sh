@@ -383,9 +383,14 @@ file_parse_refusal() {  # <file>
   strip_rc=$?
   case $strip_rc in
     0)
-      hit=$({ strip_cached "$f" | grep -nF '<<' | grep -vF '<<<'
-              strip_cached "$f" | grep -nE '^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]'
-            } | head -1)
+      hit=$(strip_cached "$f" | awk '
+        index($0, "<<") && !index($0, "<<<") && !heredoc { heredoc = NR ":" $0 }
+        /^[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)\(\)[[:space:]]*(\{|$)|^[[:space:]]*function[[:space:]]+[A-Za-z_]/ && !definition { definition = NR ":" $0 }
+        END {
+          if (heredoc) print heredoc
+          else if (definition) print definition
+        }
+      ')
       ;;
     1) hit="0:unterminated quoted string" ;;
     2) hit="0:legacy backtick substitution" ;;
