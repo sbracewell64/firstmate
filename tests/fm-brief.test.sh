@@ -247,8 +247,10 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
         "$id: the pipeline contract does not bind the publication repository"
       assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
         "$id: the pipeline contract does not bind the publication notes ref"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
       assert_grep 'final_head="$(gh pr view {url} --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-fA-F]{40}$ ]]' "$brief" \
         "$id: the pipeline contract does not fail closed while observing the final PR head"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
       assert_grep '--expect-head "$final_head"' "$brief" \
         "$id: the pipeline contract does not bind publication to the validated final PR head"
       grep -q 'Run it unconditionally' "$brief" \
@@ -294,6 +296,7 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
   brief="$home/data/$id/brief.md"
   # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
   head_command=$(sed -n '/final_head=.*gh pr view/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
+  # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
   command=$(sed -n '/fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
   FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" PATH="$root_with_space/bin:$PATH" \
     bash -c "$head_command || exit \$?"$'\n'"$command" || fail "the generated publication commands did not execute"
