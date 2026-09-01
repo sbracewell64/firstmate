@@ -40,7 +40,30 @@
 #   fm-outbound-artifact.sh resume --request <id>
 #       Record that the waiting item resumed on that ruling.
 #   fm-outbound-artifact.sh close --request <id> --disposition <text>
-#       Complete the correlation with the outcome.
+#                                 [--authorization <id> --target-ref <ref>
+#                                  --target-generation <sha>]
+#       Complete the correlation with the outcome. When a landing authorization
+#       was minted for this request, closure MUST name it and the generation the
+#       effect produced: the authority is checked to have been spent for this
+#       exact request and head, and the target ref is READ AGAIN in the governed
+#       clone and bound into the record at the generation it is actually at. A
+#       disposition sentence alone would record a landing nobody observed.
+#   fm-outbound-artifact.sh correct --request <id>
+#       Retire a request whose ruling demanded a corrected candidate. The record
+#       is preserved and becomes terminal, so no wait rests on it and no fresh
+#       emit adopts it. The correction is a different head and therefore a new
+#       request, which inherits nothing from this ruling.
+#   fm-outbound-artifact.sh declare <item-id> --gate <gate> --head <sha>
+#       Enter the wait state for one item, and REFUSE to enter it unless a
+#       durable, valid, applicable request already backs that exact gate and
+#       head. This is the only point at which a bare wait can still be
+#       prevented rather than merely reported by a later sweep.
+#   fm-outbound-artifact.sh quarantine --request <id> --ruling <ref>
+#       Retire a MALFORMED request as non-actionable under the ruling that said
+#       so. The record is preserved unchanged and stays diagnostic; it simply
+#       stops being applicable, so no wait rests on it and no restart rebuilds
+#       one from it. Never a repair, and never a substitute for hand-editing a
+#       request into validity - which the ruling forbids.
 #   fm-outbound-artifact.sh show <request-id>
 #   fm-outbound-artifact.sh --help
 #
@@ -194,6 +217,80 @@ probe_budget_reset() {
   : > "$PROBE_CAPPED"
 }
 
+# --- project clone resolution ------------------------------------------------
+#
+# WHERE A REGISTERED PROJECT'S CLONE ACTUALLY IS.
+#
+# Nearly always $PROJECTS/<name>, and for every project but one that is the
+# whole rule. The exception is firstmate's OWN repository: the operational home
+# IS that checkout, so $PROJECTS/<name> names a directory that has never
+# existed. The consequence is not cosmetic - the object format is read from the
+# clone, an undeterminable width refuses every candidate head by contract, and
+# so every exact head for that project was unobservable and no request for it
+# could be bound at all.
+#
+# The only way to observe one was to point FM_PROJECTS_OVERRIDE at the home's
+# parent directory. That variable is TEST isolation (docs/configuration.md), and
+# using it as configuration resolves this project by BREAKING every other one:
+# with the override in place a sibling project's clone is no longer under
+# $PROJECTS at all, so its stored correlation records stop validating and turn
+# could-not-observe. The two defects this file was repaired for are that trade,
+# seen from its two ends.
+#
+# So the home's own repository is resolved here, from evidence, under three
+# conditions that must ALL hold. Each one closes a different way of guessing:
+#
+#   1. $PROJECTS/<name> does not exist. A real clone always wins, so no existing
+#      resolution changes and a home that does keep one is untouched.
+#   2. The project is REGISTERED in data/projects.md, read through the same
+#      registry reader the inventory pass already uses. An unreadable registry
+#      is could-not-observe and never an empty one, so a caller-supplied name
+#      can never reach the home through a registry nobody could read.
+#   3. $FM_HOME is itself the TOP LEVEL of a git repository whose directory name
+#      is that project. Read from git and compared as resolved physical paths,
+#      never inferred from a name matching - a home that merely sits somewhere
+#      inside a repository is not that repository's clone.
+#
+# Anything short of all three is could-not-observe, which leaves the ordinary
+# path in place and the head unobserved - the same answer as before this
+# resolution existed. Nothing here writes, and every read it enables is a read.
+
+# Resolved ONCE at startup rather than per call. Every consumer below runs
+# inside a command substitution, and a global assigned in a subshell dies with
+# it, so a lazily memoized answer would be recomputed on every single call while
+# reading as if it were cached.
+HOME_REPO_PROJECT=
+resolve_home_repo_project() {
+  local top home_phys top_phys
+  top=$(git --no-optional-locks -C "$FM_HOME" rev-parse --show-toplevel 2>/dev/null) || return 0
+  [ -n "$top" ] || return 0
+  home_phys=$(cd "$FM_HOME" 2>/dev/null && pwd -P) || return 0
+  top_phys=$(cd "$top" 2>/dev/null && pwd -P) || return 0
+  [ "$home_phys" = "$top_phys" ] || return 0
+  HOME_REPO_PROJECT=${top_phys##*/}
+}
+resolve_home_repo_project
+
+registered_projects() {
+  local reg="$DATA/projects.md"
+  [ -r "$reg" ] || return 1
+  sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg"
+}
+
+# The ONE place a project name becomes a directory. Prints the ordinary
+# $PROJECTS path unless all three conditions above hold, so a caller that gets
+# an unusable directory back is in exactly the position it was in before.
+project_dir() {  # <project> -> clone directory
+  local project=$1
+  if [ ! -d "$PROJECTS/$project" ] && [ -n "$HOME_REPO_PROJECT" ] \
+     && [ "$project" = "$HOME_REPO_PROJECT" ] \
+     && registered_projects 2>/dev/null | grep -qxF -- "$project"; then
+    printf '%s\n' "$FM_HOME"
+    return 0
+  fi
+  printf '%s\n' "$PROJECTS/$project"
+}
+
 # --- durable records ---------------------------------------------------------
 
 record_path() { printf '%s/%s.json\n' "$RECORD_DIR" "$1"; }
@@ -222,7 +319,7 @@ record_identity_cno() { printf '%s\n' "$FM_OUTBOUND_IDENTITY_CNO"; }
 # caller then cannot tell a foreign record from an unreadable one, and those need
 # different repairs.
 record_identity_verdict() {  # <record-json> <expected-id>
-  local raw=$1 expected=$2 state stored gate project repo item pr head head_source computed
+  local raw=$1 expected=$2 state stored gate project repo item pr head head_source computed tree policy
   printf '%s' "$raw" | jq -e --arg s "$FM_OUTBOUND_RECORD_SCHEMA" \
     '.schema == $s' >/dev/null 2>&1 || { record_identity_cno; return 0; }
   state=$(printf '%s' "$raw" | jq -er '.state // empty') || { record_identity_cno; return 0; }
@@ -236,12 +333,16 @@ record_identity_verdict() {  # <record-json> <expected-id>
   head=$(printf '%s' "$raw" | jq -er '.identity.head // empty') || { record_identity_cno; return 0; }
   head_source=$(printf '%s' "$raw" | jq -r '.identity.head_source // ""') \
     || { record_identity_cno; return 0; }
+  # Absent tree and policy stay absent, so a record written before those axes
+  # existed recomputes to exactly the id it was filed under.
+  tree=$(printf '%s' "$raw" | jq -r '.identity.tree // ""') || { record_identity_cno; return 0; }
+  policy=$(printf '%s' "$raw" | jq -r '.identity.policy // ""') || { record_identity_cno; return 0; }
   case $head_source in ""|declared|forge|local) ;; *) record_identity_cno; return 0 ;; esac
   # An identity that cannot be bound cannot be compared: that is an absent
   # identity, not one naming something else.
-  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" \
+  fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$(project_dir "$project")" "$head_source" \
     >/dev/null 2>&1 || { record_identity_cno; return 0; }
-  computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head") \
+  computed=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr" "$head" "$tree" "$policy") \
     || { record_identity_cno; return 0; }
   if [ "$stored" = "$expected" ] && [ "$computed" = "$expected" ]; then
     printf '%s\n' "$FM_OUTBOUND_IDENTITY_VALID"
@@ -377,7 +478,7 @@ branch_head() {  # <clone-dir> <item> -> sha or empty
 # non-identity to the binding check and letting it surface as evidence.
 observe_head() {  # <item> <pr-url> <project> -> sha<TAB>source or empty
   local item=$1 pr_url=$2 project=$3 head width dir=
-  [ -z "$project" ] || dir="$PROJECTS/$project"
+  [ -z "$project" ] || dir=$(project_dir "$project")
   # The width comes from the target repository, so it is resolved ONCE here and
   # every step of the cascade is judged against it. With no readable repository
   # the width is undeterminable, and an undeterminable width refuses every
@@ -405,6 +506,118 @@ observe_head() {  # <item> <pr-url> <project> -> sha<TAB>source or empty
 #
 # Return 0 found (prints the forge identity), 1 provably absent, 2 could not
 # observe, 3 the channel's venue is not configured at all.
+
+# The envelope spellings this fleet has actually received for each binding.
+#
+# A MIGRATION SURFACE, not an extension point. Every name here was observed on
+# the live control issue; adding one to make a body join is how the join stops
+# meaning anything. Where an envelope carries more than one spelling of the same
+# binding they must agree, so a longer list never loosens the join - it only
+# lets a genuine ruling be read.
+ruling_field_aliases() {  # <binding> -> the envelope keys that state it
+  case $1 in
+    request) printf 'in_reply_to\n' ;;
+    item)    printf 'expected_item\nitem\n' ;;
+    head)    printf 'expected_head_sha\nhead\n' ;;
+    gate)    printf 'expected_gate\n' ;;
+    project) printf 'expected_project\n' ;;
+    repo)    printf 'expected_repo\n' ;;
+    pr)      printf 'expected_pull_request\n' ;;
+    tree)    printf 'expected_tree_sha\n' ;;
+    policy)  printf 'expected_policy_generation\n' ;;
+  esac
+}
+
+# THE RULING-IDENTITY JOIN.
+#
+# The typed reader uses the module's own field primitive from
+# bin/fm-outbound-artifact-lib.sh. The legacy form remains readable for
+# diagnosis but is not an acceptance-bearing input.
+#
+# EVERY APPLICABILITY BINDING IS JOINED. Request, gate, project, repository,
+# item, pull request and exact head are required. Tree and policy generation are
+# required when the request identity carries them.
+#
+# Nothing here is resolved by position or precedence. A required field that is
+# absent, duplicated, or malformed refuses, and so does a body whose form is
+# itself ambiguous - and every one of those refusals happens before any record
+# is written, so a refused ruling mutates nothing.
+#
+# Returns 0 joined · 1 the body names other work · 2 ambiguous or unreadable ·
+# 3 legacy rendering that cannot carry authority.
+# Set by ruling_identity_join to name the binding that stopped it, so a refusal
+# points at the repair. "no exact head" and "two items" are different fixes, and
+# a single ambiguity sentence sends an operator looking for the wrong one.
+RULING_JOIN_DETAIL=
+ruling_identity_join() {  # <body> <record-json> [<form>]
+  local body=$1 rec=$2 form=${3:-} envelope value rc key want alias found
+  RULING_JOIN_DETAIL=
+  [ -n "$form" ] || form=$(fm_outbound_ruling_form "$body")
+  case $form in
+    legacy) RULING_JOIN_DETAIL="legacy marker rulings are non-authoritative rendering"; return 3 ;;
+    typed) ;;
+    both) RULING_JOIN_DETAIL="its envelope declares more than one ruling form"; return 2 ;;
+    *) RULING_JOIN_DETAIL="it declares no ruling form"; return 1 ;;
+  esac
+  envelope=$(fm_outbound_ruling_envelope "$body")
+
+  # Required bindings. Absent or duplicated is could-not-observe, never a
+  # mismatch: we did not learn the envelope is about other work, we learned it
+  # did not say once which work it is about.
+  #
+  # TWO SPELLINGS PER BINDING, because the governed sender uses both. Comment
+  # 5383943043 states `expected_item`/`expected_head_sha`; comments 5384188549
+  # and 5384189401 state a bare `item`. Reading only one vocabulary would refuse
+  # genuine rulings for a naming choice. Where an envelope states BOTH, they must
+  # agree - two spellings disagreeing is a contradiction inside one envelope and
+  # is refused rather than resolved by preferring either.
+  for key in request gate project repo item pr head; do
+    case $key in
+      request) want=$(printf '%s' "$rec" | jq -r '.request_id') ;;
+      gate)    want=$(printf '%s' "$rec" | jq -r '.identity.gate') ;;
+      project) want=$(printf '%s' "$rec" | jq -r '.identity.project') ;;
+      repo)    want=$(printf '%s' "$rec" | jq -r '.identity.repo') ;;
+      item)    want=$(printf '%s' "$rec" | jq -r '.identity.item') ;;
+      pr)      want=$(printf '%s' "$rec" | jq -r '.identity.pr // "-"') ;;
+      head)    want=$(printf '%s' "$rec" | jq -r '.identity.head') ;;
+    esac
+    found=0
+    for alias in $(ruling_field_aliases "$key"); do
+      value=$(fm_outbound_envelope_field "$envelope" "$alias"); rc=$?
+      case $rc in
+        1) continue ;;
+        2) RULING_JOIN_DETAIL="its envelope states $alias more than once"; return 2 ;;
+      esac
+      [ -n "$value" ] || { RULING_JOIN_DETAIL="its envelope states an empty $alias"; return 2; }
+      [ "$value" = "$want" ] || { RULING_JOIN_DETAIL="its $alias names $value, not $want"; return 1; }
+      found=1
+    done
+    if [ "$found" -ne 1 ]; then
+      RULING_JOIN_DETAIL="its envelope states no $key"
+      return 2
+    fi
+  done
+
+  for key in tree policy; do
+    case $key in
+      tree)   want=$(printf '%s' "$rec" | jq -r '.identity.tree // ""') ;;
+      policy) want=$(printf '%s' "$rec" | jq -r '.identity.policy // ""') ;;
+    esac
+    [ -n "$want" ] || continue
+    found=0
+    for alias in $(ruling_field_aliases "$key"); do
+      value=$(fm_outbound_envelope_field "$envelope" "$alias"); rc=$?
+      case $rc in
+        1) continue ;;
+        2) RULING_JOIN_DETAIL="its envelope states $alias more than once"; return 2 ;;
+      esac
+      [ "$value" = "$want" ] || { RULING_JOIN_DETAIL="its $alias names $value, not $want"; return 1; }
+      found=1
+    done
+    [ "$found" -eq 1 ] || { RULING_JOIN_DETAIL="its envelope states no $key"; return 2; }
+  done
+  return 0
+}
 
 artifact_body_matches_identity() {  # <body> <record-json> <marker>
   local body=$1 rec=$2 marker=$3
@@ -467,7 +680,11 @@ pr_artifact_present() {  # <venue-slug> <head-sha> -> pull request number
 # remotes rather than guessed from a name, because this fleet's projects
 # routinely fetch from upstream and push to a fork.
 project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
-  local dir=$PROJECTS/$1 declared=${2:-} url
+  local declared=${2:-} url dir
+  # Split from the assignments above deliberately: bash expands every `local`
+  # right-hand side before assigning any of them, so a path built from a
+  # positional in the same declaration is a standing hazard.
+  dir=$(project_dir "$1")
   if [ -n "$declared" ]; then printf '%s\n' "$declared"; return 0; fi
   [ -d "$dir/.git" ] || return 0
   url=$(obs git --no-optional-locks -C "$dir" remote get-url upstream) || url=
@@ -508,11 +725,9 @@ project_venue() {  # <project> [<declared-venue>] -> owner/name or empty
 # it cannot read, or a venue it cannot reach, is COULD_NOT_OBSERVE for that item
 # BY NAME - never folded into a no-unsubmitted-work conclusion, which would be
 # the completeness defect this pass exists to remove.
-registered_pr_projects() {
-  local reg="$DATA/projects.md"
-  [ -r "$reg" ] || return 1
-  sed -n 's/^- \([A-Za-z0-9_.-]*\).*/\1/p' "$reg"
-}
+#
+# It reads its project list through registered_projects, which lives with the
+# clone resolution above because project_dir consults the same registry.
 
 # Is this head already contained in what the project lands onto? Landed work is
 # not unsubmitted work, so it is excluded before anything is reported.
@@ -659,7 +874,7 @@ branch_inventory_rows() {  # appends row_json lines to $1
   local seen="$SCRATCH/inventory-identities"
   local project_mode_command=${FM_OUTBOUND_PROJECT_MODE_COMMAND:-$SCRIPT_DIR/fm-project-mode.sh}
   : > "$seen"
-  projects=$(registered_pr_projects); rc=$?
+  projects=$(registered_projects); rc=$?
   if [ "$rc" -ne 0 ]; then
     row_json project-registry "" inventory pull-request "" "" "" "" \
       unevaluable "$FM_OUTBOUND_TOKEN_REGISTRY_UNREADABLE" "" "" 0 >> "$out"
@@ -675,7 +890,7 @@ branch_inventory_rows() {  # appends row_json lines to $1
     fi
     mode=${mode%% *}
     [ "$mode" = "local-only" ] && continue
-    dir="$PROJECTS/$project"
+    dir=$(project_dir "$project")
     if [ ! -d "$dir/.git" ]; then
       row_json "$project" "" inventory pull-request "$project" "" "" "" \
         unevaluable "$FM_OUTBOUND_TOKEN_CLONE_UNREADABLE" "" "" 0 >> "$out"
@@ -787,7 +1002,7 @@ row_json() {  # <item> <gate> <tier> <channel> <project> <repo> <head> <rid> <ve
 
 sweep() {
   local rows count i rec verdict gate tier item project pr_url pr_ref head_observation head head_source
-  local channel venue repo rid missing stale present rc row token capped cls
+  local channel venue repo rid missing stale present rc token capped cls subject_tree subject_policy subject_declared subject_missing
   local existing record_state applicability record_rc all_records
 
   probe_budget_reset
@@ -838,11 +1053,21 @@ sweep() {
 
     if [ "$channel" = "pull-request" ]; then
       venue=$(project_venue "$project" "$(printf '%s' "$rec" | jq -r '.contribution_venue // ""')")
+      # For a contribution the venue IS the subject: the pull request lives in
+      # the repository it is offered to.
+      repo=${venue:-$project}
     else
       venue=
       read_sol_config && venue=$SOL_REPO
+      # THE SAME SUBJECT THE EMITTER COMPILES, or this sweep computes an identity
+      # emit will never produce and reports every item as missing its artifact.
+      # It used to take the control repository here too, which is how the sweep
+      # agreed with the malformed requests it should have been contradicting.
+      subject_declared=$(declared_field "$item" repo)
+      repo=$(subject_repo_for "$item" "$project")
     fi
-    repo=${venue:-$project}
+    subject_tree=$(declared_field "$item" tree)
+    subject_policy=$(declared_field "$item" policy_generation)
 
     # Fail closed on an incomplete binding BEFORE anything else. An item whose
     # binding cannot be constructed cannot have an exact-head-bound artifact, so
@@ -864,7 +1089,7 @@ sweep() {
     # An item that is BOTH untyped and headless keeps the stronger verdict: the
     # gate is a read that succeeded and found nothing, so the item is provably
     # unbindable whatever the head turns out to be.
-    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+    missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$(project_dir "$project")" "$head_source" || true)
     if [ -n "$missing" ]; then
       if [ "$missing" = head ]; then
         row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
@@ -877,13 +1102,43 @@ sweep() {
       continue
     fi
 
-    rid=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr_ref" "$head") || rid=
+    if [ "$channel" != "pull-request" ]; then
+      subject_missing=$(fm_outbound_subject_missing "$repo" "$SOL_REPO" \
+        "$(project_dir "$project")" "$subject_tree" "$head" "$subject_declared" || true)
+    else
+      subject_missing=
+    fi
+    if [ -n "$subject_missing" ]; then
+      # TWO OUTCOMES, NOT ONE. A subject that is positively WRONG - the venue
+      # itself, a name the clone does not know, a tree that is not the head's -
+      # is a defect: no request can exist for it, and saying so is a claim the
+      # evidence supports.
+      #
+      # A subject that is merely UNDECIDED is not. When the clone names two
+      # repositories and nothing declares which one the review governs, this
+      # sweep cannot compute the identity an artifact would carry, so it cannot
+      # look for one either. Reporting a defect there would assert the invariant
+      # is violated on the strength of a read that never happened.
+      if printf '%s' "$subject_missing" | grep -qxF subject-repo-ambiguous; then
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
+          unevaluable "$FM_OUTBOUND_TOKEN_SUBJECT_UNRESOLVED" \
+          "$(printf '%s' "$subject_missing" | tr '\n' ',' | sed 's/,$//')" "" 0 >> "$rows"
+      else
+        row_json "$item" "$gate" "$tier" "$channel" "$project" "$repo" "$head" "" \
+          defect "$FM_OUTBOUND_TOKEN_INCOMPLETE" \
+          "$(printf '%s' "$subject_missing" | tr '\n' ',' | sed 's/,$//')" "" 0 >> "$rows"
+      fi
+      continue
+    fi
+    rid=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr_ref" "$head" \
+      "$subject_tree" "$subject_policy") || rid=
 
     if [ "$channel" = "pull-request" ]; then
       present=$(pr_artifact_present "$venue" "$head"); rc=$?
     else
       existing=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$repo" \
-        "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
+        "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source" \
+        "$subject_tree" "$subject_policy")
       present=$(sol_artifact_present "$rid" "$existing"); rc=$?
       if [ "$rc" -eq 0 ]; then
         if existing=$(record_read "$rid"); then
@@ -959,13 +1214,25 @@ sweep() {
   # than only the rows somebody already annotated. A backlog row wins on a
   # collision: it carries gate and correlation context the ref alone does not.
   branch_inventory_rows "$rows"
-  row=$(jq -s 'reduce .[] as $r ([];
-                 if $r.tier == "inventory" and $r.verdict != "unevaluable"
-                    and any(.[]; ._identity == $r._identity and .tier != "inventory")
-                 then . else . + [$r] end) | map(del(._identity))' < "$rows")
   if probes_capped; then capped=true; else capped=false; fi
-  SWEEP=$(jq -n --argjson rows "$row" --argjson capped "$capped" \
-    '{schema:"fm-outbound-sweep.v1",readable:true,capped:$capped,rows:$rows,reason:null}')
+  # THE ROWS REACH jq THROUGH stdin, NEVER THROUGH argv. They used to be folded
+  # in one jq and then handed to a second as `--argjson rows "$row"`, which
+  # Linux caps at MAX_ARG_STRLEN - 128KB for ONE argument, well under the 2MB
+  # total - so a sweep simply died with "Argument list too long", printing no
+  # rows and no reason. Observed the moment this command could read firstmate's
+  # own repository: ~250 candidate branches is already past the cap, and the
+  # sweep that was meant to report them reported nothing at all.
+  #
+  # A row set has no bound this file controls - it is however many branches and
+  # waiting items a fleet has - so the fix is structural rather than a bigger
+  # number: one jq, rows read from the file, nothing large on a command line.
+  SWEEP=$(jq -s --argjson capped "$capped" '
+    (reduce .[] as $r ([];
+       if $r.tier == "inventory" and $r.verdict != "unevaluable"
+          and any(.[]; ._identity == $r._identity and .tier != "inventory")
+       then . else . + [$r] end) | map(del(._identity))) as $rows
+    | {schema:"fm-outbound-sweep.v1",readable:true,capped:$capped,rows:$rows,reason:null}' \
+    < "$rows")
 }
 
 # --- rendering and verdict ---------------------------------------------------
@@ -1121,21 +1388,70 @@ sweep_exit() {
 # A transport failure therefore never loses the request: attempts are recorded in
 # the durable record and the item stays red until an artifact is observed.
 
-supersede_other_heads() {  # <item> <current-request-id> <current-head>
-  local item=$1 rid=$2 head=$3 f other rec read_rc
+# SUPERSEDING THIS ITEM'S OLDER HEADS IS A DECISION ABOUT THIS ITEM. Reaching it
+# used to require VALIDATING every record in the store first, and that ordering
+# is the defect repaired here: one preserved adverse record - kept deliberately,
+# filed for a completely different work item, and correctly classified adverse
+# everywhere it is reported - refused every NEW request in the fleet, including
+# an exact, complete, well-bound one for work it says nothing about. Measured:
+# an exact request for candidate-publication-effect-guard returned
+# FM_OUTBOUND_RECORD_UNREADABLE before transport because
+# fm-ob-18a4c958c445.json, whose own identity names ae-xp1-registered-external-
+# target, could not be validated. A record's own brokenness became every other
+# item's blocker, which is a fleet-wide outage produced by a correlation fault
+# in one row.
+#
+# So the scope test now runs BEFORE the validity test, and only in that
+# direction. A record this pass can positively read as belonging to ANOTHER item
+# is skipped for THIS decision, because superseding is defined over records for
+# THIS item and such a record was never a candidate for it.
+#
+# WHAT THE SKIP IS NOT. It is not a repair, not a certification, and not a
+# narrowing of the invariant. The record is untouched, still adverse to
+# record_read and `show`, and still reported through the item it actually
+# belongs to by the sweep - which is where a correlation fault is an operator's
+# to fix. Nothing here can make a record satisfy anything.
+#
+# SAME-ITEM SAFETY IS UNCHANGED, and the asymmetry is what preserves it. The
+# skip needs unrelatedness POSITIVELY established from the record's own bytes;
+# every other outcome keeps the record in scope and reaches the identical
+# refusal as before. A record for this item whose identity mismatches, one whose
+# subject is absent, ambiguous or duplicated, and one that will not parse at all
+# are all still validated here and still refuse with zero posted.
+#
+# THE BOUND, STATED: this pass is O(records in the store), by construction and
+# not by oversight. The store is content-addressed - a record is named
+# fm-ob-<digest>.json where the digest is over the canonical identity - so the
+# work item cannot be recovered from a filename and no cheap name filter can
+# narrow the walk. The jq below is what scopes the WRITE to this item and to
+# non-terminal records; reading every file is what it costs to reach that
+# decision. Narrowing this would mean indexing the store, which is a change to
+# the record format rather than to this loop.
+supersede_other_heads() {  # <item> <current-request-id> <current-head> <current-gate>
+  local item=$1 rid=$2 head=$3 gate=$4 f other rec read_rc raw subject reason state
   [ -d "$RECORD_DIR" ] || return 0
-  # THE BOUND, STATED: this pass is O(records in the store), by construction and
-  # not by oversight. The store is content-addressed - a record is named
-  # fm-ob-<digest>.json where the digest is over the canonical identity - so the
-  # work item cannot be recovered from a filename and no cheap name filter can
-  # narrow the walk. The jq below is what scopes the DECISION to this item and
-  # to non-terminal records; reading every file is what it costs to reach that
-  # decision. Narrowing this would mean indexing the store, which is a change to
-  # the record format rather than to this loop.
   for f in "$RECORD_DIR"/*.json; do
     [ -f "$f" ] || continue
     other=${f##*/}
     other=${other%.json}
+    raw=$(cat "$f" 2>/dev/null) || raw=
+    if subject=$(fm_outbound_record_subject "$raw"); then
+      # Positively another item's record: outside this decision entirely. Note
+      # this consults the record's OWN bytes, never its filename - a filename is
+      # what a record can disagree with, which is the condition being guarded.
+      [ "$subject" = "$item" ] || continue
+    else
+      # THE SUBJECT COULD NOT BE ESTABLISHED, so this record can be shown
+      # neither to be another item's nor to be readable as this one's. It
+      # refuses HERE rather than falling through, because the validator below
+      # resolves a duplicated key by write order: handed a record carrying two
+      # subjects it reads the last one, finds it consistent, and returns a
+      # confident verdict about a record whose subject is ambiguous - which is
+      # then skipped as another item's without anything ever refusing. Measured
+      # as exactly that: a duplicated `identity` permitted an emit while the
+      # scope test above had already declined to read it.
+      return 2
+    fi
     rec=$(record_read "$other"); read_rc=$?
     if [ "$read_rc" -ne 0 ]; then
       case $read_rc in
@@ -1144,13 +1460,35 @@ supersede_other_heads() {  # <item> <current-request-id> <current-head>
         *) return 2 ;;
       esac
     fi
-    printf '%s' "$rec" | jq -e --arg i "$item" --arg h "$head" \
-      '.identity.item == $i and .identity.head != $h and .state != "closed" and .state != "superseded"' \
+    # A PREDECESSOR IS ANY LIVE REQUEST FOR THIS ITEM AT A DIFFERENT IDENTITY,
+    # and the test for that is the REQUEST ID, not a field-by-field comparison.
+    # The id is the digest OVER the whole identity, so a different id is exactly
+    # what "a different question" means - and it stays right as identity grows.
+    # It was written as a head-and-gate comparison, and every field added since
+    # slipped through it: a moved policy generation asked a new question while
+    # its predecessor stayed live beside it, which is the two-applicable-request
+    # state this linkage exists to make impossible.
+    #
+    # TERMINAL RECORDS ARE PRESERVED, not rewritten. A finished predecessor is
+    # history and this linkage only ever retires something still live.
+    state=$(printf '%s' "$rec" | jq -r '.state') || continue
+    fm_outbound_state_terminal "$state" && continue
+    printf '%s' "$rec" | jq -e --arg i "$item" --arg r "$rid" \
+      '.identity.item == $i
+       and .request_id != $r' \
       >/dev/null 2>&1 || continue
+    # Name WHICH binding moved, because "superseded" alone does not say whether
+    # the work changed or only the question did.
+    reason='bound to an identity that moved'
+    printf '%s' "$rec" | jq -e --arg h "$head" '.identity.head != $h' >/dev/null 2>&1 \
+      && reason='bound to a head that moved'
+    printf '%s' "$rec" | jq -e --arg h "$head" --arg g "$gate" \
+      '.identity.head == $h and .identity.gate != $g' >/dev/null 2>&1 \
+      && reason='bound to a gate that moved'
     rec=$(printf '%s' "$rec" | jq --arg s "$rid" --arg n "$(now_iso)" \
       '.state = "superseded" | .superseded_by = $s | .updated = $n')
     record_write "$other" "$rec" || return 2
-    printf 'superseded: %s (bound to a head that moved)\n' "$other"
+    printf 'superseded: %s (%s)\n' "$other" "$reason"
   done
 }
 
@@ -1172,7 +1510,8 @@ require_unique_backlog_record() {  # <item>
 cmd_emit() {
   local item=$1 rationale=$2 dry=$3
   local rec gate channel project pr_url pr_ref head_observation head head_source venue missing rid record
-  local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc
+  local subject_repo subject_declared subject_tree subject_policy subject_missing clone
+  local attempt delay body found existing dedupe_rc retry_rc record_rc supersede_rc existing_state
 
   read_snapshot || die "fleet backlog could not be read" 4
   require_unique_backlog_record "$item"
@@ -1206,9 +1545,28 @@ cmd_emit() {
     printf '%s remains waiting with no artifact; this refusal does not clear it.\n' "$item" >&2
     exit 4
   fi
-  venue=$SOL_REPO
+  venue="$SOL_REPO#$SOL_ISSUE"
 
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$venue" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+  # THE SUBJECT, COMPILED ONCE AND VALIDATED BEFORE ANY DURABLE EFFECT.
+  #
+  # The identity's repository is what the request is ABOUT. It used to be
+  # $SOL_REPO - the control issue's own repository - so three requests in a row
+  # persisted `repo: sbracewell64/firstmate-sol-control` while binding a head
+  # that exists only in the governed repository the work lives in, and Browser
+  # Sol ruled every one of them non-actionable for the same reason.
+  #
+  # Everything below happens BEFORE the record directory, the lock, supersession
+  # and the transport call, so a subject that cannot represent one real thing
+  # refuses with zero durable actionable request and zero waiting-state
+  # transition - which is what the ruling requires and what a later refusal,
+  # after the record exists, would not have given.
+  subject_declared=$(declared_field "$item" repo)
+  subject_tree=$(declared_field "$item" tree)
+  subject_policy=$(declared_field "$item" policy_generation)
+  clone=$(project_dir "$project")
+  subject_repo=$(subject_repo_for "$item" "$project")
+
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$subject_repo" "$item" "$head" "$clone" "$head_source" || true)
   if [ -n "$missing" ]; then
     printf '%s: cannot construct an exact-head-bound request for %s - missing %s\n' \
       "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" \
@@ -1217,12 +1575,23 @@ cmd_emit() {
     exit 3
   fi
 
-  rid=$(fm_outbound_request_id "$gate" "$project" "$venue" "$item" "$pr_ref" "$head") \
+  subject_missing=$(fm_outbound_subject_missing "$subject_repo" "$SOL_REPO" "$clone" "$subject_tree" "$head" "$subject_declared" || true)
+  if [ -n "$subject_missing" ]; then
+    printf '%s: %s has no validated governed subject - %s\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$item" \
+      "$(printf '%s' "$subject_missing" | tr '\n' ',' | sed 's/,$//')" >&2
+    printf 'The control repository is where the question is asked, never what it is about.\n' >&2
+    printf 'Nothing was written and no wait was created.\n' >&2
+    exit 3
+  fi
+
+  rid=$(fm_outbound_request_id "$gate" "$project" "$subject_repo" "$item" "$pr_ref" "$head" \
+    "$subject_tree" "$subject_policy") \
     || die "could not compute a request identity" 4
 
   if [ "$dry" = "1" ]; then
-    record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-      "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
+    record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$subject_repo" \
+      "$item" "$pr_ref" "$head" "$venue" "$(now_iso)" "$head_source" "$subject_tree" "$subject_policy")
     fm_outbound_request_body "$record" "$rationale"
     return 0
   fi
@@ -1235,7 +1604,7 @@ cmd_emit() {
   fi
   EMIT_LOCK="$RECORD_DIR/.$rid.lock"
 
-  supersede_other_heads "$item" "$rid" "$head"; supersede_rc=$?
+  supersede_other_heads "$item" "$rid" "$head" "$gate"; supersede_rc=$?
   if [ "$supersede_rc" -ne 0 ]; then
     case $supersede_rc in
       5) die "$FM_OUTBOUND_TOKEN_IDENTITY: a keyed correlation record belongs to another request" 3 ;;
@@ -1246,12 +1615,31 @@ cmd_emit() {
   # Dedupe against the forge FIRST. This is both ordinary duplicate suppression
   # and the crash-recovery path, because they are the same question: does an
   # artifact carrying this id already exist?
-  record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-    "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
+  record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$subject_repo" \
+    "$item" "$pr_ref" "$head" "$venue" "$(now_iso)" "$head_source" "$subject_tree" "$subject_policy")
   found=$(sol_artifact_present "$rid" "$record"); dedupe_rc=$?
   if [ "$dedupe_rc" -eq 0 ]; then
     existing=$(record_read "$rid"); record_rc=$?
     if [ "$record_rc" -eq 0 ]; then
+      # A FINISHED REQUEST CANNOT ANSWER A FRESH ONE. `closed` and `superseded`
+      # are terminal, and fm_outbound_applicability has always called them
+      # INAPPLICABLE - but this adoption path never asked, so a completed
+      # correlation was reported as "already requested" and the item went on
+      # waiting on an artifact whose question had already been answered and
+      # retired. Measured on fm-ob-25c701e04893, closed after its HOLD was
+      # self-handled, adopted by a later request at the same identity.
+      #
+      # Refusing here rather than reopening: the identity is deterministic, so
+      # the same gate, item and head always name this same finished record. What
+      # has to move is the item's own state, and saying so is the repair.
+      existing_state=$(printf '%s' "$existing" | jq -r '.state')
+      if fm_outbound_state_terminal "$existing_state"; then
+          printf '%s: %s already names %s, which is %s and cannot answer a new request\n' \
+            "$FM_OUTBOUND_TOKEN_MISMATCH" "$item" "$rid" "$existing_state" >&2
+          printf 'Its gate, head and item are unchanged, so a fresh request would carry the same identity.\n' >&2
+          printf 'Nothing was posted and the finished record is untouched.\n' >&2
+          exit 3
+      fi
       record=$(printf '%s' "$existing" | jq --arg c "$found" --arg n "$(now_iso)" \
         '.comment_id = $c | .state = (if .state == "emitting" then "emitted" else .state end) | .updated = $n')
     else
@@ -1278,8 +1666,8 @@ cmd_emit() {
   if [ "$record_rc" -ne 0 ]; then
     case $record_rc in
       1)
-        record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$venue" \
-          "$item" "$pr_ref" "$head" "$SOL_REPO#$SOL_ISSUE" "$(now_iso)" "$head_source")
+        record=$(fm_outbound_record_new "$rid" "$gate" "$channel" "$project" "$subject_repo" \
+          "$item" "$pr_ref" "$head" "$venue" "$(now_iso)" "$head_source" "$subject_tree" "$subject_policy")
         ;;
       5) die "$FM_OUTBOUND_TOKEN_IDENTITY: correlation record $rid belongs to another request" 3 ;;
       *) die "$FM_OUTBOUND_TOKEN_UNREADABLE: correlation record $rid could not be validated" 4 ;;
@@ -1335,6 +1723,60 @@ cmd_emit() {
   exit 4
 }
 
+# RETIRING A MALFORMED REQUEST THROUGH THIS OWNER, never by hand.
+#
+# Three requests were emitted with the control repository as their subject and
+# ruled non-actionable. The ruling is explicit that they must not be hand-edited
+# into validity and must not keep sustaining a wait - two requirements that pull
+# in opposite directions unless the owner itself can retire one.
+#
+# So this marks the record terminal and records WHY, under WHICH ruling. Nothing
+# about its identity, its comment, or its evidence changes: the record stays
+# readable, stays diagnostic, and stays exactly as adverse as it was. What it
+# stops being is APPLICABLE - fm_outbound_applicability has always called a
+# terminal record inapplicable, so after this no wait rests on it and no restart
+# can reconstruct one from it.
+#
+# It is deliberately NOT a repair. A quarantined request answers nothing; the
+# item it belonged to goes back to having no applicable artifact, which is the
+# invariant's red condition and the honest state to be in.
+cmd_quarantine() {  # <request-id> <ruling-ref>
+  local rid=$1 ruling=$2 rec state
+  [ -n "$ruling" ] || die "quarantine needs the ruling that retires the request" 2
+  require_record "$rid"; rec=$RECORD
+  state=$(printf '%s' "$rec" | jq -r '.state')
+  if [ "$state" = quarantined ]; then
+    printf 'already quarantined: %s (%s)\n' "$rid" \
+      "$(printf '%s' "$rec" | jq -r '.disposition // "no ruling recorded"')"
+    return 0
+  fi
+  # AN ALREADY-FINISHED REQUEST IS ANNOTATED, NOT RELABELLED. Two of the three
+  # requests this was built for had already been superseded by the time the
+  # ruling arrived. They are inapplicable already, so nothing needs retiring -
+  # but WHY they are non-actionable is worth recording, and overwriting
+  # `superseded` would throw away the successor linkage that says which request
+  # replaced them. So the ruling is appended to the disposition and the state is
+  # left exactly as it stands.
+  if fm_outbound_state_terminal "$state"; then
+    rec=$(printf '%s' "$rec" | jq --arg r "$ruling" --arg n "$(now_iso)" \
+      '.disposition = ((.disposition // "")
+                       | if . == "" then "" else . + "; " end)
+                      + "ruled malformed under " + $r
+       | .updated = $n')
+    record_write "$rid" "$rec" || die "could not write the correlation record" 4
+    printf 'already terminal: %s is %s and applies to nothing; recorded the ruling %s\n' \
+      "$rid" "$state" "$ruling"
+    return 0
+  fi
+  rec=$(printf '%s' "$rec" | jq --arg r "$ruling" --arg n "$(now_iso)" \
+    '.state = "quarantined"
+     | .disposition = ("retired as malformed under " + $r)
+     | .updated = $n')
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+  printf 'quarantined: %s retired as malformed under %s\n' "$rid" "$ruling"
+  printf 'Its identity, comment and evidence are unchanged; it is no longer applicable to any wait.\n'
+}
+
 # --- correlation -------------------------------------------------------------
 #
 # The chain a ruling has to complete: request -> ruling -> resumed item ->
@@ -1370,9 +1812,26 @@ require_record() {  # <request-id>; sets RECORD or exits
   fi
 }
 
+# THE GOVERNED SUBJECT, DERIVED IN EXACTLY ONE PLACE.
+#
+# Every caller that computes a request identity - emit, the sweep, and the
+# ruling join that re-checks a stored identity against the current one - must
+# agree on what the request is ABOUT, or a genuine ruling for our own request is
+# refused as a mismatch. It is derived here so there is one answer rather than
+# three: a declaration wins, otherwise it is the repository this project's work
+# actually lives in, and it is never $SOL_REPO, which is only where the question
+# gets asked. Prints the subject repository; the caller validates it.
+subject_repo_for() {  # <item> <project> -> owner/name or project name
+  local declared
+  declared=$(declared_field "$1" repo)
+  [ -n "$declared" ] || declared=$(project_venue "$2")
+  [ -n "$declared" ] || declared=$2
+  printf '%s\n' "$declared"
+}
+
 require_record_applicable_now() {  # <request-id> <record-json>
   local rid=$1 rec=$2 item current gate channel project repo pr_url pr_ref head_observation head head_source missing
-  local stored_identity current_identity stored_venue current_venue
+  local stored_identity current_identity stored_venue current_venue tree policy successor
   item=$(printf '%s' "$rec" | jq -r '.identity.item')
   read_snapshot || die "fleet backlog could not be read while validating $rid" 4
   require_unique_backlog_record "$item"
@@ -1386,25 +1845,45 @@ require_record_applicable_now() {  # <request-id> <record-json>
   head_observation=$(observe_head "$item" "$pr_url" "$project")
   head=$(printf '%s' "$head_observation" | cut -f1)
   head_source=$(printf '%s' "$head_observation" | cut -f2)
+  tree=$(declared_field "$item" tree)
+  policy=$(declared_field "$item" policy_generation)
   if [ "$channel" = "pull-request" ]; then
     repo=$(project_venue "$project" \
       "$(printf '%s' "$current" | jq -r '.contribution_venue // ""')")
   else
     read_sol_config || die "the configured control repository could not be observed" 4
-    repo=$SOL_REPO
+    # NOT $SOL_REPO. The stored identity records the governed subject, so
+    # recomputing it from the transport venue would refuse every ruling for a
+    # request emitted after that repair - the join would compare the subject
+    # against the venue and correctly find them different.
+    repo=$(subject_repo_for "$item" "$project")
     current_venue="$SOL_REPO#$SOL_ISSUE"
   fi
-  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$PROJECTS/$project" "$head_source" || true)
+  missing=$(fm_outbound_binding_missing "$gate" "$project" "$repo" "$item" "$head" "$(project_dir "$project")" "$head_source" || true)
   [ -z "$missing" ] || die "the current identity for $item is incomplete: $(printf '%s' "$missing" | tr '\n' ',')" 4
+  # VALIDATE THE SUBJECT BEFORE COMPARING AGAINST IT. Everything below this line
+  # can WRITE - a mismatch supersedes the stored record - so a subject that was
+  # merely derived and never checked would let this retire a live request on the
+  # strength of a guess. When the subject cannot be established the honest answer
+  # is could-not-observe: the ruling is not joined, and the record is left
+  # exactly as it stands rather than being retired by an unread comparison.
+  if [ "$channel" != "pull-request" ]; then
+    missing=$(fm_outbound_subject_missing "$repo" "$SOL_REPO" "$(project_dir "$project")" \
+      "$tree" "$head" "$(declared_field "$item" repo)" || true)
+    [ -z "$missing" ] || die \
+      "$FM_OUTBOUND_TOKEN_SUBJECT_UNRESOLVED: $item has no validated governed subject - $(printf '%s' "$missing" | tr '\n' ',' | sed 's/,$//'); $rid was left untouched" 4
+  fi
   stored_identity=$(printf '%s' "$rec" | jq -r \
-    '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head] | @tsv')
-  current_identity=$(printf '%s\t%s\t%s\t%s\t%s\t%s' \
-    "$gate" "$project" "$repo" "$item" "$pr_ref" "$head")
+    '[.identity.gate,.identity.project,.identity.repo,.identity.item,(.identity.pr // "-"),.identity.head,(.identity.tree // ""),(.identity.policy // "")] | @tsv')
+  current_identity=$(printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s' \
+    "$gate" "$project" "$repo" "$item" "$pr_ref" "$head" "$tree" "$policy")
   stored_venue=$(printf '%s' "$rec" | jq -r '.venue // ""')
   if [ "$current_identity" != "$stored_identity" ] \
     || { [ "$channel" = "sol-control" ] && [ "$current_venue" != "$stored_venue" ]; }; then
-    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
-      '.state = "superseded" | .updated = $n')
+    successor=$(fm_outbound_request_id "$gate" "$project" "$repo" "$item" "$pr_ref" "$head" "$tree" "$policy") \
+      || die "the successor identity for $item could not be compiled" 4
+    rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" --arg s "$successor" \
+      '.state = "superseded" | .superseded_by = $s | .updated = $n')
     record_write "$rid" "$rec" || die "could not invalidate stale request $rid" 4
     printf '%s: request %s no longer matches the complete current identity\n' \
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" >&2
@@ -1414,6 +1893,7 @@ require_record_applicable_now() {  # <request-id> <record-json>
 
 cmd_ruling() {  # <request-id> <comment-id> <issue>
   local rid=$1 comment=$2 issue=$3 rec state venue_repo venue_issue artifact body request_comment verdict verdict_count
+  local form join_rc verdict_key other_key other_count
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   case $state in
@@ -1451,9 +1931,29 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
       exit 3
     }
   body=$(printf '%s' "$artifact" | jq -r '.body')
-  if ! artifact_body_matches_identity "$body" "$rec" "$FM_OUTBOUND_RULING_MARKER"; then
-      printf '%s: comment %s does not carry the exact request identity\n' \
-        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" >&2
+  form=$(fm_outbound_ruling_form "$body")
+  ruling_identity_join "$body" "$rec" "$form"; join_rc=$?
+  if [ "$join_rc" -eq 3 ]; then
+    printf '%s: comment %s uses the legacy marker form, which cannot drive a ruling transition\n' \
+      "$FM_OUTBOUND_TOKEN_LEGACY_NONAUTHORITATIVE" "$comment" >&2
+    printf 'Submit a complete typed RulingEnvelope. Nothing was written.\n' >&2
+    exit 3
+  fi
+  if [ "$join_rc" -eq 2 ]; then
+    # AMBIGUOUS, not MISMATCH. The body may well be this request's ruling; what
+    # we could not do is read WHICH request it names once. Reporting that as a
+    # mismatch sends an operator looking for a misaddressed ruling instead of
+    # for the duplicated or missing field that is actually there.
+    printf '%s: comment %s cannot be joined - %s\n' \
+      "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" \
+      "${RULING_JOIN_DETAIL:-its envelope does not state the request identity once}" >&2
+    printf 'Refusing rather than choosing a field by position. Nothing was written.\n' >&2
+    exit 4
+  fi
+  if [ "$join_rc" -ne 0 ]; then
+      printf '%s: comment %s does not carry the exact request identity - %s\n' \
+        "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" \
+        "${RULING_JOIN_DETAIL:-its envelope names other work}" >&2
       exit 3
   fi
   # THE SENDER, before the verdict. A body that does not establish who sent it
@@ -1487,15 +1987,46 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
   # order, and as an unparseable construct reporting could-not-observe rather
   # than being skipped: an ambiguous input is refused loudly and then fixed, and
   # is never resolved into a confident answer nobody chose.
-  verdict_count=$(printf '%s\n' "$body" | grep -c '^verdict: ' || true)
+  # EACH FORM STATES ITS VERDICT UNDER ITS OWN KEY - `verdict:` on the legacy
+  # form, `decision:` on the typed one - and a body carrying BOTH keys is
+  # refused rather than resolved by preferring either. Two verdict channels in
+  # one body is the same ambiguity as two verdict lines, arriving one level up.
+  if [ "$form" = typed ]; then verdict_key='decision'; other_key='verdict'
+  else verdict_key='verdict'; other_key='decision'; fi
+  other_count=$(printf '%s\n' "$body" | grep -c "^$other_key: " || true)
+  case $other_count in ''|*[!0-9]*) other_count=0 ;; esac
+  if [ "$other_count" -ne 0 ]; then
+    printf '%s: comment %s is a %s-form ruling that also carries %s "%s:" line(s)\n' \
+      "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$form" "$other_count" "$other_key" >&2
+    printf 'Refusing rather than preferring one verdict key over the other. Nothing was written.\n' >&2
+    exit 4
+  fi
+  verdict_count=$(printf '%s\n' "$body" | grep -c "^$verdict_key: " || true)
   case $verdict_count in ''|*[!0-9]*) verdict_count=0 ;; esac
   if [ "$verdict_count" -ne 1 ]; then
-    printf '%s: comment %s carries %s verdict lines; exactly one is required\n' \
-      "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$verdict_count" >&2
+    printf '%s: comment %s carries %s %s lines; exactly one is required\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$comment" "$verdict_count" "$verdict_key" >&2
     printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own verdict once.\n' >&2
     exit 3
   fi
-  verdict=$(printf '%s\n' "$body" | sed -n 's/^verdict: //p')
+  # Recorded VERBATIM. This module never decides what a word authorizes; the
+  # closed list in bin/fm-landing-authorization-lib.sh does, and a word outside
+  # it - HOLD included - is unrecognized there and stops the act.
+  verdict=$(printf '%s\n' "$body" | sed -n "s/^$verdict_key: //p")
+  # A REPLAY OF THE SAME RULING WRITES NOTHING. A wake can arrive twice - a
+  # re-poll, a retried check, a restart mid-drain - and rejoining the identical
+  # comment used to rewrite `observed` and `updated` each time. That is a
+  # durable change with no new information in it, so the record's own bytes
+  # stopped being a reliable answer to "has anything happened since?", and
+  # anything comparing the record across a replay saw movement that was purely
+  # the clock. Converging silently here is what makes the replay idempotent
+  # rather than merely harmless.
+  if [ "$state" = ruled ] \
+    && printf '%s' "$rec" | jq -e --arg c "$comment" --arg v "$verdict" \
+      '.ruling.comment_id == $c and .ruling.verdict == $v' >/dev/null 2>&1; then
+    printf 'ruled: %s already carries this exact ruling; nothing was written\n' "$rid"
+    return 0
+  fi
   rec=$(printf '%s' "$rec" | jq --arg c "$comment" --arg v "$verdict" --arg n "$(now_iso)" \
     '.ruling = {comment_id:$c, verdict:$v, observed:$n} | .state = "ruled" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
@@ -1503,7 +2034,7 @@ cmd_ruling() {  # <request-id> <comment-id> <issue>
 }
 
 cmd_poll() {
-  local comments row body rid marker_count comment rc failed=0 poll_record poll_state out
+  local comments row body rid comment rc failed=0 poll_record poll_state out form marker_count
   read_sol_config || return 0
   probe_budget || die "the ruling poll probe budget is exhausted" 4
   # fm-retrieval-audit: complete-source - --paginate traverses every issue-comment page before absence is concluded.
@@ -1515,28 +2046,53 @@ cmd_poll() {
       || { failed=4; continue; }
     body=$(printf '%s' "$row" | jq -Rr '@base64d | fromjson | .[1]') \
       || { failed=4; continue; }
-    rid=$(printf '%s\n' "$body" \
-      | sed -n "s/^$FM_OUTBOUND_RULING_MARKER \($FM_OUTBOUND_REQUEST_ID_PATTERN\)$/\1/p")
-    marker_count=$(printf '%s\n' "$rid" | grep -c . || true)
-    [ "$marker_count" -ne 0 ] || continue
-    # AMBIGUOUS, not MISMATCH. A mismatch says the one candidate found is not
-    # about this work; ambiguity says several were found and none can be chosen.
-    # Labelling this a mismatch sends the operator asking why a ruling was
-    # misaddressed when the truth is that one comment carried two markers.
-    if [ "$marker_count" -gt 1 ]; then
-      printf '%s: comment %s carries %s ruling marker lines, so which request it rules is ambiguous\n' \
-        "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$marker_count" >&2
-      printf 'Refusing rather than reading one by position. A ruling that quotes another must state its own request once.\n' >&2
-      [ "$failed" -ne 0 ] || failed=3
-      continue
+    # DISCOVERY READS BOTH WIRE FORMS so legacy rendering is diagnosed rather
+    # than silently disappearing, while only the typed form can transition.
+    form=$(fm_outbound_ruling_form "$body")
+    case $form in
+      both)
+        marker_count=$(fm_outbound_ruling_envelope "$body" \
+          | grep -c "^$FM_OUTBOUND_RULING_MARKER " || true)
+        case $marker_count in ''|*[!0-9]*) marker_count=0 ;; esac
+        printf '%s: comment %s declares more than one ruling form in its envelope (%s ruling marker lines)\n' \
+          "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" "$marker_count" >&2
+        printf 'Refusing rather than preferring one declaration over the other.\n' >&2
+        [ "$failed" -ne 0 ] || failed=3
+        continue ;;
+      none) continue ;;
+    esac
+    if [ "$form" = typed ]; then
+      rid=$(fm_outbound_typed_ruling_request "$body"); rc=$?
+    else
+      rid=$(fm_outbound_legacy_ruling_request "$body"); rc=$?
     fi
+    # NOT OURS IS NOT AMBIGUOUS. An envelope with no request, or one naming an
+    # identity this mechanism does not correlate, is passed over in silence -
+    # this control issue carries far more conversation than correlation records,
+    # and treating every other participant's ruling as a defect is what turned
+    # one poll into dozens of ambiguity reports and a failing status.
+    case $rc in
+      0) ;;
+      1|3) continue ;;
+      *)
+        # The one genuinely unresolvable case: the envelope addresses us and
+        # states its request more than once, so which one it rules cannot be
+        # chosen without choosing for the sender.
+        printf '%s: comment %s states its request more than once in its envelope\n' \
+          "$FM_OUTBOUND_TOKEN_AMBIGUOUS" "$comment" >&2
+        printf 'Refusing rather than reading one by position.\n' >&2
+        [ "$failed" -ne 0 ] || failed=3
+        continue ;;
+    esac
     poll_record=$(record_read "$rid") || poll_record=
     if [ -n "$poll_record" ]; then
       poll_state=$(printf '%s' "$poll_record" | jq -r '.state')
       case $poll_state in
-        resumed|closed|superseded) continue ;;
-        ruled) continue ;;
+        resumed|ruled) continue ;;
       esac
+      # A finished request cannot receive a ruling, so a late or duplicate
+      # delivery for one is passed over rather than woken.
+      fm_outbound_state_terminal "$poll_state" && continue
     fi
     out=$("$0" ruling --request "$rid" --comment "$comment" --issue "$SOL_ISSUE" 2>&1)
     rc=$?
@@ -1549,12 +2105,25 @@ cmd_poll() {
 }
 
 cmd_resume() {  # <request-id>
-  local rid=$1 rec state
+  local rid=$1 rec state verdict
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   if [ "$state" != "ruled" ]; then
     printf '%s: request %s is %s; only a ruled request can resume its item\n' \
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
+    exit 3
+  fi
+  # A REVISION IS NOT A RESUMPTION. `ruled` says a verdict arrived, never that
+  # the verdict let the work continue, and resuming on the strength of the state
+  # alone is how a body that said "change this" clears the wait it should have
+  # extended. The item goes back to work on a CORRECTED candidate, which is a
+  # different head, so it is a different identity and a different request - and
+  # this one is retired through `correct` rather than resumed here.
+  verdict=$(printf '%s' "$rec" | jq -r '.ruling.verdict // ""')
+  if fm_outbound_verdict_revising "$verdict"; then
+    printf '%s: the ruling on %s returned "%s", which demands a corrected candidate rather than resuming this one\n' \
+      "$FM_OUTBOUND_TOKEN_REVISION_REQUIRED" "$rid" "$verdict" >&2
+    printf 'Retire it for correction, then emit the corrected candidate. It inherits nothing from this ruling.\n' >&2
     exit 3
   fi
   require_record_applicable_now "$rid" "$rec"
@@ -1564,8 +2133,224 @@ cmd_resume() {  # <request-id>
   printf 'resumed: %s\n' "$(printf '%s' "$rec" | jq -r '.identity.item')"
 }
 
-cmd_close() {  # <request-id> <disposition>
-  local rid=$1 disp=$2 rec state
+# --- entering the wait state -------------------------------------------------
+#
+# THE ONLY MOMENT A BARE WAIT CAN STILL BE PREVENTED. Everything else in this
+# file reports the condition after it exists: the sweep finds an item waiting
+# with no artifact and calls it a defect, which is a repair notice rather than a
+# guard. Seven items reached that state and stayed in it, because nothing was
+# ever asked at the point the wait was CREATED.
+#
+# So the declaration that puts an item into a wait state is written HERE, and
+# only after a durable request that backs that exact gate and head is found to
+# exist. The order is the whole mechanism: ask first, then wait. An item cannot
+# enter AWAITING_BROWSER_SOL because somebody wrote a hold sentence saying it
+# is waiting - it enters because a question was demonstrably asked.
+#
+# THIS IS A PROMOTION, WHICH IS WHY IT DOES NOT TYPE THE GATE ITSELF. A row that
+# has not been asked yet is recognised by its hold PROSE, and that prose is what
+# lets the request be emitted in the first place. This command turns that
+# recognised-by-prose wait into a TYPED declaration, and the typed form is
+# exactly the one an emit reads as authoritative - so promoting a wait that
+# nothing backs would manufacture the authoritative form of a question nobody
+# asked. It never invents a gate and never rewrites prose; it refuses, and the
+# prose row stays exactly as it was for a later sweep to report.
+#
+# A TERMINAL REQUEST BACKS NOTHING. Quarantined, revised, superseded and closed
+# records are preserved as evidence and are deliberately not applicable, so a
+# wait may not rest on one. That is the case worth naming: a request retired as
+# malformed is exactly the shape that would otherwise look like an artifact and
+# hold an item waiting forever on a question that was never validly asked.
+cmd_declare() {  # <item> <gate> <head>
+  local item=$1 gate=$2 head=$3 f other raw subject rec read_rc state backing dir tmp
+  local declaration declared_repo declared_tree declared_policy
+  if ! fm_outbound_gate_valid "$gate"; then
+    printf '%s: %s is not a gate this mechanism recognises\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$gate" >&2
+    exit 3
+  fi
+  # SHAPE ONLY, and both object widths. The head's real width belongs to the
+  # target repository's object format, which emit already established against
+  # the clone - this declaration is not the place to re-derive it, and the
+  # binding check below is the strong test anyway: a head no live request names
+  # is refused whatever it looks like.
+  if ! fm_outbound_is_sha "$head" 40 && ! fm_outbound_is_sha "$head" 64; then
+    printf '%s: %s cannot be an exact head\n' \
+      "$FM_OUTBOUND_TOKEN_INCOMPLETE" "$head" >&2
+    exit 3
+  fi
+
+  # An unreadable store is could-not-observe, never "no backing request exists".
+  # Reading it the other way would let an unreadable directory authorize the
+  # very wait this refuses.
+  if [ -d "$RECORD_DIR" ] && { [ ! -r "$RECORD_DIR" ] || [ ! -x "$RECORD_DIR" ]; }; then
+    printf '%s: the request store could not be read, so it is unknown whether %s is backed\n' \
+      "$FM_OUTBOUND_TOKEN_UNREADABLE" "$item" >&2
+    exit 4
+  fi
+  declaration='{}'
+  if [ -e "$(gate_file "$item")" ]; then
+    declaration=$(jq -e 'select(type == "object")' "$(gate_file "$item")" 2>/dev/null) \
+      || die "the existing declaration for $item could not be read" 4
+  fi
+  declared_repo=$(printf '%s' "$declaration" | jq -r '.repo // ""')
+  declared_tree=$(printf '%s' "$declaration" | jq -r '.tree // ""')
+  declared_policy=$(printf '%s' "$declaration" | jq -r '.policy_generation // ""')
+  backing=
+  if [ -d "$RECORD_DIR" ]; then
+    for f in "$RECORD_DIR"/*.json; do
+      [ -f "$f" ] || continue
+      other=${f##*/}; other=${other%.json}
+      raw=$(cat "$f" 2>/dev/null) || {
+        printf '%s: %s could not be read, so it is unknown whether %s is backed\n' \
+          "$FM_OUTBOUND_TOKEN_UNREADABLE" "$other" "$item" >&2
+        exit 4
+      }
+      subject=$(fm_outbound_record_subject "$raw") || continue
+      [ "$subject" = "$item" ] || continue
+      rec=$(record_read "$other"); read_rc=$?
+      # A record filed for THIS item that cannot be validated is not passed
+      # over: it is the one record whose unreadability decides this answer.
+      if [ "$read_rc" -ne 0 ]; then
+        printf '%s: %s is filed for %s and could not be validated, so it is unknown whether the wait is backed\n' \
+          "$FM_OUTBOUND_TOKEN_UNREADABLE" "$other" "$item" >&2
+        exit 4
+      fi
+      printf '%s' "$rec" | jq -e --arg g "$gate" --arg h "$head" \
+        --arg r "$declared_repo" --arg t "$declared_tree" --arg p "$declared_policy" \
+        '.identity.gate == $g and .identity.head == $h
+         and ($r == "" or .identity.repo == $r)
+         and ($t == "" or .identity.tree == $t)
+         and ($p == "" or .identity.policy == $p)' >/dev/null 2>&1 || continue
+      state=$(printf '%s' "$rec" | jq -r '.state')
+      fm_outbound_state_terminal "$state" && continue
+      backing=$other
+      break
+    done
+  fi
+
+  if [ -z "$backing" ]; then
+    printf '%s: %s has no live request at %s for head %s, so it may not enter that wait\n' \
+      "$FM_OUTBOUND_TOKEN_WAIT_UNBACKED" "$item" "$gate" "$head" >&2
+    printf 'Emit the request first. A wait with nothing to wait for is the condition this refuses to create.\n' >&2
+    exit 3
+  fi
+
+  dir="$DATA/$item"
+  mkdir -p "$dir" || die "could not create the declaration directory for $item" 4
+  tmp="$dir/.outbound-gate.json.$$"
+  printf '%s' "$declaration" | jq --arg gate "$gate" --arg head "$head" --arg r "$backing" \
+    '. + {gate:$gate, head:$head, request:$r}' > "$tmp" \
+    || { rm -f "$tmp"; die "could not write the declaration for $item" 4; }
+  mv -f "$tmp" "$(gate_file "$item")" \
+    || { rm -f "$tmp"; die "could not install the declaration for $item" 4; }
+  printf 'declared: %s waits at %s on %s\n' "$item" "$gate" "$backing"
+}
+
+# THE CORRECTION ROUTE. A revision is the one ruling that answers the question
+# and still leaves the item waiting, so it needs a terminal of its own: the
+# request was well formed and was ruled, and what must change is the CANDIDATE.
+#
+# Retiring it here is what stops the correction being silently dropped. While
+# the record stands `ruled` it is still applicable, so a sweep sees a live
+# request, a fresh emit adopts it, and the item waits on a question that was
+# already answered. `revised` is terminal, so applicability says inapplicable
+# once and every one of those paths follows without a second rule.
+#
+# NOTHING TRANSFERS. The corrected candidate is a different head, so it computes
+# a different identity and a different request id, and the ruling recorded here
+# stays attached to the head it actually judged. That is the whole reason the
+# successor is left to an ordinary `emit` rather than minted here: a successor
+# this command wrote would be a request nobody asked, carrying an approval
+# nobody gave for a head nobody reviewed.
+cmd_correct() {  # <request-id>
+  local rid=$1 rec state verdict
+  require_record "$rid"; rec=$RECORD
+  state=$(printf '%s' "$rec" | jq -r '.state')
+  if [ "$state" != "ruled" ]; then
+    printf '%s: request %s is %s; only a ruled request can be retired for correction\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
+    exit 3
+  fi
+  verdict=$(printf '%s' "$rec" | jq -r '.ruling.verdict // ""')
+  # ONLY a revision is retired this way. A request whose ruling approved or
+  # declined it has a different ending, and letting this command retire one
+  # would turn a correction route into a way to discard an inconvenient verdict.
+  if ! fm_outbound_verdict_revising "$verdict"; then
+    printf '%s: the ruling on %s returned "%s", which is not a demand for a corrected candidate\n' \
+      "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$verdict" >&2
+    printf 'Only a revising verdict is retired for correction. Nothing was written.\n' >&2
+    exit 3
+  fi
+  rec=$(printf '%s' "$rec" | jq --arg n "$(now_iso)" \
+    '.state = "revised" | .updated = $n')
+  record_write "$rid" "$rec" || die "could not write the correlation record" 4
+  printf 'revised: %s retired for correction - emit the corrected candidate to ask a new question\n' "$rid"
+}
+
+# --- post-effect closure -----------------------------------------------------
+#
+# CLOSURE IS AN OBSERVATION, NOT AN ANNOUNCEMENT. A disposition sentence is
+# whatever the caller typed, so a correlation that closes on prose alone records
+# that somebody BELIEVED the effect landed. That is exactly the evidence class
+# this fleet keeps mistaking for a measurement: a merge command exits 0 for a
+# merge that was queued, superseded, or performed against another head.
+#
+# So when an effect was actually authorized for this request, closure re-reads
+# the world: the authority is checked to have been spent for THIS request and
+# THIS head, and the target ref is observed again in the governed clone and
+# bound into the record at the generation it is actually at.
+#
+# WHAT IS AND IS NOT PROVEN HERE, stated because the strength differs by effect
+# and a uniform claim would be false. A fast-forward landing is exactly
+# checkable: ff-only makes the target BECOME the authorized head, so anything
+# else at the ref means something other than the authorized act moved it. A
+# squash or rebase merge produces a forge-authored commit that no local rule
+# predicts, so for those this binds the observed generation and does NOT claim
+# the head is contained in it. The record says which was achieved rather than
+# letting the stronger reading be assumed.
+auth_store_dir() {
+  printf '%s\n' "${FM_LANDING_AUTH_DIR:-$DATA/landing-authorizations}"
+}
+
+# The authorization this request had minted for it, if any. Prints its id, or
+# nothing. A store that exists and cannot be read is could-not-observe and is
+# reported by the caller rather than being read as "no authority was minted".
+#
+# THIS REFUSES ON ANY UNREADABLE RECORD, and that is deliberately not the same
+# call as `supersede_other_heads`, which scopes to one item and passes over
+# records positively identified as another item's. The difference is what the
+# unreadable record could be. There, a record whose subject reads cleanly as
+# another item is provably outside the decision. Here, an authorization is
+# named by a digest over its own identity, so a record that cannot be read
+# cannot be shown to belong to another request either - it might be this
+# request's spent landing authority, and passing over it would close an effect
+# by failing to see it. The blast radius is real and the repair is one named
+# file, which is why the caller prints the file it could not read.
+auth_for_request() {  # <request-id> -> auth-id
+  local dir f id auth_json request
+  dir=$(auth_store_dir)
+  [ -d "$dir" ] || return 0
+  if [ ! -r "$dir" ] || [ ! -x "$dir" ]; then return 2; fi
+  for f in "$dir"/*.json; do
+    [ -e "$f" ] || continue
+    id=${f##*/}
+    id=${id%.json}
+    auth_json=$(FM_HOME="$FM_HOME" FM_LANDING_AUTH_DIR="$dir" \
+      "$SCRIPT_DIR/fm-landing-authorization.sh" inspect "$id") || return 2
+    request=$(printf '%s' "$auth_json" | jq -r '.request_id') || return 2
+    [ "$request" = "$1" ] || continue
+    printf '%s\n' "$id"
+    return 0
+  done
+  return 0
+}
+
+cmd_close() {  # <request-id> <disposition> [<authorization>] [<target-ref>] [<target-generation>]
+  local rid=$1 disp=$2 auth_id=${3:-} target_ref=${4:-} target_gen=${5:-}
+  local rec state minted rc auth_json dir head item plan_kind plan_mode plan_head plan_ref plan_repo plan_pr base_ref
+  local clone project observed verification
+
   require_record "$rid"; rec=$RECORD
   state=$(printf '%s' "$rec" | jq -r '.state')
   if [ "$state" != "resumed" ]; then
@@ -1573,8 +2358,134 @@ cmd_close() {  # <request-id> <disposition>
       "$FM_OUTBOUND_TOKEN_MISMATCH" "$rid" "$state" >&2
     exit 3
   fi
+
+  # A CLOSURE MAY NOT OMIT AN EFFECT IT HAD. Naming the authority is not a
+  # courtesy flag: if it were optional, every post-effect closure could become
+  # an effect-free one by leaving it out, and the verification below would be
+  # skipped precisely when it matters. So the store is asked, not the caller.
+  minted=$(auth_for_request "$rid"); rc=$?
+  if [ "$rc" -ne 0 ]; then
+    printf '%s: the landing authorization store could not be read, so it is unknown whether %s had an effect authorized\n' \
+      "$FM_OUTBOUND_TOKEN_UNREADABLE" "$rid" >&2
+    exit 4
+  fi
+  if [ -n "$minted" ] && [ -z "$auth_id" ]; then
+    printf '%s: %s had landing authorization %s minted for it, so this closure must name it and the generation the effect produced\n' \
+      "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$rid" "$minted" >&2
+    printf 'Closing on a disposition sentence alone would record a landing nobody observed.\n' >&2
+    exit 3
+  fi
+
+  if [ -n "$auth_id" ]; then
+    [ -n "$target_ref" ] && [ -n "$target_gen" ] \
+      || die "--authorization needs --target-ref and --target-generation naming what the effect produced" 2
+    dir=$(auth_store_dir)
+    auth_json=$(FM_HOME="$FM_HOME" FM_LANDING_AUTH_DIR="$dir" \
+      "$SCRIPT_DIR/fm-landing-authorization.sh" inspect "$auth_id"); rc=$?
+    [ "$rc" -eq 0 ] || exit "$rc"
+
+    # THE CHAIN, not the caller's word about it. An authority for another
+    # request, another item, or another head is foreign to this closure however
+    # valid it is in its own right.
+    head=$(printf '%s' "$rec" | jq -r '.identity.head')
+    item=$(printf '%s' "$rec" | jq -r '.identity.item')
+    printf '%s' "$auth_json" | jq -e --arg r "$rid" --arg h "$head" --arg i "$item" \
+      '.request_id == $r and .grant.head == $h and .grant.item == $i' >/dev/null 2>&1 \
+      || { printf '%s: authorization %s does not belong to request %s at head %s\n' \
+             "$FM_OUTBOUND_TOKEN_AUTHORITY_FOREIGN" "$auth_id" "$rid" "$head" >&2
+           printf 'Nothing was written.\n' >&2; exit 3; }
+
+    # SPENT AND APPLIED. A granted authority is permission that was never used,
+    # and a spend that failed or is still in flight is not a landing.
+    printf '%s' "$auth_json" | jq -e \
+      '.state == "spent" and .spend.outcome == "applied"' >/dev/null 2>&1 \
+      || { printf '%s: authorization %s is %s and its act is %s; only a spent, applied authority closes an effect\n' \
+             "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$auth_id" \
+             "$(printf '%s' "$auth_json" | jq -r '.state // "unreadable"')" \
+             "$(printf '%s' "$auth_json" | jq -r '.spend.outcome // "unrecorded"')" >&2
+           exit 3; }
+
+    plan_kind=$(printf '%s' "$auth_json" | jq -r '.effect.kind // ""')
+    plan_mode=$(printf '%s' "$auth_json" | jq -r '.effect.mode // ""')
+    plan_head=$(printf '%s' "$auth_json" | jq -r '.grant.head // ""')
+    if [ "$plan_kind" = local-fast-forward ]; then
+      plan_ref=$(printf '%s' "$auth_json" | jq -r '.effect.target_ref // ""')
+      [ -n "$plan_ref" ] && [ "$target_ref" = "$plan_ref" ] \
+        || { printf '%s: closure target %s is not the authorized effect target %s\n' \
+               "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "${plan_ref:-unobserved}" >&2
+             printf 'Nothing was written.\n' >&2; exit 3; }
+    elif [ "$plan_kind" = pr-merge ]; then
+      plan_repo=$(printf '%s' "$auth_json" | jq -r '.effect.repo // ""')
+      plan_pr=$(printf '%s' "$auth_json" | jq -r '.effect.pr // ""')
+      [ -n "$plan_repo" ] && [ -n "$plan_pr" ] \
+        || { printf '%s: the consumed merge plan does not identify its pull request\n' \
+               "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" >&2; exit 4; }
+      # fm-retrieval-audit: not-a-collection - the repository and pull request number select exactly one pull request object.
+      base_ref=$(obs gh api "repos/$plan_repo/pulls/$plan_pr" --jq '.base.ref') || base_ref=''
+      [ -n "$base_ref" ] && [ "$(printf '%s\n' "$base_ref" | wc -l | tr -d ' ')" -eq 1 ] \
+        || { printf '%s: the base ref for %s#%s could not be observed exactly once\n' \
+               "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "$plan_repo" "$plan_pr" >&2; exit 4; }
+      plan_ref="refs/heads/$base_ref"
+      git check-ref-format "$plan_ref" >/dev/null 2>&1 \
+        || { printf '%s: the observed merge target %s is not a valid ref\n' \
+               "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "$plan_ref" >&2; exit 4; }
+      [ "$target_ref" = "$plan_ref" ] \
+        || { printf '%s: closure target %s is not the merge plan target %s\n' \
+               "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "$plan_ref" >&2
+             printf 'Nothing was written.\n' >&2; exit 3; }
+    else
+      printf '%s: authorization %s carries unsupported effect kind %s\n' \
+        "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$auth_id" "${plan_kind:-unobserved}" >&2
+      exit 4
+    fi
+
+    # RE-OBSERVE THE TARGET. This is the step the disposition sentence was
+    # standing in for.
+    project=$(printf '%s' "$rec" | jq -r '.identity.project')
+    clone=$(project_dir "$project")
+    [ -n "$clone" ] && [ -d "$clone" ] \
+      || { printf '%s: the governed clone for %s could not be located, so the generation %s reports could not be observed\n' \
+             "$FM_OUTBOUND_TOKEN_CLONE_UNREADABLE" "$project" "$target_ref" >&2; exit 4; }
+    observed=$(obs git --no-optional-locks -C "$clone" rev-parse --verify "$target_ref^{commit}") || observed=''
+    [ -n "$observed" ] \
+      || { printf '%s: %s could not be read in the governed clone, so this closure cannot say where the effect landed\n' \
+             "$FM_OUTBOUND_TOKEN_REF_UNOBSERVED" "$target_ref" >&2; exit 4; }
+    if [ "$observed" != "$target_gen" ]; then
+      printf '%s: %s is at %s, not the %s this closure claims the effect produced\n' \
+        "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$target_ref" "$observed" "$target_gen" >&2
+      printf 'Nothing was written.\n' >&2
+      exit 3
+    fi
+
+    # THE STRICT CASE. A fast-forward landing makes the target exactly the head
+    # it landed, so here the generation is checkable against the authority and
+    # is not merely observed.
+    verification=observed
+    if [ "$plan_kind" = local-fast-forward ] || [ "$plan_mode" = ff-only ]; then
+      if [ "$target_gen" != "$plan_head" ]; then
+        printf '%s: a fast-forward landing of %s must leave %s at that head, and it is at %s\n' \
+          "$FM_OUTBOUND_TOKEN_CLOSURE_UNPROVEN" "$plan_head" "$target_ref" "$target_gen" >&2
+        printf 'Something other than the authorized act moved this ref. Nothing was written.\n' >&2
+        exit 3
+      fi
+      verification=exact
+    fi
+
+    rec=$(printf '%s' "$rec" | jq --arg d "$disp" --arg n "$(now_iso)" \
+      --arg a "$auth_id" --arg r "$target_ref" --arg g "$target_gen" --arg v "$verification" \
+      '.disposition = {outcome:$d, at:$n,
+                       effect:{authorization:$a, target_ref:$r,
+                               target_generation:$g, verification:$v}}
+       | .state = "closed" | .updated = $n')
+    record_write "$rid" "$rec" || die "could not write the correlation record" 4
+    printf 'closed: %s - %s (%s at %s, %s)\n' "$rid" "$disp" "$target_ref" "$target_gen" "$verification"
+    return 0
+  fi
+
+  # No effect was authorized for this request, and the record says so explicitly
+  # rather than leaving an absent field to be read either way.
   rec=$(printf '%s' "$rec" | jq --arg d "$disp" --arg n "$(now_iso)" \
-    '.disposition = {outcome:$d, at:$n} | .state = "closed" | .updated = $n')
+    '.disposition = {outcome:$d, at:$n, effect:null} | .state = "closed" | .updated = $n')
   record_write "$rid" "$rec" || die "could not write the correlation record" 4
   printf 'closed: %s - %s\n' "$rid" "$disp"
 }
@@ -1700,16 +2611,56 @@ case $CMD in
     cmd_resume "$RID"
     ;;
   close)
-    RID=; DISP=
+    RID=; DISP=; AUTH=; TREF=; TGEN=
     while [ $# -gt 0 ]; do
       case $1 in
         --request) RID=${2:-}; shift 2 ;;
         --disposition) DISP=${2:-}; shift 2 ;;
+        --authorization) AUTH=${2:-}; shift 2 ;;
+        --target-ref) TREF=${2:-}; shift 2 ;;
+        --target-generation) TGEN=${2:-}; shift 2 ;;
         *) die "unknown option '$1'" ;;
       esac
     done
     [ -n "$RID" ] && [ -n "$DISP" ] || die "close needs --request and --disposition"
-    cmd_close "$RID" "$DISP"
+    cmd_close "$RID" "$DISP" "$AUTH" "$TREF" "$TGEN"
+    ;;
+  correct)
+    RID=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --request) RID=${2:-}; shift 2 ;;
+        *) die "unknown option '$1'" ;;
+      esac
+    done
+    [ -n "$RID" ] || die "correct needs --request"
+    cmd_correct "$RID"
+    ;;
+  declare)
+    ITEM=; GATE=; HEAD=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --gate) GATE=${2:-}; shift 2 ;;
+        --head) HEAD=${2:-}; shift 2 ;;
+        -*) die "unknown option '$1'" ;;
+        *) [ -z "$ITEM" ] || die "unexpected argument '$1'"; ITEM=$1; shift ;;
+      esac
+    done
+    [ -n "$ITEM" ] && [ -n "$GATE" ] && [ -n "$HEAD" ] \
+      || die "declare needs <item-id> --gate <gate> --head <sha>"
+    cmd_declare "$ITEM" "$GATE" "$HEAD"
+    ;;
+  quarantine)
+    RID=; RULING=
+    while [ $# -gt 0 ]; do
+      case $1 in
+        --request) RID=${2:-}; shift 2 ;;
+        --ruling) RULING=${2:-}; shift 2 ;;
+        *) die "unknown option '$1'" ;;
+      esac
+    done
+    [ -n "$RID" ] && [ -n "$RULING" ] || die "quarantine needs --request and --ruling"
+    cmd_quarantine "$RID" "$RULING"
     ;;
   show)
     [ $# -gt 0 ] || die "show needs a request id"

@@ -1475,31 +1475,28 @@ test_unguverned_effects_refuse_unsafe_or_unconfirmed_commands() {
   pass "ungoverned effects share command validation and remote confirmation"
 }
 
-# --- (q) an outbound state no landed vocabulary declares is a hold -------------
+# --- (q) an outbound state no owner declares is a hold -------------------------
 
 test_an_undeclared_outbound_state_holds_rather_than_disappearing() {
   local state out rc after
-  # `quarantined` is the state that actually caused this: it is written by the
-  # outbound owner's quarantine path and is absent from the record vocabulary, so
-  # a live-state test dropped the record and a quarantined request holding this
-  # exact candidate read as no hold at all. The second value is arbitrary on
-  # purpose - the rule under test is "undeclared holds", not one string.
-  for state in quarantined not-a-state-this-fleet-declares; do
-    fixture "undeclared-$state"
-    policy
-    record fm-ob-undeclared "$state"
-    rc=0
-    out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
-      --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
-    [ "$rc" -eq 3 ] \
-      || fail "undeclared: a request in state '$state' did not refuse the publication (exit $rc): $out"
-    assert_contains "$out" 'FM_PUB_ACTIVE_HOLD' \
-      "undeclared: a request in state '$state' was not reported as a hold: $out"
-    after=$(tip) || fail "undeclared: the remote tip could not be observed"
-    [ "$after" = '-' ] \
-      || fail "undeclared: a refused publication moved the remote to $after"
-  done
-  pass "an outbound request in a state no landed vocabulary declares holds the publication rather than disappearing from it"
+  # The outbound owner now declares `quarantined` terminal, so it correctly
+  # answers nothing and must not be used as the undeclared-state control.
+  # An actually unknown value still holds because no owner classified it.
+  state=not-a-state-this-fleet-declares
+  fixture "undeclared-$state"
+  policy
+  record fm-ob-undeclared "$state"
+  rc=0
+  out=$(guard prepare --repo "$FX_REPO" --remote origin --venue "$VENUE" \
+    --ref "$REF" --head "$FX_HEAD" --expected-tip -) || rc=$?
+  [ "$rc" -eq 3 ] \
+    || fail "undeclared: a request in state '$state' did not refuse the publication (exit $rc): $out"
+  assert_contains "$out" 'FM_PUB_ACTIVE_HOLD' \
+    "undeclared: a request in state '$state' was not reported as a hold: $out"
+  after=$(tip) || fail "undeclared: the remote tip could not be observed"
+  [ "$after" = '-' ] \
+    || fail "undeclared: a refused publication moved the remote to $after"
+  pass "an outbound request in a state no owner declares holds the publication rather than disappearing from it"
 }
 
 # --- (r) the review, and the qualification of whoever performed it ------------

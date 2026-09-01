@@ -193,6 +193,7 @@ The file is one JSON object with two required fields.
 ```
 
 `repo` is the control repository in `owner/name` form, and `issue` is the control issue number a request is posted to as a comment.
+This repository is only the transport venue; the governed repository the request is about comes from the item's typed outbound binding and is never inferred from this field.
 `issue` may be a number or a string; both are read the same way.
 
 An absent or incomplete file does not make a waiting item clear.
