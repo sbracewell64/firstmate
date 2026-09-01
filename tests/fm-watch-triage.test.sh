@@ -3098,7 +3098,8 @@ test_completed_check_pgid_mismatch_is_not_signalled() {
   local dir=$TMP_ROOT/completed-check-pgid-mismatch out rc
   mkdir -p "$dir/state"
   rc=0
-  out=$(FM_STATE_OVERRIDE="$dir/state" WATCH="$WATCH" KILL_LOG="$dir/kill.log" bash -c '
+  out=$(FM_STATE_OVERRIDE="$dir/state" WATCH="$WATCH" KILL_LOG="$dir/kill.log" \
+    PGID_PROBE_LOG="$dir/pgid-probe.log" bash -c '
     set -u
     . "$WATCH"
     run_check_process() { printf "%s\n" complete; }
@@ -3109,6 +3110,7 @@ test_completed_check_pgid_mismatch_is_not_signalled() {
         sleep 0.01
         i=$((i + 1))
       done
+      printf "mismatched\n" > "$PGID_PROBE_LOG"
       printf "%s\n" 999999
     }
     kill() { printf "%s\n" "$*" >> "$KILL_LOG"; command kill "$@"; }
@@ -3117,6 +3119,8 @@ test_completed_check_pgid_mismatch_is_not_signalled() {
     printf "result=%s\n" "$FM_CHECK_RESULT"
   ' 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "completed check pgid mismatch failed: $out"
+  [ "$(cat "$dir/pgid-probe.log" 2>/dev/null)" = mismatched ] \
+    || fail "completed check fixture never returned the mismatched process group"
   [ "$out" = "result=complete" ] || fail "completed check result was lost: $out"
   [ ! -s "$dir/kill.log" ] || fail "completed check pgid mismatch signalled a recycled group: $(cat "$dir/kill.log")"
   pass "a completed check pgid mismatch cannot signal a recycled group"
