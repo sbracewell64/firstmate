@@ -271,7 +271,7 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
 }
 
 test_no_mistakes_brief_quotes_policy_metadata_paths() {
-  local home id brief root_with_space head_command command args expected_head
+  local home id brief root_with_space command args expected_head
   home="$TMP_ROOT/attest path home"
   root_with_space="$TMP_ROOT/firstmate root"
   id='brief-attest-space'
@@ -295,23 +295,21 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
     || fail "brief with a spaced Firstmate root did not scaffold"
   brief="$home/data/$id/brief.md"
   # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
-  head_command=$(sed -n '/final_head=.*gh pr view/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
-  # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
-  command=$(sed -n '/fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
+  command=$(sed -n '/final_head=.*fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
   FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" PATH="$root_with_space/bin:$PATH" \
-    bash -c "$head_command || exit \$?"$'\n'"$command" || fail "the generated publication commands did not execute"
+    bash -c "$command" || fail "the generated publication command did not execute"
   assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
     "the generated command split the policy metadata path"
   assert_contains "$(cat "$args")" "<$expected_head>" \
     "the generated command did not pass the forge-observed final PR head as one argument"
   rm "$args"
   FM_TEST_ARGS="$args" FM_TEST_HEAD=not-a-commit PATH="$root_with_space/bin:$PATH" \
-    bash -c "$head_command || exit \$?"$'\n'"$command" >/dev/null 2>&1 \
-    && fail "the generated publication commands accepted a malformed final PR head"
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command accepted a malformed final PR head"
   assert_absent "$args" "a malformed final PR head reached attestation publication"
   FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_GH_STATUS=1 PATH="$root_with_space/bin:$PATH" \
-    bash -c "$head_command || exit \$?"$'\n'"$command" >/dev/null 2>&1 \
-    && fail "the generated publication commands ignored a failed forge observation"
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command ignored a failed forge observation"
   assert_absent "$args" "a failed forge observation reached attestation publication"
   pass "fm-brief.sh: policy metadata paths round-trip as one argument"
 }
