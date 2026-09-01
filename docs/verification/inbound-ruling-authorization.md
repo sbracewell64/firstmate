@@ -582,9 +582,7 @@ Minting is idempotent on that identity, so a caller that arrives after the atomi
 
 ### Publication integration and uncovered scope
 
-`bin/fm-publication-guard.sh` consumes the same `claim_acquire`, so its `retire` path now reports a claim it could not observe as `FM_PUB_CLAIM_OWNER_UNOBSERVED` rather than flattening that result into `FM_PUB_IN_FLIGHT`.
-Its dead-claim reconciliation also preserves the third value when removal succeeds but safe reacquisition does not, guarded by `test_dead_claim_reacquisition_failure_is_could_not_observe` in `tests/fm-publication-seam.test.sh`.
-Its other `spend` and `reconcile` outcomes already degraded to `cno` and were left alone.
+`bin/fm-publication-guard.sh` consumes the same `claim_acquire`; [`candidate-publication-effect-guard.md`](candidate-publication-effect-guard.md) owns its claim-outcome guarantees and regression evidence.
 
 `bin/fm-test-run.sh` line 403 emitted the identical broken-pipe diagnostic in the same CI lane.
 It is outside this owner and is not repaired here.

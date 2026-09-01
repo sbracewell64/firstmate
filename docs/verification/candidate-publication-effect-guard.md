@@ -16,6 +16,7 @@ Sixteen properties, and one control without which none of them means anything:
 3. A remote that moved under a granted authority refuses without overwriting what moved it.
 4. An authority is spent exactly once through the authorization store's atomic compare-and-claim mechanism, so concurrent consumers execute one push and every replay refuses and publishes nothing.
    A claim binds the owning process identity and process group; a provably dead owner can be reclaimed through a durable, restartable intent, while a live group or unobservable owner refuses reclamation, and consume, reconcile and retire cannot overwrite one another.
+   Claim acquisition remains three-valued throughout: only an observed competing holder is in flight, while an unobservable acquisition or a dead-claim removal followed by unsafe reacquisition is could-not-observe.
 5. An authority consumed before its effect is durably `consumed-without-confirmed-effect`, is never resurrected, and recovery mints a fresh authority for the same unchanged subject rather than reusing it.
 6. A remote already equal to the head is a typed `NO_EFFECT_ALREADY_EQUAL` result that consumes no authority.
 7. A governed candidate publishes only when a ruling is bound to the EXACT head being published and the role qualification register currently records the declared reviewer as qualified and assignment-distinct against the declared maker.
