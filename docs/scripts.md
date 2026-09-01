@@ -17,7 +17,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-bearings-snapshot.sh` | Project the fleet snapshot to the compact TOON bearings view; local-only unless `--include-prs` |
 | `fm-admission.sh`        | Decide the task-independent fleet admission band from a fresh census, with the exact per-rule explanation |
 | `fm-admission-lib.sh`    | Shared fleet-admission policy reader and `_scheduling.admission_control` schema validator |
-| `fm-decision-surface.sh` | Compose the read-only operational decision surface, refuse a claim structured state contradicts, and report the compensation ledger and platform seam |
+| `fm-decision-surface.sh` | Compose the read-only operational decision surface, including the compiled landing-authority verdict, and refuse a claim structured state contradicts |
 | `fm-dead-predicate-check.sh` | Refuse enrolled shell files containing functions with no repository-wide call site, and report unevaluable syntax or enrollment |
 | `fm-outbound-artifact-lib.sh` | Own the outbound-artifact invariant, gate vocabulary, identity rule, recognizer, and correlation-record shape |
 | `fm-outbound-artifact.sh` | Compile waiting-item requests, typed rulings, correction, authorization-bound closure, and disposition |
@@ -77,8 +77,8 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `backends/orca.sh`       | Experimental Orca backend adapter owning both worktree and terminal                  |
 | `backends/cmux.sh`       | Experimental cmux session-provider adapter                                           |
 | `fm-config-push.sh`      | Push declared inherited local material to live local or remote secondmates and send the placement-specific config reread when changed |
-| `fm-project-mode.sh`     | Resolve a project's registered delivery posture from `data/projects.md` for fleet sync and home seeding |
-| `fm-merge-local.sh`      | Fast-forward a `local-only` project's local default branch after approval            |
+| `fm-project-mode.sh`     | Resolve a project's registered delivery and autonomy posture from `data/projects.md`, with optional source attribution |
+| `fm-merge-local.sh`      | Compile landing authority and guardedly fast-forward a `local-only` project's local default branch |
 | `fm-review-diff.sh`      | Review a crewmate branch or resolved PR head against the authoritative base          |
 | `fm-review-exec.sh`      | Launch and capture a reviewer in a disposable pinned clone, and own that review's execution evidence ([verification](verification/review-execution-evidence.md)) |
 | `fm-review-mutation.sh`  | Prove from execution, not from a label, that a named target assertion ran and what it concluded ([verification](verification/review-mutation-proof.md)) |
@@ -122,7 +122,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-blocker-lib.sh`      | Detect blocker movement for dependency-driven pause re-evaluation and maintain its durable baseline |
 | `fm-status-event-lib.sh` | Single owner of the `fm-status-event.v1` typed status-event wire format and its only parser |
 | `fm-task-axis-lib.sh`    | Single owner of a task's role, deliverable, and stage axes, their derivation, and the stale-writer refusal |
-| `fm-autonomy-lib.sh`     | Single owner of the task autonomy-state (`yolo=`) vocabulary, its producer validation, and the one comparison that reads it |
+| `fm-autonomy-lib.sh`     | Single owner of the task autonomy-state (`yolo=`) vocabulary, producer validation, comparison, and effective-posture resolution |
 | `fm-send.sh`             | Send one verified literal line or supported key through the target's recorded backend |
 | `fm-busy-lib.sh`         | Single owner of the semantic busy-state contract: verdicts, source attribution, and per-harness sources |
 | `fm-busy-event.sh`       | The only writer of a task's semantic busy-state record; arms an incarnation and applies lifecycle events |
@@ -143,7 +143,7 @@ The shared no-mistakes gate refusal for fleet lifecycle entrypoints is summarize
 | `fm-pr-merge.sh`         | Forge-verify landing identity, re-verify a PR's current head, then merge a task's canonical full GitHub URL |
 | `fm-landing-authorization.sh` | Mint a one-use landing authorization carrying a typed effect plan from a ruled Browser Sol request, and perform that plan's own act exactly once against the exact head it names |
 | `fm-landing-authorization-lib.sh` | Shared landing, candidate-publication, custody-replication and attestation-evidence authorization identity, state vocabulary, typed effect-plan contract, and pure mint and spend predicates |
-| `fm-landing-seam-lib.sh` | Single owner of whether a landing candidate is inside the declared Browser Sol landing domain, which request grants its authority, and the spend that performs the authority's own act |
+| `fm-landing-seam-lib.sh` | Single owner of compiled landing authority, Browser Sol governance applicability, and the one-use authorization spend |
 | `fm-publication-guard.sh` | Compile the eligibility verdict and effect class for one exact remote-changing act, mint the one-use authority it must spend, run the effect inside that spend, and project candidate state where applicable |
 | `fm-publication-seam-lib.sh` | Single owner of whether a guarded candidate or attestation-evidence publication may proceed, and the only wiring FirstMate's own publication paths reach it through |
 | `fm-rebase-equivalence.sh` | Diagnostic: report whether a rebase dropped content a pipeline validated, naming the losing paths |
