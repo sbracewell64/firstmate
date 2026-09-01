@@ -3040,7 +3040,7 @@ test_typed_ruling_is_discovered_by_poll() {
 }
 
 test_a_hold_ruling_never_becomes_a_landing_authority() {
-  local dir rid head out rc auth
+  local dir rid head out rc auth auth_file
   auth="$ROOT/bin/fm-landing-authorization.sh"
   [ -x "$auth" ] || { printf 'skip: %s is not executable\n' "$auth"; return 0; }
   dir=$(new_case typedhold)
@@ -3085,6 +3085,11 @@ test_a_hold_ruling_never_becomes_a_landing_authority() {
     --effect pr-merge --method squash 2>&1); rc=$?
   [ "$rc" -eq 0 ] \
     || fail "hold GREEN: an approving ruling failed to mint, exit $rc: $out"
+  auth_file=$(find "$dir/home/data/landing-authorizations" -type f -name '*.json' -print -quit)
+  [ -n "$auth_file" ] \
+    || fail "hold GREEN: mint reported success without writing an authorization"
+  [ "$(jq -r '.effect.executable_path' "$auth_file")" = "$dir/bin/gh-axi" ] \
+    || fail "hold GREEN: mint resolved gh-axi outside the fixture"
   pass "hold: a joined HOLD is recorded and refused as authority, while an approving verdict still mints"
 }
 
