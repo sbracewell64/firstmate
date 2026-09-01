@@ -654,6 +654,44 @@ test_reclaims_a_dead_owner_before_spending_a_granted_authority() {
   pass "a dead owner's claim beside a granted authority is reclaimed"
 }
 
+test_dead_claim_reacquisition_failure_is_could_not_observe() {
+  local id out rc=0 fakebin real_mkdir claim count
+  fixture dead-claim-reacquire-unobserved
+  policy
+  reviewed
+  grant; id=$GRANT_ID
+  claim_fixture "$id" 99999991 dead-owner 99999991
+  claim="$FX_DATA/landing-authorizations/.$id.claim"
+  fakebin="$FX_HOME/fakebin"
+  count="$FX_HOME/mkdir-count"
+  real_mkdir=$(command -v mkdir) || fail "dead-claim-reacquire-unobserved: mkdir"
+  mkdir -p "$fakebin" || fail "dead-claim-reacquire-unobserved: fakebin"
+  cat > "$fakebin/mkdir" <<'EOF'
+#!/usr/bin/env bash
+target=${!#}
+if [ "$target" = "$FM_TEST_CLAIM" ]; then
+  seen=0
+  [ ! -e "$FM_TEST_MKDIR_COUNT" ] || seen=$(cat "$FM_TEST_MKDIR_COUNT")
+  seen=$(( seen + 1 ))
+  printf '%s\n' "$seen" > "$FM_TEST_MKDIR_COUNT"
+  if [ "$seen" -eq 2 ]; then
+    : > "$target"
+    exit 1
+  fi
+fi
+exec "$FM_TEST_REAL_MKDIR" "$@"
+EOF
+  chmod +x "$fakebin/mkdir" || fail "dead-claim-reacquire-unobserved: chmod"
+  out=$(FM_TEST_CLAIM="$claim" FM_TEST_MKDIR_COUNT="$count" \
+    FM_TEST_REAL_MKDIR="$real_mkdir" PATH="$fakebin:$PATH" spend "$id") || rc=$?
+  [ "$rc" -eq 4 ] \
+    || fail "dead-claim-reacquire-unobserved: unobservable reacquisition exited $rc: $out"
+  assert_contains "$out" 'FM_PUB_CLAIM_OWNER_UNOBSERVED' \
+    "dead-claim-reacquire-unobserved: $out"
+  [ "$(tip)" = '-' ] || fail "dead-claim-reacquire-unobserved: the publication executed"
+  pass "an unobservable dead-claim reacquisition is could-not-observe"
+}
+
 test_does_not_reclaim_a_live_owner() {
   local id out rc=0 identity group
   fixture live-claim
@@ -2070,6 +2108,7 @@ test_remote_credentials_are_never_persisted_or_emitted
 test_push_output_is_sanitized_bounded_and_recorded
 test_concurrent_consumers_execute_exactly_one_push
 test_reclaims_a_dead_owner_before_spending_a_granted_authority
+test_dead_claim_reacquisition_failure_is_could_not_observe
 test_does_not_reclaim_a_live_owner
 test_reclaims_a_reused_owner_pid_with_a_different_identity
 test_refuses_to_reclaim_an_unreadable_owner_record

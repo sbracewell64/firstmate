@@ -362,14 +362,18 @@ publication_claim_reclaim_dead() {
     0|3) ;;
     *) CLAIM_OWNER_STATE=unobserved; return 4 ;;
   esac
-  if claim_acquire "$id" serial; then
-    rm -f "$tombstone/owner-pid" "$tombstone/owner-identity" \
-      "$tombstone/owner-group" "$tombstone/reclaim-intent.json"
-    rmdir "$tombstone" 2>/dev/null || true
-    return 0
-  fi
-  CLAIM_OWNER_STATE=raced
-  return 3
+  claim_acquire "$id" serial
+  rc=$?
+  case $rc in
+    0)
+      rm -f "$tombstone/owner-pid" "$tombstone/owner-identity" \
+        "$tombstone/owner-group" "$tombstone/reclaim-intent.json"
+      rmdir "$tombstone" 2>/dev/null || true
+      return 0
+      ;;
+    1) CLAIM_OWNER_STATE=raced; return 3 ;;
+    *) CLAIM_OWNER_STATE=unobserved; return 4 ;;
+  esac
 }
 
 # --- the remote tip, OBSERVED -------------------------------------------------
