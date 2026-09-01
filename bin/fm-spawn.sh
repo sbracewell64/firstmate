@@ -350,6 +350,8 @@ SUB_HOME_MARKER=".fm-secondmate-home"
 . "$SCRIPT_DIR/fm-tasks-axi-lib.sh"
 # shellcheck source=bin/fm-pool-lib.sh
 . "$SCRIPT_DIR/fm-pool-lib.sh"
+# shellcheck source=bin/fm-nm-run-lib.sh
+. "$SCRIPT_DIR/fm-nm-run-lib.sh"
 # Fail closed before any fleet mutation: a no-mistakes gate agent must never spawn
 # a direct report (see bin/fm-gate-refuse-lib.sh).
 fm_refuse_if_gate_agent
@@ -2297,6 +2299,78 @@ BRIEF_REAL="$BRIEF_DIR_REAL/$(basename "$BRIEF")"
 # once here so every downstream comparison uses the same physical form
 # (docs/herdr-backend.md "Known gaps").
 PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_ABS"
+
+# --- production commit identity: a LAUNCH PRECONDITION, not an instruction ---
+#
+# WHY THIS IS HERE AND NOT ONLY IN THE BRIEF. bin/fm-commit-identity.sh is the
+# primitive that binds the authoritative production author and committer; this is
+# what makes running it MANDATORY. A generated brief sentence is not an
+# admission: a worker that skips it, a resumed session that never read it, and a
+# pipeline started by hand all reach commit creation in exactly the unbound state
+# the recurrence red reproduces, where identity falls through to whatever the
+# machine happens to declare. Nothing this fleet dispatches exists without
+# passing through this file, so this is where the precondition belongs. The brief
+# keeps its own call as the human-readable projection, and because that one runs
+# in the WORKER's process it also checks the worker's own environment - the one
+# channel a launch-time check cannot speak for.
+#
+# It binds the PROJECT rather than the task slot, deliberately. Git worktrees
+# share one repository-local config, so binding the project binds every worktree
+# cut from it and reaches the pipeline's own gate repository in the same act -
+# and it happens BEFORE any pool slot or backend endpoint exists, so a refusal
+# leaves nothing allocated to clean up.
+#
+# AN UNGOVERNED HOME PROCEEDS AND SAYS SO. That is this fleet's established
+# reading of an absent publication identity policy rather than a loophole opened
+# here: a home that declared no governance has no authoritative identity to bind,
+# and refusing its every dispatch would be a verdict about a promise nobody made.
+# docs/configuration.md "Publication identity policy" owns that rule, and
+# bin/fm-publication-seam-lib.sh already applies the same reading one step later.
+spawn_commit_identity_bind() {  # -> 0 bound or ungoverned, 1 refused
+  local binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0 init_out
+
+  if [ "$MODE" = no-mistakes ]; then
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "$PROJ_ABS" 2>&1) || rc=$?
+  else
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind "$PROJ_ABS" 2>&1) || rc=$?
+  fi
+
+  # A delivery mode that WILL run the pipeline needs the gate repository to
+  # exist before it can be bound, so ensure it once and re-bind. Creating it is
+  # the same step the brief already instructed the worker to take; doing it here
+  # moves it from prose into the owner, and a gate that still cannot be
+  # established refuses rather than launching into an unbound one.
+  if [ "$rc" -ne 0 ] && [ "$MODE" = no-mistakes ]; then
+    case $out in
+      *FM_CI_GATE_ABSENT*)
+        init_out=$(fm_nm_run_bounded "$PROJ_ABS" 120 init 2>&1) || true
+        rc=0
+        out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "$PROJ_ABS" 2>&1) || rc=$?
+        [ "$rc" -eq 0 ] || out="$out"$'\n'"pipeline initialization reported: $init_out"
+        ;;
+    esac
+  fi
+
+  [ "$rc" -eq 0 ] && return 0
+
+  echo "error: $ID is not launching: the authoritative production commit identity could not be bound for $PROJ_ABS, so this task could reach its first commit with whatever identity this machine happens to declare. Repair the reported channel and dispatch again." >&2
+  printf '%s\n' "$out" >&2
+  return 1
+}
+
+# A secondmate provisioning spawn creates a HOME rather than project commits, so
+# it has no production commit path of its own to bind.
+if [ "$KIND" != secondmate ]; then
+  if [ ! -x "$FM_ROOT/bin/fm-commit-identity.sh" ]; then
+    echo "error: $ID is not launching: the production commit identity binder $FM_ROOT/bin/fm-commit-identity.sh is missing or not executable, so whether this task's commits would carry the authoritative identity could not be established" >&2
+    exit 1
+  fi
+  if [ -e "$CONFIG/publication-identity.json" ]; then
+    spawn_commit_identity_bind || exit 1
+  else
+    echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
+  fi
+fi
 
 real_path_or_raw() {  # <path>
   local path=$1 real

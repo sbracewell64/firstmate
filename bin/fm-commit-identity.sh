@@ -19,10 +19,16 @@
 # through its existing owner.
 #
 # Usage:
-#   fm-commit-identity.sh bind  [<checkout>]   install and verify the binding
+#   fm-commit-identity.sh bind  [--require-gate] [<checkout>]
+#                                              install and verify the binding
 #   fm-commit-identity.sh check [<checkout>]   read-only verdict, installs nothing
 #   fm-commit-identity.sh env   [<checkout>]   print exports for eval, nothing else
 #   fm-commit-identity.sh --help
+#
+# `--require-gate` turns an uninitialized pipeline from NOT APPLICABLE into a
+# refusal. The launch owner passes it for a delivery mode that WILL run the
+# pipeline, where "no gate repository here" means the stage that would create
+# commits has nowhere bound to create them, rather than that no such stage exists.
 #
 # `bind` is what a production pipeline run must pass before it may start. It
 # binds and re-observes the policy identity through each reachable repository
@@ -94,6 +100,16 @@ case "$VERB" in
   bind | check | env) shift ;;
   *) refuse USAGE "unknown verb '$VERB'"; exit 64 ;;
 esac
+
+REQUIRE_GATE=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --require-gate) REQUIRE_GATE=1; shift ;;
+    --) shift; break ;;
+    -*) refuse USAGE "unknown option '$1'"; exit 64 ;;
+    *) break ;;
+  esac
+done
 
 CHECKOUT=${1:-.}
 if ! git --no-optional-locks -C "$CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
@@ -169,7 +185,10 @@ fi
 
 fm_commit_identity_gate "$CHECKOUT" "$NM_TIMEOUT" || true
 GATE=$FM_COMMIT_IDENTITY_GATE
-if [ "$FM_COMMIT_IDENTITY_GATE_STATE" = uninitialized ]; then
+if [ "$FM_COMMIT_IDENTITY_GATE_STATE" = uninitialized ] && [ "$REQUIRE_GATE" -eq 1 ]; then
+  say "gate:      $FM_CI_TOKEN_GATE_ABSENT - this delivery mode runs the pipeline, but it is not initialized for this checkout, so the stage that would create commits has no bound repository to create them in"
+  STATUS=1
+elif [ "$FM_COMMIT_IDENTITY_GATE_STATE" = uninitialized ]; then
   say "gate:      not applicable - the pipeline is not initialized for this checkout, so no pipeline stage creates commit objects here"
 elif [ -z "$GATE" ]; then
   say "gate:      UNOBSERVED - the pipeline did not report a gate repository for this checkout, so whether its stages would commit under the authoritative identity is unknown"

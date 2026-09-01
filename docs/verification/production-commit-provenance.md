@@ -104,12 +104,58 @@ That the mutation surfaces as UNVERIFIED rather than as a silent pass is the re-
 
 The remaining ruling-required reds are individually held by the suite: a poisoned `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment refuses by name and creates zero commits; poisoned repository-local and global configuration both lose to the binding; fixture activity establishing a `Test` identity in the same session does not cross the boundary; a restart between commits leaves the bound provenance as the sole selector; an unstated, placeholder, malformed, ungoverned or undeclared identity refuses with its own token and creates nothing; and a pipeline daemon carrying an identity variable refuses.
 
+## The admission is the launch owner, not the brief
+
+An earlier generation of this work bound correctly and was still not closed, because the only thing that made a worker run the binder was a sentence in a generated brief.
+A worker that skipped it, a resumed session that never read it, and a pipeline started by hand all reached commit creation in exactly the unbound state the recurrence red reproduces.
+
+The binding is therefore a precondition of [`../../bin/fm-spawn.sh`](../../bin/fm-spawn.sh), the owner nothing this fleet dispatches exists without passing through.
+It binds the PROJECT rather than the task slot: git worktrees share one repository-local config, so that one act reaches every worktree cut from the repository and the pipeline's own gate repository, and it runs before any pool slot or backend endpoint exists, so a refusal leaves nothing allocated.
+The brief keeps its call as projection, and it earns its place for a reason a launch-time bind cannot cover: it runs in the WORKER's own process, so it is the only check that sees the worker's environment, which outranks every repository binding.
+
+`test_a_launch_whose_identity_cannot_bind_is_mechanically_refused` drives the real launch path with no brief instruction anywhere and a policy whose identity cannot be bound, and requires that no task record is published and no endpoint exists.
+`test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step` starts through the ordinary lifecycle with nothing invoking the binder, then makes real commits both ways production commits are actually made - by the worker in its slot and by a pipeline stage in the gate repository - and requires the authoritative author and committer on both.
+A home that declares no publication identity policy launches and says so, which is this fleet's existing reading of that absent file at the publication seam rather than an exception opened here.
+
+The refusal control was driven red by removing the launch gate, which is the demonstration that it measures the gate and not something incidental:
+
+```
+not ok - a launch whose production identity cannot be bound must refuse: notice: unbindable
+  launches with commit provenance ungoverned - this home declares no publication identity
+  policy, so there is no authoritative production identity to bind
+```
+
+Without the gate the launch simply proceeds, which is precisely the state the earlier candidate shipped in.
+
+## A defect this record exists to remember
+
+The daemon environment check compares the process start time against the time the pipeline recorded, so a reused PID cannot pass as the daemon.
+Its first implementation read `ps -o lstart=`, which prints LOCAL time with no zone designator, and parsed it with `date -u`, which reads a zone-less string as UTC.
+Every comparison was therefore off by the host's UTC offset, and on this host a live, correctly-running daemon was permanently unidentifiable:
+
+```sh
+$ date +%z
+-0400
+$ recorded=1787747390; process=1787732990; echo $(( recorded - process ))
+14400                   # exactly four hours: the offset, not a different process
+```
+
+The suite did not catch it, and the reason is the part worth keeping.
+The fixture converted its own timestamp with the same `date -u -d` mistake, so fixture and implementation agreed with each other while neither matched a real daemon.
+A green suite proved the code was self-consistent, not that it could identify anything.
+Both sides now parse local time as local and convert through an unambiguous epoch, and the result was checked against the real running daemon rather than only against the fixture.
+
+That defect mattered beyond its own correctness: an unidentifiable daemon is could-not-observe, and once the binding became a launch precondition, could-not-observe refuses. Shipped as it was, it would have blocked every dispatch in this fleet.
+
 ## What this does NOT establish
 
 The honest scope is narrower than "the fleet cannot publish a contaminated commit", and the difference matters.
 
-- A `git commit` typed by hand, a provider web UI, and a pipeline run started without passing this command are not reached by the binding.
-  The gate repository binding survives in that repository's configuration, so a later run reuses it, but a gate repository this fleet has never bound is unbound.
+- A `git commit` typed by hand and a provider web UI are outside any of this, and always will be; server-side protection is the separate defence for those.
+- The launch gate covers what this fleet DISPATCHES. A repository nobody has ever dispatched work in is unbound until the first such launch, and a pipeline run started by hand in a repository this fleet has never launched into reaches commit creation without passing here.
+  The binding is durable in repository configuration once made, so later runs in a bound repository reuse it.
+- The worker's own environment is checked by the brief's projection call, in the worker's process, and not by the launch gate.
+  A launch-time check reads the launching process's environment, which is not the one the worker will commit in, and crediting it with that reach would be the wrong-subject failure this fleet has a vocabulary for.
 - The pipeline daemon's environment is read, never set.
   A daemon started with an identity variable is refused rather than corrected, because this fleet may not restart a daemon serving other lanes.
 - The gate repository is discovered by parsing `no-mistakes status` output, measured against v1.40.3.

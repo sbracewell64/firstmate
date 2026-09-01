@@ -75,11 +75,11 @@ FAKE
   printf '%s\n' "$root"
 }
 
-write_policy() {  # <root> <author> <committer>
-  local root=${1:?} author=${2:-} committer=${3:-}
-  jq -n --arg a "$author" --arg c "$committer" '{
+write_policy() {  # <root> <author> <committer> [<venue>]
+  local root=${1:?} author=${2:-} committer=${3:-} venue=${4:-github.com/sbracewell64/firstmate}
+  jq -n --arg a "$author" --arg c "$committer" --arg v "$venue" '{
     generation: "pol-test-g1",
-    venues: { "github.com/sbracewell64/firstmate": { identities: (
+    venues: { ($v): { identities: (
       (if $a == "" then {} else { author: $a } end) +
       (if $c == "" then {} else { committer: $c } end) +
       { delivery_actor: "sbracewell64", maker: "m/one", reviewer: "r/two", ruling: "browser-sol" }
@@ -95,8 +95,14 @@ start_daemon() {  # <root> [VAR=VALUE...]
   env "$@" sleep 300 &
   pid=$!
   fm_test_reap "$pid"
+  # `ps -o lstart=` is LOCAL time with no zone, so it is parsed as local and only
+  # then formatted as UTC through an unambiguous epoch. Converting it with a
+  # single `date -u -d` would misread it as UTC - which is the exact defect the
+  # production reader had, and because this fixture once shared it, the two
+  # agreed with each other while neither matched a real daemon.
   started=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 1
-  started=$(date -u -d "$started" +%Y-%m-%dT%H:%M:%SZ) || return 1
+  started=$(date -d "$started" +%s) || return 1
+  started=$(date -u -d "@$started" +%Y-%m-%dT%H:%M:%SZ) || return 1
   printf '{"pid":%s,"started_at":"%s"}' "$pid" "$started" > "$root/nm/daemon.pid" || return 1
   printf '%s\n' "$pid"
 }
@@ -129,6 +135,99 @@ gate_commit_identity() {  # <root> [env-assignments...]
   env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
     HOME="$root/home" \
     "$@" bash -c 'cd "$1" && git commit -q --allow-empty -m "pipeline stage fix" && git log -1 --format="%an <%ae>|%cn <%ce>"' _ "$root/gatewt"
+}
+
+# --- the real launch path ----------------------------------------------------
+#
+# These two controls answer the question the primitive's own tests cannot: not
+# "does the binder work when invoked?" but "can a production commit path reach
+# its first commit-producing action WITHOUT it having been invoked?" That is a
+# property of the launch owner, so they drive bin/fm-spawn.sh for real - a real
+# isolated worktree, a fake terminal backend, and NO manual binder call anywhere.
+#
+# The brief instruction is deliberately absent from both. It is projection, and a
+# control that relied on it would be measuring the prose rather than the gate.
+
+SPAWN="$ROOT/bin/fm-spawn.sh"
+LAUNCH_VENUE='example.invalid/sbracewell64/firstmate'
+
+# Every launch-path invocation is BOUNDED. The subject of these controls is what
+# the launch owner binds, not whether a stand-in terminal completes its
+# handshake, so a slow or unfinished launch must surface as a bounded failure
+# rather than a hung suite.
+FM_CI_LAUNCH_TIMEOUT=${FM_CI_LAUNCH_TIMEOUT:-90}
+
+# Echoes "<home>|<project>|<worktree>|<fakebin>". The project carries the
+# poisoned global identity through HOME, exactly as the real defect did.
+make_launch_case() {  # <name> [<policy>]
+  local name=${1:?} policy=${2:-default} case_dir home proj wt fakebin gate
+  case_dir="$TMP_ROOT/launch-$name"
+  home="$case_dir/home"
+  proj="$case_dir/project"
+  wt="$case_dir/wt"
+  gate="$case_dir/nm/repos/gate.git"
+  mkdir -p "$home/data" "$home/projects" "$home/state" "$home/config" \
+    "$case_dir/nm/repos" "$case_dir/home_env" || return 1
+  printf '[user]\n\temail = test@example.com\n\tname = Test\n' > "$case_dir/home_env/.gitconfig" || return 1
+  fakebin=$(fm_fakebin "$case_dir") || return 1
+  cat > "$fakebin/tmux" <<'SH'
+#!/usr/bin/env bash
+set -u
+case "$*" in
+  *"#{pane_current_path}"*) printf '%s\n' "${FM_FAKE_PANE_PATH:-}"; exit 0 ;;
+esac
+case "${1:-}" in
+  display-message) printf 'firstmate\n'; exit 0 ;;
+  list-windows) exit 0 ;;
+esac
+exit 0
+SH
+  chmod +x "$fakebin/tmux" || return 1
+  fm_fake_exit0 "$fakebin" treehouse || return 1
+  cat > "$fakebin/no-mistakes" <<'SH'
+#!/usr/bin/env bash
+[ "${1:-}" = status ] || exit 0
+cat "$FM_TEST_NM_STATUS"
+SH
+  chmod +x "$fakebin/no-mistakes" || return 1
+  printf 'claude\n' > "$home/config/crew-harness" || return 1
+  printf '%s\n' "$$" > "$home/state/.lock" || return 1
+  touch "$home/state/.last-watcher-beat" || return 1
+
+  fm_git_worktree "$proj" "$wt" "wt-$name" || return 1
+  # A reserved-invalid host: the venue is what the policy is keyed on, and using
+  # a real forge URL would let a launch-path step try to reach it.
+  git -C "$proj" remote add origin "git@example.invalid:sbracewell64/firstmate.git" || return 1
+  git init -q --bare "$gate" || return 1
+  git -C "$proj" push -q "$gate" HEAD:refs/heads/main || return 1
+
+  case "$policy" in
+    default) write_policy "$home" "$AUTHORITATIVE" "$AUTHORITATIVE" "$LAUNCH_VENUE" || return 1 ;;
+    none) : ;;
+    *) printf '%s' "$policy" > "$home/config/publication-identity.json" || return 1 ;;
+  esac
+  printf '  repo:  %s\n  gate:  %s\n' "$proj" "$gate" > "$case_dir/nm-status" || return 1
+  start_daemon "$case_dir" >/dev/null || return 1
+  printf '%s|%s|%s|%s\n' "$home" "$proj" "$wt" "$fakebin"
+}
+
+run_launch() {  # <case-dir> <home> <wt> <fakebin> <spawn-args...>
+  local case_dir=${1:?} home=${2:?} wt=${3:?} fakebin=${4:?}
+  shift 4
+  env HOME="$case_dir/home_env" \
+    FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
+    FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
+    FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
+    FM_TEST_NM_STATUS="$case_dir/nm-status" \
+    FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux FM_FAKE_PANE_PATH="$wt" \
+    PATH="$fakebin:$PATH" \
+    timeout "$FM_CI_LAUNCH_TIMEOUT" "$SPAWN" "$@" 2>&1
+}
+
+make_launch_brief() {  # <home> <id> <mode>
+  local home=${1:?} id=${2:?} mode=${3:?}
+  mkdir -p "$home/data/$id" || return 1
+  printf 'Delivery contract: mode=%s\n' "$mode" > "$home/data/$id/brief.md"
 }
 
 # --- the watched red: what the fleet published ------------------------------
@@ -482,6 +581,101 @@ test_the_repository_channel_clearly_refuses_distinct_roles() {
   pass "the repository channel clearly refuses distinct roles before writing or committing"
 }
 
+# --- the launch owner is the admission, not the brief ------------------------
+#
+# THE CONTROL THE PREVIOUS CANDIDATE FAILED. Its binder worked, but the only
+# thing that made a worker run it was a sentence in a generated brief. This
+# drives the REAL launch path with no brief instruction anywhere and a policy
+# whose identity cannot be bound, and requires that no production commit path is
+# ever handed over: no task metadata, no endpoint, nothing for a worker to
+# commit in. Before the launch gate existed this spawn succeeded, which is
+# exactly the gap being closed.
+test_a_launch_whose_identity_cannot_bind_is_mechanically_refused() {
+  local rec home proj wt fakebin case_dir out rc id
+  id=unbindable
+  rec=$(make_launch_case "$id" '{"generation":"g","venues":{"example.invalid/sbracewell64/firstmate":{"identities":{"author":"Test <test@example.com>","committer":"Test <test@example.com>"}}}}') \
+    || fail "launch fixture setup failed"
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  make_launch_brief "$home" "$id" no-mistakes || fail "brief fixture failed"
+
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
+  [ "$rc" -ne 0 ] || fail "a launch whose production identity cannot be bound must refuse: $out"
+  assert_contains "$out" "is not launching" "the refusal must say the task is not being launched"
+  assert_contains "$out" "FM_CI_IDENTITY_PLACEHOLDER" "the refusal must carry the binder's own reason"
+  assert_absent "$home/state/$id.meta" "a refused launch must publish no task record"
+  pass "a launch whose authoritative identity cannot be bound is refused by the launch owner, with no brief instruction involved"
+}
+
+# THE POSITIVE END-TO-END CONTROL. Ordinary lifecycle, no operator anywhere near
+# the binder, and then real commit objects made the two ways production commits
+# are actually made: by the worker in its own slot, and by a pipeline stage in
+# the gate repository. Both must carry the authoritative author AND committer
+# even though nothing in this test ever ran the binding command.
+test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step() {
+  local rec home proj wt fakebin case_dir out id identity gate
+  id=ordinary
+  rec=$(make_launch_case "$id") || fail "launch fixture setup failed"
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  gate="$case_dir/nm/repos/gate.git"
+  make_launch_brief "$home" "$id" no-mistakes || fail "brief fixture failed"
+
+  # The launch is driven for real and its own completion is NOT the subject: a
+  # stand-in terminal may or may not finish its handshake, and crediting this
+  # control with that would be measuring the fixture. What is asserted is that
+  # the launch was not stopped by the identity gate, and then what real commit
+  # objects carry afterwards - which is the thing the ruling asks about.
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
+  assert_not_contains "$out" "is not launching" "the identity gate must admit a bindable launch"
+
+  # The worker's own commit, in the slot the launch handed over.
+  # shellcheck disable=SC2016  # positional args inside bash -c, not expansions
+  identity=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME \
+    -u GIT_COMMITTER_EMAIL HOME="$case_dir/home_env" bash -c \
+    'cd "$1" && git commit -q --allow-empty -m "worker commit" && git log -1 --format="%an <%ae>|%cn <%ce>"' _ "$wt") \
+    || fail "worker commit failed"
+  [ "$identity" = "$AUTHORITATIVE|$AUTHORITATIVE" ] \
+    || fail "the worker path must carry the authoritative identity with no manual binding, got: $identity"
+
+  # A pipeline stage's commit, in the gate repository the launch also bound.
+  git --git-dir="$gate" worktree add -q "$case_dir/gatewt" main || fail "gate worktree failed"
+  # shellcheck disable=SC2016  # positional args inside bash -c, not expansions
+  identity=$(env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME \
+    -u GIT_COMMITTER_EMAIL HOME="$case_dir/home_env" bash -c \
+    'cd "$1" && git commit -q --allow-empty -m "pipeline stage commit" && git log -1 --format="%an <%ae>|%cn <%ce>"' _ "$case_dir/gatewt") \
+    || fail "gate commit failed"
+  [ "$identity" = "$AUTHORITATIVE|$AUTHORITATIVE" ] \
+    || fail "the pipeline path must carry the authoritative identity with no manual binding, got: $identity"
+  pass "an ordinary launch binds the worker slot and the pipeline repository with no manual binding step"
+}
+
+# An ungoverned home is not a refusal. This fleet already reads an absent
+# publication identity policy as "this home declared no governance" at the
+# publication seam, and reversing that here would stop every dispatch in a home
+# that never opted in - a verdict about a promise nobody made.
+test_an_ungoverned_home_launches_and_says_so() {
+  local rec home proj wt fakebin case_dir out id
+  id=ungoverned
+  rec=$(make_launch_case "$id" none) || fail "launch fixture setup failed"
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  make_launch_brief "$home" "$id" no-mistakes || fail "brief fixture failed"
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
+  assert_not_contains "$out" "is not launching" "a home that declared no policy must not be refused by the identity gate"
+  assert_contains "$out" "ungoverned" "an ungoverned launch must say so rather than pass silently"
+  pass "a home with no publication identity policy launches and reports the provenance as ungoverned"
+}
+
 FM_CONTROLS=(
   test_an_unbound_gate_reproduces_the_published_defect
   test_binding_makes_an_ordinary_pipeline_commit_authoritative
@@ -503,6 +697,9 @@ FM_CONTROLS=(
   test_the_env_verb_emits_the_channel_that_outranks_everything
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
+  test_a_launch_whose_identity_cannot_bind_is_mechanically_refused
+  test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
+  test_an_ungoverned_home_launches_and_says_so
 )
 
 for control in "${FM_CONTROLS[@]}"; do

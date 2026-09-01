@@ -601,10 +601,16 @@ fi
 # the gate repository exists, because that repository is one of the two channels
 # it binds. bin/fm-commit-identity.sh owns what it installs and what it refuses.
 identity_step() {  # <step-number>
+  # PROJECTION, not the admission. bin/fm-spawn.sh binds the authoritative
+  # production identity before this worker exists, so a worker that never runs
+  # this command still cannot commit under an ambient identity. What this call
+  # adds is the one channel a launch-time bind cannot speak for: it runs in the
+  # WORKER's own process, so it sees the worker's environment, which outranks
+  # every repository binding.
   # shellcheck disable=SC2016  # a printf format: the backticks are brief markup
   printf '
-%s. Bind the production commit identity before your first commit: `%s/bin/fm-commit-identity.sh bind .`
-   It binds each reachable commit channel to what that channel can genuinely express, so neither your commits nor a later validation stage can fall through to whatever identity this machine happens to carry; the command refuses instead of collapsing distinct author and committer roles into one repository identity.
+%s. Confirm the production commit identity in your own environment: `%s/bin/fm-commit-identity.sh bind .`
+   The declared production author and committer were already bound for you before this task was launched, so this is a confirmation rather than the thing that makes it true - what it adds is a check of THIS shell, whose own identity variables would outrank that binding.
    If it refuses, or reports that it could not observe one of those paths, STOP and append `blocked: {what it reported}` - do not commit, because a commit object cannot be re-attributed once it exists.' "$1" "$FM_ROOT"
 }
 

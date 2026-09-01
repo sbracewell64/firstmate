@@ -125,6 +125,8 @@ FM_CI_TOKEN_AMBIENT_OVERRIDE=FM_CI_AMBIENT_OVERRIDE
 # shellcheck disable=SC2034
 FM_CI_TOKEN_GATE_UNOBSERVED=FM_CI_GATE_UNOBSERVED
 # shellcheck disable=SC2034
+FM_CI_TOKEN_GATE_ABSENT=FM_CI_GATE_ABSENT
+# shellcheck disable=SC2034
 FM_CI_TOKEN_INSTALL_FAILED=FM_CI_INSTALL_FAILED
 # shellcheck disable=SC2034
 FM_CI_TOKEN_UNVERIFIED=FM_CI_BINDING_UNVERIFIED
@@ -428,8 +430,13 @@ fm_commit_identity_daemon_process_started_epoch() {  # <pid>
   started=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
   started=${started#"${started%%[![:space:]]*}"}
   [ -n "$started" ] || return 1
-  date -u -d "$started" +%s 2>/dev/null \
-    || date -u -j -f '%a %b %e %T %Y' "$started" +%s 2>/dev/null
+  # `ps -o lstart=` prints LOCAL time with no zone designator, so it must be
+  # parsed as local time. Reading it as UTC shifts every comparison by this
+  # host's offset, which on any machine not running UTC makes a live, correct
+  # daemon permanently unidentifiable - and an unidentifiable daemon is
+  # could-not-observe, so the whole binding stops being able to pass.
+  date -d "$started" +%s 2>/dev/null \
+    || date -j -f '%a %b %e %T %Y' "$started" +%s 2>/dev/null
 }
 
 fm_commit_identity_daemon_recorded_epoch() {  # <pid-file>
@@ -438,6 +445,18 @@ fm_commit_identity_daemon_recorded_epoch() {  # <pid-file>
   [ -n "$started" ] || return 1
   date -u -d "$started" +%s 2>/dev/null \
     || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$started" +%s 2>/dev/null
+}
+
+FM_CI_DAEMON_START_TOLERANCE_SECONDS=${FM_CI_DAEMON_START_TOLERANCE_SECONDS:-5}
+
+fm_commit_identity_epoch_close() {  # <a> <b>
+  local a=${1:-} b=${2:-} d
+  case "${a:-}${b:-}" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+  d=$((a - b))
+  [ "$d" -lt 0 ] && d=$((-d))
+  [ "$d" -le "$FM_CI_DAEMON_START_TOLERANCE_SECONDS" ]
 }
 
 fm_commit_identity_daemon_pid() {  # <nm-root>
@@ -451,7 +470,12 @@ fm_commit_identity_daemon_pid() {  # <nm-root>
   kill -0 "$pid" 2>/dev/null || return 1
   recorded_epoch=$(fm_commit_identity_daemon_recorded_epoch "$file") || return 1
   process_epoch=$(fm_commit_identity_daemon_process_started_epoch "$pid") || return 1
-  [ "$recorded_epoch" = "$process_epoch" ] || return 1
+  # Compared with a small tolerance rather than for equality: the recorded time
+  # is written by the daemon at startup and the kernel's start time is reported
+  # to the second, so the two legitimately differ by a moment. The window stays
+  # far below any plausible PID reuse, which reappears after the PID space wraps
+  # rather than seconds later.
+  fm_commit_identity_epoch_close "$recorded_epoch" "$process_epoch" || return 1
   printf '%s\n' "$pid"
 }
 
