@@ -19,7 +19,7 @@
 # through its existing owner.
 #
 # Usage:
-#   fm-commit-identity.sh bind  [--require-gate] [<checkout>]
+#   fm-commit-identity.sh bind  [--require-gate] [--venue <host/owner/repo>] [<checkout>]
 #                                              install and verify the binding
 #   fm-commit-identity.sh check [<checkout>]   read-only verdict, installs nothing
 #   fm-commit-identity.sh env   [<checkout>]   print exports for eval, nothing else
@@ -102,9 +102,17 @@ case "$VERB" in
 esac
 
 REQUIRE_GATE=0
+VENUE_OVERRIDE=
+VENUE_OVERRIDE_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --require-gate) REQUIRE_GATE=1; shift ;;
+    --venue)
+      [ $# -ge 2 ] || { refuse USAGE "--venue requires a value"; exit 64; }
+      VENUE_OVERRIDE=$2
+      VENUE_OVERRIDE_SET=1
+      shift 2
+      ;;
     --) shift; break ;;
     -*) refuse USAGE "unknown option '$1'"; exit 64 ;;
     *) break ;;
@@ -117,7 +125,12 @@ if ! git --no-optional-locks -C "$CHECKOUT" rev-parse --git-dir >/dev/null 2>&1;
   exit 64
 fi
 
-VENUE=$(resolve_venue "$CHECKOUT" || true)
+if [ "$VENUE_OVERRIDE_SET" -eq 1 ]; then
+  VENUE=$VENUE_OVERRIDE
+  [ "$VENUE" != unresolved ] || VENUE=
+else
+  VENUE=$(resolve_venue "$CHECKOUT" || true)
+fi
 fm_commit_identity_resolve "$CONFIG" "$VENUE"
 RESOLVED=$?
 if [ "$RESOLVED" -ne 0 ]; then
@@ -164,9 +177,13 @@ report_channel() {  # <label> <repo>
   return 1
 }
 
-bind_channel() {  # <label> <repo>
-  local label=${1:-} repo=${2:-} rc=0
-  fm_commit_identity_install_repo "$repo" || rc=$?
+bind_channel() {  # <label> <repo> [worktree]
+  local label=${1:-} repo=${2:-} scope=${3:-repo} rc=0
+  if [ "$scope" = worktree ]; then
+    fm_commit_identity_install_worktree "$repo" || rc=$?
+  else
+    fm_commit_identity_install_repo "$repo" || rc=$?
+  fi
   case $rc in
     0) say "$label: bound - $FM_COMMIT_IDENTITY_AUTHOR" ; return 0 ;;
     1) say "$label: REFUSED - the identity could not be written into $repo" ; return 1 ;;
@@ -176,7 +193,7 @@ bind_channel() {  # <label> <repo>
 }
 
 if [ "$VERB" = bind ]; then
-  bind_channel "checkout " "$CHECKOUT" || STATUS=1
+  bind_channel "checkout " "$CHECKOUT" worktree || STATUS=1
 else
   report_channel "checkout " "$CHECKOUT" || STATUS=$?
 fi

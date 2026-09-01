@@ -117,6 +117,14 @@ run_cmd() {  # <root> <verb> [env-assignments...] -- runs against the fixture
     "$@" "$CMD" "$verb" "$root/checkout" 2>&1
 }
 
+run_cmd_venue() {  # <root> <verb> <venue> [checkout]
+  local root=${1:?} verb=${2:?} venue=${3:?} checkout=${4:-$1/checkout}
+  env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
+    HOME="$root/home" PATH="$root/bin:$PATH" FM_TEST_NM_STATUS="$root/nm-status" \
+    FM_HOME="$root" FM_CONFIG_OVERRIDE="$root/config" \
+    "$CMD" "$verb" --venue "$venue" "$checkout" 2>&1
+}
+
 # The subject of every assertion: the identity a REAL commit object carries when
 # made the way the pipeline makes one, with nothing on the command line saying
 # who it is.
@@ -581,6 +589,58 @@ test_the_repository_channel_clearly_refuses_distinct_roles() {
   pass "the repository channel clearly refuses distinct roles before writing or committing"
 }
 
+test_an_explicit_venue_overrides_origin_and_unresolved_refuses() {
+  local root origin_identity target_identity policy out rc identity
+  origin_identity='Origin Person <origin@example.invalid>'
+  target_identity='Target Person <target@example.invalid>'
+  root=$(make_case venue-override) || fail "fixture setup failed"
+  policy=$(jq -n --arg o "$origin_identity" --arg t "$target_identity" '{
+    generation: "g", venues: {
+      "github.com/sbracewell64/firstmate": {identities:{author:$o, committer:$o}},
+      "example.invalid/target/project": {identities:{author:$t, committer:$t}}
+    }}') || fail "policy setup failed"
+  printf '%s' "$policy" > "$root/config/publication-identity.json" || fail "policy write failed"
+  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
+
+  out=$(run_cmd_venue "$root" bind example.invalid/target/project); rc=$?
+  expect_code 0 "$rc" "the explicit contribution venue must bind: $out"
+  identity=$(commit_identity "$root/checkout" "target venue commit") || fail "checkout commit failed"
+  [ "$identity" = "$target_identity|$target_identity" ] \
+    || fail "the contribution venue must override origin, got: $identity"
+
+  out=$(run_cmd_venue "$root" bind unresolved); rc=$?
+  expect_code 2 "$rc" "an unresolved contribution venue must be could-not-observe: $out"
+  assert_contains "$out" "FM_CI_VENUE_UNOBSERVED" "the unresolved sentinel must never fall back to origin"
+  pass "an explicit contribution venue overrides origin and unresolved refuses"
+}
+
+test_concurrent_tasks_keep_worktree_scoped_identities() {
+  local root second first_identity second_identity policy out identity
+  first_identity='First Lane <first@example.invalid>'
+  second_identity='Second Lane <second@example.invalid>'
+  root=$(make_case worktree-isolation) || fail "fixture setup failed"
+  second="$root/second"
+  git -C "$root/checkout" branch second-lane || fail "branch setup failed"
+  git -C "$root/checkout" worktree add -q "$second" second-lane || fail "worktree setup failed"
+  policy=$(jq -n --arg a "$first_identity" --arg b "$second_identity" '{
+    generation: "g", venues: {
+      "example.invalid/first/project": {identities:{author:$a, committer:$a}},
+      "example.invalid/second/project": {identities:{author:$b, committer:$b}}
+    }}') || fail "policy setup failed"
+  printf '%s' "$policy" > "$root/config/publication-identity.json" || fail "policy write failed"
+  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
+
+  out=$(run_cmd_venue "$root" bind example.invalid/first/project "$root/checkout"); rc=$?
+  expect_code 0 "$rc" "the first task binding must succeed: $out"
+  out=$(run_cmd_venue "$root" bind example.invalid/second/project "$second"); rc=$?
+  expect_code 0 "$rc" "the second task binding must succeed: $out"
+  identity=$(commit_identity "$root/checkout" "first lane commit") || fail "first commit failed"
+  [ "$identity" = "$first_identity|$first_identity" ] || fail "the second task overwrote the first: $identity"
+  identity=$(commit_identity "$second" "second lane commit") || fail "second commit failed"
+  [ "$identity" = "$second_identity|$second_identity" ] || fail "the second task lost its binding: $identity"
+  pass "concurrent tasks retain distinct worktree-scoped identities"
+}
+
 # --- the launch owner is the admission, not the brief ------------------------
 #
 # THE CONTROL THE PREVIOUS CANDIDATE FAILED. Its binder worked, but the only
@@ -697,6 +757,8 @@ FM_CONTROLS=(
   test_the_env_verb_emits_the_channel_that_outranks_everything
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
+  test_an_explicit_venue_overrides_origin_and_unresolved_refuses
+  test_concurrent_tasks_keep_worktree_scoped_identities
   test_a_launch_whose_identity_cannot_bind_is_mechanically_refused
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
   test_an_ungoverned_home_launches_and_says_so

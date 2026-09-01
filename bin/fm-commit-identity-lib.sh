@@ -354,6 +354,23 @@ fm_commit_identity_install_repo() {  # <git-dir-or-worktree>
   return 0
 }
 
+fm_commit_identity_install_worktree() {  # <worktree>
+  local worktree=${1:-} seen
+  if [ "$FM_COMMIT_IDENTITY_AUTHOR" != "$FM_COMMIT_IDENTITY_COMMITTER" ]; then
+    fm_commit_identity_set "$FM_CI_TOKEN_REPO_DISTINCT" \
+      "worktree-local git identity holds one pair for both roles and cannot bind author '$FM_COMMIT_IDENTITY_AUTHOR' separately from committer '$FM_COMMIT_IDENTITY_COMMITTER'"
+    return 3
+  fi
+  git --no-optional-locks -C "$worktree" config extensions.worktreeConfig true 2>/dev/null || return 1
+  git --no-optional-locks -C "$worktree" config --worktree user.name "$FM_COMMIT_IDENTITY_AUTHOR_NAME" 2>/dev/null || return 1
+  git --no-optional-locks -C "$worktree" config --worktree user.email "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL" 2>/dev/null || return 1
+  seen=$(fm_commit_identity_effective "$worktree" author) || return 2
+  [ "$seen" = "$FM_COMMIT_IDENTITY_AUTHOR" ] || return 2
+  seen=$(fm_commit_identity_effective "$worktree" committer) || return 2
+  [ "$seen" = "$FM_COMMIT_IDENTITY_COMMITTER" ] || return 2
+  return 0
+}
+
 # The exports a production commit path this fleet runs should carry. The
 # environment is git's strongest selector, so where the fleet owns the process it
 # uses that channel and does not settle for the weaker one.

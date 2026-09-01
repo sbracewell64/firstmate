@@ -162,3 +162,5 @@ The honest scope is narrower than "the fleet cannot publish a contaminated commi
   A future release that stops printing a `gate:` line degrades to could-not-observe and refuses, rather than silently binding nothing.
 - The upstream tool exposes no commit-identity configuration of its own (its whole `commit` config key carries only `fix_message`), which is why the binding is installed into the repository it commits in rather than declared to it.
   That gap is filed upstream as [kunchenguid/no-mistakes#924](https://github.com/kunchenguid/no-mistakes/issues/924); this record does not claim it is closed.
+- The pipeline gate repository remains shared per project, so concurrent lanes for differently governed venues can contend for its single repository-local identity.
+  The fleet does not own that repository's worktrees and does not claim to isolate this upstream channel.

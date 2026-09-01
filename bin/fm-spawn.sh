@@ -2314,11 +2314,11 @@ PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_AB
 # in the WORKER's process it also checks the worker's own environment - the one
 # channel a launch-time check cannot speak for.
 #
-# It binds the PROJECT rather than the task slot, deliberately. Git worktrees
-# share one repository-local config, so binding the project binds every worktree
-# cut from it and reaches the pipeline's own gate repository in the same act -
-# and it happens BEFORE any pool slot or backend endpoint exists, so a refusal
-# leaves nothing allocated to clean up.
+# It binds this task's own worktree-scoped config, so concurrent tasks for
+# differently governed venues cannot overwrite one shared repository-local
+# identity. It also reaches the pipeline's gate repository in the same act, and
+# happens BEFORE any backend endpoint exists, so a refusal never hands an
+# unbound commit path to a worker.
 #
 # AN UNGOVERNED HOME PROCEEDS AND SAYS SO. That is this fleet's established
 # reading of an absent publication identity policy rather than a loophole opened
@@ -2326,13 +2326,18 @@ PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_AB
 # and refusing its every dispatch would be a verdict about a promise nobody made.
 # docs/configuration.md "Publication identity policy" owns that rule, and
 # bin/fm-publication-seam-lib.sh already applies the same reading one step later.
-spawn_commit_identity_bind() {  # -> 0 bound or ungoverned, 1 refused
-  local binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0 init_out
+spawn_commit_identity_bind() {  # <task-worktree> -> 0 bound or ungoverned, 1 refused
+  local checkout=${1:?} binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0 init_out
+  local -a venue_args=()
+
+  # A scout has no contribution venue because it opens no pull request, so only
+  # that role retains the binder's standalone origin derivation.
+  [ -z "$CONTRIB_VENUE" ] || venue_args=(--venue "$CONTRIB_VENUE")
 
   if [ "$MODE" = no-mistakes ]; then
-    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "$PROJ_ABS" 2>&1) || rc=$?
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "${venue_args[@]}" "$checkout" 2>&1) || rc=$?
   else
-    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind "$PROJ_ABS" 2>&1) || rc=$?
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind "${venue_args[@]}" "$checkout" 2>&1) || rc=$?
   fi
 
   # A delivery mode that WILL run the pipeline needs the gate repository to
@@ -2343,9 +2348,9 @@ spawn_commit_identity_bind() {  # -> 0 bound or ungoverned, 1 refused
   if [ "$rc" -ne 0 ] && [ "$MODE" = no-mistakes ]; then
     case $out in
       *FM_CI_GATE_ABSENT*)
-        init_out=$(fm_nm_run_bounded "$PROJ_ABS" 120 init 2>&1) || true
+        init_out=$(fm_nm_run_bounded "$checkout" 120 init 2>&1) || true
         rc=0
-        out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "$PROJ_ABS" 2>&1) || rc=$?
+        out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "${venue_args[@]}" "$checkout" 2>&1) || rc=$?
         [ "$rc" -eq 0 ] || out="$out"$'\n'"pipeline initialization reported: $init_out"
         ;;
     esac
@@ -2353,7 +2358,7 @@ spawn_commit_identity_bind() {  # -> 0 bound or ungoverned, 1 refused
 
   [ "$rc" -eq 0 ] && return 0
 
-  echo "error: $ID is not launching: the authoritative production commit identity could not be bound for $PROJ_ABS, so this task could reach its first commit with whatever identity this machine happens to declare. Repair the reported channel and dispatch again." >&2
+  echo "error: $ID is not launching: the authoritative production commit identity could not be bound for $checkout, so this task could reach its first commit with whatever identity this machine happens to declare. Repair the reported channel and dispatch again." >&2
   printf '%s\n' "$out" >&2
   return 1
 }
@@ -2364,11 +2369,6 @@ if [ "$KIND" != secondmate ]; then
   if [ ! -x "$FM_ROOT/bin/fm-commit-identity.sh" ]; then
     echo "error: $ID is not launching: the production commit identity binder $FM_ROOT/bin/fm-commit-identity.sh is missing or not executable, so whether this task's commits would carry the authoritative identity could not be established" >&2
     exit 1
-  fi
-  if [ -e "$CONFIG/publication-identity.json" ]; then
-    spawn_commit_identity_bind || exit 1
-  else
-    echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
   fi
 fi
 
@@ -2951,6 +2951,14 @@ if [ "$KIND" != secondmate ] && [ "$BACKEND" != orca ]; then
     validate_spawn_worktree "treehouse enter $WT_SLOT_NAME" "$T"
   else
     validate_spawn_worktree "treehouse get" "$T"
+  fi
+fi
+
+if [ "$KIND" != secondmate ]; then
+  if [ -e "$CONFIG/publication-identity.json" ]; then
+    spawn_commit_identity_bind "$WT" || exit 1
+  else
+    echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
   fi
 fi
 
