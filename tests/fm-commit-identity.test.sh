@@ -282,8 +282,10 @@ venue-ungoverned|{"generation":"g","venues":{"github.com/other/repo":{"identitie
 axis-unstated|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"A Person <a@example.invalid>"}}}}|FM_CI_IDENTITY_UNSTATED
 identity-placeholder|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"Test <test@example.com>","committer":"Test <test@example.com>"}}}}|FM_CI_IDENTITY_PLACEHOLDER
 identity-malformed|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"no angle brackets","committer":"no angle brackets"}}}}|FM_CI_IDENTITY_MALFORMED
+identity-trailing-content|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"A Person <a@example.invalid> garbage","committer":"A Person <a@example.invalid> garbage"}}}}|FM_CI_IDENTITY_MALFORMED
+identity-distinct-axes|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"A Person <a@example.invalid>","committer":"C Person <c@example.invalid>"}}}}|FM_CI_IDENTITY_DISTINCT_UNSUPPORTED
 EOF
-  pass "an unstated, placeholder, malformed, ungoverned or undeclared identity refuses before any commit object exists"
+  pass "an unstated, placeholder, malformed, distinct, ungoverned or undeclared identity refuses before any commit object exists"
 }
 
 test_an_unreadable_policy_is_could_not_observe_not_a_refusal() {

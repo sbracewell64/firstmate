@@ -114,6 +114,8 @@ FM_CI_TOKEN_PLACEHOLDER=FM_CI_IDENTITY_PLACEHOLDER
 # shellcheck disable=SC2034
 FM_CI_TOKEN_MALFORMED=FM_CI_IDENTITY_MALFORMED
 # shellcheck disable=SC2034
+FM_CI_TOKEN_DISTINCT=FM_CI_IDENTITY_DISTINCT_UNSUPPORTED
+# shellcheck disable=SC2034
 FM_CI_TOKEN_AMBIENT_OVERRIDE=FM_CI_AMBIENT_OVERRIDE
 # shellcheck disable=SC2034
 FM_CI_TOKEN_GATE_UNOBSERVED=FM_CI_GATE_UNOBSERVED
@@ -167,7 +169,7 @@ fm_commit_identity_split() {  # <identity> -> sets NAME and EMAIL
   FM_COMMIT_IDENTITY_NAME=
   FM_COMMIT_IDENTITY_EMAIL=
   case $id in
-    *'<'*'>'*) ;;
+    *'<'*'>') ;;
     *) return 1 ;;
   esac
   # Control characters would be carried straight into a commit header, where
@@ -257,6 +259,12 @@ fm_commit_identity_resolve() {  # <config-dir> <venue>
       committer) FM_COMMIT_IDENTITY_COMMITTER=$raw ;;
     esac
   done
+
+  if [ "$FM_COMMIT_IDENTITY_AUTHOR" != "$FM_COMMIT_IDENTITY_COMMITTER" ]; then
+    fm_commit_identity_set "$FM_CI_TOKEN_DISTINCT" \
+      "the policy declares distinct author and committer identities for $venue, but repository-local git identity provides one pair for both axes, so neither axis may be silently substituted"
+    return 1
+  fi
 
   fm_commit_identity_set "$FM_CI_TOKEN_BOUND" \
     "policy generation ${FM_COMMIT_IDENTITY_GENERATION:-<unstated>} declares author and committer for $venue"
