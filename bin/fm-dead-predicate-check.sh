@@ -616,13 +616,13 @@ MARK_VERIFIED_SITE=()
 MARK_CLASSIFIED_DATA_SITE=()
 REFUSED_MARKS=()
 collect_marks() {
-  local f hit lineno rest fn site path resolved reason
+  local f hit lineno rest fn site extra path resolved reason
   for f in "${PARSEABLE[@]}"; do
     while IFS= read -r hit; do
       lineno=${hit%%:*}
       rest=${hit#*:}
       rest=${rest#*indirect-call:}
-      read -r fn site _ <<<"$rest"
+      read -r fn site extra <<<"$rest"
       [ -n "${fn:-}" ] || continue
       case $fn in
         [A-Za-z_]*) ;;
@@ -634,16 +634,22 @@ collect_marks() {
         *) path='' ;;
       esac
       resolved=$(site_file_parseable "$path") || resolved=''
-      if reason=$(mark_site_refusal "$fn" "${site:-}" "$resolved"); then
+      if [ -n "${extra:-}" ]; then
+        reason="has trailing fields outside the admitted <function> <file>:<line> grammar"
+      elif reason=$(mark_site_refusal "$fn" "${site:-}" "$resolved"); then
         MARK_VERIFIED+=("$fn")
         MARK_VERIFIED_SITE+=("$fn|$resolved|${site##*:}")
-      else
+        continue
+      fi
+      if [ -n "$reason" ]; then
         REFUSED_MARKS+=("$f"$'\t'"$lineno"$'\t'"$fn"$'\t'"${site:-}"$'\t'"$reason")
         case $reason in
           *'opaque data'*|*'places '*"$fn"*' in data'*|*'non-dispatching command'*)
             [ -z "$resolved" ] || MARK_CLASSIFIED_DATA_SITE+=("$fn|$resolved|${site##*:}")
             ;;
         esac
+      else
+        die "internal error: indirect-call mark reached no verdict"
       fi
     done < <(shell_comments "$f" | grep -nE '^#[[:space:]]*indirect-call:')
   done

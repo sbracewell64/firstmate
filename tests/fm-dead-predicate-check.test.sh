@@ -337,6 +337,20 @@ trap '\''cleanup_handler'\'' EXIT'
   pass "a mark naming a line past the end of its site file is refused"
 }
 
+test_mark_with_trailing_fields_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-trailing-fields 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3 manufactured
+echo unrelated'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark outside the admitted grammar was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*trailing fields outside the admitted' \
+    || fail "the unparseable mark was not loudly refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*cleanup_handler' \
+    || fail "the unparseable mark kept its predicate alive: $out"
+  pass "a mark with trailing fields is refused as outside the admitted grammar"
+}
+
 test_mark_site_in_an_unparseable_file_is_refused() {
   local dir out rc
   # A mark may not rescue a call site this control cannot read. The line-local
@@ -1013,6 +1027,7 @@ test_mark_trap_shape_inside_a_multiline_string_is_refused
 test_mark_naming_a_wrong_line_is_refused
 test_deleting_the_dispatch_while_keeping_the_mark_cannot_keep_it_alive
 test_mark_site_past_end_of_file_is_refused
+test_mark_with_trailing_fields_is_refused
 test_mark_site_in_an_unparseable_file_is_refused
 test_mark_site_that_is_the_definition_is_refused
 test_mark_site_inside_a_multiline_string_is_refused
