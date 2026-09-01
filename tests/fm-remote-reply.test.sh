@@ -14,7 +14,24 @@ REMOTE="$TMP_ROOT/remote"
 FAKEBIN=$(fm_fakebin "$TMP_ROOT/fake")
 CLAIMS="$TMP_ROOT/claims"
 mkdir -p "$PARENT/data" "$PARENT/state" "$REMOTE/state" "$REMOTE/data/reply" "$CLAIMS"
-trap 'FM_HOME="$PARENT" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true; if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then kill "$(cat "$TMP_ROOT/remote-jobs/worker.pid")" 2>/dev/null || true; fi; rm -rf -- "$TMP_ROOT"' EXIT
+cleanup() {
+  local worker='' i
+  FM_HOME="$PARENT" FM_PROCEVENT_CLAIM_ROOT="$CLAIMS" \
+    "$ROOT/bin/fm-procevent.sh" sweep-home >/dev/null 2>&1 || true
+  if [ -f "$TMP_ROOT/remote-jobs/worker.pid" ]; then
+    worker=$(cat "$TMP_ROOT/remote-jobs/worker.pid" 2>/dev/null || true)
+    if [ -n "$worker" ]; then
+      kill "$worker" 2>/dev/null || true
+      wait "$worker" 2>/dev/null || true
+      for i in $(seq 1 100); do
+        kill -0 "$worker" 2>/dev/null || break
+        sleep 0.01
+      done
+    fi
+  fi
+  rm -rf -- "$TMP_ROOT"
+}
+trap cleanup EXIT
 
 cat > "$PARENT/data/secondmates.md" <<EOF
 - ios - iOS delivery (host: remote-mac; root: $ROOT; home: $REMOTE; scope: iOS work; projects: alpha; added 2026-08-02)
@@ -78,6 +95,7 @@ assert_contains "$out" "armed: $SID offset=0" "remote reply source was not armed
 
 remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" > "$TMP_ROOT/start-one.out" 2>&1 &
 RUNNER=$!
+fm_test_reap "$RUNNER"
 wait_for "$CLAIMS/$SID.claim" || fail "process-event runner never claimed the remote reply source"
 printf 'done [corr=0123456789abcdef]: build verified (data/reply/report.md)\n' \
   >> "$REMOTE/state/parent-replies.status"
@@ -183,6 +201,7 @@ pass "ingest rejects uncorrelated payload even when its transport digest is vali
 printf 'failed [corr=fedcba9876543210]: source was replaced\n' > "$REMOTE/state/parent-replies.status"
 remote_env "$ROOT/bin/fm-procevent.sh" start "$SID" > "$TMP_ROOT/start-two.out" 2>&1 &
 RUNNER=$!
+fm_test_reap "$RUNNER"
 wait "$RUNNER" || fail "continuity break was not captured as a structured result"
 RESULT_FOUR=$(find "$PARENT/state/procevent-inbox" -name "$SID.4.result" -print -quit)
 [ -n "$RESULT_FOUR" ] || fail "continuity break produced no durable result"

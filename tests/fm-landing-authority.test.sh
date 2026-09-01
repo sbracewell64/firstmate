@@ -115,7 +115,7 @@ register_project() {  # <dir> [<annotation>]
 }
 
 configure_venue() {  # <dir>
-  printf '%s\n' '{ "repo": "owner/control", "issue": 36 }' \
+  printf '%s\n' '{ "repo": "owner/control", "issue": 36, "landing_domain": { "repos": [] } }' \
     > "$1/home/config/sol-control.json"
 }
 

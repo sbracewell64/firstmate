@@ -107,6 +107,10 @@ _FM_LANDING_SEAM_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/nu
 . "$_FM_LANDING_SEAM_LIB_DIR/fm-classify-lib.sh"
 # shellcheck source=bin/fm-pr-lib.sh
 . "$_FM_LANDING_SEAM_LIB_DIR/fm-pr-lib.sh"
+# shellcheck source=bin/fm-task-base-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-task-base-lib.sh"
+# shellcheck source=bin/fm-sol-control-config-lib.sh
+. "$_FM_LANDING_SEAM_LIB_DIR/fm-sol-control-config-lib.sh"
 # shellcheck source=bin/fm-verify-lib.sh
 . "$_FM_LANDING_SEAM_LIB_DIR/fm-verify-lib.sh"
 # shellcheck source=bin/fm-independence-lib.sh
@@ -671,7 +675,7 @@ FM_LANDING_CANDIDATE_REASON=
 
 fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <review>]
   local home=$1 task=$2 route=$3 record=$4 head=${5:-} review=${6:-}
-  local project branch maker_harness maker_model independence recorded_heads recorded_head url output owner repo number seam_rc=0
+  local project branch maker_harness maker_model independence recorded_heads recorded_head url output owner repo number repository remote identity seam_rc=0
   local outbound=${FM_OUTBOUND_DIR:-${FM_DATA_OVERRIDE:-$home/data}/outbound-artifacts}
   local config=${FM_CONFIG_OVERRIDE:-$home/config}
   FM_LANDING_CANDIDATE_HEAD=
@@ -687,11 +691,18 @@ fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <revi
       [ -n "$project" ] && [ -d "$project" ] || { FM_LANDING_CANDIDATE_REASON='the local project could not be read'; return 4; }
       head=$(git -C "$project" rev-parse --verify --quiet "refs/heads/$branch^{commit}") \
         || { FM_LANDING_CANDIDATE_REASON="the live head of $branch could not be read"; return 4; }
+      remote=$(git --no-optional-locks -C "$project" remote get-url --push origin 2>/dev/null) || remote=
+      identity=$(task_base_venue_identity "$remote" 2>/dev/null) || identity=
+      case "$identity" in
+        */*/*) repository=${identity#*/} ;;
+        *) repository=- ;;
+      esac
       ;;
     pr-live)
       fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ] \
         || { FM_LANDING_CANDIDATE_REASON='the live pull request identity could not be read'; return 4; }
       owner=$FM_PR_OWNER repo=$FM_PR_REPO number=$FM_PR_NUMBER
+      repository="$owner/$repo"
       # fm-retrieval-audit: complete-source - the shared GraphQL normalizer compares every reviews, commits, and check-context totalCount with the nodes read
       output=$(gh api graphql -f query="$FM_VERIFY_ROLLUP_GRAPHQL" -f owner="$owner" -f repo="$repo" -F number="$number" \
         -q "$FM_VERIFY_ROLLUP_NORMALIZE_GRAPHQL | (.head, $FM_LANDING_REVIEW_EVIDENCE_JQ)" 2>/dev/null) \
@@ -706,7 +717,13 @@ fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <revi
         return 4
       fi
       ;;
-    pr-snapshot) ;;
+    pr-snapshot)
+      if fm_pr_url_parse "$url" && [ "$FM_PR_PROVIDER" = github ]; then
+        repository="$FM_PR_OWNER/$FM_PR_REPO"
+      else
+        repository=-
+      fi
+      ;;
     *) FM_LANDING_CANDIDATE_REASON="the landing route '$route' is not classified"; return 4 ;;
   esac
   fm_pr_head_valid "$head" || { FM_LANDING_CANDIDATE_REASON='the live landing head could not be established'; return 4; }
@@ -725,7 +742,11 @@ fm_landing_candidate_resolve() {  # <home> <task> <route> <record> [<head> <revi
   FM_LANDING_CANDIDATE_REVIEW=$review
   # shellcheck disable=SC2034  # Output consumed by the decision-surface sourcing caller.
   FM_LANDING_CANDIDATE_REASON="candidate head=$head review=${review:-could-not-observe}"
-  fm_landing_seam_resolve "$outbound" "$config" "$task" "$head" "${url:--}" || seam_rc=$?
+  fm_landing_seam_resolve "$outbound" "$config" "$task" "$head" "${url:--}" \
+    "${repository:--}" || seam_rc=$?
+  if [ "$seam_rc" -ne 0 ]; then
+    FM_LANDING_CANDIDATE_REASON="$FM_LANDING_CANDIDATE_REASON seam=$FM_LANDING_SEAM_TOKEN: $FM_LANDING_SEAM_REASON"
+  fi
   return "$seam_rc"
 }
 

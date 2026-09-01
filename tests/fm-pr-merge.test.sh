@@ -298,7 +298,7 @@ test_records_pr_and_head_before_merging() {
   rc=$?
   set -e
 
-  expect_code 0 "$rc" "records-before-merge: fm-pr-merge should succeed"
+  [ "$rc" -eq 0 ] || fail "records-before-merge: fm-pr-merge should succeed:"$'\n'"$(cat "$case_dir/stderr")"
   assert_grep 'pr=https://github.com/example/repo/pull/9' "$case_dir/state/task-x1.meta" \
     "records-before-merge: pr= was not recorded"
   assert_grep 'pr_head=deadbeefcafefeed0000000000000000deadbeef' "$case_dir/state/task-x1.meta" \
