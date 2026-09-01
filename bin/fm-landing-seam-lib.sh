@@ -656,10 +656,10 @@ fm_landing_seam_spend() {  # <auth-script> <auth-id> <head> <receipt> <asserted-
 #                 decision the captain reserved.
 #
 # THERE IS NO INPUT FOR AN UTTERANCE, which is the property this file exists to
-# have. `CAPTAIN_REQUIRED` is reachable from a typed reserved decision or absent
-# assignment-distinct review evidence: not from the act being a merge, not from the project, not from a
-# local-only landing, not from a posture that used to be off, and not from the
-# absence of a sentence.
+# have. `CAPTAIN_REQUIRED` is reachable only from a typed reserved decision: not
+# from the act being a merge, not from the project, not from a local-only landing,
+# not from a posture that used to be off, not from absent assignment-distinct
+# review evidence, and not from the absence of a sentence.
 #
 # WHAT IT DOES NOT DECIDE. Nothing about whether the work is fit to land. Every
 # test, validator, review, exact-head binding, mergeability and one-use

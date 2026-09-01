@@ -81,9 +81,11 @@ An instruction's transport is not an authority source, and a gate that waits for
 
 - **not-contradicted** - the landing is firstmate's to make once its own gates pass.
   Land it; do not park it waiting to be told again.
-- **contradicted** - a decision on this work is typed as the captain's.
+- **contradicted** with `CAPTAIN_REQUIRED` - a decision on this work is typed as the captain's.
   The evidence line names the decision key and its disposition.
   Rule that decision first; landing is not the question in front of the captain.
+- **contradicted** with `LANDING_REVIEW_GATE_REFUSED` - the engineering review gate is unmet.
+  Satisfy it with an approving review from a non-maker identity or head-bound independent pipeline review evidence; never escalate it to the captain.
 - **unevaluable** - a durable record needed to answer could not be read.
   Repair the record, and assert nothing about the landing in either direction meanwhile.
 
