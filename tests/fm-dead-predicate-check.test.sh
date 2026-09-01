@@ -482,6 +482,46 @@ dispatch value live_one'
   pass "pass-by-name proof binds the exact positional argument"
 }
 
+test_pass_by_name_rejects_bound_variable_reassignment() {
+  local dir out rc
+  dir=$(fixture mutated-bound-variable 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() { local check=${2:-}; check=echo; "$check"; }
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a reassigned callback variable was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the reassigned callback lacked a named refusal: $out"
+  pass "pass-by-name proof rejects bound-variable reassignment"
+}
+
+test_pass_by_name_rejects_positional_mutation() {
+  local body dir out rc variant=0
+  for body in 'dispatch() { shift; "$2"; }' 'dispatch() { set -- a echo; "$2"; }'; do
+    variant=$((variant + 1))
+    dir=$(fixture "mutated-position-$variant" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "$body
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "positional mutation was accepted, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+      || fail "the positional mutation lacked a named refusal: $out"
+  done
+  pass "pass-by-name proof rejects positional-parameter mutation"
+}
+
+test_pass_by_name_accepts_unmutated_local_binding() {
+  local dir out rc
+  dir=$(fixture unmutated-local-binding 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() { local a=$1 check=${2:-} b; "$check"; }
+# indirect-call: live_one bin/plain-consumer.sh:4
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "an unmutated local callback binding was refused, exit $rc: $out"
+  pass "pass-by-name proof accepts an unmutated multi-name local binding"
+}
+
 test_comparison_site_is_refused_and_dead() {
   local dir out rc
   dir=$(fixture mark-comparison 'dead_one() { return 0; }')
@@ -872,6 +912,9 @@ test_real_command_head_with_argument_counts
 test_pass_by_name_ignores_definition_inside_quoted_data
 test_pass_by_name_ignores_quoted_dispatch_data
 test_pass_by_name_requires_the_exact_argument_position
+test_pass_by_name_rejects_bound_variable_reassignment
+test_pass_by_name_rejects_positional_mutation
+test_pass_by_name_accepts_unmutated_local_binding
 test_comparison_site_is_refused_and_dead
 test_trap_trailing_comment_site_is_refused_and_dead
 test_quoted_marker_string_is_not_discovered

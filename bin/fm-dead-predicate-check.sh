@@ -56,7 +56,8 @@
 #   - BARE DISPATCH. The function begins a command after indentation and optional
 #     shell control words, begins a command substitution, or begins a canonical
 #     one-line function body. A bare argument counts only when the named callee's
-#     own canonical definition binds that argument to a command-head parameter.
+#     own canonical definition binds that argument to an unmutated command-head
+#     parameter, directly or through one local or plain assignment.
 #     Assignments, test expressions, output commands, and other arguments are data.
 #   - HANDLER DISPATCH. The function is the quoted handler operand of `trap`.
 #
@@ -439,14 +440,34 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
   else
     body=$(printf '%s\n' "$executable" | sed -n "${def_line},${end_line}p")
   fi
-  printf '%s\n' "$body" | grep -Eq "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?\\\$${arg_index}([[:space:];|&(){}<>]|$)" \
-    && return 0
   param_var=$(printf '%s\n' "$body" \
-    | sed -nE "s/.*[[:space:]]([A-Za-z_][A-Za-z0-9_]*)=\\\$\\{${arg_index}:-[^}]*\\}.*/\\1/p" \
+    | sed -nE "s/.*[[:space:]]([A-Za-z_][A-Za-z0-9_]*)=(\\\$${arg_index}([[:space:];]|$)|\\\$\\{${arg_index}:-[^}]*\\}).*/\\1/p" \
     | sed -n '1p')
-  [ -n "$param_var" ] || return 1
-  printf '%s\n' "$body" \
-    | grep -Eq "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?\\\$${param_var}([[:space:];|&(){}<>]|$)"
+  printf '%s\n' "$body" | awk -v n="$arg_index" -v var="$param_var" '
+    { text = text " " $0 }
+    END {
+      boundary = "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?"
+      term = "([[:space:];|&(){}<>]|$)"
+      positional_mutation = "(^|[;{}[:space:]])(shift([;{}[:space:]]|$)|set[[:space:]]+--([;{}[:space:]]|$))"
+      direct = boundary "\\$" n term
+      if (match(text, direct)) {
+        before = substr(text, 1, RSTART - 1)
+        if (before !~ positional_mutation) exit 0
+      }
+      if (var == "") exit 1
+      binding = "(^|[;{}[:space:]])" var "=(\\$" n "([;{}[:space:]]|$)|\\$\\{" n ":-[^}]*\\})"
+      if (!match(text, binding)) exit 1
+      binding_end = RSTART + RLENGTH - 1
+      after_binding = substr(text, binding_end + 1)
+      dispatch = boundary "\\$" var term
+      if (!match(after_binding, dispatch)) exit 1
+      between = substr(after_binding, 1, RSTART - 1)
+      before_dispatch = substr(text, 1, binding_end + RSTART - 1)
+      variable_mutation = "(^|[;{}[:space:]])" var "[[:space:]]*="
+      if (between ~ variable_mutation || before_dispatch ~ positional_mutation) exit 1
+      exit 0
+    }
+  '
 }
 
 # Why a mark's site does not establish the call. Prints the reason and returns 1
