@@ -574,6 +574,9 @@ It was kept because the law had no N-way statement anywhere, and it was watched 
 not ok - racing-mints: six racing mints granted no authorization at all
 ```
 
+Here, one winner means one durable authorization identity and one stored record, not necessarily one exit-zero process.
+Minting is idempotent on that identity, so a caller that arrives after the atomic transition may return the same authorization without creating another winner; every non-authorization outcome must still be a typed refusal.
+
 ### What this repair does NOT cover
 
 `bin/fm-publication-guard.sh` consumes the same `claim_acquire`, and its `retire` path was flattening the new distinction back into `FM_PUB_IN_FLIGHT`; that one call site now reports a claim it could not observe as `FM_PUB_CLAIM_OWNER_UNOBSERVED`.
