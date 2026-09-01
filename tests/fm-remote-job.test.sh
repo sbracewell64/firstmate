@@ -54,7 +54,7 @@ cat > "$REMOTE_ROOT/bin/fm-shutdown-job.sh" <<'SH'
 #!/bin/bash
 trap '' HUP INT TERM
 printf 'started\n' > "$1"
-sleep 3
+sleep 30
 printf 'ran\n' > "$2"
 SH
 cat > "$REMOTE_ROOT/bin/fm-output-job.sh" <<'SH'
@@ -626,7 +626,7 @@ done
 assert_present "$QUARANTINE_STARTED" "the quarantine fixture did not begin executing"
 GROUP_PID=$(cat "$JOB_DIR/.claim/group")
 printf 'invalid\n' > "$JOB_DIR/.claim/group"
-WORKER_PID=$(cat "$STATE_ROOT/worker.pid")
+WORKER_PID=$(cat "$JOB_DIR/.claim/owner")
 kill -TERM "$WORKER_PID"
 wait "$WORKER_PID" 2>/dev/null || true
 for _ in $(seq 1 100); do
