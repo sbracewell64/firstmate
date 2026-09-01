@@ -129,7 +129,7 @@ The exact-head REVISE on PR #134 (applying 19/5431020714) names that gap, and th
   A candidate's edits to the workflow or the gate are proposal-only: they can become current policy only by landing under the preceding generation.
 
 The `pull_request` subscription is the PRECEDING law's trigger, kept while the candidate introducing this law is judged under the law that preceded it, so PR #134 cannot retire it itself.
-The first fresh descendant that the ordinary pipeline creates after this policy lands by reconciling onto the settled governed generation removes it - the two-generation rule applied to the workflow file.
+The first fresh descendant that the ordinary pipeline creates after this policy lands on the governed branch and that branch settles, by reconciling onto that governed generation, removes it - the two-generation rule applied to the workflow file.
 On that transitional leg the wrapper file is still the candidate's, but the fetched policy generation's gate judges whenever that generation carries one; the inline flow behind it exists only for policy generations from before the gate did.
 
 If the governed program cannot be obtained, the check reaches no verdict and says so.
