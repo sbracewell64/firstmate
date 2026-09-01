@@ -915,6 +915,74 @@ EOF
   pass "production input cannot activate the custody test barrier"
 }
 
+test_custody_claim_stays_observable_during_record_replacement() {
+  local root gate state project barrier staged target writer_pid contender_rc out
+  root="$TMP_ROOT/custody-record-replacement"
+  gate="$root/gate.git"
+  state="$root/state"
+  project="$root/project"
+  barrier="$root/barrier"
+  target="$state/holder.meta"
+  staged="$state/.holder.meta.staged"
+  mkdir -p "$gate" "$state" "$project" || fail "record replacement fixture setup failed"
+  printf 'project=%s\ncontribution_venue=venue/holder\ncommit_identity=Owner A <a@example.invalid>\ncommit_identity_gate=%s\n' "$project" "$gate" > "$target" || fail "custody claim setup failed"
+  printf 'window=full\nproject=%s\ncontribution_venue=venue/holder\ncommit_identity=Owner A <a@example.invalid>\ncommit_identity_gate=%s\n' "$project" "$gate" > "$staged" || fail "full record staging failed"
+  bash -c '
+    set -u
+    root=$1 staged=$2 target=$3 barrier=$4
+    . "$root/bin/fm-commit-identity-lib.sh"
+    fm_commit_identity_record_replace "$staged" "$target" "$barrier"
+  ' _ "$CUSTODY_LIB_ROOT" "$staged" "$target" "$barrier" &
+  writer_pid=$!
+  fm_test_reap "$writer_pid"
+  fm_test_wait_file "$barrier/replace.arrived" 30 "$writer_pid" \
+    "record replacement exited before reaching its barrier" \
+    "record replacement barrier was not reached"
+  out=$(bash -c '
+    set -u
+    root=$1 gate=$2 state=$3 project=$4
+    . "$root/bin/fm-wake-lib.sh"
+    . "$root/bin/fm-pool-lib.sh"
+    . "$root/bin/fm-commit-identity-lib.sh"
+    fm_meta_get() { sed -n "s/^$2=//p" "$1" | tail -1; }
+    install_claim() { return 0; }
+    publish_claim() { : > "$state/contender.meta"; }
+    trap fm_commit_identity_custody_release EXIT
+    if fm_commit_identity_custody_admit "$gate" "$state" contender "$project" venue/contender "Owner B <b@example.invalid>" "$state" install_claim publish_claim; then
+      printf "admitted\n"
+      exit 0
+    fi
+    printf "reason=%s\n" "$FM_CI_CUSTODY_UNOBSERVED_REASON"
+    exit 1
+  ' _ "$CUSTODY_LIB_ROOT" "$gate" "$state" "$project" 2>&1); contender_rc=$?
+  : > "$barrier/replace.release" || fail "record replacement release failed"
+  if ! wait "$writer_pid"; then fail "atomic record replacement failed"; fi
+  [ "$contender_rc" -ne 0 ] || fail "a contender must not be admitted while a live custody record is replaced: $out"
+  assert_grep 'window=full' "$target" "the complete record must replace the claim"
+  assert_grep 'commit_identity=Owner A <a@example.invalid>' "$target" "the replacement must preserve the custody identity"
+  assert_absent "$staged" "the staged record must be consumed"
+
+  : > "$state/unreadable.meta" || fail "unreadable record setup failed"
+  out=$(bash -c '
+    set -u
+    root=$1 gate=$2 state=$3 project=$4
+    . "$root/bin/fm-wake-lib.sh"
+    . "$root/bin/fm-pool-lib.sh"
+    . "$root/bin/fm-commit-identity-lib.sh"
+    fm_meta_get() { sed -n "s/^$2=//p" "$1" | tail -1; }
+    install_claim() { return 0; }
+    publish_claim() { return 0; }
+    trap fm_commit_identity_custody_release EXIT
+    fm_commit_identity_custody_admit "$gate" "$state" unreadable-contender "$project" venue/contender "Owner A <a@example.invalid>" "$state" install_claim publish_claim || {
+      printf "reason=%s\n" "$FM_CI_CUSTODY_UNOBSERVED_REASON"
+      exit 1
+    }
+  ' _ "$CUSTODY_LIB_ROOT" "$gate" "$state" "$project" 2>&1); contender_rc=$?
+  [ "$contender_rc" -ne 0 ] || fail "an existing unreadable live record must not be treated as no lane"
+  assert_contains "$out" "reason=record" "an unreadable live record must report a record observation failure"
+  pass "custody claims stay whole and unreadable live records refuse admission"
+}
+
 # The cone is exactly the contended resource. Two same-project lanes whose venues
 # resolve to the SAME identity are not contending for anything, so they must both
 # run - otherwise this control would be serializing ordinary parallel work.
@@ -1038,6 +1106,7 @@ FM_CONTROLS=(
   test_a_contended_shared_gate_refuses_the_second_lane_until_released
   test_the_custody_owner_serializes_the_read_and_claim_interval
   test_production_cannot_activate_the_custody_barrier
+  test_custody_claim_stays_observable_during_record_replacement
   test_same_identity_lanes_on_one_project_are_not_contended
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
   test_an_ungoverned_home_launches_and_says_so

@@ -1004,6 +1004,7 @@ WT_POOL_LOCK_HELD=0
 COMMIT_CUSTODY_CLAIM_PUBLISHED=0
 COMMIT_CUSTODY_PREVIOUS_META=
 COMMIT_CUSTODY_PREVIOUS_META_PRESENT=0
+SPAWN_META_REPLACE_TMP=
 
 # Stop occupying the chosen pool slot. Called as soon as the pane's own shell is
 # inside it, and again from the abort path so an aborted spawn never leaves the
@@ -1044,6 +1045,10 @@ spawn_abort_cleanup() {
     COMMIT_CUSTODY_CLAIM_PUBLISHED=0
   fi
   fm_commit_identity_custody_release
+  if [ -n "$SPAWN_META_REPLACE_TMP" ]; then
+    rm -f "$SPAWN_META_REPLACE_TMP"
+    SPAWN_META_REPLACE_TMP=
+  fi
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
@@ -2449,7 +2454,11 @@ spawn_commit_identity_install_for_custody() {
 
 spawn_commit_identity_custody_refusal() {
   if [ "$FM_CI_CUSTODY_UNOBSERVED" = 1 ]; then
-    echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID is a live lane for this project, but its governed identity could not be established from recorded venue ${FM_CI_CUSTODY_OTHER_VENUE:-<unrecorded>}, so whether rebinding the shared validation repository would change that lane's commit identity is unknown." >&2
+    if [ "$FM_CI_CUSTODY_UNOBSERVED_REASON" = record ]; then
+      echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID has a live task record, but its shared-repository custody claim could not be read, so whether rebinding the validation repository would change that lane's commit identity is unknown." >&2
+    else
+      echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID is a live lane for this project, but its governed identity could not be established from recorded venue ${FM_CI_CUSTODY_OTHER_VENUE:-<unrecorded>}, so whether rebinding the shared validation repository would change that lane's commit identity is unknown." >&2
+    fi
   else
     echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID already holds the shared validation repository for this project under a different governed identity, and that repository carries ONE identity for both lanes, so running them together would let one commit under the other's identity." >&2
   fi
@@ -3424,7 +3433,8 @@ if [ "$KIND" != secondmate ]; then
     exit 1
   fi
 fi
-{
+SPAWN_META_REPLACE_TMP="$STATE/.${ID}.meta.$$"
+if ! {
   echo "window=$META_WINDOW"
   echo "endpoint_task_id=$ID"
   echo "worktree=$WT"
@@ -3534,7 +3544,19 @@ fi
     echo "home=$PROJ_ABS"
     echo "projects=$SECONDMATE_PROJECTS"
   fi
-} > "$STATE/$ID.meta"
+} > "$SPAWN_META_REPLACE_TMP"; then
+  rm -f "$SPAWN_META_REPLACE_TMP"
+  SPAWN_META_REPLACE_TMP=
+  echo "error: could not stage task metadata for $ID" >&2
+  exit 1
+fi
+if ! fm_commit_identity_record_replace "$SPAWN_META_REPLACE_TMP" "$STATE/$ID.meta"; then
+  rm -f "$SPAWN_META_REPLACE_TMP"
+  SPAWN_META_REPLACE_TMP=
+  echo "error: could not publish task metadata for $ID" >&2
+  exit 1
+fi
+SPAWN_META_REPLACE_TMP=
 # Which execution attempt this launch is for, read back from the record that
 # owns it. It is marked ACTIVE only after the launch is confirmed, far below:
 # metadata publication is not a launch, and an execution that was published and

@@ -191,6 +191,9 @@ The concurrent-admission control calls the custody owner function directly with 
 Against the raw-path lock-key mutation, both path-aliased contenders reached that barrier and both claims were published, producing `not ok - the custody owner must admit exactly one unlike identity: a=0 b=0 arrivals=2`.
 Against the repaired owner, one contender reached the barrier and published while holding the canonical gate lock, then the other refused after its custody read, producing one admitted claim and one arrival.
 The launch-path alias control concurrently gives two differently governed lanes physical and symlinked spellings of one project and gate, and requires exactly one admission.
+The record-replacement control drives the owner helper through its explicit barrier while the full task record replaces the early claim, and a concurrent unlike identity must still refuse.
+Against the non-atomic replacement and unreadable-record-skip mutation, the target was empty at the barrier and the contender was admitted, producing `not ok - a contender must not be admitted while a live custody record is replaced: admitted`.
+Against the repaired owner, the contender observes either the whole early claim or the whole final record, while a separately empty existing live record refuses with `reason=record`.
 
 ## What this does NOT establish
 

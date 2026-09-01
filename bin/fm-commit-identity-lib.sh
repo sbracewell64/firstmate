@@ -297,6 +297,7 @@ FM_CI_CUSTODY_OTHER_ID=
 FM_CI_CUSTODY_OTHER_IDENTITY=
 FM_CI_CUSTODY_OTHER_VENUE=
 FM_CI_CUSTODY_UNOBSERVED=0
+FM_CI_CUSTODY_UNOBSERVED_REASON=
 
 fm_commit_identity_custody_release() {
   [ "$FM_CI_CUSTODY_LOCK_HELD" = 1 ] || return 0
@@ -314,6 +315,7 @@ fm_commit_identity_custody_admit() {
   FM_CI_CUSTODY_OTHER_IDENTITY=
   FM_CI_CUSTODY_OTHER_VENUE=
   FM_CI_CUSTODY_UNOBSERVED=0
+  FM_CI_CUSTODY_UNOBSERVED_REASON=
   gate_real=$(cd "$gate" 2>/dev/null && pwd -P) || gate_real=$gate
   FM_CI_CUSTODY_LOCK=$(fm_pool_state_path "$gate_real" commit-custody .lock) || return 1
   max=${FM_SPAWN_COMMIT_CUSTODY_LOCK_POLLS:-1200}
@@ -336,6 +338,17 @@ fm_commit_identity_custody_admit() {
       other_gate=$(fm_meta_get "$meta" commit_identity_gate)
       other_identity=$(fm_meta_get "$meta" commit_identity)
       other_venue=$(fm_meta_get "$meta" contribution_venue)
+      if [ -z "$other_gate" ] && [ -z "$other_identity" ] && [ -z "$other_venue" ]; then
+        if [ -n "$other_project" ]; then
+          other_project_real=$(cd "$other_project" 2>/dev/null && pwd -P) || other_project_real=$other_project
+          [ "$other_project_real" = "$project_real" ] || continue
+        fi
+        FM_CI_CUSTODY_UNOBSERVED=1
+        FM_CI_CUSTODY_UNOBSERVED_REASON=record
+        FM_CI_CUSTODY_OTHER_ID=$other_id
+        fm_commit_identity_custody_release
+        return 1
+      fi
       if [ -n "$other_gate" ]; then
         other_gate_real=$(cd "$other_gate" 2>/dev/null && pwd -P) || other_gate_real=$other_gate
         [ "$other_gate_real" = "$gate_real" ] || continue
@@ -348,6 +361,7 @@ fm_commit_identity_custody_admit() {
         fm_commit_identity_resolve "$config" "$other_venue" || resolve_rc=$?
         if [ "$resolve_rc" -ne 0 ]; then
           FM_CI_CUSTODY_UNOBSERVED=1
+          FM_CI_CUSTODY_UNOBSERVED_REASON=identity
           FM_CI_CUSTODY_OTHER_ID=$other_id
           FM_CI_CUSTODY_OTHER_VENUE=$other_venue
           fm_commit_identity_custody_release
@@ -357,6 +371,7 @@ fm_commit_identity_custody_admit() {
       fi
       if [ -z "$other_identity" ]; then
         FM_CI_CUSTODY_UNOBSERVED=1
+        FM_CI_CUSTODY_UNOBSERVED_REASON=identity
         FM_CI_CUSTODY_OTHER_ID=$other_id
         FM_CI_CUSTODY_OTHER_VENUE=$other_venue
         fm_commit_identity_custody_release
@@ -384,6 +399,23 @@ fm_commit_identity_custody_admit() {
   "$install_callback" || { fm_commit_identity_custody_release; return 1; }
   "$publish_callback" || { fm_commit_identity_custody_release; return 1; }
   fm_commit_identity_custody_release
+}
+
+fm_commit_identity_record_replace() {
+  local staged=${1:?} target=${2:?} barrier=${3:-} attempt=0 staged_dir target_dir
+  [ -f "$staged" ] || return 1
+  staged_dir=$(cd "$(dirname "$staged")" 2>/dev/null && pwd -P) || return 1
+  target_dir=$(cd "$(dirname "$target")" 2>/dev/null && pwd -P) || return 1
+  [ "$staged_dir" = "$target_dir" ] || return 1
+  if [ -n "$barrier" ]; then
+    mkdir -p "$barrier" || return 1
+    : > "$barrier/replace.arrived" || return 1
+    while [ "$attempt" -lt 20 ] && [ ! -f "$barrier/replace.release" ]; do
+      sleep 0.1
+      attempt=$((attempt + 1))
+    done
+  fi
+  mv -f "$staged" "$target"
 }
 
 # --- ambient channels that outrank the binding -------------------------------
