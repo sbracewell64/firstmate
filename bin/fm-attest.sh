@@ -206,11 +206,10 @@ RECONCILE_POLL=${FM_ATTEST_RECONCILE_POLL:-15}
 case "$RECONCILE_POLL" in '' | *[!0-9]* | 0*) RECONCILE_POLL=15 ;; esac
 
 # What this program can be asked to do, for a caller that has to know before
-# asking. The workflow runs this script from the pull request's own head, so a
-# head raised before a subcommand existed does not carry it, and a caller that
-# probed by running it could not tell "this program does not do that" from
-# "that failed". Answering as an exit status rather than as text keeps the probe
-# out of the business of reading messages.
+# asking. The governed acceptance runner uses this to reject an unsupported
+# policy-generation combination as could-not-observe rather than guessing a
+# fallback command. Answering as an exit status rather than as text keeps the
+# probe out of the business of reading messages.
 CAPABILITIES="write verify recheck reconcile show required declaration-check"
 
 # ---------------------------------------------------------------------------
@@ -2075,10 +2074,8 @@ recheck_resolve_pull_request() {
   [ -f "$SCRIPT_DIR/fm-task-base-lib.sh" ] || recheck_fail repository-unresolved \
     "bin/fm-task-base-lib.sh is not beside this script, so a remote URL cannot be read as a forge repository." \
     "Name the pull request instead: bin/fm-attest.sh recheck --head $recheck_head --repo <owner/name> --pr <number>"
-  # Sourced here rather than at the top of this file on purpose. The workflow
-  # runs `verify` from a pull request's own head with fetch-depth 1, and every
-  # library that path loads is another thing that can be missing at that head
-  # and turn a verdict into a crash. Nothing outside recheck needs this one.
+  # The shared task-base library owns this repository-to-venue normalization
+  # and is also required by the policy-declaration commands.
   # shellcheck source=bin/fm-task-base-lib.sh
   . "$SCRIPT_DIR/fm-task-base-lib.sh"
 
