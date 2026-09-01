@@ -51,7 +51,10 @@
 #       Print one token: granted | spent | indeterminate | void | unreadable |
 #       absent. `indeterminate` is a real answer rather than a failure, and it
 #       still exits 4 so that exit 0 from this command means strictly "a
-#       determinate answer" to a caller that reads only the status.
+#       determinate answer" to a caller that reads only the status. An id that
+#       names another class's authority in this shared store prints no token and
+#       refuses, because this vocabulary describes a landing authority's
+#       lifecycle and none of its words is true of a record that is not one.
 #
 #   fm-landing-authorization.sh inspect <auth-id>
 #       Print the canonical-reader-validated authorization record as JSON.
@@ -62,14 +65,18 @@
 #       happened. Requires the evidence pointer; it never guesses.
 #
 #   fm-landing-authorization.sh list
-#       Enumerate authorizations. A partial enumeration reports could-not-observe
-#       rather than a short list.
+#       Enumerate authorizations as `<id> <state> <class>`. A partial enumeration
+#       reports could-not-observe rather than a short list. The store is shared
+#       by four authority classes, so the class is listed rather than assumed:
+#       every class carries the same lifecycle states, and only `landing` is one
+#       this command's other subcommands may act on.
 #
 # EXIT CODES
 #   0  the operation completed, or the authority was already spent and the
 #      recorded outcome is reprinted
 #   2  usage error
-#   3  refused - a verdict was reached and it is no
+#   3  refused - a verdict was reached and it is no, including an id that names
+#      another class's authority in this shared store
 #   4  could-not-observe - no verdict was reached, including an indeterminate
 #      spend. Never read as either neighbour.
 #
@@ -144,25 +151,38 @@ auth_write() {  # <auth-id> <json>
   fm_auth_store_write "$AUTH_DIR" "$1" "$2"
 }
 
-# Four-valued, and the caller must keep the four apart:
+# Five-valued, and the caller must keep the five apart:
 #   0 and RECORD set   readable
 #   3                  no such file - genuinely absent
 #   4                  present and unreadable, or not this schema
 #   5                  readable as a record, but its effect plan does not
 #                      determine an act - AUTH_PLAN_DEFECT names why
+#   6                  a well-formed authorization of ANOTHER class, sharing this
+#                      store - AUTH_CLASS names which
+#
+# 6 IS NOT 4, and the difference is the whole reason it exists. This store holds
+# four authority classes and this file reads exactly one of them. A publication,
+# custody or attestation-evidence record here is not corrupt and needs no repair;
+# it is simply not a landing authority, and judging it against the landing schema
+# would report a healthy record as a broken one. Every point lookup still refuses
+# it - addressing another class's authority with the landing commands is an
+# error - but an ENUMERATION skips it, because a record that could never have
+# performed a landing cannot answer whether a landing happened.
 #
 # The plan is parsed here rather than at the act, so no path in this file can
 # reach a mutation holding a record whose plan was never validated.
 AUTH_RECORD=
 AUTH_RAW=
+AUTH_CLASS=
 AUTH_PLAN_DEFECT=
 AUTH_PLAN_RC=0
 auth_read() {  # <auth-id>
   local expected=$1 path raw schema stored request comment verdict item project repo pr head computed
-  local plan plan_rc stored_effect computed_effect
+  local plan plan_rc stored_effect computed_effect class
   AUTH_PLAN_DEFECT=
   AUTH_PLAN_RC=0
   AUTH_RAW=
+  AUTH_CLASS=
   path=$(auth_path "$expected") || return 4
   if [ ! -e "$path" ]; then
     AUTH_RECORD=
@@ -172,6 +192,23 @@ auth_read() {  # <auth-id>
   printf '%s' "$raw" | jq -e . >/dev/null 2>&1 || return 4
   schema=$(printf '%s' "$raw" | jq -r '.schema // ""')
   [ "$schema" = "$FM_AUTH_SCHEMA" ] || return 4
+
+  # WHICH CLASS, BEFORE WHICH SCHEMA. bin/fm-landing-authorization-lib.sh owns
+  # this answer for every reader of this store. A record it cannot classify is
+  # could-not-observe rather than a landing record read strictly, because the
+  # landing schema's refusal would name a repair for a record that may not be a
+  # landing authority at all.
+  class=$(fm_auth_record_class "$raw") || return 4
+  AUTH_CLASS=$class
+  if [ "$class" != "$FM_AUTH_CLASS_LANDING" ]; then
+    # AUTH_RAW, not AUTH_RECORD: this record was never validated as a landing
+    # authority and must not be handed to a caller as one. What it may be read
+    # for is the lifecycle fields every class in this store shares, which is all
+    # the listing needs.
+    AUTH_RAW=$raw
+    return 6
+  fi
+
   printf '%s' "$raw" | jq -e '
     (.authorization_id | type == "string" and length > 0) and
     (.request_id | type == "string" and length > 0) and
@@ -675,6 +712,18 @@ ruling_unspent() {  # <request-id> <head> <this-id>
       # an attacker can edit is a store they can delete from, which this guard
       # never claimed to survive. What it survives is ordinary duplication.
       5) record=$AUTH_RAW ;;
+      # ANOTHER CLASS'S AUTHORITY, sharing this store. It is not a landing
+      # authority, it never could have performed a landing, and so it cannot
+      # answer the one question asked here. Skipping it is not a relaxation of
+      # this guard: a publication, custody or attestation-evidence record was
+      # never a candidate answer, and treating one as could-not-observe wedged
+      # every governed landing in a home that held one - which is what a home
+      # that publishes no-mistakes attestation evidence holds by the dozen.
+      #
+      # It is skipped by CLASS and not by unreadability. A landing record this
+      # file cannot read still stops the enumeration below, because that one
+      # might have held the answer.
+      6) continue ;;
       *)
         unobserved "$FM_AUTH_TOKEN_ENUM_UNOBSERVED" \
           "authorization $other could not be read, so whether this ruling already landed could not be observed; repair or retire that record before landing anything in this home" ;;
@@ -830,6 +879,7 @@ cmd_mint() {  # <request-id> --effect <kind> [...]
       unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
         "an authorization already exists at $id and could not be read" ;;
     5) plan_defect_stop "$id" ;;
+    6) foreign_class_stop "$id" ;;
   esac
 
   # Only reached when this exact plan has no record yet, which is the one moment
@@ -858,6 +908,15 @@ auth_void() {  # <auth-id> <record> <reason>
     '.state = "void" | .void_reason = $r | .updated = $n
      | .history += [{at:$n, event:"void", detail:$r}]')
   auth_write "$1" "$rec" || return 1
+}
+
+# Another class's record, addressed with this file's commands. A REFUSAL rather
+# than a could-not-observe: the record said what it is, and what it is is not a
+# landing authority. Naming the class is the whole repair, because the caller
+# reached for the wrong owner - bin/fm-publication-guard.sh reads these.
+foreign_class_stop() {  # <auth-id>
+  refuse "$FM_AUTH_TOKEN_FOREIGN_CLASS" \
+    "authorization $1 carries the ${AUTH_CLASS:-non-landing} effect and shares this store; it is not a landing authorization, and bin/fm-publication-guard.sh owns that class"
 }
 
 # A record whose plan does not determine an act, reported as the defect it is.
@@ -1019,6 +1078,7 @@ cmd_spend() {  # <auth-id> --head <sha> [--receipt <path>] [--assert-act -- <com
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" \
          "authorization $id could not be read, so whether it is spent is unknown" ;;
     5) plan_defect_stop "$id" ;;
+    6) foreign_class_stop "$id" ;;
   esac
   rec=$AUTH_RECORD
   state=$(printf '%s' "$rec" | jq -r '.state // ""')
@@ -1273,6 +1333,10 @@ cmd_status() {  # <auth-id>
     4) printf '%s\n' "$FM_AUTH_STATUS_UNREADABLE"; exit 4 ;;
     5) printf '%s\n' "$FM_AUTH_STATUS_UNREADABLE"
        plan_defect_stop "$id" ;;
+    # No status token: this vocabulary describes a landing authority's lifecycle,
+    # and printing one of its words for another class's record would answer a
+    # question that was not asked. The refusal names the class instead.
+    6) foreign_class_stop "$id" ;;
   esac
   reported=$(fm_auth_reported_status "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')")
   printf '%s\n' "$reported"
@@ -1290,6 +1354,7 @@ cmd_inspect() {  # <auth-id>
     3) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id is absent" ;;
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be identity-validated" ;;
     5) plan_defect_stop "$id" ;;
+    6) foreign_class_stop "$id" ;;
   esac
 }
 
@@ -1321,6 +1386,7 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be read" ;;
     5) plan_defect_stop "$id" ;;
+    6) foreign_class_stop "$id" ;;
   esac
   rec=$AUTH_RECORD
   initial_state=$(printf '%s' "$rec" | jq -r '.state // ""')
@@ -1366,6 +1432,7 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
     3) refuse "$FM_AUTH_TOKEN_NONE" "no authorization $id exists" ;;
     4) unobserved "$FM_AUTH_TOKEN_RECORD_UNREADABLE" "authorization $id could not be read" ;;
     5) plan_defect_stop "$id" ;;
+    6) foreign_class_stop "$id" ;;
   esac
   rec=$AUTH_RECORD
   state=$(printf '%s' "$rec" | jq -r '.state // ""')
@@ -1419,7 +1486,7 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
 # is genuinely empty and says so with a count rather than with silence, because
 # silence is what an unreadable store would also look like.
 cmd_list() {
-  local f id state count=0 failed=0
+  local f id state class rc count=0 failed=0
   if [ ! -d "$AUTH_DIR" ]; then
     printf 'count=0\n'
     return 0
@@ -1431,13 +1498,21 @@ cmd_list() {
   for f in "$AUTH_DIR"/*.json; do
     [ -e "$f" ] || continue
     id=$(basename "$f" .json)
-    if auth_read "$id"; then
-      state=$(fm_auth_reported_status "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')")
-    else
-      state=$FM_AUTH_STATUS_UNREADABLE
-      failed=1
-    fi
-    printf '%s\t%s\n' "$id" "$state"
+    auth_read "$id"; rc=$?
+    case $rc in
+      0) state=$(fm_auth_reported_status "$(printf '%s' "$AUTH_RECORD" | jq -r '.state // ""')")
+         class=$AUTH_CLASS ;;
+      # Another class's authority. Its lifecycle fields are the ones every class
+      # in this store shares, so it is LISTED with its real state rather than
+      # made to look broken - and it does not make this listing incomplete,
+      # because nothing about it was unreadable.
+      6) state=$(fm_auth_reported_status "$(printf '%s' "$AUTH_RAW" | jq -r '.state // ""')")
+         class=$AUTH_CLASS ;;
+      *) state=$FM_AUTH_STATUS_UNREADABLE
+         class=${AUTH_CLASS:-unknown}
+         failed=1 ;;
+    esac
+    printf '%s\t%s\t%s\n' "$id" "$state" "$class"
     count=$((count + 1))
   done
   printf 'count=%s\n' "$count"

@@ -506,6 +506,59 @@ FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 Re-run the red calibration - not just the green suite - after any change to the plan vocabulary, the act construction, the assertion comparison, or the effect-time re-observation.
 Those are the four places where this control can go quietly vacuous while staying green: a plan that stops covering a mutation-significant field, an act rebuilt from something other than the plan, an assertion that stops comparing, and a freshness check that stops looking.
 
+## The shared store's four authority classes
+
+Date: 2026-09-01.
+Subject: `fm_auth_record_class` in `bin/fm-landing-authorization-lib.sh`, and the class gate it feeds in `bin/fm-landing-authorization.sh`'s `auth_read`.
+Regression owner: controls 31 and 32 in `tests/fm-landing-authorization.test.sh`.
+
+`data/landing-authorizations/` is one store holding four authority classes.
+Only `landing` is one this script reads; `publication`, `custody` and `attestation-evidence` are written through the same library by `bin/fm-publication-guard.sh`.
+An `attestation-evidence` record carries `request_id: null`, because publishing no-mistakes evidence to a notes ref has no semantic work identity to name, so a home that ships through no-mistakes accumulates these.
+
+The claim: a record belonging to another class neither stops the landing enumerations nor becomes spendable as a landing, while a LANDING record this script cannot read still stops them.
+
+### What the class gate is not credited with
+
+The gate is on the record's class, not on whether the landing schema accepts it.
+An attestation-evidence record fails eight of that schema's axes - `request_id`, the three `.ruling` axes, `.grant.project`, `.grant.repo`, and four `.spend` axes - so relaxing any single axis would leave the enumeration wedged.
+Relaxing all of them would be worse than the wedge: it would make another class's authority readable as a landing authority.
+
+### Red calibration
+
+Both controls were observed failing for their intended reason before they were trusted.
+
+| # | Injected defect | Observed failure |
+| - | --------------- | ---------------- |
+| 31 | the class gate absent, as shipped before this change | `not ok - foreign-class: a foreign-class record must not wedge the mint: FM_AUTH_ENUMERATION_UNOBSERVED: authorization fm-auth-3161248a55ea2e49778c2877024820ec could not be read, so whether this ruling already landed could not be observed` |
+| 31 | the foreign record read rather than skipped (`6) record=$AUTH_RAW` in place of `6) continue`), so the skip would rest on a field comparison instead of on the class | `not ok - foreign-class: a spent publication on this ruling and head must not read as a landing: FM_AUTH_RULING_ALREADY_LANDED: the ruling on fm-ob-cccccc333333 at 1111111111111111111111111111111111111111 has already been landed under fm-auth-a312c4cf1fb26b0615e612d03f60d275 (spent)` |
+| 32 | the gate widened to skip every record the landing schema rejects, not only another class's (`4) continue` added beside `6) continue`, and the listing's `failed=1` dropped) | `not ok - null-request: an unreadable landing record must make the listing could-not-observe: fm-auth-ddbbb0fabee45256cd761b7e6539ad0b\tunreadable\tlanding count=1: expected exit 4, got 0` |
+
+The second row for control 31 is the one that establishes the skip is by CLASS and not by luck: it plants a spent `publication` record carrying the landing's own `request_id` and head, so every field comparison in the already-landed check matches it.
+Read rather than skipped, that record reports the ruling as already landed and refuses its real landing permanently - a publication is a push, and a push is not a landing.
+
+Control 32's own null `request_id` assertion is deliberately not attributed to one axis: both the shape check and the identity recomputation reject that record, and relaxing either alone still leaves it unreadable.
+
+### The real store, before and after
+
+The fifteen `attestation-evidence` records this home wrote between 2026-08-30 and 2026-09-01, plus its three real landing records, driven through the real mint path in a scratch home.
+
+Before, at `6d1a000e`:
+
+```
+FM_AUTH_ENUMERATION_UNOBSERVED: authorization fm-auth-07b0dfc2aa80ec0de0411b41ff371a73 could not be read, so whether this ruling already landed could not be observed; repair or retire that record before landing anything in this home
+exit=4
+```
+
+After, on the identical fixture:
+
+```
+fm-auth-3dbc5c1dfe3d1175a095b9ef5143061d demo-item at 1111111111111111111111111111111111111111
+exit=0
+```
+
+`list` over that same store reports each record with its class, and the two pre-effect-plan landing records in it still read as `unreadable landing` - unchanged behaviour, and correct: a record that cannot say what it would authorize is unreadable as an authority, which is what `status` has always printed for them.
+
 ## The restart window, stated precisely
 
 The spend writes its intent before the act and its outcome after, so a process killed between them leaves a durable record that says a spend began and does not say how it ended.
