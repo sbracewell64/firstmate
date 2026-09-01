@@ -13,6 +13,7 @@
 # tests in this repo must exercise behavior through an executable interface and
 # never assert implementation bytes. This suite honours that - it builds fixture
 # trees and asserts the command's VERDICT, never its source.
+# shellcheck disable=SC2016 # Fixture programs expand only after they are written and executed.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091

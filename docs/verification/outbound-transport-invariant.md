@@ -243,7 +243,8 @@ There was no dispatch, and the control reported the predicate consulted.
 
 The repair keeps the mark and removes its authority.
 A mark now carries the exact dispatch site, `# indirect-call: <function> <file>:<line>`, and the control re-reads that line and looks for the function itself.
-The admitted site forms are closed and enumerated in that script's header: a bare dispatch, judged on the file's own quote walk so the middle line of a multi-line string is the data it actually is, and a handler dispatch, where the raw line names the function inside a quoted word and the same line carries `trap`, `eval`, `xargs`, or `bash`/`sh`/`env` with `-c` outside the quotes.
+The admitted site forms are closed and enumerated in that script's header: a bare command-head dispatch, a proven pass-by-name command-head dispatch, or a quoted `trap` handler dispatch.
+The bare forms are judged on the file's own quote walk so the middle line of a multi-line string remains data, while the handler form reads the raw line because the function name is quoted.
 A site file the control cannot parse is refused rather than read, which is what stops a mark from being written instead of repairing the heredoc that made a consumer unreadable.
 Everything else is refused by name and is red at the same severity as a dead predicate, because a mark is a written claim and a claim the code does not support is manufactured evidence rather than an oversight.
 

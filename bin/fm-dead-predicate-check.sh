@@ -439,6 +439,7 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
   done
   [ "$arg_index" -gt 0 ] || return 1
   executable=$(strip_cached "$f")
+  # shellcheck disable=SC2016 # This sed program is literal; the shell must not expand it.
   def_line=$(printf '%s\n' "$executable" \
     | grep -nE "^${callee}\\(\\)[[:space:]]*\\{" \
     | sed -n '${s/:.*//;p;}')
