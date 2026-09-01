@@ -2414,19 +2414,27 @@ spawn_commit_identity_validate() {  # -> 0 validated or ungoverned, 1 refused
 # a lane may still reach its commit-producing stages. No second registry is
 # introduced, and nothing here outlives the records it reads.
 spawn_commit_identity_custody() {  # -> 0 clear, 1 contended
-  local meta other_id other_project other_gate other_identity other_venue resolve_rc
+  local meta other_id other_project other_project_real other_gate other_gate_real
+  local this_gate_real other_identity other_venue resolve_rc
   [ -n "${FM_CI_STATE_GATE:-}" ] || return 0
   [ -d "$STATE" ] || return 0
+  this_gate_real=$(cd "$FM_CI_STATE_GATE" 2>/dev/null && pwd -P) || this_gate_real=$FM_CI_STATE_GATE
   for meta in "$STATE"/*.meta; do
     [ -f "$meta" ] || continue
     other_id=${meta##*/}
     other_id=${other_id%.meta}
     [ "$other_id" != "$ID" ] || continue
     other_project=$(fm_meta_get "$meta" project)
-    [ "$other_project" = "$PROJ_ABS" ] || continue
     other_gate=$(fm_meta_get "$meta" commit_identity_gate)
     other_identity=$(fm_meta_get "$meta" commit_identity)
     other_venue=$(fm_meta_get "$meta" contribution_venue)
+    if [ -n "$other_gate" ]; then
+      other_gate_real=$(cd "$other_gate" 2>/dev/null && pwd -P) || other_gate_real=$other_gate
+      [ "$other_gate_real" = "$this_gate_real" ] || continue
+    else
+      other_project_real=$(cd "$other_project" 2>/dev/null && pwd -P) || other_project_real=$other_project
+      [ "$other_project_real" = "$PROJ_ABS_REAL" ] || continue
+    fi
     if [ -z "$other_gate" ] && [ -z "$other_identity" ]; then
       resolve_rc=0
       fm_commit_identity_resolve "$CONFIG" "$other_venue" || resolve_rc=$?
@@ -2442,7 +2450,6 @@ spawn_commit_identity_custody() {  # -> 0 clear, 1 contended
       other_gate=$FM_CI_STATE_GATE
       other_identity=$FM_COMMIT_IDENTITY_AUTHOR
     fi
-    [ "$other_gate" = "$FM_CI_STATE_GATE" ] || continue
     if [ -z "$other_identity" ]; then
       echo "error: $ID is not launching yet: task $other_id holds the shared validation repository, but its identity could not be established from its live record." >&2
       return 1
@@ -2455,6 +2462,21 @@ spawn_commit_identity_custody() {  # -> 0 clear, 1 contended
     echo "  this task:      $ID, venue ${CONTRIB_VENUE:-<unrecorded>}, identity $FM_CI_STATE_AUTHOR" >&2
     echo "  This is a WAIT, not a failure: nothing was allocated, no attempt was spent, and no task record was written. The dispatch becomes admissible again as soon as $other_id is released, and firstmate's ordinary re-evaluation of queued work will make it." >&2
     return 1
+  done
+  return 0
+}
+
+spawn_commit_identity_custody_test_barrier() {
+  local barrier=${FM_SPAWN_CUSTODY_BARRIER:-} attempt=0 arrivals
+  [ "${FM_TEST_IDENTITY_CONTRACT:-}" = 1 ] || return 0
+  [ -n "$barrier" ] || return 0
+  mkdir -p "$barrier" || return 1
+  : > "$barrier/$ID.arrived" || return 1
+  while [ "$attempt" -lt 20 ]; do
+    arrivals=$(find "$barrier" -maxdepth 1 -type f -name '*.arrived' 2>/dev/null | wc -l | tr -d ' ')
+    [ "$arrivals" -lt 2 ] || return 0
+    sleep 0.1
+    attempt=$((attempt + 1))
   done
   return 0
 }
@@ -2530,6 +2552,7 @@ if [ "$KIND" != secondmate ]; then
     spawn_commit_identity_validate || exit 1
     spawn_commit_identity_custody_lock_acquire || exit 1
     spawn_commit_identity_custody || exit 1
+    spawn_commit_identity_custody_test_barrier || exit 1
     spawn_commit_identity_install "$PROJ_ABS" "${FM_CI_STATE_GATE:-}" || exit 1
     spawn_commit_identity_claim_publish || exit 1
     spawn_commit_identity_custody_lock_release

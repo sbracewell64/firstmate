@@ -148,7 +148,7 @@ gate_commit_identity() {  # <root> [env-assignments...]
 # The brief instruction is deliberately absent from both. It is projection, and a
 # control that relied on it would be measuring the prose rather than the gate.
 
-SPAWN="$ROOT/bin/fm-spawn.sh"
+SPAWN="${FM_TEST_SPAWN_OVERRIDE:-$ROOT/bin/fm-spawn.sh}"
 LAUNCH_VENUE='example.invalid/sbracewell64/firstmate'
 LAUNCH_CASE_REC=
 
@@ -231,6 +231,8 @@ run_launch() {  # <case-dir> <home> <wt> <fakebin> <spawn-args...>
     FM_TEST_NM_STATUS="$case_dir/nm-status" \
     FM_TEST_ENDPOINT_MARKER="$case_dir/endpoint-allocated" \
     FM_TEST_SLOT_MARKER="$case_dir/slot-allocated" \
+    FM_TEST_IDENTITY_CONTRACT="${FM_TEST_CUSTODY_BARRIER:+1}" \
+    FM_SPAWN_CUSTODY_BARRIER="${FM_TEST_CUSTODY_BARRIER:-${FM_SPAWN_CUSTODY_BARRIER:-}}" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux FM_FAKE_PANE_PATH="$wt" \
     PATH="$fakebin:$PATH" \
     timeout "$FM_CI_LAUNCH_TIMEOUT" "$SPAWN" "$@" 2>&1
@@ -738,7 +740,7 @@ EOF
 test_a_contended_shared_gate_refuses_the_second_lane_until_released() {
   local rec home proj first_wt fakebin case_dir second_wt upstream_identity fork_identity
   local policy upstream_target fork_target default_branch out rc identity shared_before shared_after gate
-  local race_a_pid race_b_pid race_a_rc race_b_rc
+  local race_a_pid race_b_pid race_a_rc race_b_rc race_arrivals barrier gate_alias project_alias
   upstream_identity='Upstream Lane <upstream@example.invalid>'
   fork_identity='Fork Lane <fork@example.invalid>'
   policy=$(jq -n --arg a "$fork_identity" --arg b "$upstream_identity" '{generation:"g",venues:{
@@ -797,6 +799,17 @@ EOF
   assert_absent "$home/state/custody-b.meta" "a refused lane must publish no task record"
   assert_absent "$home/state/custody-b.attempt" "a refused lane must spend no attempt"
 
+  project_alias="$case_dir/project-alias"
+  gate_alias="$case_dir/gate-alias.git"
+  ln -s "$proj" "$project_alias" || fail "project alias setup failed"
+  ln -s "$gate" "$gate_alias" || fail "gate alias setup failed"
+  sed -e "s|^project=.*|project=$project_alias|" -e "s|^commit_identity_gate=.*|commit_identity_gate=$gate_alias|" \
+    "$home/state/custody-a.meta" > "$home/state/custody-a.meta.alias" || fail "aliased custody setup failed"
+  mv "$home/state/custody-a.meta.alias" "$home/state/custody-a.meta" || fail "aliased custody publication failed"
+  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" custody-b "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target"); rc=$?
+  [ "$rc" -ne 0 ] || fail "path aliases for one shared gate must still contend: $out"
+
   # The holder's own pipeline path still commits as the holder.
   git --git-dir="$gate" worktree add -q "$case_dir/gatewt" main || fail "gate worktree failed"
   identity=$(HOME="$case_dir/home_env" commit_identity "$case_dir/gatewt" "pipeline stage commit") || fail "gate commit failed"
@@ -827,19 +840,39 @@ EOF
   printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/race-a/brief.md" || fail "race first base contract failed"
   make_launch_brief "$home" race-b no-mistakes || fail "race second brief failed"
   printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$fork_target" >> "$home/data/race-b/brief.md" || fail "race second base contract failed"
-  run_launch "$case_dir" "$home" "$first_wt" "$fakebin" race-a "$proj" claude \
+  barrier="$case_dir/custody-barrier"
+  FM_TEST_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$first_wt" "$fakebin" race-a "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target" > "$case_dir/race-a.out" &
   race_a_pid=$!
   fm_test_reap "$race_a_pid"
-  run_launch "$case_dir" "$home" "$second_wt" "$fakebin" race-b "$proj" claude \
+  FM_TEST_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$second_wt" "$fakebin" race-b "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target" > "$case_dir/race-b.out" &
   race_b_pid=$!
   fm_test_reap "$race_b_pid"
   if wait "$race_a_pid"; then race_a_rc=0; else race_a_rc=$?; fi
   if wait "$race_b_pid"; then race_b_rc=0; else race_b_rc=$?; fi
+  race_arrivals=$(find "$barrier" -maxdepth 1 -type f -name '*.arrived' 2>/dev/null | wc -l | tr -d ' ')
   [ $((race_a_rc == 0 ? 1 : 0)) -ne $((race_b_rc == 0 ? 1 : 0)) ] \
-    || fail "exactly one concurrent unlike-identity admission must succeed: a=$race_a_rc b=$race_b_rc"
+    || fail "exactly one concurrent unlike-identity admission must succeed: a=$race_a_rc b=$race_b_rc arrivals=$race_arrivals"
+  [ "$race_arrivals" -eq 1 ] || fail "serialized custody must admit one contender past the read before publication: arrivals=$race_arrivals"
   pass "a contended shared gate refuses the second lane naming both venues, and releases to it intact"
+}
+
+test_production_cannot_activate_the_custody_barrier() {
+  local rec home proj wt fakebin case_dir barrier out
+  make_launch_case barrier-guard || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-barrier-guard"
+  barrier="$case_dir/production-barrier"
+  make_launch_brief "$home" barrier-guard no-mistakes || fail "brief fixture failed"
+  out=$(FM_SPAWN_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$wt" "$fakebin" barrier-guard "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
+  assert_not_contains "$out" "is not launching" "the ordinary production launch must remain admissible"
+  assert_absent "$barrier/barrier-guard.arrived" "production input must not activate the test barrier"
+  pass "production input cannot activate the custody test barrier"
 }
 
 # The cone is exactly the contended resource. Two same-project lanes whose venues
@@ -963,6 +996,7 @@ FM_CONTROLS=(
   test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation
   test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses
   test_a_contended_shared_gate_refuses_the_second_lane_until_released
+  test_production_cannot_activate_the_custody_barrier
   test_same_identity_lanes_on_one_project_are_not_contended
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
   test_an_ungoverned_home_launches_and_says_so

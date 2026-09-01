@@ -187,6 +187,12 @@ Removing the custody check yields:
 not ok - a contended shared gate must refuse the second lane
 ```
 
+The concurrent-admission control uses a bounded barrier after the custody read and before claim publication.
+Against the unlocked mutation, both contenders reached that barrier and both launches succeeded, producing `not ok - exactly one concurrent unlike-identity admission must succeed: a=0 b=0 arrivals=2`.
+Against the repaired path, one contender reached the barrier, published while holding the lock, and the other refused after its custody read, so exactly one launch succeeded with one arrival.
+The path-identity mutation compared the recorded project spelling before the shared repository and admitted a differently governed lane when the holder recorded symlink aliases for the same physical project and gate.
+The repaired control resolves both gate spellings physically and refuses that lane.
+
 ## What this does NOT establish
 
 The honest scope is narrower than "the fleet cannot publish a contaminated commit", and the difference matters.
