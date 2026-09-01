@@ -6,7 +6,7 @@ This record holds reusable evidence for one active guarantee of [`../../bin/fm-c
 [`../../bin/fm-commit-identity-lib.sh`](../../bin/fm-commit-identity-lib.sh)'s header owns the channel precedence and the honest limits, that command's header owns the verb contract and exit statuses, and [`../configuration.md`](../configuration.md) "Publication identity policy" owns the schema the authoritative identity is declared in.
 
 Verified on 2026-09-01 on Linux 6.18.33.2-microsoft-standard-WSL2 with git 2.51.0, jq 1.8.1, shellcheck 0.11.0, and no-mistakes v1.40.3.
-The controls below were exercised at implementation head `ab9126f0898fd2a8dd6dbeca8bcc86eea6315b0e`.
+The controls below were exercised at implementation head `b10eed211d6d2553ee0e95e37472f2b27bce5dc1`.
 
 ## The defect this record is built from
 
@@ -84,7 +84,7 @@ $ bash tests/fm-commit-identity.test.sh | tail -1
 FM_TEST_CONTRACT suite=fm-commit-identity.test.sh status=pass
 ```
 
-Thirteen controls, each observing a real commit object's author and committer or the absence of one, because a verdict about configuration would be a verdict about the wrong subject.
+Fifteen controls, each observing a real commit object's author and committer or the absence of one, because a verdict about configuration would be a verdict about the wrong subject.
 
 ## Watched reds
 
