@@ -477,6 +477,10 @@
     {
       "path": "skills/stow/SKILL.md",
       "audience": "public-product"
+    },
+    {
+      "path": "docs/verification/production-commit-provenance.md",
+      "audience": "maintainer-verification"
     }
   ]
 }

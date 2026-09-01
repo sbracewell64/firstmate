@@ -268,6 +268,8 @@ Attestation-evidence publication uses the venue declaration only as destination 
 `work` maps each publishable ref to the semantic work identity it carries and its `role`; only `canonical` is actionable, so a retained predecessor stays readable and stays unable to publish.
 `placeholders` adds identities to the built-in list that is never a governed party whatever a policy says; that list is built in rather than configured because a placeholder a home could switch off is not a floor.
 
+The `author` and `committer` axes have a second consumer one step earlier in the same lifecycle: [`bin/fm-commit-identity.sh`](../bin/fm-commit-identity.sh) installs them as the identity every production commit path resolves, before a commit object exists, so a governed venue's commits carry the party this file declares rather than whatever identity the machine happens to hold.
+
 A GitHub email association is never maker proof: the mapping is what this file states, and an identity it does not state refuses.
 
 An absent file means this home has declared no publication governance, and a publication no live request holds proceeds and reports that it was ungoverned.

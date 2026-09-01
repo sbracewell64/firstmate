@@ -596,13 +596,25 @@ echo "scaffolded: $BRIEF (scout; replace {TASK})"
 exit 0
 fi
 
+# The production commit identity binding, worded once and numbered per mode. It
+# has to run before the worker's FIRST commit, and - for a pipeline mode - after
+# the gate repository exists, because that repository is one of the two channels
+# it binds. bin/fm-commit-identity.sh owns what it installs and what it refuses.
+identity_step() {  # <step-number>
+  # shellcheck disable=SC2016  # a printf format: the backticks are brief markup
+  printf '
+%s. Bind the production commit identity before your first commit: `%s/bin/fm-commit-identity.sh bind .`
+   It installs the declared production author and committer into both this checkout and the repository the validation pipeline commits in, so neither your commits nor a later validation stage can fall through to whatever identity this machine happens to carry.
+   If it refuses, or reports that it could not observe one of those paths, STOP and append `blocked: {what it reported}` - do not commit, because a commit object cannot be re-attributed once it exists.' "$1" "$FM_ROOT"
+}
+
 # Ship task: shape Setup / Rule 1 / Definition of done by this task's explicit
 # delivery mode, validated above. The generated DOD opens with the fixed
 # "Delivery contract: mode=<mode>" line that bin/fm-spawn.sh checks against its own
 # explicit --mode before launching.
 case "$MODE" in
   direct-PR)
-    SETUP2=""
+    SETUP2="$(identity_step 2)"
     RULE1='1. Never push to the default branch (push only your `fm/'"$ID"'` branch). Never merge a PR.'
     RULE4_PHASES='(setup done, bug reproduced, fix implemented, validation passed)'
     IFS= read -r -d '' DOD <<EOF || true
@@ -615,7 +627,7 @@ Do NOT run the no-mistakes pipeline. The configured merge authority decides whet
 EOF
     ;;
   local-only)
-    SETUP2=""
+    SETUP2="$(identity_step 2)"
     RULE1="1. Never push to any remote and never open a PR. Work only on your \`fm/$ID\` branch; firstmate handles the merge into local \`main\`."
     RULE4_PHASES='(setup done, bug reproduced, fix implemented, validation passed)'
     IFS= read -r -d '' DOD <<EOF || true
@@ -630,7 +642,7 @@ EOF
     ;;
   *)  # no-mistakes
     SETUP2="
-2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`."
+2. Run \`no-mistakes doctor\`; if it reports the repo is not initialized here, run \`no-mistakes init\`.$(identity_step 3)"
     RULE1='1. Never push to the default branch. Never merge a PR.'
     RULE4_PHASES='(setup done, bug reproduced - never the implementation commit, whose only next step is the pipeline call under Definition of done)'
     IFS= read -r -d '' DOD <<EOF || true
