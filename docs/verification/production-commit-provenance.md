@@ -82,6 +82,10 @@ verdict:   FM_CI_BOUND_EXACT - every reachable production commit path resolves t
 ```sh
 $ bash tests/fm-commit-identity.test.sh | tail -1
 FM_TEST_CONTRACT suite=fm-commit-identity.test.sh status=pass
+$ bin/fm-lint.sh
+fm-lint.sh: ShellCheck 0.11.0 (pinned 0.11.0)
+$ bin/fm-doc-audience-check.sh
+fm-doc-audience-check: ok surfaces=93 local_links=420
 ```
 
 Thirty-three controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
