@@ -2457,6 +2457,10 @@ spawn_commit_identity_install_for_custody() {
   spawn_commit_identity_install "$PROJ_ABS" "$FM_CI_STATE_GATE"
 }
 
+spawn_commit_identity_uses_gate() {
+  [ "$KIND" = ship ] && [ "$MODE" = no-mistakes ]
+}
+
 spawn_commit_identity_custody_refusal() {
   if [ "$FM_CI_CUSTODY_UNOBSERVED" = 1 ]; then
     if [ "$FM_CI_CUSTODY_UNOBSERVED_REASON" = record ]; then
@@ -2483,11 +2487,15 @@ if [ "$KIND" != secondmate ]; then
   fi
   if [ -e "$CONFIG/publication-identity.json" ]; then
     spawn_commit_identity_validate || exit 1
-    if ! fm_commit_identity_custody_admit "$FM_CI_STATE_GATE" "$STATE" "$ID" "$PROJ_ABS_REAL" \
-      "$CONTRIB_VENUE" "$FM_CI_STATE_AUTHOR" "$CONFIG" \
-      'spawn_commit_identity_install_for_custody' 'spawn_commit_identity_claim_publish'; then
-      [ -z "$FM_CI_CUSTODY_OTHER_ID" ] || spawn_commit_identity_custody_refusal
-      exit 1
+    if spawn_commit_identity_uses_gate; then
+      if ! fm_commit_identity_custody_admit "$FM_CI_STATE_GATE" "$STATE" "$ID" "$PROJ_ABS_REAL" \
+        "$CONTRIB_VENUE" "$FM_CI_STATE_AUTHOR" "$CONFIG" \
+        'spawn_commit_identity_install_for_custody' 'spawn_commit_identity_claim_publish'; then
+        [ -z "$FM_CI_CUSTODY_OTHER_ID" ] || spawn_commit_identity_custody_refusal
+        exit 1
+      fi
+    else
+      spawn_commit_identity_install "$PROJ_ABS" || exit 1
     fi
   else
     echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
@@ -3078,7 +3086,11 @@ fi
 
 if [ "$KIND" != secondmate ]; then
   if [ -e "$CONFIG/publication-identity.json" ]; then
-    spawn_commit_identity_install "$WT" "${FM_CI_STATE_GATE:-}" || exit 1
+    if spawn_commit_identity_uses_gate; then
+      spawn_commit_identity_install "$WT" "$FM_CI_STATE_GATE" || exit 1
+    else
+      spawn_commit_identity_install "$WT" || exit 1
+    fi
   fi
 fi
 
@@ -3503,13 +3515,14 @@ if ! {
   [ -z "$QUALIFICATION_STATE" ] || echo "qualification_observed=$QUALIFICATION_STATE"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
-  # The identity this lane was admitted under and the shared gate repository it
-  # holds. Recorded together because the pair IS the custody claim: the next
-  # launch reads them to decide whether admitting it would let one of the two
-  # lanes commit under the other's identity. An absent pair means the lane
-  # predates this record or launched ungoverned, and is never read as agreement.
+  # The governed worktree identity and, for a pipeline lane, the shared gate
+  # repository it holds. The gate field marks custody; the next pipeline launch
+  # reads it to decide whether admitting that lane would let either commit under
+  # the other's identity.
   [ -z "${FM_CI_STATE_AUTHOR:-}" ] || echo "commit_identity=$FM_CI_STATE_AUTHOR"
-  [ -z "${FM_CI_STATE_GATE:-}" ] || echo "commit_identity_gate=$FM_CI_STATE_GATE"
+  if spawn_commit_identity_uses_gate; then
+    [ -z "${FM_CI_STATE_GATE:-}" ] || echo "commit_identity_gate=$FM_CI_STATE_GATE"
+  fi
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"

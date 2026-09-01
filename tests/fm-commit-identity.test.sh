@@ -1022,6 +1022,51 @@ EOF
   pass "two same-project lanes resolving one identity are admitted together"
 }
 
+test_non_pipeline_lanes_do_not_claim_or_rebind_the_shared_gate() {
+  local mode rec home proj first_wt fakebin case_dir second_wt policy gate
+  local upstream_identity fork_identity upstream_target out gate_before gate_after
+  upstream_identity='Upstream Lane <upstream@example.invalid>'
+  fork_identity='Fork Lane <fork@example.invalid>'
+  policy=$(jq -n --arg a "$fork_identity" --arg b "$upstream_identity" '{generation:"g",venues:{
+    "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$a}},
+    "example.invalid/upstream/project":{identities:{author:$b,committer:$b}}
+  }}') || fail "policy setup failed"
+
+  for mode in direct-PR local-only; do
+    make_launch_case "non-pipeline-$mode" "$policy" || fail "$mode launch fixture setup failed"
+    rec=$LAUNCH_CASE_REC
+    IFS='|' read -r home proj first_wt fakebin <<EOF
+$rec
+EOF
+    case_dir="$TMP_ROOT/launch-non-pipeline-$mode"
+    gate="$case_dir/nm/repos/gate.git"
+    second_wt="$case_dir/wt-second"
+    upstream_target=$(git -C "$proj" rev-parse HEAD) || fail "$mode upstream target setup failed"
+    gate_before=$(git --git-dir="$gate" config --local --get-regexp '^user\.' 2>/dev/null || true)
+
+    make_launch_brief "$home" "non-pipeline-$mode" "$mode" || fail "$mode brief failed"
+    out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" "non-pipeline-$mode" "$proj" claude \
+      --mode "$mode" --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
+    assert_not_contains "$out" "is not launching" "$mode lane must be admitted"
+    assert_grep "commit_identity=$fork_identity" "$home/state/non-pipeline-$mode.meta" "$mode lane must retain its worktree identity record"
+    assert_no_grep '^commit_identity_gate=' "$home/state/non-pipeline-$mode.meta" "$mode lane must publish no shared-gate custody claim"
+    gate_after=$(git --git-dir="$gate" config --local --get-regexp '^user\.' 2>/dev/null || true)
+    [ "$gate_after" = "$gate_before" ] || fail "$mode lane rebound the shared gate: $gate_before -> $gate_after"
+
+    git -C "$proj" remote add upstream git@example.invalid:upstream/project.git || fail "$mode upstream setup failed"
+    git -C "$proj" update-ref refs/remotes/upstream/main "$upstream_target" || fail "$mode upstream ref setup failed"
+    git -C "$proj" symbolic-ref refs/remotes/upstream/HEAD refs/remotes/upstream/main || fail "$mode upstream head setup failed"
+    git -C "$proj" worktree add -q -b "non-pipeline-$mode-second" "$second_wt" || fail "$mode second worktree setup failed"
+    make_launch_brief "$home" "pipeline-after-$mode" no-mistakes || fail "$mode pipeline brief failed"
+    printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/pipeline-after-$mode/brief.md" || fail "$mode pipeline base contract failed"
+    out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" "pipeline-after-$mode" "$proj" claude \
+      --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target") || true
+    assert_not_contains "$out" "is not launching" "$mode lane must not block a differently governed pipeline lane"
+    assert_grep "commit_identity=$upstream_identity" "$home/state/pipeline-after-$mode.meta" "$mode pipeline lane must claim its governed identity"
+  done
+  pass "direct-PR and local-only lanes neither claim nor rebind the shared gate"
+}
+
 # THE POSITIVE END-TO-END CONTROL. Ordinary lifecycle, no operator anywhere near
 # the binder, and then real commit objects made the two ways production commits
 # are actually made: by the worker in its own slot, and by a pipeline stage in
@@ -1120,6 +1165,7 @@ FM_CONTROLS=(
   test_production_cannot_activate_the_custody_barrier
   test_custody_claim_stays_observable_during_record_replacement
   test_same_identity_lanes_on_one_project_are_not_contended
+  test_non_pipeline_lanes_do_not_claim_or_rebind_the_shared_gate
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
   test_an_ungoverned_home_launches_and_says_so
 )

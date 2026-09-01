@@ -309,7 +309,7 @@ fm_commit_identity_custody_admit() {
   local gate=${1:?} state=${2:?} id=${3:?} project_real=${4:?}
   local venue=${5:-} identity=${6:?} config=${7:?} install_callback=${8:?}
   local publish_callback=${9:?} barrier=${10:-} gate_real attempt=0 max
-  local meta other_id other_project other_project_real other_gate other_gate_real
+  local meta other_id other_mode other_project other_project_real other_gate other_gate_real
   local other_identity other_venue resolve_rc arrivals
   FM_CI_CUSTODY_OTHER_ID=
   FM_CI_CUSTODY_OTHER_IDENTITY=
@@ -334,6 +334,10 @@ fm_commit_identity_custody_admit() {
       other_id=${meta##*/}
       other_id=${other_id%.meta}
       [ "$other_id" != "$id" ] || continue
+      other_mode=$(fm_meta_get "$meta" mode)
+      case $other_mode in
+        direct-PR|local-only) continue ;;
+      esac
       other_project=$(fm_meta_get "$meta" project)
       other_gate=$(fm_meta_get "$meta" commit_identity_gate)
       other_identity=$(fm_meta_get "$meta" commit_identity)
