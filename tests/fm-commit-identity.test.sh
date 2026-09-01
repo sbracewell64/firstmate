@@ -179,11 +179,17 @@ esac
 case "${1:-}" in
   display-message) printf 'firstmate\n'; exit 0 ;;
   list-windows) exit 0 ;;
+  new-window) touch "$FM_TEST_ENDPOINT_MARKER"; exit 0 ;;
 esac
 exit 0
 SH
   chmod +x "$fakebin/tmux" || return 1
-  fm_fake_exit0 "$fakebin" treehouse || return 1
+  cat > "$fakebin/treehouse" <<'SH'
+#!/usr/bin/env bash
+touch "$FM_TEST_SLOT_MARKER"
+exit 0
+SH
+  chmod +x "$fakebin/treehouse" || return 1
   cat > "$fakebin/no-mistakes" <<'SH'
 #!/usr/bin/env bash
 [ "${1:-}" = status ] || exit 0
@@ -219,6 +225,8 @@ run_launch() {  # <case-dir> <home> <wt> <fakebin> <spawn-args...>
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
     FM_TEST_NM_STATUS="$case_dir/nm-status" \
+    FM_TEST_ENDPOINT_MARKER="$case_dir/endpoint-allocated" \
+    FM_TEST_SLOT_MARKER="$case_dir/slot-allocated" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux FM_FAKE_PANE_PATH="$wt" \
     PATH="$fakebin:$PATH" \
     timeout "$FM_CI_LAUNCH_TIMEOUT" "$SPAWN" "$@" 2>&1
@@ -607,7 +615,37 @@ EOF
   assert_contains "$out" "is not launching" "the refusal must say the task is not being launched"
   assert_contains "$out" "FM_CI_IDENTITY_PLACEHOLDER" "the refusal must carry the binder's own reason"
   assert_absent "$home/state/$id.meta" "a refused launch must publish no task record"
+  assert_absent "$case_dir/endpoint-allocated" "a refused launch must allocate no endpoint"
+  assert_absent "$case_dir/slot-allocated" "a refused launch must allocate no slot"
   pass "a launch whose authoritative identity cannot be bound is refused by the launch owner, with no brief instruction involved"
+}
+
+test_distinct_roles_refuse_before_any_launch_allocation() {
+  local rec home proj wt fakebin case_dir out rc id author committer policy
+  id=distinct-preallocation
+  author='Author Person <author@example.invalid>'
+  committer='Committer Person <committer@example.invalid>'
+  policy=$(jq -n --arg a "$author" --arg c "$committer" '{generation:"g",venues:{
+    "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$c}}
+  }}') || fail "policy setup failed"
+  rec=$(make_launch_case "$id" "$policy") || fail "launch fixture setup failed"
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  printf "repo not initialized (run 'no-mistakes init' first)\n" > "$case_dir/nm-status" || fail "pipeline status setup failed"
+  make_launch_brief "$home" "$id" local-only || fail "brief fixture failed"
+
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode local-only --yolo off --reason-code NL_RULE_CLASSIFICATION); rc=$?
+  [ "$rc" -ne 0 ] || fail "distinct roles must refuse before allocation: $out"
+  assert_contains "$out" "FM_CI_REPO_IDENTITY_DISTINCT" "the refusal must carry the distinct-role token"
+  assert_contains "$out" "$author" "the refusal must name the author"
+  assert_contains "$out" "$committer" "the refusal must name the committer"
+  assert_absent "$home/state/$id.meta" "the refusal must publish no task record"
+  assert_absent "$case_dir/endpoint-allocated" "the refusal must allocate no endpoint"
+  assert_absent "$case_dir/slot-allocated" "the refusal must allocate no slot"
+  pass "distinct roles refuse before any launch allocation"
 }
 
 test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses() {
@@ -785,6 +823,7 @@ FM_CONTROLS=(
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
   test_a_launch_whose_identity_cannot_bind_is_mechanically_refused
+  test_distinct_roles_refuse_before_any_launch_allocation
   test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses
   test_two_same_project_launches_keep_worktree_identities_isolated
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step

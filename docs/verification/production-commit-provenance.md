@@ -84,7 +84,7 @@ $ bash tests/fm-commit-identity.test.sh | tail -1
 FM_TEST_CONTRACT suite=fm-commit-identity.test.sh status=pass
 ```
 
-Twenty-five controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
+Twenty-six controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
 
 ## Watched reds
 
@@ -105,6 +105,8 @@ That the mutation surfaces as UNVERIFIED rather than as a silent pass is the re-
 The retargeted-venue launch control was observed failing against the prior launch gate because the spawn path selected the checkout origin's identity instead of the finalized contribution venue.
 The same-project launch control was observed failing against the prior repository-local binding because the second launch replaced the first launch's identity in their shared config.
 Both controls now drive bounded real launches and observe commit objects in the task worktrees, while the unresolved-venue companion refuses before publishing a task record.
+The distinct-role no-gate launch was observed passing phase-one validation and allocating its endpoint against the prior head before phase two refused it.
+It now refuses with both declared roles and `FM_CI_REPO_IDENTITY_DISTINCT` before the fixture observes any slot or endpoint allocation.
 
 The remaining ruling-required reds are individually held by the suite: a poisoned `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment refuses by name and creates zero commits; poisoned repository-local and global configuration both lose to the binding; fixture activity establishing a `Test` identity in the same session does not cross the boundary; a restart between commits leaves the bound provenance as the sole selector; an unstated, placeholder, malformed, ungoverned or undeclared identity refuses with its own token and creates nothing; and a pipeline daemon carrying an identity variable refuses.
 

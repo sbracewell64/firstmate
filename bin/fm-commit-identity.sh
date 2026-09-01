@@ -146,9 +146,10 @@ if [ "$VERB" = install-worktree ]; then
   fi
   case $rc in
     1) refuse "$FM_CI_TOKEN_INSTALL_FAILED" "the validated identity could not be written into $CHECKOUT" ;;
-    *) refuse "$FM_CI_TOKEN_UNVERIFIED" "the validated identity was written into $CHECKOUT but git did not report it back" ;;
+    2) refuse "$FM_CI_TOKEN_UNVERIFIED" "the validated identity was written into $CHECKOUT but git did not report it back" ;;
+    3) refuse "$FM_CI_TOKEN_REPO_DISTINCT" "the worktree channel holds one identity pair and cannot carry both declared roles: author '$FM_COMMIT_IDENTITY_AUTHOR' and committer '$FM_COMMIT_IDENTITY_COMMITTER'" ;;
   esac
-  exit 1
+  exit "$rc"
 fi
 
 if [ "$VENUE_OVERRIDE_SET" -eq 1 ]; then
@@ -166,6 +167,11 @@ fi
 if [ "$VERB" = env ]; then
   fm_commit_identity_env_block
   exit 0
+fi
+if [ "$VERB" = validate ] && [ "$FM_COMMIT_IDENTITY_AUTHOR" != "$FM_COMMIT_IDENTITY_COMMITTER" ]; then
+  refuse "$FM_CI_TOKEN_REPO_DISTINCT" \
+    "the launch binds through a channel that holds one identity pair and cannot carry both declared roles: author '$FM_COMMIT_IDENTITY_AUTHOR' and committer '$FM_COMMIT_IDENTITY_COMMITTER'"
+  exit 1
 fi
 
 # The environment this command was invoked in is the environment the worker's own

@@ -2371,12 +2371,18 @@ spawn_commit_identity_validate() {  # -> 0 validated or ungoverned, 1 refused
 }
 
 spawn_commit_identity_install() {  # <task-worktree>
-  local checkout=${1:?} binder="$FM_ROOT/bin/fm-commit-identity.sh" out
+  local checkout=${1:?} binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0
   out=$(FM_CI_STATE_VALIDATED="$FM_CI_STATE_VALIDATED" \
     FM_CI_STATE_AUTHOR="$FM_CI_STATE_AUTHOR" FM_CI_STATE_COMMITTER="$FM_CI_STATE_COMMITTER" \
     FM_CI_STATE_AUTHOR_NAME="$FM_CI_STATE_AUTHOR_NAME" FM_CI_STATE_AUTHOR_EMAIL="$FM_CI_STATE_AUTHOR_EMAIL" \
     FM_CI_STATE_COMMITTER_NAME="$FM_CI_STATE_COMMITTER_NAME" FM_CI_STATE_COMMITTER_EMAIL="$FM_CI_STATE_COMMITTER_EMAIL" \
-    "$binder" install-worktree "$checkout" 2>&1) && return 0
+    "$binder" install-worktree "$checkout" 2>&1) || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -eq 3 ]; then
+    echo "error: $ID is not launching: the worktree identity channel holds one pair and cannot carry both the validated author '$FM_CI_STATE_AUTHOR' and committer '$FM_CI_STATE_COMMITTER'; aborting the allocated launch resources." >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
   echo "error: $ID is not launching: the already-validated production commit identity could not be installed and re-observed in $checkout; aborting the allocated launch resources." >&2
   printf '%s\n' "$out" >&2
   return 1
