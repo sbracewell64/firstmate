@@ -20,25 +20,32 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 1. Fork the repo, then clone the parent repo or set your local `origin` back to the parent (`git@github.com:kunchenguid/firstmate.git`).
 2. Create a branch and make your changes.
 3. Initialize the gate with your fork as the push target: `no-mistakes init --fork-url git@github.com:<you>/firstmate.git` (firstmate expects **no-mistakes v1.31.2+**; without a fork, plain `no-mistakes init` still works for maintainers with push access).
-4. Commit your changes.
-5. Push through the gate instead of pushing to `origin`:
+4. Configure the active Firstmate home's governed venue and production author and committer in [`config/publication-identity.json`](docs/configuration.md#publication-identity-policy-configpublication-identityjson), then bind that identity into the checkout and initialized gate before the first commit:
+
+   ```sh
+   bin/fm-commit-identity.sh bind .
+   ```
+
+   A refusal or unobservable result blocks committing until the reported identity or channel state is repaired.
+5. Commit your changes.
+6. Push through the gate instead of pushing to `origin`:
 
    ```sh
    git push no-mistakes
    ```
 
-6. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
+7. Run `no-mistakes` to attach to the pipeline, watch findings, authorize auto-fixes, and review ask-user findings as needed.
    Follow the installed no-mistakes version's SKILL.md and live `axi` help for gate mechanics.
-7. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
-8. Publish the attestation for the head it pushed:
+8. Once the pipeline passes, it pushes the branch to your fork and opens the PR against the parent repo for you.
+9. Publish the attestation for the head it pushed:
 
    ```sh
    bin/fm-attest.sh write
    ```
 
-   Publish as soon as step 7 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.
+   Publish as soon as step 8 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.
    `Require no-mistakes` is one of the checks `checks-passed` waits on and it stays red until this note exists, so waiting for that outcome first waits on the check this step is what clears.
-   The pipeline steps `bin/fm-attest.sh write` requires are the ones step 7 completed, and it attests the head that run validated rather than whatever `HEAD` happens to be, so it refuses instead of attesting the wrong commit.
+   The pipeline steps `bin/fm-attest.sh write` requires are the ones step 8 completed, and it attests the head that run validated rather than whatever `HEAD` happens to be, so it refuses instead of attesting the wrong commit.
    Make no further commit before publishing, because a review or lint fix round or any later commit advances the head beyond the commit the completed run validated.
    Do not add a follow-up commit merely to restart the failed check; validate that new head through no-mistakes first, then publish its attestation.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
@@ -47,8 +54,8 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else.
    If your `origin` pushes to the parent rather than your fork, name the fork explicitly: `bin/fm-attest.sh write --remote <your-fork-remote>`.
    Repeat this after any later push, because the attestation names one commit and a new commit is a new head.
-9. Step 8 completes the routine flow; no human nudge follows it.
-   The check ran and refused before the note existed, and publishing a note fires no pull request event of its own, so step 8 re-runs that check for the head it just published; the pull request needs no closing, reopening or editing.
+10. Step 9 completes the routine flow; no human nudge follows it.
+   The check ran and refused before the note existed, and publishing a note fires no pull request event of its own, so step 9 re-runs that check for the head it just published; the pull request needs no closing, reopening or editing.
    It uses `gh`, and it tells you plainly when it could not: `gh` missing or unauthenticated, or no write access to the parent repository's Actions, which you do not hold when contributing from a fork.
    Only then, re-run that workflow run from the repository's Actions tab or ask a maintainer to, and do not publish the attestation again - it already names your commit.
 
