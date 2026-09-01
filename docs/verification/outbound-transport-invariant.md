@@ -30,7 +30,7 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap preserves definitive outbound defect classification
 ```
 
-The 73 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases pass.
+The 73 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases passed at that head.
 What follows is why that sentence is worth anything.
 
 The focused suites were re-run on 2026-08-17 at exact implementation head `3c21e711075a75daa930d186811144d675c6ca09` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
@@ -167,6 +167,7 @@ Each row states what the control actually establishes and what it does not. A kn
 | `unambiguous-ruling-verdict` | Exactly one verdict line is required, and ambiguity refuses while naming its count | Add a quoted prior verdict beside the decided verdict | Does not decide which verdict was intended when a ruling contains more than one |
 | `inbound-sender-boundary` | An inbound ruling needs exactly one whole-value `from: browser-sol`, checked before its verdict, and any other sender wakes nothing | Supply the live prefix-shaped malformed sender or claim the `firstmate` role | Does not authenticate the forge account that authored the comment |
 | `dead-predicate` | A function in an enrolled file with no call site in its complete possible-caller universe is refused; blanket exemption does not silence; zero enrolled files is could-not-observe | Wire the offender in, or remove enrolment | Does NOT prove a called predicate implements everything its name implies - not mechanically decidable, caught by review. `DEAD` is issued only when every possible caller is parseable; an unparseable file that does not even loosely mention that predicate is outside its property-scoped universe, while a loose mention can only make the verdict could-not-observe and can never confirm a call |
+| `indirect-call-mark-is-verified` | An `indirect-call:` mark counts only when the control re-reads the exact `<file>:<line>` it names and observes the function dispatched there; a mark with no site, a stale line, a site past end of file, a site in a file the control cannot parse, a site that is the definition, a site inside a multi-line string, and a site that only prints the name are each REFUSED and red | Restore the bare `grep -Eq "# indirect-call: <fn>"` acceptance - observed red on trunk `135a9c473155684fda5221868a0269f54b93cef5`, one fabricated comment turned `DEAD` exit 3 into `ALIVE` exit 0 with no dispatch anywhere in the fixture | Establishes that the function is named at the site in an executable position, NOT that the surrounding code reaches that line at run time. Reachability is not mechanically decidable here and is review's job, exactly as the adjacent "called but checks less than its name claims" shape is |
 | `reconcile-status-provenance` | `reconcile` reports the verdict of the stage that produced it: an emit that exhausts transport exits 4, and the following sweep's 3 never overwrites it | Read the status of a different pipeline stage - observed red, reported 3 for a could-not-observe emit | Does not cover more than one failing emit in one run; `reconcile-report-completeness` below owns the fact that a refusal no longer ends the run |
 | `emit-lock-release` | Every emit releases its own per-request lock during the run rather than at process exit, so a multi-item `reconcile` leaves none behind | Drop the explicit release and rely on the EXIT trap - observed red, one lock left behind | Does not cover a process killed between acquiring and releasing; that lock is reclaimed by the dead-pid steal, which is a separate mechanism |
 | `sweep-identity-distinct` | The sweep reports a readable record naming another request as an identity refusal and a defect, never as an unreadable record | Collapse the mismatch return back onto the unreadable return - observed red, exit 4 and `RECORD_UNREADABLE` | Does not cover a record that is both foreign and unparseable; the unparseable answer wins, correctly |
@@ -204,7 +205,9 @@ That guard is deliberately module-local; the general form - every declared vocab
 
 Browser Sol generalised the containment findings on this task into two laws, and they are recorded here because the code applies them rather than merely citing them.
 
-**Discovery is not identity.** A substring, prefix, text occurrence, API hit, path or name match discovers CANDIDATES only, and can never by itself satisfy an identity-bearing join, dedupe, applicability, wait, authorization or acceptance decision. A discovered candidate must be validated by the consumer against the complete exact identity that decision needs. Prefix relation is never equality. Three instances were found on this surface: a forge endpoint returning pull requests that merely CONTAIN a commit, quoted prose counting as a call site, and a substring of a comment body satisfying request presence. A class sweep for containment-style matching across the outbound surface found no fourth; the sweep's own near-miss is recorded below.
+**Discovery is not identity.** A substring, prefix, text occurrence, API hit, path or name match discovers CANDIDATES only, and can never by itself satisfy an identity-bearing join, dedupe, applicability, wait, authorization or acceptance decision. A discovered candidate must be validated by the consumer against the complete exact identity that decision needs. Prefix relation is never equality. Three instances were found on this surface at the time: a forge endpoint returning pull requests that merely CONTAIN a commit, quoted prose counting as a call site, and a substring of a comment body satisfying request presence. A class sweep for containment-style matching across the outbound surface found no fourth, and its own near-miss is recorded below.
+
+A fourth was found later, and it is recorded here because the sweep that missed it was scanning for the wrong shape. The dead-predicate control's `indirect-call:` mark was not a containment match at all - it was an exact whole-word match on an exact declared marker, which is why a containment sweep passed straight over it. The defect was one level up: the thing being matched exactly was a COMMENT, and a comment is a claim about a call rather than a call. Discovery-is-not-identity is therefore not a rule about loose matching; it is a rule about what the matched artifact IS. A precise match on a proxy is still a proxy. The repair and its evidence are the section below.
 
 **Negative claims require complete observation.** Absent, no caller, dead predicate, nothing waiting - each qualifies only when the candidate universe is observable enough to exclude a satisfying member. `found=0` is not `clean=true` unless the verifier also establishes its completeness predicate, which is why the dead-predicate summary always prints `alive=` and `could_not_observe=` and why the sweep reports observation gaps beside findings.
 
@@ -213,6 +216,73 @@ The completeness predicate is PROPERTY-SCOPED, not global. The universe for one 
 ### A note for the next class sweep on this surface
 
 The sweep that found the third instance nearly missed the correct code beside it: filtering for unanchored `grep` on `-qx` skipped the `-Fqx` whole-line matches, which are the opposite of containment and are the validator the fix reuses. A class sweep has to cover flag-order and flag-combination variants rather than the canonical spelling, or it acquires a blind spot of the same kind it is hunting.
+
+## The indirect-call mark, and the site read that verifies it
+
+Verified on 2026-08-30 on Linux 6.18.33.2-microsoft-standard-WSL2 with GNU Awk 5.3.2, jq 1.8.1 and shellcheck 0.11.0.
+The red was reproduced at trunk head `135a9c473155684fda5221868a0269f54b93cef5`; the green and the injection proof were taken on `fm/dead-predicate-mark-verification` at the head that carries this record.
+The final 69-case `tests/fm-dead-predicate-check.test.sh` suite passes at that head.
+
+`bin/fm-dead-predicate-check.sh` accepted `# indirect-call: <function>` as positive call evidence on the strength of the comment alone.
+A fixture holding one enrolled library with an uncalled predicate and one consumer that never calls it went from `DEAD` to `ALIVE` when a single comment was added and nothing else changed:
+
+```sh
+$ FM_ROOT_OVERRIDE=$SC/root bin/fm-dead-predicate-check.sh --json bin/lib.sh   # no comment
+  "alive": 0, "dead": [ { "function": "fm_never_called_predicate", "line": 3 } ]
+exit=3
+$ printf '# indirect-call: fm_never_called_predicate\n' >> $SC/root/bin/consumer.sh
+$ FM_ROOT_OVERRIDE=$SC/root bin/fm-dead-predicate-check.sh --json bin/lib.sh   # comment only
+  "alive": 1, "dead": []
+exit=0
+$ grep -rn 'fm_never_called_predicate' $SC/root/bin/
+  bin/consumer.sh:2:# indirect-call: fm_never_called_predicate
+  bin/lib.sh:3:fm_never_called_predicate() {
+```
+
+The two occurrences of the name in the whole tree were its definition and the comment.
+There was no dispatch, and the control reported the predicate consulted.
+
+The repair keeps the mark and removes its authority.
+A mark now carries the exact dispatch site, `# indirect-call: <function> <file>:<line>`, and the control re-reads that line and looks for the function itself.
+The admitted site forms are closed and enumerated in that script's header: a bare command-head dispatch, a proven pass-by-name command-head dispatch, or a quoted `trap` handler dispatch.
+The bare forms are judged on the file's own quote walk so the middle line of a multi-line string remains data, while the handler form reads the raw line because the function name is quoted.
+A site file the control cannot parse is refused rather than read, which is what stops a mark from being written instead of repairing the heredoc that made a consumer unreadable.
+Everything else is refused by name and is red at the same severity as a dead predicate, because a mark is a written claim and a claim the code does not support is manufactured evidence rather than an oversight.
+
+### The real seam, not a fixture
+
+The end-to-end proof runs through the production producer, the real control, and the gate that consumes its verdict: `bin/fm-landing-authorization-lib.sh` declares nine per-field validators it dispatches by name, `bin/fm-dead-predicate-check.sh` reads them, and `.github/workflows/ci.yml` runs that control as a required check, so a red verdict blocks the pull request.
+
+One real mark was moved off its dispatch by a single line, which is exactly what a stale mark looks like after an edit:
+
+```sh
+$ sed -i 's|fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:730|fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:731|' bin/fm-landing-authorization-lib.sh
+$ bin/fm-dead-predicate-check.sh --json bin/fm-landing-authorization-lib.sh
+  "alive": 20,
+  "could_not_observe": [ fm_auth_identity_canonical, fm_auth_plain_value,
+                         fm_auth_plan_reset, fm_auth_plan_read, fm_auth_plan_repo_valid ],
+  "refused_marks": [ { "line": 610, "function": "fm_auth_plan_repo_valid",
+                       "site": "bin/fm-landing-authorization-lib.sh:731",
+                       "reason": "site bin/fm-landing-authorization-lib.sh:731 does not mention fm_auth_plan_repo_valid" } ]
+exit=3
+```
+
+The stale mark refused, and the file it lived in went unchecked with it, so five predicates became could-not-observe.
+Neither answer is `ALIVE`, which is the property: an unverifiable claim degrades to refusal and to could-not-observe, never to a positive fact, and it does so before the gate rather than after it.
+
+Restoring the one character returns the ordinary supported path to the same lawful result it had before the repair.
+The repo-wide run is byte-identical to the pre-repair baseline apart from the new counter:
+
+```sh
+$ bin/fm-dead-predicate-check.sh
+fm-dead-predicate-check: ok enrolled=4 scanned=118 unchecked=245 alive=100 could_not_observe=0 refused=0 marked=0
+exit=0
+```
+
+Before the repair the same run reported `alive=100 could_not_observe=0` with no `refused=` counter, so the nine site-pinned marks resolve exactly as the nine bare marks did, and nothing else moved.
+
+What this does NOT establish is that the marked line is reached at run time.
+The control observes that the function is named at that site in an executable position; whether the surrounding branch ever executes is not mechanically decidable here and stays review's job, the same boundary the control's header already draws around "called but checks less than its name claims".
 
 ## The completeness claim is scoped, and what owns the rest
 

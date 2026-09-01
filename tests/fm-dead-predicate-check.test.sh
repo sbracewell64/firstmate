@@ -13,6 +13,7 @@
 # tests in this repo must exercise behavior through an executable interface and
 # never assert implementation bytes. This suite honours that - it builds fixture
 # trees and asserts the command's VERDICT, never its source.
+# shellcheck disable=SC2016 # Fixture programs expand only after they are written and executed.
 set -u
 
 # shellcheck source=tests/lib.sh disable=SC1091
@@ -211,12 +212,6 @@ awk '\''
   pass "quoted awk functions are excluded before shell construct classification"
 }
 
-# A TRAP HANDLER NAMED ONLY INSIDE QUOTES is a call site and needs no mark.
-# Stripping quotes before classifying constructs is correct, but it also removes
-# the handler of `trap 'fn args' SIG`, which left a genuinely live function
-# reading dead and invited an `indirect-call:` mark to paper over it. A mark
-# declares a call the control cannot see; this one IS visible in accepted syntax,
-# so the control reads it rather than being told about it.
 test_quoted_trap_handler_is_a_call_site() {
   local dir out rc
   dir=$(fixture quoted-trap 'live_one() { return 0; }' "trap 'live_one INT' INT")
@@ -225,11 +220,6 @@ test_quoted_trap_handler_is_a_call_site() {
   pass "a trap handler named inside a quoted trap string reads alive without a mark"
 }
 
-# THE ANCHOR, asserted so the rule above cannot quietly become "any quoted first
-# word is a call". The name sits at the head of a quoted string exactly as it
-# would in a trap handler, but the command is not `trap`, so it stays dead. This
-# is what keeps the quoted-handler rule from re-widening what quote stripping
-# deliberately narrowed.
 test_quoted_first_word_outside_trap_is_not_a_call_site() {
   local dir out rc
   dir=$(fixture quoted-first-word 'dead_one() { return 0; }' "printf '%s\\n' 'dead_one INT'")
@@ -241,12 +231,490 @@ test_quoted_first_word_outside_trap_is_not_a_call_site() {
 test_explicit_indirect_call_counts() {
   local dir out rc
   # shellcheck disable=SC2016 # The generated fixture expands callback at runtime.
-  dir=$(fixture indirect 'live_one() { return 0; }' 'callback=live_one
-# indirect-call: live_one callback dispatch
-"$callback"')
+  dir=$(fixture indirect 'live_one() { return 0; }' 'dispatch() { "$2"; }
+# indirect-call: live_one bin/consumer.sh:4
+dispatch value live_one')
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "an explicitly identified indirect call was refused, exit $rc: $out"
   pass "an explicit indirect call site counts as consulted"
+}
+
+# THE MARK CASES. A mark is the one call form that is DECLARED rather than
+# written, which is what makes it the one form a fabricated comment could forge.
+# Every case below drives the control to a verdict from a fixture that differs by
+# the dispatch alone, so a mark can never be observed to carry a verdict the code
+# does not.
+
+test_fabricated_mark_with_no_dispatch_is_refused_and_dead() {
+  local dir out rc
+  # THE WATCHED RED, and the exact shape that was measured red on this control.
+  # The name occurs twice in the whole fixture: at its definition, and inside a
+  # comment. There is no dispatch. One generation of this control read the
+  # comment as positive proof and answered ALIVE, which is a proxy marker
+  # upgrading an unobserved construct into a semantic fact.
+  dir=$(fixture fabricated-mark 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one
+echo unrelated'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a fabricated mark did not turn the control red, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' \
+    || fail "the fabricated mark was not refused by name: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' \
+    || fail "the predicate the fabricated mark named was not reported dead: $out"
+  pass "a fabricated indirect-call mark naming no dispatch site is refused, and the predicate stays dead"
+}
+
+test_quoted_trap_dispatch_named_by_a_site_counts() {
+  local dir out rc
+  # A quoted trap handler is already an admitted direct call form. The mark is
+  # still verified independently and must be accepted only when its pinned site
+  # names that executable handler dispatch.
+  dir=$(fixture trap-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+trap '\''cleanup_handler cleanup-argument'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a mark naming a real quoted-trap dispatch was refused, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'alive=1' \
+    || fail "the verified mark did not resolve the predicate as consulted: $out"
+  pass "a mark naming a real quoted-trap dispatch is verified and counts"
+}
+
+test_mark_trap_shape_inside_a_multiline_string_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-multiline-trap-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:4
+message="first
+trap '\''cleanup_handler cleanup-argument'\'' EXIT
+last"'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a trap-shaped line in a multi-line string was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*cleanup_handler' \
+    || fail "the quoted trap-shaped data site was not refused: $out"
+  pass "a trap-shaped line inside a multi-line string cannot verify a mark"
+}
+
+test_mark_naming_a_wrong_line_is_refused() {
+  local dir out rc
+  # The line number is part of the claim. A mark left behind when its dispatch
+  # moved must refuse rather than drift onto whatever now sits at that line,
+  # because a mark that survives its own site is a stale positive.
+  dir=$(fixture mark-wrong-line 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:1
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming the wrong line was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*does not mention cleanup_handler' \
+    || fail "the stale mark was not refused by name: $out"
+  pass "a mark naming a line that does not dispatch the function is refused"
+}
+
+test_deleting_the_dispatch_while_keeping_the_mark_cannot_keep_it_alive() {
+  local dir out rc
+  # Same fixture, same mark, dispatch deleted. The verdict must follow the code.
+  dir=$(fixture dispatch-deleted 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "dispatch-deleted: the baseline arm was not alive, exit $rc: $out"
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+trap - EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "deleting the dispatch left the mark carrying the call, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*cleanup_handler' \
+    || fail "the orphaned mark was not refused: $out"
+  pass "deleting the invocation while keeping the mark does not preserve the call fact"
+}
+
+test_mark_site_past_end_of_file_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-past-eof 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:900
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming a line past end of file was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*past the end' \
+    || fail "the out-of-range site was not named: $out"
+  pass "a mark naming a line past the end of its site file is refused"
+}
+
+test_mark_with_trailing_fields_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-trailing-fields 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3 manufactured
+trap '\''cleanup_handler'\'' EXIT'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark outside the admitted grammar was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*trailing fields outside the admitted' \
+    || fail "the unparseable mark was not loudly refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*cleanup_handler' \
+    && fail "the refused mark hid the independent quoted-trap dispatch: $out"
+  pass "a malformed mark is refused even when its named site is a real dispatch"
+}
+
+test_mark_site_in_an_unparseable_file_is_refused() {
+  local dir out rc
+  # A mark may not rescue a call site this control cannot read. The line-local
+  # read cannot tell an unreadable file's payload text from its code, so a mark
+  # pointing into a heredoc would let the "write a mark instead of repairing the
+  # construct" move back in through the site.
+  dir=$(fixture mark-unparseable-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/unparseable.sh:4'
+  add_unparseable_consumer "$dir" 'cleanup_handler'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark into an unparseable file was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*not a file this control can parse' \
+    || fail "the unparseable site was not named: $out"
+  printf '%s' "$out" | grep -q 'alive=1' \
+    && fail "a mark into an unparseable file was counted as a call: $out"
+  pass "a mark naming a site inside a file this control cannot parse is refused"
+}
+
+test_mark_site_that_is_the_definition_is_refused() {
+  local dir out rc
+  dir=$(fixture mark-definition-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/sample-lib.sh:3'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming the definition was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*is the definition of' \
+    || fail "the definition site was not named: $out"
+  pass "a mark naming the function's own definition as its dispatch site is refused"
+}
+
+test_mark_site_inside_a_multiline_string_is_refused() {
+  local dir out rc
+  # The site is judged in FILE context, not line context. Read on its own, the
+  # middle line of a multi-line string looks like a bare command; read through
+  # the file's quote walk it is the data it actually is.
+  dir=$(fixture mark-multiline-string-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:4
+message="first
+cleanup_handler
+last"'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark into a multi-line string was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*cleanup_handler' \
+    || fail "the quoted-data site was not refused: $out"
+  pass "a mark naming a line inside a multi-line string is refused, because the site is read in file context"
+}
+
+test_mark_site_handing_the_name_to_an_output_command_is_refused() {
+  local dir out rc
+  # Opaque data at a site, exactly as it is everywhere else in this control.
+  dir=$(fixture mark-output-command-site 'cleanup_handler() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: cleanup_handler bin/plain-consumer.sh:3
+echo cleanup_handler'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mark naming an output command was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*opaque data' \
+    || fail "the output-command site was not named: $out"
+  pass "a mark naming a site that only prints the function name is refused"
+}
+
+test_mark_naming_a_bare_pass_by_name_dispatch_counts() {
+  local dir out rc
+  # The shape this repository actually uses: a validator handed to its caller by
+  # name and invoked through a variable. The name is a bare word at the site, so
+  # the shell really does hand that word to something that dispatches it.
+  dir=$(fixture mark-pass-by-name 'validate_one() { return 0; }')
+  # shellcheck disable=SC2016 # The generated fixture dispatches at runtime.
+  add_plain_consumer "$dir" 'dispatch() { "$2"; }
+# indirect-call: validate_one bin/plain-consumer.sh:4
+dispatch value validate_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a mark naming a bare pass-by-name dispatch was refused, exit $rc: $out"
+  pass "a mark naming a bare pass-by-name dispatch site counts as consulted"
+}
+
+test_arbitrary_command_arguments_are_refused_and_dead() {
+  local command dir out rc
+  for command in 'grep dead_one FILE' 'cp dead_one target' 'logger dead_one'; do
+    dir=$(fixture "mark-argument-${command%% *}" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "# indirect-call: dead_one bin/plain-consumer.sh:3
+$command"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "$command was accepted as dispatch, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "$command was not refused by name: $out"
+    printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "$command kept the predicate alive: $out"
+  done
+  pass "arguments to non-dispatching commands cannot manufacture call evidence"
+}
+
+test_data_mark_does_not_suppress_another_unsupported_use() {
+  local dir out rc
+  dir=$(fixture mark-data-and-unsupported 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+grep dead_one FILE
+unknown_consumer --callback dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "the refused mark did not retain exit 3, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'CNO.*dead_one' || fail "the separate unsupported use did not yield CNO: $out"
+  printf '%s' "$out" | grep -q 'unsupported call-site form for dead_one.*unknown_consumer' \
+    || fail "the separate observation gap was not named: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' && fail "the observation gap collapsed to DEAD: $out"
+  pass "a refused data mark suppresses only its exact classified source line"
+}
+
+test_assignment_site_is_refused_and_dead() {
+  local dir out rc
+  dir=$(fixture mark-assignment 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+value=dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "an assignment site was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "the assignment mark was not refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "the assignment kept the predicate alive: $out"
+  pass "an assignment cannot manufacture indirect-call evidence"
+}
+
+test_function_named_assignment_tokens_are_refused() {
+  local body dir out rc
+  for body in 'dead_one=value' 'env dead_one=value true'; do
+    dir=$(fixture "named-assignment-${body%%=*}" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "# indirect-call: dead_one bin/plain-consumer.sh:3
+$body"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "$body was accepted as a command head, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*assignment' || fail "$body lacked a named refusal: $out"
+    printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "$body kept the predicate alive: $out"
+  done
+  pass "function-named assignment tokens are never command heads"
+}
+
+test_real_command_head_with_argument_counts() {
+  local dir out rc
+  dir=$(fixture real-command-head 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+dead_one --flag'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a genuine command head was refused, exit $rc: $out"
+  pass "a genuine command head followed by an argument counts"
+}
+
+test_pass_by_name_ignores_definition_inside_quoted_data() {
+  local dir out rc
+  dir=$(fixture quoted-callee-definition 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'message="start
+dispatch() { $2; }
+end"
+# indirect-call: live_one bin/plain-consumer.sh:6
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a quoted callee definition proved dispatch, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the quoted callee definition lacked a named refusal: $out"
+  pass "a callee definition inside quoted data proves nothing"
+}
+
+test_pass_by_name_ignores_quoted_dispatch_data() {
+  local dir out rc
+  dir=$(fixture quoted-callee-dispatch 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() {
+  printf '\''%s\n'\'' '\''; "$2"'\''
+}
+# indirect-call: live_one bin/plain-consumer.sh:6
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "quoted dispatch data proved a call, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the quoted dispatch data lacked a named refusal: $out"
+  pass "quoted text inside a callee body cannot prove parameter dispatch"
+}
+
+test_pass_by_name_requires_the_exact_argument_position() {
+  local dir out rc
+  dir=$(fixture mismatched-callee-position 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() { "$1"; }
+# indirect-call: live_one bin/plain-consumer.sh:4
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a mismatched positional dispatch was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the mismatched position lacked a named refusal: $out"
+  pass "pass-by-name proof binds the exact positional argument"
+}
+
+test_pass_by_name_rejects_bound_variable_reassignment() {
+  local dir out rc
+  dir=$(fixture mutated-bound-variable 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() { local check=${2:-}; check=echo; "$check"; }
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a reassigned callback variable was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+    || fail "the reassigned callback lacked a named refusal: $out"
+  pass "pass-by-name proof rejects bound-variable reassignment"
+}
+
+test_pass_by_name_rejects_positional_mutation() {
+  local body dir out rc variant=0
+  for body in 'dispatch() { shift; "$2"; }' 'dispatch() { set -- a echo; "$2"; }' 'dispatch() { set a echo; "$2"; }'; do
+    variant=$((variant + 1))
+    dir=$(fixture "mutated-position-$variant" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "$body
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "positional mutation was accepted, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+      || fail "the positional mutation lacked a named refusal: $out"
+  done
+  pass "pass-by-name proof rejects positional-parameter mutation"
+}
+
+test_pass_by_name_rejects_unadmitted_bound_name_uses() {
+  local body dir out rc variant=0
+  for body in \
+    'dispatch() { local check=${2:-}; check+=_suffix; "$check"; }' \
+    'dispatch() { local check=${2:-}; read check; "$check"; }' \
+    'dispatch() { local check=${2:-}; printf -v check echo; "$check"; }'; do
+    variant=$((variant + 1))
+    dir=$(fixture "unadmitted-bound-name-$variant" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "$body
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "an unadmitted bound-name use was accepted, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+      || fail "the unadmitted bound-name use lacked a named refusal: $out"
+  done
+  pass "pass-by-name proof admits only non-mutating bound-name expansions"
+}
+
+test_pass_by_name_refuses_payload_executing_bodies() {
+  local body dir out rc variant=0
+  for body in \
+    'dispatch() { local check=${2:-}; eval '\''check=echo'\''; "$check"; }' \
+    'dispatch() { local check=${2:-}; source /dev/null; "$check"; }' \
+    'dispatch() { local check=${2:-}; . /dev/null; "$check"; }' \
+    'dispatch() { local check=${2:-}; MODE=x eval '\''check=echo'\''; "$check"; }' \
+    'dispatch() { local check=${2:-}; MODE=x source /dev/null; "$check"; }'; do
+    variant=$((variant + 1))
+    dir=$(fixture "payload-executing-body-$variant" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "$body
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "a payload-executing callee was accepted, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*pass-by-name relation is could-not-observe' \
+      || fail "the payload-executing callee lacked a named could-not-observe refusal: $out"
+    printf '%s' "$out" | grep -q 'ALIVE.*dead_one' \
+      && fail "the payload-executing callee promoted an unobservable relation to ALIVE: $out"
+  done
+  pass "payload-executing callees are refused as could-not-observe"
+}
+
+test_pass_by_name_accepts_unmutated_local_binding() {
+  local dir out rc
+  dir=$(fixture unmutated-local-binding 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'dispatch() { local a=$1 check=${2:-} b; "$check"; }
+# indirect-call: live_one bin/plain-consumer.sh:4
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "an unmutated local callback binding was refused, exit $rc: $out"
+  pass "pass-by-name proof accepts an unmutated multi-name local binding"
+}
+
+test_pass_by_name_accepts_production_shaped_body() {
+  local dir out rc
+  dir=$(fixture production-shaped-binding 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'helper() { return 0; }
+dispatch() {
+  local a=$1 check=${2:-} b
+  b=value
+  if helper; then
+    helper "$b"
+  fi
+  [ -n "$check" ] && ! "$check" "$b"
+}
+# indirect-call: live_one bin/plain-consumer.sh:12
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a production-shaped callback body was refused, exit $rc: $out"
+  pass "pass-by-name proof permits unrelated assignments, control flow, and helper calls"
+}
+
+test_dynamic_local_helper_mutation_is_a_declared_limit() {
+  local dir out rc
+  dir=$(fixture dynamic-local-helper-limit 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'mutate() { check=echo; }
+dispatch() { local check=${2:-}; mutate; "$check"; }
+# indirect-call: live_one bin/plain-consumer.sh:5
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "the declared dynamic-local helper limit changed, exit $rc: $out"
+  pass "dynamic-local mutation through a called helper remains outside observation"
+}
+
+test_comparison_site_is_refused_and_dead() {
+  local dir out rc
+  dir=$(fixture mark-comparison 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+[ "$value" = dead_one ]'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a comparison site was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "the comparison mark was not refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "the comparison kept the predicate alive: $out"
+  pass "a test comparison cannot manufacture indirect-call evidence"
+}
+
+test_trap_trailing_comment_site_is_refused_and_dead() {
+  local dir out rc
+  dir=$(fixture mark-trap-comment 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:3
+trap '\''other'\'' EXIT # dead_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a trap trailing comment was accepted, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*dead_one' || fail "the trap-comment mark was not refused: $out"
+  printf '%s' "$out" | grep -q 'DEAD.*dead_one' || fail "the trap comment kept the predicate alive: $out"
+  pass "a trap-line trailing comment cannot manufacture indirect-call evidence"
+}
+
+test_quoted_marker_string_is_not_discovered() {
+  local dir out rc
+  dir=$(fixture quoted-marker 'live_one() { return 0; }' 'live_one
+printf '\''%s\n'\'' '\''# indirect-call: live_one bin/consumer.sh:900'\''')
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a quoted marker string produced a refusal, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED' && fail "quoted marker data was discovered as a mark: $out"
+  pass "a quoted marker string is data and never a mark"
+}
+
+test_a_refused_mark_is_red_even_when_the_function_is_alive() {
+  local dir out rc
+  # A refused mark is a written claim the code does not support, so it is red on
+  # its own account. Letting a real call elsewhere absorb it would leave
+  # manufactured evidence in the tree with nothing reporting it.
+  dir=$(fixture refused-mark-still-red 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'live_one
+# indirect-call: live_one bin/plain-consumer.sh:900'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "a refused mark on a live function was not red, exit $rc: $out"
+  printf '%s' "$out" | grep -q 'REFUSED.*live_one' \
+    || fail "the refused mark was not reported: $out"
+  printf '%s' "$out" | grep -q 'DEAD' \
+    && fail "a function with a real call site was reported dead: $out"
+  pass "a mark that cannot be verified is red even when the function has a real call site"
+}
+
+test_mark_is_reported_in_json_with_its_site_and_reason() {
+  local dir out rc
+  # The JSON is what a downstream consumer reads, so the refusal has to be a
+  # typed record there and not only a line of prose.
+  dir=$(fixture mark-json 'dead_one() { return 0; }')
+  add_plain_consumer "$dir" '# indirect-call: dead_one bin/plain-consumer.sh:900'
+  out=$(run_check "$dir" --json 2>&1); rc=$?
+  [ "$rc" -eq 3 ] || fail "the JSON arm did not refuse, exit $rc: $out"
+  printf '%s' "$out" | jq -e '
+    .schema == "fm-dead-predicate-check.v2"
+    and ((.refused_marks | length) == 1)
+    and (.refused_marks[0].function == "dead_one")
+    and (.refused_marks[0].site == "bin/plain-consumer.sh:900")
+    and ((.refused_marks[0].reason | length) > 0)
+    and (.alive == 0)
+  ' >/dev/null \
+    || fail "the refusal was not a typed JSON record: $out"
+  pass "a refused mark is reported as a typed record naming its site and its reason"
 }
 
 test_call_in_quoted_substitution_counts() {
@@ -358,6 +826,35 @@ test_outbound_library_stays_enrolled() {
   grep -qF "$MARKER" "$ROOT/bin/fm-outbound-artifact-lib.sh" \
     || fail "bin/fm-outbound-artifact-lib.sh is no longer enrolled in the dead-predicate control"
   pass "the outbound library is enrolled, and cannot be quietly un-enrolled"
+}
+
+test_repository_has_no_dead_predicates_under_the_control() {
+  # This asserts the SAME outcome the CI invariants job asserts by running the
+  # same command with no arguments over the real repository. Accepting exit 4
+  # here as well as 0 would have made the test pass while CI went red, and would
+  # have let the repository drift into a state where no predicate resolves at
+  # all - which is what the control's own header says must never read as clean.
+  local consumer="$ROOT/bin/fm-landing-authorization.sh" out rc
+  out=$("$CHECK" --json 2>&1); rc=$?
+  [ "$rc" -ne 3 ] \
+    || fail "the real repository has an unconsulted guard: $out"
+  [ "$rc" -ne 4 ] \
+    || fail "the real repository has an unresolved predicate; that is not a pass: $out"
+  [ "$rc" -eq 0 ] \
+    || fail "the real repository produced an unexpected verdict, exit $rc: $out"
+  printf '%s' "$out" | jq -e --arg consumer "$consumer" '
+    .schema == "fm-dead-predicate-check.v2"
+    and (.alive > 0)
+    and ((.dead | length) == 0)
+    and ((.could_not_observe | length) == 0)
+    and ((.refused_marks | length) == 0)
+    and (.unchecked_consumers
+      | map(startswith($consumer + ":"))
+      | any
+      | not)
+  ' >/dev/null \
+    || fail "the repository verdict did not prove the landing-authorization consumer readable: $out"
+  pass "the real repository passes the CI control with the landing-authorization consumer readable"
 }
 
 test_control_is_wired_into_the_automatic_check_path() {
@@ -524,6 +1021,38 @@ test_quoted_awk_function_is_not_shell_syntax
 test_quoted_trap_handler_is_a_call_site
 test_quoted_first_word_outside_trap_is_not_a_call_site
 test_explicit_indirect_call_counts
+test_fabricated_mark_with_no_dispatch_is_refused_and_dead
+test_quoted_trap_dispatch_named_by_a_site_counts
+test_mark_trap_shape_inside_a_multiline_string_is_refused
+test_mark_naming_a_wrong_line_is_refused
+test_deleting_the_dispatch_while_keeping_the_mark_cannot_keep_it_alive
+test_mark_site_past_end_of_file_is_refused
+test_mark_with_trailing_fields_is_refused
+test_mark_site_in_an_unparseable_file_is_refused
+test_mark_site_that_is_the_definition_is_refused
+test_mark_site_inside_a_multiline_string_is_refused
+test_mark_site_handing_the_name_to_an_output_command_is_refused
+test_mark_naming_a_bare_pass_by_name_dispatch_counts
+test_arbitrary_command_arguments_are_refused_and_dead
+test_data_mark_does_not_suppress_another_unsupported_use
+test_assignment_site_is_refused_and_dead
+test_function_named_assignment_tokens_are_refused
+test_real_command_head_with_argument_counts
+test_pass_by_name_ignores_definition_inside_quoted_data
+test_pass_by_name_ignores_quoted_dispatch_data
+test_pass_by_name_requires_the_exact_argument_position
+test_pass_by_name_rejects_bound_variable_reassignment
+test_pass_by_name_rejects_positional_mutation
+test_pass_by_name_rejects_unadmitted_bound_name_uses
+test_pass_by_name_refuses_payload_executing_bodies
+test_pass_by_name_accepts_unmutated_local_binding
+test_pass_by_name_accepts_production_shaped_body
+test_dynamic_local_helper_mutation_is_a_declared_limit
+test_comparison_site_is_refused_and_dead
+test_trap_trailing_comment_site_is_refused_and_dead
+test_quoted_marker_string_is_not_discovered
+test_a_refused_mark_is_red_even_when_the_function_is_alive
+test_mark_is_reported_in_json_with_its_site_and_reason
 test_call_in_quoted_substitution_counts
 test_multiline_double_quoted_command_shape_is_not_a_call
 test_same_line_double_quoted_command_shape_is_not_a_call
@@ -535,4 +1064,6 @@ test_mark_must_be_adjacent_to_the_definition
 test_no_enrolled_file_is_could_not_observe
 test_outbound_library_stays_enrolled
 test_control_is_wired_into_the_automatic_check_path
+test_repository_has_no_dead_predicates_under_the_control
+
 printf '\nall fm-dead-predicate-check tests passed\n'
