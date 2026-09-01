@@ -664,6 +664,7 @@ Two firstmate-specific rules layer on top of that guidance:
 - Avoid \`--yes\`: it would silently bypass firstmate's authority check and any required captain escalation.
 
 When the pipeline reports CI green (the CI-ready return point - do not wait for it to keep monitoring in the background until merge), resolve and validate the forge-observed final PR head in this worktree first:
+   # fm-retrieval-audit: not-a-collection - gh pr view reads the one pull request named by {url}.
    \`final_head="\$(gh pr view {url} --json headRefOid --jq .headRefOid)" && [[ "\$final_head" =~ ^[0-9a-fA-F]{40}\$ ]]\`
 Only when that succeeds, publish the head-bound evidence for the commit it pushed with one call:
    \`. "$FM_ROOT/bin/fm-backend.sh"; "$FM_ROOT/bin/fm-attest.sh" write --only-if-required --policy-meta "$FM_ROOT/state/$ID.meta" --publish-repo "\$(fm_meta_get "$FM_ROOT/state/$ID.meta" publication_repo)" --publish-notes-ref refs/notes/no-mistakes --expect-head "\$final_head"\`

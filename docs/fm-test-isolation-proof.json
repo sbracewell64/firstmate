@@ -1,6 +1,6 @@
 {
   "concurrency": 4,
-  "finished_at": "2026-09-01T20:42:15Z",
+  "finished_at": "2026-09-01T22:19:36Z",
   "fm_test_run_jobs_enabled": false,
   "isolation_contract": {
     "digest": "sha256:d995377e1f35ff66cb2271ba1ce0958a671cb7e1051354e13202bd0872d4bb5e"
@@ -22,12 +22,12 @@
     "runner_jobs_max": 4
   },
   "production_sharding_enabled": false,
-  "run_id": "fm-isolation-1788294800316-799624",
+  "run_id": "fm-isolation-1788300797522-1323946",
   "schema_version": 2,
   "scripts": [
     {
       "digest": "sha256:e09af258983da922a12b206d933828aac4975dc16572c332aa24a040eaf296f6",
-      "duration_ms": 99479,
+      "duration_ms": 56987,
       "exit": 0,
       "fixtures": [
         {
@@ -47,7 +47,7 @@
     },
     {
       "digest": "sha256:e74f87206503083790182934bdc8666fb44590c68cb4db3ac31d72fec0253f02",
-      "duration_ms": 30696,
+      "duration_ms": 19515,
       "exit": 0,
       "fixtures": [
         {
@@ -70,8 +70,8 @@
       "worker": 2
     },
     {
-      "digest": "sha256:706bce2a94723c60314c2654b8393e282b08b1abf3056644383807e953ef434e",
-      "duration_ms": 3994,
+      "digest": "sha256:d83b88d980d93f7a02beed715ec228721ee903e349d7dd15f58f1183be3c76ad",
+      "duration_ms": 2557,
       "exit": 0,
       "fixtures": [
         {
@@ -90,7 +90,7 @@
     },
     {
       "digest": "sha256:2d3b856ac3b19b3b10fa776cc9df4e5c2ae4b901cdeb03439980845dd92bbed2",
-      "duration_ms": 50974,
+      "duration_ms": 29089,
       "exit": 0,
       "fixtures": [
         {
@@ -108,7 +108,7 @@
     },
     {
       "digest": "sha256:de5cacd07394e22e4285448d62abe006bdc7096cdbaf3183cf171cbee3ee8b23",
-      "duration_ms": 3007,
+      "duration_ms": 1866,
       "exit": 0,
       "fixtures": [
         {
@@ -127,7 +127,7 @@
     },
     {
       "digest": "sha256:a2ff98851bc17949c7a5f8561e1e68c9163d9c631eb291a501d7aa2ba2405633",
-      "duration_ms": 189,
+      "duration_ms": 123,
       "exit": 0,
       "fixtures": [
         {
@@ -144,7 +144,7 @@
     },
     {
       "digest": "sha256:cdd394e5e90e67fa9c4549bc527c6ba70463657a500b8ed978d9e02393a67677",
-      "duration_ms": 55098,
+      "duration_ms": 45573,
       "exit": 0,
       "fixtures": [
         {
@@ -161,7 +161,7 @@
     },
     {
       "digest": "sha256:03b27851706ef7b469289caf8ec27371880cea9e9109543da429bb50e2480675",
-      "duration_ms": 68867,
+      "duration_ms": 49128,
       "exit": 0,
       "fixtures": [
         {
@@ -179,7 +179,7 @@
     },
     {
       "digest": "sha256:c747ae60035b65430f5083ac887e1d4485b4becea68b1b020e73d891ebe9de11",
-      "duration_ms": 370,
+      "duration_ms": 248,
       "exit": 0,
       "fixtures": [
         {
@@ -196,7 +196,7 @@
     },
     {
       "digest": "sha256:ee3b9c776f8c844bd30ad78ef8fb66f90fcc033bb0d4809a690927f9e38980b4",
-      "duration_ms": 10647,
+      "duration_ms": 7839,
       "exit": 0,
       "fixtures": [
         {
@@ -213,7 +213,7 @@
     },
     {
       "digest": "sha256:6cee889411c9bf492faf27a75b4bf2deed77210591e06b6e158f950fb94ab167",
-      "duration_ms": 9380,
+      "duration_ms": 8221,
       "exit": 0,
       "fixtures": [
         {
@@ -231,7 +231,7 @@
     },
     {
       "digest": "sha256:7cb6667b8636591af9bc9a041f4b56eddbe490d23b85d4214b01e98018bda3be",
-      "duration_ms": 1766,
+      "duration_ms": 1514,
       "exit": 0,
       "fixtures": [
         {
@@ -248,7 +248,7 @@
     },
     {
       "digest": "sha256:e735e9ed1506d39ce4b374588153031c1c9bf2f0935bfeefdf92e7f1f8ee95f3",
-      "duration_ms": 151,
+      "duration_ms": 166,
       "exit": 0,
       "fixtures": [],
       "path": "tests/fm-pi-primary-types.test.sh",
@@ -260,7 +260,7 @@
     },
     {
       "digest": "sha256:ff6578bddfa53e8675528d87ff77219b91ab8da2fb022f8484b72f1f66b1c2b5",
-      "duration_ms": 56101,
+      "duration_ms": 42439,
       "exit": 0,
       "fixtures": [
         {
@@ -277,7 +277,7 @@
     },
     {
       "digest": "sha256:c618c4e83fada59483f45ca5311d213d2489887786e1c20511b972a063149948",
-      "duration_ms": 4488,
+      "duration_ms": 3364,
       "exit": 0,
       "fixtures": [
         {
@@ -294,7 +294,7 @@
     },
     {
       "digest": "sha256:d1c2cda97878035fb755cf002ee6b35e1868a0de5f31acb9dbcaf0fc66577ef5",
-      "duration_ms": 6206,
+      "duration_ms": 4560,
       "exit": 0,
       "fixtures": [
         {
@@ -313,7 +313,7 @@
     },
     {
       "digest": "sha256:4330258558495c012190128c6308226cf052c336d0ff8cb0231cfcaf7528bcf0",
-      "duration_ms": 2698,
+      "duration_ms": 2009,
       "exit": 0,
       "fixtures": [
         {
@@ -331,7 +331,7 @@
     },
     {
       "digest": "sha256:0cdbb1d55f8022c95758b97a83d95351faf9eee4391a7387fbd313d01d51bd66",
-      "duration_ms": 3556,
+      "duration_ms": 2447,
       "exit": 0,
       "fixtures": [
         {
@@ -349,7 +349,7 @@
     },
     {
       "digest": "sha256:a9293dc6b821e91d1d47f51c6b2adb532784aa3e8a3d44ba7c76b9117f696b23",
-      "duration_ms": 3534,
+      "duration_ms": 2563,
       "exit": 0,
       "fixtures": [
         {
@@ -366,7 +366,7 @@
     },
     {
       "digest": "sha256:4061d5face721164258f5aebe5e6271081e901ab6a512e0f47fab7bccf941e99",
-      "duration_ms": 419,
+      "duration_ms": 328,
       "exit": 0,
       "fixtures": [
         {
@@ -383,7 +383,7 @@
     },
     {
       "digest": "sha256:05f8cf51845fc2368ce1a6d9aefb7137ed1218736eea6550d6cabc7b9e29fa90",
-      "duration_ms": 309829,
+      "duration_ms": 229332,
       "exit": 0,
       "fixtures": [
         {
@@ -400,7 +400,7 @@
     },
     {
       "digest": "sha256:72751d894273fcde160c6783c5bde2301c9de24ff72fa63710a531c6171f6bd7",
-      "duration_ms": 1900,
+      "duration_ms": 1576,
       "exit": 0,
       "fixtures": [
         {
@@ -418,7 +418,7 @@
     },
     {
       "digest": "sha256:1c53ed596e088343fd51d10e766d0935ce6ab0415f7816809e12b258d9f16e6d",
-      "duration_ms": 170,
+      "duration_ms": 132,
       "exit": 0,
       "fixtures": [
         {
@@ -435,7 +435,7 @@
     },
     {
       "digest": "sha256:d905c60ec14a27ef553e64210f544d70875b2177983e6e6c3852110b004cf258",
-      "duration_ms": 61950,
+      "duration_ms": 45702,
       "exit": 0,
       "fixtures": [
         {
@@ -453,9 +453,9 @@
       "worker": 24
     }
   ],
-  "started_at": "2026-09-01T20:33:20Z",
+  "started_at": "2026-09-01T22:13:17Z",
   "summary": {
-    "duration_ms": 535612,
+    "duration_ms": 378958,
     "failed": 0,
     "total": 24
   }
