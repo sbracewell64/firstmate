@@ -33,7 +33,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
 8. Publish the attestation for the head it pushed:
 
    ```sh
-   final_head="$(gh pr view <pull-request-url> --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-f]{40}$ ]] && bin/fm-attest.sh write --publish-repo github.com/<your-fork-owner>/<repo> --expect-head "$final_head"
+   final_head="$(gh pr view <pull-request-url> --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-f]{40}$ ]] && bin/fm-attest.sh write --publish-repo github.com/<your-fork-owner>/<repo> --publish-notes-ref refs/notes/no-mistakes --expect-head "$final_head"
    ```
 
    Publish as soon as step 7 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.
@@ -43,7 +43,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    Make no further commit before publishing, because a review or lint fix round or any later commit advances the head beyond the commit the completed run validated.
    Do not add a follow-up commit merely to restart the failed check; validate that new head through no-mistakes first, then publish its attestation.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
-   `--publish-repo` names the repository authorized to receive the note, and it is required rather than optional.
+   `--publish-repo` and `--publish-notes-ref` bind the repository and ref authorized to receive the note, and both are required rather than optional.
    That repository must be the one holding the pull request head, because the check reads the attestation from there and nowhere else, and a remote name in your checkout is configuration rather than authority over which repository that is.
    The command carries the note through the push target of `origin`, which step 3 pointed at your fork, only after proving that remote addresses the repository you named; if it addresses another one it refuses before pushing anything.
    That remote-changing push is subject to the publication guard documented in [`docs/no-mistakes-attestation.md`](docs/no-mistakes-attestation.md), including any publication identity policy configured for the active Firstmate home.
