@@ -497,7 +497,7 @@ dispatch value dead_one'
 
 test_pass_by_name_rejects_positional_mutation() {
   local body dir out rc variant=0
-  for body in 'dispatch() { shift; "$2"; }' 'dispatch() { set -- a echo; "$2"; }'; do
+  for body in 'dispatch() { shift; "$2"; }' 'dispatch() { set -- a echo; "$2"; }' 'dispatch() { set a echo; "$2"; }'; do
     variant=$((variant + 1))
     dir=$(fixture "mutated-position-$variant" 'dead_one() { return 0; }')
     add_plain_consumer "$dir" "$body
@@ -511,6 +511,25 @@ dispatch value dead_one"
   pass "pass-by-name proof rejects positional-parameter mutation"
 }
 
+test_pass_by_name_rejects_unadmitted_bound_name_uses() {
+  local body dir out rc variant=0
+  for body in \
+    'dispatch() { local check=${2:-}; check+=_suffix; "$check"; }' \
+    'dispatch() { local check=${2:-}; read check; "$check"; }' \
+    'dispatch() { local check=${2:-}; printf -v check echo; "$check"; }'; do
+    variant=$((variant + 1))
+    dir=$(fixture "unadmitted-bound-name-$variant" 'dead_one() { return 0; }')
+    add_plain_consumer "$dir" "$body
+# indirect-call: dead_one bin/plain-consumer.sh:4
+dispatch value dead_one"
+    out=$(run_check "$dir" 2>&1); rc=$?
+    [ "$rc" -eq 3 ] || fail "an unadmitted bound-name use was accepted, exit $rc: $out"
+    printf '%s' "$out" | grep -q 'REFUSED.*no proven command-head dispatch' \
+      || fail "the unadmitted bound-name use lacked a named refusal: $out"
+  done
+  pass "pass-by-name proof admits only non-mutating bound-name expansions"
+}
+
 test_pass_by_name_accepts_unmutated_local_binding() {
   local dir out rc
   dir=$(fixture unmutated-local-binding 'live_one() { return 0; }')
@@ -520,6 +539,37 @@ dispatch value live_one'
   out=$(run_check "$dir" 2>&1); rc=$?
   [ "$rc" -eq 0 ] || fail "an unmutated local callback binding was refused, exit $rc: $out"
   pass "pass-by-name proof accepts an unmutated multi-name local binding"
+}
+
+test_pass_by_name_accepts_production_shaped_body() {
+  local dir out rc
+  dir=$(fixture production-shaped-binding 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'helper() { return 0; }
+dispatch() {
+  local a=$1 check=${2:-} b
+  b=value
+  if helper; then
+    helper "$b"
+  fi
+  [ -n "$check" ] && ! "$check" "$b"
+}
+# indirect-call: live_one bin/plain-consumer.sh:12
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "a production-shaped callback body was refused, exit $rc: $out"
+  pass "pass-by-name proof permits unrelated assignments, control flow, and helper calls"
+}
+
+test_dynamic_local_helper_mutation_is_a_declared_limit() {
+  local dir out rc
+  dir=$(fixture dynamic-local-helper-limit 'live_one() { return 0; }')
+  add_plain_consumer "$dir" 'mutate() { check=echo; }
+dispatch() { local check=${2:-}; mutate; "$check"; }
+# indirect-call: live_one bin/plain-consumer.sh:5
+dispatch value live_one'
+  out=$(run_check "$dir" 2>&1); rc=$?
+  [ "$rc" -eq 0 ] || fail "the declared dynamic-local helper limit changed, exit $rc: $out"
+  pass "dynamic-local mutation through a called helper remains outside observation"
 }
 
 test_comparison_site_is_refused_and_dead() {
@@ -914,7 +964,10 @@ test_pass_by_name_ignores_quoted_dispatch_data
 test_pass_by_name_requires_the_exact_argument_position
 test_pass_by_name_rejects_bound_variable_reassignment
 test_pass_by_name_rejects_positional_mutation
+test_pass_by_name_rejects_unadmitted_bound_name_uses
 test_pass_by_name_accepts_unmutated_local_binding
+test_pass_by_name_accepts_production_shaped_body
+test_dynamic_local_helper_mutation_is_a_declared_limit
 test_comparison_site_is_refused_and_dead
 test_trap_trailing_comment_site_is_refused_and_dead
 test_quoted_marker_string_is_not_discovered

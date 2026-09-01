@@ -56,10 +56,17 @@
 #   - BARE DISPATCH. The function begins a command after indentation and optional
 #     shell control words, begins a command substitution, or begins a canonical
 #     one-line function body. A bare argument counts only when the named callee's
-#     own canonical definition binds that argument to an unmutated command-head
-#     parameter, directly or through one local or plain assignment.
+#     own canonical definition dispatches that positional parameter directly, or
+#     binds it exactly once in a local or plain assignment and uses the bound name
+#     only through expansions before dispatching it at a command head. The whole
+#     body must contain no `shift` or `set` command.
 #     Assignments, test expressions, output commands, and other arguments are data.
 #   - HANDLER DISPATCH. The function is the quoted handler operand of `trap`.
+#
+# Bash locals are dynamically scoped. This body-local proof does not follow calls
+# into helpers, so a helper that rebinds its caller's local is could-not-observe
+# territory even when that helper is defined in the same file. A verified mark
+# establishes only that the callee body itself does not rebind the dispatch name.
 #
 # Everything else is REFUSED and named: a mark with no site, an unparseable or
 # unknown site file, a line past end of file, a line that never mentions the
@@ -448,23 +455,37 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
     END {
       boundary = "(^|[;&|{}])[;&|]?[[:space:]]*(![[:space:]]*)?"
       term = "([[:space:];|&(){}<>]|$)"
-      positional_mutation = "(^|[;{}[:space:]])(shift([;{}[:space:]]|$)|set[[:space:]]+--([;{}[:space:]]|$))"
+      positional_mutation = "(^|[;&|{}[:space:]])(shift|set)([[:space:];|&(){}<>]|$)"
+      if (text ~ positional_mutation) exit 1
       direct = boundary "\\$" n term
-      if (match(text, direct)) {
-        before = substr(text, 1, RSTART - 1)
-        if (before !~ positional_mutation) exit 0
-      }
+      if (match(text, direct)) exit 0
       if (var == "") exit 1
       binding = "(^|[;{}[:space:]])" var "=(\\$" n "([;{}[:space:]]|$)|\\$\\{" n ":-[^}]*\\})"
-      if (!match(text, binding)) exit 1
-      binding_end = RSTART + RLENGTH - 1
+      rest = text
+      binding_count = 0
+      binding_start = 0
+      binding_length = 0
+      offset = 0
+      while (match(rest, binding)) {
+        binding_count++
+        if (binding_count > 1) exit 1
+        binding_start = offset + RSTART
+        binding_length = RLENGTH
+        offset += RSTART + RLENGTH - 1
+        rest = substr(rest, RSTART + RLENGTH)
+      }
+      if (binding_count != 1) exit 1
+      binding_end = binding_start + binding_length - 1
       after_binding = substr(text, binding_end + 1)
       dispatch = boundary "\\$" var term
       if (!match(after_binding, dispatch)) exit 1
-      between = substr(after_binding, 1, RSTART - 1)
-      before_dispatch = substr(text, 1, binding_end + RSTART - 1)
-      variable_mutation = "(^|[;{}[:space:]])" var "[[:space:]]*="
-      if (between ~ variable_mutation || before_dispatch ~ positional_mutation) exit 1
+      admitted = substr(text, 1, binding_start - 1) substr(text, binding_end + 1)
+      braced_expansion = "\\$\\{" var "[^}]*\\}"
+      simple_expansion = "\\$" var "([^A-Za-z0-9_]|$)"
+      gsub(braced_expansion, "", admitted)
+      gsub(simple_expansion, "", admitted)
+      bare_name = "(^|[^A-Za-z0-9_])" var "([^A-Za-z0-9_]|$)"
+      if (admitted ~ bare_name) exit 1
       exit 0
     }
   '
