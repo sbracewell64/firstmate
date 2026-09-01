@@ -860,9 +860,10 @@ SH
 # authorization or a TYPED refusal - never a second authorization, never a
 # silent nothing, and never zero winners.
 #
-# A late racer legitimately prints the SAME id: the mint is idempotent on
-# identity, so arriving after the winner released the claim returns the first
-# authorization rather than granting a second. That is why this counts DISTINCT
+# "Exactly one winner" can mean one exit-0 process or one authorization. The
+# second is the law here because the mint is idempotent on identity: a racer
+# arriving after the winner released the claim legitimately returns the SAME id
+# rather than granting a second authorization. That is why this counts DISTINCT
 # ids and stored records rather than counting successes.
 #
 # HONEST ABOUT WHAT IT IS. Unlike 31 and 32, this case does NOT go red on the
