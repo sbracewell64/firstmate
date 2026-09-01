@@ -247,6 +247,9 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
         "$id: the pipeline contract does not bind the publication repository"
       assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
         "$id: the pipeline contract does not bind the publication notes ref"
+      # shellcheck disable=SC2016 # This assertion must match the literal runtime forge lookup.
+      assert_grep '--expect-head "$(gh pr view {url} --json headRefOid --jq .headRefOid)"' "$brief" \
+        "$id: the pipeline contract does not bind publication to the forge-observed final PR head"
       grep -q 'Run it unconditionally' "$brief" \
         || fail "$id: the publication step is left to the worker to judge"
       assert_grep 'Published or nothing-to-publish, append `done:' "$brief" \
@@ -265,28 +268,35 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
 }
 
 test_no_mistakes_brief_quotes_policy_metadata_paths() {
-  local home id brief root_with_space command args
+  local home id brief root_with_space command args expected_head
   home="$TMP_ROOT/attest path home"
   root_with_space="$TMP_ROOT/firstmate root"
   id='brief-attest-space'
   mkdir -p "$root_with_space/bin" "$root_with_space/state" "$home/data"
   write_registry "$home"
   args="$TMP_ROOT/attest-space-args"
+  expected_head=0123456789abcdef0123456789abcdef01234567
   # shellcheck disable=SC2016 # This fixture must preserve literal runtime expansions.
   printf '%s\n' '#!/usr/bin/env bash' \
     'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
   printf '%s\n' 'fm_meta_get() { printf '\''github.com/example/repo\n'\''; }' \
     > "$root_with_space/bin/fm-backend.sh"
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf '\''%s\n'\'' "$FM_TEST_HEAD"' > "$root_with_space/bin/gh"
   chmod +x "$root_with_space/bin/fm-attest.sh"
+  chmod +x "$root_with_space/bin/gh"
   FM_HOME="$home" FM_ROOT_OVERRIDE="$root_with_space" "$ROOT/bin/fm-brief.sh" \
     "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \
     || fail "brief with a spaced Firstmate root did not scaffold"
   brief="$home/data/$id/brief.md"
   # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
   command=$(sed -n '/fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
-  FM_TEST_ARGS="$args" bash -c "$command" || fail "the generated publication command did not execute"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" || fail "the generated publication command did not execute"
   assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
     "the generated command split the policy metadata path"
+  assert_contains "$(cat "$args")" "<$expected_head>" \
+    "the generated command did not pass the forge-observed final PR head as one argument"
   pass "fm-brief.sh: policy metadata paths round-trip as one argument"
 }
 
