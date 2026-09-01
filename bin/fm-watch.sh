@@ -648,6 +648,16 @@ FM_CHECK_OUTPUT=
 FM_CHECK_RESULT=
 FM_CHECK_SIGNAL_PENDING=
 
+fm_active_check_is_running_job() {
+  local job_pid
+  while IFS= read -r job_pid; do
+    [ "$job_pid" != "$FM_ACTIVE_CHECK_PID" ] || return 0
+  done <<EOF
+$(jobs -pr)
+EOF
+  return 1
+}
+
 fm_check_output_cleanup() {
   [ -z "$FM_CHECK_OUTPUT" ] || rm -f -- "$FM_CHECK_OUTPUT"
   FM_CHECK_OUTPUT=
@@ -697,7 +707,7 @@ run_check_capture() {
   # reused by an unrelated process whose group must not be mistaken for the
   # check's; refuse only while Bash still owns that pid as a running job.
   if [ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ]; then
-    if jobs -pr | grep -Fxq "$FM_ACTIVE_CHECK_PID"; then
+    if fm_active_check_is_running_job; then
       fm_active_check_stop || true
       fm_check_output_cleanup
       return 1
