@@ -1560,7 +1560,7 @@ add_ruled_correlation() {  # <dir> <request-id>
 }
 
 test_a_foreign_class_record_does_not_block_the_landing_enumeration() {
-  local dir id planted matching out rc
+  local dir id planted custody matching out rc
   dir=$(new_case foreign-class) || fail "foreign-class: fixture failed"
   add_ruled_correlation "$dir" fm-ob-bbbbbb222222 \
     || fail "foreign-class: second correlation record failed"
@@ -1579,6 +1579,13 @@ test_a_foreign_class_record_does_not_block_the_landing_enumeration() {
     || fail "foreign-class: planted record has no authorization id: $planted"
   [ "$(jq -r '.request_id' "$dir/home/data/landing-authorizations/$planted.json")" = null ] \
     || fail "foreign-class: the planted record does not carry the null request_id under test"
+
+  # Custody is the fourth class in this shared store. Exercise it separately so
+  # the class gate stays closed over the complete writer vocabulary.
+  custody=$(plant_effect_record "$dir" custody granted fm-ob-custody123456) \
+    || fail "foreign-class: the custody record could not be planted"
+  fm_auth_id_shape "$custody" \
+    || fail "foreign-class: custody record has no authorization id: $custody"
 
   # RED 1: minting a landing for a DIFFERENT ruling must still reach a verdict.
   # Before the class gate this bailed could-not-observe, wedging every governed
@@ -1622,6 +1629,7 @@ test_a_foreign_class_record_does_not_block_the_landing_enumeration() {
   out=$(run_auth "$dir" list 2>&1); rc=$?
   expect_code 0 "$rc" "foreign-class: a foreign-class record must not wedge the listing: $out"
   assert_contains "$out" "$planted" "foreign-class: the foreign-class record was not listed"
+  assert_contains "$out" "$custody" "foreign-class: the custody record was not listed"
 
   # Addressing it with the landing commands still refuses: unwedging the
   # enumeration must not make a publication authority spendable as a landing.
