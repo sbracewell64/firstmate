@@ -3104,7 +3104,7 @@ test_completed_check_pgid_mismatch_is_not_signalled() {
     run_check_process() { printf "%s\n" complete; }
     ps() {
       local i=0
-      while builtin kill -0 "$FM_ACTIVE_CHECK_PID" 2>/dev/null; do
+      while jobs -pr | grep -Fxq "$FM_ACTIVE_CHECK_PID"; do
         [ "$i" -lt 500 ] || return 1
         sleep 0.01
         i=$((i + 1))
