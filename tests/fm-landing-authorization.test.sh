@@ -876,15 +876,17 @@ test_racing_mints_grant_one_authorization_and_type_every_other_outcome() {
   local dir i out first records distinct untyped ready
   local -a pids=()
   dir=$(new_case racing-mints) || fail "racing-mints: fixture failed"
+  mkdir "$dir/mint-ready" || fail "racing-mints: readiness barrier could not be created"
   for i in 1 2 3 4 5 6; do
-    ( : > "$dir/mint-$i.ready"
+    ( : > "$dir/mint-ready/$i"
       while [ ! -e "$dir/mints-go" ]; do sleep 0.01; done
       mint_plan "$dir" fm-ob-abcdef123456 ) >"$dir/mint-$i.out" 2>&1 &
     pids+=("$!")
     fm_test_reap "$!"
   done
   for _ in $(seq 1 300); do
-    ready=$(find "$dir" -maxdepth 1 -name 'mint-*.ready' | wc -l)
+    ready=0
+    for i in "$dir"/mint-ready/*; do [ -e "$i" ] && ready=$((ready + 1)); done
     [ "$ready" -eq 6 ] && break
     sleep 0.01
   done
