@@ -372,6 +372,7 @@ fm_commit_identity_custody_admit() {
       if [ -z "$other_identity" ]; then
         # shellcheck disable=SC2034 # contract values read by sourcing callers
         FM_CI_CUSTODY_UNOBSERVED=1
+        # shellcheck disable=SC2034 # contract value read by sourcing callers
         FM_CI_CUSTODY_UNOBSERVED_REASON=identity
         FM_CI_CUSTODY_OTHER_ID=$other_id
         FM_CI_CUSTODY_OTHER_VENUE=$other_venue
@@ -381,7 +382,9 @@ fm_commit_identity_custody_admit() {
       [ "$other_identity" != "$identity" ] || continue
       # shellcheck disable=SC2034 # contract values read by sourcing callers
       FM_CI_CUSTODY_OTHER_ID=$other_id
+      # shellcheck disable=SC2034 # contract value read by sourcing callers
       FM_CI_CUSTODY_OTHER_IDENTITY=$other_identity
+      # shellcheck disable=SC2034 # contract value read by sourcing callers
       FM_CI_CUSTODY_OTHER_VENUE=$other_venue
       fm_commit_identity_custody_release
       return 1
