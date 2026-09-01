@@ -1308,7 +1308,7 @@ cmd_inspect() {  # <auth-id>
 
 cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
   local id=$1; shift
-  local claim_rc
+  local claim_rc reclaim_rc
   local observed='' evidence=''
   local rec state initial_state rc now rid head reservation holder
   while [ $# -gt 0 ]; do
@@ -1358,7 +1358,10 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
         unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
           "the spender process group for $id could not be observed as gone" ;;
     esac
-    claim_reclaim_gone "$id" \
+    claim_reclaim_gone "$id"; reclaim_rc=$?
+    [ "$reclaim_rc" -ne 2 ] || unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+      "the old claim on $id was removed, but its replacement could not be observed safely: $FM_AUTH_CLAIM_DEFECT"
+    [ "$reclaim_rc" -eq 0 ] \
       || unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
         "the spender process group for $id could not be reclaimed after it was observed gone"
   else
@@ -1367,7 +1370,15 @@ cmd_reconcile() {  # <auth-id> --observed applied|not-applied --evidence <ref>
       unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
         "the claim on $id was neither taken nor ruled out, so nothing about its spender was established: $FM_AUTH_CLAIM_DEFECT"
     fi
-    if [ "$claim_rc" -ne 0 ] && ! claim_reclaim_gone "$id"; then
+    reclaim_rc=0
+    if [ "$claim_rc" -ne 0 ]; then
+      claim_reclaim_gone "$id"; reclaim_rc=$?
+    fi
+    if [ "$reclaim_rc" -eq 2 ]; then
+      unobserved "$FM_AUTH_TOKEN_CLAIM_UNOBSERVED" \
+        "the old claim on $id was removed, but its replacement could not be observed safely: $FM_AUTH_CLAIM_DEFECT"
+    fi
+    if [ "$claim_rc" -ne 0 ] && [ "$reclaim_rc" -ne 0 ]; then
       if [ "$CLAIM_OWNER_STATE" = live ]; then
         unobserved "$FM_AUTH_TOKEN_INDETERMINATE" \
           "the spender process group for $id still exists"
