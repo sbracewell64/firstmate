@@ -1001,8 +1001,6 @@ CONFIG_INHERIT_LOCK_HELD=0
 SLOT_HOLDER_PID=
 WT_POOL_LOCK=
 WT_POOL_LOCK_HELD=0
-COMMIT_CUSTODY_LOCK=
-COMMIT_CUSTODY_LOCK_HELD=0
 COMMIT_CUSTODY_CLAIM_PUBLISHED=0
 COMMIT_CUSTODY_PREVIOUS_META=
 COMMIT_CUSTODY_PREVIOUS_META_PRESENT=0
@@ -1045,10 +1043,7 @@ spawn_abort_cleanup() {
     fi
     COMMIT_CUSTODY_CLAIM_PUBLISHED=0
   fi
-  if [ "$COMMIT_CUSTODY_LOCK_HELD" = 1 ]; then
-    COMMIT_CUSTODY_LOCK_HELD=0
-    fm_lock_release "$COMMIT_CUSTODY_LOCK" || true
-  fi
+  fm_commit_identity_custody_release
   if [ "$HERDR_PROJECTION_ABORT_CLEANUP" = 1 ] \
      && [ "$HERDR_PRESENTATION_ORDER_LOCK_HELD" != 1 ]; then
     if ! spawn_herdr_presentation_order_lock_acquire "${HERDR_PROJECTION_ABORT_SESSION:-}"; then
@@ -2413,93 +2408,6 @@ spawn_commit_identity_validate() {  # -> 0 validated or ungoverned, 1 refused
 # launch until teardown removes it, which is precisely the interval during which
 # a lane may still reach its commit-producing stages. No second registry is
 # introduced, and nothing here outlives the records it reads.
-spawn_commit_identity_custody() {  # -> 0 clear, 1 contended
-  local meta other_id other_project other_project_real other_gate other_gate_real
-  local this_gate_real other_identity other_venue resolve_rc
-  [ -n "${FM_CI_STATE_GATE:-}" ] || return 0
-  [ -d "$STATE" ] || return 0
-  this_gate_real=$(cd "$FM_CI_STATE_GATE" 2>/dev/null && pwd -P) || this_gate_real=$FM_CI_STATE_GATE
-  for meta in "$STATE"/*.meta; do
-    [ -f "$meta" ] || continue
-    other_id=${meta##*/}
-    other_id=${other_id%.meta}
-    [ "$other_id" != "$ID" ] || continue
-    other_project=$(fm_meta_get "$meta" project)
-    other_gate=$(fm_meta_get "$meta" commit_identity_gate)
-    other_identity=$(fm_meta_get "$meta" commit_identity)
-    other_venue=$(fm_meta_get "$meta" contribution_venue)
-    if [ -n "$other_gate" ]; then
-      other_gate_real=$(cd "$other_gate" 2>/dev/null && pwd -P) || other_gate_real=$other_gate
-      [ "$other_gate_real" = "$this_gate_real" ] || continue
-    else
-      other_project_real=$(cd "$other_project" 2>/dev/null && pwd -P) || other_project_real=$other_project
-      [ "$other_project_real" = "$PROJ_ABS_REAL" ] || continue
-    fi
-    if [ -z "$other_gate" ] && [ -z "$other_identity" ]; then
-      resolve_rc=0
-      fm_commit_identity_resolve "$CONFIG" "$other_venue" || resolve_rc=$?
-      if [ "$resolve_rc" -ne 0 ]; then
-        echo "error: $ID is not launching yet: task $other_id is a live lane for this project, but its governed identity could not be established from recorded venue ${other_venue:-<unrecorded>}, so whether rebinding the shared validation repository would change that lane's commit identity is unknown." >&2
-        echo "  project:        $PROJ_ABS" >&2
-        echo "  repository:     $FM_CI_STATE_GATE" >&2
-        echo "  held by:        $other_id, venue ${other_venue:-<unrecorded>}, identity <could-not-observe>" >&2
-        echo "  this task:      $ID, venue ${CONTRIB_VENUE:-<unrecorded>}, identity $FM_CI_STATE_AUTHOR" >&2
-        echo "  This is a WAIT, not a failure: nothing was allocated, no attempt was spent, and no task record was written." >&2
-        return 1
-      fi
-      other_gate=$FM_CI_STATE_GATE
-      other_identity=$FM_COMMIT_IDENTITY_AUTHOR
-    fi
-    if [ -z "$other_identity" ]; then
-      echo "error: $ID is not launching yet: task $other_id holds the shared validation repository, but its identity could not be established from its live record." >&2
-      return 1
-    fi
-    [ "$other_identity" != "$FM_CI_STATE_AUTHOR" ] || continue
-    echo "error: $ID is not launching yet: task $other_id already holds the shared validation repository for this project under a different governed identity, and that repository carries ONE identity for both lanes, so running them together would let one commit under the other's identity." >&2
-    echo "  project:        $PROJ_ABS" >&2
-    echo "  repository:     $FM_CI_STATE_GATE" >&2
-    echo "  held by:        $other_id, venue ${other_venue:-<unrecorded>}, identity $other_identity" >&2
-    echo "  this task:      $ID, venue ${CONTRIB_VENUE:-<unrecorded>}, identity $FM_CI_STATE_AUTHOR" >&2
-    echo "  This is a WAIT, not a failure: nothing was allocated, no attempt was spent, and no task record was written. The dispatch becomes admissible again as soon as $other_id is released, and firstmate's ordinary re-evaluation of queued work will make it." >&2
-    return 1
-  done
-  return 0
-}
-
-spawn_commit_identity_custody_test_barrier() {
-  local barrier=${FM_SPAWN_CUSTODY_BARRIER:-} attempt=0 arrivals
-  [ "${FM_TEST_IDENTITY_CONTRACT:-}" = 1 ] || return 0
-  [ -n "$barrier" ] || return 0
-  mkdir -p "$barrier" || return 1
-  : > "$barrier/$ID.arrived" || return 1
-  while [ "$attempt" -lt 20 ]; do
-    arrivals=$(find "$barrier" -maxdepth 1 -type f -name '*.arrived' 2>/dev/null | wc -l | tr -d ' ')
-    [ "$arrivals" -lt 2 ] || return 0
-    sleep 0.1
-    attempt=$((attempt + 1))
-  done
-  return 0
-}
-
-spawn_commit_identity_custody_lock_acquire() {
-  local attempt=0 max
-  COMMIT_CUSTODY_LOCK=$(fm_pool_state_path "$FM_CI_STATE_GATE" commit-custody .lock) || {
-    echo "error: cannot resolve the shared repository custody lock for $FM_CI_STATE_GATE" >&2
-    return 1
-  }
-  max=${FM_SPAWN_COMMIT_CUSTODY_LOCK_POLLS:-1200}
-  while [ "$attempt" -lt "$max" ]; do
-    if fm_lock_try_acquire "$COMMIT_CUSTODY_LOCK"; then
-      COMMIT_CUSTODY_LOCK_HELD=1
-      return 0
-    fi
-    sleep 0.1
-    attempt=$((attempt + 1))
-  done
-  echo "error: another admission holds the shared repository custody lock for $FM_CI_STATE_GATE; refusing to proceed without serialized custody" >&2
-  return 1
-}
-
 spawn_commit_identity_claim_publish() {
   mkdir -p "$STATE" || return 1
   if [ -f "$STATE/$ID.meta" ]; then
@@ -2513,12 +2421,6 @@ spawn_commit_identity_claim_publish() {
     echo "commit_identity_gate=$FM_CI_STATE_GATE"
   } > "$STATE/$ID.meta" || return 1
   COMMIT_CUSTODY_CLAIM_PUBLISHED=1
-}
-
-spawn_commit_identity_custody_lock_release() {
-  [ "$COMMIT_CUSTODY_LOCK_HELD" = 1 ] || return 0
-  COMMIT_CUSTODY_LOCK_HELD=0
-  fm_lock_release "$COMMIT_CUSTODY_LOCK" || true
 }
 
 spawn_commit_identity_install() {  # <task-worktree> [<gate-repo>]
@@ -2541,6 +2443,23 @@ spawn_commit_identity_install() {  # <task-worktree> [<gate-repo>]
   return 1
 }
 
+spawn_commit_identity_install_for_custody() {
+  spawn_commit_identity_install "$PROJ_ABS" "$FM_CI_STATE_GATE"
+}
+
+spawn_commit_identity_custody_refusal() {
+  if [ "$FM_CI_CUSTODY_UNOBSERVED" = 1 ]; then
+    echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID is a live lane for this project, but its governed identity could not be established from recorded venue ${FM_CI_CUSTODY_OTHER_VENUE:-<unrecorded>}, so whether rebinding the shared validation repository would change that lane's commit identity is unknown." >&2
+  else
+    echo "error: $ID is not launching yet: task $FM_CI_CUSTODY_OTHER_ID already holds the shared validation repository for this project under a different governed identity, and that repository carries ONE identity for both lanes, so running them together would let one commit under the other's identity." >&2
+  fi
+  echo "  project:        $PROJ_ABS" >&2
+  echo "  repository:     $FM_CI_STATE_GATE" >&2
+  echo "  held by:        $FM_CI_CUSTODY_OTHER_ID, venue ${FM_CI_CUSTODY_OTHER_VENUE:-<unrecorded>}, identity ${FM_CI_CUSTODY_OTHER_IDENTITY:-<could-not-observe>}" >&2
+  echo "  this task:      $ID, venue ${CONTRIB_VENUE:-<unrecorded>}, identity $FM_CI_STATE_AUTHOR" >&2
+  echo "  This is a WAIT, not a failure: nothing was allocated, no attempt was spent, and no task record was written. The dispatch becomes admissible again as soon as $FM_CI_CUSTODY_OTHER_ID is released, and firstmate's ordinary re-evaluation of queued work will make it." >&2
+}
+
 # A secondmate provisioning spawn creates a HOME rather than project commits, so
 # it has no production commit path of its own to bind.
 if [ "$KIND" != secondmate ]; then
@@ -2550,12 +2469,12 @@ if [ "$KIND" != secondmate ]; then
   fi
   if [ -e "$CONFIG/publication-identity.json" ]; then
     spawn_commit_identity_validate || exit 1
-    spawn_commit_identity_custody_lock_acquire || exit 1
-    spawn_commit_identity_custody || exit 1
-    spawn_commit_identity_custody_test_barrier || exit 1
-    spawn_commit_identity_install "$PROJ_ABS" "${FM_CI_STATE_GATE:-}" || exit 1
-    spawn_commit_identity_claim_publish || exit 1
-    spawn_commit_identity_custody_lock_release
+    if ! fm_commit_identity_custody_admit "$FM_CI_STATE_GATE" "$STATE" "$ID" "$PROJ_ABS_REAL" \
+      "$CONTRIB_VENUE" "$FM_CI_STATE_AUTHOR" "$CONFIG" \
+      'spawn_commit_identity_install_for_custody' 'spawn_commit_identity_claim_publish'; then
+      [ -z "$FM_CI_CUSTODY_OTHER_ID" ] || spawn_commit_identity_custody_refusal
+      exit 1
+    fi
   else
     echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
   fi

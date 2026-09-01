@@ -187,11 +187,10 @@ Removing the custody check yields:
 not ok - a contended shared gate must refuse the second lane
 ```
 
-The concurrent-admission control uses a bounded barrier after the custody read and before claim publication.
-Against the unlocked mutation, both contenders reached that barrier and both launches succeeded, producing `not ok - exactly one concurrent unlike-identity admission must succeed: a=0 b=0 arrivals=2`.
-Against the repaired path, one contender reached the barrier, published while holding the lock, and the other refused after its custody read, so exactly one launch succeeded with one arrival.
-The path-identity mutation compared the recorded project spelling before the shared repository and admitted a differently governed lane when the holder recorded symlink aliases for the same physical project and gate.
-The repaired control resolves both gate spellings physically and refuses that lane.
+The concurrent-admission control calls the custody owner function directly with its explicit bounded barrier parameter after the custody read and before claim publication; production calls that function without a barrier, and every other custody control continues to exercise real launches.
+Against the raw-path lock-key mutation, both path-aliased contenders reached that barrier and both claims were published, producing `not ok - the custody owner must admit exactly one unlike identity: a=0 b=0 arrivals=2`.
+Against the repaired owner, one contender reached the barrier and published while holding the canonical gate lock, then the other refused after its custody read, producing one admitted claim and one arrival.
+The launch-path alias control concurrently gives two differently governed lanes physical and symlinked spellings of one project and gate, and requires exactly one admission.
 
 ## What this does NOT establish
 

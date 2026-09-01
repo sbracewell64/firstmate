@@ -149,6 +149,7 @@ gate_commit_identity() {  # <root> [env-assignments...]
 # control that relied on it would be measuring the prose rather than the gate.
 
 SPAWN="${FM_TEST_SPAWN_OVERRIDE:-$ROOT/bin/fm-spawn.sh}"
+CUSTODY_LIB_ROOT="${FM_TEST_CUSTODY_LIB_ROOT:-$ROOT}"
 LAUNCH_VENUE='example.invalid/sbracewell64/firstmate'
 LAUNCH_CASE_REC=
 
@@ -228,11 +229,11 @@ run_launch() {  # <case-dir> <home> <wt> <fakebin> <spawn-args...>
     FM_ROOT_OVERRIDE="$ROOT" FM_HOME="$home" \
     FM_STATE_OVERRIDE="$home/state" FM_DATA_OVERRIDE="$home/data" \
     FM_PROJECTS_OVERRIDE="$home/projects" FM_CONFIG_OVERRIDE="$home/config" \
-    FM_TEST_NM_STATUS="$case_dir/nm-status" \
+    FM_TEST_NM_STATUS="${FM_TEST_NM_STATUS_OVERRIDE:-$case_dir/nm-status}" \
     FM_TEST_ENDPOINT_MARKER="$case_dir/endpoint-allocated" \
     FM_TEST_SLOT_MARKER="$case_dir/slot-allocated" \
-    FM_TEST_IDENTITY_CONTRACT="${FM_TEST_CUSTODY_BARRIER:+1}" \
-    FM_SPAWN_CUSTODY_BARRIER="${FM_TEST_CUSTODY_BARRIER:-${FM_SPAWN_CUSTODY_BARRIER:-}}" \
+    FM_TEST_IDENTITY_CONTRACT="${FM_TEST_IDENTITY_CONTRACT:-}" \
+    FM_SPAWN_CUSTODY_BARRIER="${FM_SPAWN_CUSTODY_BARRIER:-}" \
     FM_SPAWN_NO_GUARD=1 FM_BACKEND=tmux FM_FAKE_PANE_PATH="$wt" \
     PATH="$fakebin:$PATH" \
     timeout "$FM_CI_LAUNCH_TIMEOUT" "$SPAWN" "$@" 2>&1
@@ -740,7 +741,7 @@ EOF
 test_a_contended_shared_gate_refuses_the_second_lane_until_released() {
   local rec home proj first_wt fakebin case_dir second_wt upstream_identity fork_identity
   local policy upstream_target fork_target default_branch out rc identity shared_before shared_after gate
-  local race_a_pid race_b_pid race_a_rc race_b_rc race_arrivals barrier gate_alias project_alias
+  local race_a_pid race_b_pid race_a_rc race_b_rc gate_alias project_alias status_a status_b
   upstream_identity='Upstream Lane <upstream@example.invalid>'
   fork_identity='Fork Lane <fork@example.invalid>'
   policy=$(jq -n --arg a "$fork_identity" --arg b "$upstream_identity" '{generation:"g",venues:{
@@ -799,17 +800,6 @@ EOF
   assert_absent "$home/state/custody-b.meta" "a refused lane must publish no task record"
   assert_absent "$home/state/custody-b.attempt" "a refused lane must spend no attempt"
 
-  project_alias="$case_dir/project-alias"
-  gate_alias="$case_dir/gate-alias.git"
-  ln -s "$proj" "$project_alias" || fail "project alias setup failed"
-  ln -s "$gate" "$gate_alias" || fail "gate alias setup failed"
-  sed -e "s|^project=.*|project=$project_alias|" -e "s|^commit_identity_gate=.*|commit_identity_gate=$gate_alias|" \
-    "$home/state/custody-a.meta" > "$home/state/custody-a.meta.alias" || fail "aliased custody setup failed"
-  mv "$home/state/custody-a.meta.alias" "$home/state/custody-a.meta" || fail "aliased custody publication failed"
-  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" custody-b "$proj" claude \
-    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target"); rc=$?
-  [ "$rc" -ne 0 ] || fail "path aliases for one shared gate must still contend: $out"
-
   # The holder's own pipeline path still commits as the holder.
   git --git-dir="$gate" worktree add -q "$case_dir/gatewt" main || fail "gate worktree failed"
   identity=$(HOME="$case_dir/home_env" commit_identity "$case_dir/gatewt" "pipeline stage commit") || fail "gate commit failed"
@@ -833,29 +823,79 @@ EOF
   [ "$identity" = "$fork_identity|$fork_identity" ] \
     || fail "the released gate must be re-established to the new holder rather than reusing the stale binding, got: $identity"
 
-  # Hold neither claim, then start unlike identities together. The per-gate
-  # admission lock must make the first published claim visible to the other.
   rm -f "$home/state/custody-b.meta" || fail "race release failed"
+  project_alias="$case_dir/project-alias"
+  gate_alias="$case_dir/gate-alias.git"
+  status_a="$case_dir/nm-status-a"
+  status_b="$case_dir/nm-status-b"
+  ln -s "$proj" "$project_alias" || fail "project alias setup failed"
+  ln -s "$gate" "$gate_alias" || fail "gate alias setup failed"
+  printf '  repo:  %s\n  gate:  %s\n' "$proj" "$gate" > "$status_a" || fail "physical status setup failed"
+  printf '  repo:  %s\n  gate:  %s\n' "$project_alias" "$gate_alias" > "$status_b" || fail "alias status setup failed"
   make_launch_brief "$home" race-a no-mistakes || fail "race first brief failed"
   printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/race-a/brief.md" || fail "race first base contract failed"
   make_launch_brief "$home" race-b no-mistakes || fail "race second brief failed"
   printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$fork_target" >> "$home/data/race-b/brief.md" || fail "race second base contract failed"
-  barrier="$case_dir/custody-barrier"
-  FM_TEST_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$first_wt" "$fakebin" race-a "$proj" claude \
+  FM_TEST_NM_STATUS_OVERRIDE="$status_a" run_launch "$case_dir" "$home" "$first_wt" "$fakebin" race-a "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target" > "$case_dir/race-a.out" &
   race_a_pid=$!
   fm_test_reap "$race_a_pid"
-  FM_TEST_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$second_wt" "$fakebin" race-b "$proj" claude \
+  FM_TEST_NM_STATUS_OVERRIDE="$status_b" run_launch "$case_dir" "$home" "$second_wt" "$fakebin" race-b "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target" > "$case_dir/race-b.out" &
   race_b_pid=$!
   fm_test_reap "$race_b_pid"
   if wait "$race_a_pid"; then race_a_rc=0; else race_a_rc=$?; fi
   if wait "$race_b_pid"; then race_b_rc=0; else race_b_rc=$?; fi
-  race_arrivals=$(find "$barrier" -maxdepth 1 -type f -name '*.arrived' 2>/dev/null | wc -l | tr -d ' ')
   [ $((race_a_rc == 0 ? 1 : 0)) -ne $((race_b_rc == 0 ? 1 : 0)) ] \
-    || fail "exactly one concurrent unlike-identity admission must succeed: a=$race_a_rc b=$race_b_rc arrivals=$race_arrivals"
-  [ "$race_arrivals" -eq 1 ] || fail "serialized custody must admit one contender past the read before publication: arrivals=$race_arrivals"
+    || fail "exactly one concurrent path-aliased admission must succeed: a=$race_a_rc b=$race_b_rc"
   pass "a contended shared gate refuses the second lane naming both venues, and releases to it intact"
+}
+
+test_the_custody_owner_serializes_the_read_and_claim_interval() {
+  local root gate gate_alias state barrier project a_pid b_pid a_rc b_rc arrivals
+  root="$TMP_ROOT/custody-owner-race"
+  gate="$root/gate.git"
+  gate_alias="$root/gate-alias.git"
+  state="$root/state"
+  barrier="$root/barrier"
+  project="$root/project"
+  mkdir -p "$gate" "$state" "$project" || fail "custody owner fixture setup failed"
+  ln -s "$gate" "$gate_alias" || fail "custody owner alias setup failed"
+  bash -c '
+    set -u
+    root=$1 gate=$2 state=$3 id=$4 project=$5 identity=$6 barrier=$7
+    . "$root/bin/fm-wake-lib.sh"
+    . "$root/bin/fm-pool-lib.sh"
+    . "$root/bin/fm-commit-identity-lib.sh"
+    fm_meta_get() { sed -n "s/^$2=//p" "$1" | tail -1; }
+    install_claim() { return 0; }
+    publish_claim() { printf "project=%s\ncontribution_venue=venue/%s\ncommit_identity=%s\ncommit_identity_gate=%s\n" "$project" "$id" "$identity" "$gate" > "$state/$id.meta"; }
+    trap fm_commit_identity_custody_release EXIT
+    fm_commit_identity_custody_admit "$gate" "$state" "$id" "$project" "venue/$id" "$identity" "$state" install_claim publish_claim "$barrier"
+  ' _ "$CUSTODY_LIB_ROOT" "$gate" "$state" race-owner-a "$project" 'Owner A <a@example.invalid>' "$barrier" &
+  a_pid=$!
+  fm_test_reap "$a_pid"
+  bash -c '
+    set -u
+    root=$1 gate=$2 state=$3 id=$4 project=$5 identity=$6 barrier=$7
+    . "$root/bin/fm-wake-lib.sh"
+    . "$root/bin/fm-pool-lib.sh"
+    . "$root/bin/fm-commit-identity-lib.sh"
+    fm_meta_get() { sed -n "s/^$2=//p" "$1" | tail -1; }
+    install_claim() { return 0; }
+    publish_claim() { printf "project=%s\ncontribution_venue=venue/%s\ncommit_identity=%s\ncommit_identity_gate=%s\n" "$project" "$id" "$identity" "$gate" > "$state/$id.meta"; }
+    trap fm_commit_identity_custody_release EXIT
+    fm_commit_identity_custody_admit "$gate" "$state" "$id" "$project" "venue/$id" "$identity" "$state" install_claim publish_claim "$barrier"
+  ' _ "$CUSTODY_LIB_ROOT" "$gate_alias" "$state" race-owner-b "$project" 'Owner B <b@example.invalid>' "$barrier" &
+  b_pid=$!
+  fm_test_reap "$b_pid"
+  if wait "$a_pid"; then a_rc=0; else a_rc=$?; fi
+  if wait "$b_pid"; then b_rc=0; else b_rc=$?; fi
+  arrivals=$(find "$barrier" -maxdepth 1 -type f -name '*.arrived' 2>/dev/null | wc -l | tr -d ' ')
+  [ $((a_rc == 0 ? 1 : 0)) -ne $((b_rc == 0 ? 1 : 0)) ] \
+    || fail "the custody owner must admit exactly one unlike identity: a=$a_rc b=$b_rc arrivals=$arrivals"
+  [ "$arrivals" -eq 1 ] || fail "the serialized owner must publish before the second custody read: arrivals=$arrivals"
+  pass "the custody owner serializes one physical gate across path aliases"
 }
 
 test_production_cannot_activate_the_custody_barrier() {
@@ -868,7 +908,7 @@ EOF
   case_dir="$TMP_ROOT/launch-barrier-guard"
   barrier="$case_dir/production-barrier"
   make_launch_brief "$home" barrier-guard no-mistakes || fail "brief fixture failed"
-  out=$(FM_SPAWN_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$wt" "$fakebin" barrier-guard "$proj" claude \
+  out=$(FM_TEST_IDENTITY_CONTRACT=1 FM_SPAWN_CUSTODY_BARRIER="$barrier" run_launch "$case_dir" "$home" "$wt" "$fakebin" barrier-guard "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
   assert_not_contains "$out" "is not launching" "the ordinary production launch must remain admissible"
   assert_absent "$barrier/barrier-guard.arrived" "production input must not activate the test barrier"
@@ -996,6 +1036,7 @@ FM_CONTROLS=(
   test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation
   test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses
   test_a_contended_shared_gate_refuses_the_second_lane_until_released
+  test_the_custody_owner_serializes_the_read_and_claim_interval
   test_production_cannot_activate_the_custody_barrier
   test_same_identity_lanes_on_one_project_are_not_contended
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step

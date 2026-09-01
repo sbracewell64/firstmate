@@ -291,6 +291,101 @@ fm_commit_identity_resolve() {  # <config-dir> <venue>
   return 0
 }
 
+FM_CI_CUSTODY_LOCK=
+FM_CI_CUSTODY_LOCK_HELD=0
+FM_CI_CUSTODY_OTHER_ID=
+FM_CI_CUSTODY_OTHER_IDENTITY=
+FM_CI_CUSTODY_OTHER_VENUE=
+FM_CI_CUSTODY_UNOBSERVED=0
+
+fm_commit_identity_custody_release() {
+  [ "$FM_CI_CUSTODY_LOCK_HELD" = 1 ] || return 0
+  FM_CI_CUSTODY_LOCK_HELD=0
+  fm_lock_release "$FM_CI_CUSTODY_LOCK" || true
+}
+
+fm_commit_identity_custody_admit() {
+  local gate=${1:?} state=${2:?} id=${3:?} project_real=${4:?}
+  local venue=${5:-} identity=${6:?} config=${7:?} install_callback=${8:?}
+  local publish_callback=${9:?} barrier=${10:-} gate_real attempt=0 max
+  local meta other_id other_project other_project_real other_gate other_gate_real
+  local other_identity other_venue resolve_rc arrivals
+  FM_CI_CUSTODY_OTHER_ID=
+  FM_CI_CUSTODY_OTHER_IDENTITY=
+  FM_CI_CUSTODY_OTHER_VENUE=
+  FM_CI_CUSTODY_UNOBSERVED=0
+  gate_real=$(cd "$gate" 2>/dev/null && pwd -P) || gate_real=$gate
+  FM_CI_CUSTODY_LOCK=$(fm_pool_state_path "$gate_real" commit-custody .lock) || return 1
+  max=${FM_SPAWN_COMMIT_CUSTODY_LOCK_POLLS:-1200}
+  while [ "$attempt" -lt "$max" ]; do
+    if fm_lock_try_acquire "$FM_CI_CUSTODY_LOCK"; then
+      FM_CI_CUSTODY_LOCK_HELD=1
+      break
+    fi
+    sleep 0.1
+    attempt=$((attempt + 1))
+  done
+  [ "$FM_CI_CUSTODY_LOCK_HELD" = 1 ] || return 1
+  if [ -d "$state" ]; then
+    for meta in "$state"/*.meta; do
+      [ -f "$meta" ] || continue
+      other_id=${meta##*/}
+      other_id=${other_id%.meta}
+      [ "$other_id" != "$id" ] || continue
+      other_project=$(fm_meta_get "$meta" project)
+      other_gate=$(fm_meta_get "$meta" commit_identity_gate)
+      other_identity=$(fm_meta_get "$meta" commit_identity)
+      other_venue=$(fm_meta_get "$meta" contribution_venue)
+      if [ -n "$other_gate" ]; then
+        other_gate_real=$(cd "$other_gate" 2>/dev/null && pwd -P) || other_gate_real=$other_gate
+        [ "$other_gate_real" = "$gate_real" ] || continue
+      else
+        other_project_real=$(cd "$other_project" 2>/dev/null && pwd -P) || other_project_real=$other_project
+        [ "$other_project_real" = "$project_real" ] || continue
+      fi
+      if [ -z "$other_gate" ] && [ -z "$other_identity" ]; then
+        resolve_rc=0
+        fm_commit_identity_resolve "$config" "$other_venue" || resolve_rc=$?
+        if [ "$resolve_rc" -ne 0 ]; then
+          FM_CI_CUSTODY_UNOBSERVED=1
+          FM_CI_CUSTODY_OTHER_ID=$other_id
+          FM_CI_CUSTODY_OTHER_VENUE=$other_venue
+          fm_commit_identity_custody_release
+          return 1
+        fi
+        other_identity=$FM_COMMIT_IDENTITY_AUTHOR
+      fi
+      if [ -z "$other_identity" ]; then
+        FM_CI_CUSTODY_UNOBSERVED=1
+        FM_CI_CUSTODY_OTHER_ID=$other_id
+        FM_CI_CUSTODY_OTHER_VENUE=$other_venue
+        fm_commit_identity_custody_release
+        return 1
+      fi
+      [ "$other_identity" != "$identity" ] || continue
+      FM_CI_CUSTODY_OTHER_ID=$other_id
+      FM_CI_CUSTODY_OTHER_IDENTITY=$other_identity
+      FM_CI_CUSTODY_OTHER_VENUE=$other_venue
+      fm_commit_identity_custody_release
+      return 1
+    done
+  fi
+  if [ -n "$barrier" ]; then
+    mkdir -p "$barrier" || { fm_commit_identity_custody_release; return 1; }
+    : > "$barrier/$id.arrived" || { fm_commit_identity_custody_release; return 1; }
+    attempt=0
+    while [ "$attempt" -lt 20 ]; do
+      arrivals=$(find "$barrier" -maxdepth 1 -type f -name '*.arrived' 2>/dev/null | wc -l | tr -d ' ')
+      [ "$arrivals" -lt 2 ] || break
+      sleep 0.1
+      attempt=$((attempt + 1))
+    done
+  fi
+  "$install_callback" || { fm_commit_identity_custody_release; return 1; }
+  "$publish_callback" || { fm_commit_identity_custody_release; return 1; }
+  fm_commit_identity_custody_release
+}
+
 # --- ambient channels that outrank the binding -------------------------------
 #
 # Named, not counted: the caller has to repair a specific variable, and a bare
