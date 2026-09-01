@@ -3097,18 +3097,24 @@ test_afk_paused_changed_pane_hands_off_plain_stale() {
 test_completed_check_pgid_mismatch_is_not_signalled() {
   local dir=$TMP_ROOT/completed-check-pgid-mismatch out rc
   mkdir -p "$dir/state"
-  set +e
+  rc=0
   out=$(FM_STATE_OVERRIDE="$dir/state" WATCH="$WATCH" KILL_LOG="$dir/kill.log" bash -c '
     set -u
     . "$WATCH"
     run_check_process() { printf "%s\n" complete; }
-    ps() { sleep 0.1; printf "%s\n" 999999; }
+    ps() {
+      local i=0
+      while builtin kill -0 "$FM_ACTIVE_CHECK_PID" 2>/dev/null; do
+        [ "$i" -lt 500 ] || return 1
+        sleep 0.01
+        i=$((i + 1))
+      done
+      printf "%s\n" 999999
+    }
     kill() { printf "%s\n" "$*" >> "$KILL_LOG"; command kill "$@"; }
     run_check_capture ignored
     printf "result=%s\n" "$FM_CHECK_RESULT"
-  ' 2>&1)
-  rc=$?
-  set -e
+  ' 2>&1) || rc=$?
   [ "$rc" -eq 0 ] || fail "completed check pgid mismatch failed: $out"
   [ "$out" = "result=complete" ] || fail "completed check result was lost: $out"
   [ ! -s "$dir/kill.log" ] || fail "completed check pgid mismatch signalled a recycled group: $(cat "$dir/kill.log")"

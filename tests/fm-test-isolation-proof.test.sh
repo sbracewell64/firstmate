@@ -72,6 +72,7 @@ test_extra_hermetic_candidates_present() {
     tests/fm-backend-herdr.test.sh \
     tests/fm-send-strict.test.sh \
     tests/fm-spawn-batch.test.sh \
+    tests/fm-landing-authority.test.sh \
     tests/fm-pr-merge.test.sh \
     tests/fm-review-diff.test.sh \
     tests/fm-x-mode.test.sh; do
