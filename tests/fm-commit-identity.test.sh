@@ -373,6 +373,7 @@ test_the_env_channel_preserves_distinct_author_and_committer() {
   root=$(make_case env-distinct) || fail "fixture setup failed"
   write_policy "$root" "$author" "$committer" || fail "policy setup failed"
   out=$(run_cmd "$root" env) || fail "distinct identities must resolve for the environment channel: $out"
+  # shellcheck disable=SC2016 # positional args inside bash -c, not expansions
   identity=$(env HOME="$root/home" bash -c \
     'eval "$1"; cd "$2" && git commit -q --allow-empty -m distinct && git log -1 --format="%an <%ae>|%cn <%ce>"' \
     _ "$out" "$root/gatewt") || fail "commit under the distinct environment failed"
