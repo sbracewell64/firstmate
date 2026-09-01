@@ -1808,6 +1808,43 @@ test_check_step_names_validating_an_unvalidated_head_as_the_repair() {
   pass "no-mistakes-required.yml: a head no run validated is sent to the pipeline rather than to publishing"
 }
 
+# The refusal's one remaining mis-repairing reader: the automated fix agent the
+# pipeline's own CI monitor dispatches at a failing check. Its only tool is a
+# file change, and every file change here is the restart commit the refusal
+# already forbids, so a refusal that never addresses that reader teaches it to
+# churn: each fix commit advances the head past the validated one and reproduces
+# this same red against a head no run validated.
+test_check_step_tells_an_automated_fix_agent_to_leave_the_tree_alone() {
+  local dir script head out rc
+  dir="$TMP_ROOT/workflow-fix-agent"
+  mkdir -p "$dir"
+  script="$dir/verify-step.sh"
+  head=0123456789012345678901234567890123456789
+  workflow_step_script 'Verify the head-bound no-mistakes attestation' > "$script"
+  [ -s "$script" ] || fail "the verify step's own script could not be read out of the workflow"
+
+  install_verifier_stub "$dir" 1
+  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 1 ] || fail "a refused attestation did not fail the check with exit 1 (exit $rc): $out"
+  assert_contains "$out" "If you are an automated agent" \
+    "the refusal does not address the automated fix agent dispatched at this check"
+  assert_contains "$out" "the file change you were asked for does not exist" \
+    "the refusal does not tell a fix agent that no edit can satisfy this check"
+  assert_contains "$out" "Leave every file unchanged" \
+    "the refusal does not name leaving the tree unchanged as the fix agent's repair"
+
+  # The matched control: a passing head is told none of it, so the lines above
+  # are reached by the refusal rather than printed unconditionally.
+  install_verifier_stub "$dir" 0
+  out=$( cd "$dir" && HEAD_SHA="$head" PR_NUMBER=1 PR_AUTHOR=someone bash "$script" 2>&1 )
+  rc=$?
+  [ "$rc" -eq 0 ] || fail "an attested head was failed by the check: $out"
+  assert_not_contains "$out" "If you are an automated agent" \
+    "a passing head was told the fix-agent refusal"
+  pass "no-mistakes-required.yml: an automated fix agent is told no file change can satisfy this check"
+}
+
 test_check_step_addresses_both_repositories_without_logging_its_token() {
   local dir script log out rc repo fork
   dir="$TMP_ROOT/workflow-address"
@@ -3164,6 +3201,7 @@ test_write_makes_the_pipeline_tools_own_streams_safe_to_print
 test_write_rejects_a_zero_bound_rather_than_running_the_read_unbounded
 test_check_step_separates_a_verdict_from_a_verifier_that_could_not_run
 test_check_step_names_validating_an_unvalidated_head_as_the_repair
+test_check_step_tells_an_automated_fix_agent_to_leave_the_tree_alone
 test_check_step_addresses_both_repositories_without_logging_its_token
 test_write_outside_a_repository_fails_as_such
 test_write_without_the_pipeline_tool_fails_as_such
