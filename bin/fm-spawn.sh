@@ -2370,13 +2370,59 @@ spawn_commit_identity_validate() {  # -> 0 validated or ungoverned, 1 refused
   return 1
 }
 
-spawn_commit_identity_install() {  # <task-worktree>
-  local checkout=${1:?} binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0
+# --- shared gate custody, the one channel a sibling lane can redefine --------
+#
+# The validation pipeline's gate repository is SHARED per project and holds ONE
+# identity pair. Two lanes of the same project with different governed venues
+# therefore contend for it: lane A binds it to identity A, lane B later binds the
+# same repository to identity B, and lane A's pipeline stages then commit as B.
+# Nothing about lane A was wrong; its channel was redefined underneath it.
+#
+# This is closed by refusing the conflicting interval rather than by serializing
+# work: a lane is admitted only when no OTHER live lane holds that same gate
+# under a different identity. The cone is exactly the contended resource - lanes
+# on other projects, and lanes on this project resolving the SAME identity, are
+# untouched and still run in parallel.
+#
+# The live set is the task records this home already keeps: a record exists from
+# launch until teardown removes it, which is precisely the interval during which
+# a lane may still reach its commit-producing stages. No second registry is
+# introduced, and nothing here outlives the records it reads.
+spawn_commit_identity_custody() {  # -> 0 clear, 1 contended
+  local meta other_id other_gate other_identity other_venue
+  [ -n "${FM_CI_STATE_GATE:-}" ] || return 0
+  [ -d "$STATE" ] || return 0
+  for meta in "$STATE"/*.meta; do
+    [ -f "$meta" ] || continue
+    other_id=${meta##*/}
+    other_id=${other_id%.meta}
+    [ "$other_id" != "$ID" ] || continue
+    other_gate=$(fm_meta_get "$meta" commit_identity_gate)
+    [ "$other_gate" = "$FM_CI_STATE_GATE" ] || continue
+    other_identity=$(fm_meta_get "$meta" commit_identity)
+    [ -n "$other_identity" ] || continue
+    [ "$other_identity" != "$FM_CI_STATE_AUTHOR" ] || continue
+    other_venue=$(fm_meta_get "$meta" contribution_venue)
+    echo "error: $ID is not launching yet: task $other_id already holds the shared validation repository for this project under a different governed identity, and that repository carries ONE identity for both lanes, so running them together would let one commit under the other's identity." >&2
+    echo "  project:        $PROJ_ABS" >&2
+    echo "  repository:     $FM_CI_STATE_GATE" >&2
+    echo "  held by:        $other_id, venue ${other_venue:-<unrecorded>}, identity $other_identity" >&2
+    echo "  this task:      $ID, venue ${CONTRIB_VENUE:-<unrecorded>}, identity $FM_CI_STATE_AUTHOR" >&2
+    echo "  This is a WAIT, not a failure: nothing was allocated, no attempt was spent, and no task record was written. The dispatch becomes admissible again as soon as $other_id is released, and firstmate's ordinary re-evaluation of queued work will make it." >&2
+    return 1
+  done
+  return 0
+}
+
+spawn_commit_identity_install() {  # <task-worktree> [<gate-repo>]
+  local checkout=${1:?} gate=${2:-} binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0
+  local -a gate_args=()
+  [ -z "$gate" ] || gate_args=(--gate "$gate")
   out=$(FM_CI_STATE_VALIDATED="$FM_CI_STATE_VALIDATED" \
     FM_CI_STATE_AUTHOR="$FM_CI_STATE_AUTHOR" FM_CI_STATE_COMMITTER="$FM_CI_STATE_COMMITTER" \
     FM_CI_STATE_AUTHOR_NAME="$FM_CI_STATE_AUTHOR_NAME" FM_CI_STATE_AUTHOR_EMAIL="$FM_CI_STATE_AUTHOR_EMAIL" \
     FM_CI_STATE_COMMITTER_NAME="$FM_CI_STATE_COMMITTER_NAME" FM_CI_STATE_COMMITTER_EMAIL="$FM_CI_STATE_COMMITTER_EMAIL" \
-    "$binder" install-worktree "$checkout" 2>&1) || rc=$?
+    "$binder" install-worktree "${gate_args[@]}" "$checkout" 2>&1) || rc=$?
   [ "$rc" -eq 0 ] && return 0
   if [ "$rc" -eq 3 ]; then
     echo "error: $ID is not launching: the worktree identity channel holds one pair and cannot carry both the validated author '$FM_CI_STATE_AUTHOR' and committer '$FM_CI_STATE_COMMITTER'." >&2
@@ -2397,7 +2443,8 @@ if [ "$KIND" != secondmate ]; then
   fi
   if [ -e "$CONFIG/publication-identity.json" ]; then
     spawn_commit_identity_validate || exit 1
-    spawn_commit_identity_install "$PROJ_ABS" || exit 1
+    spawn_commit_identity_custody || exit 1
+    spawn_commit_identity_install "$PROJ_ABS" "${FM_CI_STATE_GATE:-}" || exit 1
   else
     echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
   fi
@@ -2987,7 +3034,7 @@ fi
 
 if [ "$KIND" != secondmate ]; then
   if [ -e "$CONFIG/publication-identity.json" ]; then
-    spawn_commit_identity_install "$WT" || exit 1
+    spawn_commit_identity_install "$WT" "${FM_CI_STATE_GATE:-}" || exit 1
   fi
 fi
 
@@ -3411,6 +3458,13 @@ fi
   [ -z "$QUALIFICATION_STATE" ] || echo "qualification_observed=$QUALIFICATION_STATE"
   [ -z "$ESCALATION_POLICY" ] || echo "escalation_policy=$ESCALATION_POLICY"
   [ -z "$TOOLING_GAP_ITEM" ] || echo "tooling_gap_item=$TOOLING_GAP_ITEM"
+  # The identity this lane was admitted under and the shared gate repository it
+  # holds. Recorded together because the pair IS the custody claim: the next
+  # launch reads them to decide whether admitting it would let one of the two
+  # lanes commit under the other's identity. An absent pair means the lane
+  # predates this record or launched ungoverned, and is never read as agreement.
+  [ -z "${FM_CI_STATE_AUTHOR:-}" ] || echo "commit_identity=$FM_CI_STATE_AUTHOR"
+  [ -z "${FM_CI_STATE_GATE:-}" ] || echo "commit_identity_gate=$FM_CI_STATE_GATE"
   echo "tasktmp=$TASK_TMP"
   echo "model=${MODEL:-default}"
   echo "effort=${EFFORT:-default}"

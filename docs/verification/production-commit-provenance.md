@@ -155,6 +155,38 @@ Both sides now parse local time as local and convert through an unambiguous epoc
 
 That defect mattered beyond its own correctness: an unidentifiable daemon is could-not-observe, and once the binding became a launch precondition, could-not-observe refuses. Shipped as it was, it would have blocked every dispatch in this fleet.
 
+## The shared validation repository, and the option that was rejected
+
+That repository is shared per project and holds ONE identity pair, so two same-project lanes governed by different venues cannot both be served by it.
+Lane A binds it, lane B later binds it to a different identity, and lane A's pipeline stages then commit as B - with nothing wrong in either lane.
+
+Two remedies were available and they produce different fleets.
+
+**Rejected: re-establish at each lane's own boundary.**
+Admit both lanes and have each re-assert the repository immediately before its own pipeline can commit.
+It preserves parallelism, and it is what the ruling's own wording contemplates.
+It was rejected because the last moment this fleet owns is the launch and the worker's pre-pipeline step: a sibling that rebinds while a run is already MID-FLIGHT still lands a wrong immutable object, and that window cannot be closed without the pipeline's cooperation.
+A remedy that narrows a hole is not the same as one that closes it, and the difference is invisible in a green test run.
+
+**Adopted: refuse the contended interval.**
+A lane is admitted only when no other live lane holds that same repository under a different identity.
+The refusal is a WAIT and not a failure - nothing is allocated, no attempt is spent, no task record is written, and the dispatch becomes admissible again as soon as the holder is released, through the ordinary re-evaluation of queued work.
+It reads only the task records this home already keeps, so no second registry exists and nothing outlives those records.
+
+The cost is real and bounded: two same-project lanes with different governed venues no longer run at once.
+That is exactly the cone the ruling permits constraining, and `test_same_identity_lanes_on_one_project_are_not_contended` holds the boundary by requiring that same-identity lanes on one project still run together.
+
+Ordering matters as much as the check.
+Validation deliberately does NOT write to that repository; the write happens after custody is settled.
+An earlier revision of this work validated and bound in one step, so a lane that was about to be refused had already rebound the repository - the control caught it, reporting the holder's pipeline path carrying the refused lane's identity.
+
+Both new controls were driven red before their fix.
+Removing the custody check yields:
+
+```
+not ok - a contended shared gate must refuse the second lane
+```
+
 ## What this does NOT establish
 
 The honest scope is narrower than "the fleet cannot publish a contaminated commit", and the difference matters.
@@ -168,7 +200,8 @@ The honest scope is narrower than "the fleet cannot publish a contaminated commi
   A daemon started with an identity variable is refused rather than corrected, because this fleet may not restart a daemon serving other lanes.
 - The gate repository is discovered by parsing `no-mistakes status` output, measured against v1.40.3.
   A future release that stops printing a `gate:` line degrades to could-not-observe and refuses, rather than silently binding nothing.
+- Custody covers lanes this fleet ADMITS. A rebinding performed outside that path - by hand, or by another home sharing the same repository - is not prevented, and a lane whose run is already in flight when that happens still commits under the changed identity.
 - The upstream tool exposes no commit-identity configuration of its own (its whole `commit` config key carries only `fix_message`), which is why the binding is installed into the repository it commits in rather than declared to it.
   That gap is filed upstream as [kunchenguid/no-mistakes#924](https://github.com/kunchenguid/no-mistakes/issues/924); this record does not claim it is closed.
-- The pipeline gate repository remains shared per project, so concurrent lanes for differently governed venues can contend for its single repository-local identity.
+- The shared validation repository is contended rather than partitioned. The section above records how that contention is closed, what it costs, and the alternative that was rejected.
   The fleet does not own that repository's worktrees and does not claim to isolate this upstream channel.

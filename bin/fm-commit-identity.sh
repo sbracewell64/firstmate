@@ -23,6 +23,7 @@
 #                                              install and verify the binding
 #   fm-commit-identity.sh validate [--require-gate] [--venue <host/owner/repo>]
 #                                      [--emit-state] [<checkout>]
+#   fm-commit-identity.sh install-worktree [--gate <gate-repo>] [<worktree>]
 #   fm-commit-identity.sh install-worktree <checkout>
 #   fm-commit-identity.sh check [<checkout>]   read-only verdict, installs nothing
 #   fm-commit-identity.sh env   [<checkout>]   print exports for eval, nothing else
@@ -105,6 +106,8 @@ case "$VERB" in
 esac
 
 REQUIRE_GATE=0
+GATE_ARG=
+GATE_FAILED=
 EMIT_STATE=0
 VENUE_OVERRIDE=
 VENUE_OVERRIDE_SET=0
@@ -112,6 +115,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --require-gate) REQUIRE_GATE=1; shift ;;
     --emit-state) EMIT_STATE=1; shift ;;
+    --gate) GATE_ARG=${2:-}; shift 2 ;;
     --venue)
       [ $# -ge 2 ] || { refuse USAGE "--venue requires a value"; exit 64; }
       VENUE_OVERRIDE=$2
@@ -140,9 +144,29 @@ if [ "$VERB" = install-worktree ]; then
   FM_COMMIT_IDENTITY_COMMITTER_NAME=${FM_CI_STATE_COMMITTER_NAME:-}
   FM_COMMIT_IDENTITY_COMMITTER_EMAIL=${FM_CI_STATE_COMMITTER_EMAIL:-}
   fm_commit_identity_install_worktree "$CHECKOUT" || rc=$?
+  # RE-ESTABLISH AND RE-OBSERVE THE SHARED GATE HERE, not only at validation.
+  # The gate repository holds ONE identity pair for the whole project, so
+  # between this lane's validation and the moment it becomes commit-capable that
+  # pair may have been rewritten. Re-asserting it at the later boundary means
+  # the identity a pipeline stage will resolve is the one this lane was
+  # authorized for, and a gate that cannot be re-established refuses here rather
+  # than letting the lane become commit-capable under someone else's identity.
+  if [ "$rc" -eq 0 ] && [ -n "$GATE_ARG" ]; then
+    fm_commit_identity_install_repo "$GATE_ARG" || rc=$?
+    [ "$rc" -eq 0 ] || GATE_FAILED=$GATE_ARG
+  fi
   if [ "$rc" -eq 0 ]; then
     say "checkout : bound - $FM_COMMIT_IDENTITY_AUTHOR"
+    [ -z "$GATE_ARG" ] || say "gate     : reasserted - $FM_COMMIT_IDENTITY_AUTHOR"
     exit 0
+  fi
+  if [ -n "${GATE_FAILED:-}" ]; then
+    case $rc in
+      1) refuse "$FM_CI_TOKEN_INSTALL_FAILED" "the validated identity could not be re-established in the shared gate repository $GATE_FAILED before this lane became commit-capable" ;;
+      2) refuse "$FM_CI_TOKEN_UNVERIFIED" "the validated identity was re-established in the shared gate repository $GATE_FAILED but git did not report it back, so what a pipeline stage would commit as is unknown" ;;
+      *) refuse "$FM_CI_TOKEN_REPO_DISTINCT" "the shared gate repository holds one identity pair and cannot carry both declared roles" ;;
+    esac
+    exit 1
   fi
   case $rc in
     1) refuse "$FM_CI_TOKEN_INSTALL_FAILED" "the validated identity could not be written into $CHECKOUT" ;;
@@ -244,7 +268,15 @@ elif [ -z "$GATE" ]; then
   [ "$STATUS" -eq 1 ] || STATUS=2
 else
   say "gate:      $GATE"
-  if [ "$VERB" = bind ] || [ "$VERB" = validate ]; then
+  # VALIDATE DOES NOT WRITE HERE, deliberately. The gate repository is shared per
+  # project and holds one identity pair, so writing it during validation would
+  # rebind a repository another lane may still be relying on - before anything
+  # has decided whether this lane may take it. A lane that is then refused would
+  # already have taken it, which is the exact defect this ordering closes.
+  # The write happens in install, after custody is settled.
+  if [ "$VERB" = validate ]; then
+    :
+  elif [ "$VERB" = bind ]; then
     bind_channel "gate     " "$GATE" || STATUS=1
   else
     report_channel "gate     " "$GATE"
@@ -291,6 +323,10 @@ case $STATUS in
       printf 'FM_CI_STATE_AUTHOR_EMAIL=%q\n' "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL"
       printf 'FM_CI_STATE_COMMITTER_NAME=%q\n' "$FM_COMMIT_IDENTITY_COMMITTER_NAME"
       printf 'FM_CI_STATE_COMMITTER_EMAIL=%q\n' "$FM_COMMIT_IDENTITY_COMMITTER_EMAIL"
+      # The gate repository this lane's pipeline stages will commit in. Emitted
+      # because it is SHARED per project and holds one identity pair, so the
+      # launch owner has to know which lanes are contending for it.
+      printf 'FM_CI_STATE_GATE=%q\n' "${GATE:-}"
     fi
     ;;
   1) say "verdict:   REFUSED - do not create production commits until the channel above is repaired" ;;

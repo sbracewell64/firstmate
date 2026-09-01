@@ -720,50 +720,122 @@ EOF
   pass "a retargeted launch binds its contribution venue and unresolved refuses"
 }
 
-test_two_same_project_launches_keep_worktree_identities_isolated() {
-  local rec home proj first_wt fakebin case_dir second_wt upstream_identity fork_identity policy upstream_target fork_target default_branch out identity shared_before shared_after
+# THE SHARED-GATE CUSTODY CONTROL.
+#
+# The validation pipeline's gate repository is shared per project and holds ONE
+# identity pair, so two same-project lanes governed by different venues cannot
+# both be served by it. Before this control the second lane was admitted, rebound
+# that repository to its own identity, and the first lane's pipeline stages then
+# committed as the second - a wrong immutable object with nothing wrong in
+# either lane.
+#
+# This drives the real launch path for both lanes and asserts the whole shape:
+# the second is refused, the refusal names who holds it and both venues, nothing
+# is allocated for it, the first lane's own gate commit still carries its own
+# identity, and - once the holder is released - the second lane is admitted and
+# binds ITS identity, which is what proves the binding follows authority rather
+# than a value baked in somewhere.
+test_a_contended_shared_gate_refuses_the_second_lane_until_released() {
+  local rec home proj first_wt fakebin case_dir second_wt upstream_identity fork_identity
+  local policy upstream_target fork_target default_branch out rc identity shared_before shared_after gate
   upstream_identity='Upstream Lane <upstream@example.invalid>'
   fork_identity='Fork Lane <fork@example.invalid>'
   policy=$(jq -n --arg a "$fork_identity" --arg b "$upstream_identity" '{generation:"g",venues:{
     "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$a}},
     "example.invalid/upstream/project":{identities:{author:$b,committer:$b}}
   }}') || fail "policy setup failed"
-  make_launch_case concurrent-a "$policy" || fail "launch fixture setup failed"
+  make_launch_case custody "$policy" || fail "launch fixture setup failed"
   rec=$LAUNCH_CASE_REC
   IFS='|' read -r home proj first_wt fakebin <<EOF
 $rec
 EOF
-  case_dir="$TMP_ROOT/launch-concurrent-a"
+  case_dir="$TMP_ROOT/launch-custody"
+  gate="$case_dir/nm/repos/gate.git"
   second_wt="$case_dir/wt-second"
   upstream_target=$(git -C "$proj" rev-parse HEAD) || fail "upstream target setup failed"
   git -C "$proj" remote add upstream git@example.invalid:upstream/project.git || fail "upstream setup failed"
   git -C "$proj" update-ref refs/remotes/upstream/main "$upstream_target" || fail "upstream ref setup failed"
   git -C "$proj" symbolic-ref refs/remotes/upstream/HEAD refs/remotes/upstream/main || fail "upstream head setup failed"
-  git -C "$proj" worktree add -q -b concurrent-second "$second_wt" || fail "second worktree setup failed"
+  git -C "$proj" worktree add -q -b custody-second "$second_wt" || fail "second worktree setup failed"
   git -C "$second_wt" -c user.name=Seed -c user.email=seed@example.invalid commit -q --allow-empty -m fork-only || fail "fork target setup failed"
   fork_target=$(git -C "$second_wt" rev-parse HEAD) || fail "fork target read failed"
   default_branch=$(git -C "$proj" symbolic-ref --quiet --short HEAD) || fail "default branch setup failed"
   git -C "$proj" update-ref "refs/remotes/origin/$default_branch" "$fork_target" || fail "fork ref setup failed"
   shared_before=$(git -C "$proj" config --local --get-regexp '^user\.' 2>/dev/null || true)
 
-  make_launch_brief "$home" concurrent-a no-mistakes || fail "first brief failed"
-  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/concurrent-a/brief.md" || fail "first base contract failed"
-  out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" concurrent-a "$proj" claude \
+  # Lane A, governed by the upstream venue, is admitted and takes the gate.
+  make_launch_brief "$home" custody-a no-mistakes || fail "first brief failed"
+  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/custody-a/brief.md" || fail "first base contract failed"
+  out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" custody-a "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target") || true
-  assert_not_contains "$out" "is not launching" "the upstream launch must be admitted"
-  make_launch_brief "$home" concurrent-b no-mistakes || fail "second brief failed"
-  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$fork_target" >> "$home/data/concurrent-b/brief.md" || fail "second base contract failed"
-  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" concurrent-b "$proj" claude \
-    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target") || true
-  assert_not_contains "$out" "is not launching" "the fork launch must be admitted"
+  assert_not_contains "$out" "is not launching" "the first lane must be admitted"
+  assert_grep "commit_identity=$upstream_identity" "$home/state/custody-a.meta" "the admitted lane must record the identity it holds the gate under"
 
-  identity=$(HOME="$case_dir/home_env" commit_identity "$first_wt" "upstream lane commit") || fail "upstream lane commit failed"
-  [ "$identity" = "$upstream_identity|$upstream_identity" ] || fail "the fork launch overwrote the upstream worktree: $identity"
-  identity=$(HOME="$case_dir/home_env" commit_identity "$second_wt" "fork lane commit") || fail "fork lane commit failed"
-  [ "$identity" = "$fork_identity|$fork_identity" ] || fail "the fork worktree lost its binding: $identity"
+  # Lane B, same project, governed by the fork venue, contends for that one pair.
+  make_launch_brief "$home" custody-b no-mistakes || fail "second brief failed"
+  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$fork_target" >> "$home/data/custody-b/brief.md" || fail "second base contract failed"
+  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" custody-b "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a contended shared gate must refuse the second lane: $out"
+  assert_contains "$out" "custody-a" "the refusal must name the lane holding the repository"
+  assert_contains "$out" "$upstream_identity" "the refusal must name the holder's identity"
+  assert_contains "$out" "$fork_identity" "the refusal must name this lane's own identity"
+  assert_contains "$out" "example.invalid/upstream/project" "the refusal must name the holder's venue"
+  assert_contains "$out" "example.invalid/sbracewell64/firstmate" "the refusal must name this lane's venue"
+  assert_contains "$out" "WAIT, not a failure" "the refusal must say the dispatch is waiting rather than failed"
+  assert_absent "$home/state/custody-b.meta" "a refused lane must publish no task record"
+  assert_absent "$home/state/custody-b.attempt" "a refused lane must spend no attempt"
+
+  # The holder's own pipeline path still commits as the holder.
+  git --git-dir="$gate" worktree add -q "$case_dir/gatewt" main || fail "gate worktree failed"
+  identity=$(HOME="$case_dir/home_env" commit_identity "$case_dir/gatewt" "pipeline stage commit") || fail "gate commit failed"
+  [ "$identity" = "$upstream_identity|$upstream_identity" ] \
+    || fail "the holder's pipeline repository must still carry the holder's identity, got: $identity"
+
+  # Worktree isolation and the shared repository identity are both preserved.
+  identity=$(HOME="$case_dir/home_env" commit_identity "$first_wt" "holder worker commit") || fail "holder worker commit failed"
+  [ "$identity" = "$upstream_identity|$upstream_identity" ] || fail "the holder's worktree lost its binding: $identity"
   shared_after=$(git -C "$proj" config --local --get-regexp '^user\.' 2>/dev/null || true)
   [ "$shared_after" = "$shared_before" ] || fail "launches rewrote shared repository-local identity: $shared_before -> $shared_after"
-  pass "two same-project launches retain isolated worktree identities"
+
+  # RELEASE the holder, exactly as teardown does, and the contended lane becomes
+  # admissible and binds its OWN identity - the composition proving the binding
+  # follows authority and that custody is a wait rather than a permanent claim.
+  rm -f "$home/state/custody-a.meta" || fail "release failed"
+  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" custody-b "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target") || true
+  assert_not_contains "$out" "is not launching" "the contended lane must be admitted once the holder is released"
+  identity=$(HOME="$case_dir/home_env" commit_identity "$case_dir/gatewt" "second lane pipeline commit") || fail "second gate commit failed"
+  [ "$identity" = "$fork_identity|$fork_identity" ] \
+    || fail "the released gate must be re-established to the new holder rather than reusing the stale binding, got: $identity"
+  pass "a contended shared gate refuses the second lane naming both venues, and releases to it intact"
+}
+
+# The cone is exactly the contended resource. Two same-project lanes whose venues
+# resolve to the SAME identity are not contending for anything, so they must both
+# run - otherwise this control would be serializing ordinary parallel work.
+test_same_identity_lanes_on_one_project_are_not_contended() {
+  local rec home proj first_wt fakebin case_dir second_wt out identity
+  make_launch_case uncontended || fail "launch fixture setup failed"
+  rec=$LAUNCH_CASE_REC
+  IFS='|' read -r home proj first_wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-uncontended"
+  second_wt="$case_dir/wt-second"
+  git -C "$proj" worktree add -q -b uncontended-second "$second_wt" || fail "second worktree setup failed"
+
+  make_launch_brief "$home" uncontended-a no-mistakes || fail "first brief failed"
+  out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" uncontended-a "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
+  assert_not_contains "$out" "is not launching" "the first lane must be admitted"
+  make_launch_brief "$home" uncontended-b no-mistakes || fail "second brief failed"
+  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" uncontended-b "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION) || true
+  assert_not_contains "$out" "is not launching" "a same-identity lane must not be treated as contended"
+  identity=$(HOME="$case_dir/home_env" commit_identity "$second_wt" "second same-identity commit") || fail "second commit failed"
+  [ "$identity" = "$AUTHORITATIVE|$AUTHORITATIVE" ] || fail "the second lane lost its binding: $identity"
+  pass "two same-project lanes resolving one identity are admitted together"
 }
 
 # THE POSITIVE END-TO-END CONTROL. Ordinary lifecycle, no operator anywhere near
@@ -859,7 +931,8 @@ FM_CONTROLS=(
   test_distinct_roles_refuse_before_any_launch_allocation
   test_an_unobservable_worktree_binding_refuses_before_any_launch_allocation
   test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses
-  test_two_same_project_launches_keep_worktree_identities_isolated
+  test_a_contended_shared_gate_refuses_the_second_lane_until_released
+  test_same_identity_lanes_on_one_project_are_not_contended
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
   test_an_ungoverned_home_launches_and_says_so
 )
