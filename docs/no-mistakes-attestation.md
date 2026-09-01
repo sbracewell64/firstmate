@@ -128,7 +128,7 @@ The exact-head REVISE on PR #134 (applying 19/5431020714) names that gap, and th
   The checkout is the base branch - the policy generation itself - the candidate head crosses in as a sha and is never checked out or executed, permissions stay `contents: read`, and the file runs the generation's own gate.
   A candidate's edits to the workflow or the gate are proposal-only: they can become current policy only by landing under the preceding generation.
 
-The `pull_request` subscription is the PRECEDING law's trigger, kept for one generation so the candidate introducing this law is itself judged under the law that preceded it, and removed by the next descendant generation - the two-generation rule applied to the workflow file.
+The `pull_request` subscription is the PRECEDING law's trigger, kept while the candidate introducing this law is judged under the law that preceded it, and removed by the first descendant reconciled after this policy lands on the governed branch - the two-generation rule applied to the workflow file.
 On that transitional leg the wrapper file is still the candidate's, but the fetched policy generation's gate judges whenever that generation carries one; the inline flow behind it exists only for policy generations from before the gate did.
 
 If the governed program cannot be obtained, the check reaches no verdict and says so.
