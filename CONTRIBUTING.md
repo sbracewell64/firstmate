@@ -39,6 +39,7 @@ GitHub Actions and Dependabot are exempt so their automation keeps working, but 
    Publish as soon as step 7 has pushed the branch and opened the pull request, rather than waiting for `no-mistakes axi` to report `checks-passed`.
    `Require no-mistakes` is one of the checks `checks-passed` waits on and it stays red until this note exists, so waiting for that outcome first waits on the check this step is what clears.
    The pipeline steps `bin/fm-attest.sh write` requires are the ones step 7 completed, and it attests the head that run validated rather than whatever `HEAD` happens to be, so it refuses instead of attesting the wrong commit.
+   Confirm the head it reports is the pull request's current head before treating publication as complete.
    Make no further commit before publishing, because a review or lint fix round or any later commit advances the head beyond the commit the completed run validated.
    Do not add a follow-up commit merely to restart the failed check; validate that new head through no-mistakes first, then publish its attestation.
    If CI reports `no-attestation-for-head`, validate the current head through no-mistakes before running this command; an attestation for an earlier head cannot repair that failure.
