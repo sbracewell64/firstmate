@@ -114,7 +114,7 @@ FM_CI_TOKEN_PLACEHOLDER=FM_CI_IDENTITY_PLACEHOLDER
 # shellcheck disable=SC2034
 FM_CI_TOKEN_MALFORMED=FM_CI_IDENTITY_MALFORMED
 # shellcheck disable=SC2034
-FM_CI_TOKEN_DISTINCT=FM_CI_IDENTITY_DISTINCT_UNSUPPORTED
+FM_CI_TOKEN_REPO_DISTINCT=FM_CI_REPO_IDENTITY_DISTINCT
 # shellcheck disable=SC2034
 FM_CI_TOKEN_AMBIENT_OVERRIDE=FM_CI_AMBIENT_OVERRIDE
 # shellcheck disable=SC2034
@@ -144,6 +144,10 @@ FM_COMMIT_IDENTITY_TOKEN=
 FM_COMMIT_IDENTITY_REASON=
 FM_COMMIT_IDENTITY_AUTHOR=
 FM_COMMIT_IDENTITY_COMMITTER=
+FM_COMMIT_IDENTITY_AUTHOR_NAME=
+FM_COMMIT_IDENTITY_AUTHOR_EMAIL=
+FM_COMMIT_IDENTITY_COMMITTER_NAME=
+FM_COMMIT_IDENTITY_COMMITTER_EMAIL=
 FM_COMMIT_IDENTITY_VENUE=
 FM_COMMIT_IDENTITY_GENERATION=
 
@@ -171,6 +175,9 @@ fm_commit_identity_split() {  # <identity> -> sets NAME and EMAIL
   case $id in
     *'<'*'>') ;;
     *) return 1 ;;
+  esac
+  case $id in
+    *'<'*'<'* | *'>'*'>'*) return 1 ;;
   esac
   # Control characters would be carried straight into a commit header, where
   # they can forge a field boundary, so they are refused rather than escaped.
@@ -205,6 +212,10 @@ fm_commit_identity_resolve() {  # <config-dir> <venue>
   local config=${1:-} venue=${2:-} axis raw
   FM_COMMIT_IDENTITY_AUTHOR=
   FM_COMMIT_IDENTITY_COMMITTER=
+  FM_COMMIT_IDENTITY_AUTHOR_NAME=
+  FM_COMMIT_IDENTITY_AUTHOR_EMAIL=
+  FM_COMMIT_IDENTITY_COMMITTER_NAME=
+  FM_COMMIT_IDENTITY_COMMITTER_EMAIL=
   # shellcheck disable=SC2034
   FM_COMMIT_IDENTITY_VENUE=$venue
   FM_COMMIT_IDENTITY_GENERATION=
@@ -255,16 +266,18 @@ fm_commit_identity_resolve() {  # <config-dir> <venue>
       return 1
     fi
     case $axis in
-      author) FM_COMMIT_IDENTITY_AUTHOR=$raw ;;
-      committer) FM_COMMIT_IDENTITY_COMMITTER=$raw ;;
+      author)
+        FM_COMMIT_IDENTITY_AUTHOR=$raw
+        FM_COMMIT_IDENTITY_AUTHOR_NAME=$FM_COMMIT_IDENTITY_NAME
+        FM_COMMIT_IDENTITY_AUTHOR_EMAIL=$FM_COMMIT_IDENTITY_EMAIL
+        ;;
+      committer)
+        FM_COMMIT_IDENTITY_COMMITTER=$raw
+        FM_COMMIT_IDENTITY_COMMITTER_NAME=$FM_COMMIT_IDENTITY_NAME
+        FM_COMMIT_IDENTITY_COMMITTER_EMAIL=$FM_COMMIT_IDENTITY_EMAIL
+        ;;
     esac
   done
-
-  if [ "$FM_COMMIT_IDENTITY_AUTHOR" != "$FM_COMMIT_IDENTITY_COMMITTER" ]; then
-    fm_commit_identity_set "$FM_CI_TOKEN_DISTINCT" \
-      "the policy declares distinct author and committer identities for $venue, but repository-local git identity provides one pair for both axes, so neither axis may be silently substituted"
-    return 1
-  fi
 
   fm_commit_identity_set "$FM_CI_TOKEN_BOUND" \
     "policy generation ${FM_COMMIT_IDENTITY_GENERATION:-<unstated>} declares author and committer for $venue"
@@ -286,10 +299,10 @@ fm_commit_identity_env_overrides() {  # -> prints offending NAME=VALUE lines
     eval "value=\${$var-}"
     [ -n "${value:-}" ] || continue
     case "$var" in
-      GIT_AUTHOR_NAME | GIT_COMMITTER_NAME)
-        [ "$value" = "$FM_COMMIT_IDENTITY_NAME" ] && continue ;;
-      GIT_AUTHOR_EMAIL | GIT_COMMITTER_EMAIL)
-        [ "$value" = "$FM_COMMIT_IDENTITY_EMAIL" ] && continue ;;
+      GIT_AUTHOR_NAME) [ "$value" = "$FM_COMMIT_IDENTITY_AUTHOR_NAME" ] && continue ;;
+      GIT_AUTHOR_EMAIL) [ "$value" = "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL" ] && continue ;;
+      GIT_COMMITTER_NAME) [ "$value" = "$FM_COMMIT_IDENTITY_COMMITTER_NAME" ] && continue ;;
+      GIT_COMMITTER_EMAIL) [ "$value" = "$FM_COMMIT_IDENTITY_COMMITTER_EMAIL" ] && continue ;;
     esac
     printf '%s=%s\n' "$var" "$value"
     found=0
@@ -327,8 +340,13 @@ fm_commit_identity_effective() {  # <git-dir-or-worktree> <author|committer>
 
 fm_commit_identity_install_repo() {  # <git-dir-or-worktree>
   local repo=${1:-} seen
-  git --no-optional-locks -C "$repo" config --local user.name "$FM_COMMIT_IDENTITY_NAME" 2>/dev/null || return 1
-  git --no-optional-locks -C "$repo" config --local user.email "$FM_COMMIT_IDENTITY_EMAIL" 2>/dev/null || return 1
+  if [ "$FM_COMMIT_IDENTITY_AUTHOR" != "$FM_COMMIT_IDENTITY_COMMITTER" ]; then
+    fm_commit_identity_set "$FM_CI_TOKEN_REPO_DISTINCT" \
+      "repository-local git identity holds one pair for both roles and cannot bind author '$FM_COMMIT_IDENTITY_AUTHOR' separately from committer '$FM_COMMIT_IDENTITY_COMMITTER'"
+    return 3
+  fi
+  git --no-optional-locks -C "$repo" config --local user.name "$FM_COMMIT_IDENTITY_AUTHOR_NAME" 2>/dev/null || return 1
+  git --no-optional-locks -C "$repo" config --local user.email "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL" 2>/dev/null || return 1
   seen=$(fm_commit_identity_effective "$repo" author) || return 2
   [ "$seen" = "$FM_COMMIT_IDENTITY_AUTHOR" ] || return 2
   seen=$(fm_commit_identity_effective "$repo" committer) || return 2
@@ -340,10 +358,10 @@ fm_commit_identity_install_repo() {  # <git-dir-or-worktree>
 # environment is git's strongest selector, so where the fleet owns the process it
 # uses that channel and does not settle for the weaker one.
 fm_commit_identity_env_block() {
-  printf 'export GIT_AUTHOR_NAME=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_NAME")"
-  printf 'export GIT_AUTHOR_EMAIL=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_EMAIL")"
-  printf 'export GIT_COMMITTER_NAME=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_NAME")"
-  printf 'export GIT_COMMITTER_EMAIL=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_EMAIL")"
+  printf 'export GIT_AUTHOR_NAME=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_AUTHOR_NAME")"
+  printf 'export GIT_AUTHOR_EMAIL=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL")"
+  printf 'export GIT_COMMITTER_NAME=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_COMMITTER_NAME")"
+  printf 'export GIT_COMMITTER_EMAIL=%s\n' "$(fm_commit_identity_quote "$FM_COMMIT_IDENTITY_COMMITTER_EMAIL")"
 }
 
 fm_commit_identity_quote() {  # <value>

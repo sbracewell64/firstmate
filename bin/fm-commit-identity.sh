@@ -108,11 +108,6 @@ if [ "$RESOLVED" -ne 0 ]; then
   refuse "$FM_COMMIT_IDENTITY_TOKEN" "$FM_COMMIT_IDENTITY_REASON"
   exit "$RESOLVED"
 fi
-fm_commit_identity_split "$FM_COMMIT_IDENTITY_AUTHOR" || {
-  refuse "$FM_CI_TOKEN_MALFORMED" "the resolved author identity stopped parsing between resolution and use"
-  exit 1
-}
-
 if [ "$VERB" = env ]; then
   fm_commit_identity_env_block
   exit 0
@@ -159,6 +154,7 @@ bind_channel() {  # <label> <repo>
   case $rc in
     0) say "$label: bound - $FM_COMMIT_IDENTITY_AUTHOR" ; return 0 ;;
     1) say "$label: REFUSED - the identity could not be written into $repo" ; return 1 ;;
+    3) say "$label: REFUSED $FM_COMMIT_IDENTITY_TOKEN - $FM_COMMIT_IDENTITY_REASON" ; return 1 ;;
     *) say "$label: UNVERIFIED - the identity was written into $repo but git does not report it back" ; return 1 ;;
   esac
 }

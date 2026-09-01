@@ -283,9 +283,9 @@ axis-unstated|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"
 identity-placeholder|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"Test <test@example.com>","committer":"Test <test@example.com>"}}}}|FM_CI_IDENTITY_PLACEHOLDER
 identity-malformed|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"no angle brackets","committer":"no angle brackets"}}}}|FM_CI_IDENTITY_MALFORMED
 identity-trailing-content|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"A Person <a@example.invalid> garbage","committer":"A Person <a@example.invalid> garbage"}}}}|FM_CI_IDENTITY_MALFORMED
-identity-distinct-axes|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"A Person <a@example.invalid>","committer":"C Person <c@example.invalid>"}}}}|FM_CI_IDENTITY_DISTINCT_UNSUPPORTED
+identity-extra-delimiter|{"generation":"g","venues":{"github.com/sbracewell64/firstmate":{"identities":{"author":"A Person <a@example.invalid>junk>","committer":"A Person <a@example.invalid>junk>"}}}}|FM_CI_IDENTITY_MALFORMED
 EOF
-  pass "an unstated, placeholder, malformed, distinct, ungoverned or undeclared identity refuses before any commit object exists"
+  pass "an unstated, placeholder, malformed, ungoverned or undeclared identity refuses before any commit object exists"
 }
 
 test_an_unreadable_policy_is_could_not_observe_not_a_refusal() {
@@ -366,6 +366,41 @@ test_the_env_verb_emits_the_channel_that_outranks_everything() {
   pass "the emitted environment block outranks a poisoned environment for a process this fleet runs"
 }
 
+test_the_env_channel_preserves_distinct_author_and_committer() {
+  local root out identity author committer
+  author='A Person <a@example.invalid>'
+  committer='C Person <c@example.invalid>'
+  root=$(make_case env-distinct) || fail "fixture setup failed"
+  write_policy "$root" "$author" "$committer" || fail "policy setup failed"
+  out=$(run_cmd "$root" env) || fail "distinct identities must resolve for the environment channel: $out"
+  identity=$(env HOME="$root/home" bash -c \
+    'eval "$1"; cd "$2" && git commit -q --allow-empty -m distinct && git log -1 --format="%an <%ae>|%cn <%ce>"' \
+    _ "$out" "$root/gatewt") || fail "commit under the distinct environment failed"
+  [ "$identity" = "$author|$committer" ] \
+    || fail "the environment must preserve each authoritative role, got: $identity"
+  pass "the environment channel preserves distinct authoritative author and committer identities"
+}
+
+test_the_repository_channel_clearly_refuses_distinct_roles() {
+  local root out rc before after author committer
+  author='A Person <a@example.invalid>'
+  committer='C Person <c@example.invalid>'
+  root=$(make_case repo-distinct) || fail "fixture setup failed"
+  write_policy "$root" "$author" "$committer" || fail "policy setup failed"
+  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
+  before=$(git -C "$root/gatewt" rev-list --count HEAD) || fail "count failed"
+  out=$(run_cmd "$root" bind); rc=$?
+  expect_code 1 "$rc" "the one-pair repository channel must refuse distinct roles: $out"
+  assert_contains "$out" "FM_CI_REPO_IDENTITY_DISTINCT" "the refusal must carry its own typed token"
+  assert_contains "$out" "$author" "the refusal must name the authoritative author"
+  assert_contains "$out" "$committer" "the refusal must name the authoritative committer"
+  assert_contains "$out" "one pair" "the refusal must state the repository channel limitation"
+  assert_not_contains "$out" "UNVERIFIED" "a channel limitation must not be reported as failed re-observation"
+  after=$(git -C "$root/gatewt" rev-list --count HEAD) || fail "count failed"
+  [ "$before" = "$after" ] || fail "the repository-channel refusal must create zero commit objects"
+  pass "the repository channel clearly refuses distinct roles before writing or committing"
+}
+
 FM_CONTROLS=(
   test_an_unbound_gate_reproduces_the_published_defect
   test_binding_makes_an_ordinary_pipeline_commit_authoritative
@@ -380,6 +415,8 @@ FM_CONTROLS=(
   test_a_pipeline_daemon_carrying_an_identity_variable_refuses
   test_an_unidentifiable_daemon_is_could_not_observe
   test_the_env_verb_emits_the_channel_that_outranks_everything
+  test_the_env_channel_preserves_distinct_author_and_committer
+  test_the_repository_channel_clearly_refuses_distinct_roles
 )
 
 for control in "${FM_CONTROLS[@]}"; do
