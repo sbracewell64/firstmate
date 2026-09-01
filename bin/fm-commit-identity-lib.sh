@@ -292,23 +292,16 @@ fm_commit_identity_resolve() {  # <config-dir> <venue>
 # --- ambient channels that outrank the binding -------------------------------
 #
 # Named, not counted: the caller has to repair a specific variable, and a bare
-# "your environment is dirty" makes that a search. A variable already holding the
-# authoritative value is NOT an override - it is the binding, arrived at early -
-# so it is reported clean rather than refused, which keeps `bind` idempotent
-# under its own exported environment.
+# "your environment is dirty" makes that a search. Presence is the refusal:
+# repository binding cannot establish provenance while a stronger channel is
+# active, even when that channel currently repeats the authoritative value.
 
 fm_commit_identity_env_overrides() {  # -> prints offending NAME=VALUE lines
   local var value found=1
   while IFS= read -r var; do
     [ -n "$var" ] || continue
+    eval "[ \"\${$var+x}\" = x ]" || continue
     eval "value=\${$var-}"
-    [ -n "${value:-}" ] || continue
-    case "$var" in
-      GIT_AUTHOR_NAME) [ "$value" = "$FM_COMMIT_IDENTITY_AUTHOR_NAME" ] && continue ;;
-      GIT_AUTHOR_EMAIL) [ "$value" = "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL" ] && continue ;;
-      GIT_COMMITTER_NAME) [ "$value" = "$FM_COMMIT_IDENTITY_COMMITTER_NAME" ] && continue ;;
-      GIT_COMMITTER_EMAIL) [ "$value" = "$FM_COMMIT_IDENTITY_COMMITTER_EMAIL" ] && continue ;;
-    esac
     printf '%s=%s\n' "$var" "$value"
     found=0
   done <<< "$FM_CI_OVERRIDING_ENV"
@@ -430,27 +423,53 @@ fm_commit_identity_gate() {  # <checkout> [<timeout-secs>]
 # only; `ps eww` covers the same question where /proc is absent. Where neither
 # answers, the answer is could-not-observe, which is not "clean".
 
+fm_commit_identity_daemon_process_started_epoch() {  # <pid>
+  local pid=${1:-} started
+  started=$(LC_ALL=C ps -p "$pid" -o lstart= 2>/dev/null) || return 1
+  started=${started#"${started%%[![:space:]]*}"}
+  [ -n "$started" ] || return 1
+  date -u -d "$started" +%s 2>/dev/null \
+    || date -u -j -f '%a %b %e %T %Y' "$started" +%s 2>/dev/null
+}
+
+fm_commit_identity_daemon_recorded_epoch() {  # <pid-file>
+  local file=${1:-} started
+  started=$(sed -n 's/.*"started_at"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$file" 2>/dev/null | head -1)
+  [ -n "$started" ] || return 1
+  date -u -d "$started" +%s 2>/dev/null \
+    || date -u -j -f '%Y-%m-%dT%H:%M:%SZ' "$started" +%s 2>/dev/null
+}
+
 fm_commit_identity_daemon_pid() {  # <nm-root>
-  local root=${1:-} pid
-  [ -f "$root/daemon.pid" ] || return 1
-  pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$root/daemon.pid" | head -1)
+  local root=${1:-} file pid recorded_epoch process_epoch
+  file="$root/daemon.pid"
+  [ -f "$file" ] || return 1
+  pid=$(sed -n 's/.*"pid"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$file" | head -1)
   case ${pid:-} in
     '' | *[!0-9]*) return 1 ;;
   esac
   kill -0 "$pid" 2>/dev/null || return 1
+  recorded_epoch=$(fm_commit_identity_daemon_recorded_epoch "$file") || return 1
+  process_epoch=$(fm_commit_identity_daemon_process_started_epoch "$pid") || return 1
+  [ "$recorded_epoch" = "$process_epoch" ] || return 1
   printf '%s\n' "$pid"
 }
 
 # 0 clean, 1 an overriding variable was found (printed), 2 could not observe.
 fm_commit_identity_daemon_env() {  # <pid>
-  local pid=${1:-} raw='' var hit=0 line
-  if [ -r "/proc/$pid/environ" ]; then
-    raw=$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null) || raw=''
+  local pid=${1:-} raw='' var hit=0 line observed=0 proc_root
+  proc_root=${FM_PROC_ROOT_OVERRIDE:-/proc}
+  if [ -r "$proc_root/$pid/environ" ]; then
+    if raw=$(tr '\0' '\n' < "$proc_root/$pid/environ" 2>/dev/null); then
+      observed=1
+    fi
   fi
-  if [ -z "$raw" ]; then
+  if [ "$observed" -eq 0 ]; then
     raw=$(ps eww "$pid" 2>/dev/null | tr ' ' '\n') || raw=''
+    printf '%s\n' "$raw" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*=' || return 2
+    observed=1
   fi
-  [ -n "$raw" ] || return 2
+  [ "$observed" -eq 1 ] || return 2
   while IFS= read -r var; do
     [ -n "$var" ] || continue
     line=$(printf '%s\n' "$raw" | grep -m1 -e "^$var=." 2>/dev/null) || continue

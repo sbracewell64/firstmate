@@ -90,12 +90,14 @@ write_policy() {  # <root> <author> <committer>
 # A live process standing in for the pipeline daemon, so the environment check
 # reads a real one. Extra arguments are VAR=VALUE assignments placed into it.
 start_daemon() {  # <root> [VAR=VALUE...]
-  local root=${1:?} pid
+  local root=${1:?} pid started
   shift
   env "$@" sleep 300 &
   pid=$!
   fm_test_reap "$pid"
-  printf '{"pid":%s,"started_at":"2026-09-01T00:00:00Z"}' "$pid" > "$root/nm/daemon.pid" || return 1
+  started=$(LC_ALL=C ps -p "$pid" -o lstart=) || return 1
+  started=$(date -u -d "$started" +%Y-%m-%dT%H:%M:%SZ) || return 1
+  printf '{"pid":%s,"started_at":"%s"}' "$pid" "$started" > "$root/nm/daemon.pid" || return 1
   printf '%s\n' "$pid"
 }
 
@@ -195,6 +197,21 @@ test_poisoned_identity_environment_refuses_before_any_commit() {
   after=$(git -C "$root/gatewt" rev-list --count HEAD) || fail "count failed"
   [ "$before" = "$after" ] || fail "a refusal must create zero commit objects"
   pass "a poisoned GIT_AUTHOR/GIT_COMMITTER environment refuses by name and creates no commit"
+}
+
+test_matching_identity_environment_still_refuses_by_presence() {
+  local root out rc
+  root=$(make_case env-matching) || fail "fixture setup failed"
+  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
+
+  out=$(run_cmd "$root" bind GIT_AUTHOR_NAME='Shane Bracewell'); rc=$?
+  expect_code 1 "$rc" "a present matching identity variable must refuse: $out"
+  assert_contains "$out" "GIT_AUTHOR_NAME=Shane Bracewell" "the refusal must name the present matching variable"
+
+  out=$(run_cmd "$root" bind GIT_AUTHOR_EMAIL=); rc=$?
+  expect_code 1 "$rc" "a present empty identity variable must refuse: $out"
+  assert_contains "$out" "GIT_AUTHOR_EMAIL=" "the refusal must name the present empty variable"
+  pass "any present invoking identity variable refuses by name regardless of value"
 }
 
 test_poisoned_repository_and_global_config_lose_to_the_binding() {
@@ -344,6 +361,39 @@ test_an_unidentifiable_daemon_is_could_not_observe() {
   pass "a pipeline daemon that cannot be identified leaves its channel could-not-observe rather than clean"
 }
 
+test_a_reused_daemon_pid_is_could_not_observe() {
+  local root out rc pid
+  root=$(make_case daemon-reused-pid) || fail "fixture setup failed"
+  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
+  pid=$(jq -r .pid "$root/nm/daemon.pid") || fail "pid read failed"
+  printf '{"pid":%s,"started_at":"2001-01-01T00:00:00Z"}' "$pid" > "$root/nm/daemon.pid" || fail "pid record failed"
+  out=$(run_cmd "$root" bind); rc=$?
+  expect_code 2 "$rc" "a live pid from a different start must be unobservable: $out"
+  assert_contains "$out" "no running pipeline daemon was identifiable" "the stale record must not certify the live process"
+  pass "daemon PID reuse cannot attribute an unrelated process to the pipeline"
+}
+
+test_ps_metadata_without_environment_is_could_not_observe() {
+  local root fake_proc out rc pid
+  root=$(make_case daemon-ps-metadata) || fail "fixture setup failed"
+  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
+  pid=$(jq -r .pid "$root/nm/daemon.pid") || fail "pid read failed"
+  fake_proc="$root/no-proc"
+  mkdir -p "$fake_proc" || fail "proc fixture failed"
+  cat > "$root/bin/ps" <<'FAKE'
+#!/usr/bin/env bash
+case " $* " in
+  *' -o lstart= '*) command /bin/ps "$@" ;;
+  *) printf 'PID TTY STAT TIME COMMAND\n%s ? S 0:00 no-mistakes daemon\n' "${2:-0}" ;;
+esac
+FAKE
+  chmod +x "$root/bin/ps" || fail "ps fixture failed"
+  out=$(run_cmd "$root" bind FM_PROC_ROOT_OVERRIDE="$fake_proc"); rc=$?
+  expect_code 2 "$rc" "ps metadata without environment fields must be unobservable: $out"
+  assert_contains "$out" "environment of pid $pid could not be read" "metadata must not be folded into a clean environment"
+  pass "ps process metadata alone cannot certify the daemon environment clean"
+}
+
 # --- the strongest channel, for processes this fleet runs -------------------
 test_the_env_verb_emits_the_channel_that_outranks_everything() {
   local root out identity
@@ -406,6 +456,7 @@ FM_CONTROLS=(
   test_an_unbound_gate_reproduces_the_published_defect
   test_binding_makes_an_ordinary_pipeline_commit_authoritative
   test_poisoned_identity_environment_refuses_before_any_commit
+  test_matching_identity_environment_still_refuses_by_presence
   test_poisoned_repository_and_global_config_lose_to_the_binding
   test_fixture_identity_in_the_same_session_does_not_cross_the_boundary
   test_the_binding_survives_a_restart_between_commits
@@ -415,6 +466,8 @@ FM_CONTROLS=(
   test_an_unreadable_gate_report_is_could_not_observe
   test_a_pipeline_daemon_carrying_an_identity_variable_refuses
   test_an_unidentifiable_daemon_is_could_not_observe
+  test_a_reused_daemon_pid_is_could_not_observe
+  test_ps_metadata_without_environment_is_could_not_observe
   test_the_env_verb_emits_the_channel_that_outranks_everything
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
