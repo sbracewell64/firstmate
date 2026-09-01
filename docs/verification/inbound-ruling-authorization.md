@@ -496,6 +496,9 @@ ok - an act that exits non-zero leaves the authority indeterminate
 ok - a project alias moved after mint performs no act
 ok - successful exit requires post-effect proof
 ok - the whole path lands one real fast-forward and proves it from the repository
+ok - a predicate answers without writing anything, even when its reader stops early
+ok - a claim that could not be observed is not reported as another operation holding it
+ok - racing mints grant one authorization and type every other outcome
 FM_TEST_CONTRACT suite=fm-landing-authorization.test.sh status=pass
 ```
 
@@ -577,12 +580,11 @@ not ok - racing-mints: six racing mints granted no authorization at all
 Here, one winner means one durable authorization identity and one stored record, not necessarily one exit-zero process.
 Minting is idempotent on that identity, so a caller that arrives after the atomic transition may return the same authorization without creating another winner; every non-authorization outcome must still be a typed refusal.
 
-### What this repair does NOT cover
+### Publication integration and uncovered scope
 
-`bin/fm-publication-guard.sh` consumes the same `claim_acquire`, and its `retire` path was flattening the new distinction back into `FM_PUB_IN_FLIGHT`; that one call site now reports a claim it could not observe as `FM_PUB_CLAIM_OWNER_UNOBSERVED`.
-Its `spend` and `reconcile` paths already degraded to `cno` and were left alone.
-`publication_claim_reclaim_dead` still sets `CLAIM_OWNER_STATE=raced` for any failure to re-acquire, so a could-not-observe inside that reclaim can still surface as an in-flight refusal.
-That is unchanged from `6dde2417` rather than introduced here, it is the same class as the defect above, and it is recorded as remaining rather than described as clean.
+`bin/fm-publication-guard.sh` consumes the same `claim_acquire`, so its `retire` path now reports a claim it could not observe as `FM_PUB_CLAIM_OWNER_UNOBSERVED` rather than flattening that result into `FM_PUB_IN_FLIGHT`.
+Its dead-claim reconciliation also preserves the third value when removal succeeds but safe reacquisition does not, guarded by `test_dead_claim_reacquisition_failure_is_could_not_observe` in `tests/fm-publication-seam.test.sh`.
+Its other `spend` and `reconcile` outcomes already degraded to `cno` and were left alone.
 
 `bin/fm-test-run.sh` line 403 emitted the identical broken-pipe diagnostic in the same CI lane.
 It is outside this owner and is not repaired here.

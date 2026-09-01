@@ -360,23 +360,11 @@ fm_auth_id() {  # <same arguments as fm_auth_identity_canonical> -> id
 
 # --- how the predicates below read their input --------------------------------
 #
-# Every predicate here is pure: it answers a question and writes nothing. Making
-# one of them ALSO a writer to a pipe is what broke this file in CI. The shape
-# was `printf ... | grep -q ...`, and `grep -q` closes the pipe the moment it
-# matches, by design. Whenever the writer had not finished, its next write got
-# EPIPE - and because a CI runner starts its steps with SIGPIPE IGNORED, the
-# writer did not die quietly on the signal: bash reported the failed write on
-# STDERR. That line then landed in whatever the caller was capturing:
-#
-#   not ok - nonvacuity: fresh authorization reported '.../fm-landing-authorization-lib.sh:
-#   line 687: printf: write error: Broken pipe
-#   granted', not granted
-#
-# The authorization in that run was correct. `granted` is what the mechanism
-# said. A predicate's diagnostic was simply mixed into the answer, and a test
-# comparing the whole captured value saw the two as one string. So this is not a
-# cosmetic defect: a predicate that can emit on stderr can corrupt any caller
-# that reads a command's combined output, which is how these are read.
+# Every predicate here is pure: it answers a question and writes nothing.
+# A writer piped into `grep -q` can receive EPIPE after an early match and emit a
+# diagnostic when SIGPIPE is ignored, corrupting a caller's captured answer.
+# The calibration and regression evidence are in
+# docs/verification/inbound-ruling-authorization.md.
 #
 # Two forms are used below, and neither can write anything:
 #
@@ -1005,16 +993,10 @@ fm_auth_process_group() {  # <pid>; sets FM_AUTH_PROCESS_GROUP
   FM_AUTH_PROCESS_GROUP=$group
 }
 
-# Taking a claim is THREE-VALUED, for the same reason every other observation in
-# this contract is. It can fail because another operation holds the claim, which
-# is a verdict about a competitor that was actually observed, and it can fail
-# because this process could not observe what it needs in order to hold the
-# claim safely, which is no verdict about anybody. Those were one return code,
-# and both callers reported the pair as FM_AUTH_SPEND_IN_FLIGHT - so a mint that
-# merely could not read its own process group announced that "another operation
-# holds the claim" when nothing held it and no store even existed. Two racers
-# hitting that produce a pair of confident, false refusals and no winner, which
-# is what "neither mint produced an authorization" looked like from outside.
+# Taking a claim is THREE-VALUED: failure can establish that another operation
+# holds the claim, or it can leave the holder unobserved.
+# Callers must preserve that distinction; the regression evidence is in
+# docs/verification/inbound-ruling-authorization.md.
 #
 #   0  acquired
 #   1  another operation holds the claim - OBSERVED, the directory already exists
