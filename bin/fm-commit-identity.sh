@@ -25,10 +25,10 @@
 #   fm-commit-identity.sh --help
 #
 # `bind` is what a production pipeline run must pass before it may start. It
-# installs the policy's author and committer as repository-local identity in BOTH
-# the checkout (covering commits this fleet's own workers make) and the
-# no-mistakes gate repository the pipeline commits in (covering every stage the
-# daemon runs), re-observes each one, and reports what it could not establish.
+# binds and re-observes the policy identity through each reachable repository
+# channel: the checkout for worker commits and the no-mistakes gate repository
+# for daemon stages. The library header owns the channel-capability split,
+# including why a one-pair repository channel refuses distinct roles.
 #
 # Exit status, three-valued and never folded:
 #   0  bound      the authoritative identity is installed and re-observed in

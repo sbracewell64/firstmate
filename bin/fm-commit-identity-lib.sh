@@ -54,7 +54,8 @@
 # So a binding is only as strong as the strongest channel it controls:
 #
 #   - For a process THIS FLEET runs, the environment is available and is the
-#     strongest channel, so the identity is exported there.
+#     strongest channel, so the policy's author and committer are exported as
+#     independent GIT_AUTHOR_* and GIT_COMMITTER_* roles.
 #   - For the no-mistakes daemon, whose environment was fixed when it started
 #     and which this fleet may not restart, the strongest channel available is
 #     the gate repository's own local config. The tool exposes no commit-identity
@@ -62,6 +63,10 @@
 #     kunchenguid/no-mistakes#924. That beats the global config the
 #     defect came through, and it is the lever git provides for "this repository
 #     commits as this identity" without changing the tool.
+#     Repository-local user.name/user.email is one pair used for both roles, so
+#     this channel can bind only a policy whose author and committer are equal.
+#     When they differ it names both authoritative identities and refuses rather
+#     than silently substituting one role for the other.
 #
 # Because that second binding is NOT the strongest channel in absolute terms,
 # the daemon's environment is OBSERVED rather than assumed: a daemon carrying an

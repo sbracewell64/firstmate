@@ -604,7 +604,7 @@ identity_step() {  # <step-number>
   # shellcheck disable=SC2016  # a printf format: the backticks are brief markup
   printf '
 %s. Bind the production commit identity before your first commit: `%s/bin/fm-commit-identity.sh bind .`
-   It installs the declared production author and committer into both this checkout and the repository the validation pipeline commits in, so neither your commits nor a later validation stage can fall through to whatever identity this machine happens to carry.
+   It binds each reachable commit channel to what that channel can genuinely express, so neither your commits nor a later validation stage can fall through to whatever identity this machine happens to carry; the command refuses instead of collapsing distinct author and committer roles into one repository identity.
    If it refuses, or reports that it could not observe one of those paths, STOP and append `blocked: {what it reported}` - do not commit, because a commit object cannot be re-attributed once it exists.' "$1" "$FM_ROOT"
 }
 
