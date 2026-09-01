@@ -738,6 +738,7 @@ EOF
 test_a_contended_shared_gate_refuses_the_second_lane_until_released() {
   local rec home proj first_wt fakebin case_dir second_wt upstream_identity fork_identity
   local policy upstream_target fork_target default_branch out rc identity shared_before shared_after gate
+  local race_a_pid race_b_pid race_a_rc race_b_rc
   upstream_identity='Upstream Lane <upstream@example.invalid>'
   fork_identity='Fork Lane <fork@example.invalid>'
   policy=$(jq -n --arg a "$fork_identity" --arg b "$upstream_identity" '{generation:"g",venues:{
@@ -763,13 +764,23 @@ EOF
   git -C "$proj" update-ref "refs/remotes/origin/$default_branch" "$fork_target" || fail "fork ref setup failed"
   shared_before=$(git -C "$proj" config --local --get-regexp '^user\.' 2>/dev/null || true)
 
-  # Lane A, governed by the upstream venue, is admitted and takes the gate.
+  # A rolling-update lane has no custody pair, so its recorded venue must be
+  # resolved through the current policy rather than treated as agreement.
+  printf 'project=%s\ncontribution_venue=%s\n' "$proj" "example.invalid/sbracewell64/firstmate" > "$home/state/legacy.meta" || fail "legacy record setup failed"
   make_launch_brief "$home" custody-a no-mistakes || fail "first brief failed"
   printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/custody-a/brief.md" || fail "first base contract failed"
+  out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" custody-a "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target"); rc=$?
+  [ "$rc" -ne 0 ] || fail "a legacy lane whose venue derives to another identity must refuse"
+  assert_contains "$out" "$fork_identity" "the legacy lane's venue must derive to its governed identity"
+  printf 'project=%s\ncontribution_venue=%s\n' "$proj" "example.invalid/upstream/project" > "$home/state/legacy.meta" || fail "legacy record update failed"
+
+  # Lane A, governed by the upstream venue, is admitted and takes the gate.
   out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" custody-a "$proj" claude \
     --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target") || true
   assert_not_contains "$out" "is not launching" "the first lane must be admitted"
   assert_grep "commit_identity=$upstream_identity" "$home/state/custody-a.meta" "the admitted lane must record the identity it holds the gate under"
+  rm -f "$home/state/legacy.meta" || fail "legacy release failed"
 
   # Lane B, same project, governed by the fork venue, contends for that one pair.
   make_launch_brief "$home" custody-b no-mistakes || fail "second brief failed"
@@ -808,6 +819,26 @@ EOF
   identity=$(HOME="$case_dir/home_env" commit_identity "$case_dir/gatewt" "second lane pipeline commit") || fail "second gate commit failed"
   [ "$identity" = "$fork_identity|$fork_identity" ] \
     || fail "the released gate must be re-established to the new holder rather than reusing the stale binding, got: $identity"
+
+  # Hold neither claim, then start unlike identities together. The per-gate
+  # admission lock must make the first published claim visible to the other.
+  rm -f "$home/state/custody-b.meta" || fail "race release failed"
+  make_launch_brief "$home" race-a no-mistakes || fail "race first brief failed"
+  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/race-a/brief.md" || fail "race first base contract failed"
+  make_launch_brief "$home" race-b no-mistakes || fail "race second brief failed"
+  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$fork_target" >> "$home/data/race-b/brief.md" || fail "race second base contract failed"
+  run_launch "$case_dir" "$home" "$first_wt" "$fakebin" race-a "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target" > "$case_dir/race-a.out" &
+  race_a_pid=$!
+  fm_test_reap "$race_a_pid"
+  run_launch "$case_dir" "$home" "$second_wt" "$fakebin" race-b "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target" > "$case_dir/race-b.out" &
+  race_b_pid=$!
+  fm_test_reap "$race_b_pid"
+  if wait "$race_a_pid"; then race_a_rc=0; else race_a_rc=$?; fi
+  if wait "$race_b_pid"; then race_b_rc=0; else race_b_rc=$?; fi
+  [ $((race_a_rc == 0 ? 1 : 0)) -ne $((race_b_rc == 0 ? 1 : 0)) ] \
+    || fail "exactly one concurrent unlike-identity admission must succeed: a=$race_a_rc b=$race_b_rc"
   pass "a contended shared gate refuses the second lane naming both venues, and releases to it intact"
 }
 
