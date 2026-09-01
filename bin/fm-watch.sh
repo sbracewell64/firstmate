@@ -648,6 +648,16 @@ FM_CHECK_OUTPUT=
 FM_CHECK_RESULT=
 FM_CHECK_SIGNAL_PENDING=
 
+fm_active_check_is_running_job() {
+  local job_pid
+  while IFS= read -r job_pid; do
+    [ "$job_pid" != "$FM_ACTIVE_CHECK_PID" ] || return 0
+  done <<EOF
+$(jobs -pr)
+EOF
+  return 1
+}
+
 fm_check_output_cleanup() {
   [ -z "$FM_CHECK_OUTPUT" ] || rm -f -- "$FM_CHECK_OUTPUT"
   FM_CHECK_OUTPUT=
@@ -693,10 +703,16 @@ run_check_capture() {
   set +m
   pgid=$(ps -o pgid= -p "$FM_ACTIVE_CHECK_PID" 2>/dev/null | tr -d '[:space:]')
   trap 'exit 1' HUP INT TERM
+  # A very short check can exit between launch and ps. Its pid may then be
+  # reused by an unrelated process whose group must not be mistaken for the
+  # check's; refuse only while Bash still owns that pid as a running job.
   if [ -n "$pgid" ] && [ "$pgid" != "$FM_ACTIVE_CHECK_PGID" ]; then
-    fm_active_check_stop || true
-    fm_check_output_cleanup
-    return 1
+    if fm_active_check_is_running_job; then
+      fm_active_check_stop || true
+      fm_check_output_cleanup
+      return 1
+    fi
+    FM_ACTIVE_CHECK_PGID=
   fi
   [ -z "$FM_CHECK_SIGNAL_PENDING" ] || exit 1
   wait "$FM_ACTIVE_CHECK_PID" 2>/dev/null || true

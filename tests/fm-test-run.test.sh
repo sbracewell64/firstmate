@@ -376,26 +376,30 @@ test_exclude_family() {
 # that already holds the freshness fixtures and the proven-set seam, and it is
 # where the real-seam assertion belongs.
 test_portable_shard_union_and_lane_partition() {
-  local s1 s2 proven serial herdr all_count union_count overlap first
+  local s1 s2 candidates serial herdr all all_count union_count overlap first
   s1=$("$RUNNER" --list --lane portable-parallel-1)
   s2=$("$RUNNER" --list --lane portable-parallel-2)
-  proven=$("$RUNNER" --list --proven-isolated)
-  serial=$("$RUNNER" --list --lane portable-serial)
+  candidates=$("$ROOT/bin/fm-test-isolation-proof.sh" --list)
   herdr=$("$RUNNER" --list --family real-herdr-gated)
+  all=$("$RUNNER" --list --all)
+  serial=$(comm -23 \
+    <(printf '%s\n' "$all" | LC_ALL=C sort) \
+    <(printf '%s\n' "$candidates" "$herdr" | LC_ALL=C sort -u))
   [ -n "$s1" ] && [ -n "$s2" ] || fail "portable parallel shards must be non-empty"
   # Shards disjoint.
   overlap=$(comm -12 <(printf '%s\n' "$s1" | LC_ALL=C sort) <(printf '%s\n' "$s2" | LC_ALL=C sort) || true)
   [ -z "$overlap" ] || fail "portable parallel shards overlap: $overlap"
-  # Union of shards equals proven-isolated.
+  # The subject compares the changed lane assignment with the current proof
+  # input, not the necessarily stale prior artifact it is being run to replace.
   [ "$(printf '%s\n' "$s1" "$s2" | LC_ALL=C sort -u)" = \
-    "$(printf '%s\n' "$proven" | LC_ALL=C sort -u)" ] \
-    || fail "shard union must equal proven-isolated set"
+    "$(printf '%s\n' "$candidates" | LC_ALL=C sort -u)" ] \
+    || fail "shard union must equal isolation-proof candidate set"
   # No herdr in portable lanes.
   printf '%s\n' "$s1" "$s2" "$serial" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     && fail "portable lanes must not include real-herdr-gated smoke"
   printf '%s\n' "$herdr" | grep -Fq 'tests/fm-backend-herdr-smoke.test.sh' \
     || fail "herdr family must include smoke"
-  all_count=$("$RUNNER" --list --all | wc -l | tr -d ' ')
+  all_count=$(printf '%s\n' "$all" | wc -l | tr -d ' ')
   union_count=$(printf '%s\n' "$s1" "$s2" "$serial" "$herdr" | LC_ALL=C sort -u | wc -l | tr -d ' ')
   [ "$union_count" = "$all_count" ] \
     || fail "union of lanes ($union_count) must equal --all ($all_count)"
@@ -837,7 +841,6 @@ fm_make_wide_drift_runner() {
     "$dest/bin/fm-test-run.sh" || return 1
   grep -q '^PORTABLE_SERIAL_BUDGET_DRIFT_PCT=19$' "$dest/bin/fm-test-run.sh" || return 1
 }
-
 # A declared budget moved off the mean of its own samples: stale calibration
 # credit surviving a changed load-bearing axis.
 fm_make_moved_budget_runner() {
@@ -935,7 +938,6 @@ test_variance_control_an_unqualified_basis_cannot_credit_a_pass() {
   set -e
   [ "$rc" -eq 0 ] || fail "the shipped basis must let a healthy lane pass, got $rc: $out"
   assert_contains "$out" "verdict=ok" "the shipped basis must credit a healthy lane"
-
   rm -rf "$tmp"
   pass "an unqualified single-sample basis credits neither a pass nor a failure"
 }
@@ -962,7 +964,6 @@ test_variance_control_a_narrowed_envelope_is_refused() {
   set -e
   [ "$rc" -eq 0 ] || fail "the shipped basis must be qualified, got $rc: $out"
   assert_contains "$out" "verdict=qualified" "the shipped basis must report verdict=qualified"
-
   rm -rf "$tmp"
   pass "a declared envelope narrower than its own evidence is refused"
 }
@@ -1055,7 +1056,6 @@ test_variance_control_declarations_must_match_their_own_evidence() {
   out=$("$RUNNER" --check-basis 2>/dev/null); rc=$?
   set -e
   [ "$rc" -eq 0 ] || fail "the shipped declarations must match their evidence, got $rc: $out"
-
   rm -rf "$tmp"
   pass "declared calibration must agree with the evidence it was derived from"
 }

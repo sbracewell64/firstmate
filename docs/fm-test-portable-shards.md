@@ -38,14 +38,14 @@ This table preserves the 2026-07-29 durations only because they are what the lan
 
 ## Parallel lanes
 
-The two-lane longest-processing-time split in `list_portable_parallel_1` and `list_portable_parallel_2` derives from the 2026-07-29 per-subject durations above, not from the current measurements.
+The placements that existed in the 2026-07-29 candidate set derive from the per-subject durations above, not from the current measurements; the newer `tests/fm-landing-authority.test.sh` and `tests/fm-publication-seam.test.sh` subjects have no values in that basis.
 The split is therefore known-stale for balance purposes, pending the follow-up parallel-lane-split-rebalance, which re-derives it from the current durations in `docs/fm-test-isolation-proof.json`.
 
 | Lane | Script count | Estimated duration (2026-07-29 basis) |
 |---|---:|---:|
 | `portable-parallel-1` | 11 | 162436 ms (~162.4 s) |
-| `portable-parallel-2` | 13 | 162754 ms (~162.8 s) |
-| imbalance | | 318 ms |
+| `portable-parallel-2` | 15 | not comparable: two subjects postdate the basis |
+| imbalance | | unknown until remeasurement |
 
 `bin/fm-test-run.sh` contains the exact ordered memberships in `list_portable_parallel_1` and `list_portable_parallel_2`.
 
@@ -130,6 +130,7 @@ The lane axis is the only one the measured spread applies to, because it is the 
 Whether the declared partition ran, and whether a shard is crowding its hang tripwire, are facts about what happened rather than measurements of how fast, so they keep ordinary pass/fail verdicts and a deterministic failure still outranks a measurement `cno`.
 This separation exists because pull request 133 ran the same runner blob against its own unchanged inventory and landed on both sides of the then-declared bound, which proved that boundary was reporting the runner rather than the suite.
 Those adverse observations are preserved in the basis comment in `bin/fm-test-run.sh`; a later favourable sample does not erase an earlier adverse one.
+An individual serial-shard product-test failure remains that test's verdict, not a timing-axis verdict; when the identical test is known to fail on the base, re-run the exact unchanged head instead of changing shard membership, ordering, or timing calibration to hide it.
 
 The shard-headroom bound detects dangerous imbalance independently of lane growth, before an overloaded shard reaches its timeout.
 
@@ -161,7 +162,7 @@ Portable shards, each portable serial shard, and the Herdr lane upload runner-ge
 
 | Job | timeout-minutes | Rationale |
 |---|---:|---|
-| portable parallel 1/2 | 10 | The measured shard sums are about three minutes and the timeout is a hang tripwire. |
+| portable parallel 1/2 | 10 | The historical basis put each shard near three minutes before the post-basis subjects were added; the timeout remains a hang tripwire. |
 | portable serial | 15 | The workflow owns the timeout literal; the runner owns the shard count, measured basis, and hang-tripwire margin. |
 | Herdr | 40 | The real-Herdr lane keeps its dedicated timeout. |
 
