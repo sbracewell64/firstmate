@@ -497,8 +497,9 @@ claim_owner_state() {  # <auth-id>
   [ -n "$identity" ] || { printf 'unobserved\n'; return; }
   if current=$(fm_pid_identity "$pid" 2>/dev/null); then
     if [ "$current" = "$identity" ]; then
-      current_group=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d '[:space:]') \
+      fm_auth_process_group "$pid" \
         || { printf 'unobserved\n'; return; }
+      current_group=$FM_AUTH_PROCESS_GROUP
       if [ "$current_group" = "$group" ]; then printf 'live\n'; else printf 'unobserved\n'; fi
       return
     fi
