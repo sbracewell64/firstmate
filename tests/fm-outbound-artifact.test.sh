@@ -3431,7 +3431,9 @@ test_sweep_survives_a_row_set_larger_than_one_argument() {
   git -C "$repo" checkout -q -b unlanded
   printf 'unlanded\n' > "$repo/f"
   git -C "$repo" add f
-  git -C "$repo" -c commit.gpgsign=false commit -qm 'never landed'
+  git -C "$repo" -c commit.gpgsign=false \
+    -c user.name=Fixture -c user.email=fixture@example.com \
+    commit -qm 'never landed'
   base=$(git -C "$repo" rev-parse HEAD)
   git -C "$repo" checkout -q main
   # Long names so the byte target is reached with few refs; one batched update
