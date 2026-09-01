@@ -243,13 +243,13 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
       assert_grep 'bin/fm-attest.sh" write --only-if-required' "$brief" \
         "$id: the pipeline contract does not publish the head-bound evidence"
       # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
-      assert_grep '--publish-repo "$(fm_meta_get' "$brief" \
-        "$id: the pipeline contract does not bind the publication repository"
+      assert_grep '--publish-repo "github.com/$final_repo"' "$brief" \
+        "$id: the pipeline contract does not bind the forge-observed publication repository"
       assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
         "$id: the pipeline contract does not bind the publication notes ref"
       # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
-      assert_grep 'final_head="$(gh pr view {url} --json headRefOid --jq .headRefOid)" && [[ "$final_head" =~ ^[0-9a-f]{40}$ ]]' "$brief" \
-        "$id: the pipeline contract does not fail closed while observing the final PR head"
+      assert_grep "gh pr view {url} --json headRefOid,headRepository --jq '[.headRefOid,.headRepository.nameWithOwner]|@tsv'" "$brief" \
+        "$id: the pipeline contract does not observe the final PR head and repository together"
       # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
       assert_grep '--expect-head "$final_head"' "$brief" \
         "$id: the pipeline contract does not bind publication to the validated final PR head"
@@ -271,7 +271,7 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
 }
 
 test_no_mistakes_brief_quotes_policy_metadata_paths() {
-  local home id brief root_with_space command args expected_head
+  local home id brief root_with_space command args expected_head expected_repo
   home="$TMP_ROOT/attest path home"
   root_with_space="$TMP_ROOT/firstmate root"
   id='brief-attest-space'
@@ -279,14 +279,13 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
   write_registry "$home"
   args="$TMP_ROOT/attest-space-args"
   expected_head=0123456789abcdef0123456789abcdef01234567
+  expected_repo=owner/final-fork
   # shellcheck disable=SC2016 # This fixture must preserve literal runtime expansions.
   printf '%s\n' '#!/usr/bin/env bash' \
     'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
-  printf '%s\n' 'fm_meta_get() { printf '\''github.com/example/repo\n'\''; }' \
-    > "$root_with_space/bin/fm-backend.sh"
-  # shellcheck disable=SC2016 # This fixture expands FM_TEST_HEAD in the generated script.
+  # shellcheck disable=SC2016 # This fixture expands test values in the generated script.
   printf '%s\n' '#!/usr/bin/env bash' \
-    'printf '\''%s\n'\'' "$FM_TEST_HEAD"' \
+    'printf '\''%s\t%s\n'\'' "$FM_TEST_HEAD" "$FM_TEST_REPO"' \
     'exit "${FM_TEST_GH_STATUS:-0}"' > "$root_with_space/bin/gh"
   chmod +x "$root_with_space/bin/fm-attest.sh"
   chmod +x "$root_with_space/bin/gh"
@@ -295,23 +294,34 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
     || fail "brief with a spaced Firstmate root did not scaffold"
   brief="$home/data/$id/brief.md"
   # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
-  command=$(sed -n '/final_head=.*fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
-  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" PATH="$root_with_space/bin:$PATH" \
+  command=$(sed -n '/forge_head=.*fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_REPO="$expected_repo" \
+    PATH="$root_with_space/bin:$PATH" \
     bash -c "$command" || fail "the generated publication command did not execute"
   assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
     "the generated command split the policy metadata path"
   assert_contains "$(cat "$args")" "<$expected_head>" \
     "the generated command did not pass the forge-observed final PR head as one argument"
+  assert_contains "$(cat "$args")" "<github.com/$expected_repo>" \
+    "the generated command did not pass the forge-observed final PR repository"
   rm "$args"
-  FM_TEST_ARGS="$args" FM_TEST_HEAD=not-a-commit PATH="$root_with_space/bin:$PATH" \
+  FM_TEST_ARGS="$args" FM_TEST_HEAD=not-a-commit FM_TEST_REPO="$expected_repo" \
+    PATH="$root_with_space/bin:$PATH" \
     bash -c "$command" >/dev/null 2>&1 \
     && fail "the generated publication command accepted a malformed final PR head"
   assert_absent "$args" "a malformed final PR head reached attestation publication"
-  FM_TEST_ARGS="$args" FM_TEST_HEAD="${expected_head^^}" PATH="$root_with_space/bin:$PATH" \
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="${expected_head^^}" FM_TEST_REPO="$expected_repo" \
+    PATH="$root_with_space/bin:$PATH" \
     bash -c "$command" >/dev/null 2>&1 \
     && fail "the generated publication command accepted a non-canonical final PR head"
   assert_absent "$args" "a non-canonical final PR head reached attestation publication"
-  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_GH_STATUS=1 PATH="$root_with_space/bin:$PATH" \
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_REPO='owner/other repo' \
+    PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command accepted a malformed final PR repository"
+  assert_absent "$args" "a malformed final PR repository reached attestation publication"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_REPO="$expected_repo" \
+    FM_TEST_GH_STATUS=1 PATH="$root_with_space/bin:$PATH" \
     bash -c "$command" >/dev/null 2>&1 \
     && fail "the generated publication command ignored a failed forge observation"
   assert_absent "$args" "a failed forge observation reached attestation publication"
