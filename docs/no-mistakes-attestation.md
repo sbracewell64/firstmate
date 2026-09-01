@@ -150,7 +150,7 @@ It re-verifies its own payload with the same code path the gate uses, so a malfo
 `--no-recheck` publishes without asking GitHub anything, and is for the case where the note is wanted but the check is not the point.
 
 The head it attests is not always `HEAD`.
-The pipeline commits its own fixes and advances the run tip past the local checkout, so a run tip ahead of `HEAD` on the same history is the normal state, it is the head the pull request is opened on, and it is what gets attested.
+The pipeline commits its own fixes and advances the run tip past the local checkout, so the final run tip ahead of `HEAD` on the same history is the normal state, it is the head the pull request is opened on, and only that final tip is attested after every pipeline-authored commit is complete.
 A run tip behind or beside `HEAD` is refused as `run-covers-another-head`, because this branch then carries work that run never saw or its tip was rewritten.
 A run tip that is not a commit in this checkout at all is refused separately as `run-head-unavailable`, because that is a fetch rather than a re-validation.
 `bin/fm-nm-run-lib.sh` owns that directional rule for every caller that has to decide whether a run belongs to a worktree, and owns reading this tool's output; both are read from there rather than re-derived here, so a change to the tool's shape moves every reader at once.
