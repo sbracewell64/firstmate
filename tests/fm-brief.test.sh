@@ -253,6 +253,7 @@ test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
         "$id: successful publication does not complete the task"
       assert_grep 'A refusal is a verdict about this candidate - report it verbatim, append `done:' "$brief" \
         "$id: the owner's explicit refusal does not complete the task"
+      # shellcheck disable=SC2016 # Backticks are literal prompt markup.
       assert_grep 'Anything else is could-not-observe: report what it said, append `blocked: final-head attestation publication could not be observed`, and stop without appending `done:`' "$brief" \
         "$id: an inconclusive publication result can complete the task"
     else
