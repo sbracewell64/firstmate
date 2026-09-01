@@ -84,7 +84,7 @@ $ bash tests/fm-commit-identity.test.sh | tail -1
 FM_TEST_CONTRACT suite=fm-commit-identity.test.sh status=pass
 ```
 
-Twenty-three controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
+Twenty-five controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
 
 ## Watched reds
 
@@ -102,6 +102,10 @@ not ok - after binding, an ordinary commit on each production path carries the a
 
 That the mutation surfaces as UNVERIFIED rather than as a silent pass is the re-observation step working: the command never credits a `git config` write it did not read back.
 
+The retargeted-venue launch control was observed failing against the prior launch gate because the spawn path selected the checkout origin's identity instead of the finalized contribution venue.
+The same-project launch control was observed failing against the prior repository-local binding because the second launch replaced the first launch's identity in their shared config.
+Both controls now drive bounded real launches and observe commit objects in the task worktrees, while the unresolved-venue companion refuses before publishing a task record.
+
 The remaining ruling-required reds are individually held by the suite: a poisoned `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment refuses by name and creates zero commits; poisoned repository-local and global configuration both lose to the binding; fixture activity establishing a `Test` identity in the same session does not cross the boundary; a restart between commits leaves the bound provenance as the sole selector; an unstated, placeholder, malformed, ungoverned or undeclared identity refuses with its own token and creates nothing; and a pipeline daemon carrying an identity variable refuses.
 
 ## The admission is the launch owner, not the brief
@@ -110,7 +114,8 @@ An earlier generation of this work bound correctly and was still not closed, bec
 A worker that skipped it, a resumed session that never read it, and a pipeline started by hand all reached commit creation in exactly the unbound state the recurrence red reproduces.
 
 The binding is therefore a precondition of [`../../bin/fm-spawn.sh`](../../bin/fm-spawn.sh), the owner nothing this fleet dispatches exists without passing through.
-It binds the PROJECT rather than the task slot: git worktrees share one repository-local config, so that one act reaches every worktree cut from the repository and the pipeline's own gate repository, and it runs before any pool slot or backend endpoint exists, so a refusal leaves nothing allocated.
+Before allocation it resolves and validates the finalized venue and identity, rejects ambient overrides, binds and re-observes the pipeline gate repository, and observes the daemon environment.
+After the isolated task worktree is known, it installs those already-validated values into worktree-scoped config and re-observes only that mechanical write before worker execution.
 The brief keeps its call as projection, and it earns its place for a reason a launch-time bind cannot cover: it runs in the WORKER's own process, so it is the only check that sees the worker's environment, which outranks every repository binding.
 
 `test_a_launch_whose_identity_cannot_bind_is_mechanically_refused` drives the real launch path with no brief instruction anywhere and a policy whose identity cannot be bound, and requires that no task record is published and no endpoint exists.

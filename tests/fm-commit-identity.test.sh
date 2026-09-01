@@ -117,14 +117,6 @@ run_cmd() {  # <root> <verb> [env-assignments...] -- runs against the fixture
     "$@" "$CMD" "$verb" "$root/checkout" 2>&1
 }
 
-run_cmd_venue() {  # <root> <verb> <venue> [checkout]
-  local root=${1:?} verb=${2:?} venue=${3:?} checkout=${4:-$1/checkout}
-  env -u GIT_AUTHOR_NAME -u GIT_AUTHOR_EMAIL -u GIT_COMMITTER_NAME -u GIT_COMMITTER_EMAIL \
-    HOME="$root/home" PATH="$root/bin:$PATH" FM_TEST_NM_STATUS="$root/nm-status" \
-    FM_HOME="$root" FM_CONFIG_OVERRIDE="$root/config" \
-    "$CMD" "$verb" --venue "$venue" "$checkout" 2>&1
-}
-
 # The subject of every assertion: the identity a REAL commit object carries when
 # made the way the pipeline makes one, with nothing on the command line saying
 # who it is.
@@ -589,58 +581,6 @@ test_the_repository_channel_clearly_refuses_distinct_roles() {
   pass "the repository channel clearly refuses distinct roles before writing or committing"
 }
 
-test_an_explicit_venue_overrides_origin_and_unresolved_refuses() {
-  local root origin_identity target_identity policy out rc identity
-  origin_identity='Origin Person <origin@example.invalid>'
-  target_identity='Target Person <target@example.invalid>'
-  root=$(make_case venue-override) || fail "fixture setup failed"
-  policy=$(jq -n --arg o "$origin_identity" --arg t "$target_identity" '{
-    generation: "g", venues: {
-      "github.com/sbracewell64/firstmate": {identities:{author:$o, committer:$o}},
-      "example.invalid/target/project": {identities:{author:$t, committer:$t}}
-    }}') || fail "policy setup failed"
-  printf '%s' "$policy" > "$root/config/publication-identity.json" || fail "policy write failed"
-  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
-
-  out=$(run_cmd_venue "$root" bind example.invalid/target/project); rc=$?
-  expect_code 0 "$rc" "the explicit contribution venue must bind: $out"
-  identity=$(commit_identity "$root/checkout" "target venue commit") || fail "checkout commit failed"
-  [ "$identity" = "$target_identity|$target_identity" ] \
-    || fail "the contribution venue must override origin, got: $identity"
-
-  out=$(run_cmd_venue "$root" bind unresolved); rc=$?
-  expect_code 2 "$rc" "an unresolved contribution venue must be could-not-observe: $out"
-  assert_contains "$out" "FM_CI_VENUE_UNOBSERVED" "the unresolved sentinel must never fall back to origin"
-  pass "an explicit contribution venue overrides origin and unresolved refuses"
-}
-
-test_concurrent_tasks_keep_worktree_scoped_identities() {
-  local root second first_identity second_identity policy out identity
-  first_identity='First Lane <first@example.invalid>'
-  second_identity='Second Lane <second@example.invalid>'
-  root=$(make_case worktree-isolation) || fail "fixture setup failed"
-  second="$root/second"
-  git -C "$root/checkout" branch second-lane || fail "branch setup failed"
-  git -C "$root/checkout" worktree add -q "$second" second-lane || fail "worktree setup failed"
-  policy=$(jq -n --arg a "$first_identity" --arg b "$second_identity" '{
-    generation: "g", venues: {
-      "example.invalid/first/project": {identities:{author:$a, committer:$a}},
-      "example.invalid/second/project": {identities:{author:$b, committer:$b}}
-    }}') || fail "policy setup failed"
-  printf '%s' "$policy" > "$root/config/publication-identity.json" || fail "policy write failed"
-  start_daemon "$root" >/dev/null || fail "daemon fixture failed"
-
-  out=$(run_cmd_venue "$root" bind example.invalid/first/project "$root/checkout"); rc=$?
-  expect_code 0 "$rc" "the first task binding must succeed: $out"
-  out=$(run_cmd_venue "$root" bind example.invalid/second/project "$second"); rc=$?
-  expect_code 0 "$rc" "the second task binding must succeed: $out"
-  identity=$(commit_identity "$root/checkout" "first lane commit") || fail "first commit failed"
-  [ "$identity" = "$first_identity|$first_identity" ] || fail "the second task overwrote the first: $identity"
-  identity=$(commit_identity "$second" "second lane commit") || fail "second commit failed"
-  [ "$identity" = "$second_identity|$second_identity" ] || fail "the second task lost its binding: $identity"
-  pass "concurrent tasks retain distinct worktree-scoped identities"
-}
-
 # --- the launch owner is the admission, not the brief ------------------------
 #
 # THE CONTROL THE PREVIOUS CANDIDATE FAILED. Its binder worked, but the only
@@ -668,6 +608,93 @@ EOF
   assert_contains "$out" "FM_CI_IDENTITY_PLACEHOLDER" "the refusal must carry the binder's own reason"
   assert_absent "$home/state/$id.meta" "a refused launch must publish no task record"
   pass "a launch whose authoritative identity cannot be bound is refused by the launch owner, with no brief instruction involved"
+}
+
+test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses() {
+  local rec home proj wt fakebin case_dir out rc id target_identity origin_identity policy target identity
+  id=retargeted
+  target_identity='Target Lane <target@example.invalid>'
+  origin_identity='Origin Lane <origin@example.invalid>'
+  policy=$(jq -n --arg a "$origin_identity" --arg b "$target_identity" '{generation:"g",venues:{
+    "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$a}},
+    "example.invalid/target/project":{identities:{author:$b,committer:$b}}
+  }}') || fail "policy setup failed"
+  rec=$(make_launch_case "$id" "$policy") || fail "launch fixture setup failed"
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  git -C "$proj" remote add upstream git@example.invalid:target/project.git || fail "upstream setup failed"
+  target=$(git -C "$proj" rev-parse HEAD) || fail "target setup failed"
+  git -C "$proj" update-ref refs/remotes/upstream/main "$target" || fail "upstream ref setup failed"
+  git -C "$proj" symbolic-ref refs/remotes/upstream/HEAD refs/remotes/upstream/main || fail "upstream head setup failed"
+  make_launch_brief "$home" "$id" no-mistakes || fail "brief fixture failed"
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$target") || true
+  assert_not_contains "$out" "is not launching" "the retargeted launch must be admitted"
+  identity=$(HOME="$case_dir/home_env" commit_identity "$wt" "retargeted commit") || fail "retargeted commit failed"
+  [ "$identity" = "$target_identity|$target_identity" ] || fail "the launch bound origin instead of the contribution venue: $identity"
+
+  id=unresolved-venue
+  rec=$(make_launch_case "$id" "$policy") || fail "unresolved fixture setup failed"
+  IFS='|' read -r home proj wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-$id"
+  git -C "$proj" remote add upstream git@example.invalid:target/project.git || fail "unresolved upstream setup failed"
+  target=$(git -C "$proj" rev-parse HEAD) || fail "unresolved target setup failed"
+  make_launch_brief "$home" "$id" no-mistakes || fail "brief fixture failed"
+  out=$(run_launch "$case_dir" "$home" "$wt" "$fakebin" "$id" "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$target"); rc=$?
+  [ "$rc" -ne 0 ] || fail "an unresolved venue must refuse before allocation: $out"
+  assert_contains "$out" "FM_CI_VENUE_UNOBSERVED" "the launch must carry the unresolved-venue token"
+  assert_absent "$home/state/$id.meta" "an unresolved venue must publish no task record"
+  pass "a retargeted launch binds its contribution venue and unresolved refuses"
+}
+
+test_two_same_project_launches_keep_worktree_identities_isolated() {
+  local rec home proj first_wt fakebin case_dir second_wt upstream_identity fork_identity policy upstream_target fork_target default_branch out identity shared_before shared_after
+  upstream_identity='Upstream Lane <upstream@example.invalid>'
+  fork_identity='Fork Lane <fork@example.invalid>'
+  policy=$(jq -n --arg a "$fork_identity" --arg b "$upstream_identity" '{generation:"g",venues:{
+    "example.invalid/sbracewell64/firstmate":{identities:{author:$a,committer:$a}},
+    "example.invalid/upstream/project":{identities:{author:$b,committer:$b}}
+  }}') || fail "policy setup failed"
+  rec=$(make_launch_case concurrent-a "$policy") || fail "launch fixture setup failed"
+  IFS='|' read -r home proj first_wt fakebin <<EOF
+$rec
+EOF
+  case_dir="$TMP_ROOT/launch-concurrent-a"
+  second_wt="$case_dir/wt-second"
+  upstream_target=$(git -C "$proj" rev-parse HEAD) || fail "upstream target setup failed"
+  git -C "$proj" remote add upstream git@example.invalid:upstream/project.git || fail "upstream setup failed"
+  git -C "$proj" update-ref refs/remotes/upstream/main "$upstream_target" || fail "upstream ref setup failed"
+  git -C "$proj" symbolic-ref refs/remotes/upstream/HEAD refs/remotes/upstream/main || fail "upstream head setup failed"
+  git -C "$proj" worktree add -q -b concurrent-second "$second_wt" || fail "second worktree setup failed"
+  git -C "$second_wt" -c user.name=Seed -c user.email=seed@example.invalid commit -q --allow-empty -m fork-only || fail "fork target setup failed"
+  fork_target=$(git -C "$second_wt" rev-parse HEAD) || fail "fork target read failed"
+  default_branch=$(git -C "$proj" symbolic-ref --quiet --short HEAD) || fail "default branch setup failed"
+  git -C "$proj" update-ref "refs/remotes/origin/$default_branch" "$fork_target" || fail "fork ref setup failed"
+  shared_before=$(git -C "$proj" config --local --get-regexp '^user\.' 2>/dev/null || true)
+
+  make_launch_brief "$home" concurrent-a no-mistakes || fail "first brief failed"
+  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$upstream_target" >> "$home/data/concurrent-a/brief.md" || fail "first base contract failed"
+  out=$(run_launch "$case_dir" "$home" "$first_wt" "$fakebin" concurrent-a "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$upstream_target") || true
+  assert_not_contains "$out" "is not launching" "the upstream launch must be admitted"
+  make_launch_brief "$home" concurrent-b no-mistakes || fail "second brief failed"
+  printf 'Base contract: slot=%s contribution=%s\n' "$upstream_target" "$fork_target" >> "$home/data/concurrent-b/brief.md" || fail "second base contract failed"
+  out=$(run_launch "$case_dir" "$home" "$second_wt" "$fakebin" concurrent-b "$proj" claude \
+    --mode no-mistakes --yolo off --reason-code NL_RULE_CLASSIFICATION --contribution-target "$fork_target") || true
+  assert_not_contains "$out" "is not launching" "the fork launch must be admitted"
+
+  identity=$(HOME="$case_dir/home_env" commit_identity "$first_wt" "upstream lane commit") || fail "upstream lane commit failed"
+  [ "$identity" = "$upstream_identity|$upstream_identity" ] || fail "the fork launch overwrote the upstream worktree: $identity"
+  identity=$(HOME="$case_dir/home_env" commit_identity "$second_wt" "fork lane commit") || fail "fork lane commit failed"
+  [ "$identity" = "$fork_identity|$fork_identity" ] || fail "the fork worktree lost its binding: $identity"
+  shared_after=$(git -C "$proj" config --local --get-regexp '^user\.' 2>/dev/null || true)
+  [ "$shared_after" = "$shared_before" ] || fail "launches rewrote shared repository-local identity: $shared_before -> $shared_after"
+  pass "two same-project launches retain isolated worktree identities"
 }
 
 # THE POSITIVE END-TO-END CONTROL. Ordinary lifecycle, no operator anywhere near
@@ -757,9 +784,9 @@ FM_CONTROLS=(
   test_the_env_verb_emits_the_channel_that_outranks_everything
   test_the_env_channel_preserves_distinct_author_and_committer
   test_the_repository_channel_clearly_refuses_distinct_roles
-  test_an_explicit_venue_overrides_origin_and_unresolved_refuses
-  test_concurrent_tasks_keep_worktree_scoped_identities
   test_a_launch_whose_identity_cannot_bind_is_mechanically_refused
+  test_a_retargeted_launch_binds_the_contribution_venue_and_unresolved_refuses
+  test_two_same_project_launches_keep_worktree_identities_isolated
   test_an_ordinary_launch_binds_both_production_paths_with_no_manual_step
   test_an_ungoverned_home_launches_and_says_so
 )

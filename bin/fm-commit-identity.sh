@@ -21,6 +21,9 @@
 # Usage:
 #   fm-commit-identity.sh bind  [--require-gate] [--venue <host/owner/repo>] [<checkout>]
 #                                              install and verify the binding
+#   fm-commit-identity.sh validate [--require-gate] [--venue <host/owner/repo>]
+#                                      [--emit-state] [<checkout>]
+#   fm-commit-identity.sh install-worktree <checkout>
 #   fm-commit-identity.sh check [<checkout>]   read-only verdict, installs nothing
 #   fm-commit-identity.sh env   [<checkout>]   print exports for eval, nothing else
 #   fm-commit-identity.sh --help
@@ -97,16 +100,18 @@ resolve_venue() {  # <checkout>
 VERB=${1:-}
 case "$VERB" in
   -h | --help | help | '') usage; exit 0 ;;
-  bind | check | env) shift ;;
+  bind | validate | install-worktree | check | env) shift ;;
   *) refuse USAGE "unknown verb '$VERB'"; exit 64 ;;
 esac
 
 REQUIRE_GATE=0
+EMIT_STATE=0
 VENUE_OVERRIDE=
 VENUE_OVERRIDE_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --require-gate) REQUIRE_GATE=1; shift ;;
+    --emit-state) EMIT_STATE=1; shift ;;
     --venue)
       [ $# -ge 2 ] || { refuse USAGE "--venue requires a value"; exit 64; }
       VENUE_OVERRIDE=$2
@@ -123,6 +128,27 @@ CHECKOUT=${1:-.}
 if ! git --no-optional-locks -C "$CHECKOUT" rev-parse --git-dir >/dev/null 2>&1; then
   refuse USAGE "'$CHECKOUT' is not a git repository"
   exit 64
+fi
+
+if [ "$VERB" = install-worktree ]; then
+  rc=0
+  [ "${FM_CI_STATE_VALIDATED:-}" = 1 ] || { refuse USAGE "install-worktree requires validated identity state"; exit 64; }
+  FM_COMMIT_IDENTITY_AUTHOR=${FM_CI_STATE_AUTHOR:-}
+  FM_COMMIT_IDENTITY_COMMITTER=${FM_CI_STATE_COMMITTER:-}
+  FM_COMMIT_IDENTITY_AUTHOR_NAME=${FM_CI_STATE_AUTHOR_NAME:-}
+  FM_COMMIT_IDENTITY_AUTHOR_EMAIL=${FM_CI_STATE_AUTHOR_EMAIL:-}
+  FM_COMMIT_IDENTITY_COMMITTER_NAME=${FM_CI_STATE_COMMITTER_NAME:-}
+  FM_COMMIT_IDENTITY_COMMITTER_EMAIL=${FM_CI_STATE_COMMITTER_EMAIL:-}
+  fm_commit_identity_install_worktree "$CHECKOUT" || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    say "checkout : bound - $FM_COMMIT_IDENTITY_AUTHOR"
+    exit 0
+  fi
+  case $rc in
+    1) refuse "$FM_CI_TOKEN_INSTALL_FAILED" "the validated identity could not be written into $CHECKOUT" ;;
+    *) refuse "$FM_CI_TOKEN_UNVERIFIED" "the validated identity was written into $CHECKOUT but git did not report it back" ;;
+  esac
+  exit 1
 fi
 
 if [ "$VENUE_OVERRIDE_SET" -eq 1 ]; then
@@ -194,7 +220,7 @@ bind_channel() {  # <label> <repo> [worktree]
 
 if [ "$VERB" = bind ]; then
   bind_channel "checkout " "$CHECKOUT" worktree || STATUS=1
-else
+elif [ "$VERB" != validate ]; then
   report_channel "checkout " "$CHECKOUT" || STATUS=$?
 fi
 
@@ -212,7 +238,7 @@ elif [ -z "$GATE" ]; then
   [ "$STATUS" -eq 1 ] || STATUS=2
 else
   say "gate:      $GATE"
-  if [ "$VERB" = bind ]; then
+  if [ "$VERB" = bind ] || [ "$VERB" = validate ]; then
     bind_channel "gate     " "$GATE" || STATUS=1
   else
     report_channel "gate     " "$GATE"
@@ -249,7 +275,18 @@ else
 fi
 
 case $STATUS in
-  0) say "verdict:   $FM_CI_TOKEN_BOUND - every reachable production commit path resolves the authoritative identity" ;;
+  0)
+    say "verdict:   $FM_CI_TOKEN_BOUND - every reachable production commit path resolves the authoritative identity"
+    if [ "$VERB" = validate ] && [ "$EMIT_STATE" -eq 1 ]; then
+      printf 'FM_CI_STATE_VALIDATED=%q\n' 1
+      printf 'FM_CI_STATE_AUTHOR=%q\n' "$FM_COMMIT_IDENTITY_AUTHOR"
+      printf 'FM_CI_STATE_COMMITTER=%q\n' "$FM_COMMIT_IDENTITY_COMMITTER"
+      printf 'FM_CI_STATE_AUTHOR_NAME=%q\n' "$FM_COMMIT_IDENTITY_AUTHOR_NAME"
+      printf 'FM_CI_STATE_AUTHOR_EMAIL=%q\n' "$FM_COMMIT_IDENTITY_AUTHOR_EMAIL"
+      printf 'FM_CI_STATE_COMMITTER_NAME=%q\n' "$FM_COMMIT_IDENTITY_COMMITTER_NAME"
+      printf 'FM_CI_STATE_COMMITTER_EMAIL=%q\n' "$FM_COMMIT_IDENTITY_COMMITTER_EMAIL"
+    fi
+    ;;
   1) say "verdict:   REFUSED - do not create production commits until the channel above is repaired" ;;
   *) say "verdict:   COULD-NOT-OBSERVE - a production commit path could not be shown to carry the authoritative identity, which is not a pass" ;;
 esac

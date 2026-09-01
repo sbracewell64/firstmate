@@ -2326,8 +2326,8 @@ PROJ_ABS_REAL=$(cd "$PROJ_ABS" 2>/dev/null && pwd -P) || PROJ_ABS_REAL="$PROJ_AB
 # and refusing its every dispatch would be a verdict about a promise nobody made.
 # docs/configuration.md "Publication identity policy" owns that rule, and
 # bin/fm-publication-seam-lib.sh already applies the same reading one step later.
-spawn_commit_identity_bind() {  # <task-worktree> -> 0 bound or ungoverned, 1 refused
-  local checkout=${1:?} binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0 init_out
+spawn_commit_identity_validate() {  # -> 0 validated or ungoverned, 1 refused
+  local binder="$FM_ROOT/bin/fm-commit-identity.sh" out rc=0 init_out state
   local -a venue_args=()
 
   # A scout has no contribution venue because it opens no pull request, so only
@@ -2335,9 +2335,9 @@ spawn_commit_identity_bind() {  # <task-worktree> -> 0 bound or ungoverned, 1 re
   [ -z "$CONTRIB_VENUE" ] || venue_args=(--venue "$CONTRIB_VENUE")
 
   if [ "$MODE" = no-mistakes ]; then
-    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "${venue_args[@]}" "$checkout" 2>&1) || rc=$?
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" validate --emit-state --require-gate "${venue_args[@]}" "$PROJ_ABS" 2>&1) || rc=$?
   else
-    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind "${venue_args[@]}" "$checkout" 2>&1) || rc=$?
+    out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" validate --emit-state "${venue_args[@]}" "$PROJ_ABS" 2>&1) || rc=$?
   fi
 
   # A delivery mode that WILL run the pipeline needs the gate repository to
@@ -2348,17 +2348,36 @@ spawn_commit_identity_bind() {  # <task-worktree> -> 0 bound or ungoverned, 1 re
   if [ "$rc" -ne 0 ] && [ "$MODE" = no-mistakes ]; then
     case $out in
       *FM_CI_GATE_ABSENT*)
-        init_out=$(fm_nm_run_bounded "$checkout" 120 init 2>&1) || true
+        init_out=$(fm_nm_run_bounded "$PROJ_ABS" 120 init 2>&1) || true
         rc=0
-        out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" bind --require-gate "${venue_args[@]}" "$checkout" 2>&1) || rc=$?
+        out=$(FM_CONFIG_OVERRIDE="$CONFIG" "$binder" validate --emit-state --require-gate "${venue_args[@]}" "$PROJ_ABS" 2>&1) || rc=$?
         [ "$rc" -eq 0 ] || out="$out"$'\n'"pipeline initialization reported: $init_out"
         ;;
     esac
   fi
 
-  [ "$rc" -eq 0 ] && return 0
+  if [ "$rc" -eq 0 ]; then
+    state=$(printf '%s\n' "$out" | sed -n '/^FM_CI_STATE_[A-Z_]*=/p')
+    [ -n "$state" ] || rc=2
+  fi
+  if [ "$rc" -eq 0 ]; then
+    eval "$state"
+    return 0
+  fi
 
-  echo "error: $ID is not launching: the authoritative production commit identity could not be bound for $checkout, so this task could reach its first commit with whatever identity this machine happens to declare. Repair the reported channel and dispatch again." >&2
+  echo "error: $ID is not launching: the authoritative production commit identity could not be validated for $PROJ_ABS, so this task could reach its first commit with whatever identity this machine happens to declare. Repair the reported channel and dispatch again." >&2
+  printf '%s\n' "$out" >&2
+  return 1
+}
+
+spawn_commit_identity_install() {  # <task-worktree>
+  local checkout=${1:?} binder="$FM_ROOT/bin/fm-commit-identity.sh" out
+  out=$(FM_CI_STATE_VALIDATED="$FM_CI_STATE_VALIDATED" \
+    FM_CI_STATE_AUTHOR="$FM_CI_STATE_AUTHOR" FM_CI_STATE_COMMITTER="$FM_CI_STATE_COMMITTER" \
+    FM_CI_STATE_AUTHOR_NAME="$FM_CI_STATE_AUTHOR_NAME" FM_CI_STATE_AUTHOR_EMAIL="$FM_CI_STATE_AUTHOR_EMAIL" \
+    FM_CI_STATE_COMMITTER_NAME="$FM_CI_STATE_COMMITTER_NAME" FM_CI_STATE_COMMITTER_EMAIL="$FM_CI_STATE_COMMITTER_EMAIL" \
+    "$binder" install-worktree "$checkout" 2>&1) && return 0
+  echo "error: $ID is not launching: the already-validated production commit identity could not be installed and re-observed in $checkout; aborting the allocated launch resources." >&2
   printf '%s\n' "$out" >&2
   return 1
 }
@@ -2369,6 +2388,11 @@ if [ "$KIND" != secondmate ]; then
   if [ ! -x "$FM_ROOT/bin/fm-commit-identity.sh" ]; then
     echo "error: $ID is not launching: the production commit identity binder $FM_ROOT/bin/fm-commit-identity.sh is missing or not executable, so whether this task's commits would carry the authoritative identity could not be established" >&2
     exit 1
+  fi
+  if [ -e "$CONFIG/publication-identity.json" ]; then
+    spawn_commit_identity_validate || exit 1
+  else
+    echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
   fi
 fi
 
@@ -2956,9 +2980,7 @@ fi
 
 if [ "$KIND" != secondmate ]; then
   if [ -e "$CONFIG/publication-identity.json" ]; then
-    spawn_commit_identity_bind "$WT" || exit 1
-  else
-    echo "notice: $ID launches with commit provenance ungoverned - this home declares no publication identity policy, so there is no authoritative production identity to bind (docs/configuration.md \"Publication identity policy\")" >&2
+    spawn_commit_identity_install "$WT" || exit 1
   fi
 fi
 
