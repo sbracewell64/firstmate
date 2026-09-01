@@ -6,7 +6,7 @@ This record holds reusable evidence for one active guarantee of [`../../bin/fm-c
 [`../../bin/fm-commit-identity-lib.sh`](../../bin/fm-commit-identity-lib.sh)'s header owns the channel precedence and the honest limits, that command's header owns the verb contract and exit statuses, and [`../configuration.md`](../configuration.md) "Publication identity policy" owns the schema the authoritative identity is declared in.
 
 Verified on 2026-09-01 on Linux 6.18.33.2-microsoft-standard-WSL2 with git 2.51.0, jq 1.8.1, shellcheck 0.11.0, and no-mistakes v1.40.3.
-The controls below were exercised at implementation head `74321f98c871b4259663503594d2e3192cc6362e` after the launch admission and its venue, worktree-isolation, pre-allocation, and fixture-reaping refinements were added.
+The controls below were exercised at implementation head `3ffc4c28d5d69e12665bc6fcae4bdeab6d0ad366` after the launch admission, shared-gate custody, canonical locking, and atomic task-record replacement refinements were added.
 
 ## The defect this record is built from
 
@@ -84,7 +84,7 @@ $ bash tests/fm-commit-identity.test.sh | tail -1
 FM_TEST_CONTRACT suite=fm-commit-identity.test.sh status=pass
 ```
 
-Twenty-seven controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
+Thirty-one controls observe a real commit object's author and committer, the absence of one, or the launch boundary that prevents either production path from becoming reachable.
 
 ## Watched reds
 
@@ -116,8 +116,8 @@ An earlier generation of this work bound correctly and was still not closed, bec
 A worker that skipped it, a resumed session that never read it, and a pipeline started by hand all reached commit creation in exactly the unbound state the recurrence red reproduces.
 
 The binding is therefore a precondition of [`../../bin/fm-spawn.sh`](../../bin/fm-spawn.sh), the owner nothing this fleet dispatches exists without passing through.
-Before allocation it resolves and validates the finalized venue and identity, rejects ambient overrides, binds and re-observes the pipeline gate repository, observes the daemon environment, and proves that the identity can be installed and re-observed through the current project worktree's worktree-scoped channel.
-After the isolated task worktree is known, it installs those already-validated values into that worktree's scoped config and re-observes only that mechanical write before worker execution.
+Before allocation it resolves and validates the finalized venue and identity without writing the shared gate repository, rejects ambient overrides, observes the daemon environment, and proves that the identity can be installed and re-observed through the current project worktree's worktree-scoped channel.
+After shared-gate custody is settled, it installs and re-observes the validated identity in the gate repository; after the isolated task worktree is known, it repeats that gate installation and installs the same values into the worktree's scoped config before worker execution.
 The brief keeps its call as projection, and it earns its place for a reason a launch-time bind cannot cover: it runs in the WORKER's own process, so it is the only check that sees the worker's environment, which outranks every repository binding.
 
 `test_a_launch_whose_identity_cannot_bind_is_mechanically_refused` drives the real launch path with no brief instruction anywhere and a policy whose identity cannot be bound, and requires that no task record is published and no endpoint exists.
