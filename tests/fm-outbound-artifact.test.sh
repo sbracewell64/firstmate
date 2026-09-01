@@ -222,6 +222,14 @@ SH
   chmod +x "$1/bin/gh"
 }
 
+# An inert effect executable for tests that mint a pr-merge authorization.
+# Mint must resolve the production-owned `gh-axi` name, while these tests never
+# perform the merge and must not inherit a developer installation from PATH.
+install_effect_gh_axi() {  # <case-dir>
+  printf '#!/bin/sh\nexit 0\n' > "$1/bin/gh-axi"
+  chmod +x "$1/bin/gh-axi"
+}
+
 # A ruling body is derived from the request it answers, so any sender the
 # REQUEST carried is stripped before the responder's own is added. A canonical
 # writer states its own role and never inherits the other side's - and leaving
@@ -3036,6 +3044,7 @@ test_a_hold_ruling_never_becomes_a_landing_authority() {
   auth="$ROOT/bin/fm-landing-authorization.sh"
   [ -x "$auth" ] || { printf 'skip: %s is not executable\n' "$auth"; return 0; }
   dir=$(new_case typedhold)
+  install_effect_gh_axi "$dir"
   declare_gate "$dir/home" AWAITING_BROWSER_SOL
   write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "hold: emit failed"
@@ -3064,6 +3073,7 @@ test_a_hold_ruling_never_becomes_a_landing_authority() {
   # PAIRED GREEN: the same path with an approving verdict does mint, so the
   # refusal above is the verdict being classified and not the fixture failing.
   dir=$(new_case typedapprove)
+  install_effect_gh_axi "$dir"
   declare_gate "$dir/home" AWAITING_BROWSER_SOL
   write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "hold GREEN: emit failed"
@@ -3754,8 +3764,7 @@ resumed_with_authority() {  # <name> [<head>] -> FIXTURE_{DIR,RID,HEAD,AUTH}
   FIXTURE_AUTH=
   auth_bin="$ROOT/bin/fm-landing-authorization.sh"
   FIXTURE_DIR=$(new_case "$name") || return 1
-  cp "$FIXTURE_DIR/bin/gh" "$FIXTURE_DIR/bin/gh-axi" || return 1
-  chmod +x "$FIXTURE_DIR/bin/gh-axi" || return 1
+  install_effect_gh_axi "$FIXTURE_DIR" || return 1
   git -C "$FIXTURE_DIR/home/projects/demo" symbolic-ref --short HEAD \
     > "$FIXTURE_DIR/forge/base_ref" || return 1
   # THE HEAD IS A PARAMETER because the request identity is DERIVED from the
@@ -3782,6 +3791,8 @@ resumed_with_authority() {  # <name> [<head>] -> FIXTURE_{DIR,RID,HEAD,AUTH}
   for f in "$FIXTURE_DIR/home/data/landing-authorizations"/*.json; do
     [ -f "$f" ] || continue
     FIXTURE_AUTH=$(jq -r '.authorization_id' "$f") || return 1
+    [ "$(jq -r '.effect.executable_path' "$f")" = "$FIXTURE_DIR/bin/gh-axi" ] \
+      || fail "closure fixture $name: mint did not pin the fixture gh-axi"
     jq '.state = "spent"
         | .spend = {started:"2026-08-30T00:00:00Z", act_digest:"x",
                     observed_head:.grant.head, outcome:"applied",
@@ -4050,6 +4061,7 @@ test_a_revision_never_resumes_the_candidate_it_judged() {
 test_a_revision_is_retired_for_correction_and_transfers_nothing() {
   local dir out rc rid head auth before successor
   dir=$(new_case revisecorrect)
+  install_effect_gh_axi "$dir"
   declare_gate "$dir/home" AWAITING_BROWSER_SOL
   write_snapshot "$dir/snap.json" outbound 'awaiting browser sol'
   run_ob "$dir" emit waiting-item >/dev/null 2>&1 || fail "correct: emit failed"
