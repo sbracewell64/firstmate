@@ -453,10 +453,9 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
   payload=$(printf '%s\n' "$body" | awk '
     { text = text " " $0 }
     END {
-      boundary = "(^|[;&|{}])[;&|]?[[:space:]]*"
-      controls = "((if|then|elif|else|while|until|do|!|command|builtin|env)[[:space:]]+)*"
+      boundary = "(^|[[:space:];|&(){}<>])"
       term = "([[:space:];|&(){}<>]|$)"
-      if (text ~ (boundary controls "(eval|source|[.])" term)) print "eval/source"
+      if (text ~ (boundary "(eval|source|[.])" term)) print "eval/source"
     }
   ')
   if [ -n "$payload" ]; then

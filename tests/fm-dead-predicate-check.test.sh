@@ -535,7 +535,9 @@ test_pass_by_name_refuses_payload_executing_bodies() {
   for body in \
     'dispatch() { local check=${2:-}; eval '\''check=echo'\''; "$check"; }' \
     'dispatch() { local check=${2:-}; source /dev/null; "$check"; }' \
-    'dispatch() { local check=${2:-}; . /dev/null; "$check"; }'; do
+    'dispatch() { local check=${2:-}; . /dev/null; "$check"; }' \
+    'dispatch() { local check=${2:-}; MODE=x eval '\''check=echo'\''; "$check"; }' \
+    'dispatch() { local check=${2:-}; MODE=x source /dev/null; "$check"; }'; do
     variant=$((variant + 1))
     dir=$(fixture "payload-executing-body-$variant" 'dead_one() { return 0; }')
     add_plain_consumer "$dir" "$body
