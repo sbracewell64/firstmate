@@ -30,7 +30,7 @@ $ bash tests/fm-bootstrap.test.sh | tail -1
 ok - bootstrap preserves definitive outbound defect classification
 ```
 
-The 73 outbound-artifact cases, 46 dead-predicate cases, and the bootstrap integration cases pass.
+The 73 outbound-artifact cases, 34 dead-predicate cases, and the bootstrap integration cases passed at that head.
 What follows is why that sentence is worth anything.
 
 The focused suites were re-run on 2026-08-17 at exact implementation head `3c21e711075a75daa930d186811144d675c6ca09` with `bash tests/fm-outbound-artifact.test.sh && bash tests/fm-dead-predicate-check.test.sh && bash tests/fm-bootstrap.test.sh`; the command exited 0.
@@ -221,6 +221,7 @@ The sweep that found the third instance nearly missed the correct code beside it
 
 Verified on 2026-08-30 on Linux 6.18.33.2-microsoft-standard-WSL2 with GNU Awk 5.3.2, jq 1.8.1 and shellcheck 0.11.0.
 The red was reproduced at trunk head `135a9c473155684fda5221868a0269f54b93cef5`; the green and the injection proof were taken on `fm/dead-predicate-mark-verification` at the head that carries this record.
+The final 69-case `tests/fm-dead-predicate-check.test.sh` suite passes at that head.
 
 `bin/fm-dead-predicate-check.sh` accepted `# indirect-call: <function>` as positive call evidence on the strength of the comment alone.
 A fixture holding one enrolled library with an uncalled predicate and one consumer that never calls it went from `DEAD` to `ALIVE` when a single comment was added and nothing else changed:
@@ -255,14 +256,14 @@ The end-to-end proof runs through the production producer, the real control, and
 One real mark was moved off its dispatch by a single line, which is exactly what a stale mark looks like after an edit:
 
 ```sh
-$ sed -i 's|fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:635|fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:636|' bin/fm-landing-authorization-lib.sh
+$ sed -i 's|fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:730|fm_auth_plan_repo_valid bin/fm-landing-authorization-lib.sh:731|' bin/fm-landing-authorization-lib.sh
 $ bin/fm-dead-predicate-check.sh --json bin/fm-landing-authorization-lib.sh
   "alive": 20,
   "could_not_observe": [ fm_auth_identity_canonical, fm_auth_plain_value,
                          fm_auth_plan_reset, fm_auth_plan_read, fm_auth_plan_repo_valid ],
-  "refused_marks": [ { "line": 515, "function": "fm_auth_plan_repo_valid",
-                       "site": "bin/fm-landing-authorization-lib.sh:636",
-                       "reason": "site bin/fm-landing-authorization-lib.sh:636 does not mention fm_auth_plan_repo_valid" } ]
+  "refused_marks": [ { "line": 610, "function": "fm_auth_plan_repo_valid",
+                       "site": "bin/fm-landing-authorization-lib.sh:731",
+                       "reason": "site bin/fm-landing-authorization-lib.sh:731 does not mention fm_auth_plan_repo_valid" } ]
 exit=3
 ```
 
