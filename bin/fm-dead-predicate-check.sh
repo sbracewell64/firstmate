@@ -444,7 +444,10 @@ pass_by_name_dispatches() {  # <site-file> <raw-site-line> <function>
     | sed -n '${s/:.*//;p;}')
   [ -n "$def_line" ] || return 1
   end_line=$(printf '%s\n' "$executable" \
-    | awk -v start="$def_line" 'NR > start && /^}/ { print NR; exit }')
+    | awk -v start="$def_line" '
+        NR > start && /^}/ && !end { end = NR }
+        END { if (end) print end }
+      ')
   if [ -z "$end_line" ]; then
     body=$(printf '%s\n' "$executable" | sed -n "${def_line}p")
   else
