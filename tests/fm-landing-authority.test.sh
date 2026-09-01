@@ -454,17 +454,23 @@ test_missing_check_evidence_refuses() {
   pass "required check evidence that is absent refuses, and is never read as eligible"
 }
 
-test_missing_review_evidence_requires_the_captain() {
+test_missing_review_evidence_refuses_at_the_review_gate() {
   local dir
   dir=$(new_pr_case no-review) || fail "fixture failed"
   write_rollup "$dir" "$HEAD_A" 0 ''
 
   run_pr_merge "$dir"
   [ "$RC" -ne 0 ] || fail "a landing with no reviewer evidence was permitted"
-  grep -F 'assignment-distinct review evidence could not be observed' "$dir/stderr" >/dev/null \
+  grep -F 'LANDING_REVIEW_GATE_REFUSED' "$dir/stderr" >/dev/null \
+    || fail "the refusal did not carry the typed engineering outcome: $(cat "$dir/stderr")"
+  grep -F 'no qualifying assignment-distinct review evidence' "$dir/stderr" >/dev/null \
     || fail "the compile did not name the missing review evidence: $(cat "$dir/stderr")"
+  # The wrong projection, pinned out: an engineering insufficiency must never
+  # manufacture a captain decision (Sol outcome-lattice ruling 19/5488261106).
+  grep -F 'CAPTAIN_REQUIRED' "$dir/stderr" >/dev/null \
+    && fail "an observed review insufficiency was projected into a captain decision: $(cat "$dir/stderr")"
   [ "$(merge_count "$dir")" = 0 ] || fail "a merge ran without review evidence"
-  pass "missing review evidence compiles to CAPTAIN_REQUIRED"
+  pass "missing review evidence refuses at the review gate with its own typed outcome, never as the captain's"
 }
 
 test_changes_requested_refuses() {
@@ -480,7 +486,7 @@ test_changes_requested_refuses() {
   pass "changes requested still refuses"
 }
 
-test_maker_associated_approval_requires_the_captain() {
+test_maker_associated_approval_refuses_at_the_review_gate() {
   local dir
   dir=$(new_pr_case maker-review) || fail "fixture failed"
   write_rollup "$dir" "$HEAD_A" 0 APPROVED maker maker
@@ -489,7 +495,11 @@ test_maker_associated_approval_requires_the_captain() {
   [ "$RC" -ne 0 ] || fail "a maker-associated approval authorized its own landing"
   grep -F 'maker-associated-approval' "$dir/stderr" >/dev/null \
     || fail "the compile did not name the maker-associated approval: $(cat "$dir/stderr")"
-  pass "a maker-associated approval compiles to CAPTAIN_REQUIRED"
+  grep -F 'LANDING_REVIEW_GATE_REFUSED' "$dir/stderr" >/dev/null \
+    || fail "the maker-checker refusal did not carry the typed engineering outcome: $(cat "$dir/stderr")"
+  grep -F 'CAPTAIN_REQUIRED' "$dir/stderr" >/dev/null \
+    && fail "a maker-checker insufficiency was projected into a captain decision: $(cat "$dir/stderr")"
+  pass "a maker-associated approval refuses through the maker-checker gate, never as the captain's decision"
 }
 
 test_independent_pipeline_review_allows_null_github_decision() {
@@ -533,9 +543,11 @@ test_decision_surface_never_delegates_an_unreviewed_candidate() {
   run_surface_check "$dir"
   [ "$SURFACE_RC" -eq 3 ] \
     || fail "the decision surface delegated a candidate with no review evidence (rc=$SURFACE_RC): $SURFACE_OUT"
+  printf '%s' "$SURFACE_OUT" | grep -F 'LANDING_REVIEW_GATE_REFUSED' >/dev/null \
+    || fail "the decision surface did not carry the typed review-gate refusal: $SURFACE_OUT"
   printf '%s' "$SURFACE_OUT" | grep -F 'CAPTAIN_REQUIRED' >/dev/null \
-    || fail "the decision surface did not name its review-evidence refusal: $SURFACE_OUT"
-  pass "the decision surface does not bypass missing review evidence"
+    && fail "the decision surface projected a review insufficiency into a captain decision: $SURFACE_OUT"
+  pass "the decision surface refuses an unreviewed candidate at the review gate, never as the captain's"
 }
 
 test_decision_surface_uses_live_pr_head() {
@@ -932,9 +944,9 @@ test_governing_ruling_is_part_of_the_compile
 test_eligibility_survives_a_cold_restart
 test_approval_bound_to_another_head_refuses
 test_missing_check_evidence_refuses
-test_missing_review_evidence_requires_the_captain
+test_missing_review_evidence_refuses_at_the_review_gate
 test_changes_requested_refuses
-test_maker_associated_approval_requires_the_captain
+test_maker_associated_approval_refuses_at_the_review_gate
 test_independent_pipeline_review_allows_null_github_decision
 test_approved_review_allows_an_ungoverned_landing
 test_decision_surface_never_delegates_an_unreviewed_candidate

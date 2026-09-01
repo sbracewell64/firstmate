@@ -814,6 +814,10 @@ check_landing_authority() {
       verdict contradicted "landing-authority $TARGET" \
         "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · $FM_LANDING_CANDIDATE_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · rule that decision before landing"
       ;;
+    5)
+      verdict contradicted "landing-authority $TARGET" \
+        "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · $FM_LANDING_CANDIDATE_REASON · sources: $FM_LANDING_AUTHORITY_SOURCES · an engineering gate refuses; satisfy the review requirement rather than escalating to the captain"
+      ;;
     *)
       verdict unevaluable "landing-authority $TARGET" \
         "$FM_LANDING_AUTHORITY_TOKEN · $FM_LANDING_AUTHORITY_REASON · sources: ${FM_LANDING_AUTHORITY_SOURCES:-none read}"
