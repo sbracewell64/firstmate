@@ -281,6 +281,7 @@ test_no_mistakes_brief_quotes_policy_metadata_paths() {
     'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
   printf '%s\n' 'fm_meta_get() { printf '\''github.com/example/repo\n'\''; }' \
     > "$root_with_space/bin/fm-backend.sh"
+  # shellcheck disable=SC2016 # This fixture expands FM_TEST_HEAD in the generated script.
   printf '%s\n' '#!/usr/bin/env bash' \
     'printf '\''%s\n'\'' "$FM_TEST_HEAD"' > "$root_with_space/bin/gh"
   chmod +x "$root_with_space/bin/fm-attest.sh"
