@@ -221,6 +221,113 @@ test_ship_modes_generate_clean_briefs() {
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"
 }
 
+# The pipeline produces the head-bound evidence a delivery boundary's own check
+# reads, and nothing else publishes it. A worker that stops at `done:` therefore
+# leaves a validated candidate with no evidence, which is the state that kept
+# recurring, so the publication step belongs in the contract the worker actually
+# executes rather than in prose it may never load. It is paired with the two
+# modes that run no pipeline: neither has evidence to publish, and a step that
+# appeared in all three would be a step nobody had thought about.
+test_no_mistakes_brief_requires_publishing_the_head_bound_evidence() {
+  local home id mode brief
+  home="$TMP_ROOT/attest-step-home"
+  write_registry "$home"
+
+  for id_mode in "brief-attest-a1:no-mistakes" "brief-attest-a2:direct-PR" "brief-attest-a3:local-only"; do
+    id=${id_mode%%:*}
+    mode=${id_mode##*:}
+    FM_HOME="$home" "$ROOT/bin/fm-brief.sh" "$id" some-proj --mode "$mode" >/dev/null 2>&1 \
+      || fail "$id: scaffold for mode $mode failed"
+    brief="$home/data/$id/brief.md"
+    if [ "$mode" = no-mistakes ]; then
+      assert_grep 'bin/fm-attest.sh" write --only-if-required' "$brief" \
+        "$id: the pipeline contract does not publish the head-bound evidence"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
+      assert_grep '--publish-repo "github.com/$final_repo"' "$brief" \
+        "$id: the pipeline contract does not bind the forge-observed publication repository"
+      assert_grep '--publish-notes-ref refs/notes/no-mistakes' "$brief" \
+        "$id: the pipeline contract does not bind the publication notes ref"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
+      assert_grep "gh pr view {url} --json headRefOid,headRepository --jq '[.headRefOid,.headRepository.nameWithOwner]|@tsv'" "$brief" \
+        "$id: the pipeline contract does not observe the final PR head and repository together"
+      # shellcheck disable=SC2016 # This assertion must match the literal unexpanded brief text.
+      assert_grep '--expect-head "$final_head"' "$brief" \
+        "$id: the pipeline contract does not bind publication to the validated final PR head"
+      grep -q 'Run it unconditionally' "$brief" \
+        || fail "$id: the publication step is left to the worker to judge"
+      assert_grep 'Published or nothing-to-publish, append `done:' "$brief" \
+        "$id: successful publication does not complete the task"
+      assert_grep 'A refusal is a verdict about this candidate - report it verbatim, append `done:' "$brief" \
+        "$id: the owner's explicit refusal does not complete the task"
+      # shellcheck disable=SC2016 # Backticks are literal prompt markup.
+      assert_grep 'Anything else is could-not-observe: report what it said, append `blocked: final-head attestation publication could not be observed`, and stop without appending `done:`' "$brief" \
+        "$id: an inconclusive publication result can complete the task"
+    else
+      assert_no_grep "fm-attest.sh" "$brief" \
+        "$id: a mode that runs no pipeline was told to publish pipeline evidence"
+    fi
+  done
+  pass "fm-brief.sh: the pipeline contract publishes the evidence its own check reads"
+}
+
+test_no_mistakes_brief_quotes_policy_metadata_paths() {
+  local home id brief root_with_space command args expected_head expected_repo
+  home="$TMP_ROOT/attest path home"
+  root_with_space="$TMP_ROOT/firstmate root"
+  id='brief-attest-space'
+  mkdir -p "$root_with_space/bin" "$root_with_space/state" "$home/data"
+  write_registry "$home"
+  args="$TMP_ROOT/attest-space-args"
+  expected_head=0123456789abcdef0123456789abcdef01234567
+  expected_repo=owner/final-fork
+  # shellcheck disable=SC2016 # This fixture must preserve literal runtime expansions.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf '\''<%s>\n'\'' "$@" > "$FM_TEST_ARGS"' > "$root_with_space/bin/fm-attest.sh"
+  # shellcheck disable=SC2016 # This fixture expands test values in the generated script.
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'printf '\''%s\t%s\n'\'' "$FM_TEST_HEAD" "$FM_TEST_REPO"' \
+    'exit "${FM_TEST_GH_STATUS:-0}"' > "$root_with_space/bin/gh"
+  chmod +x "$root_with_space/bin/fm-attest.sh"
+  chmod +x "$root_with_space/bin/gh"
+  FM_HOME="$home" FM_ROOT_OVERRIDE="$root_with_space" "$ROOT/bin/fm-brief.sh" \
+    "$id" some-proj --mode no-mistakes >/dev/null 2>&1 \
+    || fail "brief with a spaced Firstmate root did not scaffold"
+  brief="$home/data/$id/brief.md"
+  # shellcheck disable=SC2016 # This sed fixture must preserve its literal end-of-line expression.
+  command=$(sed -n '/forge_head=.*fm-attest\.sh.*write --only-if-required/{s/^[[:space:]]*`//; s/`$//; p; q;}' "$brief")
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_REPO="$expected_repo" \
+    PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" || fail "the generated publication command did not execute"
+  assert_contains "$(cat "$args")" "<$root_with_space/state/$id.meta>" \
+    "the generated command split the policy metadata path"
+  assert_contains "$(cat "$args")" "<$expected_head>" \
+    "the generated command did not pass the forge-observed final PR head as one argument"
+  assert_contains "$(cat "$args")" "<github.com/$expected_repo>" \
+    "the generated command did not pass the forge-observed final PR repository"
+  rm "$args"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD=not-a-commit FM_TEST_REPO="$expected_repo" \
+    PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command accepted a malformed final PR head"
+  assert_absent "$args" "a malformed final PR head reached attestation publication"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="${expected_head^^}" FM_TEST_REPO="$expected_repo" \
+    PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command accepted a non-canonical final PR head"
+  assert_absent "$args" "a non-canonical final PR head reached attestation publication"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_REPO='owner/other repo' \
+    PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command accepted a malformed final PR repository"
+  assert_absent "$args" "a malformed final PR repository reached attestation publication"
+  FM_TEST_ARGS="$args" FM_TEST_HEAD="$expected_head" FM_TEST_REPO="$expected_repo" \
+    FM_TEST_GH_STATUS=1 PATH="$root_with_space/bin:$PATH" \
+    bash -c "$command" >/dev/null 2>&1 \
+    && fail "the generated publication command ignored a failed forge observation"
+  assert_absent "$args" "a failed forge observation reached attestation publication"
+  pass "fm-brief.sh: policy metadata paths round-trip as one argument"
+}
+
 # A ship task's delivery mode is firstmate's per-task decision, so a missing or
 # unusable value must stop the scaffold instead of silently defaulting. The
 # no-mistakes-prod-only row is the conditional registry policy: it is never a task
@@ -1036,6 +1143,8 @@ test_help_includes_entire_header
 test_crewmate_scaffolds_carry_who_is_speaking
 test_secondmate_charter_keeps_its_own_marker_consequence
 test_ship_modes_generate_clean_briefs
+test_no_mistakes_brief_requires_publishing_the_head_bound_evidence
+test_no_mistakes_brief_quotes_policy_metadata_paths
 test_ship_mode_is_required_and_closed_set
 test_ship_mode_is_explicit_not_registry
 test_delivery_flags_are_refused_where_they_do_not_apply

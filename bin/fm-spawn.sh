@@ -1271,6 +1271,9 @@ SUCCEED_CONTRIB_TARGET=
 SUCCEED_BASE_STATE=
 SUCCEED_CONTRIB_VENUE=
 SUCCEED_CONTRIB_VENUE_URL=
+SUCCEED_POLICY_REF=
+SUCCEED_POLICY_GENERATION=
+SUCCEED_PUBLICATION_REPO=
 SUCCEED_PR=
 SUCCEED_PR_HEAD=
 if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
@@ -1317,6 +1320,9 @@ if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
   SUCCEED_BASE_STATE=$(fm_meta_get "$STATE/$ID.meta" base_state)
   SUCCEED_CONTRIB_VENUE=$(fm_meta_get "$STATE/$ID.meta" contribution_venue)
   SUCCEED_CONTRIB_VENUE_URL=$(fm_meta_get "$STATE/$ID.meta" contribution_venue_url)
+  SUCCEED_POLICY_REF=$(fm_meta_get "$STATE/$ID.meta" policy_ref)
+  SUCCEED_POLICY_GENERATION=$(fm_meta_get "$STATE/$ID.meta" policy_generation)
+  SUCCEED_PUBLICATION_REPO=$(fm_meta_get "$STATE/$ID.meta" publication_repo)
   SUCCEED_PR=$(fm_meta_get "$STATE/$ID.meta" pr)
   SUCCEED_PR_HEAD=$(fm_meta_get "$STATE/$ID.meta" pr_head)
 fi
@@ -2181,6 +2187,9 @@ CONTRIB_TARGET=
 BASE_STATE=
 CONTRIB_VENUE=
 CONTRIB_VENUE_URL=
+POLICY_REF=
+POLICY_GENERATION=
+PUBLICATION_REPO=
 if [ "$KIND" != secondmate ]; then
   if task_base_resolve "$PROJ_ABS"; then
     SLOT_BASE=$TASK_BASE_SLOT
@@ -2211,6 +2220,8 @@ if [ "$KIND" != secondmate ]; then
     [ -z "$SUCCEED_SLOT_BASE" ] || SLOT_BASE=$SUCCEED_SLOT_BASE
     [ -z "$SUCCEED_CONTRIB_TARGET" ] || CONTRIB_TARGET=$SUCCEED_CONTRIB_TARGET
     [ -z "$SUCCEED_BASE_STATE" ] || BASE_STATE=$SUCCEED_BASE_STATE
+    POLICY_REF=$SUCCEED_POLICY_REF
+    POLICY_GENERATION=$SUCCEED_POLICY_GENERATION
   fi
   if [ "$CONTRIB_SET" -eq 1 ]; then
     CONTRIB_TARGET=$(git -C "$PROJ_ABS" rev-parse --verify --quiet "$CONTRIB_ARG^{commit}" 2>/dev/null) || {
@@ -2244,6 +2255,10 @@ if [ "$KIND" != secondmate ]; then
     if task_base_venue "$PROJ_ABS" "$CONTRIB_TARGET"; then
       CONTRIB_VENUE=$TASK_BASE_VENUE
       CONTRIB_VENUE_URL=$TASK_BASE_VENUE_URL
+      if [ "$SUCCEED_EXECUTION" -eq 0 ]; then
+        POLICY_REF=$TASK_BASE_VENUE_REF
+        POLICY_GENERATION=$CONTRIB_TARGET
+      fi
     else
       # Recorded as unresolved rather than omitted: a venue nothing derived is a
       # venue no later guard may quietly treat as agreeing with whatever it sees.
@@ -2257,6 +2272,29 @@ if [ "$KIND" != secondmate ]; then
   if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
     [ -z "$SUCCEED_CONTRIB_VENUE" ] || CONTRIB_VENUE=$SUCCEED_CONTRIB_VENUE
     [ -z "$SUCCEED_CONTRIB_VENUE_URL" ] || CONTRIB_VENUE_URL=$SUCCEED_CONTRIB_VENUE_URL
+  fi
+  if [ "$KIND" != scout ]; then
+    PUBLICATION_URL_STATUS=0
+    PUBLICATION_URL=$(fm_landed_push_url "$PROJ_ABS" 2>/dev/null) || PUBLICATION_URL_STATUS=$?
+    if [ "$PUBLICATION_URL_STATUS" -eq 1 ]; then
+      PUBLICATION_URL=$(git --no-optional-locks -C "$PROJ_ABS" remote get-url origin 2>/dev/null || true)
+    elif [ "$PUBLICATION_URL_STATUS" -ne 0 ]; then
+      PUBLICATION_URL=
+    fi
+    CURRENT_PUBLICATION_REPO=$(task_base_venue_identity "$PUBLICATION_URL" 2>/dev/null || true)
+    if [ "$SUCCEED_EXECUTION" -eq 1 ]; then
+      if [ -z "$SUCCEED_PUBLICATION_REPO" ]; then
+        echo "error: $ID records no publication repository for its successor to inherit; refusing to derive the protected publication target from the checkout's current push URL '${PUBLICATION_URL:-unresolved}'" >&2
+        exit 1
+      fi
+      if [ -z "$CURRENT_PUBLICATION_REPO" ] || [ "$CURRENT_PUBLICATION_REPO" != "$SUCCEED_PUBLICATION_REPO" ]; then
+        echo "error: $ID's recorded publication repository is $SUCCEED_PUBLICATION_REPO, but the checkout's current push URL '${PUBLICATION_URL:-unresolved}' addresses ${CURRENT_PUBLICATION_REPO:-an unresolved repository}; refusing to rebind the successor's protected publication target" >&2
+        exit 1
+      fi
+      PUBLICATION_REPO=$SUCCEED_PUBLICATION_REPO
+    else
+      PUBLICATION_REPO=$CURRENT_PUBLICATION_REPO
+    fi
   fi
 fi
 
@@ -3272,6 +3310,14 @@ fi
   # non-forge venue has when the identity is empty.
   [ -z "$CONTRIB_VENUE" ] || echo "contribution_venue=$CONTRIB_VENUE"
   [ -z "$CONTRIB_VENUE_URL" ] || echo "contribution_venue_url=$CONTRIB_VENUE_URL"
+  [ -z "$PUBLICATION_REPO" ] || echo "publication_repo=$PUBLICATION_REPO"
+  # The policy ROLE, which is a different axis from the contribution target
+  # even where the two resolve to the same commit today: policy_ref names what
+  # owns current policy at that venue, policy_generation the commit it resolved
+  # to when this task was dispatched. bin/fm-task-base-lib.sh owns the tuple
+  # they belong to and bin/fm-attest.sh re-resolves the ref before acting.
+  [ -z "$POLICY_REF" ] || echo "policy_ref=$POLICY_REF"
+  [ -z "$POLICY_GENERATION" ] || echo "policy_generation=$POLICY_GENERATION"
   # Agent-justification record. Written for every task dispatch; a --secondmate
   # spawn provisions a home rather than dispatching a task and carries none.
   [ -z "$REASONING_REQUIRED" ] || echo "reasoning_required=$REASONING_REQUIRED"

@@ -69,7 +69,141 @@
 # shellcheck disable=SC2034 # The resolution outputs are read by callers (fm-spawn.sh) and tests, not by this lib.
 TASK_BASE_SLOT='' TASK_BASE_SLOT_REF='' TASK_BASE_CONTRIB='' TASK_BASE_CONTRIB_REF='' TASK_BASE_STATE='' TASK_BASE_ERROR=''
 # shellcheck disable=SC2034 # Same: consumed by fm-spawn.sh (records them) and tests.
-TASK_BASE_VENUE='' TASK_BASE_VENUE_URL=''
+TASK_BASE_VENUE='' TASK_BASE_VENUE_URL='' TASK_BASE_VENUE_REF=''
+TASK_BASE_POLICY_VENUE='' TASK_BASE_POLICY_URL='' TASK_BASE_POLICY_REF=''
+# shellcheck disable=SC2034 # The rest of the policy role tuple, read by bin/fm-attest.sh and tests.
+TASK_BASE_POLICY_GENERATION='' TASK_BASE_POLICY_ROLE='' TASK_BASE_POLICY_TARGET=''
+
+task_base_metadata_field() {  # <meta-file> <key>
+  local file=${1-} key=${2-}
+  [ -f "$file" ] && [ ! -L "$file" ] && [ -n "$key" ] || return 1
+  awk -F= -v key="$key" '
+    $1 == key { value=substr($0, length(key) + 2); seen[value]=1 }
+    END {
+      for (value in seen) { count++; only=value }
+      if (count == 0 || (count == 1 && only == "")) exit 1
+      if (count != 1) exit 2
+      print only
+    }
+  ' "$file"
+}
+
+# The POLICY ROLE TUPLE, normalized once here and consumed downstream.
+#
+# A contribution target is a commit. Policy is owned by a REF, and a commit is
+# only ever the generation that ref resolved to at some moment. Collapsing the
+# two - which this function used to do, mapping contribution_target straight
+# into the policy ref slot - records an input but establishes no policy role:
+# it cannot tell a generation that is current from one the venue has since
+# moved past, and it cannot tell a target that IS the policy ref from one that
+# merely happens to sit on the same commit today.
+#
+# So the two axes are carried separately and the RELATIONSHIP between them is
+# recorded rather than inferred:
+#
+#   TASK_BASE_POLICY_VENUE       forge identity of the governed venue
+#   TASK_BASE_POLICY_URL         the URL that venue is read from
+#   TASK_BASE_POLICY_TARGET      the contribution target commit - the CANDIDATE's
+#                                base, which is its own axis and never authority
+#                                over what the venue's policy is
+#   TASK_BASE_POLICY_REF         the NAMED ref that owns policy at that venue,
+#                                empty when nothing recorded one
+#   TASK_BASE_POLICY_GENERATION  the exact commit policy is read from
+#   TASK_BASE_POLICY_ROLE        HOW the relationship was established
+#
+# TASK_BASE_POLICY_ROLE is the whole contract in one word, and it is the field
+# that keeps this honest, because it makes "nobody recorded this" a distinct
+# answer from "this was recorded as equivalent":
+#
+#   recorded            the task metadata names a policy ref outright.
+#   target-equivalence  the metadata records, explicitly and as its own
+#                       statement, that the contribution target IS the policy
+#                       ref for this venue. The ruling allows that equivalence
+#                       and requires it be recorded, never assumed because two
+#                       strings or two commits coincide.
+#   unrecorded          neither. A generation is still carried, because reading
+#                       a declaration out of it is still meaningful, but it
+#                       carries no ref role, and bin/fm-attest.sh must not
+#                       treat it as authority over what the venue currently
+#                       requires.
+#
+# Returns 2 when the metadata could not be read; the optional policy fields
+# being absent is an ordinary recorded state, not a read failure.
+TASK_BASE_POLICY_TARGET_EQUIVALENCE=contribution-target
+
+# The venue-side spelling of the ref a contribution target was read from.
+#
+# task_base_resolve names that ref the way THIS checkout addresses it -
+# `upstream/main`, `origin/main`, or the bare local branch - and none of those
+# is a ref at the venue. The venue holds `refs/heads/main`. The mapping is the
+# same two-shape resolution task_base_upstream_ref already performs, so this
+# adds no new claim about the topology: it restates the ref that resolution
+# picked, in the namespace the venue actually serves it from.
+#
+# This is what lets a spawn RECORD which ref owns policy instead of leaving it
+# unrecorded, and an unrecorded one is not a small gap - it makes the currency
+# question unanswerable for every task, which bin/fm-attest.sh then has to
+# report as could-not-observe.
+#
+# Prints the ref, or returns 1 when the name is not one this can place at the
+# venue - which is a refusal to guess, not a licence to fall back to HEAD.
+task_base_policy_ref_for() {  # <contribution-ref>
+  local ref=${1-} name
+  case $ref in
+    '' | unresolved | *[[:space:]]* | *[[:cntrl:]]* | -*) return 1 ;;
+    refs/*) printf '%s\n' "$ref"; return 0 ;;
+    origin/*) name=${ref#origin/} ;;
+    upstream/*) name=${ref#upstream/} ;;
+    *) name=$ref ;;
+  esac
+  case $name in
+    '' | *[[:space:]]* | *[[:cntrl:]]* | -*) return 1 ;;
+  esac
+  printf 'refs/heads/%s\n' "$name"
+}
+
+task_base_policy_metadata() {  # <meta-file>
+  local file=${1-} recorded_ref recorded_generation
+  TASK_BASE_POLICY_VENUE=
+  TASK_BASE_POLICY_URL=
+  TASK_BASE_POLICY_REF=
+  TASK_BASE_POLICY_GENERATION=
+  TASK_BASE_POLICY_ROLE=
+  TASK_BASE_POLICY_TARGET=
+  TASK_BASE_POLICY_VENUE=$(task_base_metadata_field "$file" contribution_venue) || return 2
+  TASK_BASE_POLICY_URL=$(task_base_metadata_field "$file" contribution_venue_url) || return 2
+  TASK_BASE_POLICY_TARGET=$(task_base_metadata_field "$file" contribution_target) || return 2
+
+  # An absent optional field is a recorded state; only an AMBIGUOUS one (the
+  # same key written twice with different values) is a read failure, and
+  # task_base_metadata_field separates those as exit 1 and exit 2.
+  recorded_ref=$(task_base_metadata_field "$file" policy_ref)
+  case $? in
+    0 | 1) ;;
+    *) return 2 ;;
+  esac
+  recorded_generation=$(task_base_metadata_field "$file" policy_generation)
+  case $? in
+    0 | 1) ;;
+    *) return 2 ;;
+  esac
+
+  if [ -z "$recorded_ref" ]; then
+    TASK_BASE_POLICY_ROLE=unrecorded
+    TASK_BASE_POLICY_GENERATION=$TASK_BASE_POLICY_TARGET
+    return 0
+  fi
+  if [ "$recorded_ref" = "$TASK_BASE_POLICY_TARGET_EQUIVALENCE" ]; then
+    TASK_BASE_POLICY_ROLE="target-equivalence"
+    TASK_BASE_POLICY_REF=$TASK_BASE_POLICY_TARGET
+    TASK_BASE_POLICY_GENERATION=$TASK_BASE_POLICY_TARGET
+    return 0
+  fi
+  TASK_BASE_POLICY_ROLE=recorded
+  TASK_BASE_POLICY_REF=$recorded_ref
+  TASK_BASE_POLICY_GENERATION=${recorded_generation:-$TASK_BASE_POLICY_TARGET}
+  return 0
+}
 
 # shellcheck source=bin/fm-landed-lib.sh
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/fm-landed-lib.sh"
@@ -397,6 +531,7 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   local status refs complete
   TASK_BASE_VENUE=
   TASK_BASE_VENUE_URL=
+  TASK_BASE_VENUE_REF=
   TASK_BASE_ERROR=
 
   target_sha=$(git --no-optional-locks -C "$dir" rev-parse --verify --quiet "$target^{commit}" 2>/dev/null) || {
@@ -415,8 +550,13 @@ task_base_venue() {  # <repo-dir> <contribution-target>
   upstream_ref=$(task_base_upstream_ref "$dir")
   status=$?
   if [ "$status" -eq 1 ]; then
+    name=$(default_branch "$dir" 2>/dev/null) || {
+      TASK_BASE_ERROR="no default branch in $dir, so the venue policy ref cannot be named"
+      return 2
+    }
     TASK_BASE_VENUE_URL=$fetch_url
     TASK_BASE_VENUE=$(task_base_venue_identity "$fetch_url" || true)
+    TASK_BASE_VENUE_REF=$(task_base_policy_ref_for "$name") || return 2
     return 0
   fi
   if [ "$status" -ne 0 ]; then
@@ -453,6 +593,7 @@ task_base_venue() {  # <repo-dir> <contribution-target>
     "$target_sha" "$upstream_ref" 2>/dev/null; then
     TASK_BASE_VENUE_URL=$upstream_url
     TASK_BASE_VENUE=$(task_base_venue_identity "$upstream_url" || true)
+    TASK_BASE_VENUE_REF=$(task_base_policy_ref_for "$upstream_ref") || return 2
     return 0
   fi
 
@@ -474,6 +615,7 @@ task_base_venue() {  # <repo-dir> <contribution-target>
       "$target_sha" "$ref" 2>/dev/null; then
       TASK_BASE_VENUE_URL=$push_url
       TASK_BASE_VENUE=$(task_base_venue_identity "$push_url" || true)
+      TASK_BASE_VENUE_REF=$(task_base_policy_ref_for "$name") || return 2
       return 0
     fi
   done <<EOF
